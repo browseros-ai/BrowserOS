@@ -8,7 +8,7 @@ import {
 import type { ConversationPanelViews } from './conversationPanelStorage'
 
 describe('ConversationPanelBroker', () => {
-  it('opens every touched tab and retains its conversation mapping', async () => {
+  it('opens every assigned tab and retains its conversation mapping', async () => {
     const fixture = createFixture()
 
     await fixture.broker.reconcile(
@@ -70,8 +70,12 @@ describe('ConversationPanelBroker', () => {
       ]),
     )
 
-    expect(fixture.views['99']).toBeUndefined()
-    expect(fixture.opened).toEqual([{ tabId: 30, windowId: 1 }])
+    expect(fixture.views['99']).toMatchObject({ conversationId: 'stale' })
+    expect(fixture.views['99'].runId).toBeUndefined()
+    expect(fixture.opened).toEqual([
+      { tabId: 30, windowId: 1 },
+      { tabId: 31, windowId: 1 },
+    ])
     expect(fixture.views['31']?.conversationId).toBe('done')
     expect(fixture.glow[0]).toEqual({
       tabId: 99,
@@ -151,7 +155,7 @@ describe('ConversationPanelBroker', () => {
     expect(fixture.opened).toEqual([{ tabId: 55, windowId: 1 }])
   })
 
-  it('reasserts open panels on a heartbeat without restarting their glow', async () => {
+  it('respects a successful open followed by user closure across heartbeats and worker restart', async () => {
     const fixture = createFixture()
     const current = assignments([
       assignment(60, 'conversation-6', 'run-6', 'running'),
@@ -159,14 +163,43 @@ describe('ConversationPanelBroker', () => {
 
     await fixture.broker.reconcile(current)
     await fixture.broker.reconcile(current)
+    await new ConversationPanelBroker(fixture.deps).reconcile(current)
 
-    expect(fixture.opened).toEqual([
-      { tabId: 60, windowId: 1 },
-      { tabId: 60, windowId: 1 },
-    ])
+    expect(fixture.opened).toEqual([{ tabId: 60, windowId: 1 }])
     expect(fixture.glow).toEqual([
       { tabId: 60, isActive: true, conversationId: 'conversation-6' },
     ])
+  })
+
+  it('opens a short run even when it completed before the broker connected', async () => {
+    const fixture = createFixture()
+    await fixture.broker.reconcile(
+      assignments([assignment(80, 'fast', 'run-fast', 'completed')]),
+    )
+    expect(fixture.opened).toEqual([{ tabId: 80, windowId: 1 }])
+    expect(fixture.glow).toEqual([])
+  })
+
+  it('keeps a manual draft through old heartbeats and worker restart while siblings continue', async () => {
+    const fixture = createFixture()
+    const current = assignments([
+      assignment(80, 'shared', 'run-shared', 'running'),
+      assignment(81, 'shared', 'run-shared', 'running'),
+    ])
+    await fixture.broker.reconcile(current)
+    await fixture.broker.selectConversation(80, 'draft')
+    await fixture.broker.reconcile(current)
+    await new ConversationPanelBroker(fixture.deps).reconcile(current)
+    expect(fixture.views['80']).toMatchObject({
+      conversationId: 'draft',
+      manual: true,
+    })
+    expect(fixture.views['80'].runId).toBeUndefined()
+    expect(fixture.views['81']).toMatchObject({
+      conversationId: 'shared',
+      runId: 'run-shared',
+    })
+    expect(fixture.opened).toHaveLength(2)
   })
 
   it('heals a transient panel-open failure on the next heartbeat', async () => {
@@ -244,6 +277,7 @@ function createFixture(options: FixtureOptions = {}) {
     reportError: (error, context) => errors.push({ error, context }),
   }
   return {
+    deps,
     broker: new ConversationPanelBroker(deps),
     errors,
     glow,

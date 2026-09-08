@@ -57,6 +57,7 @@ export function buildSidepanelPreparedSendMessagesRequest({
         message: message ?? '',
         mode: common.mode,
         browserContext: common.browserContext,
+        panelTabId: common.panelTabId,
         userSystemPrompt: common.userSystemPrompt,
         userWorkingDir: common.userWorkingDir,
         supportsImages: common.supportsImages,

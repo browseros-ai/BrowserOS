@@ -20,7 +20,10 @@ import {
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
-import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
+import {
+  enqueuePanelSearch,
+  takePanelSearch,
+} from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { startLocalFirstMigration } from '@/modules/local-first-migration/start-local-first-migration'
@@ -77,9 +80,7 @@ export default defineBackground(() => {
       })
 
       if (opened) {
-        setTimeout(() => {
-          searchActionsStorage.setValue(messageData.data)
-        }, 500)
+        await enqueuePanelSearch(currentTab.id, messageData.data)
       }
     }
   })
@@ -94,6 +95,10 @@ export default defineBackground(() => {
       checkAndShowChangelog().catch(() => null)
     }
   })
+
+  onRuntimeMessage(RuntimeMessageType.takePanelSearch, ({ data }) =>
+    takePanelSearch(data.tabId),
+  )
 
   onRuntimeMessage(RuntimeMessageType.getTabId, ({ sender }) => {
     return { tabId: sender.tab?.id }
@@ -132,7 +137,18 @@ export default defineBackground(() => {
     },
   )
 
+  onRuntimeMessage(
+    RuntimeMessageType.selectPanelConversation,
+    async ({ data }) => {
+      await conversationPanelBroker.selectConversation(
+        data.tabId,
+        data.conversationId,
+      )
+    },
+  )
+
   chrome.tabs.onRemoved.addListener((tabId) => {
+    void conversationPanelBroker.forgetTab(tabId).catch(() => undefined)
     const key = String(tabId)
     selectedTextStorage.getValue().then((map) => {
       if (map[key]) {

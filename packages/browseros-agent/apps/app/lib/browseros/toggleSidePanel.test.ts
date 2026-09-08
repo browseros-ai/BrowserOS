@@ -76,6 +76,7 @@ beforeEach(async () => {
     sidePanel: {
       browserosToggle: async (options: unknown) => {
         browserosToggleCalls.push(options)
+        browserosIsOpenResult = true
         return { opened: true }
       },
       browserosIsOpen: async (options: unknown) => {
@@ -87,6 +88,7 @@ beforeEach(async () => {
       },
       close: async (options: unknown) => {
         closeCalls.push(options)
+        browserosIsOpenResult = false
       },
       setOptions: async (options: unknown) => {
         setOptionsCalls.push(options)
@@ -133,16 +135,44 @@ describe('side panel scope routing', () => {
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: false })
-    expect(setOptionsCalls).toEqual([])
+    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
     expect(closeCalls).toEqual([{ windowId: 3 }])
     expect(openCalls).toEqual([])
+  })
+
+  it('closes an open background contextual panel using the actual contextual state', async () => {
+    browserosIsOpenResult = true
+    expect(await toggleSidePanel({ tabId: 7, windowId: 3 })).toEqual({
+      opened: false,
+    })
+    expect(closeCalls).toEqual([{ tabId: 7 }])
+    expect(browserosToggleCalls).toEqual([])
+  })
+
+  it('gives a contextual panel a stable host path before opening', async () => {
+    await openSidePanel({ tabId: 7, windowId: 3 })
+    expect(setOptionsCalls).toContainEqual({
+      tabId: 7,
+      enabled: true,
+      path: 'sidepanel.html?tabId=7',
+    })
+  })
+
+  it('serializes automatic open and user toggle on the same tab', async () => {
+    await Promise.all([
+      openSidePanel({ tabId: 7, windowId: 3 }),
+      toggleSidePanel({ tabId: 7, windowId: 3 }),
+    ])
+    expect(browserosIsOpenResult).toBe(false)
+    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
+    expect(closeCalls).toEqual([{ tabId: 7 }])
   })
 
   it('keeps toolbar toggles on the BrowserOS tab-specific API when scope storage is absent', async () => {
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: true })
-    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
+    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
     expect(openCalls).toEqual([])
     expect(closeCalls).toEqual([])
   })
@@ -153,7 +183,7 @@ describe('side panel scope routing', () => {
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: true })
-    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
+    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
     expect(openCalls).toEqual([])
     expect(closeCalls).toEqual([])
   })
@@ -208,7 +238,7 @@ describe('side panel scope routing', () => {
     storedSidePanelPerWindow = true
 
     await refreshSidePanelRuntimeState()
-    expect(setOptionsCalls).toEqual([])
+    expect(setOptionsCalls).toEqual([{ enabled: true, path: 'sidepanel.html' }])
 
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
@@ -217,18 +247,18 @@ describe('side panel scope routing', () => {
     expect(browserosToggleCalls).toEqual([])
   })
 
-  it('falls back to tab scope without changing Chrome options when storage fails', async () => {
+  it('disables a stale global default when scope storage fails', async () => {
     getSidePanelPerWindowOverride = async () => {
       throw new Error('storage unavailable')
     }
 
     await refreshSidePanelRuntimeState()
-    expect(setOptionsCalls).toEqual([])
+    expect(setOptionsCalls).toEqual([{ enabled: false }])
 
     const result = await toggleSidePanel({ tabId: 7, windowId: 3 })
 
     expect(result).toEqual({ opened: true })
-    expect(browserosToggleCalls).toEqual([{ tabId: 7 }])
+    expect(browserosToggleCalls).toEqual([{ tabId: 7, open: true }])
     expect(openCalls).toEqual([])
   })
 

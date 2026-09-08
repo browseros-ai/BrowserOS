@@ -116,7 +116,7 @@ describe('BrowserMcpModule', () => {
     expect(Object.keys(server._registeredTools)).toContain('tabs')
   })
 
-  it('runs conversation-tab effects for the active run but not for tabs list', async () => {
+  it('does not acquire panel ownership by inspecting existing tabs', async () => {
     const conversationId = crypto.randomUUID()
     const { browserMcp: runtime, runs } = moduleFixture()
     const lease = runtime.createLease({
@@ -131,12 +131,10 @@ describe('BrowserMcpModule', () => {
     expect(runs.associated).toEqual([])
 
     await server._registeredTools.tabs.handler({ action: 'active' })
-    expect(runs.associated).toEqual([
-      { conversationId, runId: 'run-1', tabIds: [101] },
-    ])
+    expect(runs.associated).toEqual([])
   })
 
-  it('observes pages touched indirectly through the run browser SDK', async () => {
+  it('does not acquire panel ownership by using an existing page in a script', async () => {
     const conversationId = crypto.randomUUID()
     const { browserMcp: runtime, runs } = moduleFixture()
     const lease = runtime.createLease({
@@ -151,9 +149,7 @@ describe('BrowserMcpModule', () => {
       code: 'await browser.nav(1).reload(); return "done"',
     })
 
-    expect(runs.associated).toEqual([
-      { conversationId, runId: 'run-2', tabIds: [101] },
-    ])
+    expect(runs.associated).toEqual([])
   })
 
   it('groups the first tab created by an agent call', async () => {
@@ -174,6 +170,52 @@ describe('BrowserMcpModule', () => {
 
     expect(addCreatedPages).toHaveBeenCalledTimes(1)
     expect(addCreatedPages).toHaveBeenCalledWith(run, [2])
+  })
+
+  it('assigns and groups a created tab while its script is still running, even if it later fails', async () => {
+    let release!: () => void
+    let created!: () => void
+    const pending = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const observed = new Promise<void>((resolve) => {
+      created = resolve
+    })
+    const session = browserSession()
+    session.nav = () =>
+      ({
+        reload: async () => {
+          created()
+          await pending
+        },
+      }) as ReturnType<BrowserSession['nav']>
+    const conversationId = crypto.randomUUID()
+    const { browserMcp, runs, addCreatedPages } = moduleFixture({ session })
+    const run = runs.start(conversationId, 'long-script')
+    const lease = browserMcp.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+    })
+    const server = inspect(
+      browserMcp.createMcpServer({ leaseToken: lease.token }),
+    )
+    const executing = server._registeredTools.run.handler({
+      code: 'const p = await browser.pages.newPage("https://example.com"); await browser.nav(p).reload(); throw new Error("later failure")',
+    })
+    await observed
+    try {
+      expect(runs.associated).toEqual([
+        { conversationId, runId: 'long-script', tabIds: [102] },
+      ])
+      expect(addCreatedPages).toHaveBeenCalledWith(run, [2])
+    } finally {
+      release()
+    }
+    const result = await executing
+    expect(result.isError).toBe(true)
+    expect(runs.associated).toHaveLength(1)
+    expect(addCreatedPages).toHaveBeenCalledTimes(1)
   })
 
   it('attributes a late tool effect to the run that authorized the call', async () => {
@@ -501,7 +543,8 @@ class TestConversationRuns {
       panelsVisible: true,
       tabGroup: { title: 'browseros/test', colorKey: 'browseros' },
       signal: abortController.signal,
-      associateTabs: (tabIds) => {
+      ownsTab: () => true,
+      recordCreatedTabs: (tabIds) => {
         if (this.active.get(conversationId) !== run) return false
         this.associated.push({ conversationId, runId, tabIds: [...tabIds] })
         return true

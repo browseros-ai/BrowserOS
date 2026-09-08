@@ -23,8 +23,6 @@ import {
 import { logger } from '../../../lib/logger'
 import type { ActiveConversationRun } from '../conversation-runs'
 import type { ConversationTabGroups } from './conversation-tab-groups'
-import { applyConversationTabs } from './effects/conversation-tabs'
-import { applyTabGroups } from './effects/tab-groups'
 import { guardConversationRunning } from './guards/conversation-running'
 import { guardReadOnly } from './guards/read-only'
 import { observeToolTelemetry } from './observers/tool-telemetry'
@@ -96,10 +94,7 @@ const GUARDS: readonly NamedToolGuard[] = [
   { name: 'read-only', run: guardReadOnly },
 ]
 
-const EFFECTS: readonly NamedToolEffect[] = [
-  { name: 'conversation-tabs', run: applyConversationTabs },
-  { name: 'tab-groups', run: applyTabGroups },
-]
+const EFFECTS: readonly NamedToolEffect[] = []
 
 const OBSERVERS: readonly NamedToolObserver[] = [
   { name: 'telemetry', run: observeToolTelemetry },
@@ -197,7 +192,9 @@ async function executeBrowserTool(call: BrowserToolCall): Promise<ToolResult> {
   ].filter((signal): signal is AbortSignal => signal !== undefined)
   const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals)
   const session = call.run
-    ? trackBrowserSessionPages(call.context.session, call.trace)
+    ? trackBrowserSessionPages(call.context.session, call.trace, (pageId) =>
+        recordCreatedPage(call, pageId),
+      )
     : call.context.session
 
   return await withBrowserOutputFileAccess(call.lease?.outputFileAccess, () =>
@@ -237,7 +234,31 @@ function collectDeclaredPageEffects(
         : undefined
   if (pageId === undefined) return
   call.trace.touched.add(pageId)
-  if (action === 'new') call.trace.created.add(pageId)
+  if (action === 'new' && !result.isError) recordCreatedPage(call, pageId)
+}
+
+/**
+ * Creation is a browser fact, not a tool-success effect. Commit it before a
+ * long script continues, so later errors cannot orphan a tab that already exists.
+ * The run-pinned capability rejects delayed calls from a replaced execution.
+ */
+function recordCreatedPage(call: BrowserToolCall, pageId: number): void {
+  if (call.trace.created.has(pageId)) return
+  call.trace.created.add(pageId)
+  const tabId = call.context.session.pages.getTabId(pageId)
+  if (!call.run || tabId === undefined) return
+  try {
+    if (!call.run.recordCreatedTabs([tabId])) return
+    if (call.run.panelsVisible && call.run.tabGroup) {
+      call.tabGroups.addCreatedPages(call.run, [pageId])
+    }
+  } catch (error) {
+    // UI effects must not turn successful tab creation into a tool failure.
+    logger.warn('Created tab projection failed', {
+      pageId,
+      error: errorText(error),
+    })
+  }
 }
 
 const SESSION_PAGE_METHODS = new Set([
@@ -256,6 +277,7 @@ const SESSION_PAGE_METHODS = new Set([
 function trackBrowserSessionPages(
   session: BrowserSession,
   trace: BrowserToolPageTrace,
+  onCreated: (pageId: number) => void,
 ): BrowserSession {
   const touch = (pageId: number) => trace.touched.add(pageId)
   const trackedPages = new Proxy(session.pages, {
@@ -268,7 +290,7 @@ function trackBrowserSessionPages(
           const pageId = await Reflect.apply(value, target, args)
           if (typeof pageId === 'number') {
             touch(pageId)
-            trace.created.add(pageId)
+            onCreated(pageId)
           }
           return pageId
         }

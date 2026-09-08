@@ -50,7 +50,7 @@ describe('ConversationRuns', () => {
     })
 
     const pinnedRun = runs.activeRun('conversation-1')
-    expect(pinnedRun?.associateTabs([12])).toBe(true)
+    expect(pinnedRun?.recordCreatedTabs([12])).toBe(true)
     expect(
       (await panels.read()).value?.assignments.map((tab) => tab.tabId),
     ).toEqual([10, 11, 12])
@@ -74,7 +74,7 @@ describe('ConversationRuns', () => {
       panelTabIds: [10],
       createStream: () => next.stream,
     })
-    expect(pinnedRun?.associateTabs([13])).toBe(false)
+    expect(pinnedRun?.recordCreatedTabs([13])).toBe(false)
     await runs.stop('conversation-1')
     await panels.cancel()
   })
@@ -237,7 +237,7 @@ describe('ConversationRuns', () => {
       panelTabIds: [20],
       createStream: () => first.stream,
     })
-    runs.activeRun('older')?.associateTabs([21])
+    runs.activeRun('older')?.recordCreatedTabs([21])
     first.close()
     await eventually(() =>
       expect(runs.getSnapshot('older')?.status).toBe('completed'),
@@ -278,7 +278,7 @@ describe('ConversationRuns', () => {
       createStream: () => source.stream,
     })
 
-    expect(runs.activeRun('scheduled')?.associateTabs([31])).toBe(false)
+    expect(runs.activeRun('scheduled')?.recordCreatedTabs([31])).toBe(false)
     expect(await currentPanelAssignments(runs)).toEqual({ assignments: [] })
     await runs.stop('scheduled')
   })
@@ -311,6 +311,34 @@ describe('ConversationRuns', () => {
     await starting
     expect((await hydrating)?.messages[0]?.id).toBe('canonical-user')
     await runs.stop('hydrating')
+  })
+
+  it('does not let automatic tab discovery steal another conversation origin', async () => {
+    const runs = new ConversationRuns()
+    await runs.start({
+      conversationId: 'a',
+      messages: [],
+      panelTabIds: [1],
+      createStream: () => controlledSource().stream,
+    })
+    await runs.start({
+      conversationId: 'b',
+      messages: [],
+      panelTabIds: [2],
+      createStream: () => controlledSource().stream,
+    })
+    runs.activeRun('a')?.recordCreatedTabs([2, 3])
+    expect(
+      (await currentPanelAssignments(runs)).assignments.map(
+        ({ tabId, conversationId }) => ({ tabId, conversationId }),
+      ),
+    ).toEqual([
+      { tabId: 1, conversationId: 'a' },
+      { tabId: 2, conversationId: 'b' },
+      { tabId: 3, conversationId: 'a' },
+    ])
+    await runs.stop('a')
+    await runs.stop('b')
   })
 
   it('rejects stale message updates from a replaced run', async () => {
