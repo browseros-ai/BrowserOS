@@ -656,3 +656,61 @@ pub fn page_json(page: &browseros_core::pages::PageInfo) -> Value {
     }
     value
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalized(schema: Value) -> Value {
+        let Value::Object(object) = schema else {
+            panic!("test schema should be an object");
+        };
+        Value::Object((*normalize_schema_object(object)).clone())
+    }
+
+    #[test]
+    fn nullable_enum_normalization_collapses_schemars_option_enum_shape() {
+        let schema = normalized(json!({
+            "type": "object",
+            "properties": {
+                "button": {
+                    "type": ["string", "null"],
+                    "enum": ["left", "right", null]
+                }
+            }
+        }));
+
+        assert_eq!(
+            schema.pointer("/properties/button"),
+            Some(&json!({
+                "type": "string",
+                "enum": ["left", "right"]
+            }))
+        );
+    }
+
+    #[test]
+    fn nullable_enum_normalization_preserves_non_nullable_enum_schemas() {
+        let schema = normalized(json!({
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["ready", null]
+                },
+                "implicit": {
+                    "enum": ["ready", null]
+                }
+            }
+        }));
+
+        assert_eq!(
+            schema.pointer("/properties/state/enum"),
+            Some(&json!(["ready", null]))
+        );
+        assert_eq!(
+            schema.pointer("/properties/implicit/enum"),
+            Some(&json!(["ready", null]))
+        );
+    }
+}
