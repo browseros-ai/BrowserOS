@@ -59,6 +59,7 @@ export interface ActiveConversationRun {
   readonly tabGroup: ConversationTabGroupPresentation | undefined
   /** Aborts browser work when the user stops this exact run. */
   readonly signal: AbortSignal
+  /** Binds tabs created by this run and requests their initial panel open. */
   associateTabs(tabIds: readonly number[]): boolean
 }
 
@@ -122,6 +123,7 @@ export class ConversationRunNotFoundError extends Error {
 export class ConversationRuns {
   private readonly runs = new Map<string, ConversationRunRecord>()
   private readonly panelByTab = new Map<number, ConversationRunRecord>()
+  private readonly autoOpenByTab = new Map<number, string>()
   private readonly panelSubscribers = new Set<PanelAssignmentsSubscriber>()
 
   constructor(private readonly deps: ConversationRunsDeps = {}) {}
@@ -201,9 +203,14 @@ export class ConversationRuns {
   }
 
   /** Replays buffered chunks, then attaches to the same live ordered stream. */
-  subscribe(conversationId: string): ReadableStream<UIMessageChunk> {
+  subscribe(
+    conversationId: string,
+    runId?: string,
+  ): ReadableStream<UIMessageChunk> {
     const record = this.runs.get(conversationId)
-    if (!record) throw new ConversationRunNotFoundError()
+    if (!record || (runId !== undefined && record.runId !== runId)) {
+      throw new ConversationRunNotFoundError()
+    }
     let subscriber: ReadableStreamDefaultController<UIMessageChunk> | undefined
 
     return new ReadableStream<UIMessageChunk>({
@@ -282,18 +289,21 @@ export class ConversationRuns {
     if (!record) return false
     // Prevent a replacement turn until late stream construction has unwound.
     record.deleting = true
+    // Retire routing before waiting for provider cancellation. Panels must not
+    // reattach to a conversation while its asynchronous teardown is unwinding.
+    let panelsChanged = false
+    for (const [tabId, owner] of this.panelByTab) {
+      if (owner !== record) continue
+      this.panelByTab.delete(tabId)
+      this.autoOpenByTab.delete(tabId)
+      panelsChanged = true
+    }
+    if (panelsChanged) this.publishPanelAssignments()
     if (record.status === 'running') await this.stop(conversationId)
     await record.finished
     if (this.runs.get(conversationId) !== record) return false
 
     this.runs.delete(conversationId)
-    let panelsChanged = false
-    for (const [tabId, owner] of this.panelByTab) {
-      if (owner !== record) continue
-      this.panelByTab.delete(tabId)
-      panelsChanged = true
-    }
-    if (panelsChanged) this.publishPanelAssignments()
     return true
   }
 
@@ -354,7 +364,14 @@ export class ConversationRuns {
       if (owner.conversationId === record.conversationId) tabIds.add(tabId)
     }
     if (tabIds.size === 0) return
-    for (const tabId of tabIds) this.panelByTab.set(tabId, record)
+    for (const tabId of tabIds) {
+      if (
+        this.panelByTab.get(tabId)?.conversationId !== record.conversationId
+      ) {
+        this.autoOpenByTab.delete(tabId)
+      }
+      this.panelByTab.set(tabId, record)
+    }
     this.publishPanelAssignments()
   }
 
@@ -365,6 +382,8 @@ export class ConversationRuns {
     if (
       !record.panelsVisible ||
       record.status !== 'running' ||
+      record.deleting ||
+      record.abortController.signal.aborted ||
       this.runs.get(record.conversationId) !== record
     ) {
       return false
@@ -375,10 +394,16 @@ export class ConversationRuns {
       if (!Number.isInteger(tabId) || tabId < 0) continue
       if (this.panelByTab.get(tabId) === record) continue
       this.panelByTab.set(tabId, record)
+      this.autoOpenByTab.set(tabId, crypto.randomUUID())
       changed = true
     }
     if (changed) this.publishPanelAssignments()
     return true
+  }
+
+  removePanelTab(tabId: number): void {
+    this.autoOpenByTab.delete(tabId)
+    if (this.panelByTab.delete(tabId)) this.publishPanelAssignments()
   }
 
   private currentPanelAssignments(): ConversationPanelAssignments {
@@ -389,6 +414,9 @@ export class ConversationRuns {
           conversationId: record.conversationId,
           runId: record.runId,
           status: record.status,
+          ...(this.autoOpenByTab.has(tabId) && {
+            autoOpenId: this.autoOpenByTab.get(tabId),
+          }),
         }))
         .sort((a, b) => a.tabId - b.tabId),
     }

@@ -79,6 +79,76 @@ describe('ConversationRuns', () => {
     await panels.cancel()
   })
 
+  it('keeps creation identity across turns and removes only retired bindings', async () => {
+    const runs = new ConversationRuns()
+    const first = controlledSource()
+    await runs.start({
+      conversationId: 'old',
+      messages: [],
+      panelTabIds: [10],
+      createStream: () => first.stream,
+    })
+    const run = runs.activeRun('old')
+    if (!run) throw new Error('Expected active run')
+    run.associateTabs([11, 12])
+    const initial = (await currentPanelAssignments(runs)).assignments
+    expect(initial[0]?.autoOpenId).toBeUndefined()
+    expect(initial[1]?.autoOpenId).toBeString()
+    first.close()
+    await collect(runs.subscribe('old'))
+    expect(
+      (await currentPanelAssignments(runs)).assignments.map((a) => a.tabId),
+    ).toEqual([10, 11, 12])
+    const second = controlledSource()
+    await runs.start({
+      conversationId: 'old',
+      messages: [],
+      panelTabIds: [10],
+      createStream: () => second.stream,
+    })
+    expect(
+      (await currentPanelAssignments(runs)).assignments[1]?.autoOpenId,
+    ).toBe(initial[1]?.autoOpenId)
+    expect(() => {
+      runs.subscribe('old', run.runId)
+    }).toThrow('Conversation run not found')
+    await runs.start({
+      conversationId: 'new',
+      messages: [],
+      panelTabIds: [12],
+      createStream: () => new ReadableStream(),
+    })
+    await runs.delete('old')
+    expect((await currentPanelAssignments(runs)).assignments).toEqual([
+      expect.objectContaining({ tabId: 12, conversationId: 'new' }),
+    ])
+    runs.removePanelTab(12)
+    expect((await currentPanelAssignments(runs)).assignments).toEqual([])
+    await runs.stop('new')
+  })
+
+  it('retires mappings immediately while provider preparation is still unwinding', async () => {
+    let release!: (stream: ReadableStream<UIMessageChunk>) => void
+    const runs = new ConversationRuns()
+    const starting = runs.start({
+      conversationId: 'retiring',
+      messages: [],
+      panelTabIds: [4],
+      createStream: () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    })
+    const run = runs.activeRun('retiring')
+    if (!run) throw new Error('Expected active run')
+    const retiring = runs.delete('retiring')
+    expect((await currentPanelAssignments(runs)).assignments).toEqual([])
+    expect(run.associateTabs([5])).toBe(false)
+    release(new ReadableStream())
+    await starting
+    await retiring
+  })
+
   it('periodically repeats current panel assignments for client healing', async () => {
     const source = controlledSource()
     const runs = new ConversationRuns({ panelAssignmentsHeartbeatMs: 20 })

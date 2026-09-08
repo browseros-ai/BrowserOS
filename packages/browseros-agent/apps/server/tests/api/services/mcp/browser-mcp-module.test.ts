@@ -116,7 +116,7 @@ describe('BrowserMcpModule', () => {
     expect(Object.keys(server._registeredTools)).toContain('tabs')
   })
 
-  it('runs conversation-tab effects for the active run but not for tabs list', async () => {
+  it('does not bind user tabs from tabs list or active', async () => {
     const conversationId = crypto.randomUUID()
     const { browserMcp: runtime, runs } = moduleFixture()
     const lease = runtime.createLease({
@@ -131,12 +131,10 @@ describe('BrowserMcpModule', () => {
     expect(runs.associated).toEqual([])
 
     await server._registeredTools.tabs.handler({ action: 'active' })
-    expect(runs.associated).toEqual([
-      { conversationId, runId: 'run-1', tabIds: [101] },
-    ])
+    expect(runs.associated).toEqual([])
   })
 
-  it('observes pages touched indirectly through the run browser SDK', async () => {
+  it('does not replace conversations on tabs merely touched by a script', async () => {
     const conversationId = crypto.randomUUID()
     const { browserMcp: runtime, runs } = moduleFixture()
     const lease = runtime.createLease({
@@ -151,9 +149,47 @@ describe('BrowserMcpModule', () => {
       code: 'await browser.nav(1).reload(); return "done"',
     })
 
+    expect(runs.associated).toEqual([])
+  })
+
+  it('publishes a created tab before tool completion even if loading later fails', async () => {
+    const session = browserSession()
+    let release!: () => void
+    const blocked = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let created!: () => void
+    const announced = new Promise<void>((resolve) => {
+      created = resolve
+    })
+    session.pages.newPage = async (_url, options) => {
+      options?.onCreated?.(102)
+      created()
+      await blocked
+      throw new Error('page load failed after creation')
+    }
+    const conversationId = crypto.randomUUID()
+    const { browserMcp, runs } = moduleFixture({ session })
+    runs.start(conversationId, 'early')
+    const lease = browserMcp.createLease({
+      conversationId,
+      readOnly: false,
+      outputFileAccess: createBrowserOutputFileAccess(),
+    })
+    const server = inspect(
+      browserMcp.createMcpServer({ leaseToken: lease.token }),
+    )
+    const executing = server._registeredTools.tabs.handler({
+      action: 'new',
+      url: 'https://example.com',
+    })
+    await announced
     expect(runs.associated).toEqual([
-      { conversationId, runId: 'run-2', tabIds: [101] },
+      { conversationId, runId: 'early', tabIds: [102] },
     ])
+    release()
+    expect((await executing).isError).toBe(true)
+    expect(runs.associated).toHaveLength(1)
   })
 
   it('groups the first tab created by an agent call', async () => {

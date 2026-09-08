@@ -22,6 +22,8 @@ export const ConversationPanelAssignmentSchema = z.object({
   conversationId: z.string(),
   runId: z.string(),
   status: ConversationRunStatusSchema,
+  // A creation event, stable across turns. Routing updates never imply opening.
+  autoOpenId: z.string().optional(),
 })
 
 /**

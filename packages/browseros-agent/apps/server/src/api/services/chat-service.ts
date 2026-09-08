@@ -165,9 +165,14 @@ export class ChatService {
 
   subscribe(
     conversationId: string,
+    runId?: string,
   ): ReadableStream<UIMessageChunk> | undefined {
     if (!this.conversationRuns.getSnapshot(conversationId)) return undefined
-    return this.conversationRuns.subscribe(conversationId)
+    return this.conversationRuns.subscribe(conversationId, runId)
+  }
+
+  removePanelTab(tabId: number): void {
+    this.conversationRuns.removePanelTab(tabId)
   }
 
   async stop(conversationId: string): Promise<boolean> {
@@ -862,12 +867,8 @@ class ChatRequestError extends Error {
 }
 
 function browserContextTabIds(browserContext?: BrowserContext): number[] {
-  if (!browserContext) return []
-  const tabIds = new Set<number>()
-  if (browserContext.activeTab) tabIds.add(browserContext.activeTab.id)
-  for (const tab of browserContext.selectedTabs ?? []) tabIds.add(tab.id)
-  for (const tab of browserContext.tabs ?? []) tabIds.add(tab.id)
-  return [...tabIds]
+  // Selected/context tabs provide input, not ownership of their panels.
+  return browserContext?.activeTab ? [browserContext.activeTab.id] : []
 }
 
 function conversationTabGroup(

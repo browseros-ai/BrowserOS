@@ -3,11 +3,9 @@ import { Capabilities } from '@/lib/browseros/capabilities'
 import { createConversationPanelBroker } from '@/lib/browseros/conversationPanelBroker.browser'
 import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
 import {
-  ensureSidePanelRuntimeStateLoaded,
   initializeSidePanelOptions,
   openSidePanel,
-  registerSidePanelOpenStateListeners,
-  setSidePanelPerWindowPreference,
+  prepareTabSidePanel,
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
@@ -46,8 +44,21 @@ export default defineBackground(() => {
   const conversationPanelBroker = createConversationPanelBroker()
   void conversationPanelBroker.start()
 
-  registerSidePanelOpenStateListeners()
-  ensureSidePanelRuntimeStateLoaded().catch(() => null)
+  // Registration never opens a panel. Per-tab URLs let panels opened by the
+  // native Alt+A shortcut identify their owner without following tab switches.
+  const preparePanel = (tabId: number) => {
+    void prepareTabSidePanel(tabId).catch(() => undefined)
+  }
+  void initializeSidePanelOptions()
+    .then(async () => {
+      for (const tab of await chrome.tabs.query({})) {
+        if (tab.id !== undefined) preparePanel(tab.id)
+      }
+    })
+    .catch(() => undefined)
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.id !== undefined) preparePanel(tab.id)
+  })
 
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
@@ -125,14 +136,8 @@ export default defineBackground(() => {
     })
   })
 
-  onRuntimeMessage(
-    RuntimeMessageType.sidePanelScopeChanged,
-    async ({ data }) => {
-      await setSidePanelPerWindowPreference(data.perWindow)
-    },
-  )
-
   chrome.tabs.onRemoved.addListener((tabId) => {
+    void conversationPanelBroker.removeTab(tabId).catch(() => undefined)
     const key = String(tabId)
     selectedTextStorage.getValue().then((map) => {
       if (map[key]) {
