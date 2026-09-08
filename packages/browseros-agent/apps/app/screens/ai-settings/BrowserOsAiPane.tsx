@@ -38,7 +38,6 @@ import {
 } from './graphql/aiSettingsDocument'
 import type { IncompleteProvider } from './IncompleteProviderCard'
 import { IncompleteProvidersList } from './IncompleteProvidersList'
-import { McpPromoBanner } from './McpPromoBanner'
 import { NewProviderDialog } from './NewProviderDialog'
 import { partitionSyncedProviders } from './synced-providers'
 
@@ -304,8 +303,6 @@ export const BrowserOsAiPane: FC = () => {
         onCreateCustomAgent={addProvider.onCreateCustomAgent}
         onUseTemplate={addProvider.onUseTemplate}
       />
-
-      <McpPromoBanner />
 
       <IncompleteProvidersList
         providers={incompleteProviders}
