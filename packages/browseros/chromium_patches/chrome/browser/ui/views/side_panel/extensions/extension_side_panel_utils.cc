@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
-index 51d332fec4a3346e6eea7e92ca2081d5cff18b08..9971318d2be74e056fef279dde179f15181bc810 100644
+index 51d332fec4a3346e6eea7e92ca2081d5cff18b08..df757b67607685f2478e8b2da2ab064e888218b1 100644
 --- a/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 +++ b/chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
 @@ -4,6 +4,7 @@
@@ -10,7 +10,7 @@ index 51d332fec4a3346e6eea7e92ca2081d5cff18b08..9971318d2be74e056fef279dde179f15
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -200,4 +201,127 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
+@@ -200,4 +201,133 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
    contextual_registry->ResetActiveEntry();
  }
  
@@ -82,11 +82,12 @@ index 51d332fec4a3346e6eea7e92ca2081d5cff18b08..9971318d2be74e056fef279dde179f15
 +  SidePanelUI* side_panel_ui = browser_window.GetFeatures().side_panel_ui();
 +  bool is_active_tab = (&web_contents == active_web_contents);
 +
-+  // Check if this extension's contextual panel is currently showing.
-+  bool is_currently_open = false;
-+  if (is_active_tab && side_panel_ui->IsSidePanelShowing()) {
-+    is_currently_open = IsKeyActiveInRegistry(contextual_registry, extension_key);
-+  }
++  // Background tabs remember an open panel in their contextual registry even
++  // though the window is showing another tab. Use the same state as
++  // browserosIsOpen() so explicit close and toggle can clear that remembered
++  // panel before the tab is activated.
++  const bool is_currently_open = IsContextualExtensionSidePanelOpen(
++      &browser_window, &web_contents, extension_id);
 +
 +  LOG(INFO) << "browseros: is_currently_open=" << is_currently_open
 +            << ", is_active_tab=" << is_active_tab;
@@ -110,7 +111,12 @@ index 51d332fec4a3346e6eea7e92ca2081d5cff18b08..9971318d2be74e056fef279dde179f15
 +
 +  if (!should_open) {
 +    LOG(INFO) << "browseros: Closing contextual panel";
-+    side_panel_ui->Close();
++    // The visible window panel belongs to the active tab. The contextual close
++    // helper leaves it alone when the requested tab is in the background.
++    CloseContextualExtensionSidePanel(&browser_window, &web_contents,
++                                     extension_id);
++    // Clear the target's remembered entry immediately, including while an
++    // active panel is animating closed, so switching tabs cannot restore it.
 +    contextual_registry->ResetActiveEntry();
 +    return false;
 +  } else {
