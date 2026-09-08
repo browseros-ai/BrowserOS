@@ -1,0 +1,288 @@
+(
+    <div style={{ backgroundColor: '#F5F5F5', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', fontSynthesis: 'none', gap: '28px', height: '1000px', MozOsxFontSmoothing: 'grayscale', overflow: 'clip', overflowWrap: 'anywhere', padding: '40px', WebkitFontSmoothing: 'antialiased', width: '1440px' }}>
+      <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <div style={{ boxSizing: 'border-box', color: '#65676C', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 600, letterSpacing: '0.08em', lineHeight: '18px' }}>
+          BROWSEROS / STARTER PROMPTS / EXPLORATION 01
+        </div>
+        <div style={{ boxSizing: 'border-box', color: '#202225', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '32px', fontWeight: 600, letterSpacing: '-0.03em', lineHeight: '40px' }}>
+          A. Edit all three in place
+        </div>
+      </div>
+      <div style={{ alignItems: 'start', boxSizing: 'border-box', display: 'flex', gap: '32px', width: '1360px' }}>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '24px', paddingRight: '20px', paddingTop: '42px', width: '336px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#202225', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '24px', fontWeight: 500, letterSpacing: '-0.02em', lineHeight: '32px' }}>
+            One small control. Three familiar prompts.
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#51545A', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '15px', lineHeight: '24px' }}>
+            “Edit prompts” turns the existing list into three text fields. Save brings the conversation starters back.
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#51545A', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '15px', lineHeight: '24px' }}>
+            The prompt is also its button label. This keeps setup simple, but long instructions make taller buttons.
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#AE4315', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 600, lineHeight: '20px' }}>
+            Recommended starting point
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '14px', width: '480px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#51545A', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 600, lineHeight: '20px' }}>
+            01 / New conversation
+          </div>
+          <div style={{ backgroundColor: '#202225', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '12px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', height: '756px', overflow: 'clip', width: '480px' }}>
+            <div style={{ alignItems: 'center', backgroundColor: '#303339', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '44px', justifyContent: 'space-between', paddingInline: '16px' }}>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z" fill="none" stroke="#F5773B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M20 2v4M18 4h4" fill="none" stroke="#F5773B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '18px' }}>
+                  Assistant
+                </div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                <path d="m6 6 12 12M6 18 18 6" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div style={{ alignItems: 'center', borderBottomColor: '#303339', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', justifyContent: 'space-between', paddingBlock: '12px', paddingInline: '16px' }}>
+              <div style={{ alignItems: 'center', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', paddingBlock: '8px', paddingInline: '12px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '14px', fontWeight: 500, lineHeight: '20px' }}>
+                  Codex-astra
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <path d="m7 10 5 5 5-5" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '20px' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <path d="M3 10a9 9 0 1 1 2 8M3 4v6h6m3-4v6l4 2" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <circle cx="5" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  <circle cx="12" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  <circle cx="19" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            </div>
+            <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '20px', justifyContent: 'center', padding: '24px' }}>
+              <div style={{ alignItems: 'center', backgroundColor: '#292C30', borderRadius: '16px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '56px', justifyContent: 'center', width: '56px' }}>
+                <svg width="28" height="28" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z" fill="none" stroke="#F5773B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M20 2v4M18 4h4" fill="none" stroke="#F5773B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '18px', fontWeight: 600, lineHeight: '24px' }}>
+                  Agent at your service
+                </div>
+                <div style={{ boxSizing: 'border-box', color: '#ADB0B6', display: 'flex', flexWrap: 'wrap', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', justifyContent: 'center', lineHeight: '19px', maxWidth: '230px', textAlign: 'center' }}>
+                  Let AI automate tasks and browse for you
+                </div>
+              </div>
+              <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '8px', paddingTop: '12px', width: '320px' }}>
+                <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingBottom: '2px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#ADB0B6', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '18px' }}>
+                    Your prompts
+                  </div>
+                  <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '5px' }}>
+                    <svg width="13" height="13" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                      <path d="m16 3 5 5-12 12-6 1 1-6Z" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                      <path d="m14 5 5 5" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <div style={{ boxSizing: 'border-box', color: '#D3D5D9', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '18px' }}>
+                      Edit prompts
+                    </div>
+                  </div>
+                </div>
+                <div style={{ alignItems: 'center', backgroundColor: '#292C30', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '9px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '10px', minHeight: '46px', paddingBlock: '11px', paddingInline: '12px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#F3F3F3', flexBasis: '0%', flexGrow: '1', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '19px' }}>
+                    Summarize this page in 5 bullet points.
+                  </div>
+                  <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', justifyContent: 'center', width: '28px' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                      <path d="M5 12h14m-6-6 6 6-6 6" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                </div>
+                <div style={{ alignItems: 'center', backgroundColor: '#292C30', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '9px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '10px', minHeight: '46px', paddingBlock: '11px', paddingInline: '12px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#F3F3F3', flexBasis: '0%', flexGrow: '1', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '19px' }}>
+                    Compare my open tabs and highlight the differences.
+                  </div>
+                  <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', justifyContent: 'center', width: '28px' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                      <path d="M5 12h14m-6-6 6 6-6 6" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                </div>
+                <div style={{ alignItems: 'center', backgroundColor: '#292C30', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '9px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '10px', minHeight: '46px', paddingBlock: '11px', paddingInline: '12px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#F3F3F3', flexBasis: '0%', flexGrow: '1', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '19px' }}>
+                    Find the best price for this product.
+                  </div>
+                  <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexShrink: '0', justifyContent: 'center', width: '28px' }}>
+                    <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                      <path d="M5 12h14m-6-6 6 6-6 6" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{ borderTopColor: '#303339', borderTopStyle: 'solid', borderTopWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '10px', padding: '12px' }}>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingInline: '4px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#D3D5D9', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '18px' }}>
+                  Agent Mode ON
+                </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', gap: '16px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                    <path d="M12 5v14M5 12h14" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                    <circle cx="5" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    <circle cx="12" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    <circle cx="19" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              </div>
+              <div style={{ alignItems: 'center', backgroundColor: '#292C30', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '12px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingBlock: '10px', paddingInline: '12px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#A2A6AD', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '20px' }}>
+                  What should I do?
+                </div>
+                <div style={{ alignItems: 'center', backgroundColor: '#F5773B', borderRadius: '50%', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '28px', justifyContent: 'center', width: '28px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                    <path d="m3 3 18 9-18 9 4-9-4-9Zm4 9h14" fill="none" stroke="#17191C" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '14px', width: '480px' }}>
+          <div style={{ boxSizing: 'border-box', color: '#51545A', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 600, lineHeight: '20px' }}>
+            02 / After clicking “Edit prompts”
+          </div>
+          <div style={{ backgroundColor: '#202225', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '12px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', height: '756px', overflow: 'clip', width: '480px' }}>
+            <div style={{ alignItems: 'center', backgroundColor: '#303339', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '44px', justifyContent: 'space-between', paddingInline: '16px' }}>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <path d="m12 3 2.4 6.6L21 12l-6.6 2.4L12 21l-2.4-6.6L3 12l6.6-2.4Z" fill="none" stroke="#F5773B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  <path d="M20 2v4M18 4h4" fill="none" stroke="#F5773B" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '18px' }}>
+                  Assistant
+                </div>
+              </div>
+              <svg width="14" height="14" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                <path d="m6 6 12 12M6 18 18 6" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </div>
+            <div style={{ alignItems: 'center', borderBottomColor: '#303339', borderBottomStyle: 'solid', borderBottomWidth: '1px', boxSizing: 'border-box', display: 'flex', flexShrink: '0', justifyContent: 'space-between', paddingBlock: '12px', paddingInline: '16px' }}>
+              <div style={{ alignItems: 'center', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', gap: '12px', paddingBlock: '8px', paddingInline: '12px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '14px', fontWeight: 500, lineHeight: '20px' }}>
+                  Codex-astra
+                </div>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <path d="m7 10 5 5 5-5" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', gap: '20px' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <path d="M3 10a9 9 0 1 1 2 8M3 4v6h6m3-4v6l4 2" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+                <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                  <circle cx="5" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  <circle cx="12" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  <circle cx="19" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            </div>
+            <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', flexBasis: '0%', flexDirection: 'column', flexGrow: '1', gap: '14px', justifyContent: 'center', padding: '24px' }}>
+              <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '14px', width: '352px' }}>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '18px', fontWeight: 600, lineHeight: '24px' }}>
+                    Edit your prompts
+                  </div>
+                  <div style={{ boxSizing: 'border-box', color: '#ADB0B6', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '19px' }}>
+                    Your three shortcuts for a new conversation.
+                  </div>
+                </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '7px', width: '100%' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#D3D5D9', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 500, lineHeight: '18px' }}>
+                    Prompt 1
+                  </div>
+                  <div style={{ backgroundColor: '#292C30', borderColor: '#F5773B', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', flexShrink: '0', height: '66px', padding: '12px', width: '100%' }}>
+                    <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '20px' }}>
+                      Summarize this page in 5 bullet points.
+                    </div>
+                  </div>
+                </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '7px', width: '100%' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#D3D5D9', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 500, lineHeight: '18px' }}>
+                    Prompt 2
+                  </div>
+                  <div style={{ backgroundColor: '#292C30', borderColor: '#484C52', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', flexShrink: '0', height: '66px', padding: '12px', width: '100%' }}>
+                    <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '20px' }}>
+                      Compare my open tabs and highlight the differences.
+                    </div>
+                  </div>
+                </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: '7px', width: '100%' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#D3D5D9', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', fontWeight: 500, lineHeight: '18px' }}>
+                    Prompt 3
+                  </div>
+                  <div style={{ backgroundColor: '#292C30', borderColor: '#484C52', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', flexShrink: '0', height: '66px', padding: '12px', width: '100%' }}>
+                    <div style={{ boxSizing: 'border-box', color: '#F3F3F3', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '20px' }}>
+                      Find the best price for this product.
+                    </div>
+                  </div>
+                </div>
+                <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingTop: '6px' }}>
+                  <div style={{ boxSizing: 'border-box', color: '#ADB0B6', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '18px' }}>
+                    Reset defaults
+                  </div>
+                  <div style={{ boxSizing: 'border-box', display: 'flex', gap: '8px' }}>
+                    <div style={{ alignItems: 'center', borderColor: '#484C52', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '8px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', justifyContent: 'center', paddingBlock: '9px', paddingInline: '14px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#F3F3F3', display: 'flex', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '18px' }}>
+                        Cancel
+                      </div>
+                    </div>
+                    <div style={{ alignItems: 'center', backgroundColor: '#F5773B', borderRadius: '8px', boxSizing: 'border-box', display: 'flex', justifyContent: 'center', paddingBlock: '9px', paddingInline: '14px' }}>
+                      <div style={{ boxSizing: 'border-box', color: '#17191C', display: 'flex', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', fontWeight: 500, lineHeight: '18px' }}>
+                        Save prompts
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div style={{ borderTopColor: '#303339', borderTopStyle: 'solid', borderTopWidth: '1px', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', flexShrink: '0', gap: '10px', padding: '12px' }}>
+              <div style={{ alignItems: 'center', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingInline: '4px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#D3D5D9', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '12px', lineHeight: '18px' }}>
+                  Agent Mode ON
+                </div>
+                <div style={{ boxSizing: 'border-box', display: 'flex', gap: '16px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                    <path d="M12 5v14M5 12h14" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                    <circle cx="5" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    <circle cx="12" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    <circle cx="19" cy="12" r="1" fill="none" stroke="#ADB0B6" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              </div>
+              <div style={{ alignItems: 'center', backgroundColor: '#292C30', borderColor: '#3A3D42', borderImageOutset: '0', borderImageRepeat: 'stretch', borderImageSlice: '100%', borderImageSource: 'none', borderImageWidth: '1', borderRadius: '12px', borderStyle: 'solid', borderWidth: '1px', boxSizing: 'border-box', display: 'flex', justifyContent: 'space-between', paddingBlock: '10px', paddingInline: '12px' }}>
+                <div style={{ boxSizing: 'border-box', color: '#A2A6AD', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '20px' }}>
+                  What should I do?
+                </div>
+                <div style={{ alignItems: 'center', backgroundColor: '#F5773B', borderRadius: '50%', boxSizing: 'border-box', display: 'flex', flexShrink: '0', height: '28px', justifyContent: 'center', width: '28px' }}>
+                  <svg width="16" height="16" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" style={{ flexShrink: '0' }}>
+                    <path d="m3 3 18 9-18 9 4-9-4-9Zm4 9h14" fill="none" stroke="#17191C" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div style={{ boxSizing: 'border-box', color: '#51545A', fontFamily: '"Inter", system-ui, sans-serif', fontSize: '13px', lineHeight: '20px' }}>
+            Save applies to new conversations in the side panel and new tab.
+          </div>
+        </div>
+      </div>
+    </div>
+  )

@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>BrowserOS · Starter prompt studies</title>
+    <style>
+      * { box-sizing: border-box; }
+      body { margin: 0; background: #e7e7e9; color: #202225; font: 14px/1.4 system-ui, sans-serif; }
+      main { position: fixed; inset: 0 0 84px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+      #viewport { position: relative; }
+      iframe { width: 1440px; height: 1000px; border: 0; transform-origin: top left; }
+      nav { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 16px; padding: 10px 14px; border-radius: 12px; background: #202225; color: #f3f3f3; box-shadow: 0 8px 28px #0002; white-space: nowrap; }
+      button, a { color: inherit; }
+      button { background: #34373c; border: 1px solid #4b4f55; border-radius: 6px; padding: 7px 11px; cursor: pointer; }
+      #state { min-width: 236px; text-align: center; }
+      small { color: #adb0b6; }
+      a { font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <main><div id="viewport"><iframe title="Paper design comparison"></iframe></div></main>
+    <nav aria-label="Prototype variants">
+      <button id="previous" aria-label="Previous variant">←</button>
+      <div id="state" aria-live="polite"></div>
+      <button id="next" aria-label="Next variant">→</button>
+      <a href="https://app.paper.design/file/01M213WD4SPQWNYJ021VD8FNJE/1-0">Open in Paper</a>
+    </nav>
+    <script>
+      // Read-only Paper exports: this switcher only changes the study being viewed.
+      const variants = [
+        { key: 'A', label: 'Edit all three in place' },
+        { key: 'B', label: 'Edit one prompt at a time' },
+        { key: 'C', label: 'Dedicated customization pane' },
+      ];
+      const frame = document.querySelector('iframe');
+      const viewport = document.querySelector('#viewport');
+      const requested = new URLSearchParams(location.search).get('variant');
+      let current = Math.max(0, variants.findIndex((variant) => variant.key === requested));
+      function show() {
+        const variant = variants[current];
+        frame.src = variant.key + '.html';
+        document.querySelector('#state').textContent = variant.key + ' · ' + variant.label;
+        const url = new URL(location.href);
+        url.searchParams.set('variant', variant.key);
+        history.replaceState(null, '', url);
+      }
+      function cycle(direction) {
+        current = (current + direction + variants.length) % variants.length;
+        show();
+      }
+      function fit() {
+        const scale = Math.min((innerWidth - 24) / 1440, (innerHeight - 100) / 1000);
+        viewport.style.width = 1440 * scale + 'px';
+        viewport.style.height = 1000 * scale + 'px';
+        frame.style.transform = 'scale(' + scale + ')';
+      }
+      document.querySelector('#previous').onclick = () => cycle(-1);
+      document.querySelector('#next').onclick = () => cycle(1);
+      addEventListener('keydown', (event) => {
+        if (event.target.matches('input, textarea, [contenteditable]')) return;
+        if (event.key === 'ArrowLeft') cycle(-1);
+        if (event.key === 'ArrowRight') cycle(1);
+      });
+      addEventListener('resize', fit);
+      show();
+      fit();
+    </script>
+  </body>
+</html>
