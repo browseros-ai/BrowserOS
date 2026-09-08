@@ -56,10 +56,12 @@ const ModeEmptyState: FC<ChatEmptyStateProps> = ({
     }
   }
 
+  // Grow with the editor in short panels; shrinking this centered flex child
+  // would place the form's top above the parent's reachable scroll area.
   return (
     <div
       className={cn(
-        'm-0! flex min-h-full w-full flex-col items-center justify-center gap-4 py-4 text-center opacity-0 transition-all duration-700',
+        'm-0! flex min-h-full w-full shrink-0 flex-col items-center justify-center gap-4 py-4 text-center opacity-0 transition-all duration-700',
         mounted ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0',
       )}
     >
