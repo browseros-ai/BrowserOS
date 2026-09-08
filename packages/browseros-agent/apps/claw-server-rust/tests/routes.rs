@@ -497,7 +497,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
     assert_eq!(
         tool["description"],
-        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
+        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <agentName>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
     );
     assert_eq!(
         tool["inputSchema"],
@@ -691,7 +691,7 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
 
     let mut stream = McpSseStream::open(&app.router, &session_id).await?;
     let tip = format!(
-        "Tip: this session is \"claude/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
+        "Tip: this session is \"claude-code/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
     );
     for id in 3..=7 {
         let (status, _headers, body) = request_json_with_headers(

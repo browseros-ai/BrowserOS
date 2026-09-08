@@ -86,7 +86,6 @@ function session(
     slug: 'codex',
     label: 'Codex',
     name: 'Research BrowserClaw',
-    harness: 'Codex',
     color: '#0254ec',
     startedAt: 100,
     state: 'active',

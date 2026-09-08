@@ -284,7 +284,6 @@ function replayData(
     sessionId: 'session-1',
     agentLabel: 'Codex',
     taskTitle: 'Replay test',
-    harness: 'Codex',
     status: 'done' as const,
     site: 'example.com',
     startedAt: 'Jul 18, 2026',

@@ -35,6 +35,7 @@ const publicColumns = {
   createdAt: providers.createdAt,
   updatedAt: providers.updatedAt,
   baseUrl: providers.baseUrl,
+  headers: providers.headers,
   supportsImages: providers.supportsImages,
   contextWindow: providers.contextWindow,
   temperature: providers.temperature,

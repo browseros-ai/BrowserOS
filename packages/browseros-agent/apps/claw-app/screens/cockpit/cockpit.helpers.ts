@@ -4,7 +4,6 @@ import type {
   SessionSummary,
   ToolEvent,
 } from '@browseros/claw-api'
-import { HARNESSES, type Harness } from '@/components/harness/harness.types'
 
 // Missing parent colors fall back to a stable slug hash so card identity does
 // not flicker between live-session polls.
@@ -62,21 +61,12 @@ export function formatToolTrail(
     .join(' -> ')
 }
 
-/** Coerces contract strings into the UI harness union with an honest fallback. */
-export function harnessForRow(value: string | undefined): Harness {
-  if (!value) return 'Claude Code'
-  return (HARNESSES as readonly string[]).includes(value)
-    ? (value as Harness)
-    : 'Claude Code'
-}
-
 export interface LiveSessionCardRecord {
   sessionId: string
   profileId?: string
   slug: string
   label: string
   name: string
-  harness: Harness
   color: string
   startedAt: number
   state: LiveSessionActivityState
@@ -139,7 +129,6 @@ export function sessionsToLiveCards(
       slug: session.slug,
       label: session.label || session.slug,
       name: session.name,
-      harness: harnessForRow(session.harness),
       color: session.color ?? colorForSlug(session.slug),
       startedAt: session.startedAt,
       state: session.live?.state ?? 'idle',

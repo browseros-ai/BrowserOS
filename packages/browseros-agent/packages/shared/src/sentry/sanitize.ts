@@ -16,6 +16,7 @@ const SENSITIVE_KEY_PATTERNS = [
   'password',
   'secret',
   'credential',
+  'headers',
 ]
 
 function isSensitiveKey(key: string): boolean {

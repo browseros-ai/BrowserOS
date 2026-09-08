@@ -370,14 +370,19 @@ def sign_with_codesigntool(
                     cwd=str(tool_root),
                 )
 
+            # Redact the original streams before normalizing whitespace: a
+            # credential may itself contain spaces or newlines, and trimming
+            # first would prevent the exact-value redactor from matching it.
             if result.stdout:
-                for line in result.stdout.split("\n"):
+                safe_stdout = redact_sensitive_text(result.stdout, secret_values)
+                for line in safe_stdout.splitlines():
                     if line.strip():
-                        log_info(redact_sensitive_text(line.strip(), secret_values))
+                        log_info(line.strip())
             if result.stderr:
-                for line in result.stderr.split("\n"):
+                safe_stderr = redact_sensitive_text(result.stderr, secret_values)
+                for line in safe_stderr.splitlines():
                     if line.strip() and "WARNING" not in line:
-                        log_error(redact_sensitive_text(line.strip(), secret_values))
+                        log_error(line.strip())
 
             if getattr(result, "returncode", 0) != 0 or (
                 result.stdout and "Error:" in result.stdout
@@ -415,8 +420,18 @@ def sign_with_codesigntool(
                         f"✗ {binary.name} signing verification failed - Status: {verify_result.stdout.strip()}"
                     )
                     all_success = False
-            except Exception:
-                log_warning(f"Could not verify signature for {binary.name}")
+            except Exception as e:
+                # Windows releases require successful Authenticode verification.
+                # Cross-signing hosts may lack PowerShell, but a broken verifier
+                # on Windows must stop packaging and OTA publication.
+                if IS_WINDOWS():
+                    safe_error = redact_sensitive_text(str(e), secret_values)
+                    log_error(
+                        f"Could not verify signature for {binary.name}: {safe_error}"
+                    )
+                    all_success = False
+                else:
+                    log_warning(f"Could not verify signature for {binary.name}")
 
         except Exception as e:
             safe_error = redact_sensitive_text(str(e), secret_values)
