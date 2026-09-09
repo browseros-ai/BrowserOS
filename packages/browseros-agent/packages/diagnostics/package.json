@@ -17,7 +17,7 @@
     "react": "^19.2.8"
   },
   "devDependencies": {
-    "@types/chrome": "^0.2.7",
+    "@types/chrome": "^0.2.9",
     "@types/react": "^19.2.18"
   }
 }
