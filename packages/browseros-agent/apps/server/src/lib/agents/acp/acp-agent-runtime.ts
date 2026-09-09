@@ -12,7 +12,7 @@ import {
   createAcpxProvider,
 } from '@browseros/acpx-ai-provider'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
-import { createFileSessionStore } from 'acpx/runtime'
+import { type AcpSessionRecord, createFileSessionStore } from 'acpx/runtime'
 import {
   convertToModelMessages,
   createUIMessageStream,
@@ -314,13 +314,7 @@ export class AcpAgentRuntime {
       }).load(policy.sessionKey)
       // An agent may emit startup notices during prepare(). Only user turns
       // prove it has conversation context; otherwise seed it from SQLite.
-      hasHistory =
-        persistedRecord?.messages.some(
-          (message) =>
-            typeof message === 'object' &&
-            message !== null &&
-            'User' in message,
-        ) ?? false
+      hasHistory = persistedRecord?.messages.some(isAcpUserMessage) ?? false
     } catch (error) {
       await provider.close('prepare-failed').catch(() => {})
       throw error
@@ -383,6 +377,13 @@ export class AcpAgentRuntime {
     }
     idleTimer.unref?.()
   }
+}
+
+// ACPX validates records on load; the only non-object variant is a resume marker.
+function isAcpUserMessage(
+  message: AcpSessionRecord['messages'][number],
+): boolean {
+  return typeof message !== 'string' && 'User' in message
 }
 
 /**
