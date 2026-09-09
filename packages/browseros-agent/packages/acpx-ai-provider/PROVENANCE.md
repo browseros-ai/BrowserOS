@@ -14,7 +14,7 @@ BrowserOS wants to edit the provider in place without a round-trip through npm p
 
 ## Current compatibility and upstream review
 
-The original snapshot targeted AI SDK v6. BrowserOS has since migrated this fork to AI SDK v7 (`@ai-sdk/provider ^4`, `@ai-sdk/provider-utils ^5`) and incorporated upstream changes. The workspace version still records `0.0.6`; it does not describe the current code's compatibility or upstream coverage.
+The original snapshot targeted AI SDK v6. BrowserOS has since migrated this fork to AI SDK v7 (`@ai-sdk/provider ^4`, `@ai-sdk/provider-utils ^5`) and incorporated upstream changes. The workspace package is now version `1.0.0`; the snapshot version above records its original provenance.
 
 Reviewed against upstream `main` at `1afa195fd576ff4d8af7859c5af8e2d672639ef5` on 2026-09-08; the latest published provider was `1.0.0`. Live usage events, available-command subscriptions, slash-command event routing, defensive-copy getters, tool-input ID correlation, and the explicit event-emitter type were already present locally. Ported the remaining selected-agent compaction lookup fix from upstream commit `0390bb75183bce4a51a13932475c20ea52aada53` (#80).
 
