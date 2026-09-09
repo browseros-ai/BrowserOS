@@ -127,18 +127,18 @@ export const NewTabChat: FC = () => {
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
-      <div className="mx-auto w-full max-w-3xl">
-        <ChatHeader
-          selectedProvider={selectedProvider}
-          providers={providers}
-          onSelectProvider={handleSelectProvider}
-          onNewConversation={handleNewConversation}
-          hasMessages={messages.length > 0}
-          hideHistory
-        />
-      </div>
+      <ChatHeader
+        selectedProvider={selectedProvider}
+        providers={providers}
+        onSelectProvider={handleSelectProvider}
+        onNewConversation={handleNewConversation}
+        hasMessages={messages.length > 0}
+        hideHistory
+        className="shrink-0 px-4 sm:px-8"
+      />
 
-      <main className="styled-scrollbar [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto mx-auto flex min-h-0 w-full max-w-3xl flex-1 flex-col space-y-4 overflow-y-auto overflow-x-hidden px-4 pt-4 [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
+      {/* Keep transcript and composer widths in sync; only the header spans the page. */}
+      <main className="styled-scrollbar [&_[data-streamdown='code-block']]:!max-w-full [&_[data-streamdown='code-block']]:!w-auto [&_[data-streamdown='table-wrapper']]:!max-w-full [&_[data-streamdown='table-wrapper']]:!w-auto mx-auto flex min-h-0 w-full max-w-5xl flex-1 flex-col space-y-4 overflow-y-auto overflow-x-hidden px-4 pt-4 sm:w-[calc(100%-4rem)] [&_[data-streamdown='code-block']]:overflow-x-auto [&_[data-streamdown='table-wrapper']]:overflow-x-auto">
         {isRestoringConversation ? (
           <div className="flex flex-1 items-center justify-center">
             <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -181,7 +181,7 @@ export const NewTabChat: FC = () => {
         )}
       </main>
 
-      <div className="mx-auto w-full max-w-3xl flex-shrink-0 px-4 pb-2">
+      <div className="mx-auto w-full max-w-5xl flex-shrink-0 px-4 pb-2 sm:w-[calc(100%-4rem)]">
         <ChatFooter
           mode={mode}
           onModeChange={handleModeChange}
