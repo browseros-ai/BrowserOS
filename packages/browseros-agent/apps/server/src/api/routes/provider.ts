@@ -37,11 +37,13 @@ type StoredProvider = {
  * Fills blank credential fields from the saved provider row so testing an
  * existing provider works even though reads redact its secrets.
  *
- * The stored secret is bound to the stored destination: it is reused only when
- * the request targets the same provider type AND the same connection settings
- * (base URL / resource name / region). Otherwise a caller who knows a saved
- * provider id could pair its key with an arbitrary base URL and exfiltrate it
- * to another endpoint. A changed destination must supply its own credential.
+ * A reused stored secret is bound to the stored destination: whenever a blank
+ * credential is filled in, the connection settings (base URL / resource name /
+ * region) are taken from the saved row too, so the secret can only ever be sent
+ * to the endpoint it was saved against, never a caller-supplied URL. A caller
+ * that supplies its own credential keeps its own settings, since no stored
+ * secret is at risk. The type must still match, so an openrouter key is never
+ * reused as, say, an azure provider.
  */
 export function mergeStoredCredentials<
   T extends {
@@ -51,19 +53,19 @@ export function mergeStoredCredentials<
     region?: string
   },
 >(config: T, stored: StoredProvider | null): T {
-  const same = (a?: string | null, b?: string | null) => (a ?? '') === (b ?? '')
-  if (
-    !stored ||
-    stored.type !== config.provider ||
-    !same(config.baseUrl, stored.baseUrl) ||
-    !same(config.resourceName, stored.resourceName) ||
-    !same(config.region, stored.region)
-  ) {
-    return config
-  }
+  if (!stored || stored.type !== config.provider) return config
   const merged = { ...config } as Record<string, unknown>
+  let reusedStoredSecret = false
   for (const field of CREDENTIAL_FIELDS) {
-    if (!merged[field]) merged[field] = stored[field] ?? undefined
+    if (!merged[field] && stored[field]) {
+      merged[field] = stored[field]
+      reusedStoredSecret = true
+    }
+  }
+  if (reusedStoredSecret) {
+    merged.baseUrl = stored.baseUrl ?? undefined
+    merged.resourceName = stored.resourceName ?? undefined
+    merged.region = stored.region ?? undefined
   }
   return merged as T
 }
