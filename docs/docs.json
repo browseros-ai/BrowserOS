@@ -12,8 +12,7 @@
     "products": [
       {
         "product": "BrowserOS neo",
-        "description": "The browser your AI agents drive with your logged-in accounts",
-        "icon": "bot",
+        "description": "Browser for agents",
         "groups": [
           {
             "group": "Start",
@@ -51,8 +50,7 @@
       },
       {
         "product": "BrowserOS",
-        "description": "The open-source browser with AI agents built in",
-        "icon": "globe",
+        "description": "Browser for humans",
         "groups": [
           {
             "group": "Start",
