@@ -7,7 +7,9 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Feature } from '@/lib/browseros/capabilities'
 import { cn } from '@/lib/utils'
+import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { SidebarHistory } from './SidebarHistory'
 
 export interface SidebarNavigationProps {
@@ -49,6 +51,8 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
   onNavigate,
 }) => {
   const location = useLocation()
+  const { supports } = useCapabilities()
+  const showHistory = supports(Feature.NEWTAB_CHAT_HISTORY_SUPPORT)
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -89,7 +93,8 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
                     <TooltipContent side="right">{item.name}</TooltipContent>
                   )}
                 </Tooltip>
-                {item.to === '/home' && (
+                {/* Gate the mount so non-alpha navigation never starts history queries. */}
+                {item.to === '/home' && showHistory && (
                   <SidebarHistory expanded={expanded} onNavigate={onNavigate} />
                 )}
               </div>
