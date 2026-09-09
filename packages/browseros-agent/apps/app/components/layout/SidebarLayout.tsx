@@ -7,16 +7,20 @@ import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { useIsMobile } from '@/hooks/use-mobile'
 import { RpcClientProvider } from '@/lib/rpc/RpcClientProvider'
+import { cn } from '@/lib/utils'
+import { ActiveConversationProvider } from '@/modules/conversations/active-conversation-context'
 import { ShortcutsDialog } from '@/screens/newtab/index/ShortcutsDialog'
 
 const COLLAPSE_DELAY = 150
 
-export const SidebarLayout: FC = () => {
+const SidebarLayoutContent: FC = () => {
   const location = useLocation()
+  const isChatPage = location.pathname === '/home/chat'
   const isMobile = useIsMobile()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [shortcutsDialogOpen, setShortcutsDialogOpen] = useState(false)
+  const sidebarRef = useRef<HTMLDivElement>(null)
   const collapseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const openShortcuts = useCallback(() => {
@@ -45,33 +49,51 @@ export const SidebarLayout: FC = () => {
 
   const handleMouseLeave = useCallback(() => {
     collapseTimeoutRef.current = setTimeout(() => {
-      setSidebarOpen(false)
+      // Keyboard focus keeps the rail open even when the pointer leaves it.
+      if (!sidebarRef.current?.contains(document.activeElement))
+        setSidebarOpen(false)
     }, COLLAPSE_DELAY)
   }, [])
 
   if (isMobile) {
     return (
       <RpcClientProvider>
-        <div className="flex min-h-screen flex-col bg-background">
+        <div
+          className={cn(
+            'flex flex-col bg-background',
+            isChatPage ? 'h-dvh' : 'min-h-screen',
+          )}
+        >
           <header className="flex h-14 shrink-0 items-center gap-2 border-b px-4">
             <Button
               variant="ghost"
               size="icon"
               className="-ml-1 size-7"
               onClick={() => setMobileOpen(true)}
+              aria-label="Open navigation"
             >
               <Menu className="size-4" />
             </Button>
             <span className="font-semibold">BrowserOS</span>
           </header>
-          <main className="flex-1 overflow-y-auto">
-            <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+          {isChatPage ? (
+            <main className="relative min-h-0 flex-1 overflow-hidden">
               <Outlet />
-            </div>
-          </main>
+            </main>
+          ) : (
+            <main className="flex-1 overflow-y-auto">
+              <div className="mx-auto max-w-4xl px-4 py-8 sm:px-6 lg:px-8">
+                <Outlet />
+              </div>
+            </main>
+          )}
           <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
             <SheetContent side="left" className="w-72 p-0">
-              <AppSidebar expanded onOpenShortcuts={openShortcuts} />
+              <AppSidebar
+                expanded
+                onOpenShortcuts={openShortcuts}
+                onNavigate={() => setMobileOpen(false)}
+              />
             </SheetContent>
           </Sheet>
           <ShortcutsDialog
@@ -90,15 +112,31 @@ export const SidebarLayout: FC = () => {
         {/* Sidebar - fixed overlay */}
         {/* biome-ignore lint/a11y/noStaticElementInteractions: hover interactions needed */}
         <div
+          ref={sidebarRef}
           className="fixed inset-y-0 left-0 z-40"
           onMouseEnter={handleMouseEnter}
           onMouseLeave={handleMouseLeave}
+          onFocusCapture={handleMouseEnter}
+          onBlurCapture={(event) => {
+            if (
+              !event.currentTarget.contains(event.relatedTarget) &&
+              !event.currentTarget.matches(':hover')
+            )
+              handleMouseLeave()
+          }}
         >
           <AppSidebar expanded={sidebarOpen} onOpenShortcuts={openShortcuts} />
         </div>
 
-        {location.pathname === '/home/chat' ? (
-          <main className="relative h-dvh overflow-hidden">
+        {isChatPage ? (
+          // The expanded rail adds 200px beyond the 56px already reserved.
+          // Keep the transcript readable while browsing history in narrow windows.
+          <main
+            className={cn(
+              'relative h-dvh overflow-hidden transition-[margin] duration-200',
+              sidebarOpen && 'ml-[200px]',
+            )}
+          >
             <Outlet />
           </main>
         ) : (
@@ -116,3 +154,9 @@ export const SidebarLayout: FC = () => {
     </RpcClientProvider>
   )
 }
+
+export const SidebarLayout: FC = () => (
+  <ActiveConversationProvider>
+    <SidebarLayoutContent />
+  </ActiveConversationProvider>
+)
