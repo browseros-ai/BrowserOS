@@ -25,8 +25,23 @@
     }
   }
 
+  /* Setting the href is not enough on its own. Mintlify's router intercepts
+     the click and navigates from its own state, so the anchor's href is never
+     read. The click is caught in the capture phase, before that handler runs,
+     and the navigation is done here instead. */
+  function interceptLogoClick(event) {
+    const link = event.target instanceof Element && event.target.closest('a')
+    if (!link || !link.querySelector('.nav-logo')) return
+    const home = currentHome()
+    if (home === NEO_HOME) return // the router's own default is already correct
+    event.preventDefault()
+    event.stopPropagation()
+    window.location.assign(home)
+  }
+
   const start = () => {
     syncLogoLinks()
+    document.addEventListener('click', interceptLogoClick, true)
     // The path attribute changes on client-side navigation; the logo itself is
     // re-rendered independently, so both are watched.
     new MutationObserver(syncLogoLinks).observe(document.documentElement, {
