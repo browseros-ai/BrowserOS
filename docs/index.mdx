@@ -1,106 +1,78 @@
 ---
-title: "BrowserOS"
-description: "The open-source AI browser that turns your words into actions"
+title: "BrowserOS neo"
+description: "The browser your AI can actually use. It's your browser, your logins, your control."
+keywords: ["BrowserOS neo", "browser for AI agents", "AI browser", "Claude Code browser", "MCP browser"]
 ---
 
-<Frame>
-  <img src="/images/hero-dark.png" alt="BrowserOS in action" />
-</Frame>
+<video
+  controls
+  className="w-full aspect-video rounded-xl"
+  src="https://github.com/browseros-ai/BrowserOS/releases/download/onboarding-video/v0.1.0/first-run-demo.mp4"
+  poster="https://github.com/browseros-ai/BrowserOS/releases/download/onboarding-video/v0.1.0/first-run-demo-poster.png"
+></video>
 
-BrowserOS is an AI-native browser that lets you automate any web task by describing it in plain English. Built on Chromium, it runs AI agents locally on your machine—keeping your data private while giving you superpowers for browsing.
+BrowserOS neo is a browser your AI can actually use. You install it and use it like any browser. Once you're signed in to the sites you use every day, your AI can use those same logins to get real work done. You watch every step on your new tab page, and replay anything it did like a video.
 
-**Open source. Privacy-first. The browser for the AI era.**
+## The problem
 
-## Three Ways to Use AI
+Your AI is smart. But it can't press the buttons.
 
-<Columns cols={3}>
-  <Card title="Chat Mode" icon="message">
-    Ask questions about the page you're viewing. Summarize articles, extract data, translate content—without leaving the page.
+Ask it to book a flight, download an invoice, or send a message from your inbox. It stops at the login screen. Today's tools open a blank browser where nothing is signed in, or a browser running on some remote cloud. Neither one can do your real work.
+
+## The idea
+
+BrowserOS neo is a real browser you install and use. Because it's your browser, your logins are already there. Your email, your calendar, your bank, your work tools: all signed in.
+
+When your AI drives BrowserOS neo, it can actually do things. Book a meeting on your calendar. Reply to an email from your inbox. Get the numbers from a Notion doc. File an expense. The 15-minute chores you keep meaning to get to just get done.
+
+## Three things you get
+
+<CardGroup cols={3}>
+  <Card title="Your logins" icon="key">
+    Your Gmail, your calendar, your bank, your work tools. Already signed in. Your AI uses the logins you already have.
   </Card>
-  <Card title="Agent Mode" icon="robot">
-    Describe a task and watch AI execute it: clicking, typing, navigating. Automate form filling, data extraction, and multi-step workflows.
+  <Card title="A dashboard that watches" icon="binoculars">
+    A dashboard on your new tab shows every AI working right now. Which site it's on, what it's doing, how far along.
   </Card>
-  <Card title="Graph Mode" icon="sitemap">
-    Build reliable, repeatable workflows as visual graphs. Edit steps, save, and run anytime. *Coming soon.*
+  <Card title="Replay every session" icon="rotate-ccw">
+    Every session becomes a video you can replay. If your AI got something wrong, hit rewind and see where. If it went right, you know the recipe.
   </Card>
-</Columns>
+</CardGroup>
 
-## Quick Start
+## See it in action
+
+Three steps from asking your AI to replaying what it did.
 
 <Steps>
-  <Step title="Download BrowserOS">
-    Get the latest release from [browseros.com](https://browseros.com) for macOS, Windows, or Linux.
+  <Step title="Connect BrowserOS neo to your AI">
+    One click connects BrowserOS neo to Claude Code, Cursor, Codex, and other AI tools. Nothing to set up.
   </Step>
-  <Step title="Import from Chrome">
-    Navigate to `chrome://settings/importData` and import your bookmarks, passwords, and settings in one click.
+  <Step title="Give it a real task">
+    In your AI chat, ask it to do something you actually need done. Something like: `Book me the cheapest morning flight from SFO to NYC next Friday.`
   </Step>
-  <Step title="Configure your AI">
-    BrowserOS includes a default AI model with limited daily usage for testing. For the full experience, bring your own API keys.
-
-    <Card title="Set up your LLM provider" icon="key" href="/features/bring-your-own-llm">
-      Configure Gemini, Claude, OpenAI, or run models locally with Ollama
-    </Card>
-  </Step>
-  <Step title="Try it out">
-    Open any webpage and press the **Assistant** button in the toolbar. Ask a question about the page, or describe a task to automate.
+  <Step title="Watch it work, replay it later">
+    Open a new tab. Your AI's session shows up on your dashboard, live, with a preview of what it's doing. When it's done, you can replay the whole run like a video.
   </Step>
 </Steps>
 
-## Which AI Model Should I Use?
+## Your stuff stays yours
 
-<Tabs>
-  <Tab title="For Chat Mode">
-    **Any model works great**, including local LLMs.
+Everything that happens in BrowserOS neo stays on your computer. Your sessions, your screenshots, your history: none of it goes anywhere. We don't have servers to store it, and no dashboard to peek at what you're doing.
 
-    - **Ollama** or **LM Studio** — Free, runs locally, great for quick questions
-    - **Gemini Flash** — Fast and affordable
-    - **Claude or GPT-4** — Best quality responses
+<Card title="Privacy and data" icon="lock" href="/neo/privacy">
+  The full breakdown of what stays on your machine.
+</Card>
 
-    Chat Mode just needs to understand the page and answer questions—local models handle this well.
-  </Tab>
-  <Tab title="For Agent Mode">
-    **Use Claude Opus 4.5 for best results.**
+## Get started
 
-    | Model | Speed | Quality |
-    |-------|-------|---------|
-    | Claude Opus 4.5 | Slower | Best |
-    | Claude Sonnet 4.5 | Medium | Great |
-    | Claude Haiku 4.5 | Fast | Good |
-    | Gemini Flash | Fast | Good |
-
-    <Warning>
-    Local LLMs are not yet powerful enough for Agent Mode. The model needs strong reasoning to click the right elements and handle multi-step tasks.
-    </Warning>
-  </Tab>
-</Tabs>
-
-## Why BrowserOS?
-
-<Columns cols={2}>
-  <Card title="Privacy-First" icon="shield-check">
-    Run AI locally with Ollama, or bring your own API keys. Your browsing data never leaves your machine unless you choose.
+<CardGroup cols={3}>
+  <Card title="Download BrowserOS neo" icon="download" href="https://browseros.com/agents">
+    macOS, Windows, and Linux. Free and open source.
   </Card>
-  <Card title="Open Source" icon="code-branch">
-    100% open source under AGPL-3.0. Inspect the code, contribute features, or fork it for your needs.
+  <Card title="Connect your AI" icon="plug" href="/neo/mcp">
+    One-click setup for Claude Code, Cursor, Codex, VS Code, Zed, and more.
   </Card>
-  <Card title="Works with Your Tools" icon="plug">
-    Built-in MCP servers for Gmail, Calendar, Docs, Sheets, Notion. Connect to Claude Code or Gemini CLI for developer workflows.
+  <Card title="Your first run" icon="play" href="/neo/how-it-works">
+    A guided walkthrough from install to your first task.
   </Card>
-  <Card title="Chrome Compatible" icon="chrome">
-    All your Chrome extensions work. Import bookmarks, passwords, and settings in one click.
-  </Card>
-</Columns>
-
-## Community
-
-<Columns cols={3}>
-  <Card title="Discord" icon="discord" href="https://discord.gg/YKwjt5vuKr">
-    Get help and share feedback
-  </Card>
-  <Card title="GitHub" icon="github" href="https://github.com/BrowserOS-ai/BrowserOS">
-    Star us and contribute
-  </Card>
-  <Card title="Twitter" icon="x-twitter" href="https://x.com/browserOS_ai">
-    Follow for updates
-  </Card>
-</Columns>
+</CardGroup>
