@@ -43,7 +43,7 @@ describe('streamText — text-only turn', () => {
     expect(await result.finishReason).toBe('stop')
   })
 
-  test('usage resolves with cachedInputTokens from the size field', async () => {
+  test('reports contextWindow metadata from the size field', async () => {
     const runtime = new MockAcpRuntime({
       turnScripts: [
         {
@@ -60,7 +60,9 @@ describe('streamText — text-only turn', () => {
       stopWhen: stepCountIs(1),
     })
     const usage = await result.usage
-    expect(usage.inputTokenDetails?.cacheReadTokens).toBe(4096)
+    expect(usage.inputTokenDetails?.cacheReadTokens).toBeUndefined()
+    const metadata = await result.providerMetadata
+    expect(metadata?.acpx?.contextWindow).toBe(4096)
   })
 
   test('textStream yields the same content', async () => {

@@ -82,6 +82,7 @@ export class EventTranslator {
   ) => void
   private currentBlock: BlockKind = null
   private currentBlockId: string | null = null
+  private currentMessageId: string | null = null
   private readonly toolCalls = new Map<string, ToolCallState>()
   private lastUsageEvent: UsageUpdateEvent | undefined
 
@@ -175,7 +176,14 @@ export class EventTranslator {
     const target: TextStream = event.stream === 'thought' ? 'thought' : 'output'
     const parts: LanguageModelV2StreamPart[] = []
 
-    if (this.currentBlock !== target) {
+    // ACP chunks are token fragments, so only a new message ID or stream
+    // starts a separate AI SDK block. Missing IDs continue the current block;
+    // the first identified message also separates any preceding untagged text.
+    // Keep generated block IDs: one ACP message can contain both text and
+    // reasoning, or resume its text after a tool call.
+    const messageChanged =
+      event.messageId && event.messageId !== this.currentMessageId
+    if (this.currentBlock !== target || messageChanged) {
       parts.push(...this.closeCurrentBlock())
       const id = this.generateId()
       parts.push({
@@ -184,6 +192,7 @@ export class EventTranslator {
       })
       this.currentBlock = target
       this.currentBlockId = id
+      this.currentMessageId = event.messageId ?? null
     }
 
     if (event.text.length > 0 && this.currentBlockId) {
@@ -205,6 +214,7 @@ export class EventTranslator {
     }
     this.currentBlock = null
     this.currentBlockId = null
+    this.currentMessageId = null
     return [part]
   }
 
