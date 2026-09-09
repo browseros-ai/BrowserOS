@@ -194,7 +194,10 @@ describe('doStream — usage and finish', () => {
         inputTokens: undefined,
         outputTokens: undefined,
         totalTokens: 123,
-        cachedInputTokens: 4096,
+        cachedInputTokens: undefined,
+      },
+      providerMetadata: {
+        acpx: { contextWindow: 4096 },
       },
     })
   })
