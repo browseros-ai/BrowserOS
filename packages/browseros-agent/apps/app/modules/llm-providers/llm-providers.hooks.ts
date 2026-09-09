@@ -14,7 +14,6 @@ import {
   putDefaultProvider,
   putProvider,
 } from './llm-providers.api'
-import { planProviderSave } from './llm-providers.helpers'
 import { watchProviderRevision } from './llm-providers.revision'
 
 export interface UseLlmProvidersReturn {
@@ -103,15 +102,8 @@ export function useLlmProviders(): UseLlmProvidersReturn {
     })
 
   const saveMutation = useMutation({
-    mutationFn: async (provider: LlmProviderConfig) => {
-      const { saved, removedIds } = planProviderSave(providers, provider)
-      await putProvider(saved)
-      for (const id of removedIds) await deleteProviderRow(id)
-      // The row that persisted, which is not always the one passed in: a
-      // single-instance save keeps the earlier provider's id, and that is the
-      // id chat target selection has to reference.
-      return saved
-    },
+    // The server decides identity and returns the resolved, persisted row.
+    mutationFn: putProvider,
     onSuccess: invalidate,
   })
 

@@ -8,9 +8,11 @@ import { LLMHeadersSchema } from '@browseros/shared/schemas/llm'
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
 import { z } from 'zod'
+import { ProviderConfigError } from '../../lib/providers/provider-config'
 import {
   dbProviderStore,
   type ProviderStore,
+  publicProvider,
 } from '../../lib/providers/provider-store'
 import type { Env } from '../types'
 
@@ -31,7 +33,7 @@ const UpsertProviderSchema = z.object({
   headers: LLMHeadersSchema.nullish(),
   modelId: z.string().min(1),
   supportsImages: z.boolean().optional(),
-  contextWindow: z.number(),
+  contextWindow: z.number().int().min(1000).max(2000000).default(128000),
   temperature: z.number().optional(),
   apiKey: z.string().nullish(),
   accessKeyId: z.string().nullish(),
@@ -91,11 +93,21 @@ export function createProvidersRoutes(options: { store?: ProviderStore } = {}) {
         zValidator('param', IdParamSchema),
         zValidator('json', UpsertProviderSchema),
         async (c) => {
-          const provider = await store.upsert({
-            ...c.req.valid('json'),
-            id: c.req.valid('param').providerId,
-          })
-          return c.json({ provider })
+          try {
+            const provider = await store.upsert({
+              ...c.req.valid('json'),
+              id: c.req.valid('param').providerId,
+            })
+            // The returned id can differ on an OAuth reconnect. Clients must
+            // adopt this row rather than reconstructing what was saved.
+            return c.json({ provider: publicProvider(provider) })
+          } catch (error) {
+            if (!(error instanceof ProviderConfigError)) throw error
+            return c.json(
+              { error: error.message, fieldErrors: error.fieldErrors },
+              400,
+            )
+          }
         },
       )
       .delete('/:providerId', zValidator('param', IdParamSchema), async (c) => {

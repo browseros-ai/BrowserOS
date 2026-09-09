@@ -212,7 +212,7 @@ export const BrowserOsAiPane: FC = () => {
     setTestingProviderId(provider.id)
 
     try {
-      const result = await testProvider(provider, agentServerUrl)
+      const result = await testProvider(provider.id, agentServerUrl)
 
       if (result.success) {
         toast.success('Test Successful', {

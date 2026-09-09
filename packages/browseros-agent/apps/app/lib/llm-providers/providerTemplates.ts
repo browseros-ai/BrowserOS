@@ -1,3 +1,4 @@
+import { LLMProviderSchema } from '@browseros/shared/schemas/llm'
 import { getModelsDevProvider } from './models-dev'
 import { CHATGPT_PROVIDER_DISPLAY_NAME } from './provider-display-names'
 import type { ProviderType } from './types'
@@ -9,7 +10,6 @@ import type { ProviderType } from './types'
 export interface ProviderTemplate {
   id: ProviderType
   name: string
-  defaultBaseUrl: string
   defaultModelId: string
   supportsImages: boolean
   contextWindow: number
@@ -21,7 +21,6 @@ function enrichTemplate(
   providerId: ProviderType,
   overrides: {
     defaultModelId: string
-    defaultBaseUrl?: string
     apiKeyUrl?: string
     setupGuideUrl?: string
   },
@@ -32,7 +31,6 @@ function enrichTemplate(
   return {
     id: providerId,
     name: provider?.name ?? providerId,
-    defaultBaseUrl: overrides.defaultBaseUrl ?? provider?.api ?? '',
     defaultModelId: overrides.defaultModelId,
     supportsImages: model?.supportsImages ?? true,
     contextWindow: model?.contextWindow ?? 128000,
@@ -49,7 +47,6 @@ export const providerTemplates: ProviderTemplate[] = [
   {
     id: 'chatgpt-pro',
     name: CHATGPT_PROVIDER_DISPLAY_NAME,
-    defaultBaseUrl: 'https://chatgpt.com/backend-api',
     defaultModelId: 'gpt-5.5',
     supportsImages: true,
     contextWindow: 1050000,
@@ -58,7 +55,6 @@ export const providerTemplates: ProviderTemplate[] = [
   {
     id: 'github-copilot',
     name: 'GitHub Copilot',
-    defaultBaseUrl: 'https://api.githubcopilot.com',
     defaultModelId: 'gpt-5-mini',
     supportsImages: true,
     contextWindow: 128000,
@@ -67,7 +63,6 @@ export const providerTemplates: ProviderTemplate[] = [
   {
     id: 'qwen-code',
     name: 'Qwen Code',
-    defaultBaseUrl: 'https://portal.qwen.ai/v1',
     defaultModelId: 'coder-model',
     supportsImages: true,
     contextWindow: 1000000,
@@ -76,7 +71,6 @@ export const providerTemplates: ProviderTemplate[] = [
   {
     id: 'moonshot',
     name: 'Moonshot AI',
-    defaultBaseUrl: 'https://api.moonshot.ai/v1',
     defaultModelId: 'kimi-k2.5',
     supportsImages: true,
     contextWindow: 200000,
@@ -92,7 +86,6 @@ export const providerTemplates: ProviderTemplate[] = [
   {
     id: 'openai-compatible',
     name: 'OpenAI Compatible',
-    defaultBaseUrl: '',
     defaultModelId: '',
     supportsImages: true,
     contextWindow: 128000,
@@ -112,7 +105,6 @@ export const providerTemplates: ProviderTemplate[] = [
   {
     id: 'ollama',
     name: 'Ollama',
-    defaultBaseUrl: 'http://localhost:11434/v1',
     defaultModelId: 'llama3.2',
     supportsImages: false,
     contextWindow: 128000,
@@ -127,7 +119,6 @@ export const providerTemplates: ProviderTemplate[] = [
   }),
   enrichTemplate('lmstudio', {
     defaultModelId: 'openai/gpt-oss-20b',
-    defaultBaseUrl: 'http://localhost:1234/v1',
     setupGuideUrl:
       'https://docs.browseros.com/features/bring-your-own-llm#lmstudio',
   }),
@@ -174,44 +165,7 @@ export const getProviderTemplate = (
   return providerTemplates.find((t) => t.id === type)
 }
 
-/**
- * Default base URLs for each provider type
- * Auto-fills when user selects a provider type
- */
-const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
-  'chatgpt-pro': 'https://chatgpt.com/backend-api',
-  'github-copilot': 'https://api.githubcopilot.com',
-  'qwen-code': 'https://portal.qwen.ai/v1',
-  moonshot: 'https://api.moonshot.ai/v1',
-  anthropic: 'https://api.anthropic.com/v1',
-  openai: 'https://api.openai.com/v1',
-  'openai-compatible': '',
-  google: 'https://generativelanguage.googleapis.com/v1beta',
-  openrouter: 'https://openrouter.ai/api/v1',
-  azure: '',
-  ollama: 'http://localhost:11434/v1',
-  lmstudio: 'http://localhost:1234/v1',
-  bedrock: '',
-  browseros: '',
-}
-
-/**
- * Get default base URL for a provider type
- * @public
- */
-/**
- * Whether a stored type string is one this build understands.
- *
- * Keyed off DEFAULT_BASE_URLS because it is a `Record<ProviderType, string>`,
- * so the compiler keeps it exhaustive as the union changes. Used to filter
- * rows written by a newer build after a downgrade: icons, templates and base
- * URLs are all keyed by this union, so an unknown type would read as
- * undefined through every one of them.
- */
+/** Recognizes provider types supported by this build without choosing their defaults. */
 export function isProviderType(value: string): value is ProviderType {
-  return Object.hasOwn(DEFAULT_BASE_URLS, value)
-}
-
-export const getDefaultBaseUrlForProviders = (type: ProviderType): string => {
-  return DEFAULT_BASE_URLS[type] || ''
+  return LLMProviderSchema.safeParse(value).success
 }

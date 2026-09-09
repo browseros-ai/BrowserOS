@@ -3,24 +3,50 @@ import { hc } from 'hono/client'
 import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
-import { toProviderConfigs, toProviderPayload } from './llm-providers.helpers'
+import {
+  toProviderConfig,
+  toProviderConfigs,
+  toProviderPayload,
+} from './llm-providers.helpers'
 import { bumpProviderRevision } from './llm-providers.revision'
+
+/** Save failures retain server field errors so forms keep the draft and mark the right inputs. */
+export class ProviderSaveError extends Error {
+  constructor(
+    message: string,
+    readonly fieldErrors: Record<string, string> = {},
+  ) {
+    super(message)
+    this.name = 'ProviderSaveError'
+  }
+}
 
 async function providersClient() {
   const baseUrl = await resolveAgentServerUrlWithRetry()
   return hc<ProviderRoutes>(`${baseUrl}/providers`)
 }
 
-export async function putProvider(config: LlmProviderConfig): Promise<void> {
+export async function putProvider(
+  config: LlmProviderConfig,
+): Promise<LlmProviderConfig> {
   const client = await providersClient()
   const response = await client[':providerId'].$put({
     param: { providerId: config.id },
     json: toProviderPayload(config),
   })
-  if (!response.ok) {
-    throw new Error(`Failed to save provider (${response.status})`)
+  const result = await response.json()
+  if (!response.ok || !('provider' in result)) {
+    throw new ProviderSaveError(
+      'error' in result && typeof result.error === 'string'
+        ? result.error
+        : `Failed to save provider (${response.status})`,
+      'fieldErrors' in result ? result.fieldErrors : {},
+    )
   }
+  const saved = toProviderConfig(result.provider)
+  if (!saved) throw new Error('The server returned an unsupported provider.')
   await bumpProviderRevision()
+  return saved
 }
 
 export async function deleteProvider(providerId: string): Promise<void> {
@@ -85,8 +111,7 @@ export async function fetchProviders(): Promise<LlmProviderConfig[]> {
   if (configs.length > 0) return configs
 
   const seeded = createDefaultBrowserOSProvider()
-  await putProvider(seeded)
-  return [seeded]
+  return [await putProvider(seeded)]
 }
 
 /**

@@ -206,7 +206,6 @@ export function useAddProvider(input: {
       setTemplateValues({
         type: template.id,
         name: template.name,
-        baseUrl: template.defaultBaseUrl,
         modelId: template.defaultModelId,
         supportsImages: template.supportsImages,
         contextWindow: template.contextWindow,

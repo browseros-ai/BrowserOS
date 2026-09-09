@@ -4,10 +4,21 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import { and, eq, ne, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, ne, sql } from 'drizzle-orm'
 import type { AnySQLiteColumn } from 'drizzle-orm/sqlite-core'
 import { getDb } from '../db'
-import { type NewProviderRow, type ProviderRow, providers } from '../db/schema'
+import {
+  type NewProviderRow,
+  type ProviderRow,
+  providers,
+  scheduledJobs,
+} from '../db/schema'
+import {
+  ProviderConfigError,
+  providerBaseUrl,
+  resolveProviderConfig,
+  SINGLE_INSTANCE_PROVIDERS,
+} from './provider-config'
 
 /**
  * Every column except the four that hold secrets, plus flags saying whether
@@ -58,6 +69,24 @@ export type PublicProviderRow = {
     : ProviderRow[Extract<K, keyof ProviderRow>]
 }
 
+/** Write responses carry the same redaction contract as list/get responses. */
+export function publicProvider(row: ProviderRow): PublicProviderRow {
+  const {
+    apiKey,
+    accessKeyId,
+    secretAccessKey,
+    sessionToken,
+    ...publicFields
+  } = row
+  return {
+    ...publicFields,
+    hasApiKey: !!apiKey,
+    hasAccessKeyId: !!accessKeyId,
+    hasSecretAccessKey: !!secretAccessKey,
+    hasSessionToken: !!sessionToken,
+  }
+}
+
 /**
  * The store stamps `updatedAt` and defaults `createdAt`, so callers supply
  * neither. `createdAt` stays optional so an import can preserve the original
@@ -81,7 +110,7 @@ export interface ProviderStore {
    * that have to build an outbound request, never for a route response.
    */
   getWithCredentials(id: string): Promise<ProviderRow | null>
-  /** Insert or replace by id. This is the app's ordinary write path. */
+  /** Resolve, validate and save atomically; OAuth reconnects keep their existing id. */
   upsert(row: ProviderUpsert): Promise<ProviderRow>
   /**
    * Insert only when the id is absent; returns null when a row already exists.
@@ -134,56 +163,67 @@ async function getWithCredentials(id: string): Promise<ProviderRow | null> {
   return row ?? null
 }
 
-const CREDENTIAL_FIELDS = [
-  'apiKey',
-  'accessKeyId',
-  'secretAccessKey',
-  'sessionToken',
-] as const
-
-/**
- * Drops credential fields the caller did not supply, so they keep their stored
- * value.
- *
- * Reads no longer return credentials, so a client editing a provider cannot
- * send back what it never received. A plain whole-row upsert would then write
- * over a working key on every rename.
- *
- * An empty string counts as not supplied, not as an instruction to clear. A
- * form field that was never filled in submits as `''` rather than undefined,
- * so treating the two differently would wipe the key on exactly the edit this
- * exists to protect. Clearing is deliberate and explicit: send null.
- */
-function withoutAbsentCredentials<T extends Record<string, unknown>>(
-  row: T,
-): Partial<T> {
-  const next: Record<string, unknown> = { ...row }
-  for (const field of CREDENTIAL_FIELDS) {
-    if (next[field] === undefined || next[field] === '') delete next[field]
-  }
-  return next as Partial<T>
-}
-
 async function upsert(row: ProviderUpsert): Promise<ProviderRow> {
-  const now = Date.now()
-  const values = { ...row, kind: 'llm' as const }
-  const [saved] = await getDb()
-    .insert(providers)
-    .values({ ...values, createdAt: row.createdAt ?? now, updatedAt: now })
-    .onConflictDoUpdate({
-      target: providers.id,
-      // createdAt is deliberately absent: re-importing a provider must not
-      // rewrite when the user originally created it. isDefault likewise, so a
-      // save does not silently move the selection.
-      set: {
-        ...withoutAbsentCredentials(values),
-        createdAt: undefined,
-        isDefault: undefined,
+  // Reads, credential reuse and singleton reconciliation share a transaction:
+  // two UI surfaces saving concurrently must not use stale configuration or
+  // choose different ids for the same OAuth account.
+  return getDb().transaction(
+    (tx) => {
+      const byId = tx
+        .select()
+        .from(providers)
+        .where(eq(providers.id, row.id))
+        .get()
+      if (byId && byId.kind !== 'llm')
+        throw new ProviderConfigError({
+          type: 'This ID belongs to a coding agent.',
+        })
+      const siblings = SINGLE_INSTANCE_PROVIDERS.has(row.type)
+        ? tx
+            .select()
+            .from(providers)
+            .where(and(eq(providers.kind, 'llm'), eq(providers.type, row.type)))
+            .orderBy(
+              desc(providers.isDefault),
+              asc(providers.createdAt),
+              asc(providers.id),
+            )
+            .all()
+        : []
+      const existing = byId ?? siblings[0] ?? null
+      const id = existing?.id ?? row.id
+      const config = resolveProviderConfig({ ...row, id }, existing)
+      const removedIds = siblings
+        .filter((sibling) => sibling.id !== id)
+        .map((sibling) => sibling.id)
+      const isDefault =
+        !!existing?.isDefault || siblings.some((sibling) => sibling.isDefault)
+      if (removedIds.length) {
+        // Keep scheduled jobs attached when collapsing duplicates from older
+        // clients. Move their references before deleting any provider row.
+        tx.update(scheduledJobs)
+          .set({ providerId: id })
+          .where(inArray(scheduledJobs.providerId, removedIds))
+          .run()
+        tx.delete(providers).where(inArray(providers.id, removedIds)).run()
+      }
+      const now = Date.now()
+      const values = {
+        ...config,
+        kind: 'llm' as const,
+        isDefault,
+        createdAt: existing?.createdAt ?? row.createdAt ?? now,
         updatedAt: now,
-      },
-    })
-    .returning()
-  return saved
+      }
+      return tx
+        .insert(providers)
+        .values(values)
+        .onConflictDoUpdate({ target: providers.id, set: values })
+        .returning()
+        .get()
+    },
+    { behavior: 'immediate' },
+  )
 }
 
 async function insertIfAbsent(
@@ -196,6 +236,7 @@ async function insertIfAbsent(
     .insert(providers)
     .values({
       ...row,
+      baseUrl: providerBaseUrl(row) || null,
       kind: 'llm' as const,
       createdAt: row.createdAt ?? now,
       updatedAt: now,

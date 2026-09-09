@@ -2,7 +2,6 @@ import { describe, expect, it } from 'bun:test'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   type ProviderRow,
-  removedProviderIds,
   toProviderConfig,
   toProviderConfigs,
   toProviderPayload,
@@ -123,19 +122,5 @@ describe('toProviderPayload', () => {
 
   it('preserves the creation time so a save does not reset it', () => {
     expect(toProviderPayload(config()).createdAt).toBe(10)
-  })
-})
-
-describe('removedProviderIds', () => {
-  it('names the ids that a save displaced', () => {
-    const before = [config(), config({ id: 'provider-2' })]
-    const after = [config()]
-
-    expect(removedProviderIds(before, after)).toEqual(['provider-2'])
-  })
-
-  it('names nothing when the save displaced nothing', () => {
-    const before = [config()]
-    expect(removedProviderIds(before, before)).toEqual([])
   })
 })

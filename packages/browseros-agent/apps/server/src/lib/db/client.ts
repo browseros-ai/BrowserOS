@@ -8,9 +8,11 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { and, eq, isNull, or } from 'drizzle-orm'
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
 import { logger } from '../logger'
+import { PROVIDER_DEFAULT_URLS } from '../providers/provider-config'
 import * as schema from './schema'
 
 export type BrowserOsDatabase = BunSQLiteDatabase<typeof schema>
@@ -59,6 +61,33 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
       )
       bootstrapCurrentSchema(sqlite)
     }
+
+    // Older clients left standard URLs implicit. Materialize those defaults
+    // before serving any UI; only missing values are written, so a row is
+    // backfilled once and custom destinations and credentials are untouched.
+    db.transaction((tx) => {
+      const legacy = tx
+        .select()
+        .from(schema.providers)
+        .where(
+          and(
+            eq(schema.providers.kind, 'llm'),
+            or(
+              isNull(schema.providers.baseUrl),
+              eq(schema.providers.baseUrl, ''),
+            ),
+          ),
+        )
+        .all()
+      for (const row of legacy) {
+        const baseUrl = PROVIDER_DEFAULT_URLS[row.type]
+        if (baseUrl)
+          tx.update(schema.providers)
+            .set({ baseUrl })
+            .where(eq(schema.providers.id, row.id))
+            .run()
+      }
+    })
   }
 
   return {

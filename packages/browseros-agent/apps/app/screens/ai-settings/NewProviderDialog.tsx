@@ -58,16 +58,19 @@ import {
   MODEL_SELECTED_EVENT,
 } from '@/lib/constants/analyticsEvents'
 import {
-  getDefaultBaseUrlForProviders,
   getProviderTemplate,
   providerTypeOptions,
 } from '@/lib/llm-providers/providerTemplates'
-import { type TestResult, testProvider } from '@/lib/llm-providers/testProvider'
+import {
+  type TestResult,
+  testProviderDraft,
+} from '@/lib/llm-providers/testProvider'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { cn } from '@/lib/utils'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
+import { ProviderSaveError } from '@/modules/llm-providers/llm-providers.api'
 import {
   getIncompleteCatalogHint,
   getModelPickerRows,
@@ -167,59 +170,6 @@ function getVisibleProviderTypeOptions(
   )
 }
 
-function isProviderTestable(input: {
-  type: ProviderType
-  modelId: string
-  baseUrl?: string
-  apiKey?: string
-  resourceName?: string
-  accessKeyId?: string
-  secretAccessKey?: string
-  region?: string
-  /**
-   * Credentials already held by the server for this provider. Reads do not
-   * return the values, so editing one leaves the fields blank; a stored
-   * credential satisfies the requirement exactly as a typed one does, and
-   * leaving it blank keeps what is stored.
-   */
-  stored?: {
-    hasApiKey?: boolean
-    hasAccessKeyId?: boolean
-    hasSecretAccessKey?: boolean
-    hasSessionToken?: boolean
-  }
-}): boolean {
-  if (!input.modelId) return false
-
-  const hasApiKey = Boolean(input.apiKey || input.stored?.hasApiKey)
-  const hasAccessKeyId = Boolean(
-    input.accessKeyId || input.stored?.hasAccessKeyId,
-  )
-  const hasSecretAccessKey = Boolean(
-    input.secretAccessKey || input.stored?.hasSecretAccessKey,
-  )
-
-  if (
-    input.type === 'chatgpt-pro' ||
-    input.type === 'github-copilot' ||
-    input.type === 'qwen-code'
-  ) {
-    return true
-  }
-
-  if (input.type === 'azure') {
-    return Boolean((input.resourceName || input.baseUrl) && hasApiKey)
-  }
-  if (input.type === 'bedrock') {
-    return Boolean(hasAccessKeyId && hasSecretAccessKey && input.region)
-  }
-  if (!input.baseUrl) return false
-  if (!['ollama', 'lmstudio'].includes(input.type) && !hasApiKey) {
-    return false
-  }
-  return true
-}
-
 export interface NewProviderDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -248,8 +198,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     defaultValues: {
       type: initialValues?.type || 'openai',
       name: initialValues?.name || '',
-      baseUrl:
-        initialValues?.baseUrl || getDefaultBaseUrlForProviders('openai'),
+      baseUrl: initialValues?.baseUrl ?? '',
       modelId: initialValues?.modelId || '',
       apiKey: initialValues?.apiKey || '',
       headers: headerEntries(initialValues?.headers),
@@ -261,10 +210,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       secretAccessKey: initialValues?.secretAccessKey || '',
       region: initialValues?.region || '',
       sessionToken: initialValues?.sessionToken || '',
-      hasApiKey: initialValues?.hasApiKey ?? false,
-      hasAccessKeyId: initialValues?.hasAccessKeyId ?? false,
-      hasSecretAccessKey: initialValues?.hasSecretAccessKey ?? false,
-      originalType: initialValues?.type,
       reasoningEffort:
         initialValues?.reasoningEffort ||
         defaultReasoningEffort(initialValues?.type),
@@ -388,7 +333,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
   const handleTypeChange = (newType: ProviderType) => {
     form.setValue('type', newType)
-    form.setValue('baseUrl', getDefaultBaseUrlForProviders(newType))
+    form.setValue('baseUrl', '')
     form.setValue('reasoningEffort', defaultReasoningEffort(newType))
     form.setValue('modelId', '')
   }
@@ -413,9 +358,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       form.reset({
         type: initialValues.type || 'openai',
         name: initialValues.name || '',
-        baseUrl:
-          initialValues.baseUrl ||
-          getDefaultBaseUrlForProviders(initialValues.type || 'openai'),
+        baseUrl: initialValues.baseUrl ?? '',
         modelId: initialValues.modelId || '',
         apiKey: initialValues.apiKey || '',
         headers: headerEntries(initialValues.headers),
@@ -427,10 +370,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: initialValues.secretAccessKey || '',
         region: initialValues.region || '',
         sessionToken: initialValues.sessionToken || '',
-        hasApiKey: initialValues.hasApiKey ?? false,
-        hasAccessKeyId: initialValues.hasAccessKeyId ?? false,
-        hasSecretAccessKey: initialValues.hasSecretAccessKey ?? false,
-        originalType: initialValues.type,
         reasoningEffort:
           initialValues.reasoningEffort ||
           defaultReasoningEffort(initialValues.type),
@@ -445,7 +384,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       form.reset({
         type: defaultType,
         name: '',
-        baseUrl: getDefaultBaseUrlForProviders(defaultType),
+        baseUrl: '',
         modelId: '',
         apiKey: '',
         headers: [],
@@ -457,10 +396,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
         secretAccessKey: '',
         region: '',
         sessionToken: '',
-        hasApiKey: false,
-        hasAccessKeyId: false,
-        hasSecretAccessKey: false,
-        originalType: undefined,
         reasoningEffort: defaultReasoningEffort(defaultType),
         reasoningSummary: 'auto',
       })
@@ -478,7 +413,30 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
       updatedAt: Date.now(),
     }
 
-    await onSave(provider)
+    form.clearErrors()
+    try {
+      await onSave(provider)
+    } catch (error) {
+      if (
+        error instanceof ProviderSaveError &&
+        Object.keys(error.fieldErrors).length > 0
+      ) {
+        for (const [field, message] of Object.entries(error.fieldErrors)) {
+          form.setError(field as keyof ProviderFormValues, {
+            type: 'server',
+            message,
+          })
+        }
+      } else {
+        form.setError('root', {
+          message:
+            error instanceof Error
+              ? error.message
+              : 'Could not save this provider.',
+        })
+      }
+      return
+    }
     if (isNewProvider) {
       track(AI_PROVIDER_ADDED_EVENT, {
         provider_type: normalizedValues.type,
@@ -500,20 +458,6 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     onOpenChange(false)
   }
 
-  const canTest = isProviderTestable({
-    type: watchedType as ProviderType,
-    modelId: watchedModelId,
-    baseUrl: watchedBaseUrl,
-    apiKey: watchedApiKey,
-    resourceName: watchedResourceName,
-    accessKeyId: watchedAccessKeyId,
-    secretAccessKey: watchedSecretAccessKey,
-    region: watchedRegion,
-    // A saved credential only counts while the type is unchanged; after a type
-    // switch the Test needs the new type's own credential entered.
-    stored: typeUnchanged ? initialValues : undefined,
-  })
-
   const handleTest = async () => {
     if (!(await form.trigger('headers'))) return
     if (!agentServerUrl) {
@@ -530,11 +474,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
     try {
       const values = normalizeProviderFormValues(form.getValues())
 
-      const result = await testProvider(
+      const result = await testProviderDraft(
         {
           // The real id (when editing) lets the server fill a blank key from
           // the saved credential; a new provider has no saved row to reuse.
-          id: initialValues?.id ?? 'test',
+          id: initialValues?.id,
           type: values.type,
           name: values.name || 'Test',
           baseUrl: values.baseUrl,
@@ -841,9 +785,16 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           name="baseUrl"
           render={({ field }) => (
             <FormItem>
-              <FormLabel>Base URL *</FormLabel>
+              <FormLabel>Base URL</FormLabel>
               <FormControl>
-                <Input placeholder="https://api.openai.com/v1" {...field} />
+                <Input
+                  placeholder={
+                    watchedType === 'openai-compatible'
+                      ? "Enter your provider's base URL"
+                      : 'Leave blank to use the provider default'
+                  }
+                  {...field}
+                />
               </FormControl>
               {watchedType === 'openai' && (
                 <FormDescription>
@@ -867,9 +818,11 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
           control={form.control}
           name="apiKey"
           render={({ field }) => {
-            const isApiKeyOptional = ['ollama', 'lmstudio'].includes(
-              watchedType,
-            )
+            const isApiKeyOptional = [
+              'ollama',
+              'lmstudio',
+              'openai-compatible',
+            ].includes(watchedType)
             return (
               <FormItem>
                 <FormLabel>
@@ -889,7 +842,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                   />
                 </FormControl>
                 <FormDescription>
-                  Your API key is encrypted and stored locally.{' '}
+                  Your API key is stored locally by BrowserOS.{' '}
                   {setupGuideUrl && (
                     <a
                       href={setupGuideUrl}
@@ -1200,6 +1153,12 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
               <ProviderHeadersFields />
             )}
 
+            {form.formState.errors.root?.message && (
+              <p role="alert" className="text-destructive text-sm">
+                {form.formState.errors.root.message}
+              </p>
+            )}
+
             {testResult && (
               <div
                 className={`flex items-center gap-2 rounded-lg border p-3 text-sm ${
@@ -1234,13 +1193,22 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 type="button"
                 variant="outline"
                 onClick={handleTest}
-                disabled={!canTest || isTesting}
+                disabled={isTesting || form.formState.isSubmitting}
               >
                 {isTesting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {isTesting ? 'Testing...' : 'Test'}
               </Button>
-              <Button type="submit" disabled={isTesting || contextExceedsMax}>
-                {initialValues?.id ? 'Update' : 'Save'}
+              <Button
+                type="submit"
+                disabled={
+                  isTesting || form.formState.isSubmitting || contextExceedsMax
+                }
+              >
+                {form.formState.isSubmitting
+                  ? 'Saving...'
+                  : initialValues?.id
+                    ? 'Update'
+                    : 'Save'}
               </Button>
             </DialogFooter>
           </form>

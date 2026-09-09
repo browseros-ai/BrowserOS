@@ -75,62 +75,19 @@ describe('provider setup boundary', () => {
     expect(values).not.toContain('acp-custom')
   })
 
-  it('requires the API key for a new Azure provider', () => {
-    const result = providerFormSchema.safeParse({
-      ...baseValues,
-      type: 'azure' as const,
-      baseUrl: 'https://example.openai.azure.com',
-      apiKey: '',
-    })
-    expect(result.success).toBe(false)
-  })
-
-  it('lets an Azure provider save blank when a key is already stored', () => {
-    const result = providerFormSchema.safeParse({
-      ...baseValues,
-      type: 'azure' as const,
-      baseUrl: 'https://example.openai.azure.com',
-      apiKey: '',
-      hasApiKey: true,
-      originalType: 'azure' as const,
-    })
-    expect(result.success).toBe(true)
-  })
-
-  it('re-requires the credential when an edited provider switches type', () => {
-    const result = providerFormSchema.safeParse({
-      ...baseValues,
-      type: 'azure' as const,
-      baseUrl: 'https://example.openai.azure.com',
-      apiKey: '',
-      hasApiKey: true,
-      originalType: 'openai-compatible' as const,
-    })
-    expect(result.success).toBe(false)
-  })
-
-  it('requires AWS credentials for a new Bedrock provider', () => {
-    const result = providerFormSchema.safeParse({
-      ...baseValues,
-      type: 'bedrock' as const,
-      region: 'us-east-1',
-      accessKeyId: '',
-      secretAccessKey: '',
-    })
-    expect(result.success).toBe(false)
-  })
-
-  it('lets a Bedrock provider save blank when credentials are already stored', () => {
-    const result = providerFormSchema.safeParse({
-      ...baseValues,
-      type: 'bedrock' as const,
-      region: 'us-east-1',
-      accessKeyId: '',
-      secretAccessKey: '',
-      hasAccessKeyId: true,
-      hasSecretAccessKey: true,
-      originalType: 'bedrock' as const,
-    })
-    expect(result.success).toBe(true)
-  })
+  it.each(['openrouter', 'azure', 'bedrock'])(
+    'leaves %s connection requirements to the server',
+    (type) => {
+      const result = providerFormSchema.parse({
+        ...baseValues,
+        type,
+        baseUrl: '',
+        apiKey: '',
+      })
+      expect(normalizeProviderFormValues(result)).toMatchObject({
+        baseUrl: '',
+        apiKey: '',
+      })
+    },
+  )
 })

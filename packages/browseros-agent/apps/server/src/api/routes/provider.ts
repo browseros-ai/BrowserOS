@@ -1,13 +1,14 @@
-/**
- * @license
- * Copyright 2025 BrowserOS
- * SPDX-License-Identifier: AGPL-3.0-or-later
- */
-
+/** Tests a stored provider by ID, or resolves an unsaved draft without writing it. */
 import { zValidator } from '@hono/zod-validator'
 import { Hono } from 'hono'
+import { z } from 'zod'
 import { testProviderConnection } from '../../lib/clients/llm/test-provider'
 import { logger } from '../../lib/logger'
+import {
+  ProviderConfigError,
+  providerToLlmConfig,
+  resolveProviderConfig,
+} from '../../lib/providers/provider-config'
 import {
   dbProviderStore,
   type ProviderStore,
@@ -17,84 +18,96 @@ import { AgentLLMConfigSchema } from '../types'
 interface ProviderRouteDeps {
   browserosId?: string
   store?: Pick<ProviderStore, 'getWithCredentials'>
+  testConnection?: typeof testProviderConnection
 }
 
-const CREDENTIAL_FIELDS = [
-  'apiKey',
-  'accessKeyId',
-  'secretAccessKey',
-  'sessionToken',
-] as const
+// Keep the full-config shape for draft tests and independently updating older
+// extensions. An ID-only request always tests the authoritative saved row.
+const TestRequestSchema = z.union([
+  z.object({ providerId: z.string().min(1) }).strict(),
+  // Incomplete drafts reach the shared resolver for actionable field errors.
+  AgentLLMConfigSchema.extend({ model: z.string().optional() }),
+])
 
-type StoredProvider = {
-  type: string
-  baseUrl?: string | null
-  resourceName?: string | null
-  region?: string | null
-} & Partial<Record<(typeof CREDENTIAL_FIELDS)[number], string | null>>
-
-/**
- * Fills blank credential fields from the saved provider row so testing an
- * existing provider works even though reads redact its secrets.
- *
- * The stored secret is bound to the stored destination: it is reused only when
- * the request targets the same provider type AND the same connection settings
- * (base URL / resource name / region). Otherwise a caller who knows a saved
- * provider id could pair its key with an arbitrary base URL and exfiltrate it
- * to another endpoint. A changed destination must supply its own credential.
- */
-export function mergeStoredCredentials<
-  T extends {
-    provider: string
-    baseUrl?: string
-    resourceName?: string
-    region?: string
-  },
->(config: T, stored: StoredProvider | null): T {
-  const same = (a?: string | null, b?: string | null) => (a ?? '') === (b ?? '')
-  if (
-    !stored ||
-    stored.type !== config.provider ||
-    !same(config.baseUrl, stored.baseUrl) ||
-    !same(config.resourceName, stored.resourceName) ||
-    !same(config.region, stored.region)
-  ) {
-    return config
-  }
-  const merged = { ...config } as Record<string, unknown>
-  for (const field of CREDENTIAL_FIELDS) {
-    if (!merged[field]) merged[field] = stored[field] ?? undefined
-  }
-  return merged as T
-}
-
-export function createProviderRoutes(deps: ProviderRouteDeps = {}) {
+export function createProviderRoutes(deps: ProviderRouteDeps = {}): Hono {
   const store = deps.store ?? dbProviderStore
+  const testConnection = deps.testConnection ?? testProviderConnection
   return new Hono().post(
     '/',
-    zValidator('json', AgentLLMConfigSchema),
+    zValidator('json', TestRequestSchema, (result, c) => {
+      if (!result.success)
+        return c.json(
+          {
+            success: false,
+            message: 'Provide a saved provider ID or valid provider settings.',
+          },
+          400,
+        )
+      return undefined
+    }),
     async (c) => {
-      const config = c.req.valid('json')
-      const stored = config.providerId
-        ? await store.getWithCredentials(config.providerId)
+      const request = c.req.valid('json')
+      const stored = request.providerId
+        ? await store.getWithCredentials(request.providerId)
         : null
-      const resolved = mergeStoredCredentials(config, stored)
-
-      logger.info('Testing provider connection', {
-        provider: resolved.provider,
-        model: resolved.model,
-      })
-
-      const result = await testProviderConnection(resolved, deps.browserosId)
-
-      logger.info('Provider test result', {
-        provider: resolved.provider,
-        model: resolved.model,
-        success: result.success,
-        responseTime: result.responseTime,
-      })
-
-      return c.json(result, result.success ? 200 : 400)
+      if (stored && stored.kind !== 'llm')
+        return c.json(
+          { success: false, message: 'This provider is a coding agent.' },
+          400,
+        )
+      try {
+        const changes =
+          'provider' in request
+            ? {
+                id: request.providerId ?? 'draft',
+                name: stored?.name ?? 'Test',
+                type: request.provider,
+                modelId: request.model,
+                contextWindow: stored?.contextWindow ?? 128000,
+                baseUrl: request.baseUrl,
+                headers: request.headers,
+                apiKey: request.apiKey,
+                resourceName: request.resourceName,
+                region: request.region,
+                accessKeyId: request.accessKeyId,
+                secretAccessKey: request.secretAccessKey,
+                sessionToken: request.sessionToken,
+                reasoningEffort: request.reasoningEffort,
+                reasoningSummary: request.reasoningSummary,
+              }
+            : stored
+        if (!changes) {
+          return c.json(
+            {
+              success: false,
+              message:
+                'This provider no longer exists. Reload the provider list.',
+            },
+            404,
+          )
+        }
+        const resolved = providerToLlmConfig(
+          resolveProviderConfig(changes, stored),
+        )
+        const result = await testConnection(resolved, deps.browserosId)
+        logger.info('Provider test result', {
+          provider: resolved.provider,
+          model: resolved.model,
+          success: result.success,
+          responseTime: result.responseTime,
+        })
+        return c.json(result, result.success ? 200 : 400)
+      } catch (error) {
+        if (!(error instanceof ProviderConfigError)) throw error
+        return c.json(
+          {
+            success: false,
+            message: error.message,
+            fieldErrors: error.fieldErrors,
+          },
+          400,
+        )
+      }
     },
   )
 }

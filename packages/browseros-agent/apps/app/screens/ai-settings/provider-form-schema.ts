@@ -25,123 +25,54 @@ const credentiallessProviderTypes: ReadonlySet<
   z.infer<typeof providerTypeEnum>
 > = new Set(['chatgpt-pro', 'github-copilot', 'qwen-code'])
 
-export const providerFormSchema = z
-  .object({
-    type: providerTypeEnum,
-    name: z.string().min(1, 'Provider name is required').max(50),
-    baseUrl: z.string().optional(),
-    headers: z
-      .array(
-        z.object({
-          name: z
-            .string()
-            .regex(HEADER_NAME_PATTERN, 'Enter a valid HTTP header name'),
-          value: z
-            .string()
-            .regex(
-              HEADER_VALUE_PATTERN,
-              'Header values cannot contain newlines or unsupported characters',
-            ),
-        }),
-      )
-      .superRefine((headers, ctx) => {
-        const names = new Set<string>()
-        headers.forEach(({ name }, index) => {
-          const normalized = name.toLowerCase()
-          if (names.has(normalized)) {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              message: 'Duplicate header name',
-              path: [index, 'name'],
-            })
-          }
-          names.add(normalized)
-        })
+// Validate editor structure here. The server resolves connection defaults and
+// validates credentials for both Save and Test, using the same saved record.
+export const providerFormSchema = z.object({
+  type: providerTypeEnum,
+  name: z.string().min(1, 'Provider name is required').max(50),
+  baseUrl: z.string().optional(),
+  headers: z
+    .array(
+      z.object({
+        name: z
+          .string()
+          .regex(HEADER_NAME_PATTERN, 'Enter a valid HTTP header name'),
+        value: z
+          .string()
+          .regex(
+            HEADER_VALUE_PATTERN,
+            'Header values cannot contain newlines or unsupported characters',
+          ),
+      }),
+    )
+    .superRefine((headers, ctx) => {
+      const names = new Set<string>()
+      headers.forEach(({ name }, index) => {
+        const normalized = name.toLowerCase()
+        if (names.has(normalized)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'Duplicate header name',
+            path: [index, 'name'],
+          })
+        }
+        names.add(normalized)
       })
-      .optional(),
-    modelId: z.string().min(1, 'Model ID is required'),
-    apiKey: z.string().optional(),
-    supportsImages: z.boolean(),
-    contextWindow: z.number().int().min(1000).max(2000000),
-    temperature: z.number().min(0).max(2),
-    resourceName: z.string().optional(),
-    accessKeyId: z.string().optional(),
-    secretAccessKey: z.string().optional(),
-    region: z.string().optional(),
-    sessionToken: z.string().optional(),
-    // Set when editing a provider that already has the credential stored, so a
-    // blank field means "keep the saved value" rather than a missing
-    // credential. Populated from the server's has* flags, never user-entered.
-    hasApiKey: z.boolean().optional(),
-    hasAccessKeyId: z.boolean().optional(),
-    hasSecretAccessKey: z.boolean().optional(),
-    // The provider type when the edit started. A stored-credential flag only
-    // applies while the type is unchanged; switching type must require the new
-    // type's own credential rather than reusing the previous provider's.
-    originalType: providerTypeEnum.optional(),
-    reasoningEffort: z.string().optional(),
-    reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
-  })
-  .superRefine((data, ctx) => {
-    // Stored-credential flags only count while the provider type is unchanged.
-    const typeUnchanged = data.type === data.originalType
-    const hasStoredApiKey = Boolean(data.hasApiKey) && typeUnchanged
-    const hasStoredAccessKeyId = Boolean(data.hasAccessKeyId) && typeUnchanged
-    const hasStoredSecretAccessKey =
-      Boolean(data.hasSecretAccessKey) && typeUnchanged
-    if (data.type === 'azure') {
-      if (!data.resourceName && !data.baseUrl) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Either Resource Name or Base URL is required',
-          path: ['resourceName'],
-        })
-      }
-      if (!data.apiKey && !hasStoredApiKey) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'API Key is required for Azure',
-          path: ['apiKey'],
-        })
-      }
-    } else if (data.type === 'bedrock') {
-      if (!data.accessKeyId && !hasStoredAccessKeyId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Access Key ID is required',
-          path: ['accessKeyId'],
-        })
-      }
-      if (!data.secretAccessKey && !hasStoredSecretAccessKey) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Secret Access Key is required',
-          path: ['secretAccessKey'],
-        })
-      }
-      if (!data.region) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'Region is required',
-          path: ['region'],
-        })
-      }
-    } else if (credentiallessProviderTypes.has(data.type)) {
-      return
-    } else if (!data.baseUrl) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Base URL is required',
-        path: ['baseUrl'],
-      })
-    } else if (!/^https?:\/\/.+/.test(data.baseUrl)) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: 'Must be a valid URL',
-        path: ['baseUrl'],
-      })
-    }
-  })
+    })
+    .optional(),
+  modelId: z.string().min(1, 'Model ID is required'),
+  apiKey: z.string().optional(),
+  supportsImages: z.boolean(),
+  contextWindow: z.number().int().min(1000).max(2000000),
+  temperature: z.number().min(0).max(2),
+  resourceName: z.string().optional(),
+  accessKeyId: z.string().optional(),
+  secretAccessKey: z.string().optional(),
+  region: z.string().optional(),
+  sessionToken: z.string().optional(),
+  reasoningEffort: z.string().optional(),
+  reasoningSummary: z.enum(['auto', 'concise', 'detailed']).optional(),
+})
 
 export type ProviderFormValues = z.infer<typeof providerFormSchema>
 

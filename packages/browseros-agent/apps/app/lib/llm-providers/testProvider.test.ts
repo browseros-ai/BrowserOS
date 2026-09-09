@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { testProvider } from './testProvider'
+import { testProvider, testProviderDraft } from './testProvider'
 import type { LlmProviderConfig } from './types'
 
 let lastCall: { url: string; body: Record<string, unknown> } | null = null
@@ -43,14 +43,29 @@ function baseProvider(
 }
 
 describe('testProvider — request body', () => {
+  it('tests saved providers using only their ID', async () => {
+    await testProvider('saved-provider', 'http://127.0.0.1:9000')
+    expect(lastCall).toEqual({
+      url: 'http://127.0.0.1:9000/test-provider',
+      body: { providerId: 'saved-provider' },
+    })
+  })
+
+  it('leaves new drafts without a fabricated provider ID or URL', async () => {
+    const { id, ...draft } = baseProvider()
+    await testProviderDraft(draft, 'http://127.0.0.1:9000')
+    expect(lastCall?.body).not.toHaveProperty('providerId')
+    expect(lastCall?.body).not.toHaveProperty('baseUrl')
+  })
+
   it('passes custom header templates to the local test endpoint', async () => {
     const headers = { 'x-opencode-session': '{{conversationId}}' }
-    await testProvider(baseProvider({ headers }), 'http://127.0.0.1:9000')
+    await testProviderDraft(baseProvider({ headers }), 'http://127.0.0.1:9000')
     expect(lastCall?.body.headers).toEqual(headers)
   })
 
   it('forwards model-backed fields for non-ACP providers', async () => {
-    await testProvider(baseProvider(), 'http://127.0.0.1:9000')
+    await testProviderDraft(baseProvider(), 'http://127.0.0.1:9000')
     expect(lastCall?.url).toBe('http://127.0.0.1:9000/test-provider')
     expect(lastCall?.body).toMatchObject({
       provider: 'anthropic',
@@ -66,7 +81,10 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
       throw new TypeError('Failed to fetch')
     }) as unknown as typeof globalThis.fetch
 
-    const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
+    const result = await testProviderDraft(
+      baseProvider(),
+      'http://127.0.0.1:9200',
+    )
     expect(result.success).toBe(false)
     // Message must call out the LOCAL server and the URL we tried,
     // not blame the user's provider config. Guards against a future
@@ -87,7 +105,10 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
         },
       }) as unknown as Response) as unknown as typeof globalThis.fetch
 
-    const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
+    const result = await testProviderDraft(
+      baseProvider(),
+      'http://127.0.0.1:9200',
+    )
     expect(result.success).toBe(false)
     expect(result.message).toContain('local BrowserOS server')
     expect(result.message).toContain('http://127.0.0.1:9200')
@@ -108,7 +129,10 @@ describe('testProvider — client-side fetch failure (issue #1844)', () => {
         }),
       }) as unknown as Response) as unknown as typeof globalThis.fetch
 
-    const result = await testProvider(baseProvider(), 'http://127.0.0.1:9200')
+    const result = await testProviderDraft(
+      baseProvider(),
+      'http://127.0.0.1:9200',
+    )
     expect(result.success).toBe(false)
     expect(result.message).toBe('[anthropic] 401 Unauthorized')
     expect(result.message).not.toContain('local BrowserOS server')

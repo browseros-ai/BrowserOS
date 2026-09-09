@@ -234,6 +234,7 @@ describe('dbProviderStore', () => {
       await dbProviderStore.upsert({
         ...baseProvider(),
         id: 'no-key',
+        type: 'ollama',
         apiKey: undefined,
       })
 
@@ -291,6 +292,7 @@ describe('dbProviderStore', () => {
       useTempDb()
       await dbProviderStore.upsert({
         ...baseProvider(),
+        type: 'ollama',
         apiKey: '',
         accessKeyId: '',
         secretAccessKey: '',
@@ -331,16 +333,19 @@ describe('dbProviderStore', () => {
       })
     })
 
-    test('an explicitly null credential clears it', async () => {
+    test('an explicitly null optional credential clears it', async () => {
       useTempDb()
       await dbProviderStore.upsert(baseProvider())
 
-      await dbProviderStore.upsert({ ...baseProvider(), apiKey: null })
+      await dbProviderStore.upsert({ ...baseProvider(), sessionToken: 'token' })
+      await dbProviderStore.upsert({ ...baseProvider(), sessionToken: null })
 
       expect(
-        (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.apiKey,
+        (await dbProviderStore.getWithCredentials(PROVIDER_ID))?.sessionToken,
       ).toBeNull()
-      expect((await dbProviderStore.get(PROVIDER_ID))?.hasApiKey).toBe(false)
+      expect((await dbProviderStore.get(PROVIDER_ID))?.hasSessionToken).toBe(
+        false,
+      )
     })
   })
 })
