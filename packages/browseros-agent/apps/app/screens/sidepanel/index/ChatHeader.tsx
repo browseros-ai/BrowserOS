@@ -17,6 +17,7 @@ import { Feature } from '@/lib/browseros/capabilities'
 import { productRepositoryUrl } from '@/lib/constants/productUrls'
 import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
+import { cn } from '@/lib/utils'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { useCredits } from '@/modules/credits/credits.hooks'
 
@@ -39,6 +40,8 @@ export interface ChatHeaderProps {
   onNewConversation: () => void
   hasMessages: boolean
   hideHistory?: boolean
+  /** Lets the full-page chat opt into spacing without changing the sidepanel. */
+  className?: string
 }
 
 export const ChatHeader: FC<ChatHeaderProps> = ({
@@ -48,6 +51,7 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   onNewConversation,
   hasMessages,
   hideHistory,
+  className,
 }) => {
   const location = useLocation()
   const navigate = useNavigate()
@@ -59,7 +63,12 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   }
 
   return (
-    <header className="flex items-center justify-between border-border/40 border-b bg-background/80 px-3 py-2.5 backdrop-blur-md">
+    <header
+      className={cn(
+        'flex items-center justify-between border-border/40 border-b bg-background/80 px-3 py-2.5 backdrop-blur-md',
+        className,
+      )}
+    >
       <div className="flex items-center gap-2">
         {/* Provider Selector */}
         <ChatProviderSelector
