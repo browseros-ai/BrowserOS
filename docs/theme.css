@@ -31,7 +31,10 @@ html[data-current-path^="/browseros"] {
    pinned to the rendered height to stop the square stretching. */
 html:not([data-current-path^="/browseros"]) #navbar .nav-logo,
 html:not([data-current-path^="/browseros"]) #sidebar .nav-logo {
+  /* content: url() gives the img no intrinsic size, so it collapses to 0x0
+     unless both axes are set. 552x104 at 1.75rem tall is 9.3rem wide. */
   content: url("/logo/neo-wordmark.svg");
-  width: auto;
+  width: 9.3rem;
   height: 1.75rem;
+  max-width: none;
 }
