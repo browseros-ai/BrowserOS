@@ -90,8 +90,8 @@
             "pages": [
               "browseros/integrations/n8n",
               "browseros/troubleshooting/connection-issues",
-              "changelog",
-              "contributing"
+              "browseros/changelog",
+              "browseros/contributing"
             ]
           }
         ]
