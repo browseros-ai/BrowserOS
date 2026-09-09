@@ -12,9 +12,11 @@ import {
   createAcpxProvider,
 } from '@browseros/acpx-ai-provider'
 import type { BrowserContext } from '@browseros/shared/schemas/browser-context'
-import { createFileSessionStore } from 'acpx/runtime'
+import { type AcpSessionRecord, createFileSessionStore } from 'acpx/runtime'
 import {
   convertToModelMessages,
+  createUIMessageStream,
+  type ModelMessage,
   stepCountIs,
   streamText,
   type UIMessage,
@@ -73,6 +75,11 @@ export class AcpAgentPreparationError extends Error {
   }
 }
 
+/**
+ * Owns the persistent ACP process for each agent/conversation pair. Saved display
+ * messages seed fresh sessions; a pre-prompt resume retry shares the same UI
+ * response and turn lock, so neither replies nor browser actions are duplicated.
+ */
 export class AcpAgentRuntime {
   private readonly serverPort: number
   private readonly resourcesDir: string | null
@@ -127,48 +134,99 @@ export class AcpAgentRuntime {
         resourcesDir: this.resourcesDir,
         browserosDir: this.browserosDir,
       })
-      const acquired = await this.acquireSession(policy)
-      const session = acquired.session
-      createdSession = acquired.created
-      if (input.abortSignal?.aborted) {
-        throw input.abortSignal.reason ?? new Error('ACP turn was aborted')
+      let session: ActiveAcpSession
+      let recovered = false
+      const prepare = async () => {
+        input.abortSignal?.throwIfAborted()
+        const acquired = await this.acquireSession(policy)
+        session = acquired.session
+        createdSession ||= acquired.created
+        input.abortSignal?.throwIfAborted()
+        await applyFullAccess(session.provider, policy)
+        await applyReasoningEffort(session.provider, input.agent)
+      }
+      const canRecover = (error: unknown) =>
+        !recovered && !input.abortSignal?.aborted && isResumeFailure(error)
+      const recover = async (error: unknown) => {
+        if (!canRecover(error)) throw error
+        recovered = true
+        logger.warn('Starting a fresh ACP session after resume failed', {
+          agentId: input.agent.id,
+          conversationId: input.conversationId,
+        })
+        await this.resetSession(policy.sessionKey)
+        await prepare()
+        session.hasHistory = false
+      }
+      try {
+        await prepare()
+      } catch (error) {
+        await recover(error)
       }
 
-      await applyFullAccess(session.provider, policy)
-      await applyReasoningEffort(session.provider, input.agent)
-
-      const messages = session.hasHistory
-        ? latestUserTurn(input.messages)
-        : input.messages
-      const modelMessages = await convertToModelMessages(messages)
-      const result = streamText({
-        model: session.provider.languageModel(),
-        messages: modelMessages,
-        abortSignal: input.abortSignal,
-        stopWhen: stepCountIs(1),
-        onError: ({ error }) => {
+      // One UI response spans a possible pre-prompt resume retry. The failed
+      // attempt must not create an empty assistant reply or persist its error.
+      const responseId = crypto.randomUUID()
+      let failed = false
+      const stream = createUIMessageStream<UIMessage>({
+        originalMessages: input.messages,
+        generateId: () => responseId,
+        execute: async ({ writer }) => {
+          writer.write({ type: 'start', messageId: responseId })
+          while (true) {
+            input.abortSignal?.throwIfAborted()
+            const messages = session.hasHistory
+              ? latestUserTurn(input.messages)
+              : input.messages
+            const modelMessages = await convertHistory(messages)
+            let turnError: unknown
+            const result = streamText({
+              model: session.provider.languageModel(),
+              messages: modelMessages,
+              abortSignal: input.abortSignal,
+              stopWhen: stepCountIs(1),
+              onError: ({ error }) => {
+                turnError = error
+              },
+            })
+            const outcome = await forwardAttempt(
+              result.toUIMessageStream({
+                sendStart: false,
+                onError: (error) => {
+                  turnError = error
+                  return acpUiErrorMessage(error)
+                },
+              }),
+              (chunk) => writer.write(chunk),
+              () => canRecover(turnError),
+            )
+            if (outcome === 'retry') {
+              await recover(turnError)
+              continue
+            }
+            failed = outcome === 'failed'
+            return
+          }
+        },
+        onFinish: async ({ messages, isAborted }) => {
+          if (!failed && !isAborted) session.hasHistory = true
+          await input.onFinish?.({ messages, isAborted })
+        },
+        onError: (error) => {
+          failed = true
           logger.error('ACP agent stream failed', {
             agentId: input.agent.id,
             conversationId: input.conversationId,
             error: error instanceof Error ? error.message : String(error),
           })
+          return acpUiErrorMessage(error)
         },
-      })
-      const stream = result.toUIMessageStream({
-        originalMessages: messages,
-        onFinish: async ({ messages: finishedMessages, isAborted }) => {
-          session.hasHistory = true
-          await input.onFinish?.({
-            messages: finishedMessages,
-            isAborted,
-          })
-        },
-        onError: acpUiErrorMessage,
       })
       streamStarted = true
       return releaseOnEnd(stream, () => {
         this.activeTurns.delete(sessionKey)
-        this.scheduleIdleClose(sessionKey, session)
+        const active = this.sessions.get(sessionKey)
+        if (active) this.scheduleIdleClose(sessionKey, active)
       })
     } catch (error) {
       if (createdSession) {
@@ -254,9 +312,9 @@ export class AcpAgentRuntime {
       const persistedRecord = await createFileSessionStore({
         stateDir: this.stateDir,
       }).load(policy.sessionKey)
-      hasHistory = persistedRecord
-        ? persistedRecord.messages.length > 0
-        : (existing?.hasHistory ?? false)
+      // An agent may emit startup notices during prepare(). Only user turns
+      // prove it has conversation context; otherwise seed it from SQLite.
+      hasHistory = persistedRecord?.messages.some(isAcpUserMessage) ?? false
     } catch (error) {
       await provider.close('prepare-failed').catch(() => {})
       throw error
@@ -270,6 +328,26 @@ export class AcpAgentRuntime {
     }
     this.sessions.set(policy.sessionKey, session)
     return { session, created: true }
+  }
+
+  private async resetSession(sessionKey: string): Promise<void> {
+    const session = this.sessions.get(sessionKey)
+    this.sessions.delete(sessionKey)
+    if (session) {
+      clearIdleTimer(session)
+      await session.provider.close('resume-failed')
+    }
+    const store = createFileSessionStore({ stateDir: this.stateDir })
+    const record = await store.load(sessionKey)
+    if (record) {
+      // ACP session/close is optional and may itself fail for a stale session.
+      // Ask ACPX to replace its local session on the next ensure, retaining
+      // SQLite and the old record until the replacement is ready.
+      await store.save({
+        ...record,
+        acpx: { ...record.acpx, reset_on_next_ensure: true },
+      })
+    }
   }
 
   private scheduleIdleClose(
@@ -299,6 +377,47 @@ export class AcpAgentRuntime {
     }
     idleTimer.unref?.()
   }
+}
+
+// ACPX validates records on load; the only non-object variant is a resume marker.
+function isAcpUserMessage(
+  message: AcpSessionRecord['messages'][number],
+): boolean {
+  return typeof message !== 'string' && 'User' in message
+}
+
+/**
+ * Forward one attempt, holding its step envelope until work starts. A resume
+ * failure can be hidden and retried only before any text/reasoning/tool activity;
+ * drain that failed attempt before replacing its agent process.
+ */
+async function forwardAttempt(
+  stream: ReadableStream<UIMessageChunk>,
+  write: (chunk: UIMessageChunk) => void,
+  canRecover: () => boolean,
+): Promise<'completed' | 'failed' | 'retry'> {
+  let outcome: 'completed' | 'failed' | 'retry' = 'completed'
+  let hasOutput = false
+  const pending: UIMessageChunk[] = []
+  for await (const chunk of stream) {
+    if (outcome === 'retry') continue
+    if (chunk.type === 'error' && !hasOutput && canRecover()) {
+      outcome = 'retry'
+      continue
+    }
+    if (!hasOutput && chunk.type === 'start-step') {
+      pending.push(chunk)
+      continue
+    }
+    hasOutput = true
+    for (const prefix of pending.splice(0)) write(prefix)
+    if (chunk.type === 'error') outcome = 'failed'
+    write(chunk)
+  }
+  if (outcome !== 'retry') {
+    for (const prefix of pending) write(prefix)
+  }
+  return outcome
 }
 
 function clearIdleTimer(session: ActiveAcpSession): void {
@@ -393,6 +512,40 @@ async function applyReasoningEffort(
       reasoningEffort: agent.reasoningEffort,
       error: error instanceof Error ? error.message : String(error),
     })
+  }
+}
+
+// ACPX uses these detail codes only before a prompt can execute. Other
+// failures (auth, quota, tool errors) must surface without replaying the turn.
+function isResumeFailure(error: unknown): boolean {
+  const visited = new Set<unknown>()
+  while (error && typeof error === 'object' && !visited.has(error)) {
+    visited.add(error)
+    const detail = 'detailCode' in error ? error.detailCode : undefined
+    if (
+      detail === 'SESSION_RESUME_REQUIRED' ||
+      detail === 'SESSION_MODE_REPLAY_FAILED' ||
+      detail === 'SESSION_MODEL_REPLAY_FAILED' ||
+      detail === 'SESSION_CONFIG_OPTION_REPLAY_FAILED'
+    )
+      return true
+    error = 'cause' in error ? error.cause : undefined
+  }
+  return false
+}
+
+async function convertHistory(messages: UIMessage[]): Promise<ModelMessage[]> {
+  try {
+    return await convertToModelMessages(messages, {
+      ignoreIncompleteToolCalls: true,
+    })
+  } catch (error) {
+    const latest = latestUserTurn(messages)
+    if (latest.length === messages.length) throw error
+    // Legacy display records can outlive their message schema. Keep the user's
+    // new request usable even when the old transcript cannot be replayed.
+    logger.warn('Continuing ACP turn without incompatible saved history')
+    return convertToModelMessages(latest)
   }
 }
 
