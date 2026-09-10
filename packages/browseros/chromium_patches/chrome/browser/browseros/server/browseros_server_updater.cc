@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..d1e13bcff945bb3a31478fde101dc269444a21d7
+index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f1553ec41550
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1120 @@
+@@ -0,0 +1,1127 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -719,6 +719,13 @@ index 0000000000000000000000000000000000000000..d1e13bcff945bb3a31478fde101dc269
 +        base::BindOnce(
 +            [](base::FilePath dir) { base::DeletePathRecursively(dir); },
 +            version_dir));
++
++    // If the version we just tested is the persisted "current" one, it is
++    // unusable: clear the pointer so we fall back to the bundled server and can
++    // re-download it on the next appcast check instead of retrying it forever.
++    if (version == cached_downloaded_version_) {
++      WriteCurrentVersionFile(base::Version());
++    }
 +
 +    OnError("verify", "Binary --version check failed");
 +    return;
