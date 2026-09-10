@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000..f154a9f21a6cb
+index 0000000000000000000000000000000000000000..d1e13bcff945bb3a31478fde101dc269444a21d7
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1096 @@
+@@ -0,0 +1,1120 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -366,6 +366,30 @@ index 0000000000000..f154a9f21a6cb
 +void BrowserOSServerUpdater::CheckVersionCachesAndStart() {
 +  if (!bundled_version_loaded_ || !downloaded_version_loaded_) {
 +    return;  // Wait for both to complete
++  }
++
++  // The manager launches the bundled server before this updater exists, so a
++  // version downloaded in a previous session is not the one running now. If
++  // that downloaded version is newer than the bundled one, activate it instead
++  // of waiting for the appcast to advertise something newer (it never will once
++  // the downloaded version is already the latest), which would otherwise leave
++  // the stale bundled server running indefinitely.
++  if (cached_downloaded_version_.IsValid() &&
++      (!cached_bundled_version_.IsValid() ||
++       cached_downloaded_version_ > cached_bundled_version_)) {
++    LOG(INFO) << "browseros: Activating downloaded version "
++              << cached_downloaded_version_.GetString() << " over bundled "
++              << (cached_bundled_version_.IsValid()
++                      ? cached_bundled_version_.GetString()
++                      : "(unknown)");
++    PrefService* prefs = g_browser_process->local_state();
++    if (prefs) {
++      prefs->SetString(kServerVersion, cached_downloaded_version_.GetString());
++    }
++    pending_item_.version = cached_downloaded_version_;
++    update_in_progress_ = true;
++    TestBinary(cached_downloaded_version_);
++    return;
 +  }
 +
 +  // Sync version pref with current best version
