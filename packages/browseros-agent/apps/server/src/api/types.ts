@@ -23,6 +23,10 @@ export type { BrowserContext }
 export const AgentLLMConfigSchema = LLMConfigSchema.extend({
   model: z.string().min(1, 'Model name is required'),
   upstreamProvider: z.string().optional(),
+  // Set when testing an existing provider. Its stored credentials are redacted
+  // from the client, so the test route fills blank credential fields from the
+  // saved row (matching type) rather than failing on an empty key.
+  providerId: z.string().optional(),
 })
 
 const PreviousConversationSchema = z

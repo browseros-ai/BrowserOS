@@ -25,9 +25,10 @@
     },
     "apps/app": {
       "name": "@browseros/app",
-      "version": "0.0.151",
+      "version": "0.0.156",
       "dependencies": {
         "@ai-sdk/react": "^4.0.87",
+        "@browseros/diagnostics": "workspace:*",
         "@browseros/server": "workspace:*",
         "@browseros/shared": "workspace:*",
         "@hookform/resolvers": "^5.9.1",
@@ -157,6 +158,7 @@
         "@base-ui/react": "^1.7.0",
         "@browseros/claw-api": "workspace:*",
         "@browseros/claw-api-client": "workspace:*",
+        "@browseros/diagnostics": "workspace:*",
         "@browseros/shared": "workspace:*",
         "@fontsource-variable/jetbrains-mono": "^5.3.0",
         "@fontsource-variable/schibsted-grotesk": "^5.3.0",
@@ -247,7 +249,7 @@
     },
     "apps/server": {
       "name": "@browseros/server",
-      "version": "0.0.157",
+      "version": "0.0.164",
       "bin": {
         "browseros-server": "./src/index.ts",
       },
@@ -319,7 +321,7 @@
     },
     "packages/acpx-ai-provider": {
       "name": "@browseros/acpx-ai-provider",
-      "version": "0.0.6",
+      "version": "1.0.0",
       "dependencies": {
         "@ai-sdk/provider": "^4.0.0",
         "@ai-sdk/provider-utils": "^5.0.0",
@@ -385,6 +387,17 @@
       "dependencies": {
         "@browseros/claw-api": "workspace:*",
         "openapi-fetch": "0.17.0",
+      },
+    },
+    "packages/diagnostics": {
+      "name": "@browseros/diagnostics",
+      "version": "0.0.1",
+      "devDependencies": {
+        "@types/chrome": "^0.2.7",
+        "@types/react": "^19.2.18",
+      },
+      "peerDependencies": {
+        "react": "^19.2.8",
       },
     },
     "packages/onboarding-video": {
@@ -650,6 +663,8 @@
     "@browseros/claw-onboard": ["@browseros/claw-onboard@workspace:apps/claw-onboard"],
 
     "@browseros/claw-server-rust": ["@browseros/claw-server-rust@workspace:apps/claw-server-rust"],
+
+    "@browseros/diagnostics": ["@browseros/diagnostics@workspace:packages/diagnostics"],
 
     "@browseros/harness-integrations-rust": ["@browseros/harness-integrations-rust@workspace:crates/harness-integrations"],
 

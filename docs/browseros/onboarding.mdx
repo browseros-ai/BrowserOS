@@ -1,0 +1,58 @@
+---
+title: "Getting Started"
+description: "Set up BrowserOS in 2 minutes"
+---
+
+Welcome to BrowserOS! Let's get you set up.
+
+<Steps>
+  <Step title="Import from Chrome">
+    Bring your bookmarks, history, and passwords from Chrome.
+
+    1. Go to `chrome://settings/importData`
+    2. Select **Google Chrome** and click **Import**
+    3. Choose **Always allow** when prompted
+
+    <Tip>
+    This imports everything in one click — bookmarks, passwords, history, and extensions.
+    </Tip>
+  </Step>
+
+  <Step title="Set up your AI">
+    BrowserOS includes a default AI model with limited daily usage. For the best experience, add your own.
+
+    **Quick option:** Get a free Gemini API key from [aistudio.google.com](https://aistudio.google.com) — 20 requests per minute at no cost.
+
+    <Card title="Configure your LLM" icon="key" href="/browseros/features/bring-your-own-llm">
+      Set up Gemini, Claude, OpenAI, or run models locally with Ollama
+    </Card>
+  </Step>
+
+  <Step title="Try it out">
+    Open any webpage and click the **Assistant** button in the toolbar.
+
+    - **Chat Mode:** Ask questions about the page
+    - **Agent Mode:** Describe a task and watch it execute
+
+    <Note>
+    For Agent Mode, use Claude Opus 4.5 or Sonnet 4.5. Local models work great for Chat but aren't powerful enough for agents yet.
+    </Note>
+  </Step>
+</Steps>
+
+## You're all set!
+
+<Tip>
+**Block ads with uBlock Origin** — Chrome dropped support for the full uBlock Origin extension, but BrowserOS brought it back. [Install it from the Chrome Web Store](https://chromewebstore.google.com/detail/ublock-origin/cjpalhdlnbpafiamejdnhcphjbkeiagm) and browse ad-free. [Learn more →](/browseros/features/ad-blocking)
+</Tip>
+
+Explore what BrowserOS can do:
+
+<Columns cols={2}>
+  <Card title="Cowork" icon="user-group" href="/browseros/features/cowork">
+    Hand off a multi-step task and combine browser automation with local files
+  </Card>
+  <Card title="Use with Claude Code" icon="terminal" href="/browseros/features/use-with-claude-code">
+    Control BrowserOS from Claude Code or Gemini CLI
+  </Card>
+</Columns>

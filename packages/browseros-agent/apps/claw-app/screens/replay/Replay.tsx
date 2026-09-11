@@ -141,7 +141,7 @@ export function Replay() {
             {replay.taskTitle}
           </div>
           <div className="text-ink-3 text-xs">
-            {replay.agentLabel} · {replay.harness}
+            {replay.agentLabel}
             {replay.startedAt ? ` · ${replay.startedAt}` : ''}
           </div>
         </div>

@@ -185,7 +185,7 @@ describe('resolveAcpSpawnCommand', () => {
       '/c',
     ])
     expect(payload.argv[4]).toContain('npx')
-    expect(payload.argv[4]).toContain('@agentclientprotocol/codex-acp@^^1.0.2')
+    expect(payload.argv[4]).toContain('@agentclientprotocol/codex-acp@^^1.10.0')
     expect(payload.env.INITIAL_AGENT_MODE).toBe('agent-full-access')
   })
 
@@ -204,7 +204,7 @@ describe('resolveAcpSpawnCommand', () => {
     const payload = decodeEnvironmentPayload(out.argv[3])
     expect(payload.argv[0]).toBe('C:\\Windows\\System32\\cmd.exe')
     expect(payload.argv[4]).toContain(
-      '@agentclientprotocol/claude-agent-acp@^^0.31.0',
+      '@agentclientprotocol/claude-agent-acp@^^0.75.1',
     )
   })
 

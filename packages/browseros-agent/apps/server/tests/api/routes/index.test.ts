@@ -228,6 +228,40 @@ describe('createApiRoutes', () => {
     ).toBe(403)
   })
 
+  // /test-provider reuses a saved provider credential server-side and
+  // /refine-prompt drives an outbound LLM call, so both must sit behind the same
+  // app-origin auth as /providers, not just the blanket Origin check that a
+  // request carrying no Origin slips past.
+  it('keeps provider test and refine-prompt behind app-origin auth', async () => {
+    const app = createTestApp()
+    const body = JSON.stringify({ provider: 'openai-compatible', model: 'x' })
+
+    for (const path of ['/test-provider', '/refine-prompt']) {
+      const originless = await app.request(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body,
+      })
+      expect(originless.status).toBe(403)
+
+      const remote = await app.request(
+        path,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
+          },
+          body,
+        },
+        {
+          server: { requestIP: () => ({ address: '192.168.1.20' }) },
+        } as never,
+      )
+      expect(remote.status).toBe(403)
+    }
+  })
+
   it('keeps scheduled job runs behind app-origin auth', async () => {
     const app = createTestApp()
 

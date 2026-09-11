@@ -25,6 +25,7 @@ export interface ResolvedAgentConfig {
   model: string
   apiKey?: string
   baseUrl?: string
+  headers?: Record<string, string>
   upstreamProvider?: string
   resourceName?: string
   region?: string

@@ -1,3 +1,4 @@
+import { DiagnosticsPage } from '@browseros/diagnostics/view'
 import type { ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { CockpitShell } from '@/components/layout/CockpitShell'
@@ -19,6 +20,14 @@ export function App() {
         <Route element={<CockpitShell />}>
           <Route path="/" element={<Cockpit />} />
           <Route path="/mcp" element={<Mcp />} />
+          <Route
+            path="/diagnostics"
+            element={
+              <div className="mx-auto max-w-5xl px-6 py-10">
+                <DiagnosticsPage />
+              </div>
+            }
+          />
           <Route path="/skills" element={<Skills />} />
           <Route path="/skills/:name" element={<SkillDetail />} />
           <Route

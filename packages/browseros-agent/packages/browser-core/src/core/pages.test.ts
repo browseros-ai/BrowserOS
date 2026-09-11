@@ -17,6 +17,34 @@ function tab(targetId: string, url: string) {
 }
 
 describe('PageManager', () => {
+  it('announces creation before waiting for the new page to load', async () => {
+    let release!: (value: { tab: ReturnType<typeof tab> }) => void
+    const loaded = new Promise<{ tab: ReturnType<typeof tab> }>((resolve) => {
+      release = resolve
+    })
+    const created: number[] = []
+    const cdp = {
+      Browser: {
+        createTab: async () => ({ tab: tab('new', 'https://new.example') }),
+        getTabInfo: () => loaded,
+      },
+      connectionEpoch: () => 1,
+      isConnected: () => true,
+    } as unknown as CdpConnection
+    const pages = new PageManager(cdp)
+    const creating = pages.newPage('https://new.example', {
+      onCreated: (id) => {
+        created.push(id)
+      },
+    })
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(created).toEqual([42])
+    release({ tab: tab('new', 'https://new.example') })
+    expect(await creating).toBe(1)
+  })
+
   it('projects protocol tabs into the owned page model', async () => {
     const getTabsCalls: unknown[][] = []
     const cdp = {

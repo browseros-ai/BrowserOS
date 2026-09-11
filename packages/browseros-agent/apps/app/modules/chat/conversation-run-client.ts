@@ -11,10 +11,11 @@ export async function fetchConversationRunState(
   serverUrl: string,
   conversationId: string,
   fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal,
 ): Promise<ConversationRunState> {
   const response = await fetchImpl(
     `${serverUrl}/chat/${encodeURIComponent(conversationId)}/state`,
-    { cache: 'no-store' },
+    { cache: 'no-store', ...(signal && { signal }) },
   )
   if (!response.ok) {
     throw new Error(`Failed to load active conversation (${response.status})`)
@@ -29,8 +30,10 @@ export async function fetchConversationRunState(
 export function conversationReconnectUrl(
   serverUrl: string,
   conversationId: string,
+  runId?: string,
 ): string {
-  return `${serverUrl}/chat/${encodeURIComponent(conversationId)}/stream`
+  const url = `${serverUrl}/chat/${encodeURIComponent(conversationId)}/stream`
+  return runId ? `${url}?runId=${encodeURIComponent(runId)}` : url
 }
 
 function isConversationRunState(value: unknown): value is ConversationRunState {

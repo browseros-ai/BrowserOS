@@ -26,11 +26,11 @@ export const TASK_COLUMNS: ColumnDef<TaskSummary>[] = [
   {
     id: 'agent',
     header: 'Agent',
-    accessorKey: 'agentLabel',
+    accessorKey: 'slug',
     cell: ({ row }) => (
       <div className="flex items-center gap-2">
         <span className="min-w-0 truncate text-[12px] text-ledger-link">
-          {row.original.label}
+          {row.original.slug}
         </span>
         {row.original.status === 'live' && <LiveInlineChip />}
         {row.original.status === 'failed' && <FailedInlineChip />}

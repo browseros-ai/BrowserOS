@@ -94,7 +94,10 @@ describe('doGenerate', () => {
     const result = await provider.languageModel().doGenerate(baseCall)
     expect(result.usage).toMatchObject({
       totalTokens: 50,
-      cachedInputTokens: 1024,
+      cachedInputTokens: undefined,
+    })
+    expect(result.providerMetadata?.acpx).toMatchObject({
+      contextWindow: 1024,
     })
   })
 

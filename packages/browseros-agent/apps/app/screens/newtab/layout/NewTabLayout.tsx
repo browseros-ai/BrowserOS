@@ -17,5 +17,14 @@ export const NewTabLayout: FC = () => {
 
   if (!useChatSession) return content
 
-  return <ChatSessionProvider origin="newtab">{content}</ChatSessionProvider>
+  // Each history selection gets its own SDK session and composer. A late
+  // stream or restore from the previous selection cannot replace this view.
+  const conversationId = new URLSearchParams(location.search).get(
+    'conversationId',
+  )
+  return (
+    <ChatSessionProvider key={conversationId ?? 'new'} origin="newtab">
+      {content}
+    </ChatSessionProvider>
+  )
 }

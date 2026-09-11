@@ -11,7 +11,9 @@ export function createConversationPanelBroker(): ConversationPanelBroker {
     fetch: (input, init) => fetch(input, init),
     getTab: (tabId) => chrome.tabs.get(tabId),
     openPanel: async (target) => {
-      await openSidePanel(target)
+      const result = await openSidePanel(target)
+      if (!result.opened)
+        throw new Error(`Panel did not open for tab ${target.tabId}`)
     },
     readViews: () => conversationPanelViewsStorage.getValue(),
     writeViews: (views) => conversationPanelViewsStorage.setValue(views),

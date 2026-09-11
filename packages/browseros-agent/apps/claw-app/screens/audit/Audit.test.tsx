@@ -109,7 +109,6 @@ describe('Audit screen', () => {
       agentOptions: [
         {
           slug: 'claude-code',
-          agentLabel: 'Claude Code',
           count: 1,
         },
       ],
@@ -117,7 +116,8 @@ describe('Audit screen', () => {
       siteOptions: [{ site: 'example.com', count: 1 }],
     }
     const html = renderApp()
-    expect(html).toContain('Claude Code')
+    // The row cell renders the session label; the agent filter chip renders the slug.
+    expect(html).toContain('claude-code')
     expect(html).toContain('Browsed example.com')
     // DONE is the silent default; only the exceptional states
     // (LIVE / FAILED / STOPPED) render a chip in the agent cell.

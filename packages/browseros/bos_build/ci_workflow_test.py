@@ -1492,7 +1492,28 @@ print(json.dumps({
         self.assertEqual(keychain_cleanup["if"], "always()")
 
 
-class FamilyNightlyWorkflowTest(unittest.TestCase):
+class ProductNightlyWorkflowTest(unittest.TestCase):
+    PRODUCTS = {
+        "browseros": (
+            "BrowserOS",
+            "server",
+            "agent",
+            "server_version",
+            "agent_version",
+            "app_onboarding_version",
+            "appcast-server.alpha.xml",
+        ),
+        "browserclaw": (
+            "BrowserOS neo",
+            "claw-server",
+            "browserclaw",
+            "claw_server_version",
+            "browserclaw_version",
+            "onboarding_version",
+            "appcast-claw-server.alpha.xml",
+        ),
+    }
+
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
         path = WORKFLOW_DIR / workflow_name
         return yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -1506,321 +1527,348 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             if step.get("name") == step_name
         )
 
-    def test_one_entrypoint_freezes_main_into_stable_suite_identity(self):
-        self.assertTrue((WORKFLOW_DIR / "nightly.yml").is_file())
-        self.assertFalse((WORKFLOW_DIR / "nightly-browseros.yml").exists())
-        self.assertFalse((WORKFLOW_DIR / "nightly-browserclaw.yml").exists())
-        self.assertFalse(
-            (WORKFLOW_DIR / "reserve-nightly-browser-version.yml").exists()
-        )
-
-        workflow = self.load_workflow("nightly.yml")
-        triggers = workflow.get("on", workflow.get(True))
-        transaction = workflow["jobs"]["transaction"]
-        checkout = next(
-            step
-            for step in transaction["steps"]
-            if str(step.get("uses", "")).startswith("actions/checkout@")
-        )
-        reconcile = self.named_step(
-            workflow, "transaction", "Reconcile family transaction"
-        )
-        text = (WORKFLOW_DIR / "nightly.yml").read_text(encoding="utf-8")
-
-        self.assertIsNone(triggers["workflow_dispatch"])
-        self.assertNotIn("schedule", triggers)
-        self.assertEqual(workflow["permissions"], {})
-        self.assertEqual(
-            workflow["concurrency"],
-            {
-                "group": "release-suite",
-                "cancel-in-progress": False,
-                "queue": "max",
-            },
-        )
-        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
-        self.assertEqual(
-            transaction["concurrency"],
-            {
-                "group": "release-component-allocation",
-                "cancel-in-progress": False,
-                "queue": "max",
-            },
-        )
-        self.assertEqual(
-            transaction["outputs"]["app_onboarding_version"],
-            "${{ steps.transaction.outputs.app_onboarding_version }}",
-        )
-        for token in (
-            '"$DEFAULT_BRANCH" != "main"',
-            '"$SOURCE_REF" != "refs/heads/main"',
-            'source_sha="$(git rev-parse HEAD)"',
-            'test "$source_sha" = "$GITHUB_SHA"',
-            "release suite reconcile",
-            "--mode nightly",
-            '--source-sha "$source_sha"',
-            'if [ "$(jq -r \'.state\' "$RUNNER_TEMP/release-suite.json")" != "open" ]; then',
-            "Only an open transaction can start builds",
-            "Re-run failed jobs",
-        ):
-            self.assertIn(token, reconcile["run"])
-        self.assertNotIn("GITHUB_RUN_ATTEMPT", text)
-
-    def test_exact_family_components_prepare_before_both_browser_builds(self):
-        workflow = self.load_workflow("nightly.yml")
-        jobs = workflow["jobs"]
-        components = {
-            "prepare-server": (
-                "release-server.yml",
-                "server_version",
-                None,
-            ),
-            "prepare-claw-server": (
-                "release-claw-server.yml",
-                "claw_server_version",
-                None,
-            ),
-            "prepare-agent": (
-                "release-extensions.yml",
-                "agent_version",
-                "agent",
-            ),
-            "prepare-browserclaw": (
-                "release-extensions.yml",
-                "browserclaw_version",
-                "browserclaw",
-            ),
-        }
-        for job_name, (workflow_name, output_name, extension) in components.items():
-            job = jobs[job_name]
-            with self.subTest(job=job_name):
-                self.assertEqual(job["needs"], "transaction")
-                self.assertEqual(job["uses"], f"./.github/workflows/{workflow_name}")
-                self.assertEqual(job["with"]["mode"], "build")
-                self.assertIs(job["with"]["defer_finalize"], True)
-                self.assertEqual(job["with"]["state_owner"], "suite")
+    def test_manual_product_entries_replace_family_dispatch(self):
+        self.assertFalse((WORKFLOW_DIR / "nightly.yml").exists())
+        self.assertFalse((WORKFLOW_DIR / "nightly-macos-product.yml").exists())
+        for product, (
+            label,
+            _,
+            _,
+            server,
+            extension,
+            onboard,
+            _,
+        ) in self.PRODUCTS.items():
+            with self.subTest(product=product):
+                workflow = self.load_workflow(f"nightly-macos-{product}.yml")
+                self.assertEqual(workflow["name"], f"Nightly: {label} (macOS arm64)")
                 self.assertEqual(
-                    job["with"]["version"],
-                    f"${{{{ needs.transaction.outputs.{output_name} }}}}",
+                    workflow.get("on", workflow.get(True)), {"workflow_dispatch": None}
                 )
-                source_input = "branch" if extension else "ref"
+                self.assertEqual(workflow["permissions"], {})
                 self.assertEqual(
-                    job["with"][source_input],
+                    workflow["concurrency"],
+                    {
+                        "group": "release-suite",
+                        "cancel-in-progress": False,
+                        "queue": "max",
+                    },
+                )
+                transaction = workflow["jobs"]["transaction"]
+                self.assertEqual(
+                    transaction["concurrency"],
+                    {
+                        "group": "release-component-allocation",
+                        "cancel-in-progress": False,
+                        "queue": "max",
+                    },
+                )
+                self.assertEqual(
+                    transaction["steps"][0]["with"]["ref"], "${{ github.sha }}"
+                )
+                self.assertEqual(
+                    set(transaction["outputs"]),
+                    {
+                        "state_ref",
+                        "source_sha",
+                        "reservation_sha",
+                        "browser_version",
+                        server,
+                        extension,
+                        onboard,
+                    },
+                )
+                reconcile = self.named_step(
+                    workflow, "transaction", "Reconcile product transaction"
+                )["run"]
+                for token in (
+                    '"$DEFAULT_BRANCH" != "main"',
+                    '"$SOURCE_REF" != "refs/heads/main"',
+                    'test "$source_sha" = "$GITHUB_SHA"',
+                    "release suite reconcile",
+                    f"--product {product}",
+                    "--mode nightly",
+                    "Re-run failed jobs",
+                    "Only an open transaction can start builds",
+                ):
+                    self.assertIn(token, reconcile)
+
+    def test_each_graph_prepares_builds_and_finalizes_only_its_product(self):
+        for product, (
+            _,
+            server,
+            extension,
+            server_pin,
+            extension_pin,
+            onboarding_pin,
+            snapshot,
+        ) in self.PRODUCTS.items():
+            with self.subTest(product=product):
+                workflow = self.load_workflow(f"nightly-macos-{product}.yml")
+                jobs = workflow["jobs"]
+                build_name = f"build-{product}"
+                ota_name = "server-ota" if product == "browseros" else "claw-server-ota"
+                self.assertEqual(
+                    set(jobs),
+                    {
+                        "transaction",
+                        f"prepare-{server}",
+                        f"prepare-{extension}",
+                        "verify-components",
+                        build_name,
+                        f"finalize-{server}",
+                        f"finalize-{extension}",
+                        ota_name,
+                        "publish",
+                        "notify-failure",
+                    },
+                )
+                for component, workflow_name, pin in (
+                    (server, f"release-{server}.yml", server_pin),
+                    (extension, "release-extensions.yml", extension_pin),
+                ):
+                    for phase in ("prepare", "finalize"):
+                        job = jobs[f"{phase}-{component}"]
+                        self.assertEqual(
+                            job["uses"], f"./.github/workflows/{workflow_name}"
+                        )
+                        self.assertEqual(job["with"]["state_owner"], "suite")
+                        self.assertEqual(
+                            job["with"]["version"],
+                            f"${{{{ needs.transaction.outputs.{pin} }}}}",
+                        )
+                        source_input = "branch" if component == extension else "ref"
+                        self.assertEqual(
+                            job["with"][source_input],
+                            "${{ needs.transaction.outputs.source_sha }}",
+                        )
+                        if phase == "prepare":
+                            self.assertEqual(job["needs"], "transaction")
+                            self.assertEqual(job["with"]["mode"], "build")
+                            self.assertIs(job["with"]["defer_finalize"], True)
+                        else:
+                            self.assertEqual(
+                                set(job["needs"]), {"transaction", build_name}
+                            )
+                            self.assertEqual(job["with"]["mode"], "finalize")
+                        if component == extension:
+                            self.assertEqual(job["with"]["extension"], extension)
+                            self.assertIs(job["with"]["publish_alpha_feed"], False)
+                        else:
+                            self.assertIs(job["with"]["publish_ota"], False)
+                self.assertEqual(
+                    set(jobs["verify-components"]["needs"]),
+                    {
+                        "transaction",
+                        f"prepare-{server}",
+                        f"prepare-{extension}",
+                    },
+                )
+                verify = self.named_step(
+                    workflow,
+                    "verify-components",
+                    "Verify source and version identities",
+                )["run"]
+                self.assertIn('test "$SERVER_SHA" = "$SOURCE_SHA"', verify)
+                self.assertIn('test "$EXTENSION_SHA" = "$SOURCE_SHA"', verify)
+                self.assertIn(f"needs.transaction.outputs.{server_pin}", verify)
+                self.assertIn(f"needs.transaction.outputs.{extension_pin}", verify)
+                build = jobs[build_name]
+                self.assertEqual(
+                    set(build["needs"]), {"transaction", "verify-components"}
+                )
+                self.assertEqual(
+                    build["uses"],
+                    "./.github/workflows/reusable-build-macos-nightly.yml",
+                )
+                self.assertEqual(build["with"]["product"], product)
+                for input_name, output_name in (
+                    ("source_sha", "source_sha"),
+                    ("reservation_sha", "reservation_sha"),
+                    ("state_ref", "state_ref"),
+                    ("browser_version", "browser_version"),
+                    ("server_version", server_pin),
+                    ("extension_version", extension_pin),
+                    ("onboarding_version", onboarding_pin),
+                ):
+                    self.assertEqual(
+                        build["with"][input_name],
+                        f"${{{{ needs.transaction.outputs.{output_name} }}}}",
+                    )
+                self.assertNotIn("state_sha", build["with"])
+                ota = jobs[ota_name]
+                self.assertEqual(
+                    ota["uses"], "./.github/workflows/publish-server-ota.yml"
+                )
+                self.assertEqual(
+                    set(ota["needs"]), {"transaction", f"finalize-{server}"}
+                )
+                self.assertEqual(ota["with"]["product"], product)
+                self.assertEqual(
+                    ota["with"]["snapshot_path"], f"updates/server/{snapshot}"
+                )
+                self.assertEqual(ota["with"]["state_owner"], "suite")
+                self.assertEqual(
+                    ota["permissions"], {"contents": "write", "pull-requests": "write"}
+                )
+                self.assertEqual(
+                    set(jobs["publish"]["needs"]),
+                    {
+                        "transaction",
+                        build_name,
+                        f"finalize-{server}",
+                        f"finalize-{extension}",
+                        ota_name,
+                    },
+                )
+                self.assertEqual(
+                    set(jobs["notify-failure"]["needs"]), set(jobs) - {"notify-failure"}
+                )
+
+    def test_one_locked_job_merges_then_publishes_scoped_artifacts_and_feeds(self):
+        for product, (_, _, extension, _, _, _, snapshot) in self.PRODUCTS.items():
+            with self.subTest(product=product):
+                workflow = self.load_workflow(f"nightly-macos-{product}.yml")
+                publish = workflow["jobs"]["publish"]
+                self.assertEqual(
+                    publish["concurrency"],
+                    {
+                        "group": "release-feed-snapshots",
+                        "cancel-in-progress": False,
+                        "queue": "max",
+                    },
+                )
+                self.assertEqual(
+                    publish["permissions"],
+                    {"contents": "write", "pull-requests": "write"},
+                )
+                self.assertEqual(
+                    publish["steps"][0]["with"]["ref"],
                     "${{ needs.transaction.outputs.source_sha }}",
                 )
-                if extension:
-                    self.assertEqual(job["with"]["extension"], extension)
-                    self.assertIs(job["with"]["publish_alpha_feed"], False)
-                else:
-                    self.assertIs(job["with"]["publish_ota"], False)
-
-        verifier = jobs["verify-components"]
-        self.assertEqual(set(verifier["needs"]), {"transaction", *components.keys()})
-        for build_name in ("build-browseros", "build-browserclaw"):
-            build = jobs[build_name]
-            self.assertEqual(set(build["needs"]), {"transaction", "verify-components"})
-            self.assertEqual(
-                build["uses"], "./.github/workflows/nightly-macos-product.yml"
-            )
-            self.assertEqual(
-                build["with"]["source_sha"],
-                "${{ needs.transaction.outputs.source_sha }}",
-            )
-            self.assertEqual(
-                build["with"]["reservation_sha"],
-                "${{ needs.transaction.outputs.reservation_sha }}",
-            )
-            self.assertNotIn("state_sha", build["with"])
-            self.assertEqual(
-                build["with"]["state_ref"],
-                "${{ needs.transaction.outputs.state_ref }}",
-            )
-            self.assertEqual(
-                build["with"]["browser_version"],
-                "${{ needs.transaction.outputs.browser_version }}",
-            )
-
-        self.assertEqual(jobs["build-browseros"]["with"]["product"], "browseros")
-        self.assertEqual(jobs["build-browserclaw"]["with"]["product"], "browserclaw")
-        self.assertEqual(
-            jobs["build-browseros"]["with"]["server_version"],
-            "${{ needs.transaction.outputs.server_version }}",
-        )
-        self.assertEqual(
-            jobs["build-browserclaw"]["with"]["server_version"],
-            "${{ needs.transaction.outputs.claw_server_version }}",
-        )
-        self.assertEqual(
-            jobs["build-browseros"]["with"]["onboarding_version"],
-            "${{ needs.transaction.outputs.app_onboarding_version }}",
-        )
-        self.assertEqual(
-            jobs["build-browserclaw"]["with"]["onboarding_version"],
-            "${{ needs.transaction.outputs.onboarding_version }}",
-        )
-
-    def test_public_finalization_and_state_merge_follow_both_builds(self):
-        workflow = self.load_workflow("nightly.yml")
-        jobs = workflow["jobs"]
-        finalizers = {
-            "finalize-server": "release-server.yml",
-            "finalize-claw-server": "release-claw-server.yml",
-            "finalize-agent": "release-extensions.yml",
-            "finalize-browserclaw": "release-extensions.yml",
-        }
-        for job_name, workflow_name in finalizers.items():
-            job = jobs[job_name]
-            with self.subTest(job=job_name):
-                self.assertEqual(
-                    set(job["needs"]),
-                    {"transaction", "build-browseros", "build-browserclaw"},
+                names = (
+                    "Recover product transaction",
+                    "Compose snapshots from current main",
+                    "Render shared extension feeds with the selected product pin",
+                    "Reconcile and merge product state",
+                    "Verify merged transaction and restore current committed feeds",
+                    "Publish immutable signed browser artifact",
+                    "Publish current committed product feeds",
+                    "Reconcile product rolling nightly release",
                 )
-                self.assertEqual(job["uses"], f"./.github/workflows/{workflow_name}")
-                self.assertEqual(job["with"]["mode"], "finalize")
-                self.assertEqual(job["with"]["state_owner"], "suite")
+                steps = [self.named_step(workflow, "publish", name) for name in names]
+                indexes = [publish["steps"].index(step) for step in steps]
+                self.assertEqual(indexes, sorted(indexes))
+                (
+                    recover,
+                    baseline,
+                    render,
+                    merge,
+                    committed,
+                    artifact,
+                    feeds,
+                    rolling,
+                ) = steps
+                for step in (recover, merge, committed):
+                    self.assertIn(f"--product {product}", step["run"])
+                    self.assertIn('--source-sha "$SOURCE_SHA"', step["run"])
+                for step in (baseline, render, merge):
+                    self.assertEqual(
+                        step["if"], "steps.recovery.outputs.state == 'open'"
+                    )
+                self.assertIn("open|merged)", recover["run"])
+                self.assertIn(".reservation_sha", recover["run"])
+                self.assertIn(
+                    'git restore --source="$BASE_SHA" --worktree', baseline["run"]
+                )
+                self.assertIn(
+                    'git merge-base --is-ancestor "$SOURCE_SHA" "$BASE_SHA"',
+                    baseline["run"],
+                )
+                self.assertNotIn("git checkout", baseline["run"])
+                self.assertEqual(render["run"].count("--set"), 1)
+                self.assertIn(f'--set "{extension}=$EXTENSION_VERSION"', render["run"])
+                self.assertIn(
+                    '--baseline-root "$GITHUB_WORKSPACE/updates"', render["run"]
+                )
+                self.assertIn('--state-base-sha "$BASE_SHA"', merge["run"])
+                self.assertIn('--state-root "$GITHUB_WORKSPACE"', merge["run"])
+                self.assertIn(f'products: ["{product}"]', merge["run"])
+                self.assertIn("release suite merge", merge["run"])
+                for token in (
+                    'test "$(jq -r \'.state\' "$record")" = "merged"',
+                    'test "$(jq -r \'.merge_sha\' "$record")" = "$merge_sha"',
+                    'git merge-base --is-ancestor "$merge_sha" "$current_main"',
+                    'git restore --source="$current_main" --worktree',
+                ):
+                    self.assertIn(token, committed["run"])
+                self.assertNotIn('git restore --source="$merge_sha"', committed["run"])
+                own_paths = {
+                    "updates/extensions/bundled-manifest.xml",
+                    "updates/extensions/extensions.alpha.json",
+                    "updates/extensions/update-manifest.alpha.xml",
+                    f"updates/server/{snapshot}",
+                }
+                for step in (baseline, committed):
+                    for path in own_paths:
+                        self.assertIn(path, step["run"])
+                    sibling = (
+                        "appcast-claw-server.alpha.xml"
+                        if product == "browseros"
+                        else "appcast-server.alpha.xml"
+                    )
+                    self.assertNotIn(sibling, step["run"])
+                self.assertEqual(artifact["run"].count("publish-browser-artifact"), 1)
+                self.assertIn(f"--product {product}", artifact["run"])
+                self.assertIn(
+                    f'--artifact-root "$RUNNER_TEMP/nightly-{product}"', artifact["run"]
+                )
+                for path in own_paths:
+                    self.assertIn(path.removeprefix("updates/"), feeds["run"])
+                self.assertNotIn("--allow-downgrade", render["run"] + feeds["run"])
+                self.assertEqual(rolling["run"].count("reconcile-rolling-release"), 1)
+                self.assertIn(f"--tag nightly-{product}", rolling["run"])
+                self.assertIn('--source-sha "$SOURCE_SHA"', rolling["run"])
+                self.assertIn('--browser-version "$VERSION"', rolling["run"])
+                self.assertNotIn("gh release delete", rolling["run"])
+                downloads = [
+                    step
+                    for step in publish["steps"]
+                    if str(step.get("uses", "")).startswith(
+                        "actions/download-artifact@"
+                    )
+                ]
+                self.assertEqual(len(downloads), 2)
+                self.assertEqual(
+                    downloads[0]["with"]["name"],
+                    f"${{{{ needs.build-{product}.outputs.artifact_name }}}}",
+                )
+                self.assertEqual(
+                    downloads[1]["with"]["name"], f"server-ota-snapshot-{product}"
+                )
+                self.assertEqual(
+                    downloads[1]["if"], "steps.recovery.outputs.state == 'open'"
+                )
 
-        for job_name, product in (
-            ("server-ota", "browseros"),
-            ("claw-server-ota", "browserclaw"),
+    def test_product_nightly_changes_trigger_build_system_tests(self):
+        workflow = self.load_workflow("bos-build-tests.yml")
+        paths = workflow.get("on", workflow.get(True))["pull_request"]["paths"]
+        for filename in (
+            "nightly-macos-browseros.yml",
+            "nightly-macos-browserclaw.yml",
+            "reusable-build-macos-nightly.yml",
         ):
-            job = jobs[job_name]
-            self.assertEqual(job["uses"], "./.github/workflows/publish-server-ota.yml")
-            self.assertEqual(job["with"]["product"], product)
-            self.assertEqual(job["with"]["state_owner"], "suite")
-            # A called workflow can only narrow the caller's GITHUB_TOKEN, so the
-            # ceiling must cover what publish-server-ota.yml declares. Granting
-            # less rejects the whole run at validation time, before any job is
-            # created — see run 33689075661.
-            self.assertEqual(
-                job["permissions"],
-                {"contents": "write", "pull-requests": "write"},
-            )
+            self.assertIn(f".github/workflows/{filename}", paths)
 
-        reconcile = jobs["reconcile-state"]
-        self.assertTrue(set(finalizers).issubset(set(reconcile["needs"])))
-        self.assertTrue(
-            {"server-ota", "claw-server-ota"}.issubset(set(reconcile["needs"]))
-        )
-        render = self.named_step(
-            workflow, "reconcile-state", "Render shared extension feeds"
-        )
-        merge = self.named_step(
-            workflow, "reconcile-state", "Reconcile and merge family state"
-        )
-        self.assertIn('--set "agent=$AGENT_VERSION"', render["run"])
-        self.assertIn('--set "browserclaw=$BROWSERCLAW_VERSION"', render["run"])
-        self.assertEqual(render["run"].count("release extensions"), 1)
-        self.assertEqual(merge["run"].count("release suite reconcile"), 1)
-        self.assertEqual(merge["run"].count("release suite merge"), 1)
-        self.assertIn('--state-root "$GITHUB_WORKSPACE"', merge["run"])
-
-        publish = jobs["publish"]
-        self.assertEqual(
-            set(publish["needs"]),
-            {"transaction", "reconcile-state", "build-browseros", "build-browserclaw"},
-        )
-        self.assertEqual(
-            publish["concurrency"],
-            {
-                "group": "release-feed-snapshots",
-                "cancel-in-progress": False,
-                "queue": "max",
-            },
-        )
-        self.assertEqual(publish["permissions"]["pull-requests"], "read")
-        checkout = next(
-            step
-            for step in publish["steps"]
-            if str(step.get("uses", "")).startswith("actions/checkout@")
-        )
-        self.assertEqual(
-            checkout["with"]["ref"],
-            "${{ needs.reconcile-state.outputs.merge_sha }}",
-        )
-        tracked = self.named_step(
-            workflow, "publish", "Publish committed family feeds"
-        )["run"]
-        for path in (
-            "server/appcast-server.alpha.xml",
-            "server/appcast-claw-server.alpha.xml",
-            "extensions/update-manifest.alpha.xml",
-            "extensions/extensions.alpha.json",
-            "extensions/bundled-manifest.xml",
-        ):
-            self.assertIn(path, tracked)
-        self.assertNotIn("--allow-downgrade", tracked)
-        self.assertNotIn(
-            "--allow-downgrade",
-            self.named_step(
-                workflow, "reconcile-state", "Render shared extension feeds"
-            )["run"],
-        )
-        immutable = self.named_step(
-            workflow, "publish", "Publish immutable signed browser artifacts"
-        )["run"]
-        self.assertEqual(immutable.count("publish-browser-artifact"), 2)
-        self.assertIn("--product browseros", immutable)
-        self.assertIn("--product browserclaw", immutable)
-        recover = self.named_step(
-            workflow, "publish", "Recover merged transaction record"
-        )
-        self.assertEqual(
-            recover["env"]["EXPECTED_MERGE_SHA"],
-            "${{ needs.reconcile-state.outputs.merge_sha }}",
-        )
-        for assertion in (
-            "jq -r '.state'",
-            "jq -r '.merge_sha'",
-            'git rev-parse HEAD)" = "$EXPECTED_MERGE_SHA"',
-        ):
-            self.assertIn(assertion, recover["run"])
-        publish_steps = publish["steps"]
-        recover_index = publish_steps.index(recover)
-        download_indexes = [
-            index
-            for index, step in enumerate(publish_steps)
-            if str(step.get("uses", "")).startswith("actions/download-artifact@")
-        ]
-        immutable_index = publish_steps.index(
-            self.named_step(
-                workflow, "publish", "Publish immutable signed browser artifacts"
-            )
-        )
-        feed_index = publish_steps.index(
-            self.named_step(workflow, "publish", "Publish committed family feeds")
-        )
-        rolling_index = publish_steps.index(
-            self.named_step(workflow, "publish", "Reconcile rolling nightly releases")
-        )
-        self.assertEqual(len(download_indexes), 2)
-        self.assertTrue(all(recover_index < index for index in download_indexes))
-        self.assertTrue(all(index < immutable_index for index in download_indexes))
-        self.assertLess(immutable_index, feed_index)
-        self.assertLess(feed_index, rolling_index)
-
-    def test_rolling_publication_is_source_and_checksum_aware(self):
-        workflow = self.load_workflow("nightly.yml")
-        rolling_step = self.named_step(
-            workflow, "publish", "Reconcile rolling nightly releases"
-        )
-        self.assertEqual(rolling_step["working-directory"], "packages/browseros")
-        rolling = rolling_step["run"]
-        for token in (
-            "nightly-browseros",
-            "nightly-browserclaw",
-            "release suite reconcile-rolling-release",
-            '--source-sha "$SOURCE_SHA"',
-            '--browser-version "$VERSION"',
-            '--repo "$GITHUB_REPOSITORY"',
-        ):
-            self.assertIn(token, rolling)
-        self.assertEqual(rolling.count("reconcile-rolling-release"), 2)
-        self.assertNotIn("gh release delete", rolling)
-        self.assertNotIn("gh release create", rolling)
+        release_checks = self.load_workflow("test.yml")
+        release_paths = release_checks.get("on", release_checks.get(True))["pull_request"]["paths"]
+        self.assertIn(".github/workflows/reusable-build-macos-nightly.yml", release_paths)
 
     def test_internal_builder_uses_reservation_and_frozen_artifact_source(self):
-        workflow = self.load_workflow("nightly-macos-product.yml")
+        workflow = self.load_workflow("reusable-build-macos-nightly.yml")
         triggers = workflow.get("on", workflow.get(True))
+        self.assertEqual(workflow["name"], "Reusable: Build macOS nightly")
+        self.assertEqual(set(triggers), {"workflow_call"})
         self.assertNotIn("workflow_dispatch", triggers)
         self.assertEqual(
             set(triggers["workflow_call"]["inputs"]),
@@ -1844,7 +1892,9 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             workflow, "build", "Sync build repo to transaction reservation"
         )
         build = self.named_step(workflow, "build", "Build signed nightly")
-        text = (WORKFLOW_DIR / "nightly-macos-product.yml").read_text(encoding="utf-8")
+        text = (WORKFLOW_DIR / "reusable-build-macos-nightly.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("refs/pull/[1-9][0-9]*/head", sync["run"])
         self.assertIn('"+$STATE_REF:$state_remote_ref"', sync["run"])
         self.assertIn('git checkout --detach "$RESERVATION_SHA"', sync["run"])
@@ -1874,9 +1924,7 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
             "PROD_MACOS_BROWSERCLAW_PASSKEY_PROFILE_B64",
             triggers["workflow_call"]["secrets"],
         )
-        setup = self.named_step(
-            workflow, "build", "Import macOS signing certificate"
-        )
+        setup = self.named_step(workflow, "build", "Import macOS signing certificate")
         self.assertEqual(
             setup["env"]["PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64"],
             "${{ secrets.PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64 }}",
@@ -1918,17 +1966,6 @@ class FamilyNightlyWorkflowTest(unittest.TestCase):
         self.assertIn("actions/upload-artifact@v7", text)
         self.assertIn("release.json", text)
         self.assertNotIn("gh release create", text)
-
-    def test_family_nightly_changes_trigger_build_system_tests(self):
-        workflow = self.load_workflow("bos-build-tests.yml")
-        triggers = workflow.get("on", workflow.get(True))
-        paths = triggers["pull_request"]["paths"]
-        self.assertIn(".github/workflows/nightly.yml", paths)
-        self.assertIn(".github/workflows/nightly-macos-product.yml", paths)
-        self.assertNotIn(".github/workflows/nightly-browseros.yml", paths)
-        self.assertNotIn(".github/workflows/nightly-browserclaw.yml", paths)
-        self.assertNotIn(".github/workflows/reserve-nightly-browser-version.yml", paths)
-
 
 @unittest.skipIf(os.name == "nt", "macOS signing helper shell tests run on POSIX")
 class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
@@ -2747,39 +2784,46 @@ class ReleaseDocumentationTest(unittest.TestCase):
         self.assertIn("`queue: max`", self.nightly)
         self.assertIn("Published mode deliberately retains", self.warp)
 
-    def test_nightly_runbook_covers_family_transaction_and_retry_identities(self):
+    def test_nightly_runbook_covers_product_transactions_and_family_cutover(self):
         for token in (
-            ".github/workflows/nightly.yml",
-            "nightly-<source-sha>",
+            ".github/workflows/nightly-macos-browseros.yml",
+            ".github/workflows/nightly-macos-browserclaw.yml",
+            ".github/workflows/reusable-build-macos-nightly.yml",
+            "nightly-<product>-<source-sha>",
             "Source SHA",
             "Reservation SHA",
             "State SHA",
             "Merge SHA",
             "refs/pull/<PR_NUMBER>/head",
             "created as a draft",
-            "Open, closed, and\nmerged canonical suite records",
-            "superseded/no-op",
-            "--allow-downgrade",
-            "Re-run failed\njobs",
+            "Open, closed, and merged canonical suite",
+            "--baseline-root",
+            "--state-base-sha",
+            "Re-run failed jobs",
             "conditionally creates",
-            "existing alias is older or missing",
             "before exposing any mutable feeds",
-            "release record and its live tag must resolve to the same source",
+            "superseded/no-op",
             "partial draft resumes",
-            "Rewriting `main` history is unsupported",
-            "audit those effects and explicitly remove",
+            "--allow-downgrade",
+            "release-suite",
+            "Historical runs",
+            "omitting",
+            "--product",
+            "Historical standalone extension-feed runs",
+            "current committed feed files",
+            "Rewriting `main` history remains unsupported",
         ):
             with self.subTest(token=token):
                 self.assertIn(token, self.nightly)
         self.assertLess(
             self.nightly.index(
-                "conditionally create or verify both immutable signed browser artifacts"
+                "conditionally create or verify its immutable DMG and receipt"
             ),
             self.nightly.index(
-                "publish the committed feeds and reconcile both rolling prereleases"
+                "publish current committed feeds and reconcile its rolling prerelease"
             ),
         )
-        self.assertIn("first production slice migrates the nightly", self.release)
+        self.assertIn("Signed nightlies use independent product transactions", self.release)
         for token in (
             "always check out `reservation_sha`",
             "new whole-run invocation that finds the transaction already\nmerged fails closed",

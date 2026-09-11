@@ -1,197 +1,91 @@
-import {
-  openWindowSidePanelIdsStorage,
-  sidePanelPerWindowStorage,
-} from './sidePanelOpenStateStorage'
+import { sidePanelPerWindowStorage } from './sidePanelOpenStateStorage'
 
-const SIDEPANEL_PATH = 'sidepanel.html'
-const openWindowSidePanelIds = new Set<number>()
-let sidePanelPerWindow = false
-let sidePanelOpenStateListenersRegistered = false
-let sidePanelRuntimeStateLoaded = false
-let sidePanelRuntimeStateLoadPromise: Promise<void> | null = null
-let sidePanelScopePreferenceEpoch = 0
-let persistWindowSidePanelOpenStatePromise: Promise<void> = Promise.resolve()
+export type SidePanelTarget = { tabId: number; windowId: number }
+export type SidePanelToggleResult = { opened: boolean }
 
-export type SidePanelTarget = {
-  tabId: number
-  windowId: number
+let initialization: Promise<void> | undefined
+const operations = new Map<number, Promise<unknown>>()
+
+/**
+ * Panel visibility belongs to each tab. Disable the native global entry on every
+ * worker startup (Chromium forgets options on extension reload). Storage version
+ * migration separately resets the retired sharing preference once per profile.
+ */
+export function initializeSidePanelOptions(): Promise<void> {
+  initialization ??= (async () => {
+    await sidePanelPerWindowStorage.getValue()
+    await chrome.sidePanel.setOptions({ enabled: false })
+  })().catch((error) => {
+    initialization = undefined
+    throw error
+  })
+  return initialization
 }
 
-export type SidePanelToggleResult = {
-  opened: boolean
-}
-
-/** Applies an explicit side panel scope change to Chrome and the worker cache. */
-export async function setSidePanelPerWindowPreference(
-  perWindow: boolean,
-): Promise<void> {
-  const epoch = sidePanelScopePreferenceEpoch + 1
-  sidePanelScopePreferenceEpoch = epoch
-  await applySidePanelPerWindowPreference(perWindow, epoch)
-}
-
-async function applySidePanelPerWindowPreference(
-  perWindow: boolean,
-  epoch: number,
-): Promise<void> {
-  if (epoch !== sidePanelScopePreferenceEpoch) return
-  await chrome.sidePanel.setOptions(
-    perWindow ? { enabled: true, path: SIDEPANEL_PATH } : { enabled: false },
-  )
-  cacheSidePanelPerWindowPreference(perWindow, epoch)
-}
-
-function cacheSidePanelPerWindowPreference(
-  perWindow: boolean,
-  epoch: number,
-): void {
-  if (epoch === sidePanelScopePreferenceEpoch) {
-    sidePanelPerWindow = perWindow
+/** Register ownership without opening. This also gives native Alt+A a fixed URL. */
+export async function prepareTabSidePanel(tabId: number): Promise<void> {
+  await initializeSidePanelOptions()
+  const path = `sidepanel.html?tabId=${tabId}`
+  const options = await chrome.sidePanel.getOptions({ tabId })
+  if (options.path !== path || !options.enabled) {
+    await chrome.sidePanel.setOptions({ tabId, path, enabled: true })
   }
 }
 
-async function readSidePanelScopePreference(): Promise<boolean> {
-  try {
-    return await sidePanelPerWindowStorage.getValue()
-  } catch {
-    return false
-  }
+/** Opens a captured target; never queries whichever tab became active meanwhile. */
+export function openSidePanel(
+  target: SidePanelTarget,
+): Promise<SidePanelToggleResult> {
+  return forTab(target.tabId, async () => {
+    await prepareTabSidePanel(target.tabId)
+    return chrome.sidePanel.browserosToggle({ tabId: target.tabId, open: true })
+  })
 }
 
-/** Establishes Chrome's initial side panel options during extension installation. */
-export async function initializeSidePanelOptions(): Promise<void> {
-  const epoch = sidePanelScopePreferenceEpoch
-  const perWindow = await readSidePanelScopePreference()
-  await applySidePanelPerWindowPreference(perWindow, epoch)
+/**
+ * The shipped APIs have complementary close behavior: custom close clears the
+ * active entry immediately (before animation), while standard close clears a
+ * background entry. Use both, without disabling the panel or guessing whether
+ * its tab is still active after asynchronous calls.
+ */
+export function closeSidePanel(
+  target: SidePanelTarget,
+): Promise<SidePanelToggleResult> {
+  return forTab(target.tabId, async () => {
+    return closeTabPanel(target.tabId)
+  })
 }
 
-async function loadSidePanelScopePreference(): Promise<void> {
-  const epoch = sidePanelScopePreferenceEpoch
-  const perWindow = await readSidePanelScopePreference()
-  cacheSidePanelPerWindowPreference(perWindow, epoch)
-}
-
-async function loadWindowSidePanelOpenState(): Promise<void> {
-  const windowIds = await openWindowSidePanelIdsStorage.getValue()
-  openWindowSidePanelIds.clear()
-  for (const windowId of windowIds) {
-    if (Number.isInteger(windowId)) {
-      openWindowSidePanelIds.add(windowId)
+/** Until the native toggle is fixed, use its correct state reader + explicit action. */
+export function toggleSidePanel(
+  target: SidePanelTarget,
+): Promise<SidePanelToggleResult> {
+  return forTab(target.tabId, async () => {
+    await prepareTabSidePanel(target.tabId)
+    if (await chrome.sidePanel.browserosIsOpen({ tabId: target.tabId })) {
+      return closeTabPanel(target.tabId)
     }
-  }
+    return chrome.sidePanel.browserosToggle({ tabId: target.tabId, open: true })
+  })
 }
 
-function queuePersistWindowSidePanelOpenState(): void {
-  const windowIds = [...openWindowSidePanelIds]
-  persistWindowSidePanelOpenStatePromise =
-    persistWindowSidePanelOpenStatePromise
-      .catch(() => undefined)
-      .then(() => openWindowSidePanelIdsStorage.setValue(windowIds))
+async function closeTabPanel(tabId: number): Promise<SidePanelToggleResult> {
+  await chrome.sidePanel.browserosToggle({ tabId, open: false })
+  await chrome.sidePanel.close({ tabId })
+  return { opened: false }
 }
 
-function rememberWindowSidePanelOpen(windowId: number): void {
-  if (openWindowSidePanelIds.has(windowId)) return
-  openWindowSidePanelIds.add(windowId)
-  queuePersistWindowSidePanelOpenState()
-}
-
-function rememberWindowSidePanelClosed(windowId: number): void {
-  if (!openWindowSidePanelIds.delete(windowId)) return
-  queuePersistWindowSidePanelOpenState()
-}
-
-/** Refreshes the cached side panel scope and open-window state from storage. */
-export async function refreshSidePanelRuntimeState(): Promise<void> {
-  await Promise.all([
-    loadSidePanelScopePreference(),
-    loadWindowSidePanelOpenState(),
-  ])
-  sidePanelRuntimeStateLoaded = true
-}
-
-/** Serializes background startup state before a user-triggered side panel action routes. */
-export async function ensureSidePanelRuntimeStateLoaded(): Promise<void> {
-  if (sidePanelRuntimeStateLoaded) return
-  sidePanelRuntimeStateLoadPromise ??= refreshSidePanelRuntimeState()
-    .catch((error) => {
-      sidePanelRuntimeStateLoaded = false
-      throw error
-    })
+// Serialize extension actions per tab across asynchronous API calls. Native
+// Alt+A executes outside this queue; its atomic implementation remains Chromium's.
+function forTab<T>(tabId: number, action: () => Promise<T>): Promise<T> {
+  const next = (operations.get(tabId) ?? Promise.resolve())
+    .catch(() => undefined)
+    .then(action)
+  operations.set(tabId, next)
+  void next
     .finally(() => {
-      sidePanelRuntimeStateLoadPromise = null
+      if (operations.get(tabId) === next) operations.delete(tabId)
     })
-  await sidePanelRuntimeStateLoadPromise
-}
-
-async function openTabSidePanel({
-  tabId,
-}: SidePanelTarget): Promise<SidePanelToggleResult> {
-  // This is an idempotent command, not a check-then-toggle sequence. The
-  // background conversation broker may race with a user click; `open: true`
-  // guarantees that either ordering leaves the touched tab's panel open.
-  return await chrome.sidePanel.browserosToggle({ tabId, open: true })
-}
-
-async function toggleTabSidePanel({
-  tabId,
-}: SidePanelTarget): Promise<SidePanelToggleResult> {
-  return await chrome.sidePanel.browserosToggle({ tabId })
-}
-
-async function openWindowSidePanel({
-  windowId,
-}: SidePanelTarget): Promise<SidePanelToggleResult> {
-  if (!openWindowSidePanelIds.has(windowId)) {
-    await chrome.sidePanel.open({ windowId })
-    rememberWindowSidePanelOpen(windowId)
-  }
-  return { opened: true }
-}
-
-async function toggleWindowSidePanel(
-  target: SidePanelTarget,
-): Promise<SidePanelToggleResult> {
-  if (openWindowSidePanelIds.has(target.windowId)) {
-    await chrome.sidePanel.close({ windowId: target.windowId })
-    rememberWindowSidePanelClosed(target.windowId)
-    return { opened: false }
-  }
-  return await openWindowSidePanel(target)
-}
-
-/** Tracks standard side panel events so window mode can behave like a toggle. */
-export function registerSidePanelOpenStateListeners(): void {
-  if (sidePanelOpenStateListenersRegistered) return
-  sidePanelOpenStateListenersRegistered = true
-
-  chrome.sidePanel.onOpened.addListener((info) => {
-    if (info.tabId === undefined) {
-      rememberWindowSidePanelOpen(info.windowId)
-    }
-  })
-
-  chrome.sidePanel.onClosed.addListener((info) => {
-    if (info.tabId === undefined) {
-      rememberWindowSidePanelClosed(info.windowId)
-    }
-  })
-}
-
-/** Opens from non-toolbar flows that may not carry Chrome's user gesture. */
-export async function openSidePanel(
-  target: SidePanelTarget,
-): Promise<SidePanelToggleResult> {
-  await ensureSidePanelRuntimeStateLoaded()
-  return await openTabSidePanel(target)
-}
-
-/** Toggles the configured side panel scope from a toolbar/user gesture. */
-export async function toggleSidePanel(
-  target: SidePanelTarget,
-): Promise<SidePanelToggleResult> {
-  await ensureSidePanelRuntimeStateLoaded()
-  if (sidePanelPerWindow) {
-    return await toggleWindowSidePanel(target)
-  }
-  return await toggleTabSidePanel(target)
+    .catch(() => undefined)
+  return next
 }

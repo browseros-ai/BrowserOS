@@ -1,3 +1,4 @@
+import { createDiagnosticsRoute } from './diagnostics'
 /**
  * @license
  * Copyright 2025 BrowserOS
@@ -84,14 +85,13 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .use('/*', cors(defaultCorsConfig))
       .use('/*', requireTrustedOrigin())
       .route('/system/health', createHealthRoute({ browser }))
+      .route('/system/diagnostics', createDiagnosticsRoute(version))
       .route('/system/shutdown', createShutdownRoute({ onShutdown }))
       // Compatibility aliases for shipped browsers that still probe root paths
       // while the server binary can update independently during OTA.
       .route('/health', createHealthRoute({ browser }))
       .route('/shutdown', createShutdownRoute({ onShutdown }))
       .route('/status', createStatusRoute({ browser, activity }))
-      .route('/test-provider', createProviderRoutes({ browserosId }))
-      .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))
       .route(
@@ -140,14 +140,20 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       // These carry provider credentials in the clear, so they need the
       // localhost + extension-origin check. The blanket requireTrustedOrigin
       // above only rejects a request that carries a disallowed Origin header;
-      // one with no Origin at all passes it.
+      // one with no Origin at all passes it. /test-provider reuses a saved
+      // credential server-side and /refine-prompt drives an outbound LLM call,
+      // so they belong here too.
       .use('/providers/*', requireTrustedAppOrigin())
+      .use('/test-provider/*', requireTrustedAppOrigin())
+      .use('/refine-prompt/*', requireTrustedAppOrigin())
       .use('/scheduled-jobs/*', requireTrustedAppOrigin())
       .use('/scheduled-job-runs/*', requireTrustedAppOrigin())
       .route('/acpx/probe', createAcpxProbeRoutes({ resourcesDir }))
       .route('/agents', resolvedAgentRoutes)
       .route('/conversations', createConversationRoutes())
       .route('/providers', createProvidersRoutes())
+      .route('/test-provider', createProviderRoutes({ browserosId }))
+      .route('/refine-prompt', createRefinePromptRoutes({ browserosId }))
       .route('/scheduled-jobs', createScheduledJobRoutes())
       .route('/scheduled-job-runs', createScheduledJobRunRoutes())
   )

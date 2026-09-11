@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Feed-publisher release commands."""
 
+from pathlib import Path
 from typing import List
 
 import typer
@@ -125,6 +126,12 @@ def extensions_command(
     allow_downgrade: bool = typer.Option(
         False, "--allow-downgrade", help="Override the version-downgrade guard"
     ),
+    baseline_root: Path | None = typer.Option(
+        None,
+        "--baseline-root",
+        help="Committed updates/ directory to preserve alongside live pins; "
+        "hold the feed publication lock through render, commit, and publish",
+    ),
 ):
     """Regenerate extension manifests coherently."""
     try:
@@ -141,6 +148,7 @@ def extensions_command(
             set_versions=versions,
             publish=publish,
             allow_downgrade=allow_downgrade,
+            baseline_root=baseline_root,
         ),
     )
 

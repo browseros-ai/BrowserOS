@@ -292,7 +292,10 @@ export class AcpxProvider {
   async compact(
     opts: { sessionKey?: string; agent?: string } = {},
   ): Promise<void> {
-    const sessionKey = this.resolveSessionKey({ sessionKey: opts.sessionKey })
+    const sessionKey = this.resolveSessionKey({
+      sessionKey: opts.sessionKey,
+      agent: opts.agent,
+    })
     const cmds = this.lastCommands.get(sessionKey) ?? []
     const cmd = cmds.find((c) => {
       const stripped = c.name.replace(/^\//, '').toLowerCase()

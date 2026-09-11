@@ -2,7 +2,6 @@
 """Platform-specific binary signing for OTA binaries"""
 
 import os
-import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -18,12 +17,9 @@ from ...lib.utils import (
     log_info,
     log_error,
     log_success,
-    log_warning,
     IS_MACOS,
-    IS_WINDOWS,
-    get_command_secret_values,
-    redact_sensitive_text,
 )
+from ...steps.sign.windows import sign_with_codesigntool
 
 
 def sign_macos_binary(
@@ -245,103 +241,13 @@ def sign_windows_binary(
     binary_path: Path,
     env: Optional[EnvConfig] = None,
 ) -> bool:
-    """Sign a Windows binary with SSL.com CodeSignTool
+    """Use the browser build's Windows signer for OTA binaries.
 
-    Args:
-        binary_path: Path to binary to sign
-        env: Environment config with eSigner credentials
-
-    Returns:
-        True on success, False on failure
+    Sharing the signer keeps credentials out of cmd.exe parsing when the
+    bundled Java launcher is available, and reports redacted tool errors
+    before a later Authenticode check can obscure the original failure.
     """
-    if env is None:
-        env = EnvConfig()
-
-    # Prefer CODE_SIGN_TOOL_EXE (direct path), fall back to CODE_SIGN_TOOL_PATH + .bat
-    if env.code_sign_tool_exe:
-        codesigntool_path = Path(env.code_sign_tool_exe)
-    elif env.code_sign_tool_path:
-        codesigntool_path = Path(env.code_sign_tool_path) / "CodeSignTool.bat"
-    else:
-        log_warning("CODE_SIGN_TOOL_EXE not set - skipping Windows signing")
-        return True
-
-    if not codesigntool_path.exists():
-        log_error(f"CodeSignTool not found at: {codesigntool_path}")
-        return False
-
-    if not all([env.esigner_username, env.esigner_password, env.esigner_totp_secret]):
-        log_error("Missing eSigner credentials")
-        return False
-
-    log_info(f"Signing {binary_path.name}...")
-
-    secret_values: tuple[str, ...] = ()
-    try:
-        temp_output_dir = binary_path.parent / "signed_temp"
-        temp_output_dir.mkdir(exist_ok=True)
-
-        cmd = [
-            str(codesigntool_path),
-            "sign",
-            "-username", env.esigner_username,
-            "-password", f'"{env.esigner_password}"',
-        ]
-
-        if env.esigner_credential_id:
-            cmd.extend(["-credential_id", env.esigner_credential_id])
-
-        cmd.extend([
-            "-totp_secret", env.esigner_totp_secret,
-            "-input_file_path", str(binary_path),
-            "-output_dir_path", str(temp_output_dir),
-            "-override",
-        ])
-
-        secret_values = get_command_secret_values(cmd)
-        result = subprocess.run(
-            " ".join(cmd),
-            shell=True,
-            capture_output=True,
-            text=True,
-            cwd=str(codesigntool_path.parent),
-        )
-
-        if result.stdout and "Error:" in result.stdout:
-            safe_output = redact_sensitive_text(result.stdout, secret_values)
-            log_error(f"Signing failed: {safe_output}")
-            return False
-
-        signed_file = temp_output_dir / binary_path.name
-        if signed_file.exists():
-            shutil.move(str(signed_file), str(binary_path))
-
-        try:
-            temp_output_dir.rmdir()
-        except Exception:
-            pass
-
-        # Verify signature on Windows only (PowerShell not available on macOS/Linux)
-        if IS_WINDOWS():
-            verify_cmd = [
-                "powershell", "-Command",
-                f"(Get-AuthenticodeSignature '{binary_path}').Status",
-            ]
-            verify_result = subprocess.run(verify_cmd, capture_output=True, text=True)
-            if "Valid" in verify_result.stdout:
-                log_success(f"Signed and verified {binary_path.name}")
-            else:
-                log_error(f"Signature verification failed: {verify_result.stdout.strip()}")
-                return False
-        else:
-            log_success(f"Signed {binary_path.name} (verification skipped on non-Windows)")
-
-        return True
-
-    except Exception as e:
-        safe_error = redact_sensitive_text(str(e), secret_values)
-        log_error(f"Signing failed: {safe_error}")
-        return False
+    return sign_with_codesigntool([binary_path], env)
 
 
 def sign_server_bundle_macos(

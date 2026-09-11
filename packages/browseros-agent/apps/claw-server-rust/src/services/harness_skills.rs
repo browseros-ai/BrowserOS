@@ -5,6 +5,9 @@ use serde::Deserialize;
 
 use crate::error::{AppError, AppResult};
 
+// This skill ships twice. This copy is installed automatically for the harnesses on
+// the connect board; `skills/browseros-neo/SKILL.md` at the repo root is the copy every
+// other agent installs by hand through the skills CLI. Editing one means editing both.
 // MCP 2026-07-28 removed `initialize`, so keep the installed skill self-contained for
 // hosts that do not call `server/discover` or expose its instructions.
 const EMBEDDED_BROWSERCLAW_SKILL: &str =

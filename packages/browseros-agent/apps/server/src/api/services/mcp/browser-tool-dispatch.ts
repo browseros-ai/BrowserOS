@@ -37,8 +37,6 @@ export interface BrowserMcpLeaseScope {
 }
 
 export interface BrowserToolPageTrace {
-  /** Every page the tool interacted with, including pages it created. */
-  readonly touched: Set<number>
   /** Only pages created by this call; these are eligible for agent grouping. */
   readonly created: Set<number>
 }
@@ -111,7 +109,7 @@ export async function dispatchBrowserTool(
 ): Promise<ToolResult> {
   const call: BrowserToolCall = {
     ...input,
-    trace: { touched: new Set(), created: new Set() },
+    trace: { created: new Set() },
   }
   const startedAt = performance.now()
   const durationMs = () => Math.round(performance.now() - startedAt)
@@ -197,7 +195,7 @@ async function executeBrowserTool(call: BrowserToolCall): Promise<ToolResult> {
   ].filter((signal): signal is AbortSignal => signal !== undefined)
   const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals)
   const session = call.run
-    ? trackBrowserSessionPages(call.context.session, call.trace)
+    ? trackBrowserSessionPages(call.context.session, call.trace, call.run)
     : call.context.session
 
   return await withBrowserOutputFileAccess(call.lease?.outputFileAccess, () =>
@@ -215,19 +213,7 @@ function collectDeclaredPageEffects(
 ): void {
   const action =
     typeof call.args.action === 'string' ? call.args.action : undefined
-  // A list observes browser-wide metadata; it does not touch every returned tab.
-  if (call.tool.name === 'tabs' && (action ?? 'list') === 'list') return
-
-  if (typeof call.args.page === 'number') {
-    call.trace.touched.add(call.args.page)
-  }
-  if (Array.isArray(call.args.pages)) {
-    for (const page of call.args.pages) {
-      if (typeof page === 'number') call.trace.touched.add(page)
-    }
-  }
-
-  if (call.tool.name !== 'tabs') return
+  if (call.tool.name !== 'tabs' || action !== 'new') return
   const page = asRecord(result.structuredContent)?.page
   const pageId =
     typeof page === 'number'
@@ -236,18 +222,8 @@ function collectDeclaredPageEffects(
         ? (asRecord(page)?.pageId as number)
         : undefined
   if (pageId === undefined) return
-  call.trace.touched.add(pageId)
-  if (action === 'new') call.trace.created.add(pageId)
+  call.trace.created.add(pageId)
 }
-
-const SESSION_PAGE_METHODS = new Set([
-  'observe',
-  'input',
-  'nav',
-  'screenshot',
-  'screenshotForTarget',
-  'cdpJsonForPage',
-])
 
 /**
  * Wraps one call's BrowserSession so the open-ended `run` tool emits page facts
@@ -256,8 +232,8 @@ const SESSION_PAGE_METHODS = new Set([
 function trackBrowserSessionPages(
   session: BrowserSession,
   trace: BrowserToolPageTrace,
+  run: ActiveConversationRun,
 ): BrowserSession {
-  const touch = (pageId: number) => trace.touched.add(pageId)
   const trackedPages = new Proxy(session.pages, {
     get(target, property) {
       const value = Reflect.get(target, property, target)
@@ -265,18 +241,25 @@ function trackBrowserSessionPages(
 
       if (property === 'newPage') {
         return async (...args: unknown[]) => {
-          const pageId = await Reflect.apply(value, target, args)
+          // Creation is published before load waits or the rest of a `run`
+          // script. A later tool failure cannot undo the tab that already exists.
+          const options = args[1] as Parameters<
+            BrowserSession['pages']['newPage']
+          >[1]
+          const pageId = await Reflect.apply(value, target, [
+            args[0],
+            {
+              ...options,
+              onCreated: (tabId: number) => {
+                run.associateTabs([tabId])
+                options?.onCreated?.(tabId)
+              },
+            },
+          ])
           if (typeof pageId === 'number') {
-            touch(pageId)
             trace.created.add(pageId)
           }
           return pageId
-        }
-      }
-      if (property === 'getSession' || property === 'getInfo') {
-        return (...args: unknown[]) => {
-          if (typeof args[0] === 'number') touch(args[0])
-          return Reflect.apply(value, target, args)
         }
       }
       return value.bind(target)
@@ -288,12 +271,6 @@ function trackBrowserSessionPages(
       if (property === 'pages') return trackedPages
       const value = Reflect.get(target, property, target)
       if (typeof value !== 'function') return value
-      if (typeof property === 'string' && SESSION_PAGE_METHODS.has(property)) {
-        return (...args: unknown[]) => {
-          if (typeof args[0] === 'number') touch(args[0])
-          return Reflect.apply(value, target, args)
-        }
-      }
       return value.bind(target)
     },
   })

@@ -35,6 +35,12 @@ describe('conversation run client', () => {
     ).toBe('http://127.0.0.1:9000/chat/conversation%2Fone/stream')
   })
 
+  it('pins reconnects to the hydrated run instead of whichever turn is newest', () => {
+    expect(
+      conversationReconnectUrl('http://localhost:9000', 'chat', 'run/new'),
+    ).toBe('http://localhost:9000/chat/chat/stream?runId=run%2Fnew')
+  })
+
   it('rejects malformed state instead of poisoning React chat state', async () => {
     await expect(
       fetchConversationRunState(

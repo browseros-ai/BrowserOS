@@ -362,7 +362,7 @@ describe('tool_call — completed and failed', () => {
 })
 
 describe('status — usage_update', () => {
-  test('captures used and size for a later finish() call', () => {
+  test('reports size as the context window, separately from token usage', () => {
     const t = newTranslator()
     const parts = feed(t, [
       status({ tag: 'usage_update', used: 100, size: 4096 }),
@@ -377,7 +377,10 @@ describe('status — usage_update', () => {
         inputTokens: undefined,
         outputTokens: undefined,
         totalTokens: 100,
-        cachedInputTokens: 4096,
+        cachedInputTokens: undefined,
+      },
+      providerMetadata: {
+        acpx: { contextWindow: 4096 },
       },
     })
   })

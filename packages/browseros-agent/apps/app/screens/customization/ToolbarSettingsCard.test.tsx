@@ -100,10 +100,6 @@ function checkFeatureSupport(
 let prefValues = new Map<string, unknown>()
 let setPrefCalls: Array<{ name: string; value: unknown }> = []
 let getPrefError: Error | null = null
-let sidePanelPerWindowValue = false
-let sidePanelPerWindowWrites: boolean[] = []
-let sentRuntimeMessages: Array<{ type: string; data: unknown }> = []
-let sendRuntimeMessageError: Error | null = null
 let renderedSwitches: Array<{
   id?: string
   checked?: boolean
@@ -171,20 +167,6 @@ mock.module('@/lib/browseros/prefs', () => ({
   BROWSEROS_PREFS,
 }))
 
-mock.module('@/lib/browseros/sidePanelOpenStateStorage', () => ({
-  sidePanelPerWindowStorage: {
-    getValue: async () => sidePanelPerWindowValue,
-    setValue: async (value: boolean) => {
-      sidePanelPerWindowWrites.push(value)
-      sidePanelPerWindowValue = value
-    },
-  },
-  openWindowSidePanelIdsStorage: {
-    getValue: async () => [],
-    setValue: async () => {},
-  },
-}))
-
 mock.module('@/lib/browseros/capabilities', () => ({
   Capabilities: {
     getStaticSupport: () => null,
@@ -200,18 +182,6 @@ mock.module('@/lib/browseros/capabilities', () => ({
   resolveStaticFeatureSupport,
 }))
 
-mock.module('@/lib/messaging/runtime/runtimeMessages', () => ({
-  RuntimeMessageType: {
-    sidePanelScopeChanged: 'runtime.sidePanelScopeChanged',
-  },
-  sendRuntimeMessage: async (type: string, data: unknown) => {
-    sentRuntimeMessages.push({ type, data })
-    if (sendRuntimeMessageError) {
-      throw sendRuntimeMessageError
-    }
-  },
-}))
-
 let ToolbarSettingsCard: FC
 let loadToolbarSettingsState: typeof import('./ToolbarSettingsCard').loadToolbarSettingsState
 
@@ -225,10 +195,6 @@ beforeEach(() => {
   prefValues = new Map()
   setPrefCalls = []
   getPrefError = null
-  sidePanelPerWindowValue = false
-  sidePanelPerWindowWrites = []
-  sentRuntimeMessages = []
-  sendRuntimeMessageError = null
   renderedSwitches = []
 })
 
@@ -237,30 +203,12 @@ function renderCard() {
   return renderToStaticMarkup(createElement(ToolbarSettingsCard))
 }
 
-function getRenderedSwitch(id: string) {
-  const renderedSwitch = renderedSwitches.find((item) => item.id === id)
-  if (!renderedSwitch) {
-    throw new Error(`Missing switch: ${id}`)
-  }
-  return renderedSwitch
-}
-
 describe('ToolbarSettingsCard', () => {
-  it('loads side panel scope from extension storage', async () => {
-    sidePanelPerWindowValue = true
-
-    const state = await loadToolbarSettingsState()
-
-    expect(state.sidePanelPerWindow).toBe(true)
-  })
-
-  it('keeps side panel scope when native prefs fail', async () => {
-    sidePanelPerWindowValue = true
+  it('uses safe toolbar defaults when native prefs fail', async () => {
     getPrefError = new Error('native prefs unavailable')
 
     const state = await loadToolbarSettingsState()
 
-    expect(state.sidePanelPerWindow).toBe(true)
     expect(state.showLlmChat).toBe(true)
     expect(state.showToolbarLabels).toBe(true)
     expect(state.supportsVerticalTabs).toBe(false)
@@ -276,41 +224,9 @@ describe('ToolbarSettingsCard', () => {
     expect(html).not.toContain('show-llm-hub')
   })
 
-  it('renders the side panel scope toggle in the default per-tab state', () => {
+  it('removes the shared panel setting', () => {
     const html = renderCard()
-
-    expect(html).toContain('Share Side Panel Across Tabs')
-    expect(html).toContain(
-      'Use one side panel for the whole window instead of a separate one for each tab',
-    )
-    expect(html).toContain('id="side-panel-per-window"')
-    expect(getRenderedSwitch('side-panel-per-window').checked).toBe(false)
-  })
-
-  it('persists the side panel scope toggle', async () => {
-    renderCard()
-
-    await getRenderedSwitch('side-panel-per-window').onCheckedChange?.(true)
-
-    expect(sidePanelPerWindowWrites).toEqual([true])
-    expect(setPrefCalls).toEqual([])
-    expect(sentRuntimeMessages).toEqual([
-      {
-        type: 'runtime.sidePanelScopeChanged',
-        data: { perWindow: true },
-      },
-    ])
-  })
-
-  it('rolls back the side panel scope pref when background application fails', async () => {
-    sendRuntimeMessageError = new Error('No receiver')
-    sidePanelPerWindowValue = false
-    renderCard()
-
-    await getRenderedSwitch('side-panel-per-window').onCheckedChange?.(true)
-
-    expect(sidePanelPerWindowWrites).toEqual([true, false])
-    expect(setPrefCalls).toEqual([])
-    expect(sidePanelPerWindowValue).toBe(false)
+    expect(html).not.toContain('Share Side Panel Across Tabs')
+    expect(html).not.toContain('side-panel-per-window')
   })
 })

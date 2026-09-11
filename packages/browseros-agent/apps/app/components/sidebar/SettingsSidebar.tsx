@@ -1,4 +1,5 @@
 import {
+  Activity,
   ArrowLeft,
   BookOpen,
   Bot,
@@ -88,6 +89,7 @@ const primarySettingsSections: NavSection[] = [
 const helpItems: NavItem[] = [
   { name: 'Docs', href: 'https://docs.browseros.com/', icon: BookOpen },
   { name: 'Features', to: '/features', icon: Compass },
+  { name: 'Diagnostics', to: '/settings/diagnostics', icon: Activity },
 ]
 
 export const SettingsSidebar: FC = () => {

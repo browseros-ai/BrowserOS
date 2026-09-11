@@ -15,7 +15,10 @@ import {
   hydrateChatProvider,
 } from '../services/chat-provider-config'
 import { ChatService } from '../services/chat-service'
-import type { ConversationRuns } from '../services/conversation-runs'
+import {
+  ConversationRunNotFoundError,
+  type ConversationRuns,
+} from '../services/conversation-runs'
 import type { KlavisService } from '../services/klavis'
 import type { BrowserMcpModule } from '../services/mcp/browser-mcp-module'
 import type { ServerActivity } from '../services/server-activity'
@@ -159,6 +162,14 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
     }
     return panelAssignmentsResponse(service.subscribePanelAssignments())
   })
+  app.delete('/panels/:tabId', (c) => {
+    if (!isTrustedAppRequest(c)) return c.json({ error: 'Forbidden' }, 403)
+    const tabId = Number(c.req.param('tabId'))
+    if (!Number.isInteger(tabId) || tabId < 0)
+      return c.json({ error: 'Invalid tab id' }, 400)
+    service.removePanelTab(tabId)
+    return c.json({ success: true })
+  })
   app.get('/:conversationId/state', async (c) => {
     // Keep this handler's type shallow: combining an awaited response with the
     // Zod middleware overload exceeds TypeScript's depth in the composed API.
@@ -178,10 +189,17 @@ export function createChatRoutes(deps: ChatRouteDeps): Hono<Env> {
       // The run may finish after a panel hydrates `state` but before this GET.
       // Completed records still replay their buffered chunks, closing that race
       // without making the panel reconstruct an assistant message itself.
-      const stream = service.subscribe(conversationId)
-      return stream
-        ? createUIMessageStreamResponse({ stream })
-        : new Response(null, { status: 204 })
+      try {
+        const stream = service.subscribe(conversationId, c.req.query('runId'))
+        return stream
+          ? createUIMessageStreamResponse({ stream })
+          : new Response(null, { status: 204 })
+      } catch (error) {
+        if (!(error instanceof ConversationRunNotFoundError)) throw error
+        // A newer turn won the state/stream race. The panel must hydrate again;
+        // replaying that new stream onto an older snapshot would mix turns.
+        return c.json({ error: 'Conversation run changed' }, 409)
+      }
     },
   )
   app.post(

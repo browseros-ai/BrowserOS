@@ -1,4 +1,5 @@
 {
+  // WXT owns import aliases. The test command prepares this base before Bun runs.
   "extends": "./.wxt/tsconfig.json",
   "compilerOptions": {
     "types": ["chrome", "bun"],
@@ -7,7 +8,6 @@
     // wxt 0.21's generated base turns on noUncheckedIndexedAccess and verbatimModuleSyntax; opt back out until the codebase adopts them deliberately (verbatim needs codegen's useTypeImports for the generated graphql client).
     "noUncheckedIndexedAccess": false,
     "verbatimModuleSyntax": false,
-    // WXT owns the app aliases; workspace packages resolve through their exports.
     "plugins": [
       {
         "name": "@0no-co/graphqlsp",

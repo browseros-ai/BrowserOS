@@ -13,7 +13,7 @@ from bos_build.release.suite_artifact import (
     R2ImmutableObjectBackend,
     publish_suite_browser_artifact,
 )
-from bos_build.release.suite_test import suite_record
+from bos_build.release.suite_test import suite_record, product_record
 
 
 class _PreconditionFailed(Exception):
@@ -145,6 +145,28 @@ class SuiteArtifactPublicationTest(unittest.TestCase):
                     root,
                     R2ImmutableObjectBackend(_FakeR2Client(), "bucket"),
                 )
+
+    def test_product_transaction_cannot_publish_sibling_artifact(self):
+        for product, sibling in (
+            ("browseros", "browserclaw"),
+            ("browserclaw", "browseros"),
+        ):
+            with (
+                self.subTest(product=product),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
+                root = Path(temp_dir)
+                _write_artifact(root, product=product)
+                record = product_record(product, state="merged")
+                client = _FakeR2Client()
+                backend = R2ImmutableObjectBackend(client, "bucket")
+                with self.assertRaisesRegex(ValueError, "Unknown suite product"):
+                    publish_suite_browser_artifact(record, sibling, root, backend)
+                self.assertEqual(client.puts, [])
+                publication = publish_suite_browser_artifact(
+                    record, product, root, backend
+                )
+                self.assertEqual(publication.product, product)
 
 
 if __name__ == "__main__":

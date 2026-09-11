@@ -7,10 +7,14 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+import { Feature } from '@/lib/browseros/capabilities'
 import { cn } from '@/lib/utils'
+import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
+import { SidebarHistory } from './SidebarHistory'
 
 export interface SidebarNavigationProps {
   expanded?: boolean
+  onNavigate?: () => void
 }
 
 type NavItem = {
@@ -44,8 +48,11 @@ function isNavItemActive(item: NavItem, pathname: string): boolean {
 
 export const SidebarNavigation: FC<SidebarNavigationProps> = ({
   expanded = true,
+  onNavigate,
 }) => {
   const location = useLocation()
+  const { supports } = useCapabilities()
+  const showHistory = supports(Feature.NEWTAB_CHAT_HISTORY_SUPPORT)
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -58,6 +65,7 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
             const navItem = (
               <NavLink
                 to={item.to}
+                onClick={onNavigate}
                 className={cn(
                   'flex h-9 items-center gap-2 overflow-hidden whitespace-nowrap rounded-md px-3 font-medium text-sm transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
                   isActive &&
@@ -76,16 +84,21 @@ export const SidebarNavigation: FC<SidebarNavigationProps> = ({
               </NavLink>
             )
 
-            if (!expanded) {
-              return (
-                <Tooltip key={item.to}>
+            return (
+              <div key={item.to}>
+                {/* Expansion unmounts the content, so the trigger must own closing on pointer leave. */}
+                <Tooltip disableHoverableContent>
                   <TooltipTrigger asChild>{navItem}</TooltipTrigger>
-                  <TooltipContent side="right">{item.name}</TooltipContent>
+                  {!expanded && (
+                    <TooltipContent side="right">{item.name}</TooltipContent>
+                  )}
                 </Tooltip>
-              )
-            }
-
-            return <div key={item.to}>{navItem}</div>
+                {/* Gate the mount so non-alpha navigation never starts history queries. */}
+                {item.to === '/home' && showHistory && (
+                  <SidebarHistory expanded={expanded} onNavigate={onNavigate} />
+                )}
+              </div>
+            )
           })}
         </nav>
       </div>

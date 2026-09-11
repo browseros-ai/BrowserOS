@@ -26,7 +26,7 @@ describe('generateText — text-only', () => {
     expect(finishReason).toBe('stop')
   })
 
-  test('exposes accumulated cachedInputTokens from a usage_update', async () => {
+  test('reports contextWindow metadata from a usage_update', async () => {
     const runtime = new MockAcpRuntime({
       turnScripts: [
         {
@@ -37,12 +37,13 @@ describe('generateText — text-only', () => {
     })
     const provider = createAcpxProvider({ agent: 'claude', runtime })
 
-    const { usage } = await generateText({
+    const { usage, providerMetadata } = await generateText({
       model: provider.languageModel(),
       prompt: 'hi',
       stopWhen: stepCountIs(1),
     })
-    expect(usage.inputTokenDetails?.cacheReadTokens).toBe(1024)
+    expect(usage.inputTokenDetails?.cacheReadTokens).toBeUndefined()
+    expect(providerMetadata?.acpx?.contextWindow).toBe(1024)
   })
 
   test('reasoning content is preserved alongside text', async () => {

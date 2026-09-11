@@ -44,6 +44,33 @@ describe('/chat server-owned run routes', () => {
     expect(await text).toContain('"type":"text-start"')
   })
 
+  it('rejects a stream request for a superseded run and removes closed-tab bindings', async () => {
+    const runs = new ConversationRuns()
+    const conversationId = crypto.randomUUID()
+    await runs.start({
+      conversationId,
+      messages: [],
+      panelTabIds: [42],
+      createStream: () => new ReadableStream<UIMessageChunk>(),
+    })
+    const app = route(runs)
+    const response = await app.request(`/${conversationId}/stream?runId=old`)
+    expect(response.status).toBe(409)
+    const removed = await app.request(
+      'http://localhost/panels/42',
+      {
+        method: 'DELETE',
+        headers: { Host: 'localhost', Origin: 'chrome-extension://assistant' },
+      },
+      localServer,
+    )
+    expect(removed.status).toBe(200)
+    const assignments = runs.subscribePanelAssignments().getReader()
+    expect((await assignments.read()).value?.assignments).toEqual([])
+    await assignments.cancel()
+    await runs.stop(conversationId)
+  })
+
   it('replays a run that finishes between state hydration and reconnect', async () => {
     const runs = new ConversationRuns()
     const conversationId = crypto.randomUUID()

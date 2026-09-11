@@ -447,6 +447,8 @@ fn normalize_schema_value(value: &mut Value) {
                 object.remove("default");
             }
 
+            collapse_nullable_enum(object);
+
             for key in [
                 "additionalItems",
                 "additionalProperties",
@@ -489,6 +491,57 @@ fn normalize_schema_value(value: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// Rewrites a nullable enum — `{"type": ["string", "null"], "enum": [..., null]}`, which is
+/// what schemars emits for an `Option<SomeEnum>` field — into the plain single-type form.
+///
+/// An optional argument is already optional by being absent from `required`, and the extra
+/// `null` is what strict MCP clients reject: a Pydantic-backed client decodes every `enum`
+/// entry as the declared type and fails the tool list outright on the trailing `None`.
+/// Arguments are deserialized with serde rather than validated against this schema, so
+/// dropping it changes what clients are told, not what the server accepts.
+fn collapse_nullable_enum(object: &mut JsonObject) {
+    let Some(Value::Array(values)) = object.get("enum") else {
+        return;
+    };
+    if !values.iter().any(Value::is_null) {
+        return;
+    }
+    let kept_values: Vec<Value> = values
+        .iter()
+        .filter(|value| !value.is_null())
+        .cloned()
+        .collect();
+    // An enum of nothing but `null` carries no variants to keep; leave it untouched.
+    if kept_values.is_empty() {
+        return;
+    }
+
+    // A strict client rejects a `null` enum entry whatever the `type` says, so the
+    // `null` is dropped from any enum that has one. When `type` is the
+    // `["<type>", "null"]` array schemars emits for an Option, collapse it in the
+    // same pass; a scalar or missing type is left as-is.
+    let type_replacement = match object.get("type") {
+        Some(Value::Array(types)) => {
+            let kept_types: Vec<Value> = types
+                .iter()
+                .filter(|entry| entry.as_str() != Some("null"))
+                .cloned()
+                .collect();
+            match kept_types.as_slice() {
+                [] => None,
+                [single] => Some(single.clone()),
+                _ => Some(Value::Array(kept_types)),
+            }
+        }
+        _ => None,
+    };
+
+    object.insert("enum".to_string(), Value::Array(kept_values));
+    if let Some(replacement) = type_replacement {
+        object.insert("type".to_string(), replacement);
     }
 }
 
@@ -607,4 +660,69 @@ pub fn page_json(page: &browseros_core::pages::PageInfo) -> Value {
         }
     }
     value
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn normalized(schema: Value) -> Value {
+        let Value::Object(object) = schema else {
+            panic!("test schema should be an object");
+        };
+        Value::Object((*normalize_schema_object(object)).clone())
+    }
+
+    #[test]
+    fn nullable_enum_normalization_collapses_schemars_option_enum_shape() {
+        let schema = normalized(json!({
+            "type": "object",
+            "properties": {
+                "button": {
+                    "type": ["string", "null"],
+                    "enum": ["left", "right", null]
+                }
+            }
+        }));
+
+        assert_eq!(
+            schema.pointer("/properties/button"),
+            Some(&json!({
+                "type": "string",
+                "enum": ["left", "right"]
+            }))
+        );
+    }
+
+    #[test]
+    fn nullable_enum_normalization_strips_null_even_without_the_nullable_type_array() {
+        // A strict client rejects a `null` enum entry whatever `type` says, so the
+        // `null` is dropped whether `type` is a scalar string or absent; only the
+        // `["<type>", "null"]` array is additionally collapsed.
+        let schema = normalized(json!({
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": ["ready", null]
+                },
+                "implicit": {
+                    "enum": ["ready", null]
+                }
+            }
+        }));
+
+        assert_eq!(
+            schema.pointer("/properties/state/enum"),
+            Some(&json!(["ready"]))
+        );
+        assert_eq!(
+            schema.pointer("/properties/state/type"),
+            Some(&json!("string"))
+        );
+        assert_eq!(
+            schema.pointer("/properties/implicit/enum"),
+            Some(&json!(["ready"]))
+        );
+    }
 }

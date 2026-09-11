@@ -1,13 +1,16 @@
+import { registerDiagnostics } from '@browseros/diagnostics/extension'
 import { storage } from '@wxt-dev/storage'
 import { Capabilities } from '@/lib/browseros/capabilities'
 import { createConversationPanelBroker } from '@/lib/browseros/conversationPanelBroker.browser'
-import { getHealthCheckUrl, getMcpServerUrl } from '@/lib/browseros/helpers'
 import {
-  ensureSidePanelRuntimeStateLoaded,
+  getAgentServerUrl,
+  getHealthCheckUrl,
+  getMcpServerUrl,
+} from '@/lib/browseros/helpers'
+import {
   initializeSidePanelOptions,
   openSidePanel,
-  registerSidePanelOpenStateListeners,
-  setSidePanelPerWindowPreference,
+  prepareTabSidePanel,
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
@@ -41,13 +44,27 @@ const cleanupLegacyToolApprovalStorage = async () => {
 }
 
 export default defineBackground(() => {
+  registerDiagnostics('browseros', getAgentServerUrl)
   // One background broker owns the long-lived server subscription and all
   // panel-routing effects; individual React panels can come and go freely.
   const conversationPanelBroker = createConversationPanelBroker()
   void conversationPanelBroker.start()
 
-  registerSidePanelOpenStateListeners()
-  ensureSidePanelRuntimeStateLoaded().catch(() => null)
+  // Registration never opens a panel. Per-tab URLs let panels opened by the
+  // native Alt+A shortcut identify their owner without following tab switches.
+  const preparePanel = (tabId: number) => {
+    void prepareTabSidePanel(tabId).catch(() => undefined)
+  }
+  void initializeSidePanelOptions()
+    .then(async () => {
+      for (const tab of await chrome.tabs.query({})) {
+        if (tab.id !== undefined) preparePanel(tab.id)
+      }
+    })
+    .catch(() => undefined)
+  chrome.tabs.onCreated.addListener((tab) => {
+    if (tab.id !== undefined) preparePanel(tab.id)
+  })
 
   Capabilities.initialize().catch(() => null)
   setupLlmProvidersBackupToBrowserOS()
@@ -125,14 +142,8 @@ export default defineBackground(() => {
     })
   })
 
-  onRuntimeMessage(
-    RuntimeMessageType.sidePanelScopeChanged,
-    async ({ data }) => {
-      await setSidePanelPerWindowPreference(data.perWindow)
-    },
-  )
-
   chrome.tabs.onRemoved.addListener((tabId) => {
+    void conversationPanelBroker.removeTab(tabId).catch(() => undefined)
     const key = String(tabId)
     selectedTextStorage.getValue().then((map) => {
       if (map[key]) {

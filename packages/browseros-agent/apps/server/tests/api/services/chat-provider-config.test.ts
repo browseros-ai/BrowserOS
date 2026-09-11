@@ -19,6 +19,7 @@ function row(overrides: Partial<ProviderRow> = {}): ProviderRow {
     createdAt: 1,
     updatedAt: 2,
     baseUrl: null,
+    headers: null,
     supportsImages: true,
     contextWindow: 200000,
     temperature: 0.2,
@@ -54,6 +55,20 @@ function request(
 }
 
 describe('hydrateChatProvider', () => {
+  it('hydrates stored header templates and replaces stale inline headers', async () => {
+    const headers = { 'x-opencode-session': '{{conversationId}}' }
+    const result = await hydrateChatProvider(
+      request({ headers: { 'x-stale': 'value' } }),
+      lookup([row({ isDefault: true, headers })]),
+    )
+    expect(result.ok && result.request.headers).toEqual(headers)
+    const cleared = await hydrateChatProvider(
+      request({ headers }),
+      lookup([row({ isDefault: true, headers: null })]),
+    )
+    expect(cleared.ok && cleared.request.headers).toBeUndefined()
+  })
+
   it('fills the configuration from a named provider', async () => {
     const result = await hydrateChatProvider(
       request({ target: { type: 'browseros', providerId: 'anthropic-1' } }),

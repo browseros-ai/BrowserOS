@@ -51,7 +51,6 @@ export interface ReplayData {
   sessionId: string
   agentLabel: string
   taskTitle: string
-  harness: string
   status: RunStatus
   site: string
   startedAt: string
@@ -229,7 +228,6 @@ function buildReplayData(
     sessionId: task.sessionId,
     agentLabel: task.label || task.slug,
     taskTitle: task.name,
-    harness: task.profileId ?? 'unknown',
     status: mapTaskStatus(task.status),
     site: task.site ?? 'about:blank',
     startedAt: formatStartedAt(task.startedAt),
