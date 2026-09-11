@@ -14,7 +14,7 @@ Every AI browser today asks you to sign into their cloud and hand over your data
 
 ## Get started
 
-1. **Download and install** BrowserOS: [macOS](https://files.browseros.com/download/BrowserOS.dmg) · [Windows](https://files.browseros.com/download/BrowserOS_installer.exe) · [Linux (AppImage)](https://files.browseros.com/download/BrowserOS.AppImage) · [Linux (Debian)](https://cdn.browseros.com/download/BrowserOS.deb).
+1. **Install BrowserOS.** On macOS, `brew install --cask browseros`. Otherwise download it: [macOS](https://files.browseros.com/download/BrowserOS.dmg) · [Windows](https://files.browseros.com/download/BrowserOS_installer.exe) · [Linux (AppImage)](https://files.browseros.com/download/BrowserOS.AppImage) · [Linux (Debian)](https://cdn.browseros.com/download/BrowserOS.deb).
 2. **Import from Chrome** in one click. Bookmarks, passwords, extensions all carry over.
 3. **Connect your AI provider.** Claude, OpenAI, Gemini, ChatGPT Pro via OAuth, or local models via Ollama or LM Studio.
 
@@ -92,7 +92,7 @@ BrowserOS runs on macOS, Windows, and Linux. System requirements match Google Ch
 - [Discord](https://discord.gg/YKwjt5vuKr) · [Slack](https://dub.sh/browserOS-slack)
 - [Report a bug](https://github.com/browseros-ai/BrowserOS/issues)
 - [BrowserOS docs](https://docs.browseros.com)
-- Enterprise deployment: [enterprise@browseros.com](mailto:enterprise@browseros.com?subject=BrowserOS%20enterprise%20deployment)
+- Enterprise deployment: [founders@browseros.com](mailto:founders@browseros.com?subject=BrowserOS%20enterprise%20deployment)
 
 ## Contributing and license
 
