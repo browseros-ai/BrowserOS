@@ -51,3 +51,28 @@ func TestLLMTxtSkipsAutomaticUpdates(t *testing.T) {
 		t.Fatal("shouldSkipAutomaticUpdates([--llm-txt]) = false, want true")
 	}
 }
+
+func TestGuideSnapshotFlagsAreRegistered(t *testing.T) {
+	// The guide is the contract agents follow, so a flag it shows has to exist.
+	// `snapshot -i` was documented while snapshot registered no flags at all, and
+	// every agent that followed the guide got a silent failure.
+	snapshot, _, err := rootCmd.Find([]string{"snapshot"})
+	if err != nil {
+		t.Fatalf("rootCmd.Find(snapshot) error = %v", err)
+	}
+	for _, flag := range []struct{ name, short string }{
+		{"interactive", "i"},
+		{"depth", "d"},
+	} {
+		registered := snapshot.Flags().Lookup(flag.name)
+		if registered == nil {
+			t.Fatalf("snapshot does not register --%s", flag.name)
+		}
+		if registered.Shorthand != flag.short {
+			t.Fatalf("--%s shorthand = %q, want %q", flag.name, registered.Shorthand, flag.short)
+		}
+	}
+	if !strings.Contains(llmTxtGuide, "snapshot -i") {
+		t.Fatal("llmTxtGuide no longer documents snapshot -i")
+	}
+}
