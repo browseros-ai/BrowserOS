@@ -248,12 +248,12 @@ pub async fn press_combo(session: &ProtocolSession, key: &str) -> Result<(), Cor
 }
 
 #[derive(Debug)]
-struct ParsedCombo {
-    key: String,
-    modifiers: Vec<String>,
+pub(crate) struct ParsedCombo {
+    pub(crate) key: String,
+    pub(crate) modifiers: Vec<String>,
 }
 
-fn parse_key_combo(input: &str) -> Result<ParsedCombo, CoreError> {
+pub(crate) fn parse_key_combo(input: &str) -> Result<ParsedCombo, CoreError> {
     let mut parts = Vec::new();
     let mut current = String::new();
     for ch in input.chars() {
@@ -277,7 +277,7 @@ fn parse_key_combo(input: &str) -> Result<ParsedCombo, CoreError> {
     })
 }
 
-fn validate_key(key: &str) -> Result<(), CoreError> {
+pub(crate) fn validate_key(key: &str) -> Result<(), CoreError> {
     if key_info_named(key).is_some() || key.chars().count() == 1 {
         return Ok(());
     }
@@ -286,7 +286,7 @@ fn validate_key(key: &str) -> Result<(), CoreError> {
     )))
 }
 
-fn get_char_text(key: &str) -> String {
+pub(crate) fn get_char_text(key: &str) -> String {
     match key {
         "Enter" => "\r".to_string(),
         "Tab" => "\t".to_string(),

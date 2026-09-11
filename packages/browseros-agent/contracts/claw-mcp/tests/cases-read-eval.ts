@@ -311,7 +311,7 @@ export const readEvalCases: ContractCase[] = [
     },
   },
   {
-    name: 'evaluate: accepts a timeout parameter',
+    name: 'evaluate: enforces the timeout parameter',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       // A fast evaluation under the accepted timeout returns normally.
@@ -319,13 +319,28 @@ export const readEvalCases: ContractCase[] = [
       if (!fast.includes('2')) {
         throw new Error(`evaluate with a timeout did not return: ${fast}`)
       }
-      // Renderer evaluation is not preempted by this request timeout today.
+      // A page-context wait past the deadline is cut short, not awaited.
+      const started = Date.now()
       const slow = await ctx.mcp.callTool('evaluate', {
         page,
         code: 'await new Promise(r => setTimeout(r, 8000)); return "slow"',
         timeout: 1_500,
       })
-      expectOk(slow, 'evaluate page-context wait')
+      const elapsed = Date.now() - started
+      const text = payload(textOf(slow))
+      if (!slow.isError || !text.includes('timed out after 1500ms')) {
+        throw new Error(
+          `evaluate did not time out: isError=${slow.isError} text=${text}`,
+        )
+      }
+      if (elapsed > 5_000) {
+        throw new Error(`evaluate waited ${elapsed}ms for a 1500ms timeout`)
+      }
+      // The session stays usable once the abandoned wait finally resolves.
+      const after = await evalIn(ctx, page, 'return 6 + 1', 5_000)
+      if (!after.includes('7')) {
+        throw new Error(`session unusable after a timeout: ${after}`)
+      }
     },
   },
   {

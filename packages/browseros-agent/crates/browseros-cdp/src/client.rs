@@ -107,6 +107,39 @@ struct Inner {
     keepalive_task: Mutex<Option<JoinHandle<()>>>,
 }
 
+struct PendingCleanup {
+    inner: Arc<Inner>,
+    id: u64,
+    active: bool,
+}
+
+impl PendingCleanup {
+    fn new(inner: Arc<Inner>, id: u64) -> Self {
+        Self {
+            inner,
+            id,
+            active: true,
+        }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for PendingCleanup {
+    fn drop(&mut self) {
+        if !self.active {
+            return;
+        }
+        let inner = self.inner.clone();
+        let id = self.id;
+        tokio::spawn(async move {
+            inner.pending.lock().await.remove(&id);
+        });
+    }
+}
+
 impl CdpClient {
     pub async fn connect(opts: ConnectOptions) -> Result<Self, CdpError> {
         let (events_tx, _) = broadcast::channel(4096);
@@ -259,6 +292,7 @@ impl CdpClient {
 
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
+        let mut pending_cleanup = PendingCleanup::new(self.inner.clone(), id);
 
         let send_result = {
             let mut guard = self.inner.sink.lock().await;
@@ -273,10 +307,11 @@ impl CdpClient {
 
         if let Err(err) = send_result {
             self.inner.pending.lock().await.remove(&id);
+            pending_cleanup.disarm();
             return Err(err);
         }
 
-        match timeout(self.inner.opts.request_timeout, rx).await {
+        let result = match timeout(self.inner.opts.request_timeout, rx).await {
             Ok(Ok(result)) => result,
             Ok(Err(_closed)) => Err(CdpError::ConnectionLost),
             Err(_elapsed) => {
@@ -285,7 +320,9 @@ impl CdpClient {
                     method: method.to_string(),
                 })
             }
-        }
+        };
+        pending_cleanup.disarm();
+        result
     }
 }
 
@@ -535,5 +572,59 @@ async fn reject_all_pending(inner: &Arc<Inner>, error: CdpError) {
     let pending = std::mem::take(&mut *inner.pending.lock().await);
     for sender in pending.into_values() {
         let _ = sender.send(Err(error.clone()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_inner() -> Arc<Inner> {
+        Arc::new(Inner {
+            opts: ConnectOptions::default(),
+            next_id: AtomicU64::new(1),
+            pending: Mutex::new(HashMap::new()),
+            sink: Mutex::new(None),
+            events_tx: broadcast::channel(1).0,
+            targeted: std::sync::Mutex::new(HashMap::new()),
+            connected: AtomicBool::new(false),
+            disconnecting: AtomicBool::new(false),
+            reconnecting: AtomicBool::new(false),
+            epoch: AtomicU64::new(0),
+            last_host: Mutex::new(None),
+            reader_task: Mutex::new(None),
+            keepalive_task: Mutex::new(None),
+        })
+    }
+
+    #[tokio::test]
+    async fn pending_cleanup_removes_abandoned_request_entries() {
+        let inner = test_inner();
+        let (sender, _receiver) = oneshot::channel();
+        inner.pending.lock().await.insert(7, sender);
+
+        drop(PendingCleanup::new(inner.clone(), 7));
+
+        for _ in 0..10 {
+            if inner.pending.lock().await.is_empty() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
+        panic!("abandoned pending request was not removed");
+    }
+
+    #[tokio::test]
+    async fn disarmed_pending_cleanup_leaves_request_entries_for_owner() {
+        let inner = test_inner();
+        let (sender, _receiver) = oneshot::channel();
+        inner.pending.lock().await.insert(7, sender);
+
+        let mut cleanup = PendingCleanup::new(inner.clone(), 7);
+        cleanup.disarm();
+        drop(cleanup);
+        tokio::task::yield_now().await;
+
+        assert!(inner.pending.lock().await.contains_key(&7));
     }
 }
