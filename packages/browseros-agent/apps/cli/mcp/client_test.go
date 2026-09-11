@@ -95,6 +95,75 @@ func TestHealthDoesNotFallbackOnCanonicalHealthFailure(t *testing.T) {
 	assertPaths(t, paths, []string{"/system/health"})
 }
 
+func TestStatusUsesRuntimeStatusEndpoint(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/status" {
+			http.NotFound(w, r)
+			return
+		}
+		fmt.Fprint(w, `{"status":"ok","cdpConnected":true,"can_update":true}`)
+	}))
+	t.Cleanup(server.Close)
+
+	data, err := NewClient(server.URL, "test", time.Second).Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if data["can_update"] != true {
+		t.Fatalf("Status() can_update = %v, want true", data["can_update"])
+	}
+	assertPaths(t, paths, []string{"/status"})
+}
+
+func TestStatusFallsBackToCompatibleHealthEndpoint(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/status":
+			http.NotFound(w, r)
+		case "/system/health":
+			fmt.Fprint(w, `{"status":"ok","cdpConnected":true}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	data, err := NewClient(server.URL, "test", time.Second).Status()
+	if err != nil {
+		t.Fatalf("Status() error = %v", err)
+	}
+	if data["cdpConnected"] != true {
+		t.Fatalf("Status() cdpConnected = %v, want true", data["cdpConnected"])
+	}
+	assertPaths(t, paths, []string{"/status", "/system/health"})
+}
+
+func TestStatusDoesNotFallbackOnRuntimeStatusFailure(t *testing.T) {
+	var paths []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path == "/status" {
+			http.Error(w, "boom", http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	_, err := NewClient(server.URL, "test", time.Second).Status()
+	if err == nil {
+		t.Fatal("Status() error = nil, want HTTP 500")
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("Status() error = %q, want HTTP 500", err)
+	}
+	assertPaths(t, paths, []string{"/status"})
+}
+
 func assertPaths(t *testing.T, got, want []string) {
 	t.Helper()
 
