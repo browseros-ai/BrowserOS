@@ -134,7 +134,9 @@ func (r *PortReservations) ReleaseAll() {
 }
 
 func KillPort(port int) {
-	exec.Command("sh", "-c", fmt.Sprintf("lsof -ti:%d | xargs kill -9 2>/dev/null || true", port)).Run()
+	// lsof is not installed everywhere (minimal Linux images); fuser covers
+	// those cases and lsof keeps macOS behavior unchanged.
+	exec.Command("sh", "-c", fmt.Sprintf("(lsof -ti:%d 2>/dev/null || fuser %d/tcp 2>/dev/null) | xargs kill -9 2>/dev/null || true", port, port)).Run()
 }
 
 func KillPortAndWait(port int, timeout time.Duration) error {

@@ -6,7 +6,11 @@ DIR="$(cd "$(dirname "$0")" && pwd)"
 if ! command -v go &>/dev/null; then
   echo ""
   echo "  Go is required to build browseros-dev but is not installed."
-  echo "  Install it with:  brew install go"
+  if command -v brew &>/dev/null; then
+    echo "  Install it with:  brew install go"
+  else
+    echo "  Install it with your package manager (e.g. apt install golang-go)"
+  fi
   echo "  Or download from: https://go.dev/dl/"
   echo ""
   exit 1
@@ -34,7 +38,11 @@ fi
 if [ "$needs_cargo" = true ] && ! command -v cargo &>/dev/null; then
   echo ""
   echo "  Cargo is required for dev:claw-rust:watch but is not installed."
-  echo "  Install Rust with:  brew install rustup && rustup-init"
+  if command -v brew &>/dev/null; then
+    echo "  Install Rust with:  brew install rustup && rustup-init"
+  else
+    echo "  Install Rust with:  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+  fi
   echo "  Or download from: https://rustup.rs/"
   echo ""
   exit 1

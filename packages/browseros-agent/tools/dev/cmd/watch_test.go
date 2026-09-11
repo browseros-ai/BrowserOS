@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -381,6 +382,9 @@ func TestRustWatchSnapshotDetectsSourceChangesAndSkipsTargetDirs(t *testing.T) {
 }
 
 func TestEnsureLimactlPresentMissingMessage(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Lima prerequisite is only enforced on macOS")
+	}
 	t.Setenv("PATH", t.TempDir())
 
 	err := ensureLimactlPresent()
@@ -398,6 +402,9 @@ func TestEnsureLimactlPresentMissingMessage(t *testing.T) {
 }
 
 func TestEnsureLimactlPresentFindsPathBinary(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("Lima prerequisite is only enforced on macOS")
+	}
 	binDir := t.TempDir()
 	limactlPath := filepath.Join(binDir, "limactl")
 	if err := os.WriteFile(limactlPath, []byte("#!/bin/sh\n"), 0o755); err != nil {

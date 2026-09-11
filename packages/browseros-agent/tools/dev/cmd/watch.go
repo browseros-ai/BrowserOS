@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -62,8 +63,12 @@ func runWatch(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	if err := ensureLimactlPresent(); err != nil {
-		return err
+	// Lima is the macOS VM runtime the supervisor relies on; a Linux host
+	// runs natively and has no use for it.
+	if runtime.GOOS == "darwin" {
+		if err := ensureLimactlPresent(); err != nil {
+			return err
+		}
 	}
 
 	defaultPorts, err := resolveWatchDefaultPorts(root, watchClaw)
@@ -314,7 +319,7 @@ func buildClawWatchEnv(env []string, p proc.Ports) []string {
 
 func logClawBrowserBinary(resolution browser.BinaryResolution) {
 	if resolution.Fallback {
-		proc.LogMsgf(proc.TagInfo, "BrowserOS neo app not found at %s; using %s", browser.BrowserClawBinaryPath, resolution.Path)
+		proc.LogMsgf(proc.TagInfo, "BrowserOS neo app not found; using %s", resolution.Path)
 		return
 	}
 	proc.LogMsgf(proc.TagInfo, "Browser app: %s", resolution.Path)

@@ -69,6 +69,22 @@ func TestBrowserProfilePIDsFromPSSelectsOnlyDevAndTestProfiles(t *testing.T) {
 	}
 }
 
+func TestBrowserProfilePIDsFromPSMatchesLinuxBrowserPaths(t *testing.T) {
+	output := strings.Join([]string{
+		"  10  10 /usr/lib/browseros/browseros --user-data-dir=/tmp/browseros-dev",
+		"  20  20 /usr/lib/browserclaw/browserclaw --user-data-dir=/tmp/browseros-dev-abcd",
+		"  30  30 /opt/browserclaw/browserclaw --user-data-dir=/var/tmp/browseros-test-abcd",
+		"  40  40 /tmp/.mount_BrowserOS/opt/browserclaw/browserclaw --user-data-dir=/tmp/browseros-dev-mount",
+		"  50  50 grep browseros-dev-",
+	}, "\n") + "\n"
+
+	pids := browserProfilePIDsFromPS(output)
+
+	if len(pids) != 4 || pids[0] != 10 || pids[1] != 20 || pids[2] != 30 || pids[3] != 40 {
+		t.Fatalf("expected Linux dev/test browser pids, got %#v", pids)
+	}
+}
+
 func TestDefaultDevUserDataDirIsWorktreeScoped(t *testing.T) {
 	first := filepath.Join(t.TempDir(), "main-2", "packages", "browseros-agent")
 	second := filepath.Join(t.TempDir(), "feat-new-mcp", "packages", "browseros-agent")
