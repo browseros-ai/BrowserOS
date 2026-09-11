@@ -3,8 +3,9 @@
 Hey there! Thanks for your interest in BrowserOS. Whether you're fixing bugs, adding features, improving docs, or just poking around the code, we're glad you're here.
 
 BrowserOS is a monorepo with two main parts:
-- **Agent** - The Chrome extension with AI features (TypeScript/React)
-- **Browser** - The custom Chromium build (C++/Python)
+
+- **Agent** — The agent platform: extension UI (TypeScript/React), server, MCP tools (Rust), and a CLI (Go)
+- **Browser** — The custom Chromium build (C++/Python)
 
 Most folks start with the agent since it's way easier to set up and iterate on.
 
@@ -23,11 +24,11 @@ Most folks start with the agent since it's way easier to set up and iterate on.
 - Testing & docs
 
 **What you need:**
-- Node.js 18+
-- ~500MB disk space
-- 10 minutes to set up
+- [Bun](https://bun.sh) — the version pinned in `packages/browseros-agent/package.json`
+- [Go](https://go.dev/dl/) — required by the `dev:*` scripts
+- [Rust](https://rustup.rs/) — only if you touch `crates/`
 
-**Skills:** TypeScript, React, Chrome APIs
+**Skills:** TypeScript, React, Rust, Go, Chrome APIs
 
 **[→ Agent Setup](#agent-development)**
 
@@ -57,34 +58,55 @@ Most folks start with the agent since it's way easier to set up and iterate on.
 
 ## Agent Development
 
-The agent is a Chrome extension that provides AI-powered automation. Most contributors work here.
+The agent platform lives in `packages/browseros-agent`, a Bun-workspaces monorepo. It holds the extension UI, the server, the Rust MCP server and browser core, and the Go CLI.
+
+**Use Bun, not npm/yarn/pnpm.** The package manifest pins Bun and marks the others unsupported in `engines`.
 
 ### Quick Setup
 
 ```bash
-# 1. Navigate to agent directory
+# 1. Navigate to the agent directory
 cd packages/browseros-agent
 
-# 2. Install dependencies
-yarn install
+# 2. Set up the development environment file
+cp .env.development.example .env.development
+# Fill in only the secrets the workflow you're touching needs
 
-# 3. Set up environment
-cp .env.example .env
-# Edit .env and add your LITELLM_API_KEY
+# 3. Install deps and generate agent code (requires Go on PATH)
+bun run dev:setup
 
-# 4. Build the extension
-yarn build:dev       # One-time build
+# 4. Start the server and the app UI together
+bun run dev:watch
 ```
 
-### Load in BrowserOS 
+Working on an older checkout with per-app env files? Run `bun run env:migrate` to merge them into the root `.env.development`.
+
+If you only want to build the extension and skip the dev harness, `bun install && bun run codegen:agent && bun run build:agent:dev` gets you a loadable build without Go. The codegen step is required — the build fails without the generated GraphQL types.
+
+### Load in BrowserOS
 
 1. Open `chrome://extensions/`
 2. Enable **Developer mode** (top right toggle)
 3. Click **Load unpacked**
-4. Select `packages/browseros-agent/dist/`
-5. Press Agent icon from extensions toolbar to open the agent panel
+4. Select `packages/browseros-agent/apps/app/dist/chrome-mv3-dev` (a production build lands in `dist/chrome-mv3`)
+5. Press the Agent icon from the extensions toolbar to open the agent panel
 
-**For detailed setup, architecture, and code standards, see [Agent Contributing Guide](packages/browseros-agent/CONTRIBUTING.md).**
+### Before You Push
+
+```bash
+bun run check   # lint, typecheck, and Fallow
+bun run test    # full test suite
+```
+
+If you changed anything under `crates/`, also run the Rust gates:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+```
+
+**For architecture, env vars, ports, and the full script list, see [packages/browseros-agent/README.md](packages/browseros-agent/README.md).**
 
 ## Browser Development
 
@@ -94,6 +116,7 @@ Building the custom Chromium browser requires significant disk space and time. O
 
 - **~100GB disk space** for Chromium source
 - **16GB+ RAM** (recommended)
+- **Python 3.12+** and [uv](https://docs.astral.sh/uv/)
 - **Platform tools:**
   - macOS: Xcode + Command Line Tools
   - Linux: build-essential and dependencies
@@ -101,20 +124,26 @@ Building the custom Chromium browser requires significant disk space and time. O
 
 ### Quick Setup
 
-**1. Checkout Chromium source**
+**1. Get a Chromium checkout**
 
-First, follow the official Chromium guide for your platform:
+Follow the official Chromium guide for your platform:
 - **[Chromium: Get the Code](https://www.chromium.org/developers/how-tos/get-the-code/)**
 
-This will set up `depot_tools` and fetch the ~100GB Chromium source tree. This typically takes 2-3 hours depending on your internet speed.
+This sets up `depot_tools` and fetches the ~100GB Chromium source tree, typically 2-3 hours depending on your internet speed. The build system can also provision a checkout for you via `--provision` — see the build README below.
 
-**2. Build BrowserOS**
-
-Once you have Chromium checked out, navigate to our build system:
+**2. Set up the build system**
 
 ```bash
 cd packages/browseros
 
+uv sync                 # once
+cp .env.example .env    # once, then fill in what you need
+uv run browseros --help
+```
+
+**3. Build BrowserOS**
+
+```bash
 # Debug build (for development) — same command on macOS/Linux/Windows
 uv run browseros build --preset debug --chromium-src /path/to/chromium/src
 
@@ -124,6 +153,9 @@ uv run browseros build --preset release --chromium-src /path/to/chromium/src
 # See every pipeline step and preset switch
 uv run browseros build --list
 uv run browseros build --help
+
+# Print the composed plan without touching a checkout
+uv run browseros build --preset debug --show-plan
 ```
 
 The build typically takes 1-3 hours on modern hardware (M4 Max, Ryzen 9, etc.).
@@ -148,69 +180,66 @@ On your first PR, our bot will ask you to sign the Contributor License Agreement
 
 ## Code Standards
 
-### TypeScript (Agent)
+The ground rules live next to the code, so they stay current as it changes:
 
-- **Strict typing** - Always declare types, avoid `any`
-- **Zod schemas** - Use Zod instead of TypeScript interfaces
-- **Path aliases** - Use `@/lib` not relative paths like `../`
-- **Naming:**
-  - Classes: `PascalCase`
-  - Functions/variables: `camelCase`
-  - Constants: `UPPERCASE`
-  - Private methods: prefix with `_`
+| Scope | Read |
+|-------|------|
+| Agent monorepo (all of it) | [packages/browseros-agent/CLAUDE.md](packages/browseros-agent/CLAUDE.md) |
+| Extension / app UI | `packages/browseros-agent/apps/app/CLAUDE.md` |
+| Server | `packages/browseros-agent/apps/server/CLAUDE.md` |
+| CLI (Go idioms, not the TS rules) | `packages/browseros-agent/apps/cli/CLAUDE.md` |
+| Browser | Follow the Chromium style guide |
 
-Example:
-```typescript
-import { z } from 'zod'
+The highlights, so you know what you're walking into:
 
-// Good: Zod schema with inline comments
-export const ToolInputSchema = z.object({
-  action: z.enum(['click', 'type']),  // Action to perform
-  target: z.string().min(1),  // Element selector
-  timeout: z.number().default(5000)  // Timeout in ms
-})
+### TypeScript
 
-export type ToolInput = z.infer<typeof ToolInputSchema>
-```
+- **Strict typing** — avoid `any`
+- **Extensionless imports** — `./utils`, not `./utils.js`
+- **Bun everywhere** — `bun test`, `bun install`, `bun run <script>`; Bun loads env files, so don't reach for dotenv
+- **kebab-case** for folders and multi-word non-component files
+- **Shared constants** belong in `@browseros/shared` (ports, timeouts, limits, urls, paths) rather than scattered magic values
+- **Naming:** Classes `PascalCase`, functions/variables `camelCase`, constants `UPPERCASE`
 
 ### React (Agent UI)
 
 - **Styling:** Tailwind CSS only (no SCSS or CSS modules)
 - **Hooks:** Only at top level
-- **Props:** Define with Zod schemas
-- **Testing:** Vitest (not Jest)
+- **Testing:** `bun test`
 
 ### General
 
 - Keep functions short (<20 lines ideally)
 - Write tests for new features
+- Keep comments minimal — document hidden constraints, subtle invariants, and surprising behavior; don't restate the code
 - Use descriptive variable names
 - Handle errors gracefully
-
-**For detailed standards:**
-- Agent: [packages/browseros-agent/CLAUDE.md](packages/browseros-agent/CLAUDE.md)
-- Browser: Follow Chromium style guide
 
 ## Project Structure
 
 ```
-monorepo/
+BrowserOS/
 ├── packages/
-│   ├── browseros/              # Chromium build system
-│   │   ├── build/             # Python build scripts
-│   │   ├── chromium_patches/  # Patches to Chromium source
-│   │   └── resources/         # Icons, configs
+│   ├── browseros/                 # Chromium build & release system (Python)
+│   │   ├── bos_build/             # The `browseros` CLI: build steps, presets, release
+│   │   ├── chromium_patches/      # Patches applied to the Chromium source
+│   │   ├── series_patches/        # Ordered patch series
+│   │   ├── chromium_files/        # Files copied into the Chromium tree
+│   │   └── resources/             # Icons, configs, branding
 │   │
-│   └── browseros-agent/        # Chrome extension
-│       ├── src/
-│       │   ├── lib/           # Core agent logic
-│       │   ├── sidepanel/     # Side panel UI
-│       │   ├── newtab/        # New tab page
-│       │   └── background/    # Extension background
-│       └── docs/              # Architecture docs
+│   └── browseros-agent/           # Agent platform (Bun workspaces)
+│       ├── apps/
+│       │   ├── app/               # Agent UI — Chrome extension (WXT + React)
+│       │   ├── server/            # Bun server — agent loop and HTTP endpoints
+│       │   ├── cli/               # browseros-cli (Go)
+│       │   ├── claw-app/          # BrowserClaw UI
+│       │   └── claw-server-rust/  # BrowserClaw server (Rust)
+│       ├── crates/                # Rust — CDP client, browser core, MCP server
+│       ├── packages/              # Shared TS packages (shared, cdp-protocol, ...)
+│       └── contracts/             # Contract test suites
 │
-├── docs/                       # General documentation
-└── CONTRIBUTING.md            # This file
+├── docs/                          # Public documentation (Mintlify)
+└── CONTRIBUTING.md                # This file
 ```
 
 ## Ways to Contribute
@@ -232,6 +261,7 @@ Have an idea? [Share it here](https://github.com/browseros-ai/BrowserOS/issues/9
 
 ### 📚 Improve Documentation
 
+- Docs live in `docs/` and use Mintlify — edit pages and update `docs/docs.json` for navigation
 - Write blog posts or guides
 
 ### 🧪 Test & Provide Feedback
