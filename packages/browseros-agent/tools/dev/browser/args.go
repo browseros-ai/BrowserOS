@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"browseros-dev/proc"
 )
@@ -21,9 +22,35 @@ const (
 	ProductBrowserOS   = "browseros"
 	ProductBrowserClaw = "browserclaw"
 
+	// macOS app-bundle binary paths. These double as the canonical install
+	// locations documented for each product; Linux resolves its own layout in
+	// linuxBinaryPaths below.
 	BrowserOSBinaryPath   = "/Applications/BrowserOS.app/Contents/MacOS/BrowserOS"
 	BrowserClawBinaryPath = "/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo"
 )
+
+// linuxBinaryPaths lists candidate Chromium binaries per product on Linux,
+// mirroring the Debian (lib_dir) and AppImage (appimage_dir) layouts produced
+// by bos_build's linux_packaging for each product id.
+func linuxBinaryPaths(product string) []string {
+	if product == ProductBrowserClaw {
+		return []string{
+			"/usr/lib/browserclaw/browserclaw",
+			"/opt/browserclaw/browserclaw",
+		}
+	}
+	return []string{
+		"/usr/lib/browseros/browseros",
+		"/opt/browseros/browseros",
+	}
+}
+
+// EnvBinaryPath returns the developer override for the browser binary, if set.
+// BROWSEROS_BINARY already flows through WXT (web-ext.config.ts) and the test
+// runtime, so the supervisor honors the same variable.
+func EnvBinaryPath() string {
+	return os.Getenv("BROWSEROS_BINARY")
+}
 
 type BinaryResolution struct {
 	Product       string
@@ -34,7 +61,41 @@ type BinaryResolution struct {
 
 // ResolveBinary chooses the Chromium app binary for a product with an injectable existence check.
 func ResolveBinary(product string, exists func(string) bool) BinaryResolution {
+	return resolveBinaryFor(product, runtime.GOOS, exists)
+}
+
+// resolveBinaryFor is ResolveBinary with an injectable GOOS so tests can cover
+// every platform from one host.
+func resolveBinaryFor(product string, goos string, exists func(string) bool) BinaryResolution {
 	product = normalizeProduct(product)
+	if goos == "linux" {
+		candidates := linuxBinaryPaths(product)
+		for _, candidate := range candidates {
+			if exists != nil && exists(candidate) {
+				return BinaryResolution{
+					Product:       product,
+					Path:          candidate,
+					PreferredPath: candidates[0],
+				}
+			}
+		}
+		if product != ProductBrowserClaw {
+			return BinaryResolution{
+				Product:       product,
+				Path:          candidates[0],
+				PreferredPath: candidates[0],
+			}
+		}
+		// Mirror the macOS fallback: neo reuses an installed BrowserOS build
+		// when the neo install is absent.
+		return BinaryResolution{
+			Product:       product,
+			Path:          linuxBinaryPaths(ProductBrowserOS)[0],
+			PreferredPath: candidates[0],
+			Fallback:      true,
+		}
+	}
+
 	resolution := BinaryResolution{
 		Product:       product,
 		Path:          BrowserOSBinaryPath,
@@ -53,17 +114,29 @@ func ResolveBinary(product string, exists func(string) bool) BinaryResolution {
 	return resolution
 }
 
-// ResolveInstalledBinary resolves the product binary against the local macOS app bundle paths.
+// ResolveInstalledBinary resolves the product binary against the local
+// platform's install paths. BROWSEROS_BINARY wins over everything.
 func ResolveInstalledBinary(product string) BinaryResolution {
+	if env := EnvBinaryPath(); env != "" {
+		return BinaryResolution{
+			Product:       normalizeProduct(product),
+			Path:          env,
+			PreferredPath: env,
+		}
+	}
 	return ResolveBinary(product, binaryExists)
 }
 
 // BuildArgs returns the BrowserOS Chromium command for non-WXT dev/test launches.
 func BuildArgs(cfg ArgsConfig) []string {
-	return buildArgs(cfg, ResolveInstalledBinary)
+	return buildArgsForGOOS(cfg, runtime.GOOS, ResolveInstalledBinary)
 }
 
 func buildArgs(cfg ArgsConfig, resolveBinary func(string) BinaryResolution) []string {
+	return buildArgsForGOOS(cfg, runtime.GOOS, resolveBinary)
+}
+
+func buildArgsForGOOS(cfg ArgsConfig, goos string, resolveBinary func(string) BinaryResolution) []string {
 	product := cfg.Product
 	if product == "" {
 		product = ProductBrowserOS
@@ -76,8 +149,13 @@ func buildArgs(cfg ArgsConfig, resolveBinary func(string) BinaryResolution) []st
 		args = append(args, "--no-first-run", "--no-default-browser-check")
 	}
 
+	// --use-mock-keychain is a macOS keychain-testing flag; keep it off other
+	// platforms so dev launches stay identical to documented Chromium ones.
+	if goos == "darwin" {
+		args = append(args, "--use-mock-keychain")
+	}
+
 	args = append(args,
-		"--use-mock-keychain",
 		"--show-component-extension-options",
 		"--disable-browseros-server",
 		"--browseros-dock-icon=dev",

@@ -54,7 +54,8 @@ function browserOSProduct(defaultProduct: 'browseros' | 'browserclaw') {
 }
 
 const chromiumArgs = [
-  '--use-mock-keychain',
+  // macOS-only keychain-testing flag; skip it on other platforms.
+  ...(process.platform === 'darwin' ? ['--use-mock-keychain'] : []),
   // web-ext 9.x launches Chromium with --disable-blink-features=AutomationControlled,
   // which trips Chromium's "unsupported command-line flag" infobar. --test-type
   // marks this as a dev browser and suppresses that banner.
@@ -79,11 +80,22 @@ if (env.BROWSEROS_SERVER_PORT) {
   // port falls back to server port.
   chromiumArgs.push(`--browseros-proxy-port=${env.BROWSEROS_SERVER_PORT}`)
 }
+
+/**
+ * Platform default for the installed BrowserOS neo binary. The supervisor and
+ * tests accept a BROWSEROS_BINARY override; this only covers bare launches.
+ */
+function defaultBrowserBinary(): string {
+  if (process.platform === 'linux') {
+    // Debian lib_dir then AppImage appimage_dir layouts from bos_build.
+    return '/usr/lib/browserclaw/browserclaw'
+  }
+  return '/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo'
+}
+
 export default defineWebExtConfig({
   binaries: {
-    chrome:
-      env.BROWSEROS_BINARY ||
-      '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS',
+    chrome: env.BROWSEROS_BINARY || defaultBrowserBinary(),
   },
   chromiumArgs,
   chromiumProfile: chromiumProfile(),

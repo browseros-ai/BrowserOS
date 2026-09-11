@@ -52,12 +52,14 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
   {
     key: 'BROWSEROS_BINARY',
     section: 'dev-tools',
-    description: 'BrowserOS binary used by app and Claw development.',
+    description:
+      'BrowserOS binary used by app and Claw development. Optional: when\nunset, each platform falls back to its install locations.',
     secret: false,
     schema: stringSchema,
     modes: {
       development: {
         value: '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS',
+        commented: true,
       },
     },
   },
