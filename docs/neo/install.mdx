@@ -8,7 +8,7 @@ BrowserOS neo is a full browser, so installing it works like installing Chrome o
 
 <Columns cols={2}>
   <Card title="macOS" icon="apple" href="https://cdn.browseros.com/download/BrowserOS_neo.dmg">
-    Universal build for Apple Silicon and Intel. Requires macOS 10.15 or later.
+    Universal build for Apple Silicon and Intel. Requires macOS 12 (Monterey) or later.
   </Card>
   <Card title="Windows" icon="windows" href="https://cdn.browseros.com/download/BrowserOS_neo_installer.exe">
     Installer for Windows on x64.
@@ -17,17 +17,31 @@ BrowserOS neo is a full browser, so installing it works like installing Chrome o
 
 ## macOS
 
-<Steps>
-  <Step title="Open the disk image">
-    Double-click the downloaded `BrowserOS_neo.dmg`.
-  </Step>
-  <Step title="Drag it to Applications">
-    Drag **BrowserOS neo** onto the Applications folder in the same window, then eject the disk image.
-  </Step>
-  <Step title="Open it">
-    Launch BrowserOS neo from Applications or Spotlight. On first launch it will offer to import bookmarks and passwords from your existing browser.
-  </Step>
-</Steps>
+<Tabs>
+  <Tab title="Homebrew">
+    ```sh
+    brew tap browseros-ai/tap
+    brew install --cask browseros-neo
+    ```
+
+    The tap is needed because BrowserOS neo is not in Homebrew's own cask repository yet. Once it is, the same `brew install --cask browseros-neo` keeps working and the tap becomes optional.
+
+    Upgrade with `brew upgrade --cask browseros-neo`, though the browser also updates itself.
+  </Tab>
+  <Tab title="Direct download">
+    <Steps>
+      <Step title="Open the disk image">
+        Double-click the downloaded `BrowserOS_neo.dmg`.
+      </Step>
+      <Step title="Drag it to Applications">
+        Drag **BrowserOS neo** onto the Applications folder in the same window, then eject the disk image.
+      </Step>
+      <Step title="Open it">
+        Launch BrowserOS neo from Applications or Spotlight. On first launch it will offer to import bookmarks and passwords from your existing browser.
+      </Step>
+    </Steps>
+  </Tab>
+</Tabs>
 
 ## Windows
 

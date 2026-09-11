@@ -28,8 +28,16 @@ BrowserOS is an AI-native browser that lets you automate any web task by describ
 ## Quick Start
 
 <Steps>
-  <Step title="Download BrowserOS">
-    Get the latest release from [browseros.com](https://browseros.com) for macOS, Windows, or Linux.
+  <Step title="Install BrowserOS">
+    On macOS, install with Homebrew. BrowserOS is in Homebrew's own cask repository, so there is no tap to add:
+
+    ```sh
+    brew install --cask browseros
+    ```
+
+    Requires macOS 13 (Ventura) or later. Upgrade with `brew upgrade --cask browseros`, though the browser also updates itself.
+
+    On Windows and Linux, or on macOS without Homebrew, get the latest release from [browseros.com](https://browseros.com).
   </Step>
   <Step title="Import from Chrome">
     Navigate to `chrome://settings/importData` and import your bookmarks, passwords, and settings in one click.
@@ -37,7 +45,7 @@ BrowserOS is an AI-native browser that lets you automate any web task by describ
   <Step title="Configure your AI">
     BrowserOS includes a default AI model with limited daily usage for testing. For the full experience, bring your own API keys.
 
-    <Card title="Set up your LLM provider" icon="key" href="/features/bring-your-own-llm">
+    <Card title="Set up your LLM provider" icon="key" href="/browseros/features/bring-your-own-llm">
       Configure Gemini, Claude, OpenAI, or run models locally with Ollama
     </Card>
   </Step>
