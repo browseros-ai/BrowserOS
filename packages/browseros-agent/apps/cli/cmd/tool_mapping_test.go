@@ -52,11 +52,10 @@ func TestCompactToolMappings(t *testing.T) {
 		},
 		{
 			name: "open tab",
-			got:  openTabsToolArgs("https://example.com", true, false),
+			got:  openTabsToolArgs("https://example.com", false),
 			want: map[string]any{
 				"action":     "new",
 				"url":        "https://example.com",
-				"hidden":     true,
 				"background": false,
 			},
 		},
@@ -436,17 +435,20 @@ func TestFillToolArgsFromNoClearFlag(t *testing.T) {
 }
 
 func TestOpenInWindowCodeUsesCompactRunBridge(t *testing.T) {
-	code := openInWindowCode("https://example.com/?q=one two", true, false, 9)
+	code := openInWindowCode("https://example.com/?q=one two", false, 9)
 	for _, want := range []string{
 		"browser.pages.newPage",
 		`"https://example.com/?q=one two"`,
-		"hidden: true",
 		"background: false",
 		"windowId: 9",
 	} {
 		if !strings.Contains(code, want) {
 			t.Fatalf("openInWindowCode() missing %q in:\n%s", want, code)
 		}
+	}
+	// The server retired hidden: pages.newPage rejects the option outright.
+	if strings.Contains(code, "hidden") {
+		t.Fatalf("openInWindowCode() still sends retired hidden option:\n%s", code)
 	}
 }
 
