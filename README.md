@@ -16,7 +16,7 @@
 <a href="https://cdn.browseros.com/download/BrowserOS_neo.dmg"><img src="https://img.shields.io/badge/Download-macOS-black?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" /></a>
 <a href="https://cdn.browseros.com/download/BrowserOS_neo_installer.exe"><img src="https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" /></a>
 
-**[Website](https://www.browseros.com/agents)** · **[Docs](https://docs.browseros.com/neo)** · **[Enterprise](mailto:founders@browseros.com?subject=BrowserOS%20neo%20enterprise%20deployment)**
+**[Website](https://www.browseros.com)** · **[Docs](https://docs.browseros.com)** · **[Enterprise](mailto:founders@browseros.com?subject=Enterprise%3A%20BrowserOS%20neo&body=Hi%2C%0A%0AWe%27re%20looking%20at%20BrowserOS%20neo%20for%20our%20team.%0A%0ACompany%3A%0ATeam%20size%3A%0AWhat%20we%20want%20to%20automate%3A)**
 
 Free · Open source · Everything runs on your machine
 
@@ -28,9 +28,30 @@ BrowserOS neo is not a Chrome replacement. It is a secondary browser that sits n
 
 ## Get started
 
-1. **Install BrowserOS neo.** On macOS, `brew tap browseros-ai/tap && brew install --cask browseros-neo`, or use the download buttons above. Then import from Chrome in one click: logins, bookmarks, extensions.
-2. **It finds your agents.** Claude Code, Codex, Cursor, VS Code, OpenClaw, Hermes; connect with one click.
-3. **Give it a task from your agent.** *"Book me the cheapest flight to London."* Watch it live from your new tab, replay it later.
+### 1. Install BrowserOS neo
+
+```sh
+brew tap browseros-ai/tap
+brew install --cask browseros-neo
+```
+
+Prefer a direct download? Grab it for [macOS](https://cdn.browseros.com/download/BrowserOS_neo.dmg) or [Windows](https://cdn.browseros.com/download/BrowserOS_neo_installer.exe).
+
+### 2. Import from Chrome
+
+One click brings over your logins, bookmarks and extensions. Your agents work with your real accounts from the first task.
+
+### 3. Connect your agent
+
+BrowserOS neo finds Claude Code, Codex, Cursor, VS Code, OpenClaw and Hermes on your machine. Connect any of them with one click.
+
+### 4. Give it a task
+
+From your agent, not from the browser:
+
+> Book me the cheapest flight to London.
+
+Watch it happen live in your new tab, or replay it later.
 
 ## What can your agents do?
 
@@ -85,9 +106,22 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 
 ## Also in this repo: BrowserOS
 
-<img src="packages/browseros/resources/browseros/icons/product_logo_192.png" alt="" width="20" /> **BrowserOS** is our other browser: a Chromium fork with an AI agent built into every new tab, for when you are the one browsing. Bring your own AI keys or run everything locally with Ollama.
+<table>
+<tr>
+<td width="90" align="center" valign="middle">
+<img src="packages/browseros/resources/browseros/icons/product_logo_192.png" alt="" width="64" />
+</td>
+<td valign="middle">
 
-**[Read about BrowserOS](README.BrowserOS.md)** · [Website](https://www.browseros.com) · [Docs](https://docs.browseros.com)
+### BrowserOS, the AI browser for humans
+
+A Chromium fork with an AI agent built into every new tab, for when **you** are the one browsing. Bring your own AI keys or run everything locally with Ollama.
+
+**[Read about BrowserOS](README.BrowserOS.md)** · [Website](https://www.browseros.com/browseros/) · [Docs](https://docs.browseros.com/browseros)
+
+</td>
+</tr>
+</table>
 
 ## FAQ
 
@@ -110,8 +144,8 @@ BrowserOS neo runs on macOS and Windows. BrowserOS runs on macOS, Windows, and L
 
 - [Discord](https://discord.gg/YKwjt5vuKr) · [Slack](https://dub.sh/browserOS-slack)
 - [Report a bug](https://github.com/browseros-ai/BrowserOS/issues)
-- [BrowserOS neo docs](https://docs.browseros.com/neo) · [BrowserOS docs](https://docs.browseros.com)
-- Enterprise deployment: [founders@browseros.com](mailto:founders@browseros.com?subject=BrowserOS%20neo%20enterprise%20deployment)
+- [BrowserOS neo docs](https://docs.browseros.com) · [BrowserOS docs](https://docs.browseros.com/browseros)
+- Enterprise deployment: [founders@browseros.com](mailto:founders@browseros.com?subject=Enterprise%3A%20BrowserOS%20neo&body=Hi%2C%0A%0AWe%27re%20looking%20at%20BrowserOS%20neo%20for%20our%20team.%0A%0ACompany%3A%0ATeam%20size%3A%0AWhat%20we%20want%20to%20automate%3A)
 
 ## For developers
 

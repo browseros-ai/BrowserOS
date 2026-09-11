@@ -17,20 +17,9 @@ Most contributors start with BrowserOS neo or BrowserOS. Both live in `packages/
 
 ## Before you start
 
-**Use Bun.** It is the only supported package manager and runtime for the agent monorepo. `packages/browseros-agent/package.json` pins the version and rejects the alternatives outright:
+**Use Bun.** It is the only supported package manager and runtime for the agent monorepo. `packages/browseros-agent/package.json` pins the version and sets every alternative to `please-use-bun`, so npm, yarn and pnpm are rejected outright.
 
-```json
-"packageManager": "bun@<pinned>",
-"engines": {
-  "bun": "<pinned>",
-  "node": "please-use-bun",
-  "npm": "please-use-bun",
-  "yarn": "please-use-bun",
-  "pnpm": "please-use-bun"
-}
-```
-
-Install it with `curl -fsSL https://bun.sh/install | bash`, or `brew install oven-sh/bun/bun`. CI installs the exact pinned version by reading that same `package.json`, so matching it locally keeps you on the same dependency resolution. Check yours with `bun --version`.
+Install it by following [the Bun installation guide](https://bun.sh/docs/installation). CI installs the exact pinned version by reading that same `package.json`, so matching it locally keeps you on the same dependency resolution. Check yours with `bun --version`.
 
 The per-path guides list what else each one needs.
 
