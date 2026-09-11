@@ -1,0 +1,40 @@
+/* Per-product theming.
+   docs.json carries one palette and one logo site-wide, and product entries
+   silently ignore `colors` and `logo`, so the split is done here instead.
+   Mintlify auto-loads any .css file beside docs.json and puts the live route
+   on the root element, which is what makes the scoping possible.
+
+   Values are space-separated RGB channels, not hex: that is the format
+   Mintlify's own variables use. */
+
+/* BrowserOS neo owns the root, so it is the default palette. Signal Blue. */
+:root {
+  --primary: 2 84 236;
+  --primary-light: 61 139 255;
+  --primary-dark: 0 66 202;
+  --color-primary: rgb(2 84 236);
+}
+
+/* BrowserOS keeps the original orange, scoped to its own subtree. */
+html[data-current-path^="/browseros"] {
+  --primary: 242 94 26;
+  --primary-light: 255 122 61;
+  --primary-dark: 209 78 16;
+  --color-primary: rgb(242 94 26);
+}
+
+/* Logo. docs.json carries one logo site-wide and a product-level `logo` key is
+   silently ignored, so the swap happens here. neo pages get the blue mark;
+   BrowserOS pages keep the configured wordmark untouched.
+
+   The mark is square while the BrowserOS logo is a wordmark, so the width is
+   pinned to the rendered height to stop the square stretching. */
+html:not([data-current-path^="/browseros"]) #navbar .nav-logo,
+html:not([data-current-path^="/browseros"]) #sidebar .nav-logo {
+  /* content: url() gives the img no intrinsic size, so it collapses to 0x0
+     unless both axes are set. 552x104 at 1.75rem tall is 9.3rem wide. */
+  content: url("/logo/neo-wordmark.svg");
+  width: 9.3rem;
+  height: 1.75rem;
+  max-width: none;
+}

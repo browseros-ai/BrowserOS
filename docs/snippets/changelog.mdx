@@ -1,0 +1,202 @@
+All notable changes to BrowserOS are documented here. For the full release history with download links, see our [GitHub Releases](https://github.com/browseros-ai/BrowserOS/releases).
+
+---
+
+## v0.46.0
+<sub>June 17, 2026</sub>
+
+- **Claude Code & Codex in your browser** — The agent harness now bundles full coding agents. Claude Code and Codex plug straight into the assistant, so you can drive your browser with the agent — and the subscription — you already use.
+- **A brand new experience** — A redesigned new tab, a calmer composer, and a rebuilt command center for switching between agents. The whole assistant is cleaner, faster to reach, and easier to live in.
+- **New MCP tools** — A tighter, more reliable browser tool surface for agents, rebuilt from the ground up. Plus one-click install of BrowserOS as an MCP server into the agents you already run, with automatic URL sync.
+- **Chromium 148** — Updated to the latest Chromium base with all recent upstream fixes and security patches
+- **Streamlined** — We've pulled back a few features that weren't getting much use — Skills, Soul, and Memory — so we can focus and ship better versions soon.
+
+---
+
+## v0.44.0
+<sub>March 20, 2026</sub>
+
+- **ChatGPT Pro & GitHub Copilot** — Already paying for ChatGPT Pro, Plus, or GitHub Copilot? Use that subscription to automate browser tasks in BrowserOS at no extra cost — just log in with your existing account.
+- **Voice input** — Talk to your agent instead of typing. The chat bar now accepts voice input for any query.
+- **Smarter agent** — Overhauled agent grounding for more reliable and precise browser actions.
+- **Bug fixes & reliability** — Improved memory tools, fixed fill tool issues, new tab layout fixes, and numerous stability improvements across the board.
+
+---
+
+## v0.43.0
+<sub>March 12, 2026</sub>
+
+- **Skills** — Reusable instructions that teach your agent how to handle specific tasks. Ships with 12 built-in skills like deep research, price comparison, and form filling — and you can create your own.
+- **Memory** — Your assistant now remembers you across conversations. Core memory stores permanent facts like your name and projects, while daily notes capture session context and auto-expire after 30 days. Everything stays local on your machine.
+- **Kimi K2.5** — In partnership with Moonshot AI, Kimi K2.5 is now the default model in BrowserOS — open-source, multimodal, and great for browser automation. Bring your own key from [platform.moonshot.ai](https://platform.moonshot.ai/) anytime.
+- **SOUL.md** — Shape your assistant's personality, tone, and boundaries. It evolves on its own as you interact — the more you use it, the more it feels like yours.
+
+---
+
+## v0.42.0
+<sub>March 9, 2026</sub>
+
+- **SOUL.md** — Your assistant now has a soul. Tell it how you like to communicate, set boundaries, shape its personality — and it adapts on its own over time. The more you use it, the more it feels like *your* assistant.
+- **Vertical tabs** — One of the most requested features is here. BrowserOS now ships with vertical tabs by default. More screen space, better tab management, and a cleaner layout out of the box. Prefer horizontal? You can switch back anytime in settings. [Read more →](/browseros/features/vertical-tabs)
+- **Long-term memory** — Your assistant finally remembers you. Your name, your projects, what you talked about last week — it carries context across every conversation so you never have to repeat yourself. All stored locally on your machine.
+- **Chromium 146** — Updated to the latest Chromium release with all recent upstream fixes and security patches
+
+<Frame>
+  <img src="/images/changelog/0.42.0/soul-memory.png" alt="BrowserOS v0.42.0 SOUL.md feature for agent personalization" />
+</Frame>
+
+<Frame>
+  <img src="/images/changelog/0.42.0/vertical-tabs.png" alt="BrowserOS v0.42.0 vertical tabs toggle in settings" />
+</Frame>
+
+---
+
+## v0.41.0
+<sub>March 4, 2026</sub>
+
+- **New agent (v3)** — Completely redone from scratch. 2x faster, 2–3x better performance
+- **Tools — major upgrade** — Agent tools and MCP server both got a big overhaul. ~20 new tools (54 total) including file upload, save as PDF, background windows, and more. Connection with third-party coding agents (Claude Code, Codex, etc.) is much better now
+- **General fixes** — Better agent installation, bug fixes, and smoother experience overall
+- **Linux Debian packaging** — Fixed the remaining Debian packaging issues
+
+---
+
+## v0.40.1
+<sub>February 16, 2026</sub>
+
+- **Chromium 145** — Upgraded to the latest Chromium base with all recent upstream fixes and security patches
+- **Login session import improvements** — Importing login sessions is now more reliable
+- **Stability & reliability** — General improvements across the board
+
+---
+
+## v0.39.0
+<sub>February 3, 2026</sub>
+
+- **Sync** — Save your browser configuration, agent history, and scheduled tasks across machines. Your setup now follows you wherever you go
+- **App Connector redesign** — Connecting MCP apps is now easier. The new App Connector UI makes it simpler to discover, install, and manage your connected apps
+- **MCP port stability** — Additional fixes for users still experiencing port issues. More reliable connections across restarts
+- **Keyboard shortcuts** — Updated shortcuts to avoid conflicts with European keyboards
+
+<Frame>
+  <img src="/images/changelog/0.39.0-sync-mcp.png" alt="BrowserOS v0.39.0 featuring Sync and improved MCP connectors" />
+</Frame>
+
+---
+
+## v0.38.0
+<sub>January 28, 2026</sub>
+
+Bug fix and stability release.
+
+- **MCP port fix on Windows & Linux** — Fixed an issue with MCP port. Port now stays consistent across restarts and made it more reliable
+- **Settings fix** — Fixed `chrome.browser.settings` not working correctly. Settings should now persist and apply as expected
+- **Improved agent** — Made the agent more reliable and performant. General stability fixes across the agent loop
+
+---
+
+## v0.37.0
+<sub>January 21, 2026</sub>
+
+- **Workflows** — Build reliable, repeatable browser automations with a visual graph builder. Chat with the workflow agent to define step-by-step automation—ideal for complex tasks where ad-hoc prompts aren't enough.
+
+<img src="/browseros/features/workflow/sample-workflow.png" alt="Workflows visual graph builder showing a data entry automation" />
+
+- **Cowork** — Describe an outcome, step away, and come back to finished work. Combine browser automation with local file operations—research on the web and save reports, scrape data and export to files, all in one task. [Read more →](/browseros/features/cowork)
+
+<img src="/browseros/features/cowork/cowork-research-example.png" alt="Agent researching Hacker News and generating an HTML report" />
+
+---
+
+## v0.36.3
+<sub>January 15, 2026</sub>
+
+- **Agent history** — Agent conversations are now saved automatically. View and resume them anytime from the Assistant panel
+
+<img src="/images/changelog/0.36.3/agent-history-highlight.png" alt="Agent history button in the Assistant panel" />
+
+<img src="/images/changelog/0.36.3/agent-history-example.png" alt="Agent history showing past conversations" />
+
+---
+
+## v0.36.2
+<sub>January 10, 2026</sub>
+
+Bug fix release focused on MCP stability.
+
+- **MCP server disconnect fix** — Fixed port handling issue causing MCP connections to drop unexpectedly
+
+---
+
+## v0.36.0
+<sub>January 8, 2026</sub>
+
+- **Agent personalization** — Add your own prompts to personalize the agent. Tweak its behavior, adjust how it responds, set your preferred formatting, and more
+- **Toolbar customization** — Hide the Hub chat and labels from the settings page to declutter your toolbar
+- **MCP server port stability** — The port now stays consistent through browser restarts, so you don't have to keep updating your MCP clients
+- **Fixed agent install/update issues** — The agent now handles installs and updates more proactively
+
+---
+
+## v0.35.0
+<sub>December 25, 2025</sub>
+
+- **Agent stability fixes** — Fixed bugs to make the agent loop much more reliable
+- **Gemini 3 support** — Gemini 3 now supported through OpenRouter and Google adapters
+- **Better error surfacing** — Error messages are now clearer
+
+---
+
+## v0.34.0
+<sub>December 20, 2025</sub>
+
+- **Third-party MCP server support** — Connect external MCP servers like Google Calendar, Notion, Google Docs, Gmail, and more. You can also connect your own custom MCP servers
+- **Gemini 3 support** — Gemini 3 Pro and Flash models now work with BrowserOS
+- **Windows icon fix** — The Windows icon now displays BrowserOS logo correctly
+- **Agent & UI improvements** — Various agent loop fixes and UI polish
+
+---
+
+## v0.33.0
+<sub>December 18, 2025</sub>
+
+- **OpenAI-compatible provider support** — Connect any OpenAI-compatible API endpoint
+- **Multi-window & multi-profile agent support** — Agent now works across multiple windows and browser profiles
+- **MCP server reliability** — Fixed connection drops and improved stability
+- **Agent reliability improvements** — General stability fixes
+
+---
+
+## v0.32.0
+<sub>December 12, 2025</sub>
+
+A complete revamp of BrowserOS.
+
+**New features:**
+- **New Agent** — Completely rebuilt agent: faster, smarter, and more reliable
+- **Agent Per Tab** — Run multiple agents in different tabs simultaneously
+- **Polished UI** — Fresh, cleaner interface design
+- **Manifest V2 Support** — Ad blockers like uBlock Origin work again
+- **Native Split View** — Work on two things side by side
+- **Chromium 142** — Updated to Chromium 142.0.7444.49
+- **Azure & AWS Bedrock** — Native support for Azure OpenAI and AWS Bedrock models
+
+**Breaking changes:**
+- Old agent will stop working — update required
+- LLM provider settings won't carry over — reconfiguration needed
+
+---
+
+## v0.30.0
+<sub>November 14, 2025</sub>
+
+- **Better text extraction** — Improved copy button in LLM Chat
+- **MCP server stability** — Improved connection reliability
+- **UI cleanup** — Unpinned extensions for cleaner look
+- **Third-party MCP fixes** — Fixed support for third-party MCP servers
+
+---
+
+<Note>
+For older releases, see the [full release history on GitHub](https://github.com/browseros-ai/BrowserOS/releases).
+</Note>
