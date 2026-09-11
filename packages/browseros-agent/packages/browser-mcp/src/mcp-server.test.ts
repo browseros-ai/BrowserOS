@@ -253,10 +253,16 @@ describe('createBrowserMcpServer', () => {
       action: 'new',
       url: 'https://example.com',
     })
-    const mintedSession = (minted?.structuredContent as { session?: string })
-      ?.session
+    const mintedMeta = (minted as { _meta?: Record<string, unknown> })?._meta
+    const mintedSession = mintedMeta?.['com.browseros/session'] as
+      | string
+      | undefined
     expect(typeof mintedSession).toBe('string')
     expect(mintedSession).toHaveLength(36)
+    // The handle rides in _meta, never in structuredContent (issue #2651).
+    expect(
+      (minted?.structuredContent as { session?: unknown } | undefined)?.session,
+    ).toBeUndefined()
     // The handle is attributed on the per-call log, not the aggregated metric.
     const started = debugLogs.find(
       (entry) => entry.msg === 'MCP browser tool started',
@@ -269,9 +275,11 @@ describe('createBrowserMcpServer', () => {
       url: 'https://example.com',
       session: 'agent-supplied-handle',
     })
-    expect((reused?.structuredContent as { session?: string })?.session).toBe(
-      'agent-supplied-handle',
-    )
+    expect(
+      (reused as { _meta?: Record<string, unknown> })?._meta?.[
+        'com.browseros/session'
+      ],
+    ).toBe('agent-supplied-handle')
   })
 
   it('threads the abort signal from extra.mcpReq.signal into the tool', async () => {
