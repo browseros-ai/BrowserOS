@@ -169,10 +169,11 @@ BrowserOS/
 
 ### Contributing
 
-We'd love your help making BrowserOS neo and BrowserOS better. See the [Contributing Guide](CONTRIBUTING.md) for details.
+We'd love your help making BrowserOS neo and BrowserOS better. Start with the [Contributing Guide](CONTRIBUTING.md), which routes you to the right path.
 
-- **Agent platform** (TypeScript/Rust/Go): see the [agent monorepo README](packages/browseros-agent/README.md) for setup.
-- **Browser** (C++/Python): requires ~100GB disk space. See [`packages/browseros`](packages/browseros/) for build instructions.
+- **BrowserOS neo** (TypeScript, React, Rust): [setup guide](packages/browseros-agent/CONTRIBUTING.md). Around 15 minutes.
+- **BrowserOS** (TypeScript, React, Bun): [setup guide](packages/browseros-agent/CONTRIBUTING.BrowserOS.md). Around 15 minutes.
+- **Browser** (C++, Python): requires ~100GB of disk. See the [root guide](CONTRIBUTING.md#browser-development).
 
 ## Credits
 
