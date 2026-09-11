@@ -249,7 +249,7 @@ The real power of connected apps is combining them in a single request. The assi
 
 ## Add a Custom MCP Server
 
-You can connect any MCP-compatible server that exposes an SSE endpoint.
+You can connect remote MCP servers over Streamable HTTP or SSE. BrowserOS detects the transport from the server URL.
 
 1. Go to **Settings > Connected Apps**
 2. Click **Add custom app**
@@ -260,6 +260,21 @@ Custom servers appear alongside built-in apps and work the same way.
 <Tip>
 MCP has a growing ecosystem of servers. Browse [MCP servers on GitHub](https://github.com/modelcontextprotocol/servers) to find integrations for databases, APIs, and more.
 </Tip>
+
+### Example: Parallel Search
+
+[Parallel Search MCP](https://docs.parallel.ai/integrations/mcp/search-mcp) provides public web search and page extraction without a Parallel account or API key. Free access is rate limited.
+
+1. Open **Connect Apps** from the sidebar and click **Add custom app**.
+2. Enter **Parallel Search** as the **Server Name**.
+3. Enter `https://search.parallel.ai/mcp` as the **MCP Server URL**.
+4. Click **Add Server**. No sign-in, API key, or local proxy is needed.
+
+Try asking: "Use Parallel Search to find the BrowserOS documentation and fetch the page about connecting apps."
+
+The connection exposes `web_search` and `web_fetch`. Once added, the assistant can call these tools during its work, sending queries, requested URLs, and any supplied objective or context to Parallel. Use public URLs for page extraction; this service does not use your signed-in browser session.
+
+To stop using it, remove **Parallel Search** from **Connect Apps** and start a new conversation.
 
 ### Connect to OAuth-Protected Remote Servers
 
