@@ -88,9 +88,20 @@ func resolveBinaryFor(product string, goos string, exists func(string) bool) Bin
 		}
 		// Mirror the macOS fallback: neo reuses an installed BrowserOS build
 		// when the neo install is absent.
+		browserOSCandidates := linuxBinaryPaths(ProductBrowserOS)
+		for _, candidate := range browserOSCandidates {
+			if exists != nil && exists(candidate) {
+				return BinaryResolution{
+					Product:       product,
+					Path:          candidate,
+					PreferredPath: candidates[0],
+					Fallback:      true,
+				}
+			}
+		}
 		return BinaryResolution{
 			Product:       product,
-			Path:          linuxBinaryPaths(ProductBrowserOS)[0],
+			Path:          browserOSCandidates[0],
 			PreferredPath: candidates[0],
 			Fallback:      true,
 		}

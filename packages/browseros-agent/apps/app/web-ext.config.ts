@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -87,8 +87,14 @@ if (env.BROWSEROS_EXTENSION_PORT) {
  */
 function defaultBrowserBinary(): string {
   if (process.platform === 'linux') {
-    // Debian lib_dir then AppImage appimage_dir layouts from bos_build.
-    return '/usr/lib/browseros/browseros'
+    // Prefer the Debian install, then the extracted AppImage layout.
+    const candidates = [
+      '/usr/lib/browseros/browseros',
+      '/opt/browseros/browseros',
+    ]
+    return (
+      candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]
+    )
   }
   return '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
 }

@@ -159,6 +159,18 @@ func TestResolveBinaryOnLinuxFallsBackToBrowserOS(t *testing.T) {
 	}
 }
 
+func TestResolveBinaryOnLinuxFallsBackToBrowserOSAppImage(t *testing.T) {
+	got := resolveBinaryFor(ProductBrowserClaw, "linux", func(path string) bool {
+		return path == "/opt/browseros/browseros"
+	})
+	if got.Path != "/opt/browseros/browseros" {
+		t.Fatalf("expected BrowserOS AppImage fallback on Linux, got %q", got.Path)
+	}
+	if !got.Fallback {
+		t.Fatal("expected BrowserOS reuse to be flagged as fallback")
+	}
+}
+
 func TestResolveBinaryOnLinuxDefaultsToDebianPathWhenNothingInstalled(t *testing.T) {
 	got := resolveBinaryFor(ProductBrowserOS, "linux", func(string) bool { return false })
 	if got.Path != "/usr/lib/browseros/browseros" {
