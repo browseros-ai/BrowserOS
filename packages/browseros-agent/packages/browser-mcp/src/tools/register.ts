@@ -13,12 +13,16 @@ import {
 } from './output-file'
 import { BROWSER_TOOLS } from './registry'
 
-const SESSION_ARG_DESCRIPTION =
-  'Opaque session handle returned by the server. Pass it back on every call to keep working in the same browser session; omit it to start a new session.'
+// The `_meta` key the server-minted session handle is returned under, per the
+// MCP `_meta` convention. The handle deliberately never rides in
+// `structuredContent`: a client that prefers structuredContent (e.g. Claude
+// Code) would otherwise receive only the handle for the schemaless tools that
+// emit no structured payload, and it would collide with `run`'s declared output
+// schema. See issue #2651 (and #2513, the same fix on the neo server).
+const SESSION_META_KEY = 'com.browseros/session'
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
+const SESSION_ARG_DESCRIPTION =
+  'Opaque session handle for this browser session. The server returns it in every tool result under `_meta` at the key `com.browseros/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it only on the first call to start a new session.'
 
 function resolveSessionHandle(
   args: Record<string, unknown>,
@@ -32,9 +36,33 @@ function resolveSessionHandle(
   return { sessionHandle, toolArgs }
 }
 
-function mergeSessionHandle(base: unknown, sessionHandle: string | undefined) {
-  if (sessionHandle === undefined) return base
-  return { ...(isPlainObject(base) ? base : {}), session: sessionHandle }
+/**
+ * Assembles the MCP tool result. The session handle rides in `_meta`, never in
+ * `structuredContent`, so it never replaces a schemaless tool's result nor
+ * collides with a declared output schema (issue #2651). Structured content is
+ * emitted only when the caller opted in or the tool declares an output schema.
+ */
+function buildToolResult(
+  result: ToolResult,
+  includeStructured: boolean,
+  hasOutputSchema: boolean,
+  sessionHandle: string | undefined,
+): {
+  content: unknown
+  isError?: boolean
+  structuredContent?: unknown
+  _meta?: Record<string, unknown>
+} {
+  const structuredContent =
+    includeStructured || hasOutputSchema ? result.structuredContent : undefined
+  return {
+    content: result.content,
+    isError: result.isError,
+    ...(structuredContent !== undefined && { structuredContent }),
+    ...(sessionHandle !== undefined && {
+      _meta: { [SESSION_META_KEY]: sessionHandle },
+    }),
+  }
 }
 
 type RegisterFn = (
@@ -52,6 +80,7 @@ type RegisterFn = (
     content: unknown
     isError?: boolean
     structuredContent?: unknown
+    _meta?: Record<string, unknown>
   }>,
 ) => void
 
@@ -237,20 +266,17 @@ export function registerBrowserTools(
           const errorSummary = result.isError
             ? resultTextSummary(result.content)
             : undefined
-          const baseStructuredContent =
-            (options.includeStructuredContent ?? true) ||
-            tool.output !== undefined
-              ? result.structuredContent
-              : undefined
-          const structuredContent = mergeSessionHandle(
-            baseStructuredContent,
+          const toolResult = buildToolResult(
+            result,
+            options.includeStructuredContent ?? true,
+            tool.output !== undefined,
             sessionHandle,
           )
           options.logger?.debug?.('MCP browser tool completed', {
             ...logBase,
             durationMs,
             isError: Boolean(result.isError),
-            hasStructuredContent: structuredContent !== undefined,
+            hasStructuredContent: toolResult.structuredContent !== undefined,
           })
           if (result.isError) {
             options.logger?.info?.('MCP browser tool returned error', {
@@ -259,11 +285,7 @@ export function registerBrowserTools(
               errorSummary,
             })
           }
-          return {
-            content: result.content,
-            isError: result.isError,
-            ...(structuredContent !== undefined && { structuredContent }),
-          }
+          return toolResult
         } catch (error) {
           const errorText =
             error instanceof Error ? error.message : String(error)
@@ -279,11 +301,12 @@ export function registerBrowserTools(
             durationMs: duration(),
             error: errorText,
           })
-          return {
-            content: [{ type: 'text' as const, text: errorText }],
-            isError: true,
-            ...(sessionField && { structuredContent: sessionField }),
-          }
+          return buildToolResult(
+            { content: [{ type: 'text', text: errorText }], isError: true },
+            options.includeStructuredContent ?? true,
+            tool.output !== undefined,
+            sessionHandle,
+          )
         } finally {
           options.onToolExecutionEnd?.(lifecycleEvent)
         }
