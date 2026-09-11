@@ -301,11 +301,12 @@ export function registerBrowserTools(
             durationMs: duration(),
             error: errorText,
           })
-          return {
-            content: [{ type: 'text' as const, text: errorText }],
-            isError: true,
-            ...(sessionField && { structuredContent: sessionField }),
-          }
+          return buildToolResult(
+            { content: [{ type: 'text', text: errorText }], isError: true },
+            options.includeStructuredContent ?? true,
+            tool.output !== undefined,
+            sessionHandle,
+          )
         } finally {
           options.onToolExecutionEnd?.(lifecycleEvent)
         }

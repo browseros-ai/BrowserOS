@@ -296,4 +296,32 @@ describe('registerBrowserTools', () => {
 
     expect(ends).toEqual([{ tool_name: 'tabs', source: 'unit-test' }])
   })
+
+  it('delivers the session handle in _meta when the handler catch fires, never in structuredContent', async () => {
+    const fake = createFakeServer()
+
+    // Throw from the executor seam so the handler's own catch block runs (the
+    // in-tool path returns isError instead of throwing). Regression for the
+    // exception path leaking structuredContent: { session } (#2651).
+    registerBrowserTools(
+      fake.server as never,
+      { pages: {} } as unknown as BrowserSession,
+      {},
+      {
+        sessionIdentity: true,
+        executor: async () => {
+          throw new Error('boom')
+        },
+      },
+    )
+
+    const result = await fake.handlers.get('tabs')?.({ action: 'new' })
+
+    expect(result?.isError).toBe(true)
+    // The error text stays in content, never shadowed by the handle (#2651).
+    expect(textOf(result)).toContain('boom')
+    expect(result).not.toHaveProperty('structuredContent')
+    const meta = (result as { _meta?: Record<string, unknown> })?._meta
+    expect(typeof meta?.['com.browseros/session']).toBe('string')
+  })
 })
