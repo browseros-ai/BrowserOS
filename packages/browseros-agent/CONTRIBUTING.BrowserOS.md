@@ -26,6 +26,8 @@ The extension talks GraphQL to the server. The schema lives at [`apps/app/schema
 
 Rust is not needed for this path. It is only required for the BrowserOS neo backend.
 
+The dev loop is macOS only today. The supervisor resolves the browser through a hard-coded `/Applications/...` path, so Linux and Windows contributors can install dependencies and run the checks, but cannot launch either product yet.
+
 ## Setup
 
 ```bash
@@ -62,10 +64,10 @@ There are two variants and the difference matters more than the name suggests.
 |---|---|---|
 | Ports | Fixed: CDP 9000, server 9100, extension 9300 | Random, in the 9000 to 9999 range |
 | Profile | A persistent dev profile that keeps its state | A fresh temporary directory each run |
-| On start | **Kills anything holding those ports, and any browser already using that profile** | Nothing to kill |
+| On start | **Kills anything holding those ports, and any browser already using that profile** | Only its own server port, cleared just before launch |
 | Reach for it when | You want your logins and settings to survive a restart | Running more than one at once, testing first-run behaviour, or not wanting to disturb a running instance |
 
-`:new` is the safer default while you are getting oriented. Both take a lock on the profile, so two watch runs can never supervise the same one.
+`:new` is the safer default while you are getting oriented, though it is not entirely hands-off: the server process clears its own port immediately before launching, so a process that grabs that port in the gap after it was picked will still be killed. Both variants take a lock on the profile, so two watch runs can never supervise the same one.
 
 ### Running the BrowserOS neo stack instead
 

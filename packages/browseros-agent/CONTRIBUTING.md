@@ -26,6 +26,9 @@ The wire types are generated on both sides. [`packages/claw-api`](packages/claw-
 | **Lima** | The dev supervisor requires it and refuses to start without it | `brew install lima` |
 | **Rust** | `claw-server-rust` is built and run with cargo | `brew install rustup && rustup-init` |
 | **BrowserOS neo** | The supervisor launches the installed app | [Download](https://cdn.browseros.com/download/BrowserOS_neo.dmg) |
+| **Docker** | Only if you change the API contract. `codegen:claw-api` runs the generator in a pinned container | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
+
+The dev loop is macOS only today. The supervisor resolves the browser through a hard-coded `/Applications/...` path, so Linux and Windows contributors can install dependencies and run the checks, but cannot launch either product yet.
 
 ## Setup
 
@@ -65,10 +68,10 @@ There are two variants and the difference matters more than the name suggests.
 |---|---|---|
 | Ports | Fixed: CDP 9000, server 9100, extension 9300 | Random, in the 9000 to 9999 range |
 | Profile | A persistent dev profile that keeps its state | A fresh temporary directory each run |
-| On start | **Kills anything holding those ports, and any browser already using that profile** | Nothing to kill |
+| On start | **Kills anything holding those ports, and any browser already using that profile** | Only its own server port, cleared just before launch |
 | Reach for it when | You want your logins and settings to survive a restart | Running more than one at once, testing first-run behaviour, or not wanting to disturb a running instance |
 
-`:new` is the safer default while you are getting oriented. Both take a lock on the profile, so two watch runs can never supervise the same one.
+`:new` is the safer default while you are getting oriented, though it is not entirely hands-off: the server process clears its own port immediately before launching, so a process that grabs that port in the gap after it was picked will still be killed. Both variants take a lock on the profile, so two watch runs can never supervise the same one.
 
 ### Running the BrowserOS stack instead
 
@@ -81,6 +84,7 @@ bun run check        # lint, typecheck and fallow
 bun test             # TypeScript suites
 bun run test:rust    # the Rust workspace
 bun run lint:rust    # clippy, warnings are errors
+bun run fmt:rust     # rustfmt check
 ```
 
 Lint and formatting are Biome. `bun run lint:fix` applies what it can.

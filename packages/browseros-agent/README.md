@@ -100,9 +100,11 @@ rustup target add \
 
 The build preflights every selected target before compiling and repeats the install command for anything missing. `cargo-xwin` downloads and caches the Microsoft CRT and Windows SDK on its first run.
 
+**Uploads are the default.** Without `--ci` or `--no-upload`, a build pushes its zips to R2. Pass one of them for a local build.
+
 ```bash
 bun scripts/build/claw-server-rust.ts --target=all --ci        # all five, no R2 credentials needed
-bun scripts/build/claw-server-rust.ts --target=darwin-arm64    # one target
+bun scripts/build/claw-server-rust.ts --target=darwin-arm64 --no-upload    # one target, local only
 ```
 
 ## Focused test groups
