@@ -9,14 +9,15 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 
 ## Connecting
 
-The tools arrive over MCP from BrowserOS neo running on the user's machine. If you already have tools named `snapshot`, `act`, `run`, `navigate`, and `tabs` from a `browseros-neo` server, you are connected and can skip this section.
+The tools arrive over MCP from BrowserOS neo running on the user's machine. If you already have tools named `snapshot`, `act`, `run`, `navigate`, and `tabs`, you are connected and can skip this section.
 
-If you do not, the browser is either not running or not yet connected to this agent. Tell the user which, and point them at the fix rather than guessing:
+If you do not, the browser is either not running or not yet connected to this agent. Say which, and point the user at the fix rather than guessing.
 
-- The endpoint is `http://127.0.0.1:9200/mcp` over streamable HTTP, on their own machine.
-- In BrowserOS neo, opening a new tab and clicking **MCP** in the sidebar shows that URL and a one click **Connect** button for each supported AI tool. The tool needs a restart afterwards.
-- For anything not on that board, the endpoint URL above can be added by hand. See <https://docs.browseros.com/neo/mcp>.
-- If they do not have the browser yet, it is at <https://browseros.com>.
+BrowserOS neo connects Claude Code, Codex, Cursor, OpenCode, Antigravity, VS Code, and Zed itself. The user opens a new tab, clicks **MCP** in the sidebar, finds their tool, and clicks **Connect**, then restarts it. The browser writes the MCP entry and installs this skill for them, so an agent on that list rarely needs this section.
+
+Every other agent is connected by hand using the endpoint URL shown at the top of that same **MCP** page. Read the URL from there rather than assuming a port: it is a loopback address on the user's own machine, and the port is not the same across builds. Add it as a streamable HTTP MCP server named `browseros-neo`. Details are at <https://docs.browseros.com/neo/mcp/manual>.
+
+If the user does not have the browser yet, it is at <https://browseros.com>.
 
 Do not fall back to another browser tool because the connection is missing. Say what is missing and let the user fix it.
 
