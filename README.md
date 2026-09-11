@@ -108,17 +108,14 @@ Every session is saved as a scrubbable video on your disk with a step-by-step ac
 
 <table>
 <tr>
-<td width="90" align="center" valign="middle">
-<img src="packages/browseros/resources/browseros/icons/product_logo_192.png" alt="" width="64" />
+<td width="110" align="center" valign="middle">
+<img src="packages/browseros/resources/browseros/icons/product_logo_192.png" alt="" width="72" />
 </td>
 <td valign="middle">
-
-### BrowserOS, the AI browser for humans
-
-A Chromium fork with an AI agent built into every new tab, for when **you** are the one browsing. Bring your own AI keys or run everything locally with Ollama.
-
-**[Read about BrowserOS](README.BrowserOS.md)** · [Website](https://www.browseros.com/browseros/) · [Docs](https://docs.browseros.com/browseros)
-
+<h3>BrowserOS, the AI browser for humans</h3>
+A Chromium fork with an AI agent built into every new tab, for when <b>you</b> are the one browsing. Bring your own AI keys or run everything locally with Ollama.
+<br><br>
+<b><a href="README.BrowserOS.md">Read about BrowserOS</a></b> &nbsp;·&nbsp; <a href="https://www.browseros.com/browseros/">Website</a> &nbsp;·&nbsp; <a href="https://docs.browseros.com/browseros">Docs</a>
 </td>
 </tr>
 </table>
