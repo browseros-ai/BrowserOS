@@ -1,273 +1,98 @@
-# Contributing to BrowserOS
+# Contributing to BrowserOS neo and BrowserOS
 
-Hey there! Thanks for your interest in BrowserOS. Whether you're fixing bugs, adding features, improving docs, or just poking around the code, we're glad you're here.
+Thanks for being here. Whether you are fixing a bug, building a feature, improving docs, or just poking around, we are glad to have you.
 
-BrowserOS is a monorepo with two main parts:
-- **Agent** - The Chrome extension with AI features (TypeScript/React)
-- **Browser** - The custom Chromium build (C++/Python)
+Both browsers ship from this one repo, and there are four places you can work. Pick the one that matches what you want to change.
 
-Most folks start with the agent since it's way easier to set up and iterate on.
+## Pick your path
 
-## Pick Your Path
+| Path | You would work on | Stack | Cost to set up |
+|---|---|---|---|
+| **[BrowserOS neo](packages/browseros-agent/CONTRIBUTING.md)** | The cockpit new tab, the MCP surface agents connect to, session replay | TypeScript, React, Rust | ~15 minutes |
+| **[BrowserOS](packages/browseros-agent/CONTRIBUTING.BrowserOS.md)** | The side panel chat, the agent loop, scheduled tasks, settings | TypeScript, React, Bun | ~15 minutes |
+| **CLI** | Driving BrowserOS from a terminal or a coding agent | Go | ~5 minutes |
+| **Browser** | Chromium patches, the build system, platform features | C++, Python | ~100GB disk, hours |
 
-<table>
-<tr>
-<td width="50%">
+Most contributors start with BrowserOS neo or BrowserOS. Both live in `packages/browseros-agent` and share one toolchain, so setting up for one gets you most of the way to the other.
 
-### 🤖 Agent Development
+## Before you start
 
-**What you'll work on:**
-- AI agent features & tools
-- UI/UX improvements
-- Browser automation
-- Testing & docs
+**Use Bun.** It is the only supported package manager and runtime for the agent monorepo. `packages/browseros-agent/package.json` pins the version and sets every alternative to `please-use-bun`, so npm, yarn and pnpm are rejected outright.
 
-**What you need:**
-- Node.js 18+
-- ~500MB disk space
-- 10 minutes to set up
+Install it by following [the Bun installation guide](https://bun.sh/docs/installation). CI installs the exact pinned version by reading that same `package.json`, so matching it locally keeps you on the same dependency resolution. Check yours with `bun --version`.
 
-**Skills:** TypeScript, React, Chrome APIs
+The per-path guides list what else each one needs.
 
-**[→ Agent Setup](#agent-development)**
+## Browser development
 
-</td>
-<td width="50%">
+Building the Chromium fork is a different kind of work from everything above. Only go here if you are changing the browser itself rather than what runs inside it.
 
-### 🌐 Browser Development
+**You will need** roughly 100GB of free disk for the Chromium source, 16GB or more of RAM, Python 3.12+ with [uv](https://docs.astral.sh/uv/), and your platform's toolchain: Xcode command line tools on macOS, `build-essential` on Linux, or Visual Studio Build Tools on Windows.
 
-**What you'll work on:**
-- Chromium patches
-- Build system
-- Platform features
-- Core browser stuff
+**Get the Chromium source first.** Follow [Chromium: Get the Code](https://www.chromium.org/developers/how-tos/get-the-code/) for your platform. It sets up `depot_tools` and fetches the tree, which usually takes a few hours.
 
-**What you need:**
-- ~100GB disk space
-- 16GB+ RAM (recommended)
-- 3+ hours for first build
-
-**Skills:** C++, Python, Chromium internals
-
-**[→ Browser Setup](#browser-development)**
-
-</td>
-</tr>
-</table>
-
-## Agent Development
-
-The agent is a Chrome extension that provides AI-powered automation. Most contributors work here.
-
-### Quick Setup
-
-```bash
-# 1. Navigate to agent directory
-cd packages/browseros-agent
-
-# 2. Install dependencies
-yarn install
-
-# 3. Set up environment
-cp .env.example .env
-# Edit .env and add your LITELLM_API_KEY
-
-# 4. Build the extension
-yarn build:dev       # One-time build
-```
-
-### Load in BrowserOS 
-
-1. Open `chrome://extensions/`
-2. Enable **Developer mode** (top right toggle)
-3. Click **Load unpacked**
-4. Select `packages/browseros-agent/dist/`
-5. Press Agent icon from extensions toolbar to open the agent panel
-
-**For detailed setup, architecture, and code standards, see [Agent Contributing Guide](packages/browseros-agent/CONTRIBUTING.md).**
-
-## Browser Development
-
-Building the custom Chromium browser requires significant disk space and time. Only go down this path if you're working on browser-level features like patches to Chromium itself.
-
-### Prerequisites
-
-- **~100GB disk space** for Chromium source
-- **16GB+ RAM** (recommended)
-- **Platform tools:**
-  - macOS: Xcode + Command Line Tools
-  - Linux: build-essential and dependencies
-  - Windows: Visual Studio Build Tools
-
-### Quick Setup
-
-**1. Checkout Chromium source**
-
-First, follow the official Chromium guide for your platform:
-- **[Chromium: Get the Code](https://www.chromium.org/developers/how-tos/get-the-code/)**
-
-This will set up `depot_tools` and fetch the ~100GB Chromium source tree. This typically takes 2-3 hours depending on your internet speed.
-
-**2. Build BrowserOS**
-
-Once you have Chromium checked out, navigate to our build system:
+**Then build:**
 
 ```bash
 cd packages/browseros
+uv sync                                   # once
+cp .env.example .env                      # once, then fill in what you need
 
-# Debug build (for development) — same command on macOS/Linux/Windows
-uv run browseros build --preset debug --chromium-src /path/to/chromium/src
+# a debug build of either product
+uv run browseros build --preset debug --product browseros   --chromium-src /path/to/chromium/src
+uv run browseros build --preset debug --product browserclaw --chromium-src /path/to/chromium/src
 
-# Release build (for production; add --no-sign/--no-upload as needed)
-uv run browseros build --preset release --chromium-src /path/to/chromium/src
-
-# See every pipeline step and preset switch
-uv run browseros build --list
-uv run browseros build --help
+# see exactly what a build would run, without running it
+uv run browseros build --preset release --show-plan
 ```
 
-The build typically takes 1-3 hours on modern hardware (M4 Max, Ryzen 9, etc.).
+Builds take one to three hours on modern hardware. `browseros build` produces one binary for one product on one platform; releasing is a separate workflow. For the full picture, read [`packages/browseros/bos_build/README.md`](packages/browseros/bos_build/README.md).
 
-**For the build system architecture and more invocations, see [packages/browseros/bos_build/README.md](packages/browseros/bos_build/README.md).**
+## Opening a pull request
 
-## Making Your First Contribution
+- **Title in [Conventional Commits](https://www.conventionalcommits.org/) format.** A CI check enforces this.
+- **Say what changed and why.** The why is the part reviewers cannot get from the diff.
+- **Screenshots or a short video for anything visual.**
+- **Link the issue** it closes, for example `Fixes #123`.
 
-Open a PR on GitHub with:
-- **Clear title** in conventional commit format
-- **Description** explaining what changed and why
-- **Screenshots/videos** for UI changes
-- **Link to related issues** (e.g., "Fixes #123")
+Run the checks before you push:
+
+```bash
+cd packages/browseros-agent
+bun run check     # lint, typecheck and fallow in one pass
+bun test          # the TypeScript suites
+```
 
 ### Sign the CLA
 
-On your first PR, our bot will ask you to sign the Contributor License Agreement:
-
-1. Read the [CLA document](CLA.md)
-2. Comment on your PR: `I have read the CLA Document and I hereby sign the CLA`
-3. The bot will record your signature (one-time thing)
-
-## Code Standards
-
-### TypeScript (Agent)
-
-- **Strict typing** - Always declare types, avoid `any`
-- **Zod schemas** - Use Zod instead of TypeScript interfaces
-- **Path aliases** - Use `@/lib` not relative paths like `../`
-- **Naming:**
-  - Classes: `PascalCase`
-  - Functions/variables: `camelCase`
-  - Constants: `UPPERCASE`
-  - Private methods: prefix with `_`
-
-Example:
-```typescript
-import { z } from 'zod'
-
-// Good: Zod schema with inline comments
-export const ToolInputSchema = z.object({
-  action: z.enum(['click', 'type']),  // Action to perform
-  target: z.string().min(1),  // Element selector
-  timeout: z.number().default(5000)  // Timeout in ms
-})
-
-export type ToolInput = z.infer<typeof ToolInputSchema>
-```
-
-### React (Agent UI)
-
-- **Styling:** Tailwind CSS only (no SCSS or CSS modules)
-- **Hooks:** Only at top level
-- **Props:** Define with Zod schemas
-- **Testing:** Vitest (not Jest)
-
-### General
-
-- Keep functions short (<20 lines ideally)
-- Write tests for new features
-- Use descriptive variable names
-- Handle errors gracefully
-
-**For detailed standards:**
-- Agent: [packages/browseros-agent/CLAUDE.md](packages/browseros-agent/CLAUDE.md)
-- Browser: Follow Chromium style guide
-
-## Project Structure
+On your first pull request a bot will ask you to sign the Contributor License Agreement. Read [CLA.md](CLA.md), then comment on your PR with exactly:
 
 ```
-monorepo/
-├── packages/
-│   ├── browseros/              # Chromium build system
-│   │   ├── build/             # Python build scripts
-│   │   ├── chromium_patches/  # Patches to Chromium source
-│   │   └── resources/         # Icons, configs
-│   │
-│   └── browseros-agent/        # Chrome extension
-│       ├── src/
-│       │   ├── lib/           # Core agent logic
-│       │   ├── sidepanel/     # Side panel UI
-│       │   ├── newtab/        # New tab page
-│       │   └── background/    # Extension background
-│       └── docs/              # Architecture docs
-│
-├── docs/                       # General documentation
-└── CONTRIBUTING.md            # This file
+I have read the CLA Document and I hereby sign the CLA
 ```
 
-## Ways to Contribute
+The bot records it once and will not ask again.
 
-You don't need to write code to help out! Here are other ways:
+## Other ways to help
 
-### 🐛 Report Bugs
+You do not need to write code to be useful here.
 
-Found a bug? [Open an issue](https://github.com/browseros-ai/BrowserOS/issues/new) with:
-- Clear description
-- Steps to reproduce
-- Expected vs actual behavior
-- Screenshots/videos
-- Environment details (OS, browser version, BrowserOS version)
+- **Report a bug.** [Open an issue](https://github.com/browseros-ai/BrowserOS/issues/new/choose) with what you did, what you expected, what happened instead, and your OS and version. Screenshots or a recording help a lot.
+- **Suggest a feature.** Start with the [issue chooser](https://github.com/browseros-ai/BrowserOS/issues/new/choose) or talk it through on [Discord](https://discord.gg/YKwjt5vuKr) first.
+- **Improve the docs.** The site lives in [`docs/`](docs/) and is written in MDX. Fixing a wrong step you just hit is one of the most valuable contributions there is.
+- **Test on your setup.** Different OS, different agent, unusual hardware. Edge cases are found by people who have them.
 
-### 💡 Suggest Features
+## Getting help
 
-Have an idea? [Share it here](https://github.com/browseros-ai/BrowserOS/issues/99) or chat with us on [Discord](https://discord.gg/YKwjt5vuKr).
-
-### 📚 Improve Documentation
-
-- Write blog posts or guides
-
-### 🧪 Test & Provide Feedback
-
-- Try new features
-- Test on different platforms
-- Report edge cases
-- Share your use cases
-
-### 🎨 Design & UX
-
-- Suggest UI improvements
-- Create mockups
-- Improve accessibility
-- Enhance user experience
-
-## Getting Help
-
-Stuck? Need clarification? We're here to help.
-
-- **[Discord](https://discord.gg/YKwjt5vuKr)** - Real-time chat and support
-- **[GitHub Issues](https://github.com/browseros-ai/BrowserOS/issues)** - Bug reports and features
-- **[GitHub Discussions](https://github.com/browseros-ai/BrowserOS/discussions)** - General questions
-
-## Recognition
-
-We appreciate all contributors! You'll get:
-- Credits in release notes
-- Name in README
+- **[Discord](https://discord.gg/YKwjt5vuKr)** and **[Slack](https://dub.sh/browserOS-slack)** for real-time questions
+- **[GitHub Discussions](https://github.com/browseros-ai/BrowserOS/discussions)** for longer ones
+- **[GitHub Issues](https://github.com/browseros-ai/BrowserOS/issues)** for bugs
+- **Security issues:** do not open an issue. Follow [SECURITY.md](.github/SECURITY.md) and open a private advisory.
 
 ## License
 
-By contributing, you agree that your contributions will be licensed under AGPL-3.0.
+By contributing, you agree that your contributions are licensed under AGPL-3.0.
 
 ---
 
 Built with ❤️ from San Francisco
-
-Questions? Hit us up on [Discord](https://discord.gg/YKwjt5vuKr) or [Twitter](https://twitter.com/browseros_ai).
