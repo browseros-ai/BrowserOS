@@ -16,15 +16,23 @@ use serde_json::{Value, json};
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIMEOUT_MS: u64 = 30_000;
 
+/// Hard ceiling for the opt-in `maxChars`: a caller may pull up to this much of a
+/// large result inline instead of having it spilled to a local file. The default
+/// inline size stays small (`INLINE_PAGE_CONTENT_MAX_CHARS`) so ordinary results
+/// do not flood the model's context.
+const MAX_INLINE_OVERRIDE_CHARS: usize = 200_000;
+
 const DESCRIPTION: &str = "\
 Evaluate JavaScript in a page context through CDP Runtime.evaluate. \
 Prefer `run` for multi-step work; reach for evaluate only as a fallback for a one-off page-context read or script. \
 Use this for page-state reads or small DOM scripts that are awkward with read/grep. \
 Provide `code` (an async body; use `return` to read a value) or `func` (a function \
-expression like `() => {...}` that gets invoked). Return a value to read it back.";
+expression like `() => {...}` that gets invoked). Return a value to read it back. \
+`timeout` is capped at 30000 ms; for page work that needs longer, start it on the page and poll with short follow-up calls rather than one long evaluate. \
+A result larger than the inline limit is truncated and its full text is written to a local file whose path a remote MCP client cannot read; return only what you need, or raise `maxChars` to receive more of the value inline.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
 struct EvaluateArgs {
     /// Page id from `tabs`.
     page: u32,
@@ -35,8 +43,17 @@ struct EvaluateArgs {
     /// An alternative to `code` for callers that pass a function.
     #[serde(default)]
     func: Option<String>,
-    /// Max evaluation time in ms (default 30000).
+    /// Max evaluation time in ms. Hard cap: 30000 (larger values are clamped to
+    /// it). For work longer than 30s, start it on the page and poll the result
+    /// with short follow-up calls instead of one long evaluate.
     timeout: Option<f64>,
+    /// Max size of the result kept inline, measured in UTF-8 bytes to match the
+    /// server's inline limit (default 5000, max 200000); a multibyte character
+    /// counts as more than one byte. A result larger than this is truncated
+    /// inline and its full text is written to a local file, whose path a remote
+    /// MCP client cannot open; raise this to receive more of the value inline.
+    #[serde(default)]
+    max_chars: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -120,8 +137,9 @@ fn handler<'a>(
             .await
             .map(|info| info.url)
             .unwrap_or_else(|| "unknown".to_string());
-        if text.len() > INLINE_PAGE_CONTENT_MAX_CHARS {
-            let excerpt = safe_prefix(&text, INLINE_PAGE_CONTENT_MAX_CHARS);
+        let inline_limit = resolve_inline_limit(args.max_chars);
+        if text.len() > inline_limit {
+            let excerpt = safe_prefix(&text, inline_limit);
             let wrapped_text = wrap_untrusted(&text, &origin);
             let content_length = wrapped_text.len();
             match write_temp_tool_output_file(&ctx.output_files, "evaluate", "txt", &wrapped_text)
@@ -132,7 +150,7 @@ fn handler<'a>(
                         [
                             wrap_untrusted(&excerpt, &origin),
                             format!(
-                                "Evaluate result truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result ({} chars) saved to: {}",
+                                "Evaluate result truncated at {inline_limit} bytes. Full result ({} bytes) saved to: {}",
                                 text.len(),
                                 path.display()
                             ),
@@ -152,7 +170,7 @@ fn handler<'a>(
                         [
                             wrap_untrusted(&excerpt, &origin),
                             format!(
-                                "Evaluate result truncated at {INLINE_PAGE_CONTENT_MAX_CHARS} chars. Full result ({} chars) could not be saved to a BrowserOS output file: {save_error}",
+                                "Evaluate result truncated at {inline_limit} bytes. Full result ({} bytes) could not be saved to a BrowserOS output file: {save_error}",
                                 text.len()
                             ),
                         ]
@@ -223,6 +241,16 @@ fn safe_prefix(text: &str, max_chars: usize) -> String {
     text[..end].to_string()
 }
 
+/// Resolves the inline size budget for a result: the caller's `maxChars` capped
+/// at `MAX_INLINE_OVERRIDE_CHARS`, or the small default when unset. A result
+/// larger than this is truncated inline and its full text spilled to a file.
+fn resolve_inline_limit(max_chars: Option<u64>) -> usize {
+    match max_chars {
+        Some(n) => (n as usize).min(MAX_INLINE_OVERRIDE_CHARS),
+        None => INLINE_PAGE_CONTENT_MAX_CHARS,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,5 +270,18 @@ mod tests {
         assert!(!both.contains("() => 4"));
         // Neither is an error at the call site.
         assert!(resolve_expression(None, None).is_none());
+    }
+
+    #[test]
+    fn resolve_inline_limit_defaults_and_clamps() {
+        // No override falls back to the small default.
+        assert_eq!(resolve_inline_limit(None), INLINE_PAGE_CONTENT_MAX_CHARS);
+        // A caller can raise it, up to the hard ceiling.
+        assert_eq!(resolve_inline_limit(Some(50_000)), 50_000);
+        // Anything above the ceiling is clamped.
+        assert_eq!(
+            resolve_inline_limit(Some(10_000_000)),
+            MAX_INLINE_OVERRIDE_CHARS
+        );
     }
 }
