@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { TOOL_LIMITS } from '@browseros/shared/constants/limits'
-import { evaluate } from './evaluate'
+import { evaluate, resolveInlineLimit } from './evaluate'
 import { executeTool } from './framework'
 import { wrapUntrusted } from './trust-boundary'
 
@@ -84,6 +84,21 @@ describe('evaluate tool', () => {
     expect(result.isError).toBeFalsy()
     expect(result.structuredContent).toEqual({ page: 3, value: 'page-value' })
     expect(textOf(result)).toContain('page-value')
+  })
+
+  it('returns a large value inline when maxChars is raised above it', async () => {
+    const value = 'y'.repeat(TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS + 100)
+    const result = await executeTool(
+      evaluate,
+      { page: 3, code: 'return big', maxChars: value.length + 10 },
+      { session: sessionWithEvaluateValue(value) },
+    )
+
+    // Raising maxChars keeps the value inline instead of spilling to a file.
+    expect(result.isError).toBeFalsy()
+    expect(result.structuredContent).toEqual({ page: 3, value })
+    expect(result.structuredContent).not.toHaveProperty('writtenToFile')
+    expect(textOf(result)).toContain(value)
   })
 
   it('spills huge string results and omits structured value', async () => {
@@ -179,5 +194,16 @@ describe('evaluate tool', () => {
       expect(result.structuredContent).not.toHaveProperty('value')
       expect(textOf(result)).toContain('could not be saved')
     })
+  })
+})
+
+describe('resolveInlineLimit', () => {
+  it('defaults, raises, and clamps to the ceiling', () => {
+    expect(resolveInlineLimit(undefined)).toBe(
+      TOOL_LIMITS.INLINE_PAGE_CONTENT_MAX_CHARS,
+    )
+    expect(resolveInlineLimit(50_000)).toBe(50_000)
+    // Above the 200000 ceiling is clamped.
+    expect(resolveInlineLimit(10_000_000)).toBe(200_000)
   })
 })

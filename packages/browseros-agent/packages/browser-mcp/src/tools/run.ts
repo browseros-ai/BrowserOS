@@ -8,7 +8,7 @@ const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (
   ...args: string[]
 ) => (...injected: unknown[]) => Promise<unknown>
 
-const DESCRIPTION = `Run JavaScript against the \`browser\` SDK in the server runtime for multi-step flows and data extraction that would otherwise take many tool calls. \`console.log\` is captured; \`return\` a value to read it back; exceptions come back as a result, not a thrown error.
+const DESCRIPTION = `Run JavaScript against the \`browser\` SDK in the server runtime for multi-step flows and data extraction that would otherwise take many tool calls. \`console.log\` is captured; \`return\` a value to read it back; exceptions come back as a result, not a thrown error. The run honors its \`timeout\`, but each inner evaluate/wait call is individually capped at 30000 ms; for long or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
 Available as \`browser\`:
   browser.pages.list() / newPage(url) / close(pageId) / getInfo(pageId)
@@ -43,7 +43,9 @@ export const run = defineTool({
       timeout: z
         .number()
         .optional()
-        .describe('Max run time in ms (default 30000).'),
+        .describe(
+          'Max run time in ms (default 30000). The run honors this value, but each inner evaluate/wait call is individually capped at 30000 ms; for long page-driven work, split it across calls or start it and poll with short follow-up calls.',
+        ),
     })
     .strict(),
   output: z.object({
