@@ -47,10 +47,11 @@ struct EvaluateArgs {
     /// it). For work longer than 30s, start it on the page and poll the result
     /// with short follow-up calls instead of one long evaluate.
     timeout: Option<f64>,
-    /// Max characters of the result returned inline (default 5000, max 200000).
-    /// A larger result is truncated inline and its full text is written to a
-    /// local file, whose path a remote MCP client cannot open; raise this to
-    /// receive more of the value inline instead.
+    /// Max size of the result kept inline, measured in UTF-8 bytes to match the
+    /// server's inline limit (default 5000, max 200000); a multibyte character
+    /// counts as more than one byte. A result larger than this is truncated
+    /// inline and its full text is written to a local file, whose path a remote
+    /// MCP client cannot open; raise this to receive more of the value inline.
     #[serde(default)]
     max_chars: Option<u64>,
 }
@@ -149,7 +150,7 @@ fn handler<'a>(
                         [
                             wrap_untrusted(&excerpt, &origin),
                             format!(
-                                "Evaluate result truncated at {inline_limit} chars. Full result ({} chars) saved to: {}",
+                                "Evaluate result truncated at {inline_limit} bytes. Full result ({} bytes) saved to: {}",
                                 text.len(),
                                 path.display()
                             ),
@@ -169,7 +170,7 @@ fn handler<'a>(
                         [
                             wrap_untrusted(&excerpt, &origin),
                             format!(
-                                "Evaluate result truncated at {inline_limit} chars. Full result ({} chars) could not be saved to a BrowserOS output file: {save_error}",
+                                "Evaluate result truncated at {inline_limit} bytes. Full result ({} bytes) could not be saved to a BrowserOS output file: {save_error}",
                                 text.len()
                             ),
                         ]
