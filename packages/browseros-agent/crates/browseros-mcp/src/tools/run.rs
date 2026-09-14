@@ -30,7 +30,7 @@ const MAX_LOG_ENTRIES: usize = 1_000;
 const MAX_LOG_BYTES: usize = 1_000_000;
 const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
-const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able.
+const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
 The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs. Reuse a pageId across steps.
 
@@ -211,7 +211,9 @@ const BOOTSTRAP_JS: &str = r#"
 struct RunArgs {
     /// Async-capable JS body. Use top-level await; `return` a value.
     code: String,
-    /// Max run time in ms (default 30000).
+    /// Max run time in ms. Hard cap: 30000 (larger values are clamped to it). A
+    /// single run cannot exceed 30s; for longer or looping page-driven work,
+    /// split it across calls or start it and poll with short follow-up calls.
     #[serde(default = "default_timeout")]
     timeout: f64,
 }
