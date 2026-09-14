@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000..36c2cc1a7f1e0
+index 0000000000000000000000000000000000000000..c91e0bcc78e2953048bc3861ce5b004972480560
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,219 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -11,7 +11,9 @@ index 0000000000000..36c2cc1a7f1e0
 +#ifndef CHROME_BROWSER_BROWSEROS_SERVER_BROWSEROS_SERVER_MANAGER_H_
 +#define CHROME_BROWSER_BROWSEROS_SERVER_BROWSEROS_SERVER_MANAGER_H_
 +
++#include <cstdint>
 +#include <memory>
++#include <optional>
 +#include <set>
 +
 +#include "base/files/file.h"
@@ -25,9 +27,14 @@ index 0000000000000..36c2cc1a7f1e0
 +#include "chrome/browser/browseros/server/browseros_server_config.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
 +#include "chrome/browser/browseros/server/process_controller.h"
++#include "chrome/browser/browseros/server/server_version_store.h"
 +
 +class PrefChangeRegistrar;
 +class PrefService;
++
++namespace network {
++class SimpleURLLoader;
++}
 +
 +namespace browseros_server {
 +class BrowserOSServerUpdater;
@@ -94,6 +101,11 @@ index 0000000000000..36c2cc1a7f1e0
 +  using UpdateCompleteCallback = base::OnceCallback<void(bool success)>;
 +  void RestartServerForUpdate(UpdateCompleteCallback callback);
 +
++  ServerVersionStore& GetVersionStore();
++  base::Version GetRunningVersion() const;
++  void MaybeActivateReadyVersion();
++  void InvalidateDownloadedServer();
++
 + private:
 +  friend base::NoDestructor<BrowserOSServerManager>;
 +
@@ -120,10 +132,24 @@ index 0000000000000..36c2cc1a7f1e0
 +
 +  void LaunchBrowserOSProcess();
 +  void OnProcessLaunched(LaunchResult result);
++  void OnVersionsInitialized();
++  void OnVersionStoreStopped();
++  void FinishStop();
++  void ClearRunningInstallation();
++  void OnStartupHealthTimeout(uint64_t generation);
++  void OnRejectedProcessStopped(const base::Version& version);
++  void CompleteUpdate(bool success);
++  void StartUpdater();
++  void OnReadinessChecked(ServerInstallation installation,
++                          uint64_t generation,
++                          std::optional<std::string> response);
++  void ActivateInstallation(const ServerInstallation& installation);
++  void OnReadyVersionActivated(const base::Version& old_version,
++                               const base::Version& new_version,
++                               bool success);
 +
 +  void TerminateBrowserOSProcess(base::OnceCallback<void()> callback);
-+  void OnTerminateProcessComplete(base::OnceCallback<void()> callback,
-+                                  bool killed);
++  void OnTerminateProcessComplete(bool killed);
 +
 +  void RestartBrowserOSProcess();
 +  void ContinueRestartAfterTerminate();
@@ -138,7 +164,8 @@ index 0000000000000..36c2cc1a7f1e0
 +
 +  base::FilePath GetBrowserOSExecutionDir() const;
 +
-+  std::unique_ptr<ProcessController> process_controller_;
++  // Background launches retain the controller even if the manager is destroyed.
++  std::shared_ptr<ProcessController> process_controller_;
 +  std::unique_ptr<ServerStateStore> state_store_;
 +  std::unique_ptr<HealthChecker> health_checker_;
 +  std::unique_ptr<BrowserOSServerProxy> server_proxy_;
@@ -154,6 +181,22 @@ index 0000000000000..36c2cc1a7f1e0
 +  bool is_restarting_ = false;
 +  bool is_updating_ = false;
 +  UpdateCompleteCallback update_complete_callback_;
++  base::OnceClosure termination_callback_;
++
++  // Selection precedes launch; running identity is published only after health.
++  // Ready state remains in the store while activation is deferred or in flight.
++  std::unique_ptr<ServerVersionStore> version_store_;
++  std::optional<ServerInstallation> launched_installation_;
++  std::optional<ServerInstallation> running_installation_;
++  std::optional<ServerInstallation> next_installation_;
++  bool started_ = false;
++  bool stopping_ = false;
++  bool launch_in_progress_ = false;
++  bool termination_in_progress_ = false;
++  bool health_check_in_progress_ = false;
++  bool updater_started_ = false;
++  bool version_io_pending_ = false;
++  uint64_t process_generation_ = 0;
 +
 +  int consecutive_startup_failures_ = 0;
 +  int consecutive_health_failures_ = 0;
@@ -162,12 +205,19 @@ index 0000000000000..36c2cc1a7f1e0
 +
 +  base::RepeatingTimer health_check_timer_;
 +  base::RepeatingTimer process_check_timer_;
++  base::OneShotTimer startup_health_retry_timer_;
++  base::OneShotTimer startup_health_deadline_timer_;
++  base::RepeatingTimer activation_retry_timer_;
++  std::unique_ptr<network::SimpleURLLoader> readiness_loader_;
 +
 +  std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 +  std::unique_ptr<ServerUpdater> updater_;
 +  PortFinderForTesting port_finder_for_testing_;
 +
 +  base::WeakPtrFactory<BrowserOSServerManager> weak_factory_{this};
++  // Launch/termination replies must survive Stop() so their child can be reaped
++  // before the profile lock is released. Other lifecycle replies are cancelled.
++  base::WeakPtrFactory<BrowserOSServerManager> process_weak_factory_{this};
 +};
 +
 +}  // namespace browseros

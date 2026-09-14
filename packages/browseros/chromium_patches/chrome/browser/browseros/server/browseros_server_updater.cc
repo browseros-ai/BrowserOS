@@ -1,30 +1,25 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f1553ec41550
+index 0000000000000000000000000000000000000000..7c5df6afacc045b7d34559b9d47a85481bb57ed6
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,1127 @@
+@@ -0,0 +1,641 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/browseros/server/browseros_server_updater.h"
 +
++#include <algorithm>
 +#include <optional>
++#include <vector>
 +
 +#include "base/base64.h"
 +#include "base/command_line.h"
 +#include "base/feature_list.h"
 +#include "base/files/file_enumerator.h"
 +#include "base/files/file_util.h"
-+#include "base/json/json_reader.h"
 +#include "base/logging.h"
-+#include "base/path_service.h"
-+#include "base/process/launch.h"
-+#include "base/strings/strcat.h"
-+#include "base/strings/string_number_conversions.h"
-+#include "base/strings/string_util.h"
-+#include "base/task/thread_pool.h"
 +#include "chrome/browser/browser_features.h"
 +#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
@@ -32,10 +27,8 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +#include "chrome/browser/browseros/server/browseros_server_config.h"
 +#include "chrome/browser/browseros/server/browseros_server_constants.h"
 +#include "chrome/browser/browseros/server/browseros_server_manager.h"
-+#include "chrome/browser/browseros/server/browseros_server_prefs.h"
++#include "chrome/browser/browseros/server/server_version_store.h"
 +#include "chrome/browser/net/system_network_context_manager.h"
-+#include "chrome/common/chrome_paths.h"
-+#include "components/prefs/pref_service.h"
 +#include "net/base/net_errors.h"
 +#include "net/traffic_annotation/network_traffic_annotation.h"
 +#include "services/network/public/cpp/resource_request.h"
@@ -93,29 +86,6 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +      setting: "This feature can be disabled via --disable-browseros-server or --disable-browseros-server-updater."
 +      policy_exception_justification:
 +        "Essential for keeping BrowserOS server component up to date."
-+    })");
-+}
-+
-+net::NetworkTrafficAnnotationTag GetStatusTrafficAnnotation() {
-+  return net::DefineNetworkTrafficAnnotation("browseros_server_status", R"(
-+    semantics {
-+      sender: "BrowserOS Server Updater"
-+      description:
-+        "Checks if the local BrowserOS server is ready for hot-swap update."
-+      trigger: "When a new version is downloaded and ready to install."
-+      data: "No user data sent, just an HTTP GET to localhost."
-+      destination: LOCAL
-+      internal {
-+        contacts {
-+          email: "nikhil@browseros.com"
-+        }
-+      }
-+    }
-+    policy {
-+      cookies_allowed: NO
-+      setting: "This feature can be disabled via --disable-browseros-server or --disable-browseros-server-updater."
-+      policy_exception_justification:
-+        "Essential for coordinating BrowserOS server updates."
 +    })");
 +}
 +
@@ -194,34 +164,6 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +  return "";  // Success
 +}
 +
-+// Runs binary with --version and captures output.
-+// Returns exit code and output via out parameters.
-+void RunBinaryVersionCheck(const base::FilePath& binary_path,
-+                           int* exit_code,
-+                           std::string* output) {
-+  base::CommandLine cmd(binary_path);
-+  cmd.AppendSwitch("version");
-+
-+  std::string stdout_output;
-+  std::string stderr_output;
-+
-+  base::LaunchOptions options;
-+#if BUILDFLAG(IS_WIN)
-+  options.start_hidden = true;
-+#endif
-+
-+  // GetAppOutputWithExitCode runs the process and captures output
-+  bool success = base::GetAppOutputAndError(cmd, &stdout_output);
-+
-+  if (success) {
-+    *exit_code = 0;
-+    *output = stdout_output;
-+  } else {
-+    *exit_code = 1;
-+    *output = stdout_output.empty() ? "Process failed to run" : stdout_output;
-+  }
-+}
-+
 +// Background task: verify signature + extract ZIP
 +struct VerifyExtractResult {
 +  bool success = false;
@@ -271,6 +213,7 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +BrowserOSServerUpdater::BrowserOSServerUpdater(
 +    browseros::BrowserOSServerManager* manager)
 +    : manager_(manager),
++      version_store_(&manager->GetVersionStore()),
 +      descriptor_(&browseros::GetManagedServerDescriptor()) {}
 +
 +BrowserOSServerUpdater::~BrowserOSServerUpdater() {
@@ -278,139 +221,18 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +}
 +
 +void BrowserOSServerUpdater::Start() {
-+  LOG(INFO) << "browseros: Starting server updater";
-+
-+  // Load both version caches async, then start checking
-+  LoadVersionCachesAsync();
-+
++  LOG(INFO) << "browseros: Starting server update polling";
 +  update_check_timer_.Start(FROM_HERE, kUpdateCheckInterval, this,
 +                            &BrowserOSServerUpdater::OnUpdateTimer);
-+}
-+
-+void BrowserOSServerUpdater::LoadVersionCachesAsync() {
-+  // Load downloaded version from file
-+  base::FilePath version_file =
-+      GetExecutionDir().AppendASCII(kCurrentVersionFileName);
-+
-+  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(
-+          [](base::FilePath path) -> std::string {
-+            std::string content;
-+            if (!base::ReadFileToString(path, &content)) {
-+              return "";
-+            }
-+            std::string_view trimmed =
-+                base::TrimWhitespaceASCII(content, base::TRIM_ALL);
-+            return std::string(trimmed);
-+          },
-+          version_file),
-+      base::BindOnce(&BrowserOSServerUpdater::OnDownloadedVersionLoaded,
-+                     weak_factory_.GetWeakPtr()));
-+
-+  // Get bundled version by running binary with --version
-+  base::FilePath bundled_binary = GetBundledBinaryPath();
-+  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(
-+          [](base::FilePath path) -> std::pair<int, std::string> {
-+            int exit_code = 0;
-+            std::string output;
-+            RunBinaryVersionCheck(path, &exit_code, &output);
-+            return {exit_code, output};
-+          },
-+          bundled_binary),
-+      base::BindOnce(
-+          [](base::WeakPtr<BrowserOSServerUpdater> self,
-+             std::pair<int, std::string> result) {
-+            if (self) {
-+              self->OnBundledVersionLoaded(result.first, result.second);
-+            }
-+          },
-+          weak_factory_.GetWeakPtr()));
-+}
-+
-+void BrowserOSServerUpdater::OnDownloadedVersionLoaded(
-+    const std::string& version_str) {
-+  if (!version_str.empty()) {
-+    cached_downloaded_version_ = base::Version(version_str);
-+    LOG(INFO) << "browseros: Cached downloaded version: "
-+              << cached_downloaded_version_.GetString();
-+  }
-+  downloaded_version_loaded_ = true;
-+  CheckVersionCachesAndStart();
-+}
-+
-+void BrowserOSServerUpdater::OnBundledVersionLoaded(int exit_code,
-+                                                    const std::string& output) {
-+  if (exit_code == 0 && !output.empty()) {
-+    // Parse version from output (trim whitespace)
-+    std::string_view trimmed =
-+        base::TrimWhitespaceASCII(output, base::TRIM_ALL);
-+    cached_bundled_version_ = base::Version(std::string(trimmed));
-+    if (cached_bundled_version_.IsValid()) {
-+      LOG(INFO) << "browseros: Cached bundled version: "
-+                << cached_bundled_version_.GetString();
-+    } else {
-+      LOG(WARNING) << "browseros: Could not parse bundled version from: "
-+                   << output;
-+    }
-+  } else {
-+    LOG(WARNING) << "browseros: Failed to get bundled version (exit_code="
-+                 << exit_code << ")";
-+  }
-+  bundled_version_loaded_ = true;
-+  CheckVersionCachesAndStart();
-+}
-+
-+void BrowserOSServerUpdater::CheckVersionCachesAndStart() {
-+  if (!bundled_version_loaded_ || !downloaded_version_loaded_) {
-+    return;  // Wait for both to complete
-+  }
-+
-+  // The manager launches the bundled server before this updater exists, so a
-+  // version downloaded in a previous session is not the one running now. If
-+  // that downloaded version is newer than the bundled one, activate it instead
-+  // of waiting for the appcast to advertise something newer (it never will once
-+  // the downloaded version is already the latest), which would otherwise leave
-+  // the stale bundled server running indefinitely.
-+  if (cached_downloaded_version_.IsValid() &&
-+      (!cached_bundled_version_.IsValid() ||
-+       cached_downloaded_version_ > cached_bundled_version_)) {
-+    LOG(INFO) << "browseros: Activating downloaded version "
-+              << cached_downloaded_version_.GetString() << " over bundled "
-+              << (cached_bundled_version_.IsValid()
-+                      ? cached_bundled_version_.GetString()
-+                      : "(unknown)");
-+    PrefService* prefs = g_browser_process->local_state();
-+    if (prefs) {
-+      prefs->SetString(kServerVersion, cached_downloaded_version_.GetString());
-+    }
-+    pending_item_.version = cached_downloaded_version_;
-+    update_in_progress_ = true;
-+    TestBinary(cached_downloaded_version_);
-+    return;
-+  }
-+
-+  // Sync version pref with current best version
-+  base::Version current = GetCurrentVersion();
-+  if (current.IsValid()) {
-+    PrefService* prefs = g_browser_process->local_state();
-+    if (prefs) {
-+      prefs->SetString(kServerVersion, current.GetString());
-+    }
-+  }
-+
-+  // Now trigger the first check
 +  CheckNow();
 +}
 +
 +void BrowserOSServerUpdater::Stop() {
 +  LOG(INFO) << "browseros: Stopping server updater";
 +  update_check_timer_.Stop();
++  weak_factory_.InvalidateWeakPtrs();
 +  appcast_loader_.reset();
 +  download_loader_.reset();
-+  status_loader_.reset();
 +  ResetState();
 +}
 +
@@ -419,7 +241,7 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +}
 +
 +void BrowserOSServerUpdater::CheckNow() {
-+  if (!bundled_version_loaded_ || !downloaded_version_loaded_) {
++  if (!version_store_->initialized()) {
 +    LOG(INFO) << "browseros: Version caches not loaded yet, skipping check";
 +    return;
 +  }
@@ -513,13 +335,14 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +  LOG(INFO) << "browseros: Found enclosure for current platform: "
 +            << enclosure->url;
 +
-+  // Compare with current version
-+  base::Version current = GetCurrentVersion();
-+  LOG(INFO) << "browseros: Current version: "
++  // Discovery asks whether another download is needed. The manager separately
++  // compares its running installation with the store's ready installation.
++  base::Version current = version_store_->GetBestAvailable().version;
++  LOG(INFO) << "browseros: Best available version: "
 +            << (current.IsValid() ? current.GetString() : "(none)");
 +
 +  if (current.IsValid() && current >= item->version) {
-+    LOG(INFO) << "browseros: Already up to date";
++    LOG(INFO) << "browseros: Latest server already available locally";
 +    ResetState();
 +    return;
 +  }
@@ -536,9 +359,8 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +    const base::Version& version) {
 +  base::FilePath version_dir = GetVersionDir(version);
 +
-+  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock()},
-+      base::BindOnce(&base::PathExists, version_dir),
++  version_store_->file_task_runner()->PostTaskAndReplyWithResult(
++      FROM_HERE, base::BindOnce(&base::PathExists, version_dir),
 +      base::BindOnce(&BrowserOSServerUpdater::OnVersionExistsCheck,
 +                     weak_factory_.GetWeakPtr(), enclosure, version));
 +}
@@ -571,8 +393,8 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +  base::FilePath pending_dir = GetPendingUpdateDir();
 +
 +  // Clean up any previous pending update on background thread, then download
-+  base::ThreadPool::PostTaskAndReply(
-+      FROM_HERE, {base::MayBlock()},
++  version_store_->file_task_runner()->PostTaskAndReply(
++      FROM_HERE,
 +      base::BindOnce(
 +          [](base::FilePath dir) {
 +            if (base::PathExists(dir)) {
@@ -647,8 +469,8 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +  LOG(INFO) << "browseros: Verifying signature and extracting to " << dest_dir;
 +
 +  // Run verification and extraction on background thread
-+  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
++  version_store_->file_task_runner()->PostTaskAndReplyWithResult(
++      FROM_HERE,
 +      base::BindOnce(&DoVerifyAndExtract, zip_path, signature, dest_dir),
 +      base::BindOnce(
 +          [](base::WeakPtr<BrowserOSServerUpdater> self, base::Version version,
@@ -679,373 +501,76 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +
 +void BrowserOSServerUpdater::TestBinary(const base::Version& version) {
 +  state_ = State::kTesting;
-+
-+  base::FilePath binary_path = GetDownloadedBinaryPath(version);
-+  LOG(INFO) << "browseros: Testing binary: " << binary_path;
-+
-+  // Run version check on background thread
-+  base::ThreadPool::PostTaskAndReplyWithResult(
-+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(
-+          [](base::FilePath path) -> std::pair<int, std::string> {
-+            int exit_code = 0;
-+            std::string output;
-+            RunBinaryVersionCheck(path, &exit_code, &output);
-+            return {exit_code, output};
-+          },
-+          binary_path),
-+      base::BindOnce(
-+          [](base::WeakPtr<BrowserOSServerUpdater> self, base::Version version,
-+             std::pair<int, std::string> result) {
-+            if (!self) {
-+              return;
-+            }
-+            self->OnBinaryTestComplete(version, result.first, result.second);
-+          },
-+          weak_factory_.GetWeakPtr(), version));
++  version_store_->PrepareVersion(
++      version, base::BindOnce(&BrowserOSServerUpdater::OnVersionPrepared,
++                              weak_factory_.GetWeakPtr(), version));
 +}
 +
-+void BrowserOSServerUpdater::OnBinaryTestComplete(const base::Version& version,
-+                                                  int exit_code,
-+                                                  const std::string& output) {
-+  if (exit_code != 0) {
-+    LOG(ERROR) << "browseros: Binary test failed with exit code " << exit_code
-+               << ": " << output;
-+
-+    // Delete the broken version
-+    base::FilePath version_dir = GetVersionDir(version);
-+    base::ThreadPool::PostTask(
-+        FROM_HERE, {base::MayBlock()},
-+        base::BindOnce(
-+            [](base::FilePath dir) { base::DeletePathRecursively(dir); },
-+            version_dir));
-+
-+    // If the version we just tested is the persisted "current" one, it is
-+    // unusable: clear the pointer so we fall back to the bundled server and can
-+    // re-download it on the next appcast check instead of retrying it forever.
-+    if (version == cached_downloaded_version_) {
-+      WriteCurrentVersionFile(base::Version());
-+    }
-+
-+    OnError("verify", "Binary --version check failed");
-+    return;
-+  }
-+
-+  LOG(INFO) << "browseros: Binary test passed: " << output;
-+
-+  // Check if server is ready for hot-swap
-+  CheckServerStatus();
-+}
-+
-+void BrowserOSServerUpdater::CheckServerStatus() {
-+  // Products without a readiness contract restart right after verification.
-+  if (descriptor_->updater.readiness_path.empty()) {
-+    OnServerStatusChecked(/*can_update=*/true);
-+    return;
-+  }
-+
-+  GURL status_url(base::StrCat({"http://127.0.0.1:",
-+                                base::NumberToString(manager_->GetServerPort()),
-+                                descriptor_->updater.readiness_path}));
-+
-+  LOG(INFO) << "browseros: Checking server status at " << status_url;
-+
-+  auto request = std::make_unique<network::ResourceRequest>();
-+  request->url = status_url;
-+  request->method = "GET";
-+  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
-+
-+  status_loader_ = network::SimpleURLLoader::Create(
-+      std::move(request), GetStatusTrafficAnnotation());
-+  status_loader_->SetTimeoutDuration(kStatusCheckTimeout);
-+
-+  auto* url_loader_factory = g_browser_process->system_network_context_manager()
-+                                 ->GetURLLoaderFactory();
-+
-+  status_loader_->DownloadToString(
-+      url_loader_factory,
-+      base::BindOnce(&BrowserOSServerUpdater::OnStatusFetched,
-+                     weak_factory_.GetWeakPtr()),
-+      4096);
-+}
-+
-+void BrowserOSServerUpdater::OnStatusFetched(
-+    std::optional<std::string> response) {
-+  if (!response.has_value()) {
-+    int net_error = status_loader_->NetError();
-+    LOG(WARNING) << "browseros: Failed to fetch server status: "
-+                 << net::ErrorToString(net_error)
-+                 << ", proceeding with update anyway";
-+    OnServerStatusChecked(/*can_update=*/true);
-+    return;
-+  }
-+
-+  std::optional<base::Value> json =
-+      base::JSONReader::Read(*response, base::JSON_PARSE_RFC);
-+  if (!json || !json->is_dict()) {
-+    LOG(WARNING)
-+        << "browseros: Invalid status response, proceeding with update";
-+    OnServerStatusChecked(/*can_update=*/true);
-+    return;
-+  }
-+
-+  const base::DictValue& dict = json->GetDict();
-+  std::optional<bool> can_update = dict.FindBool("can_update");
-+
-+  if (!can_update.has_value()) {
-+    LOG(WARNING) << "browseros: Status response missing can_update field";
-+    OnServerStatusChecked(/*can_update=*/true);
-+    return;
-+  }
-+
-+  OnServerStatusChecked(can_update.value());
-+}
-+
-+void BrowserOSServerUpdater::OnServerStatusChecked(bool can_update) {
-+  if (!can_update) {
-+    LOG(INFO) << "browseros: Server busy, will retry hot-swap at next check";
-+
-+    base::DictValue props;
-+    props.Set("pending_version", pending_item_.version.GetString());
-+    browseros_metrics::BrowserOSMetrics::Log("server.ota.busy",
-+                                             std::move(props));
-+
-+    ResetState();
-+    return;
-+  }
-+
-+  PerformHotSwap(pending_item_.version);
-+}
-+
-+void BrowserOSServerUpdater::PerformHotSwap(const base::Version& version) {
-+  LOG(INFO) << "browseros: Performing hot-swap to version "
-+            << version.GetString();
-+
-+  // Capture old version for metrics before updating
-+  base::Version old_version = GetCurrentVersion();
-+
-+  // Update version file first (so restart uses new binary)
-+  WriteCurrentVersionFile(version);
-+
-+  // Tell manager to restart the server with new binary
-+  manager_->RestartServerForUpdate(
-+      base::BindOnce(&BrowserOSServerUpdater::OnHotSwapComplete,
-+                     weak_factory_.GetWeakPtr(), old_version, version));
-+}
-+
-+void BrowserOSServerUpdater::OnHotSwapComplete(const base::Version& old_version,
-+                                               const base::Version& new_version,
++void BrowserOSServerUpdater::OnVersionPrepared(const base::Version& version,
 +                                               bool success) {
 +  if (!success) {
-+    LOG(ERROR) << "browseros: Hot-swap failed, reverting to bundled version";
-+
-+    // Clear downloaded version - this updates cache, pref (to bundled), and
-+    // deletes the current_version file so next restart uses bundled
-+    WriteCurrentVersionFile(base::Version());
-+
-+    OnError("hotswap", "Failed to restart server with new binary");
++    OnError("prepare", "Binary version validation or ready persistence failed");
 +    return;
 +  }
 +
-+  LOG(INFO) << "browseros: Hot-swap successful! Now running version "
-+            << new_version.GetString();
-+
-+  // Cleanup old versions and pending update
-+  CleanupOldVersions();
++  LOG(INFO) << "browseros: Server version " << version.GetString()
++            << " is ready for activation";
++  // Ready state belongs to the store and survives both busy deferrals and
++  // browser shutdown. Only transient network work ends here.
 +  CleanupPendingUpdate();
-+
-+  // Log success metric
-+  base::DictValue props;
-+  props.Set("old_version",
-+            old_version.IsValid() ? old_version.GetString() : "none");
-+  props.Set("new_version", new_version.GetString());
-+  browseros_metrics::BrowserOSMetrics::Log("server.ota.success",
-+                                           std::move(props));
-+
 +  ResetState();
++  manager_->MaybeActivateReadyVersion();
 +}
 +
-+base::Version BrowserOSServerUpdater::GetCurrentVersion() {
-+  // Priority: downloaded version > bundled version
-+  base::Version downloaded = GetLatestDownloadedVersion();
-+  base::Version bundled = GetBundledVersion();
-+
-+  if (downloaded.IsValid() && (!bundled.IsValid() || downloaded > bundled)) {
-+    return downloaded;
-+  }
-+  return bundled;
-+}
-+
-+base::Version BrowserOSServerUpdater::GetBundledVersion() {
-+  // Use cached version from running bundled binary --version
-+  return cached_bundled_version_;
-+}
-+
-+base::Version BrowserOSServerUpdater::GetLatestDownloadedVersion() {
-+  // Use cached version to avoid blocking I/O on UI thread
-+  return cached_downloaded_version_;
-+}
-+
-+void BrowserOSServerUpdater::WriteCurrentVersionFile(
-+    const base::Version& version) {
-+  // Update cache immediately
-+  cached_downloaded_version_ = version;
-+
-+  // Update version pref for observability
-+  // When clearing (invalid version), show bundled version in pref
-+  PrefService* prefs = g_browser_process->local_state();
-+  if (prefs) {
-+    std::string pref_version;
-+    if (version.IsValid()) {
-+      pref_version = version.GetString();
-+    } else if (cached_bundled_version_.IsValid()) {
-+      pref_version = cached_bundled_version_.GetString();
-+    }
-+    prefs->SetString(kServerVersion, pref_version);
-+  }
-+
-+  base::FilePath version_file =
-+      GetExecutionDir().AppendASCII(kCurrentVersionFileName);
-+
-+  if (version.IsValid()) {
-+    base::ThreadPool::PostTask(
-+        FROM_HERE, {base::MayBlock()},
-+        base::BindOnce(
-+            [](base::FilePath path, std::string content) {
-+              base::WriteFile(path, content);
-+            },
-+            version_file, version.GetString()));
-+  } else {
-+    // Delete file when clearing downloaded version
-+    base::ThreadPool::PostTask(
-+        FROM_HERE, {base::MayBlock()},
-+        base::BindOnce([](base::FilePath path) { base::DeleteFile(path); },
-+                       version_file));
-+  }
++void BrowserOSServerUpdater::OnServerActivated() {
++  CleanupOldVersions();
 +}
 +
 +void BrowserOSServerUpdater::InvalidateDownloadedVersion() {
-+  LOG(WARNING) << "browseros: Invalidating downloaded version, "
-+               << "nuking versions directory";
-+
-+  // Clear cache, pref, and current_version file via shared logic
-+  WriteCurrentVersionFile(base::Version());
-+
-+  // Additionally nuke all version directories
-+  base::FilePath versions_dir = GetVersionsDir();
-+  base::ThreadPool::PostTask(
-+      FROM_HERE, {base::MayBlock()},
-+      base::BindOnce(
-+          [](base::FilePath versions_dir) {
-+            if (base::PathExists(versions_dir)) {
-+              if (!base::DeletePathRecursively(versions_dir)) {
-+                LOG(ERROR) << "browseros: Failed to delete versions directory: "
-+                           << versions_dir;
-+              }
-+            }
-+          },
-+          versions_dir));
-+}
-+
-+base::FilePath BrowserOSServerUpdater::GetExecutionDir() const {
-+  base::FilePath user_data_dir;
-+  if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir)) {
-+    return base::FilePath();
-+  }
-+  base::FilePath execution_dir =
-+      user_data_dir.Append(FILE_PATH_LITERAL(".browseros"));
-+  // Non-empty state dir isolates a product's OTA state (e.g. Claw under
-+  // .browseros/BrowserClawServer/); empty keeps the legacy BrowserOS layout.
-+  if (!descriptor_->updater.state_dir.empty()) {
-+    execution_dir = execution_dir.Append(descriptor_->updater.state_dir);
-+  }
-+  return execution_dir;
++  manager_->InvalidateDownloadedServer();
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetVersionsDir() const {
-+  return GetExecutionDir().AppendASCII(kVersionsDirectoryName);
++  return version_store_->GetVersionsDir();
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetVersionDir(
 +    const base::Version& version) const {
-+  return GetVersionsDir().AppendASCII(version.GetString());
++  return version_store_->GetVersionDir(version);
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetPendingUpdateDir() const {
-+  return GetExecutionDir().AppendASCII(kPendingUpdateDirectoryName);
-+}
-+
-+base::FilePath BrowserOSServerUpdater::GetBundledBinaryPath() const {
-+  // Delegate to manager's existing logic
-+  return manager_->GetBrowserOSServerExecutablePath();
-+}
-+
-+base::FilePath BrowserOSServerUpdater::GetBundledResourcesPath() const {
-+  return manager_->GetBrowserOSServerResourcesPath();
-+}
-+
-+base::FilePath BrowserOSServerUpdater::GetDownloadedBinaryPath(
-+    const base::Version& version) const {
-+  base::FilePath binary = GetVersionDir(version)
-+                              .Append(FILE_PATH_LITERAL("resources"))
-+                              .Append(FILE_PATH_LITERAL("bin"))
-+                              .Append(descriptor_->binary_name);
-+#if BUILDFLAG(IS_WIN)
-+  binary = binary.AddExtension(FILE_PATH_LITERAL(".exe"));
-+#endif
-+  return binary;
-+}
-+
-+base::FilePath BrowserOSServerUpdater::GetDownloadedResourcesPath(
-+    const base::Version& version) const {
-+  return GetVersionDir(version).Append(FILE_PATH_LITERAL("resources"));
++  return version_store_->GetPendingUpdateDir();
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetBestServerBinaryPath() {
-+  // Use cached versions to avoid blocking I/O
-+  base::Version downloaded = cached_downloaded_version_;
-+  base::Version bundled = cached_bundled_version_;
-+
-+  if (downloaded.IsValid() && (!bundled.IsValid() || downloaded > bundled)) {
-+    base::FilePath path = GetDownloadedBinaryPath(downloaded);
-+    // Note: We trust the cache - if binary doesn't exist, manager will handle
-+    return path;
-+  }
-+
-+  return GetBundledBinaryPath();
++  return version_store_->GetBestAvailable().executable;
 +}
 +
 +base::FilePath BrowserOSServerUpdater::GetBestServerResourcesPath() {
-+  // Use cached versions to avoid blocking I/O
-+  base::Version downloaded = cached_downloaded_version_;
-+  base::Version bundled = cached_bundled_version_;
-+
-+  if (downloaded.IsValid() && (!bundled.IsValid() || downloaded > bundled)) {
-+    return GetDownloadedResourcesPath(downloaded);
-+  }
-+
-+  return GetBundledResourcesPath();
++  return version_store_->GetBestAvailable().resources;
 +}
 +
 +void BrowserOSServerUpdater::CleanupPendingUpdate() {
 +  base::FilePath pending_dir = GetPendingUpdateDir();
-+  base::ThreadPool::PostTask(FROM_HERE, {base::MayBlock()},
-+                             base::BindOnce(
-+                                 [](base::FilePath dir) {
-+                                   if (base::PathExists(dir)) {
-+                                     base::DeletePathRecursively(dir);
-+                                   }
-+                                 },
-+                                 pending_dir));
++  version_store_->file_task_runner()->PostTask(
++      FROM_HERE, base::BindOnce(
++                     [](base::FilePath dir) {
++                       if (base::PathExists(dir)) {
++                         base::DeletePathRecursively(dir);
++                       }
++                     },
++                     pending_dir));
 +}
 +
 +void BrowserOSServerUpdater::CleanupOldVersions() {
 +  base::FilePath versions_dir = GetVersionsDir();
 +
-+  base::ThreadPool::PostTask(
-+      FROM_HERE, {base::MayBlock()},
++  version_store_->file_task_runner()->PostTask(
++      FROM_HERE,
 +      base::BindOnce(
-+          [](base::FilePath dir, int max_to_keep) {
++          [](base::FilePath dir, int max_to_keep, base::Version running_version,
++             base::Version ready_version) {
 +            if (!base::PathExists(dir)) {
 +              return;
 +            }
@@ -1056,23 +581,29 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +                                            base::FileEnumerator::DIRECTORIES);
 +            for (base::FilePath path = enumerator.Next(); !path.empty();
 +                 path = enumerator.Next()) {
-+              base::Version v(path.BaseName().AsUTF8Unsafe());
-+              if (v.IsValid()) {
-+                versions.emplace_back(v, path);
++              base::Version version(path.BaseName().AsUTF8Unsafe());
++              if (version.IsValid()) {
++                versions.emplace_back(version, path);
 +              }
 +            }
 +
 +            // Sort by version (newest first)
-+            std::sort(
-+                versions.begin(), versions.end(),
-+                [](const auto& a, const auto& b) { return a.first > b.first; });
++            std::sort(versions.begin(), versions.end(),
++                      [](const auto& first, const auto& second) {
++                        return first.first > second.first;
++                      });
 +
 +            // Delete old versions beyond the keep limit
 +            int deleted = 0;
-+            for (size_t i = max_to_keep; i < versions.size(); ++i) {
++            for (size_t index = max_to_keep; index < versions.size(); ++index) {
++              const auto& [version, version_path] = versions[index];
++              if ((running_version.IsValid() && version == running_version) ||
++                  (ready_version.IsValid() && version == ready_version)) {
++                continue;
++              }
 +              LOG(INFO) << "browseros: Cleaning up old version: "
-+                        << versions[i].first.GetString();
-+              base::DeletePathRecursively(versions[i].second);
++                        << version.GetString();
++              base::DeletePathRecursively(version_path);
 +              deleted++;
 +            }
 +
@@ -1083,7 +614,8 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +                                                       std::move(props));
 +            }
 +          },
-+          versions_dir, kMaxVersionsToKeep));
++          versions_dir, kMaxVersionsToKeep, manager_->GetRunningVersion(),
++          version_store_->GetBestAvailable().version));
 +}
 +
 +void BrowserOSServerUpdater::OnError(const std::string& stage,
@@ -1099,23 +631,6 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +  browseros_metrics::BrowserOSMetrics::Log("server.ota.error",
 +                                           std::move(props));
 +
-+  // Clean version directory if we failed after extraction (test or hotswap
-+  // stage)
-+  if (pending_item_.version.IsValid() &&
-+      (stage == "test" || stage == "hotswap")) {
-+    base::FilePath version_dir = GetVersionDir(pending_item_.version);
-+    base::ThreadPool::PostTask(
-+        FROM_HERE, {base::MayBlock()},
-+        base::BindOnce(
-+            [](base::FilePath dir) {
-+              if (base::PathExists(dir)) {
-+                LOG(INFO) << "browseros: Cleaning up failed version: " << dir;
-+                base::DeletePathRecursively(dir);
-+              }
-+            },
-+            version_dir));
-+  }
-+
 +  CleanupPendingUpdate();
 +  ResetState();
 +}
@@ -1125,7 +640,6 @@ index 0000000000000000000000000000000000000000..41fdd3a227f0fd68f3d3fc725713f155
 +  update_in_progress_ = false;
 +  appcast_loader_.reset();
 +  download_loader_.reset();
-+  status_loader_.reset();
 +  pending_item_ = AppcastItem();
 +  pending_signature_.clear();
 +}

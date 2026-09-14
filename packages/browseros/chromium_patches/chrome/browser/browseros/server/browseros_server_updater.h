@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.h b/chrome/browser/browseros/server/browseros_server_updater.h
 new file mode 100644
-index 0000000000000..529d7fc706730
+index 0000000000000000000000000000000000000000..72411a77f7ef7345280a8c8f5b53d2348978862f
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.h
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,140 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -29,8 +29,9 @@ index 0000000000000..529d7fc706730
 +
 +namespace browseros {
 +class BrowserOSServerManager;
++class ServerVersionStore;
 +struct ManagedServerDescriptor;
-+}
++}  // namespace browseros
 +
 +namespace browseros_server {
 +
@@ -42,9 +43,8 @@ index 0000000000000..529d7fc706730
 +// 3. Download ZIP if a newer version is available.
 +// 4. Verify Ed25519 signature.
 +// 5. Extract to the product's versions/{version}/ directory.
-+// 6. Test the binary with --version.
-+// 7. Update the product's current_version file.
-+// 8. Signal the manager to restart using the new binary.
++// 6. Ask the version store to validate and persist a ready installation.
++// 7. Notify the manager, which owns readiness, activation retries, and health.
 +class BrowserOSServerUpdater : public browseros::ServerUpdater {
 + public:
 +  explicit BrowserOSServerUpdater(browseros::BrowserOSServerManager* manager);
@@ -60,6 +60,7 @@ index 0000000000000..529d7fc706730
 +  base::FilePath GetBestServerBinaryPath() override;
 +  base::FilePath GetBestServerResourcesPath() override;
 +  void InvalidateDownloadedVersion() override;
++  void OnServerActivated() override;
 +
 +  // Forces an immediate update check (not part of interface).
 +  void CheckNow();
@@ -99,40 +100,14 @@ index 0000000000000..529d7fc706730
 +                                  bool success,
 +                                  const std::string& error);
 +
-+  // Binary testing
++  // Local preparation delegates probing and persistence to the version store.
 +  void TestBinary(const base::Version& version);
-+  void OnBinaryTestComplete(const base::Version& version,
-+                            int exit_code,
-+                            const std::string& output);
-+
-+  // Hot-swap flow
-+  void CheckServerStatus();
-+  void OnStatusFetched(std::optional<std::string> response);
-+  void OnServerStatusChecked(bool can_update);
-+  void PerformHotSwap(const base::Version& version);
-+  void OnHotSwapComplete(const base::Version& old_version,
-+                         const base::Version& new_version,
-+                         bool success);
-+
-+  // Version management
-+  base::Version GetCurrentVersion();
-+  base::Version GetBundledVersion();
-+  base::Version GetLatestDownloadedVersion();
-+  void LoadVersionCachesAsync();
-+  void OnDownloadedVersionLoaded(const std::string& version_str);
-+  void OnBundledVersionLoaded(int exit_code, const std::string& output);
-+  void CheckVersionCachesAndStart();
-+  void WriteCurrentVersionFile(const base::Version& version);
++  void OnVersionPrepared(const base::Version& version, bool success);
 +
 +  // Path helpers
-+  base::FilePath GetExecutionDir() const;
 +  base::FilePath GetVersionsDir() const;
 +  base::FilePath GetVersionDir(const base::Version& version) const;
 +  base::FilePath GetPendingUpdateDir() const;
-+  base::FilePath GetBundledBinaryPath() const;
-+  base::FilePath GetBundledResourcesPath() const;
-+  base::FilePath GetDownloadedBinaryPath(const base::Version& version) const;
-+  base::FilePath GetDownloadedResourcesPath(const base::Version& version) const;
 +
 +  // Cleanup
 +  void CleanupPendingUpdate();
@@ -143,6 +118,8 @@ index 0000000000000..529d7fc706730
 +  void ResetState();
 +
 +  raw_ptr<browseros::BrowserOSServerManager> manager_;
++  // Manager-owned; polling stops before the local catalog is destroyed.
++  raw_ptr<browseros::ServerVersionStore> version_store_;
 +
 +  // Selected sidecar's OTA contract (appcast feeds, state dir, binary name,
 +  // readiness path). Points at a process-lifetime static descriptor.
@@ -156,17 +133,10 @@ index 0000000000000..529d7fc706730
 +  // Keep loaders alive during async operations
 +  std::unique_ptr<network::SimpleURLLoader> appcast_loader_;
 +  std::unique_ptr<network::SimpleURLLoader> download_loader_;
-+  std::unique_ptr<network::SimpleURLLoader> status_loader_;
 +
 +  // Pending update info
 +  AppcastItem pending_item_;
 +  std::string pending_signature_;
-+
-+  // Cached versions (loaded async at startup via --version)
-+  base::Version cached_bundled_version_;
-+  base::Version cached_downloaded_version_;
-+  bool bundled_version_loaded_ = false;
-+  bool downloaded_version_loaded_ = false;
 +
 +  base::WeakPtrFactory<BrowserOSServerUpdater> weak_factory_{this};
 +};

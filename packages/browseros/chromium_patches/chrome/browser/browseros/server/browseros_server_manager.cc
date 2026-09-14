@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760581ed5c4
+index 0000000000000000000000000000000000000000..88c8769d97826bd909ada9b67cbba87d09782790
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1095 @@
+@@ -0,0 +1,1421 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,10 +13,12 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +#include <optional>
 +#include <set>
 +
++#include "base/check.h"
 +#include "base/command_line.h"
 +#include "base/files/file_path.h"
 +#include "base/files/file_util.h"
 +#include "base/functional/callback_helpers.h"
++#include "base/json/json_reader.h"
 +#include "base/logging.h"
 +#include "base/path_service.h"
 +#include "base/rand_util.h"
@@ -27,7 +29,9 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +#include "build/build_config.h"
 +#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_switches.h"
++#include "chrome/browser/browseros/metrics/browseros_metrics.h"
 +#include "chrome/browser/browseros/server/browseros_server_config.h"
++#include "chrome/browser/browseros/server/browseros_server_constants.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
 +#include "chrome/browser/browseros/server/browseros_server_proxy.h"
 +#include "chrome/browser/browseros/server/browseros_server_updater.h"
@@ -39,6 +43,7 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +#include "chrome/browser/browseros/server/server_state_store.h"
 +#include "chrome/browser/browseros/server/server_state_store_impl.h"
 +#include "chrome/browser/browseros/server/server_updater.h"
++#include "chrome/browser/net/system_network_context_manager.h"
 +#include "chrome/common/chrome_paths.h"
 +#include "components/prefs/pref_change_registrar.h"
 +#include "components/prefs/pref_service.h"
@@ -55,13 +60,63 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +#include "net/log/net_log_source.h"
 +#include "net/socket/tcp_server_socket.h"
 +#include "net/socket/tcp_socket.h"
++#include "net/traffic_annotation/network_traffic_annotation.h"
++#include "services/network/public/cpp/resource_request.h"
++#include "services/network/public/cpp/simple_url_loader.h"
++
++#if BUILDFLAG(IS_POSIX)
++#include <errno.h>
++#include <signal.h>
++#endif
 +
 +namespace {
++
++// A launch reply may be discarded after the browser's UI loop has stopped.
++// Keep child ownership in the reply itself until the manager adopts it, rather
++// than relying on a callback (or another UI task) to clean up a cancelled
++// launch.
++struct PendingServerLaunch {
++  browseros::LaunchResult result;
++
++  ~PendingServerLaunch() {
++    if (!result.process.IsValid()) {
++      return;
++    }
++#if BUILDFLAG(IS_POSIX)
++    kill(result.process.Pid(), SIGKILL);
++#else
++    result.process.Terminate(-1, false);
++#endif
++    int exit_code = 0;
++    result.process.WaitForExitWithTimeout(base::TimeDelta(), &exit_code);
++  }
++};
 +
 +constexpr int kBackLog = 10;
 +
 +constexpr base::TimeDelta kHealthCheckInterval = base::Seconds(30);
 +constexpr base::TimeDelta kProcessCheckInterval = base::Seconds(5);
++constexpr base::TimeDelta kActivationRetryInterval = base::Seconds(30);
++constexpr base::TimeDelta kStartupHealthRetryInterval = base::Seconds(1);
++
++net::NetworkTrafficAnnotationTag GetStatusTrafficAnnotation() {
++  return net::DefineNetworkTrafficAnnotation("browseros_server_status", R"(
++    semantics {
++      sender: "BrowserOS Server Manager"
++      description:
++        "Checks whether the local server is idle before activating a prepared "
++        "update. Deferred updates are retried without another download."
++      trigger: "When a prepared update exists, then every 30 seconds until idle."
++      data: "No user data sent, just an HTTP GET to localhost."
++      destination: LOCAL
++    }
++    policy {
++      cookies_allowed: NO
++      setting: "Disabled when the managed server is disabled."
++      policy_exception_justification:
++        "Internal coordination to avoid interrupting active server requests."
++    })");
++}
 +
 +constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
 +constexpr int kMaxStartupFailures = 3;
@@ -417,7 +472,7 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +}
 +
 +void BrowserOSServerManager::Start() {
-+  if (is_running_) {
++  if (started_ || stopping_ || is_running_) {
 +    LOG(INFO) << "browseros: " << GetManagedServerDescriptor().log_name
 +              << " already running";
 +    return;
@@ -459,39 +514,100 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +
 +  LOG(INFO) << "browseros: Starting " << GetManagedServerDescriptor().log_name;
 +
++  started_ = true;
 +  StartProxy();
++  ServerInstallation bundled;
++  bundled.executable = GetBrowserOSServerExecutablePath();
++  bundled.resources = GetBrowserOSServerResourcesPath();
++  version_store_ = std::make_unique<ServerVersionStore>(
++      GetBrowserOSExecutionDir(), std::move(bundled),
++      GetManagedServerDescriptor());
++  // The browser UI and proxy can start immediately. Only the sidecar launch
++  // waits for local discovery; network polling is not involved in this choice.
++  version_store_->Initialize(
++      base::BindOnce(&BrowserOSServerManager::OnVersionsInitialized,
++                     weak_factory_.GetWeakPtr()));
++}
++
++void BrowserOSServerManager::OnVersionsInitialized() {
++  if (!started_) {
++    return;
++  }
++  activation_retry_timer_.Start(
++      FROM_HERE, kActivationRetryInterval, this,
++      &BrowserOSServerManager::MaybeActivateReadyVersion);
 +  LaunchBrowserOSProcess();
 +}
 +
 +void BrowserOSServerManager::Stop() {
-+  if (!is_running_) {
++  if (stopping_ || (!started_ && !is_running_ && !launch_in_progress_)) {
 +    return;
 +  }
-+
-+  is_running_ = false;
-+
-+  LOG(INFO) << "browseros: Stopping " << GetManagedServerDescriptor().log_name;
++  started_ = false;
++  stopping_ = true;
++  weak_factory_.InvalidateWeakPtrs();
 +  health_check_timer_.Stop();
 +  process_check_timer_.Stop();
++  startup_health_retry_timer_.Stop();
++  startup_health_deadline_timer_.Stop();
++  activation_retry_timer_.Stop();
++  readiness_loader_.reset();
++  ClearRunningInstallation();
 +
 +  if (updater_) {
 +    updater_->Stop();
 +    updater_.reset();
 +  }
-+
++  updater_started_ = false;
++  version_io_pending_ = version_store_ != nullptr;
++  if (version_store_) {
++    version_store_->Shutdown(
++        base::BindOnce(&BrowserOSServerManager::OnVersionStoreStopped,
++                       process_weak_factory_.GetWeakPtr()));
++  }
++  next_installation_.reset();
 +  StopProxy();
++  CompleteUpdate(false);
 +
-+  TerminateBrowserOSProcess(base::DoNothing());
++  // An in-flight launch still owns a child-creation task. Its reply will stop
++  // that child before releasing the profile lock, rather than orphaning it.
++  if (!launch_in_progress_) {
++    TerminateBrowserOSProcess(
++        base::BindOnce(&BrowserOSServerManager::FinishStop,
++                       process_weak_factory_.GetWeakPtr()));
++  }
++}
 +
++void BrowserOSServerManager::FinishStop() {
++  if (!stopping_ || launch_in_progress_ || termination_in_progress_ ||
++      version_io_pending_ || process_.IsValid()) {
++    return;
++  }
++  launched_installation_.reset();
++  is_restarting_ = false;
 +  {
 +    base::ScopedAllowBlocking allow_blocking;
 +    state_store_->Delete();
++    if (lock_file_.IsValid()) {
++      lock_file_.Unlock();
++      lock_file_.Close();
++    }
 +  }
++  stopping_ = false;
++  LOG(INFO) << "browseros: Managed server stopped; released profile lock";
++}
 +
-+  if (lock_file_.IsValid()) {
-+    lock_file_.Unlock();
-+    lock_file_.Close();
-+    LOG(INFO) << "browseros: Released lock file";
++void BrowserOSServerManager::OnVersionStoreStopped() {
++  version_store_.reset();
++  version_io_pending_ = false;
++  FinishStop();
++}
++
++void BrowserOSServerManager::ClearRunningInstallation() {
++  is_running_ = false;
++  running_installation_.reset();
++  if (local_state_) {
++    local_state_->SetString(browseros_server::kServerVersion, std::string());
 +  }
 +}
 +
@@ -573,9 +689,15 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +  config.paths.fallback_resources = GetBrowserOSServerResourcesPath();
 +  config.paths.execution = GetBrowserOSExecutionDir();
 +
-+  if (updater_) {
-+    config.paths.exe = updater_->GetBestServerBinaryPath();
-+    config.paths.resources = updater_->GetBestServerResourcesPath();
++  // Capture one installation for this process. Never resolve executable and
++  // resources independently or relabel this process when ready state changes.
++  if (version_store_ && version_store_->initialized()) {
++    launched_installation_ = next_installation_.has_value()
++                                 ? *next_installation_
++                                 : version_store_->GetBestAvailable();
++    next_installation_.reset();
++    config.paths.exe = launched_installation_->executable;
++    config.paths.resources = launched_installation_->resources;
 +  } else {
 +    config.paths.exe = config.paths.fallback_exe;
 +    config.paths.resources = config.paths.fallback_resources;
@@ -594,56 +716,79 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +}
 +
 +void BrowserOSServerManager::LaunchBrowserOSProcess() {
++  if (!started_ || launch_in_progress_ || termination_in_progress_) {
++    return;
++  }
 +  ServerLaunchConfig config = BuildLaunchConfig();
-+
 +  if (config.paths.execution.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
++    Stop();
 +    return;
 +  }
 +
 +  LOG(INFO) << "browseros: Launching " << config.log_name << " - "
 +            << config.DebugString();
-+
-+  ProcessController* pc = process_controller_.get();
-+
++  if (launched_installation_ && launched_installation_->version.IsValid()) {
++    LOG(INFO) << "browseros: Selected "
++              << (launched_installation_->downloaded ? "downloaded" : "bundled")
++              << " server " << launched_installation_->version.GetString();
++  }
++  launch_in_progress_ = true;
++  ++process_generation_;
++  health_check_in_progress_ = false;
++  ClearRunningInstallation();
++  auto controller = process_controller_;
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(&ProcessController::Launch, base::Unretained(pc), config),
-+      base::BindOnce(&BrowserOSServerManager::OnProcessLaunched,
-+                     weak_factory_.GetWeakPtr()));
++      base::BindOnce(
++          [](std::shared_ptr<ProcessController> controller,
++             ServerLaunchConfig config) {
++            auto pending = std::make_unique<PendingServerLaunch>();
++            pending->result = controller->Launch(config);
++            return pending;
++          },
++          controller, config),
++      base::BindOnce(
++          [](base::WeakPtr<BrowserOSServerManager> manager,
++             std::unique_ptr<PendingServerLaunch> pending) {
++            if (manager) {
++              manager->OnProcessLaunched(std::move(pending->result));
++            }
++          },
++          process_weak_factory_.GetWeakPtr()));
 +}
 +
 +void BrowserOSServerManager::OnProcessLaunched(LaunchResult result) {
-+  bool was_updating = is_updating_;
-+
-+  if (result.used_fallback && updater_) {
-+    updater_->InvalidateDownloadedVersion();
-+  }
-+
-+  if (!result.process.IsValid()) {
-+    LOG(ERROR) << "browseros: Failed to launch "
-+               << GetManagedServerDescriptor().log_name;
-+    is_restarting_ = false;
-+
-+    if (was_updating) {
-+      is_updating_ = false;
-+      if (update_complete_callback_) {
-+        std::move(update_complete_callback_).Run(false);
-+      }
-+    }
++  launch_in_progress_ = false;
++  process_ = std::move(result.process);
++  if (!started_) {
++    TerminateBrowserOSProcess(
++        base::BindOnce(&BrowserOSServerManager::FinishStop,
++                       process_weak_factory_.GetWeakPtr()));
 +    return;
 +  }
 +
-+  process_ = std::move(result.process);
++  if (result.used_fallback && version_store_ && launched_installation_) {
++    if (launched_installation_->downloaded) {
++      version_store_->RejectVersion(launched_installation_->version);
++    }
++    launched_installation_ = version_store_->GetBundled();
++    CompleteUpdate(false);
++  }
++
++  if (!process_.IsValid()) {
++    LOG(ERROR) << "browseros: Failed to launch "
++               << GetManagedServerDescriptor().log_name;
++    InvalidateDownloadedServer();
++    return;
++  }
++
 +  is_running_ = true;
 +  consecutive_health_failures_ = 0;
 +  last_launch_time_ = base::TimeTicks::Now();
-+
 +  LOG(INFO) << "browseros: " << GetManagedServerDescriptor().log_name
 +            << " started with PID: " << process_.Pid();
-+  LOG(INFO) << "browseros: " << ports_.DebugString();
 +
-+  // Point proxy at the new backend port (proxy lives on IO thread)
 +  if (server_proxy_) {
 +    content::GetIOThreadTaskRunner({})->PostTask(
 +        FROM_HERE,
@@ -662,9 +807,6 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +      if (!state_store_->Write(state)) {
 +        LOG(WARNING) << "browseros: Failed to write server state file";
 +      }
-+    } else {
-+      LOG(WARNING)
-+          << "browseros: Could not get process creation time for state file";
 +    }
 +  }
 +
@@ -672,137 +814,172 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +                            &BrowserOSServerManager::CheckServerHealth);
 +  process_check_timer_.Start(FROM_HERE, kProcessCheckInterval, this,
 +                             &BrowserOSServerManager::CheckProcessStatus);
++  // A launched PID is not yet an activated server. Bound startup separately
++  // from normal health monitoring, and only complete an OTA after HTTP health.
++  startup_health_deadline_timer_.Start(
++      FROM_HERE, kStartupGracePeriod,
++      base::BindOnce(&BrowserOSServerManager::OnStartupHealthTimeout,
++                     weak_factory_.GetWeakPtr(), process_generation_));
++  CheckServerHealth();
++}
 +
-+  if (is_restarting_) {
-+    is_restarting_ = false;
-+    if (local_state_ &&
-+        local_state_->GetBoolean(browseros_server::kRestartServerRequested)) {
-+      local_state_->SetBoolean(browseros_server::kRestartServerRequested,
-+                               false);
-+      LOG(INFO) << "browseros: Restart completed, reset restart_requested pref";
-+    }
++void BrowserOSServerManager::StartUpdater() {
++  if (updater_started_ || !started_) {
++    return;
 +  }
-+
-+  if (was_updating) {
-+    is_updating_ = false;
-+    if (update_complete_callback_) {
-+      std::move(update_complete_callback_).Run(true);
-+    }
-+  }
-+
 +  const ManagedServerDescriptor& descriptor = GetManagedServerDescriptor();
 +  if (!updater_) {
 +    if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-+            browseros::kDisableServerUpdater)) {
-+      LOG(INFO) << "browseros: Server updater disabled via command line";
-+    } else if (!descriptor.enable_updater) {
-+      LOG(INFO) << "browseros: Server updater disabled for "
-+                << descriptor.log_name;
-+    } else {
-+      updater_ =
-+          std::make_unique<browseros_server::BrowserOSServerUpdater>(this);
-+      updater_->Start();
++            browseros::kDisableServerUpdater) ||
++        !descriptor.enable_updater) {
++      return;
 +    }
++    updater_ = std::make_unique<browseros_server::BrowserOSServerUpdater>(this);
++  }
++  updater_started_ = true;
++  updater_->Start();
++}
++
++void BrowserOSServerManager::CompleteUpdate(bool success) {
++  is_updating_ = false;
++  if (update_complete_callback_) {
++    std::move(update_complete_callback_).Run(success);
 +  }
 +}
 +
 +void BrowserOSServerManager::TerminateBrowserOSProcess(
 +    base::OnceCallback<void()> callback) {
++  // Stop supersedes a queued restart but shares the same termination. Never
++  // launch a replacement or release the profile lock while that kill is
++  // pending.
++  termination_callback_ = std::move(callback);
++  if (termination_in_progress_) {
++    return;
++  }
++  readiness_loader_.reset();
++  health_check_timer_.Stop();
++  process_check_timer_.Stop();
++  startup_health_retry_timer_.Stop();
++  startup_health_deadline_timer_.Stop();
++  health_check_in_progress_ = false;
++  ++process_generation_;
++  ClearRunningInstallation();
 +  if (!process_.IsValid()) {
-+    std::move(callback).Run();
++    std::move(termination_callback_).Run();
 +    return;
 +  }
 +
-+  constexpr base::TimeDelta kGracefulTimeout = base::Seconds(5);
-+  base::ProcessId pid = process_.Pid();
-+  LOG(INFO) << "browseros: Gracefully terminating "
-+            << GetManagedServerDescriptor().log_name << " (PID: " << pid << ")";
-+
++  termination_in_progress_ = true;
 +  base::ThreadPool::PostTaskAndReplyWithResult(
 +      FROM_HERE,
 +      {base::MayBlock(), base::WithBaseSyncPrimitives(),
-+       base::TaskPriority::USER_BLOCKING},
-+      base::BindOnce(&server_utils::KillProcess, pid, kGracefulTimeout),
++       base::TaskPriority::USER_BLOCKING,
++       base::TaskShutdownBehavior::BLOCK_SHUTDOWN},
++      base::BindOnce(
++          [](std::shared_ptr<ProcessController> controller,
++             base::Process process) {
++            int exit_code = 0;
++#if BUILDFLAG(IS_POSIX)
++            if (kill(process.Pid(), SIGTERM) != 0) {
++              return errno == ESRCH;
++            }
++            // Unlike orphan recovery, this is our child. waitpid must reap it:
++            // kill(pid, 0) alone treats an exited zombie as a live server.
++            if (controller->WaitForExitWithTimeout(&process, base::Seconds(5),
++                                                   &exit_code)) {
++              return true;
++            }
++#endif
++            controller->Terminate(&process, false);
++            return controller->WaitForExitWithTimeout(
++                &process, base::Seconds(5), &exit_code);
++          },
++          process_controller_, process_.Duplicate()),
 +      base::BindOnce(&BrowserOSServerManager::OnTerminateProcessComplete,
-+                     weak_factory_.GetWeakPtr(), std::move(callback)));
++                     process_weak_factory_.GetWeakPtr()));
 +}
 +
-+void BrowserOSServerManager::OnTerminateProcessComplete(
-+    base::OnceCallback<void()> callback,
-+    bool killed) {
-+  if (killed) {
-+    LOG(INFO) << "browseros: Managed server terminated";
-+  } else {
-+    LOG(WARNING) << "browseros: Managed server termination failed";
++void BrowserOSServerManager::OnTerminateProcessComplete(bool killed) {
++  termination_in_progress_ = false;
++  if (!killed) {
++    LOG(ERROR) << "browseros: Managed server termination failed; "
++                  "refusing to launch a second server";
++    termination_callback_.Reset();
++    is_restarting_ = false;
++    CompleteUpdate(false);
++    return;
 +  }
 +  process_.Close();
-+  std::move(callback).Run();
++  if (termination_callback_) {
++    std::move(termination_callback_).Run();
++  }
 +}
 +
 +void BrowserOSServerManager::OnProcessExited(int exit_code) {
-+  LOG(INFO) << "browseros: " << GetManagedServerDescriptor().log_name
-+            << " exited with code: " << exit_code;
-+  is_running_ = false;
-+
-+  health_check_timer_.Stop();
-+  process_check_timer_.Stop();
-+
-+  if (exit_code == kExitCodeSuccess) {
-+    LOG(INFO) << "browseros: Server exited cleanly (code 0), not restarting";
++  if (!started_ || termination_in_progress_) {
 +    return;
 +  }
++  LOG(INFO) << "browseros: Managed server exited with code " << exit_code;
++  const bool was_starting = !running_installation_.has_value();
++  const base::TimeDelta uptime = base::TimeTicks::Now() - last_launch_time_;
++  health_check_timer_.Stop();
++  process_check_timer_.Stop();
++  startup_health_retry_timer_.Stop();
++  startup_health_deadline_timer_.Stop();
++  readiness_loader_.reset();
++  health_check_in_progress_ = false;
++  ++process_generation_;
++  process_.Close();
++  ClearRunningInstallation();
 +
++  if (exit_code == kExitCodeSuccess && !was_starting) {
++    is_restarting_ = false;
++    return;
++  }
 +  if (exit_code == kExitCodePortConflict) {
 +    advance_port_on_restart_ = true;
-+    LOG(WARNING) << "browseros: Server reported port conflict (code "
-+                 << kExitCodePortConflict
-+                 << "), next restart will advance server port";
 +  }
-+
-+  base::TimeDelta uptime = base::TimeTicks::Now() - last_launch_time_;
 +  if (uptime < kStartupGracePeriod) {
-+    consecutive_startup_failures_++;
-+    LOG(WARNING) << "browseros: Startup failure detected (uptime: "
-+                 << uptime.InSeconds()
-+                 << "s, consecutive failures: " << consecutive_startup_failures_
-+                 << ")";
-+
-+    if (consecutive_startup_failures_ >= kMaxStartupFailures) {
-+      LOG(ERROR) << "browseros: Too many startup failures ("
-+                 << consecutive_startup_failures_
-+                 << "), invalidating downloaded version";
-+      if (updater_) {
-+        updater_->InvalidateDownloadedVersion();
-+      }
-+      consecutive_startup_failures_ = 0;
-+    }
++    ++consecutive_startup_failures_;
 +  } else {
 +    consecutive_startup_failures_ = 0;
 +  }
 +
-+  if (is_restarting_) {
-+    LOG(INFO) << "browseros: Restart already in progress, skipping";
++  // A binary can pass --version yet fail during real initialization. Reject a
++  // failed first launch immediately, but retry port conflicts on another port.
++  if ((was_starting && exit_code != kExitCodePortConflict) ||
++      consecutive_startup_failures_ >= kMaxStartupFailures) {
++    InvalidateDownloadedServer();
 +    return;
 +  }
 +
-+  LOG(WARNING) << "browseros: Server exited (code " << exit_code
-+               << "), restarting managed server";
++  is_restarting_ = false;
 +  RestartBrowserOSProcess();
 +}
 +
 +void BrowserOSServerManager::CheckServerHealth() {
-+  if (!is_running_) {
++  if (!is_running_ || health_check_in_progress_ || termination_in_progress_) {
 +    return;
 +  }
-+
++  health_check_in_progress_ = true;
++  const uint64_t generation = process_generation_;
 +  health_checker_->CheckHealth(
 +      ports_.server, std::string(GetManagedServerDescriptor().health_path),
-+      base::BindOnce(&BrowserOSServerManager::OnHealthCheckComplete,
-+                     weak_factory_.GetWeakPtr()));
++      base::BindOnce(
++          [](base::WeakPtr<BrowserOSServerManager> manager, uint64_t generation,
++             bool success) {
++            // A late response from the old port/process must not mark its
++            // replacement healthy or complete the replacement's activation.
++            if (manager && generation == manager->process_generation_) {
++              manager->health_check_in_progress_ = false;
++              manager->OnHealthCheckComplete(success);
++            }
++          },
++          weak_factory_.GetWeakPtr(), generation));
 +}
 +
 +void BrowserOSServerManager::CheckProcessStatus() {
-+  if (!is_running_ || !process_.IsValid() || is_restarting_) {
++  if (!is_running_ || !process_.IsValid() || termination_in_progress_) {
 +    return;
 +  }
 +
@@ -818,35 +995,107 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +}
 +
 +void BrowserOSServerManager::OnHealthCheckComplete(bool success) {
-+  if (!is_running_) {
++  if (!is_running_ || termination_in_progress_) {
 +    return;
 +  }
-+
 +  if (success) {
 +    consecutive_health_failures_ = 0;
-+    LOG(INFO) << "browseros: Health check passed";
++    if (!running_installation_ && launched_installation_) {
++      running_installation_ = launched_installation_;
++      startup_health_retry_timer_.Stop();
++      startup_health_deadline_timer_.Stop();
++      is_restarting_ = false;
++      if (local_state_) {
++        const base::Version version = GetRunningVersion();
++        local_state_->SetString(browseros_server::kServerVersion,
++                                version.IsValid() ? version.GetString() : "");
++        local_state_->SetBoolean(browseros_server::kRestartServerRequested,
++                                 false);
++      }
++      LOG(INFO) << "browseros: Confirmed healthy server "
++                << (GetRunningVersion().IsValid()
++                        ? GetRunningVersion().GetString()
++                        : "(unknown version)");
++      CompleteUpdate(true);
++      StartUpdater();
++      if (updater_) {
++        updater_->OnServerActivated();
++      }
++      MaybeActivateReadyVersion();
++    }
 +    return;
 +  }
 +
-+  consecutive_health_failures_++;
-+  LOG(WARNING) << "browseros: Health check failed (strike "
-+               << consecutive_health_failures_ << "/"
-+               << kMaxConsecutiveHealthCheckFailures << ")";
-+  if (consecutive_health_failures_ < kMaxConsecutiveHealthCheckFailures) {
++  if (!running_installation_ && launched_installation_) {
++    // An independent deadline also covers hung HTTP requests; this short retry
++    // allows normal server startup latency without publishing an active
++    // version.
++    startup_health_retry_timer_.Start(
++        FROM_HERE, kStartupHealthRetryInterval, this,
++        &BrowserOSServerManager::CheckServerHealth);
 +    return;
 +  }
 +
-+  LOG(WARNING) << "browseros: Health check failed twice, restarting";
-+  consecutive_health_failures_ = 0;
-+  RestartBrowserOSProcess();
++  if (++consecutive_health_failures_ >= kMaxConsecutiveHealthCheckFailures) {
++    consecutive_health_failures_ = 0;
++    if (launched_installation_ && launched_installation_->downloaded) {
++      InvalidateDownloadedServer();
++    } else {
++      RestartBrowserOSProcess();
++    }
++  }
++}
++
++void BrowserOSServerManager::OnStartupHealthTimeout(uint64_t generation) {
++  if (!started_ || generation != process_generation_ || running_installation_) {
++    return;
++  }
++  LOG(ERROR)
++      << "browseros: Server did not become healthy before startup deadline";
++  InvalidateDownloadedServer();
++}
++
++void BrowserOSServerManager::InvalidateDownloadedServer() {
++  if (!started_) {
++    return;
++  }
++  if (!launched_installation_ || !launched_installation_->downloaded ||
++      !version_store_) {
++    LOG(ERROR) << "browseros: Bundled server unavailable; stopping sidecar";
++    CompleteUpdate(false);
++    Stop();
++    return;
++  }
++
++  const base::Version rejected = launched_installation_->version;
++  LOG(WARNING) << "browseros: Rejecting failed server " << rejected.GetString();
++  is_restarting_ = true;
++  TerminateBrowserOSProcess(
++      base::BindOnce(&BrowserOSServerManager::OnRejectedProcessStopped,
++                     weak_factory_.GetWeakPtr(), rejected));
++}
++
++void BrowserOSServerManager::OnRejectedProcessStopped(
++    const base::Version& version) {
++  if (!started_ || !version_store_) {
++    return;
++  }
++  version_store_->RejectVersion(version);
++  next_installation_.reset();
++  CompleteUpdate(false);
++  consecutive_startup_failures_ = 0;
++  // Usually this selects the bundle; a newer ready download that arrived while
++  // the old process failed is preserved and remains eligible for this launch.
++  ContinueRestartAfterTerminate();
 +}
 +
 +void BrowserOSServerManager::RestartBrowserOSProcess() {
 +  LOG(INFO) << "browseros: Restarting "
 +            << GetManagedServerDescriptor().log_name;
 +
-+  if (is_restarting_) {
-+    LOG(INFO) << "browseros: Restart already in progress, ignoring";
++  if (!started_ || !version_store_ || !version_store_->initialized() ||
++      launch_in_progress_ || is_restarting_ || is_updating_) {
++    LOG(INFO) << "browseros: Restart already in progress or not initialized";
 +    return;
 +  }
 +  is_restarting_ = true;
@@ -894,8 +1143,9 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +    UpdateCompleteCallback callback) {
 +  LOG(INFO) << "browseros: Restarting server for OTA update";
 +
-+  if (is_restarting_ || is_updating_) {
-+    LOG(WARNING) << "browseros: Restart already in progress, failing update";
++  if (!started_ || launch_in_progress_ || termination_in_progress_ ||
++      is_restarting_ || is_updating_) {
++    LOG(WARNING) << "browseros: Restart already in progress, deferring update";
 +    std::move(callback).Run(false);
 +    return;
 +  }
@@ -913,34 +1163,110 @@ index 0000000000000000000000000000000000000000..894c35e6e16e3b78bfb828d9ec527760
 +}
 +
 +void BrowserOSServerManager::ContinueUpdateAfterTerminate() {
-+  base::CommandLine* cl = base::CommandLine::ForCurrentProcess();
-+  std::set<int> assigned;
-+  assigned.insert(ports_.cdp);
-+  assigned.insert(ports_.proxy);
-+  assigned.insert(proxy_https_port_);
++  ContinueRestartAfterTerminate();
++}
 +
-+  const int previous_server_port = ports_.server;
-+  if (!cl->HasSwitch(browseros::kServerPort)) {
-+    const bool advance_port = advance_port_on_restart_;
-+    const int starting_port =
-+        advance_port ? previous_server_port + 1 : previous_server_port;
-+    ports_.server = FindAvailableServerPort(starting_port, assigned,
-+                                            /*allow_reuse=*/!advance_port);
++ServerVersionStore& BrowserOSServerManager::GetVersionStore() {
++  CHECK(version_store_);
++  return *version_store_;
++}
++
++base::Version BrowserOSServerManager::GetRunningVersion() const {
++  return running_installation_ ? running_installation_->version
++                               : base::Version();
++}
++
++void BrowserOSServerManager::MaybeActivateReadyVersion() {
++  if (!started_ || !running_installation_ || !is_running_ || is_restarting_ ||
++      is_updating_ || launch_in_progress_ || termination_in_progress_ ||
++      readiness_loader_ || !version_store_ || !version_store_->initialized()) {
++    return;
 +  }
-+  advance_port_on_restart_ = false;
-+  assigned.insert(ports_.server);
-+
-+  if (ports_.server == previous_server_port) {
-+    LOG(INFO) << "browseros: Update restart keeping server port - "
-+              << ports_.DebugString();
-+  } else {
-+    LOG(INFO) << "browseros: Update restart moved server port from "
-+              << previous_server_port << " to " << ports_.server << " - "
-+              << ports_.DebugString();
++  const ServerInstallation target = version_store_->GetBestAvailable();
++  const base::Version running = GetRunningVersion();
++  if (!target.downloaded || (running.IsValid() && target.version <= running)) {
++    return;
 +  }
 +
-+  SavePortsToPrefs();
-+  LaunchBrowserOSProcess();
++  const std::string readiness_path(
++      GetManagedServerDescriptor().updater.readiness_path);
++  if (readiness_path.empty()) {
++    ActivateInstallation(target);
++    return;
++  }
++
++  auto request = std::make_unique<network::ResourceRequest>();
++  request->url =
++      GURL("http://127.0.0.1:" + base::NumberToString(ports_.server) +
++           readiness_path);
++  request->credentials_mode = network::mojom::CredentialsMode::kOmit;
++  readiness_loader_ = network::SimpleURLLoader::Create(
++      std::move(request), GetStatusTrafficAnnotation());
++  readiness_loader_->SetTimeoutDuration(browseros_server::kStatusCheckTimeout);
++  readiness_loader_->DownloadToString(
++      g_browser_process->system_network_context_manager()
++          ->GetURLLoaderFactory(),
++      base::BindOnce(&BrowserOSServerManager::OnReadinessChecked,
++                     weak_factory_.GetWeakPtr(), target, process_generation_),
++      4096);
++}
++
++void BrowserOSServerManager::OnReadinessChecked(
++    ServerInstallation installation,
++    uint64_t generation,
++    std::optional<std::string> response) {
++  readiness_loader_.reset();
++  if (!started_ || generation != process_generation_ || !version_store_ ||
++      !running_installation_) {
++    return;
++  }
++  // Unavailable/malformed readiness is not consent to interrupt work. Keep the
++  // ready installation and let the independent activation timer try again.
++  const std::optional<base::Value> status =
++      response ? base::JSONReader::Read(*response, base::JSON_PARSE_RFC)
++               : std::nullopt;
++  if (!status || !status->is_dict() ||
++      !status->GetDict().FindBool("can_update").value_or(false)) {
++    LOG(INFO) << "browseros: Server busy or readiness unknown; keeping version "
++              << installation.version.GetString() << " ready for retry";
++    return;
++  }
++  const base::Version best = version_store_->GetBestAvailable().version;
++  if (!best.IsValid() || best != installation.version) {
++    MaybeActivateReadyVersion();
++    return;
++  }
++  ActivateInstallation(installation);
++}
++
++void BrowserOSServerManager::ActivateInstallation(
++    const ServerInstallation& installation) {
++  if (!started_ || is_restarting_ || is_updating_ || launch_in_progress_ ||
++      termination_in_progress_) {
++    return;
++  }
++  next_installation_ = installation;
++  const base::Version old_version = GetRunningVersion();
++  RestartServerForUpdate(base::BindOnce(
++      &BrowserOSServerManager::OnReadyVersionActivated,
++      weak_factory_.GetWeakPtr(), old_version, installation.version));
++}
++
++void BrowserOSServerManager::OnReadyVersionActivated(
++    const base::Version& old_version,
++    const base::Version& new_version,
++    bool success) {
++  base::DictValue properties;
++  properties.Set("old_version",
++                 old_version.IsValid() ? old_version.GetString() : "unknown");
++  properties.Set("new_version", new_version.GetString());
++  if (!success) {
++    properties.Set("stage", "activation");
++    properties.Set("error", "Prepared server failed to become healthy");
++  }
++  browseros_metrics::BrowserOSMetrics::Log(
++      success ? "server.ota.success" : "server.ota.error",
++      std::move(properties));
 +}
 +
 +void BrowserOSServerManager::OnAllowRemoteInMCPChanged() {
