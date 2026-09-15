@@ -692,10 +692,14 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           conversationIdParam as ReturnType<typeof crypto.randomUUID>,
         )
         setMessages(restoredMessages)
+        setRestoredConversationId(conversationIdParam)
+        setSearchParams({}, { replace: true })
+        return
       }
-      setRestoredConversationId(conversationIdParam)
-      setSearchParams({}, { replace: true })
-      return
+      // Not in the cloud. Since #2542 the local server owns a signed-in user's
+      // history too, so a conversation opened from the local history list has
+      // no cloud record: read it from the server instead of giving up, which
+      // left the side panel snapping back to its previous view (#2665).
     }
 
     if (isLoadingProviders || isLoadingAgentUrl) return
