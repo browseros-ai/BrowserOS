@@ -7,17 +7,17 @@
     <language>en</language>
 
     <item>
-      <title>BrowserOS - 0.50.3</title>
+      <title>BrowserOS - 0.50.5</title>
       <description sparkle:format="plain-text">
       </description>
-      <sparkle:version>10000.0.50.3.0</sparkle:version>
-      <sparkle:shortVersionString>0.50.3</sparkle:shortVersionString>
-      <pubDate>Sun, 06 Sep 2026 07:57:16 +0000</pubDate>
+      <sparkle:version>10000.0.50.5.0</sparkle:version>
+      <sparkle:shortVersionString>0.50.5</sparkle:shortVersionString>
+      <pubDate>Tue, 15 Sep 2026 19:20:24 +0000</pubDate>
       <link>https://www.browseros.com/</link>
       <enclosure
-        url="http://cdn.browseros.com/releases/browseros/0.50.3/macos/BrowserOS_v0.50.3_universal.dmg"
-        sparkle:edSignature="jWLTjNX6BO5uV55iLi9ju5DBzKX5TG9vtqXRS65qAy3CMgWmUYJbpZoNggWad+I4M7JBrvCrzblrv9Hjx9mtBg=="
-        length="354342256"
+        url="http://cdn.browseros.com/releases/browseros/0.50.5/macos/BrowserOS_v0.50.5_universal.dmg"
+        sparkle:edSignature="pbPJPtz1R8RVPDOE9xxctBKADvegfqiD5qZ4pGfKV6mA8U1q2Qt/B3aHdB2gg3JcjoCsQEWdY8ltQmrxzbyYCw=="
+        length="371583771"
         type="application/octet-stream" />
       <sparkle:minimumSystemVersion>10.15</sparkle:minimumSystemVersion>
     </item>
