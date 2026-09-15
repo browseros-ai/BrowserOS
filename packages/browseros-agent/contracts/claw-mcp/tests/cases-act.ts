@@ -368,11 +368,11 @@ export const actCases: ContractCase[] = [
     },
   },
   {
-    name: 'act: focus by ref reports the current DOM-domain limitation',
+    name: 'act: focus by ref focuses the referenced element',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      expectError(
+      expectOk(
         await ctx.mcp.callTool('act', {
           page,
           kind: 'focus',
@@ -385,8 +385,10 @@ export const actCases: ContractCase[] = [
         page,
         'return document.activeElement && document.activeElement.id',
       )
-      if (active.includes('bio')) {
-        throw new Error('failed focus action unexpectedly moved focus')
+      if (!active.includes('bio')) {
+        throw new Error(
+          `focus by ref did not move focus to the bio field (active: ${active})`,
+        )
       }
     },
   },
