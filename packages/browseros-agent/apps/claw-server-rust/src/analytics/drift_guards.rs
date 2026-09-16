@@ -9,7 +9,7 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::telemetry::{
+    use crate::analytics::{
         error_allowlist::{ErrorClass, classify},
         script_fingerprint::fingerprint,
     };

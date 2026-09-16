@@ -4,8 +4,8 @@
 //! sent costs nothing to refuse and no payload is built for it.
 
 use crate::{
+    analytics::{error_allowlist::classify, script_fingerprint::fingerprint},
     db::run_error_budget::{BudgetDecision, DAILY_RUN_ERROR_CAP, RunErrorBudgetRepository},
-    telemetry::{error_allowlist::classify, script_fingerprint::fingerprint},
 };
 use std::sync::Arc;
 

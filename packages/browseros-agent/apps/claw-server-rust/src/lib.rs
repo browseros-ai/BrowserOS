@@ -10,7 +10,6 @@ pub mod ids;
 pub mod runtime;
 pub mod services;
 pub mod storage;
-pub mod telemetry;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
