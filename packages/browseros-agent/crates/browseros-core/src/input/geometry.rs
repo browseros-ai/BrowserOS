@@ -220,6 +220,13 @@ pub async fn focus_element(
 // fresh MCP sessions have not done, so it fails with "Document needs to be
 // requested first" (#2640). `HTMLElement.focus()` over `Runtime.callFunctionOn`
 // has no such dependency, the same runtime path `js_click` already uses.
+//
+// Success is confirmed against the resulting active element, not merely that a
+// `focus` method exists: every HTMLElement exposes `focus()`, but disabled or
+// otherwise unfocusable targets stay unfocused, and reporting those as success
+// would let `act focus` claim it moved focus when it did not. `getRootNode()`
+// resolves the active element inside the element's own root so shadow-DOM
+// targets are not mistaken for failures.
 pub async fn focus_element_js(
     session: &ProtocolSession,
     backend_node_id: i64,
@@ -227,7 +234,7 @@ pub async fn focus_element_js(
     let focused = call_on_element(
         session,
         backend_node_id,
-        "function(){if(typeof this.focus==='function'){this.focus();return true}return false}",
+        "function(){if(typeof this.focus!=='function'){return false}this.focus();return this.getRootNode().activeElement===this}",
         None,
     )
     .await?;
@@ -504,7 +511,9 @@ mod tests {
             Err(_err) => Vec::new(),
         };
         // Focus must go through Runtime.callFunctionOn (this.focus()), never the
-        // DOM domain that needs a prior DOM.getDocument (#2640).
+        // DOM domain that needs a prior DOM.getDocument (#2640), and it must
+        // confirm the element actually became active rather than trusting that a
+        // focus method exists.
         assert_eq!(calls.len(), 1);
         let function = calls
             .first()
@@ -512,6 +521,7 @@ mod tests {
             .and_then(Value::as_str)
             .unwrap_or_default();
         assert!(function.contains("this.focus()"));
+        assert!(function.contains("activeElement===this"));
         Ok(())
     }
 

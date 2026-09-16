@@ -393,6 +393,23 @@ export const actCases: ContractCase[] = [
     },
   },
   {
+    name: 'act: focus by ref rejects an element that cannot receive focus',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/form.html'))
+      const snap = await snapshot(ctx, page)
+      // A disabled control still exposes HTMLElement.focus(); focus must report
+      // an error rather than a false success when focus does not actually move.
+      expectError(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'focus',
+          ref: refFor(snap, 'Disabled action'),
+        }),
+        'act focus by ref on a disabled control',
+      )
+    },
+  },
+  {
     name: 'act: click toggles a checkbox and is repeatable',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
