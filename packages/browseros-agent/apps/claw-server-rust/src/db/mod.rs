@@ -2,6 +2,7 @@ pub mod audit_log;
 pub mod entities;
 mod migration;
 pub mod recording_index;
+pub mod run_error_budget;
 pub mod session_efficiency_stats;
 pub mod session_tabs;
 pub mod skills;
