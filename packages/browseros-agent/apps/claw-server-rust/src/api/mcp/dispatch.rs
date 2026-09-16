@@ -210,10 +210,16 @@ const EFFECTS: &[NamedToolEffect] = &[
 // intentionally not wired. Self-healing keeps its agent-driven surface
 // (saveHelper/listHelpers/readHelper, discovery, hot-load) but does not
 // auto-distill. Re-add a NamedToolObserver for `distill::distill` to re-enable.
-const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
-    name: "audit",
-    run: observers::audit::apply,
-}];
+const OBSERVERS: &[NamedToolObserver] = &[
+    NamedToolObserver {
+        name: "audit",
+        run: observers::audit::apply,
+    },
+    NamedToolObserver {
+        name: "run_failure",
+        run: observers::run_failure::apply,
+    },
+];
 
 struct ExecutionOutcome {
     result: ToolResult,
@@ -530,7 +536,7 @@ pub fn page_id(call: &ToolCall, result: &ToolResult) -> Option<PageId> {
         .map(PageId)
 }
 
-fn dispatch_error_text(result: &ToolResult) -> Option<String> {
+pub(crate) fn dispatch_error_text(result: &ToolResult) -> Option<String> {
     result.content.iter().find_map(|block| match block {
         ContentBlock::Text(text) => Some(text.text.chars().take(DISPATCH_ERROR_TEXT_MAX).collect()),
         _ => None,
@@ -1124,7 +1130,7 @@ mod tests {
                 .iter()
                 .map(|observer| observer.name)
                 .collect::<Vec<_>>(),
-            ["audit"]
+            ["audit", "run_failure"]
         );
     }
 
