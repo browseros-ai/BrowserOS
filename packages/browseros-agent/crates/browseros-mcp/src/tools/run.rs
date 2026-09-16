@@ -57,7 +57,7 @@ Read / wait / capture:
   browser.read(pageId)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
   browser.grep(pageId, { pattern })  -> matching lines as a STRING
   browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready. For content that loads in, wait on the thing itself with { for: "selector" } (or { for: "text" }); it resolves the moment it appears - e.g. await browser.wait(3, { for: "selector", value: 'div[data-component-type="s-search-result"]' }). Use { value: ms } only for a plain fixed pause. setTimeout(fn, ms) and `await sleep(ms)` also work for a fixed pause. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
-  browser.evaluate(pageId, { code: "..." } | { func: () => ... }) - the second argument is an OBJECT. Passing a bare function, browser.evaluate(id, () => ...), does not work.
+  browser.evaluate(pageId, { code: "..." } | { func: "() => ..." }) - the second argument is an OBJECT and both forms take a STRING. Args are JSON-serialized on the way out, so a real function value is dropped: neither browser.evaluate(id, () => ...) nor { func: () => ... } works.
   browser.screenshot(pageId) / pdf(pageId)
   browser.download(pageId, opts) / upload(pageId, opts)
   browser.tabGroups(opts) / windows(opts)
