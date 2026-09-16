@@ -19,18 +19,15 @@ mod tests {
 
     /// Pulls the top-level members out of the shim's `const browser = { ... }` literal.
     fn live_sdk_members() -> Vec<String> {
-        let bootstrap = RUN_TOOL_SOURCE
-            .split_once("const BOOTSTRAP_JS")
-            .expect("shim moved: BOOTSTRAP_JS not found in run.rs")
-            .1;
-        let block = bootstrap
-            .split_once("const browser = {")
-            .expect("shim moved: browser object literal not found")
-            .1;
-        let block = block
-            .split_once("\n  };")
-            .expect("shim moved: browser object literal is unterminated")
-            .0;
+        let Some((_, bootstrap)) = RUN_TOOL_SOURCE.split_once("const BOOTSTRAP_JS") else {
+            panic!("shim moved: BOOTSTRAP_JS not found in run.rs")
+        };
+        let Some((_, block)) = bootstrap.split_once("const browser = {") else {
+            panic!("shim moved: browser object literal not found")
+        };
+        let Some((block, _)) = block.split_once("\n  };") else {
+            panic!("shim moved: browser object literal is unterminated")
+        };
 
         let mut members = Vec::new();
         for line in block.lines() {
