@@ -32,13 +32,21 @@ const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
-The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs. Reuse a pageId across steps.
+Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `sleep(ms)`, `setTimeout`/`clearTimeout`, and nothing else. There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through browser.evaluate, which runs inside the page.
+
+Two call shapes. Do not mix them:
+  chained, the pageId returns an object - browser.observe(id).x() / browser.input(id).x() / browser.nav(id).x()
+  flat, the pageId is the first argument - browser.read(id, opts) / grep / wait / evaluate / screenshot / download / pdf / upload
+  So browser.nav(id).goto(url) is right, and browser.wait(id).forText('x') is NOT a thing - it is browser.wait(id, { for: "text", value: "x" }).
+
+The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs.
 
 Pages (pageId is a NUMBER):
   browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object. Always opens in the background; it never switches the user's tab.
   browser.pages.close(pageId)  -> undefined. Closes a page you own.
   browser.pages.list()         -> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab in the browser, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act only on your own ("mine") tabs. Leave "user" and "other-agent" tabs alone unless the user explicitly asks you to work on one.
   browser.pages.getInfo(pageId)-> { pageId, url, title, ... } or null
+  A pageId stays valid only while that tab is open and still yours. Reuse one across steps and across calls while that holds. If a call fails instantly on an id from an earlier turn, the tab is gone or was taken over - do not retry the same id. Re-derive it from browser.pages.list() filtered to ownership === "mine", or open a fresh page. Carrying the URL between calls is safer than carrying the id.
 Observe / act (refs eN come from a snapshot's text/refs):
   browser.observe(pageId).snapshot() -> { text, refs, url }
   browser.observe(pageId).diff()     -> { text, added, removed, changed }
@@ -49,7 +57,8 @@ Read / wait / capture:
   browser.read(pageId)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
   browser.grep(pageId, { pattern })  -> matching lines as a STRING
   browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready. For content that loads in, wait on the thing itself with { for: "selector" } (or { for: "text" }); it resolves the moment it appears - e.g. await browser.wait(3, { for: "selector", value: 'div[data-component-type="s-search-result"]' }). Use { value: ms } only for a plain fixed pause. setTimeout(fn, ms) and `await sleep(ms)` also work for a fixed pause. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
-  browser.screenshot(pageId) / evaluate(pageId, { code } | { func }) / pdf(pageId)
+  browser.evaluate(pageId, { code: "..." } | { func: () => ... }) - the second argument is an OBJECT. Passing a bare function, browser.evaluate(id, () => ...), does not work.
+  browser.screenshot(pageId) / pdf(pageId)
   browser.download(pageId, opts) / upload(pageId, opts)
   browser.tabGroups(opts) / windows(opts)
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page).
@@ -57,7 +66,7 @@ Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers
   browser.listHelpers({ page } | { host }) -> { host, helpers: [{ name, ageDays, candidate }] }; browser.readHelper(name, { page } | { host }) -> source string
 Raw escape hatch: browser.cdp(method, params?, sessionId?) / browser.cdpJsonForPage(pageId, method, paramsJson).
 
-Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. Efficient pattern:
+Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const ids = await Promise.all(urls.map(u => browser.pages.newPage(u)));
   await Promise.all(ids.map(id => browser.wait(id, { value: 2500 })));
   const docs = await Promise.all(ids.map(id => browser.read(id)));
