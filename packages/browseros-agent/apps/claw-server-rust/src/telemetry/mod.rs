@@ -7,4 +7,5 @@
 
 pub mod drift_guards;
 pub mod error_allowlist;
+pub mod run_failure_reporter;
 pub mod script_fingerprint;

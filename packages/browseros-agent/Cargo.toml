@@ -33,6 +33,10 @@ http = "1"
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls-webpki-roots"] }
 posthog-rs = { version = "0.21", default-features = false, features = ["async-client"] }
+# Deliberately minimal. The default feature set installs a panic hook and a tracing
+# integration that would capture far more than the one event we build by hand, which
+# would defeat the redaction this feature exists to guarantee.
+sentry = { version = "0.46", default-features = false, features = ["reqwest", "rustls"] }
 thiserror = "2"
 anyhow = "1"
 tracing = "0.1"
