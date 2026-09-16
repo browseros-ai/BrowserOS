@@ -368,11 +368,11 @@ export const actCases: ContractCase[] = [
     },
   },
   {
-    name: 'act: focus by ref reports the current DOM-domain limitation',
+    name: 'act: focus by ref focuses the referenced element',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      expectError(
+      expectOk(
         await ctx.mcp.callTool('act', {
           page,
           kind: 'focus',
@@ -385,9 +385,28 @@ export const actCases: ContractCase[] = [
         page,
         'return document.activeElement && document.activeElement.id',
       )
-      if (active.includes('bio')) {
-        throw new Error('failed focus action unexpectedly moved focus')
+      if (!active.includes('bio')) {
+        throw new Error(
+          `focus by ref did not move focus to the bio field (active: ${active})`,
+        )
       }
+    },
+  },
+  {
+    name: 'act: focus by ref rejects an element that cannot receive focus',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/form.html'))
+      const snap = await snapshot(ctx, page)
+      // A disabled control still exposes HTMLElement.focus(); focus must report
+      // an error rather than a false success when focus does not actually move.
+      expectError(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'focus',
+          ref: refFor(snap, 'Disabled action'),
+        }),
+        'act focus by ref on a disabled control',
+      )
     },
   },
   {
