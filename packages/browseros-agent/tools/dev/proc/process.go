@@ -428,8 +428,13 @@ func isBrowserProcessForUserDataDir(command string, userDataDirs []string, inclu
 }
 
 func isBrowserAppCommand(command string) bool {
+	// macOS launches resolve through the app bundle binaries; Linux runs the
+	// bare browseros/browserclaw binaries from /usr/lib or /opt (or an
+	// extracted AppImage using the same names).
 	return strings.Contains(command, "BrowserOS.app/Contents/MacOS/BrowserOS") ||
-		strings.Contains(command, "BrowserOS neo.app/Contents/MacOS/BrowserOS neo")
+		strings.Contains(command, "BrowserOS neo.app/Contents/MacOS/BrowserOS neo") ||
+		strings.Contains(command, "/browseros/browseros") ||
+		strings.Contains(command, "/browserclaw/browserclaw")
 }
 
 func watchRunPaths(baseDir string, identity WatchRunIdentity) watchRunPathsResult {

@@ -21,7 +21,7 @@ Most contributors start with BrowserOS neo or BrowserOS. Both live in `packages/
 
 Install it by following [the Bun installation guide](https://bun.sh/docs/installation). CI installs the exact pinned version by reading that same `package.json`, so matching it locally keeps you on the same dependency resolution. Check yours with `bun --version`.
 
-The per-path guides list what else each one needs.
+The per-path guides list what else each one needs. Both agent dev loops run on macOS and Linux; on Linux the supervisor resolves installed BrowserOS builds from `/usr/lib/<product>/` (or `/opt/<product>/` for AppImage layouts), or set `BROWSEROS_BINARY` to point at any build.
 
 ## Browser development
 

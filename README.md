@@ -135,7 +135,7 @@ Your sessions, screenshots, history, and settings live under `~/.browserclaw/` a
 Yes. Both browsers are Chromium forks, so Chrome extensions work and your bookmarks, passwords, and settings import in one click.
 
 **What platforms are supported?**
-BrowserOS neo runs on macOS and Windows. BrowserOS runs on macOS, Windows, and Linux. System requirements match Google Chrome.
+BrowserOS neo ships installers for macOS and Windows today; the browser itself already builds and releases for Linux from this repo, and the agent dev loop runs on macOS and Linux. BrowserOS ships installers for macOS, Windows, and Linux. System requirements match Google Chrome.
 
 ## Get help
 

@@ -6,7 +6,9 @@ import { TEST_PORTS } from '@browseros/shared/constants/ports'
 
 const DEFAULT_BINARY_PATH =
   process.env.BROWSEROS_BINARY ??
-  '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS'
+  (process.platform === 'linux'
+    ? '/usr/lib/browseros/browseros'
+    : '/Applications/BrowserOS.app/Contents/MacOS/BrowserOS')
 const PORT_SCAN_RANGE = 100
 
 export interface RuntimePorts {
