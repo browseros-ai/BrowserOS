@@ -187,10 +187,10 @@ fn consume_regex(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
 fn consume_number(first: char, chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
     let mut raw = String::from(first);
     while let Some(&c) = chars.peek() {
-        if c.is_ascii_alphanumeric() || c == '.' || c == '_' {
-            raw.push(c);
-            chars.next();
-        } else if (c == '+' || c == '-') && matches!(raw.chars().last(), Some('e') | Some('E')) {
+        // A sign only continues the literal directly after an exponent marker.
+        let signed_exponent =
+            (c == '+' || c == '-') && matches!(raw.chars().last(), Some('e') | Some('E'));
+        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || signed_exponent {
             raw.push(c);
             chars.next();
         } else {
