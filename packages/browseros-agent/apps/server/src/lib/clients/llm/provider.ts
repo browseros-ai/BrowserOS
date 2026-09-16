@@ -20,6 +20,7 @@ import type { LanguageModel } from 'ai'
 import { createBrowserOSFetch } from '../../browseros-fetch'
 import { logger } from '../../logger'
 import { createOpenRouterCompatibleFetch } from '../../openrouter-fetch'
+import { createProxiedFetch } from '../../proxy/proxy-fetch'
 import { createCodexFetch } from '../oauth/codex-fetch'
 import { createCopilotFetch } from '../oauth/copilot-fetch'
 import {
@@ -32,15 +33,16 @@ type ProviderFactory = (config: ResolvedLLMConfig) => LanguageModel
 
 // This is the SECOND provider pipeline in the repo (the first being
 // `agent/provider-factory.ts`, used by chat). This one drives
-// `/test-provider` and `/refine-prompt`. Any baseUrl-related fix must
-// land in BOTH pipelines or the test button silently ignores what
-// the chat path honors. See PR #1905 for the sibling change.
+// `/test-provider` and `/refine-prompt`. Any baseUrl- or fetch-related fix
+// (including proxy wiring) must land in BOTH pipelines or the test button
+// silently ignores what the chat path honors. See PR #1905 for the sibling change.
 function createAnthropicModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Anthropic provider requires apiKey')
   return createAnthropic({
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -50,6 +52,7 @@ function createOpenAIModel(config: ResolvedLLMConfig): LanguageModel {
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -59,6 +62,7 @@ function createGoogleModel(config: ResolvedLLMConfig): LanguageModel {
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -68,7 +72,7 @@ function createOpenRouterModel(config: ResolvedLLMConfig): LanguageModel {
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
-    fetch: createOpenRouterCompatibleFetch(),
+    fetch: createProxiedFetch(createOpenRouterCompatibleFetch()),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })(config.model)
 }
@@ -87,6 +91,7 @@ function createAzureModel(config: ResolvedLLMConfig): LanguageModel {
     apiKey: config.apiKey,
     ...(config.resourceName && { resourceName: config.resourceName }),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -97,6 +102,7 @@ function createOllamaModel(config: ResolvedLLMConfig): LanguageModel {
     name: 'ollama',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -107,6 +113,7 @@ function createLMStudioModel(config: ResolvedLLMConfig): LanguageModel {
     name: 'lmstudio',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -122,6 +129,7 @@ function createBedrockModel(config: ResolvedLLMConfig): LanguageModel {
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
     sessionToken: config.sessionToken,
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -129,8 +137,8 @@ function createBrowserOSModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.baseUrl) throw new Error('BrowserOS provider requires baseUrl')
   const { baseUrl, apiKey, model, upstreamProvider, browserosId } = config
   const browserosFetch = browserosId
-    ? createBrowserOSFetch(browserosId)
-    : createOpenRouterCompatibleFetch()
+    ? createProxiedFetch(createBrowserOSFetch(browserosId))
+    : createProxiedFetch(createOpenRouterCompatibleFetch())
 
   // BrowserOS-hosted provider: user custom headers are deliberately not
   // forwarded. Its credential is X-BrowserOS-ID (injected by browserosFetch)
@@ -173,6 +181,7 @@ function createOpenAICompatibleModel(config: ResolvedLLMConfig): LanguageModel {
     name: 'openai-compatible',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -184,6 +193,7 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
     name: 'moonshot',
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -194,6 +204,7 @@ function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
     name: 'qwen-code',
     baseURL: EXTERNAL_URLS.QWEN_CODE_API,
     apiKey: config.apiKey,
+    fetch: createProxiedFetch(),
   })(config.model)
 }
 
@@ -205,7 +216,7 @@ function createGitHubCopilotModel(config: ResolvedLLMConfig): LanguageModel {
     name: 'github-copilot',
     baseURL: EXTERNAL_URLS.GITHUB_COPILOT_API,
     apiKey: config.apiKey,
-    fetch: createCopilotFetch() as typeof globalThis.fetch,
+    fetch: createProxiedFetch(createCopilotFetch() as typeof globalThis.fetch),
   })(config.model)
 }
 
@@ -214,7 +225,9 @@ function createChatGPTProModel(config: ResolvedLLMConfig): LanguageModel {
   // Managed OAuth provider: user custom headers are deliberately not forwarded.
   return createOpenAI({
     apiKey: config.apiKey,
-    fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,
+    fetch: createProxiedFetch(
+      createCodexFetch(config.accountId) as typeof globalThis.fetch,
+    ),
   }).responses(config.model)
 }
 
