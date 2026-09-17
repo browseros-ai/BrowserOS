@@ -1,15 +1,12 @@
 ---
 title: "Manual URL setup"
-description: "Connect BrowserOS neo to any MCP-compatible AI tool by hand: add the endpoint URL, then install the BrowserOS neo skill."
+description: "Connect BrowserOS neo to any MCP-compatible AI tool by hand with the endpoint URL, and add the BrowserOS neo skill so your agent uses it well."
 keywords: ["BrowserOS neo manual MCP setup", "BrowserOS neo skill", "install browseros-neo skill", "Hermes MCP", "Vercel AI SDK MCP", "OpenClaw MCP"]
 ---
 
-Any AI tool that speaks MCP over HTTP can use BrowserOS neo. Setting one up by hand takes two steps, and both matter:
+Any AI tool that speaks MCP over HTTP can use BrowserOS neo. Adding the MCP server connects the two, and that is all you need to start driving the browser from your agent.
 
-1. **Add the MCP server.** This is what lets your agent reach the browser at all.
-2. **Install the BrowserOS neo skill.** This is what tells it how to use the browser well: to work in its own tabs rather than yours, to name its session so you can find the run in the cockpit, and to reach for this browser instead of its own fetcher.
-
-The agents on the [one-click page](/neo/mcp) get both in a single click. Doing it by hand means doing both yourself, and an agent with the tools but not the skill is the most common way this ends up feeling worse than it should.
+Installing the BrowserOS neo skill on top makes it work better. With the skill, your agent opens its own tabs instead of borrowing the one you are reading, names each session so you can pick the run out in the cockpit, and reaches for this browser rather than falling back to its own fetcher. Without it, everything still works; you just end up steering more of it yourself.
 
 The MCP syntax varies by tool, and so does the way skills are loaded. Here are the tools we have documented so far.
 
@@ -27,7 +24,9 @@ The examples name the server `browseros-neo`, matching the one-click setup. The 
 
 ## Install the skill
 
-The skill is one `SKILL.md` file, published from [the BrowserOS repository](https://github.com/browseros-ai/BrowserOS/tree/main/skills/browseros-neo). Most agents read it from a shared `.agents/skills` directory, and the quickest way to put it there is the [skills.sh](https://skills.sh) CLI:
+The skill is one `SKILL.md` file, published from [the BrowserOS repository](https://github.com/browseros-ai/BrowserOS/tree/main/skills/browseros-neo). It is worth the minute it takes: it is the difference between an agent that can reach the browser and one that uses it the way you would.
+
+Most agents read skills from a shared `.agents/skills` directory, and the quickest way to put it there is the [skills.sh](https://skills.sh) CLI:
 
 ```bash
 npx skills add browseros-ai/browseros --skill browseros-neo
@@ -60,7 +59,7 @@ Then reload Hermes:
 
 Hermes also has a CLI command that adds a server interactively: `hermes mcp add browseros-neo`. Either path works.
 
-**Then the skill.** Hermes does not read `.agents/skills`. It keeps skills in `~/.hermes/skills/`, so install it from the file directly:
+**Adding the skill.** Hermes does not read `.agents/skills`. It keeps skills in `~/.hermes/skills/`, so install it from the file directly:
 
 ```bash
 hermes skills install https://raw.githubusercontent.com/browseros-ai/BrowserOS/main/skills/browseros-neo/SKILL.md
@@ -97,7 +96,7 @@ const result = await streamText({
 
 The AI SDK docs recommend closing the client once you're done. In streaming code that means `mcpClient.close()` inside `onFinish`. In non-streaming code, use a `try` / `finally` block.
 
-**Then the skill.** The AI SDK does not discover skills on its own, because it is a library rather than an agent: you decide where skills come from and how they reach the model. Run the `npx skills add` command above to put `SKILL.md` in `.agents/skills`, then point the SDK's discovery at that directory and pass the result into your system prompt:
+**Adding the skill.** The AI SDK does not discover skills on its own, because it is a library rather than an agent: you decide where skills come from and how they reach the model. Run the `npx skills add` command above to put `SKILL.md` in `.agents/skills`, then point the SDK's discovery at that directory and pass the result into your system prompt:
 
 ```typescript
 const skills = await discoverSkills(sandbox, ['.agents/skills']);
@@ -143,7 +142,7 @@ Verify the connection with the built-in doctor:
 openclaw mcp doctor browseros-neo --probe
 ```
 
-**Then the skill.** OpenClaw already reads `.agents/skills`, both in the workspace and at `~/.agents/skills`, so the `npx skills add` command above is enough and there is nothing else to wire up. If you would rather use OpenClaw's own installer, it takes a skills.sh reference:
+**Adding the skill.** OpenClaw already reads `.agents/skills`, both in the workspace and at `~/.agents/skills`, so the `npx skills add` command above is enough and there is nothing else to wire up. If you would rather use OpenClaw's own installer, it takes a skills.sh reference:
 
 ```bash
 openclaw skills install skills-sh:browseros-ai/browseros/browseros-neo
