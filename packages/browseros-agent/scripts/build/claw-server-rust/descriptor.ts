@@ -1,6 +1,12 @@
 import type { ResourceBuildProductDescriptor } from '@browseros/build-server-tools'
 
-const INLINE_ENV_KEYS = ['CLAW_POSTHOG_KEY', 'CLAW_POSTHOG_HOST'] as const
+// `CLAW_SENTRY_DSN` is inlined but deliberately not required: a build without it still
+// works, and the server writes its redacted run-failure reports to a local log instead.
+const INLINE_ENV_KEYS = [
+  'CLAW_POSTHOG_KEY',
+  'CLAW_POSTHOG_HOST',
+  'CLAW_SENTRY_DSN',
+] as const
 
 export const clawServerRustBuildProduct: ResourceBuildProductDescriptor = {
   label: 'BrowserClaw Rust server',
