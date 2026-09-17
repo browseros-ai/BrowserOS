@@ -27,6 +27,8 @@ export const AnalyticsEvent = {
   ProductHuntBannerDismissed: 'product_hunt_banner_dismissed',
   InstallGuideOpened: 'install_guide_opened',
   InstallGuideDownloadClicked: 'install_guide_download_clicked',
+  ManualSetupOpened: 'manual_setup_opened',
+  ManualSetupCommandCopied: 'manual_setup_command_copied',
 } as const
 
 export type AnalyticsEventName =
