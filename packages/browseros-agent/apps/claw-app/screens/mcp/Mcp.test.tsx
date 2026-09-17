@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import * as _connectionsHooks from '@/modules/api/connections.hooks'
+import { SKILL_INSTALL_COMMAND, SKILLS_PACK } from './install-guide.data'
 
 const mcpBrowserosConnections = [
   {
@@ -226,5 +227,26 @@ describe('Mcp (editorial)', () => {
       'Add BrowserOS as an MCP server in your AI agent',
     )
     expect(html).not.toContain('One endpoint, every harness. Use the buttons')
+  })
+
+  it('offers a manual route for agents that are not in the list', () => {
+    const html = renderApp()
+    expect(html).toContain('Any other agent')
+    expect(html).toContain('Not on the list above?')
+  })
+
+  it('keeps the manual setup dialog closed until the card is activated', () => {
+    const html = renderApp()
+    expect(html).not.toContain('Connect any other agent')
+    expect(html).not.toContain(SKILL_INSTALL_COMMAND)
+  })
+
+  it('scopes the skill install command to the one user-facing skill', () => {
+    // `npx skills add <pack>` with no flag pulls in all six skills in the
+    // pack, five of which are internal to this repo. The flag is the point.
+    expect(SKILL_INSTALL_COMMAND).toContain('--skill browseros-neo')
+    expect(SKILL_INSTALL_COMMAND).toBe(
+      `npx skills add ${SKILLS_PACK} --skill browseros-neo`,
+    )
   })
 })
