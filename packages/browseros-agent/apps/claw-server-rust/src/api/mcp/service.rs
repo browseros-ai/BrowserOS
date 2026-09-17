@@ -468,8 +468,21 @@ impl ClawMcpService {
     }
 
     async fn learn_session_from_notification(&self, context: &NotificationContext<RoleServer>) {
-        let session_id = session_id_from_extensions(&context.extensions)
-            .unwrap_or_else(|| self.fallback_session_id.clone());
+        // Only a connection that actually has a transport session gets one here.
+        //
+        // This used to fall back to `fallback_session_id`, a fresh `stdio-{Ulid}` minted
+        // per service instance. A stateless client sending `notifications/initialized`
+        // therefore created a brand-new agent session on every connection, and since
+        // such clients often connect several times to list tools and then leave, the
+        // audit and the cockpit filled with sessions that never dispatched anything.
+        // The observed case was one client producing six empty sessions in a second.
+        //
+        // A handshake without a transport session is not a unit of work. If such a
+        // client goes on to call a tool, `call_tool` mints the session then, which is
+        // the first moment there is anything to record.
+        let Some(session_id) = session_id_from_extensions(&context.extensions) else {
+            return;
+        };
         if let Err(error) = self.ensure_session_started(session_id).await {
             warn!(error = %error, "mcp session start failed");
         }
@@ -1431,7 +1444,7 @@ mod tests {
             "- Name your session early with name_session: a 2-3 word task label, the category\n  that best fits the task, and a short PII-free summary you can search for later;\n  tabs group as <agentName>/<name>."
         ));
         assert!(instructions.contains(
-            "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
+            "- A tab that is not yours is still someone's. Leave it as you found it unless the\n  user asked you to change it, and prefer your own tab for anything exploratory."
         ));
         assert!(
             instructions

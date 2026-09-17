@@ -832,7 +832,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn same_name_mcp_sessions_have_distinct_groups_and_reject_cross_page_access()
+async fn same_name_mcp_sessions_have_distinct_groups_and_label_cross_page_access()
 -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
@@ -908,12 +908,29 @@ async fn same_name_mcp_sessions_have_distinct_groups_and_reject_cross_page_acces
         )
         .await?;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], true, "cross-page body: {body:?}");
-        assert_eq!(
-            body["result"]["content"][0]["text"],
-            format!(
-                "page {page_b} is not owned by this agent; call `tabs new` to open a fresh page and use the returned page id."
-            )
+        // Ownership informs, it never blocks. Session A reaches session B's page instead
+        // of being turned away at the door. This assertion was the opposite until the
+        // guard that enforced it was retired: it made the user's own tabs unusable, and
+        // orphaned an agent's own pages whenever a session handle went missing.
+        //
+        // The call may still fail for its own reasons, and here it does, because the
+        // mock CDP only serves snapshots for the page it was set up with. What matters
+        // is that it is no longer refused on ownership grounds. The notice an agent sees
+        // on a successful cross-page call is covered by the unit tests in
+        // `effects::page_ownership_notice`.
+        let text = body["result"]["content"]
+            .as_array()
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|block| block["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        assert!(
+            !text.contains("not owned by this agent"),
+            "ownership refused a dispatch; it must only ever label: {text}"
         );
     }
     let (_status, _headers, body) = request_json_with_headers(

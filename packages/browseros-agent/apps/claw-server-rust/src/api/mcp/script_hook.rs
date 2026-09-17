@@ -43,18 +43,16 @@ impl InnerCallHook for ScriptInnerCallHook {
             let Some(page) = page else {
                 return Ok(());
             };
-            let Some(identity) = self.identity() else {
-                return Ok(());
-            };
-            // Reject pages owned by another conversation. Pages a script creates
-            // itself are claimed via on_page_created, so they pass; a page the
-            // agent never owned is rejected.
-            match self.call.state.sessions.owner_of_page(&PageId(page)).await {
-                Some(owner) if owner != identity.ownership_key => Err(format!(
-                    "page {page} is not owned by this agent; call `tabs new` to open a fresh page and use the returned page id."
-                )),
-                _ => Ok(()),
-            }
+            // Ownership is a label, not a permission, so nothing is refused here.
+            //
+            // This hook used to reject any page owned by another conversation, which
+            // made the user's own tabs unusable from a script and, because ownership
+            // keys on a per-session id, orphaned the script's own pages whenever a
+            // session handle went missing. Agents are allowed to work in the user's
+            // tabs and in other agents' tabs; `effects::page_ownership_notice` tells
+            // them whose tab it is. Do not reintroduce a refusal here.
+            let _ = page;
+            Ok(())
         })
     }
 
@@ -368,24 +366,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authorize_rejects_foreign_owned_pages_only() -> anyhow::Result<()> {
+    /// Ownership never refuses. A script may act on the user's tabs and on other
+    /// agents' tabs; it is told whose they are, it is not stopped.
+    ///
+    /// This test previously asserted the opposite. It was changed deliberately: the
+    /// refusal made the user's own tabs unusable from a script, and orphaned a
+    /// script's own pages whenever a session handle went missing.
+    async fn authorize_never_refuses_on_ownership() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
         let hook = hook_for(&call);
 
-        // A page owned by another conversation is rejected.
+        // Another conversation's page: allowed.
         call.state
             .sessions
             .ownership()
             .claim_page(ConvoId::new("other"), PageId(7))
             .await;
-        assert!(hook.authorize(Some(7)).await.is_err());
+        assert!(hook.authorize(Some(7)).await.is_ok());
 
-        // Unclaimed pages and no-page primitives are allowed so a script's own
-        // freshly created tabs stay usable.
+        // An unclaimed page is one of the user's own: allowed.
         assert!(hook.authorize(Some(9)).await.is_ok());
         assert!(hook.authorize(None).await.is_ok());
 
-        // A page owned by the caller's own conversation is allowed.
+        // And the caller's own page, as before.
         let mine = call
             .identity
             .as_ref()

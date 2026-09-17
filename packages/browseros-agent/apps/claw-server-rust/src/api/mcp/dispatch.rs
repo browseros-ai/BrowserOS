@@ -173,10 +173,12 @@ pub struct NamedToolObserver {
     pub run: ToolObserver,
 }
 
+// Ownership is not a guard and must not become one. An agent is allowed to act on
+// the user's tabs and on other agents' tabs; it is simply told whose they are, by
+// `effects::page_ownership_notice`. See that module for why.
 const GUARDS: &[ToolGuard] = &[
     guards::navigate_scheme::guard,
     guards::browser_connected::guard,
-    guards::page_ownership::guard,
 ];
 
 const EFFECTS: &[NamedToolEffect] = &[
@@ -199,6 +201,12 @@ const EFFECTS: &[NamedToolEffect] = &[
     NamedToolEffect {
         name: "session-naming",
         run: effects::session_naming::apply,
+    },
+    NamedToolEffect {
+        // Runs late so it annotates the result the agent will actually read, and
+        // never changes it beyond appending a note. Informational only.
+        name: "page-ownership-notice",
+        run: effects::page_ownership_notice::apply,
     },
     NamedToolEffect {
         name: "helper-discovery",
@@ -1122,8 +1130,18 @@ mod tests {
                 "tab-activity",
                 "tab-groups",
                 "session-naming",
+                "page-ownership-notice",
                 "helper-discovery",
             ]
+        );
+        // Ownership must never gate a dispatch. It is a label telling an agent whose
+        // tab it is looking at, and agents are allowed to use the user's tabs and other
+        // agents' tabs. This assertion exists so the guard that used to refuse them
+        // cannot be reintroduced without someone deleting this line on purpose.
+        assert_eq!(
+            GUARDS.len(),
+            2,
+            "a guard was added. Ownership must not be one of them: it informs, it never blocks"
         );
         assert_eq!(
             OBSERVERS

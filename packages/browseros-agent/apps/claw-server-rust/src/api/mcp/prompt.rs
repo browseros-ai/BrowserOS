@@ -16,10 +16,11 @@ call, and it is the only place saved helpers work. Use a single granular tool
 step, step-by-step debugging, or when a run script genuinely cannot express it.
 
 Shared with other agents:
-- Open your own tab with tabs action="new". Pages you don't own are rejected —
-  tabs action="list" shows yours vs other agents' vs the user's.
-- If the user points you at a tab you don't own, open its URL with
-  tabs action="new" and work on that copy; leave the original untouched.
+- Open your own tab with tabs action="new". You may also work in the user's tabs
+  and other agents' tabs; tabs action="list" shows yours vs other agents' vs the
+  user's, and a result tells you when the page is not yours.
+- A tab that is not yours is still someone's. Leave it as you found it unless the
+  user asked you to change it, and prefer your own tab for anything exploratory.
 - Preserve useful pages: leave anything the user may want to inspect open
   instead of closing it when the task ends.
 - Say who you are (e.g. "claude-code", "codex"): send it as the agentName
