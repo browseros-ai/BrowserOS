@@ -23,6 +23,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0014_add_skills_and_runs::Migration),
             Box::new(m0015_add_skill_run_marks::Migration),
             Box::new(m0016_add_task_summary::Migration),
+            Box::new(m0017_add_run_error_budget::Migration),
         ]
     }
 }
@@ -2094,5 +2095,68 @@ mod m0001_baseline {
         CursorId,
         HasScreenshots,
         UpdatedAt,
+    }
+}
+
+mod m0017_add_run_error_budget {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0017_add_run_error_budget"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Caps how many run failures this install forwards per day. Keyed by UTC day
+            // alone: the database is already per-install, so the per-user dimension is
+            // implicit and needs no identifier stored here.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(RunErrorBudget::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(RunErrorBudget::Day)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(
+                            ColumnDef::new(RunErrorBudget::Sent)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .col(
+                            ColumnDef::new(RunErrorBudget::Suppressed)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(RunErrorBudget::Table).to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum RunErrorBudget {
+        Table,
+        Day,
+        Sent,
+        Suppressed,
     }
 }

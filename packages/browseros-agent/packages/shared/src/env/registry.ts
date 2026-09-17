@@ -229,6 +229,18 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     },
   },
   {
+    key: 'CLAW_SENTRY_DSN',
+    section: 'claw',
+    description:
+      'Optional Claw server Sentry DSN. Without it, redacted run-failure reports are written to a local log file instead of being sent.',
+    secret: true,
+    schema: stringSchema,
+    modes: {
+      development: { value: '', commented: true },
+      production: { value: '', commented: true },
+    },
+  },
+  {
     key: 'VITE_CLAW_POSTHOG_KEY',
     section: 'claw',
     description:

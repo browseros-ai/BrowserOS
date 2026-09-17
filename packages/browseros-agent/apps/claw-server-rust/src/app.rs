@@ -45,6 +45,7 @@ pub struct AppState {
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
     pub analytics: Arc<AnalyticsService>,
+    pub run_failures: Arc<crate::services::run_failures::RunFailureReporter>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     pub session_efficiency: Arc<SessionEfficiencyService>,
@@ -85,6 +86,13 @@ impl AppState {
         ));
         let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
+        // Shares the analytics install id, so a failure report and a product event are
+        // the same anonymous install and neither adds a new identifier.
+        let run_failures = Arc::new(crate::services::run_failures::RunFailureReporter::from_env(
+            crate::db::run_error_budget::RunErrorBudgetRepository::new(database.clone()),
+            analytics.get_state().await.distinct_id,
+            &config.browserclaw_dir.join("logs"),
+        ));
         let skill = load_browserclaw_skill(&config.resources_dir)?;
         let harness = Arc::new(HarnessService::new_with_managed_skill(
             config.browserclaw_dir.join("mcp-manager"),
@@ -180,6 +188,7 @@ impl AppState {
             skills,
             skill_runs,
             analytics,
+            run_failures,
             profiles,
             sessions,
             session_efficiency,

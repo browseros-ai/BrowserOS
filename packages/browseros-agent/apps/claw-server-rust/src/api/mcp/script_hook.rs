@@ -18,7 +18,7 @@ use tracing::warn;
 /// Host hook a `run`/`execute` script invokes around each browser primitive.
 /// A script drives the shared browser session directly, bypassing the pipeline
 /// guards and effects, so this hook reproduces what those effects would have
-/// done: it enforces per-primitive ownership, records each primitive as a child
+/// done: it notes whose tab each primitive touched, records each primitive as a child
 /// audit row linked to the script dispatch, and (on page creation) claims and
 /// groups the page exactly as a `tabs new` would. It holds the script's own
 /// `ToolCall` so it can reuse the effect helpers with the same inputs.
@@ -46,15 +46,41 @@ impl InnerCallHook for ScriptInnerCallHook {
             let Some(identity) = self.identity() else {
                 return Ok(());
             };
-            // Reject pages owned by another conversation. Pages a script creates
-            // itself are claimed via on_page_created, so they pass; a page the
-            // agent never owned is rejected.
-            match self.call.state.sessions.owner_of_page(&PageId(page)).await {
-                Some(owner) if owner != identity.ownership_key => Err(format!(
-                    "page {page} is not owned by this agent; call `tabs new` to open a fresh page and use the returned page id."
-                )),
-                _ => Ok(()),
+            // Ownership is a label, not a permission, so nothing is refused here.
+            //
+            // This hook used to reject any page owned by another conversation, which
+            // made the user's own tabs unusable from a script and, because ownership
+            // keys on a per-session id, orphaned the script's own pages whenever a
+            // session handle went missing. Do not reintroduce a refusal here.
+            //
+            // It still has to *notice*. `run` carries no top-level `page` argument, so
+            // the outer effect cannot see which pages a script touched; without this,
+            // a script could read, navigate, fill or close someone else's tab and be
+            // told nothing, which is the promise the refusal used to keep badly.
+            let owner = self.call.state.sessions.owner_of_page(&PageId(page)).await;
+            let describe = match owner {
+                Some(owner) if owner == identity.ownership_key => None,
+                Some(owner) => Some(
+                    self.call
+                        .state
+                        .sessions
+                        .snapshot()
+                        .await
+                        .into_iter()
+                        .find(|session| session.convo_id() == &owner)
+                        .map_or_else(
+                            || format!("another agent ({owner})"),
+                            |session| format!("another agent ({})", session.agent().label()),
+                        ),
+                ),
+                None => Some("the user".to_string()),
+            };
+            if let Some(description) = describe
+                && let Ok(mut pages) = self.call.foreign_pages.lock()
+            {
+                pages.insert(page, description);
             }
+            Ok(())
         })
     }
 
@@ -368,24 +394,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn authorize_rejects_foreign_owned_pages_only() -> anyhow::Result<()> {
+    /// Ownership never refuses. A script may act on the user's tabs and on other
+    /// agents' tabs; it is told whose they are, it is not stopped.
+    ///
+    /// This test previously asserted the opposite. It was changed deliberately: the
+    /// refusal made the user's own tabs unusable from a script, and orphaned a
+    /// script's own pages whenever a session handle went missing.
+    async fn authorize_never_refuses_on_ownership() -> anyhow::Result<()> {
         let call = tool_call("run", json!({ "code": "return 1" })).await?;
         let hook = hook_for(&call);
 
-        // A page owned by another conversation is rejected.
+        // Another conversation's page: allowed.
         call.state
             .sessions
             .ownership()
             .claim_page(ConvoId::new("other"), PageId(7))
             .await;
-        assert!(hook.authorize(Some(7)).await.is_err());
+        assert!(hook.authorize(Some(7)).await.is_ok());
 
-        // Unclaimed pages and no-page primitives are allowed so a script's own
-        // freshly created tabs stay usable.
+        // An unclaimed page is one of the user's own: allowed.
         assert!(hook.authorize(Some(9)).await.is_ok());
         assert!(hook.authorize(None).await.is_ok());
 
-        // A page owned by the caller's own conversation is allowed.
+        // And the caller's own page, as before.
         let mine = call
             .identity
             .as_ref()
@@ -398,6 +429,49 @@ mod tests {
             .claim_page(mine, PageId(3))
             .await;
         assert!(hook.authorize(Some(3)).await.is_ok());
+        Ok(())
+    }
+
+    /// Allowing is not the same as staying silent. `run` has no top-level `page`
+    /// argument, so unless the hook records what the script touched the agent gets
+    /// no signal at all that it worked in somebody else's tab.
+    #[tokio::test]
+    async fn authorize_records_pages_that_belong_to_someone_else() -> anyhow::Result<()> {
+        let call = tool_call("run", json!({ "code": "return 1" })).await?;
+        let mine = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(mine, PageId(3))
+            .await;
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(ConvoId::new("other"), PageId(7))
+            .await;
+        let hook = hook_for(&call);
+
+        hook.authorize(Some(3)).await.ok();
+        hook.authorize(Some(7)).await.ok();
+        hook.authorize(Some(9)).await.ok();
+        hook.authorize(None).await.ok();
+
+        let recorded = call
+            .foreign_pages
+            .lock()
+            .map_err(|_| anyhow::anyhow!("foreign_pages poisoned"))?
+            .clone();
+        assert!(!recorded.contains_key(&3), "own page needs no notice");
+        assert_eq!(
+            recorded.get(&7).map(String::as_str),
+            Some("another agent (other)")
+        );
+        assert_eq!(recorded.get(&9).map(String::as_str), Some("the user"));
         Ok(())
     }
 
