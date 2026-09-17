@@ -92,20 +92,22 @@ const result = await streamText({
 
 The AI SDK docs recommend closing the client once you're done. In streaming code that means `mcpClient.close()` inside `onFinish`. In non-streaming code, use a `try` / `finally` block.
 
-**Adding the skill.** The AI SDK does not discover skills on its own, because it is a library rather than an agent: you decide where skills come from and how they reach the model. Run the `npx skills add` command above to put `SKILL.md` in `.agents/skills`, then point the SDK's discovery at that directory and pass the result into your system prompt:
+**Adding the skill.** The AI SDK is a library rather than an agent, so nothing discovers skills for you. Run the `npx skills add` command above, then read the file into your system prompt:
 
-```typescript
-const skills = await discoverSkills(sandbox, ['.agents/skills']);
+```javascript
+import { readFile } from 'node:fs/promises';
+
+const skill = await readFile('.agents/skills/browseros-neo/SKILL.md', 'utf8');
 
 const result = await streamText({
   model: 'xai/grok-4.5',
   tools,
-  system: buildSkillsPrompt(skills),
+  system: skill,
   prompt: 'Book me a table for four on Friday.',
 });
 ```
 
-Only the name and description go in up front; the agent calls `loadSkill` to pull the full text when it decides the skill is relevant. The [agent skills guide](https://ai-sdk.dev/cookbook/guides/agent-skills) walks through `discoverSkills`, `buildSkillsPrompt` and the `loadSkill` tool in full.
+For more than one skill, the AI SDK's [agent skills guide](https://ai-sdk.dev/cookbook/guides/agent-skills) covers loading names and descriptions up front and fetching the full text on demand with a `loadSkill` tool.
 
 ## OpenClaw
 
