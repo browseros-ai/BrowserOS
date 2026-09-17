@@ -1,10 +1,12 @@
 ---
 title: "Manual URL setup"
-description: "Connect BrowserOS neo to any MCP-compatible AI tool with the copyable endpoint URL."
-keywords: ["BrowserOS neo manual MCP setup", "Hermes MCP", "Vercel AI SDK MCP", "OpenClaw MCP"]
+description: "Connect BrowserOS neo to any MCP-compatible AI tool by hand with the endpoint URL, and add the BrowserOS neo skill so your agent uses it well."
+keywords: ["BrowserOS neo manual MCP setup", "BrowserOS neo skill", "install browseros-neo skill", "Hermes MCP", "Vercel AI SDK MCP", "OpenClaw MCP"]
 ---
 
-Any AI tool that speaks MCP over HTTP can use BrowserOS neo. The pattern is always the same: copy the endpoint URL, drop it into the tool's own MCP config, restart. The exact syntax varies by tool. Here are the ones we've documented so far.
+Any AI tool that speaks MCP over HTTP can use BrowserOS neo. Adding the MCP server connects the two, and installing the BrowserOS neo skill on top improves the experience.
+
+The MCP syntax varies by tool, and so does the way skills are loaded. Here are the tools we have documented so far.
 
 First, grab the endpoint URL from BrowserOS neo. Open a new tab, click **MCP** in the sidebar, and click **Copy** at the top of the page. It looks like this:
 
@@ -17,6 +19,22 @@ Now pick your AI tool below.
 <Note>
 The examples name the server `browseros-neo`, matching the one-click setup. The name is yours to choose, but whatever you pick is the name your AI tool will know the browser by.
 </Note>
+
+## Install the skill
+
+The skill is one `SKILL.md` file, published from [the BrowserOS repository](https://github.com/browseros-ai/BrowserOS/tree/main/skills/browseros-neo). Most agents read skills from a shared `.agents/skills` directory, and the quickest way to put it there is the [skills.sh](https://skills.sh) CLI:
+
+```bash
+npx skills add browseros-ai/browseros --skill browseros-neo
+```
+
+<Warning>
+Keep the `--skill browseros-neo` flag. Without it the command installs every skill published from that repository, including several we use to work on BrowserOS itself, which have no business in your agent.
+</Warning>
+
+That writes `./.agents/skills/browseros-neo/SKILL.md` in the current project and symlinks it for agents that use their own directory. Add `-g` instead to install it once for every project.
+
+Not every agent reads `.agents/skills`, so check your tool below.
 
 ## Hermes Agent
 
@@ -36,6 +54,14 @@ Then reload Hermes:
 - Or restart Hermes.
 
 Hermes also has a CLI command that adds a server interactively: `hermes mcp add browseros-neo`. Either path works.
+
+**Adding the skill.** Hermes does not read `.agents/skills`. It keeps skills in `~/.hermes/skills/`, so install it from the file directly:
+
+```bash
+hermes skills install https://raw.githubusercontent.com/browseros-ai/BrowserOS/main/skills/browseros-neo/SKILL.md
+```
+
+Check it landed with `hermes skills list`, or `/skills` inside a chat session. Hermes loads the name and description up front and pulls the full text only when it needs it, so the skill costs almost nothing until it is used. Full details in [Hermes' skills docs](https://hermes-agent.nousresearch.com/docs/user-guide/features/skills).
 
 ## Vercel AI SDK
 
@@ -65,6 +91,23 @@ const result = await streamText({
 ```
 
 The AI SDK docs recommend closing the client once you're done. In streaming code that means `mcpClient.close()` inside `onFinish`. In non-streaming code, use a `try` / `finally` block.
+
+**Adding the skill.** The AI SDK is a library rather than an agent, so nothing discovers skills for you. Run the `npx skills add` command above, then read the file into your system prompt:
+
+```javascript
+import { readFile } from 'node:fs/promises';
+
+const skill = await readFile('.agents/skills/browseros-neo/SKILL.md', 'utf8');
+
+const result = await streamText({
+  model: 'xai/grok-4.5',
+  tools,
+  system: skill,
+  prompt: 'Book me a table for four on Friday.',
+});
+```
+
+For more than one skill, the AI SDK's [agent skills guide](https://ai-sdk.dev/cookbook/guides/agent-skills) covers loading names and descriptions up front and fetching the full text on demand with a `loadSkill` tool.
 
 ## OpenClaw
 
@@ -97,9 +140,23 @@ Verify the connection with the built-in doctor:
 openclaw mcp doctor browseros-neo --probe
 ```
 
+**Adding the skill.** OpenClaw already reads `.agents/skills`, both in the workspace and at `~/.agents/skills`, so the `npx skills add` command above is enough and there is nothing else to wire up. If you would rather use OpenClaw's own installer, it takes a skills.sh reference:
+
+```bash
+openclaw skills install skills-sh:browseros-ai/browseros/browseros-neo
+```
+
+Add `--global` to install it for every workspace. Confirm with `openclaw skills list`. Full details in [OpenClaw's skills docs](https://docs.openclaw.ai/tools/skills).
+
 ## Any other MCP-compatible AI tool
 
 The pattern is the same: paste `http://127.0.0.1:9200/mcp` into the AI tool's own MCP server config, using whatever syntax that tool expects. BrowserOS neo's endpoint uses **Streamable HTTP** transport (per the current MCP spec), so any client that supports Streamable HTTP works.
+
+For the skill, run `npx skills add browseros-ai/browseros --skill browseros-neo` and then check where your agent looks for skills. Most read `.agents/skills` and will find it with no further work. If yours keeps them somewhere of its own, copy `.agents/skills/browseros-neo/SKILL.md` into that directory, or point its own installer at the file:
+
+```text
+https://raw.githubusercontent.com/browseros-ai/BrowserOS/main/skills/browseros-neo/SKILL.md
+```
 
 If you get your AI tool talking to BrowserOS neo and want to help others do the same, please [open a discussion](https://github.com/orgs/browseros-ai/discussions) with the setup steps.
 
