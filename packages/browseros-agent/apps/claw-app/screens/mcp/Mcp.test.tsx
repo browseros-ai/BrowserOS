@@ -243,8 +243,8 @@ describe('Mcp (editorial)', () => {
   })
 
   it('scopes the skill install command to the one user-facing skill', () => {
-    // `npx skills add <pack>` with no flag pulls in all six skills in the
-    // pack, five of which are internal to this repo. The flag is the point.
+    // `npx skills add <pack>` with no flag pulls in five skills, four of
+    // them internal to this repo. Verified by running both forms.
     expect(SKILL_INSTALL_COMMAND).toContain('--skill browseros-neo')
     expect(SKILL_INSTALL_COMMAND).toBe(
       `npx skills add ${SKILLS_PACK} --skill browseros-neo`,

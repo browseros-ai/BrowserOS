@@ -111,8 +111,10 @@ export const SKILL_NAME = 'browseros-neo'
 
 /**
  * Scoped to the single skill on purpose. `npx skills add <pack>` with no
- * flag installs all six skills in the pack, five of which are ours for
- * working on this codebase and have no business in a user's agent.
+ * flag installs five skills, four of them ours for working on this codebase:
+ * ask-internal, write-internal-docs, sup-writing-plans and write-docs. One of
+ * those points an agent at a private repo, so none of them belong in a user's
+ * agent. Verified by running both forms.
  */
 export const SKILL_INSTALL_COMMAND = `npx skills add ${SKILLS_PACK} --skill ${SKILL_NAME}`
 
