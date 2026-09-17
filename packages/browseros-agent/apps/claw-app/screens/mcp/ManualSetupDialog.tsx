@@ -42,15 +42,14 @@ export function ManualSetupDialog({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[92vh] w-[min(38rem,94vw)] max-w-[94vw] overflow-y-auto p-0 sm:max-w-[min(38rem,94vw)]">
-        <div className="border-border-2 border-b bg-bg-sunken px-6 py-5">
+        <div className="border-border-2 border-b px-6 pt-5 pb-4">
           <DialogTitle className="pr-10 font-semibold text-[17px] text-ink leading-snug">
             Connect any other agent
           </DialogTitle>
           <DialogDescription className="mt-1.5 text-[13.5px] text-ink-2 leading-relaxed">
-            Agents on the list are set up in one click, and that click does two
-            things. Doing it by hand means doing both: your agent needs the MCP
-            server to reach the browser, and the skill to know how to use it.
-            One without the other leaves it half connected.
+            Connecting a listed agent does two things, so doing it by hand means
+            doing both. The MCP server lets your agent reach the browser. The
+            skill teaches it how to use it.
           </DialogDescription>
         </div>
 
