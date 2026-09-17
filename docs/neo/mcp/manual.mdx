@@ -4,9 +4,7 @@ description: "Connect BrowserOS neo to any MCP-compatible AI tool by hand with t
 keywords: ["BrowserOS neo manual MCP setup", "BrowserOS neo skill", "install browseros-neo skill", "Hermes MCP", "Vercel AI SDK MCP", "OpenClaw MCP"]
 ---
 
-Any AI tool that speaks MCP over HTTP can use BrowserOS neo. Adding the MCP server connects the two, and that is all you need to start driving the browser from your agent.
-
-Installing the BrowserOS neo skill on top makes it work better. With the skill, your agent opens its own tabs instead of borrowing the one you are reading, names each session so you can pick the run out in the cockpit, and reaches for this browser rather than falling back to its own fetcher. Without it, everything still works; you just end up steering more of it yourself.
+Any AI tool that speaks MCP over HTTP can use BrowserOS neo. Adding the MCP server connects the two, and installing the BrowserOS neo skill on top improves the experience.
 
 The MCP syntax varies by tool, and so does the way skills are loaded. Here are the tools we have documented so far.
 
@@ -24,9 +22,7 @@ The examples name the server `browseros-neo`, matching the one-click setup. The 
 
 ## Install the skill
 
-The skill is one `SKILL.md` file, published from [the BrowserOS repository](https://github.com/browseros-ai/BrowserOS/tree/main/skills/browseros-neo). It is worth the minute it takes: it is the difference between an agent that can reach the browser and one that uses it the way you would.
-
-Most agents read skills from a shared `.agents/skills` directory, and the quickest way to put it there is the [skills.sh](https://skills.sh) CLI:
+The skill is one `SKILL.md` file, published from [the BrowserOS repository](https://github.com/browseros-ai/BrowserOS/tree/main/skills/browseros-neo). Most agents read skills from a shared `.agents/skills` directory, and the quickest way to put it there is the [skills.sh](https://skills.sh) CLI:
 
 ```bash
 npx skills add browseros-ai/browseros --skill browseros-neo
