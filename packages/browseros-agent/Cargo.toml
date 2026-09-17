@@ -36,6 +36,11 @@ posthog-rs = { version = "0.21", default-features = false, features = ["async-cl
 # Deliberately minimal. The default feature set installs a panic hook and a tracing
 # integration that would capture far more than the one event we build by hand, which
 # would defeat the redaction this feature exists to guarantee.
+# A real JS scanner for the run-failure fingerprint. Regex-versus-division is
+# context dependent, so a hand-rolled lexer gets it wrong and a wrong lexer in a
+# redaction path leaks. Scanner rather than parser: the fingerprint needs token
+# kinds, not structure, and a scanner degrades far better on unparseable input.
+ress = "0.11"
 sentry = { version = "0.46", default-features = false, features = ["reqwest", "rustls"] }
 thiserror = "2"
 anyhow = "1"

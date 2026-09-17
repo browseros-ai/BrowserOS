@@ -46,6 +46,11 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         let Some(identity) = &context.call.identity else {
             return Ok(None);
         };
+        // `run` has no top-level page argument, so the outer arguments cannot say which
+        // pages a script touched. The script hook recorded them; report those instead.
+        if let Some(notice) = run_script_notice(context.call) {
+            return Ok(Some(append_notice(context.result, notice)));
+        }
         let Some(page_id) = extract_page_id(context.call) else {
             return Ok(None);
         };
@@ -86,6 +91,23 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
 
         Ok(Some(append_notice(context.result, notice)))
     })
+}
+
+/// Summarises the pages a `run` script touched that were not its own.
+fn run_script_notice(call: &crate::api::mcp::dispatch::ToolCall) -> Option<String> {
+    let pages = call.foreign_pages.lock().ok()?;
+    if pages.is_empty() {
+        return None;
+    }
+    let listed = pages
+        .iter()
+        .map(|(page, owner)| format!("page {page} belongs to {owner}"))
+        .collect::<Vec<_>>()
+        .join("; ");
+    Some(format!(
+        "Note: this script used tabs that are not yours. {listed}. You are allowed to use \
+         them; leave them as you found them unless the user asked you to change them."
+    ))
 }
 
 /// Adds the note as an extra text block, leaving the original content untouched so a
@@ -194,6 +216,46 @@ mod tests {
 
         let ok = ToolResult::text("navigated", None);
         assert!(run(&call, &ok).await.is_none(), "own pages need no notice");
+        Ok(())
+    }
+
+    /// `run` takes no `page` argument, so without the script hook's record the agent
+    /// would be told nothing about the tabs its script actually used.
+    #[tokio::test]
+    async fn a_run_script_reports_the_foreign_pages_it_touched() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
+        {
+            let mut pages = call
+                .foreign_pages
+                .lock()
+                .map_err(|_| anyhow::anyhow!("foreign_pages poisoned"))?;
+            pages.insert(7, "another agent (research)".to_string());
+            pages.insert(9, "the user".to_string());
+        }
+
+        let ok = ToolResult::text("script returned 1", None);
+        let annotated = run(&call, &ok)
+            .await
+            .unwrap_or_else(|| panic!("expected a notice"));
+        assert!(!annotated.is_error, "ownership must never fail a call");
+        let text = text_of(&annotated);
+        assert!(text.contains("script returned 1"), "original lost: {text}");
+        assert!(
+            text.contains("page 7 belongs to another agent (research)"),
+            "{text}"
+        );
+        assert!(text.contains("page 9 belongs to the user"), "{text}");
+        Ok(())
+    }
+
+    /// A script that stayed in its own tabs is not annotated.
+    #[tokio::test]
+    async fn a_run_script_in_its_own_tabs_is_quiet() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
+        let ok = ToolResult::text("script returned 1", None);
+        assert!(run(&call, &ok).await.is_none());
         Ok(())
     }
 

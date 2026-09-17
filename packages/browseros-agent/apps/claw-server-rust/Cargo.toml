@@ -27,6 +27,7 @@ base64.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 posthog-rs.workspace = true
+ress.workspace = true
 sentry.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true

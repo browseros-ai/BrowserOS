@@ -234,8 +234,8 @@ mod tests {
         const LEAKS: &[(&str, &str)] = &[
             ("Error: no results for 'pregnancy test'", "pregnancy"),
             (
-                "Error: login failed for dani@example.com",
-                "dani@example.com",
+                "Error: login failed for person@example.com",
+                "person@example.com",
             ),
             (
                 "Error: could not find /Users/someone/Desktop/taxes.pdf",

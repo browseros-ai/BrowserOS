@@ -502,6 +502,7 @@ dependencies = [
  "posthog-rs",
  "pulldown-cmark",
  "rand 0.9.4",
+ "ress",
  "rmcp",
  "sea-orm",
  "sea-orm-migration",
@@ -2359,6 +2360,16 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "ress"
+version = "0.11.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0d77111a94ef694bb2fe9867a93e21007e2151943c9a48b2ed72734bde41875a"
+dependencies = [
+ "log",
+ "unicode-xid",
 ]
 
 [[package]]

@@ -65,6 +65,12 @@ pub struct ToolCall {
     pub state: AppState,
     pub dispatch_id: DispatchId,
     pub output_files: OutputFileAccess,
+    /// Pages a `run` script acted on that belong to the user or another agent.
+    ///
+    /// `run` has no top-level `page` argument, so the ownership notice cannot be derived
+    /// from its arguments the way it is for a granular tool. The script hook records what
+    /// the script actually touched, and `effects::page_ownership_notice` reports it.
+    pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
 }
 
 impl ToolCall {
@@ -110,6 +116,7 @@ impl ToolCall {
             ToolFlags::default()
         };
         Self {
+            foreign_pages: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             catalog,
             tool_index,
             raw_args,

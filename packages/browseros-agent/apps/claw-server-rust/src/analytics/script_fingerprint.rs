@@ -1,211 +1,195 @@
 //! Reduces a `run` script to its shape.
 //!
-//! Identifiers and call structure survive because the agent wrote them and they carry
-//! the diagnosis. Every literal is replaced, because the user's data lives in literals:
-//! URLs, search terms, credentials typed into a form. Comments go entirely, since agents
-//! narrate intent in them.
+//! # Allowlist, not blocklist
 //!
-//! The lexer only ever *removes* information. An unterminated string or an unrecognised
-//! construct collapses into a placeholder rather than passing through, so malformed input
-//! cannot leak by falling off the end of a match arm.
+//! The output is built from tokens positively recognised as safe. Identifiers, keywords
+//! and punctuation are emitted because the agent wrote them and they carry the
+//! diagnosis. Literals become placeholders because the user's data lives in literals: the
+//! URL, the search term inside it, a password typed into a form. Anything the scanner
+//! cannot classify becomes a placeholder too.
+//!
+//! That direction matters. The first version of this module copied the source and removed
+//! what it recognised as a literal, which is a blocklist, and it leaked. It decided
+//! regex-versus-division from the preceding character, so `return /Amara Okafor/` looked
+//! like division and the name was copied out verbatim. Any keyword before a regex did it:
+//! `return`, `typeof`, `case`, `in`, `of`, `delete`, `void`, `new`, `instanceof`.
+//!
+//! Regex-versus-division is genuinely context dependent, which is why real scanners track
+//! the preceding *token* rather than the preceding character. Rather than reimplement
+//! that, this uses `ress`, a JavaScript scanner. A scanner and not a parser: a fingerprint
+//! needs token kinds, not structure, and a scanner degrades far better on input that does
+//! not parse.
+//!
+//! When scanning fails outright, `sdk_calls_only` takes over and emits nothing but names
+//! drawn from our own SDK surface, so an unscannable script still says which API it was
+//! using and still cannot carry user text.
 
-/// Keeps a fingerprint small enough to stay a fingerprint. Longer scripts are cut here
-/// and marked, which is itself a useful signal about the shape of the failure.
+use ress::prelude::*;
+
+/// Keeps a fingerprint small enough to stay a fingerprint.
 pub const FINGERPRINT_MAX_BYTES: usize = 4_000;
 
 const TRUNCATION_MARKER: &str = "\n/* truncated */";
 
-/// Single digits survive because they carry meaning in slicing and indexing and cannot
-/// identify anyone. Anything wider becomes `<num>`: ports, ids, prices, counts.
-fn is_safe_digit(raw: &str) -> bool {
-    raw.len() == 1 && raw.as_bytes()[0].is_ascii_digit()
-}
+/// The `browser` SDK surface. The fallback path emits only these, so it cannot carry a
+/// name the user chose.
+const SDK_SURFACE: &[&str] = &[
+    "browser",
+    "pages",
+    "observe",
+    "input",
+    "nav",
+    "cdp",
+    "cdpJsonForPage",
+    "read",
+    "grep",
+    "wait",
+    "screenshot",
+    "evaluate",
+    "download",
+    "pdf",
+    "upload",
+    "tabGroups",
+    "windows",
+    "saveHelper",
+    "listHelpers",
+    "readHelper",
+    "snapshot",
+    "diff",
+    "resolveRef",
+    "click",
+    "fill",
+    "type",
+    "press",
+    "hover",
+    "selectOption",
+    "scroll",
+    "goto",
+    "back",
+    "forward",
+    "reload",
+    "newPage",
+    "close",
+    "list",
+    "getInfo",
+    "console",
+    "sleep",
+    "setTimeout",
+];
 
-/// True when a `/` at this point starts a regex rather than a division. Standard
-/// heuristic: regex can only follow a position where a value cannot.
-fn slash_starts_regex(previous: Option<char>) -> bool {
-    match previous {
-        None => true,
-        Some(c) => matches!(
-            c,
-            '(' | ','
-                | '='
-                | ':'
-                | '['
-                | '!'
-                | '&'
-                | '|'
-                | '?'
-                | '{'
-                | '}'
-                | ';'
-                | '+'
-                | '-'
-                | '*'
-                | '%'
-                | '<'
-                | '>'
-                | '~'
-                | '^'
-                | '\n'
-        ),
-    }
-}
-
-/// Rewrites `source` into a structural fingerprint. Never returns any literal text from
-/// the input.
+/// Rewrites `source` into a structural fingerprint. Never returns literal text from the
+/// input.
 #[must_use]
 pub fn fingerprint(source: &str) -> String {
-    let mut out = String::with_capacity(source.len().min(FINGERPRINT_MAX_BYTES));
-    let mut chars = source.chars().peekable();
-    // Tracks the last emitted non-whitespace character, for the regex/division decision.
-    let mut previous: Option<char> = None;
+    let rendered = match ress::tokenize(source) {
+        Ok(tokens) => from_tokens(&tokens),
+        // Unscannable. Fall back to the one thing that is safe by construction.
+        Err(_) => sdk_calls_only(source),
+    };
+    cap(rendered)
+}
 
-    while let Some(c) = chars.next() {
-        match c {
-            // Strings and templates collapse whole. A template's `${...}` may hold an
-            // identifier worth keeping, but it far more often holds an interpolated URL,
-            // so the whole literal goes.
-            '\'' | '"' | '`' => {
-                consume_string(&mut chars, c);
-                out.push_str("<str>");
-                previous = Some('x');
-            }
-            '/' => match chars.peek() {
-                Some('/') => {
-                    for c in chars.by_ref() {
-                        if c == '\n' {
-                            out.push('\n');
-                            previous = Some('\n');
-                            break;
-                        }
+/// Emits one token per recognised kind, and a placeholder for everything else.
+fn from_tokens(tokens: &[Token<&str>]) -> String {
+    let mut out = String::new();
+    let mut previous_was_word = false;
+    // Nesting depth inside a substituting template literal. See `Template::Head` below.
+    let mut template_depth = 0_u32;
+    for token in tokens {
+        // A template with `${}` is a string the script is building, so everything
+        // interpolated into it is string data by construction: `` `Hello ${user.name}` ``
+        // carries the name as surely as a quoted literal would. Emitting `<str>` for the
+        // quoted chunks while passing the substitutions through would redact the wrapper
+        // and keep the payload, so the whole template collapses to one placeholder.
+        // Templates nest, hence the depth count rather than a flag.
+        if let Token::Template(template) = token {
+            match template {
+                Template::Head(_) => {
+                    template_depth += 1;
+                    if template_depth > 1 {
+                        continue;
                     }
                 }
-                Some('*') => {
-                    chars.next();
-                    let mut last = '\0';
-                    for c in chars.by_ref() {
-                        if last == '*' && c == '/' {
-                            break;
-                        }
-                        last = c;
-                    }
-                    out.push(' ');
+                Template::Middle(_) => continue,
+                Template::Tail(_) => {
+                    template_depth = template_depth.saturating_sub(1);
+                    continue;
                 }
-                _ => {
-                    if slash_starts_regex(previous) {
-                        consume_regex(&mut chars);
-                        out.push_str("<re>");
-                        previous = Some('x');
-                    } else {
-                        out.push('/');
-                        previous = Some('/');
+                Template::NoSub(_) => {
+                    if template_depth > 0 {
+                        continue;
                     }
                 }
-            },
-            '0'..='9' => {
-                let raw = consume_number(c, &mut chars);
-                if is_safe_digit(&raw) {
-                    out.push_str(&raw);
-                } else {
-                    out.push_str("<num>");
-                }
-                previous = Some('x');
             }
-            c if c.is_whitespace() => {
-                out.push(c);
-                if c == '\n' {
-                    previous = Some('\n');
-                }
-            }
-            c => {
-                out.push(c);
-                previous = Some(c);
-            }
+        } else if template_depth > 0 {
+            continue;
         }
-
+        let (text, is_word) = match token {
+            Token::Ident(ident) => (ident.to_string(), true),
+            Token::Keyword(keyword) => (keyword.to_string(), true),
+            Token::Punct(punct) => (punct.to_string(), false),
+            Token::Boolean(value) => (value.to_string(), true),
+            Token::Null => ("null".to_string(), true),
+            Token::Number(_) => ("<num>".to_string(), true),
+            Token::String(_) | Token::Template(_) => ("<str>".to_string(), true),
+            Token::RegEx(_) => ("<re>".to_string(), true),
+            // Agents narrate intent in comments, so they go entirely.
+            Token::Comment(_) => continue,
+            Token::EoF => break,
+        };
+        // Two adjacent words need a separator; punctuation reads better without one.
+        if is_word && previous_was_word {
+            out.push(' ');
+        }
+        out.push_str(&text);
+        previous_was_word = is_word;
         if out.len() >= FINGERPRINT_MAX_BYTES {
-            truncate_on_char_boundary(&mut out, FINGERPRINT_MAX_BYTES);
-            out.push_str(TRUNCATION_MARKER);
-            return out;
-        }
-    }
-
-    out
-}
-
-/// Walks to the closing quote, honouring backslash escapes. Runs to end of input when
-/// the literal is unterminated, which is the safe direction: nothing is emitted either way.
-fn consume_string(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, quote: char) {
-    let mut escaped = false;
-    for c in chars.by_ref() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        if c == '\\' {
-            escaped = true;
-            continue;
-        }
-        if c == quote {
-            return;
-        }
-    }
-}
-
-/// Walks a regex literal to its closing slash, skipping escapes and character classes,
-/// then eats trailing flags.
-fn consume_regex(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) {
-    let mut escaped = false;
-    let mut in_class = false;
-    while let Some(c) = chars.next() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match c {
-            '\\' => escaped = true,
-            '[' => in_class = true,
-            ']' => in_class = false,
-            '/' if !in_class => {
-                while let Some(f) = chars.peek() {
-                    if f.is_ascii_alphabetic() {
-                        chars.next();
-                    } else {
-                        break;
-                    }
-                }
-                return;
-            }
-            _ => {}
-        }
-    }
-}
-
-/// Collects a numeric literal, covering hex, binary, octal, floats, exponents, bigint
-/// and separators, so no digit-adjacent text escapes as structure.
-fn consume_number(first: char, chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> String {
-    let mut raw = String::from(first);
-    while let Some(&c) = chars.peek() {
-        // A sign only continues the literal directly after an exponent marker.
-        let signed_exponent =
-            (c == '+' || c == '-') && matches!(raw.chars().last(), Some('e') | Some('E'));
-        if c.is_ascii_alphanumeric() || c == '.' || c == '_' || signed_exponent {
-            raw.push(c);
-            chars.next();
-        } else {
             break;
         }
     }
-    raw
+    out
 }
 
-fn truncate_on_char_boundary(text: &mut String, limit: usize) {
-    let mut end = limit.min(text.len());
+/// Last resort for a script the scanner cannot read.
+///
+/// Emits only names from `SDK_SURFACE`, in the order they appear. Every emitted byte comes
+/// from our own constant rather than from the input, so this cannot leak whatever made the
+/// script unscannable.
+fn sdk_calls_only(source: &str) -> String {
+    let mut found = Vec::new();
+    let mut token = String::new();
+    for c in source.chars().chain(std::iter::once(' ')) {
+        if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
+            token.push(c);
+            continue;
+        }
+        if !token.is_empty() {
+            if let Some(name) = SDK_SURFACE.iter().find(|name| **name == token) {
+                found.push(*name);
+            }
+            token.clear();
+        }
+    }
+    if found.is_empty() {
+        return "/* unscannable script, no SDK calls recognised */".to_string();
+    }
+    format!(
+        "/* unscannable script; SDK calls seen: {} */",
+        found.join(", ")
+    )
+}
+
+fn cap(mut text: String) -> String {
+    if text.len() <= FINGERPRINT_MAX_BYTES {
+        return text;
+    }
+    let mut end = FINGERPRINT_MAX_BYTES;
     while end > 0 && !text.is_char_boundary(end) {
         end -= 1;
     }
     text.truncate(end);
+    text.push_str(TRUNCATION_MARKER);
+    text
 }
 
 #[cfg(test)]
@@ -216,8 +200,8 @@ mod tests {
     /// script plus the substring that would be a leak if it survived.
     const LEAK_CASES: &[(&str, &str)] = &[
         (
-            "await browser.input(3).fill(ref, 'dani@example.com');",
-            "dani@example.com",
+            "await browser.input(3).fill(ref, 'person@example.com');",
+            "person@example.com",
         ),
         (
             "await browser.input(3).fill(pw, \"hunter2-correct-horse\");",
@@ -292,11 +276,19 @@ mod tests {
         assert!(!out.contains("token=abc"));
     }
 
+    /// No literal survives, including a single digit.
+    ///
+    /// The previous version kept `0` through `9` on the grounds that a single digit
+    /// cannot identify anyone, which is true, and which made the rule "no literals,
+    /// except sometimes". Every leak in this module has come from an exception in the
+    /// redaction path, so the exception is gone. `slice(<num>, <num>)` is marginally less
+    /// readable than `slice(0, <num>)` and the rule is now one sentence with no caveat.
     #[test]
-    fn single_digits_survive_because_they_are_structure() {
+    fn no_number_survives_however_small() {
         let out = fingerprint("md.slice(0, 6000); arr[1];");
-        assert!(out.contains("slice(0, <num>)"), "{out}");
-        assert!(out.contains("arr[1]"), "{out}");
+        assert!(!out.contains('0'), "{out}");
+        assert!(!out.contains('1'), "{out}");
+        assert!(out.contains("slice(<num>,<num>)"), "{out}");
     }
 
     #[test]
@@ -321,14 +313,86 @@ mod tests {
     #[test]
     fn division_is_not_mistaken_for_a_regex() {
         let out = fingerprint("const ratio = total / count;");
-        assert!(out.contains("total / count"), "{out}");
+        assert!(out.contains("total/count"), "{out}");
         assert!(!out.contains("<re>"), "{out}");
+    }
+
+    /// The leak this module was rewritten for. A regex after a keyword read as division
+    /// under the old character-based heuristic, and its body was copied out verbatim.
+    #[test]
+    fn a_regex_after_a_keyword_is_redacted() {
+        const CASES: &[&str] = &[
+            "return /Amara Okafor/;",
+            "const a = typeof /Amara Okafor/;",
+            "if (x) return /Amara Okafor/.test(s);",
+            "for (const k in /Amara Okafor/.source) {}",
+            "const r = new RegExp(/Amara Okafor/);",
+            "const y = x instanceof /Amara Okafor/;",
+            "switch (v) { case /Amara Okafor/.source: break; }",
+            "void /Amara Okafor/;",
+            "delete o[/Amara Okafor/.source];",
+        ];
+        for script in CASES {
+            let out = fingerprint(script);
+            assert!(!out.contains("Amara"), "leaked from {script}\n  -> {out}");
+            assert!(
+                out.contains("<re>"),
+                "regex not marked in {script}\n  -> {out}"
+            );
+        }
+    }
+
+    /// Identifiers carrying digits used to be split by the hand-rolled number lexer, so
+    /// `p1.filter(...)` became `p<num>(...)` and the property access vanished with it.
+    /// A substituting template is a string the script is building. The wrapper alone is
+    /// not enough: `` `Hi ${name}` `` puts the name in the string just as a quote would,
+    /// and a nested template must not reopen a path out of the placeholder.
+    #[test]
+    fn nothing_interpolated_into_a_template_survives() {
+        let cases = [
+            "const a = `Hello ${userName} from ${cityName}`;",
+            "const a = `outer ${`inner ${userName}`} tail`;",
+            "await browser.nav(1).goto(`https://h.test/?q=${userName}`);",
+            "const a = `${'AmaraOkafor'}`;",
+            "const a = `${/AmaraOkafor/.source}`;",
+        ];
+        for case in cases {
+            let out = fingerprint(case);
+            for leaked in ["userName", "cityName", "AmaraOkafor", "inner", "outer"] {
+                assert!(
+                    !out.contains(leaked),
+                    "{leaked} leaked\n  in:  {case}\n  out: {out}"
+                );
+            }
+        }
+        // Structure outside the template is untouched.
+        assert_eq!(
+            fingerprint("await browser.nav(1).goto(`https://h.test/?q=${q}`);"),
+            "await browser.nav(<num>).goto(<str>);"
+        );
+    }
+
+    #[test]
+    fn identifiers_containing_digits_survive_intact() {
+        let out = fingerprint("const p1 = x; return p1.filter(r => r.ok);");
+        assert!(out.contains("p1.filter"), "{out}");
+        assert!(!out.contains("p<num>"), "{out}");
+    }
+
+    /// A script the scanner cannot read still reports which API it was using, and every
+    /// byte of that comes from our own constant rather than from the input.
+    #[test]
+    fn an_unscannable_script_reports_sdk_calls_and_nothing_else() {
+        let out = fingerprint("const a = 'unterminated; await browser.read(2); @@@ !!! }{");
+        assert!(out.contains("unscannable"), "{out}");
+        assert!(!out.contains("unterminated"), "{out}");
+        assert!(!out.contains("@@@"), "{out}");
     }
 
     #[test]
     fn an_unterminated_string_cannot_leak_its_tail() {
-        let out = fingerprint("const a = 'dani@example.com and the rest of the file");
-        assert!(!out.contains("dani@example.com"), "{out}");
+        let out = fingerprint("const a = 'person@example.com and the rest of the file");
+        assert!(!out.contains("person@example.com"), "{out}");
     }
 
     #[test]
