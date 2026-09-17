@@ -54,7 +54,7 @@ import {
 } from './manage-audit-files.helpers'
 
 export function ManageAuditFilesDialog() {
-  const storage = useAuditStorage()
+  const storage = useAuditStorage({ refetchInterval: 30000 })
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
   const invalidateStorage = () =>

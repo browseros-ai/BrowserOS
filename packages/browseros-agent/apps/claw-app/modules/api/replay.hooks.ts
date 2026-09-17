@@ -89,13 +89,15 @@ export async function fetchReplayMetadata({
   return (await apiClient()).getRecording({ sessionId })
 }
 
+// No factory refetchInterval: callers opt in to polling only while the session
+// is live (TaskHeader, the replay screen), so a finished session fetches the
+// final recording metadata once and stops.
 export const useReplayMetadata = createQuery<
   ReplayMetadata,
   UseReplayMetadataVariables
 >({
   queryKey: ['replay', 'metadata'],
   fetcher: fetchReplayMetadata,
-  refetchInterval: 10_000,
 })
 
 export interface UseReplayEventsVariables {

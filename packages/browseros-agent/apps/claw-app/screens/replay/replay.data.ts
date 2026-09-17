@@ -93,6 +93,9 @@ export function useReplayData(): UseReplayDataResult {
   const metadataQuery = useReplayMetadata({
     variables: { sessionId },
     enabled: sessionId.length > 0,
+    // Poll for newly available recording only while the session is live; a
+    // finished session's recording is fetched once and does not change.
+    refetchInterval: taskQuery.data?.session.status === 'live' ? 10_000 : false,
   })
   const metadataRevision = replayEventsRevision(metadataQuery.data)
   const sessionRevision =

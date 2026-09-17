@@ -18,7 +18,7 @@ export function Cockpit() {
 
   // When no live session is connected, these probes decide which onboarding
   // shell to show. Their stable keys are shared with RecentActivity and MCP.
-  const connections = useConnections()
+  const connections = useConnections({ refetchInterval: 5000 })
   const taskProbe = useSessions({
     variables: { limit: ONBOARDING_PROBE_LIMIT },
     // Scoped to the onboarding shells: poll every 4s while the
@@ -68,6 +68,7 @@ export function Cockpit() {
     probesResolved && state === 'ready' && !hasLiveSessions
   const stats = useCockpitStats({
     enabled: shouldLoadStats,
+    refetchInterval: 3000,
   })
 
   const content =

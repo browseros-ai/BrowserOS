@@ -35,11 +35,12 @@ export function TaskHeader({ detail }: TaskHeaderProps) {
     typeof location.state.from === 'string'
       ? location.state.from
       : '/audit'
-  // Poll the metadata endpoint so the View Replay button unlocks
-  // within seconds once the first rrweb batch lands. The
-  // useReplayMetadata hook handles its own staleTime + interval.
+  // Poll the metadata endpoint only while the session is live, so the View
+  // Replay button unlocks within seconds once the first rrweb batch lands. A
+  // finished or cancelled session fetches the final metadata once and stops.
   const replayMeta = useReplayMetadata({
     variables: { sessionId: task.sessionId },
+    refetchInterval: task.status === 'live' ? 10_000 : false,
   })
   const replayReady = replayMeta.data?.hasData === true
 
