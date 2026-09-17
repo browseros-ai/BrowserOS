@@ -300,6 +300,14 @@ impl Sessions {
         self.retired.read().await.get(id).map(|entry| entry.cause)
     }
 
+    /// The successor already bound to a retired handle, if one is.
+    ///
+    /// Lets a caller take the settled answer without minting a session it would only have
+    /// to discard, which is the common case: the race happens once, the resends follow.
+    pub async fn replacement_of(&self, retired: &SessionId) -> Option<SessionId> {
+        self.retired.read().await.get(retired)?.replacement.clone()
+    }
+
     /// Binds one successor to a retired handle, and returns the successor that won.
     ///
     /// Compare-and-set under a single write lock, so concurrent calls presenting the same

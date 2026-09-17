@@ -478,34 +478,68 @@ impl ClawMcpService {
 
     /// Resolves a handle whose session ended on its own to one successor, shared by every
     /// later call that still presents the dead handle.
+    ///
+    /// Mints first and agrees second. Choosing an id and minting it afterwards makes only
+    /// the *choice* atomic: concurrent callers settle on one id, all find it absent, and
+    /// each then builds a session of its own under it. One insert wins the map and the
+    /// rest are orphans, live in their caller's hands, claiming tabs under a conversation
+    /// id nothing will ever tear down, each with its own session-start row and no end.
+    /// Minting first means every caller owns a real, reapable session before any of them
+    /// agree on which one survives, so the loser has something it can cleanly discard.
     async fn succeed_retired_session(
         &self,
         retired: &SessionId,
         client: ClientInfo,
     ) -> Result<(StartedSession, SessionId), McpError> {
-        let candidate = SessionId::new(Uuid::new_v4().to_string());
-        let Some(winner) = self
-            .state
-            .sessions
-            .adopt_replacement(retired, candidate)
-            .await
-        else {
-            // Reaped between the two reads. It is simply unknown now.
-            return self.mint_session(client).await;
-        };
-        if let Some(session) = self.state.sessions.lookup(&winner).await {
+        // Settled already: take the successor without minting one to throw away. The race
+        // happens at most once per dead handle; every resend after it lands here.
+        if let Some(existing) = self.state.sessions.replacement_of(retired).await
+            && let Some(session) = self.state.sessions.lookup(&existing).await
+        {
             let agent_label = session.agent().label().to_string();
             return Ok((
                 StartedSession {
                     session,
                     agent_label,
                 },
-                winner,
+                existing,
             ));
         }
-        // The successor was itself torn down. Mint rather than chase a chain of tombstones.
-        let started = self.start_session_in_store(winner.clone(), client).await?;
-        Ok((started, winner))
+        let (mine, mine_handle) = self.mint_session(client).await?;
+        let Some(winner) = self
+            .state
+            .sessions
+            .adopt_replacement(retired, mine_handle.clone())
+            .await
+        else {
+            // Reaped between the two reads. Mine is simply a new session now.
+            return Ok((mine, mine_handle));
+        };
+        if winner == mine_handle {
+            return Ok((mine, mine_handle));
+        }
+        // The winner inserted its session before it adopted, and adoption is serialized, so
+        // a winner that is still live is visible here. One that is not was torn down in the
+        // gap; keep mine rather than chase a chain of tombstones.
+        let Some(session) = self.state.sessions.lookup(&winner).await else {
+            return Ok((mine, mine_handle));
+        };
+        if let Err(error) = self
+            .state
+            .sessions
+            .remove(&mine_handle, "closed", Some("superseded"))
+            .await
+        {
+            warn!(error = %error, "discarding a superseded replacement session failed");
+        }
+        let agent_label = session.agent().label().to_string();
+        Ok((
+            StartedSession {
+                session,
+                agent_label,
+            },
+            winner,
+        ))
     }
 
     async fn mint_session(
@@ -1444,7 +1478,12 @@ mod tests {
                 service
                     .resolve_modern_session(Some(handle), None, None)
                     .await
-                    .map(|(_, resolved)| resolved.to_string())
+                    .map(|(started, resolved)| {
+                        (
+                            resolved.to_string(),
+                            started.session.convo_id().as_str().to_string(),
+                        )
+                    })
                     .map_err(|error| anyhow::anyhow!("{error:?}"))
             })
         });
@@ -1452,10 +1491,30 @@ mod tests {
         for racer in racers.collect::<Vec<_>>() {
             resolved.insert(racer.await??);
         }
+        // Agreeing on the handle is not enough. Two callers can name the same successor and
+        // still each build a session of their own under it, and the one that loses the map
+        // insert stays live in its caller's hands while nothing can ever tear it down. The
+        // conversation identity is what tells those sessions apart, so it is what the
+        // assertion has to compare.
         assert_eq!(
             resolved.len(),
             1,
             "concurrent calls split into {resolved:?}"
+        );
+        let (winner, convo) = resolved
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no successor"));
+        let live = call
+            .state
+            .sessions
+            .lookup(&SessionId::new(winner))
+            .await
+            .unwrap_or_else(|| panic!("the successor every caller returned is not in the store"));
+        assert_eq!(
+            live.convo_id().as_str(),
+            convo,
+            "callers were handed a session the store does not hold"
         );
         assert_eq!(call.state.sessions.count().await, before + 1);
         Ok(())
