@@ -1,0 +1,7 @@
+User-agent: *
+Content-Signal: ai-train=yes, search=yes, ai-input=yes
+Disallow: /cdn-cgi/
+Allow: /_next/image
+Disallow: /_next/
+Disallow: /mintlify-assets/_next/static/
+Sitemap: https://docs.browseros.com/sitemap.xml
