@@ -10,6 +10,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
 import * as _connectionsHooks from '@/modules/api/connections.hooks'
+import { CommandBlock } from './CommandBlock'
 import { SKILL_INSTALL_COMMAND, SKILLS_PACK } from './install-guide.data'
 
 const mcpBrowserosConnections = [
@@ -248,5 +249,16 @@ describe('Mcp (editorial)', () => {
     expect(SKILL_INSTALL_COMMAND).toBe(
       `npx skills add ${SKILLS_PACK} --skill browseros-neo`,
     )
+  })
+
+  it('holds the endpoint block open while the URL is still resolving', () => {
+    // resolveCanonicalMcpEndpointUrl is async, so the dialog can open before
+    // the endpoint exists. Removing the block would tell someone to add an
+    // endpoint with nothing on screen to add, and would shift the layout
+    // when it arrived.
+    const html = renderToStaticMarkup(<CommandBlock command={null} />)
+    expect(html).toContain('Resolving the endpoint')
+    expect(html).toContain('animate-pulse')
+    expect(html).toContain('disabled')
   })
 })

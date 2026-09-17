@@ -3,7 +3,8 @@ import { useState } from 'react'
 import { cn } from '@/lib/utils'
 
 interface CommandBlockProps {
-  command: string
+  /** `null` while the value is still resolving, as the endpoint URL is on open. */
+  command: string | null
   /** Fired once per successful copy, so the caller can track it. */
   onCopied?: () => void
   className?: string
@@ -15,6 +16,11 @@ interface CommandBlockProps {
  * Deliberately not EndpointStrip: that one truncates to a single line, which
  * is right for a URL you only ever copy and wrong for a command someone is
  * meant to read and sanity-check before running.
+ *
+ * A null command holds the block open with a skeleton rather than removing it.
+ * The endpoint resolves asynchronously, so a reader who opens the dialog
+ * quickly would otherwise be told to add an endpoint with nothing on screen
+ * to add, and the layout would jump when it arrived.
  */
 export function CommandBlock({
   command,
@@ -22,8 +28,10 @@ export function CommandBlock({
   className,
 }: CommandBlockProps) {
   const [copied, setCopied] = useState(false)
+  const isPending = command === null
 
   const copy = async () => {
+    if (command === null) return
     try {
       await navigator.clipboard.writeText(command)
       setCopied(true)
@@ -44,14 +52,23 @@ export function CommandBlock({
         className,
       )}
     >
-      <code className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-[12.5px] text-ink leading-relaxed">
-        {command}
-      </code>
+      {isPending ? (
+        <span
+          role="status"
+          aria-label="Resolving the endpoint"
+          className="h-[18px] min-w-0 flex-1 animate-pulse rounded bg-border-2"
+        />
+      ) : (
+        <code className="min-w-0 flex-1 whitespace-pre-wrap break-words font-mono text-[12.5px] text-ink leading-relaxed">
+          {command}
+        </code>
+      )}
       <button
         type="button"
         onClick={copy}
+        disabled={isPending}
         aria-label={copied ? 'Command copied' : 'Copy command'}
-        className="inline-flex shrink-0 items-center gap-1.5 self-center rounded-lg border border-border-2 bg-card px-2 py-1 text-[11.5px] text-ink-3 transition-colors hover:border-accent/40 hover:text-ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 active:scale-[0.98]"
+        className="inline-flex shrink-0 items-center gap-1.5 self-center rounded-lg border border-border-2 bg-card px-2 py-1 text-[11.5px] text-ink-3 transition-colors hover:border-accent/40 hover:text-ink-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 active:scale-[0.98] disabled:pointer-events-none disabled:opacity-40"
       >
         {copied ? (
           <>

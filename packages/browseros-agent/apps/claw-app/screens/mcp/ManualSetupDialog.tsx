@@ -67,7 +67,7 @@ export function ManualSetupDialog({
                   {step.body}
                 </p>
 
-                {step.id === 'add-mcp' && endpointUrl !== null && (
+                {step.id === 'add-mcp' && (
                   <CommandBlock command={endpointUrl} />
                 )}
 
