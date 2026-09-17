@@ -91,6 +91,7 @@ impl AppState {
         let run_failures = Arc::new(crate::services::run_failures::RunFailureReporter::from_env(
             crate::db::run_error_budget::RunErrorBudgetRepository::new(database.clone()),
             analytics.get_state().await.distinct_id,
+            &config.browserclaw_dir.join("logs"),
         ));
         let skill = load_browserclaw_skill(&config.resources_dir)?;
         let harness = Arc::new(HarnessService::new_with_managed_skill(

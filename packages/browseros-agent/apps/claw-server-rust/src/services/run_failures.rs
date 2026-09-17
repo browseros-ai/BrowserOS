@@ -7,7 +7,10 @@ use crate::{
     analytics::{error_allowlist::classify, script_fingerprint::fingerprint},
     db::run_error_budget::{BudgetDecision, DAILY_RUN_ERROR_CAP, RunErrorBudgetRepository},
 };
-use std::sync::Arc;
+use std::{
+    io::Write,
+    sync::{Arc, Mutex},
+};
 
 const BUILD_SENTRY_DSN: Option<&str> = option_env!("CLAW_SENTRY_DSN");
 
@@ -39,10 +42,21 @@ pub fn duration_bucket(duration_ms: i64) -> &'static str {
     }
 }
 
+/// Whether the daily budget had room for this one.
+///
+/// Sinks see suppressed events too. Sentry drops them, keeping the quota honest; the dev
+/// log records them, because "nothing since ten this morning" is otherwise indistinguishable
+/// from "nothing since the bug was fixed".
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Delivery {
+    Sent,
+    SuppressedByBudget,
+}
+
 /// Where a built event goes. A trait so the decision logic can be tested without a
 /// network, and so tests can assert on exactly what would have left the machine.
 pub trait RunFailureSink: Send + Sync {
-    fn send(&self, event: RunFailureEvent);
+    fn send(&self, event: RunFailureEvent, delivery: Delivery);
 }
 
 /// Forwards to Sentry as a hand-built event.
@@ -74,7 +88,10 @@ impl SentrySink {
 }
 
 impl RunFailureSink for SentrySink {
-    fn send(&self, event: RunFailureEvent) {
+    fn send(&self, event: RunFailureEvent, delivery: Delivery) {
+        if delivery == Delivery::SuppressedByBudget {
+            return;
+        }
         let mut sentry_event = sentry::protocol::Event::new();
         sentry_event.level = sentry::Level::Error;
         sentry_event.logger = Some("run_failure".to_string());
@@ -103,6 +120,52 @@ impl RunFailureSink for SentrySink {
     }
 }
 
+/// Writes what Sentry would have received to a rolling daily file.
+///
+/// Used only when no DSN is configured, so a developer can see the exact redacted payload
+/// without wiring a project up. It writes the same event the network sink would, built by
+/// the same path: if a secret could reach this file, it could reach Sentry.
+pub struct FileSink {
+    appender: Mutex<tracing_appender::rolling::RollingFileAppender>,
+}
+
+impl FileSink {
+    pub const FILENAME_PREFIX: &'static str = "run-failures.log";
+
+    /// Returns `None` when the log directory cannot be created, which downgrades to
+    /// reporting nothing rather than failing a dispatch.
+    #[must_use]
+    pub fn new(log_dir: &std::path::Path) -> Option<Self> {
+        std::fs::create_dir_all(log_dir).ok()?;
+        Some(Self {
+            appender: Mutex::new(tracing_appender::rolling::daily(
+                log_dir,
+                Self::FILENAME_PREFIX,
+            )),
+        })
+    }
+}
+
+impl RunFailureSink for FileSink {
+    fn send(&self, event: RunFailureEvent, delivery: Delivery) {
+        let status = match delivery {
+            Delivery::Sent => "would-send",
+            Delivery::SuppressedByBudget => "over-daily-cap",
+        };
+        // One record per failure, blank-line separated. The fingerprint is multi-line, so
+        // a single line per entry would be unreadable exactly where reading matters.
+        let record = format!(
+            "---- {status} ----\nerror_label: {}\nduration_bucket: {}\ninstall_id: {}\nscript_fingerprint:\n{}\n\n",
+            event.error_label, event.duration_bucket, event.install_id, event.script_fingerprint,
+        );
+        let Ok(mut appender) = self.appender.lock() else {
+            return;
+        };
+        let _ = appender.write_all(record.as_bytes());
+        let _ = appender.flush();
+    }
+}
+
 /// Owns the decision about whether a run failure is reported.
 pub struct RunFailureReporter {
     sink: Option<Box<dyn RunFailureSink>>,
@@ -114,16 +177,31 @@ pub struct RunFailureReporter {
 impl RunFailureReporter {
     /// Builds a reporter from the ambient configuration. With no DSN this is a reporter
     /// that refuses everything, which is the correct default for a developer build.
+    /// With a DSN, reports go to Sentry. Without one, they go to a rolling file under
+    /// `log_dir` instead, so the redacted payload is inspectable in development without
+    /// a project to send it to.
     #[must_use]
-    pub fn from_env(budget: RunErrorBudgetRepository, install_id: String) -> Self {
+    pub fn from_env(
+        budget: RunErrorBudgetRepository,
+        install_id: String,
+        log_dir: &std::path::Path,
+    ) -> Self {
         let dsn = std::env::var("CLAW_SENTRY_DSN")
             .ok()
             .filter(|value| !value.trim().is_empty())
             .or_else(|| BUILD_SENTRY_DSN.map(str::to_string))
             .filter(|value| !value.trim().is_empty());
-        let sink = dsn
-            .and_then(|dsn| SentrySink::new(&dsn))
-            .map(|sink| Box::new(sink) as Box<dyn RunFailureSink>);
+        let sink = match dsn.as_deref().and_then(SentrySink::new) {
+            Some(sentry) => Some(Box::new(sentry) as Box<dyn RunFailureSink>),
+            None => {
+                tracing::info!(
+                    directory = %log_dir.display(),
+                    "no Sentry DSN configured; run failures will be written to {}",
+                    FileSink::FILENAME_PREFIX
+                );
+                FileSink::new(log_dir).map(|sink| Box::new(sink) as Box<dyn RunFailureSink>)
+            }
+        };
         Self {
             sink,
             budget,
@@ -174,22 +252,25 @@ impl RunFailureReporter {
         let Some(sink) = self.sink.as_ref() else {
             return false;
         };
-        match self.budget.claim(now_ms, self.cap).await {
-            Ok(BudgetDecision::Allowed { .. }) => {}
-            Ok(BudgetDecision::Suppressed { .. }) => return false,
+        let delivery = match self.budget.claim(now_ms, self.cap).await {
+            Ok(BudgetDecision::Allowed { .. }) => Delivery::Sent,
+            Ok(BudgetDecision::Suppressed { .. }) => Delivery::SuppressedByBudget,
             Err(error) => {
                 // A budget we cannot read is a budget we must assume is spent.
                 tracing::debug!(%error, "run failure budget unavailable; not reporting");
                 return false;
             }
-        }
-        sink.send(RunFailureEvent {
-            script_fingerprint: fingerprint(script),
-            error_label: classify(error_message).label(),
-            duration_bucket: duration_bucket(duration_ms),
-            install_id: self.install_id.clone(),
-        });
-        true
+        };
+        sink.send(
+            RunFailureEvent {
+                script_fingerprint: fingerprint(script),
+                error_label: classify(error_message).label(),
+                duration_bucket: duration_bucket(duration_ms),
+                install_id: self.install_id.clone(),
+            },
+            delivery,
+        );
+        delivery == Delivery::Sent
     }
 }
 
@@ -204,21 +285,37 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingSink {
-        sent: Mutex<Vec<RunFailureEvent>>,
+        seen: Mutex<Vec<(RunFailureEvent, Delivery)>>,
     }
 
     impl RecordingSink {
-        fn events(&self) -> Vec<RunFailureEvent> {
-            self.sent.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        /// Only the ones that would actually have left the machine.
+        fn delivered(&self) -> Vec<RunFailureEvent> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter(|(_, delivery)| *delivery == Delivery::Sent)
+                .map(|(event, _)| event.clone())
+                .collect()
+        }
+
+        fn suppressed(&self) -> usize {
+            self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter(|(_, delivery)| *delivery == Delivery::SuppressedByBudget)
+                .count()
         }
     }
 
     impl RunFailureSink for Arc<RecordingSink> {
-        fn send(&self, event: RunFailureEvent) {
-            self.sent
+        fn send(&self, event: RunFailureEvent, delivery: Delivery) {
+            self.seen
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .push(event);
+                .push((event, delivery));
         }
     }
 
@@ -246,7 +343,7 @@ mod tests {
                 .report(false, "const a = 1;", "boom", 10, NOW)
                 .await
         );
-        assert!(sink.events().is_empty());
+        assert!(sink.delivered().is_empty());
         Ok(())
     }
 
@@ -273,7 +370,16 @@ mod tests {
             assert!(reporter.report(true, "const a = 1;", "boom", 10, NOW).await);
         }
         assert!(!reporter.report(true, "const a = 1;", "boom", 10, NOW).await);
-        assert_eq!(sink.events().len(), 10);
+        assert_eq!(
+            sink.delivered().len(),
+            10,
+            "the cap must bound what is delivered"
+        );
+        assert_eq!(
+            sink.suppressed(),
+            1,
+            "the sink still sees the refusal, so a dev log can record it"
+        );
         Ok(())
     }
 
@@ -290,7 +396,7 @@ mod tests {
                 NOW,
             )
             .await;
-        let events = sink.events();
+        let events = sink.delivered();
         let event = events.first().unwrap_or_else(|| panic!("no event sent"));
 
         assert!(event.script_fingerprint.contains("browser.nav"));
@@ -319,7 +425,7 @@ await browser.upload(3, { path: '/Users/amara/Desktop/passport.pdf' });";
         let error = "Error: transfer declined for amara.okafor@example.com, balance 48,201.55";
 
         reporter.report(true, script, error, 900, NOW).await;
-        let events = sink.events();
+        let events = sink.delivered();
         let event = events.first().unwrap_or_else(|| panic!("no event sent"));
         let payload = format!(
             "{} {} {} {}",
@@ -355,5 +461,158 @@ await browser.upload(3, { path: '/Users/amara/Desktop/passport.pdf' });";
         assert_eq!(duration_bucket(619), "short");
         assert_eq!(duration_bucket(5_000), "medium");
         assert_eq!(duration_bucket(30_003), "at_cap");
+    }
+}
+
+#[cfg(test)]
+mod file_sink_tests {
+    use super::*;
+    use crate::db::Database;
+    use tempfile::tempdir;
+
+    const NOW: i64 = 1_789_560_000_000;
+
+    fn log_contents(dir: &std::path::Path) -> String {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return String::new();
+        };
+        entries
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(FileSink::FILENAME_PREFIX)
+            })
+            .filter_map(|entry| std::fs::read_to_string(entry.path()).ok())
+            .collect()
+    }
+
+    async fn reporter_writing_to(
+        dir: &std::path::Path,
+        cap: i64,
+    ) -> anyhow::Result<RunFailureReporter> {
+        let db = Database::open(dir.join("browserclaw.sqlite")).await?;
+        let logs = dir.join("logs");
+        let sink = FileSink::new(&logs).unwrap_or_else(|| panic!("could not open the log"));
+        Ok(RunFailureReporter::with_sink(
+            Box::new(sink),
+            RunErrorBudgetRepository::new(db),
+            "11111111-2222-3333-4444-555555555555".to_string(),
+            cap,
+        ))
+    }
+
+    /// Whichever sink `from_env` picks, it must pick one. The earlier behaviour, where a
+    /// missing DSN meant reporting nothing at all, is what this replaces.
+    #[tokio::test]
+    async fn from_env_always_resolves_to_some_sink() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let db = Database::open(dir.path().join("browserclaw.sqlite")).await?;
+        let reporter = RunFailureReporter::from_env(
+            RunErrorBudgetRepository::new(db),
+            "install".to_string(),
+            &dir.path().join("logs"),
+        );
+        assert!(
+            reporter.is_configured(),
+            "a missing DSN should downgrade to the log, not to silence"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failure_is_written_in_a_readable_form() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let reporter = reporter_writing_to(dir.path(), 10).await?;
+        reporter
+            .report(
+                true,
+                "const pid = 20;\nawait browser.nav(pid).goto('https://x.test/?q=secret');",
+                "ReferenceError: fetch is not defined",
+                12,
+                NOW,
+            )
+            .await;
+
+        let log = log_contents(&dir.path().join("logs"));
+        assert!(log.contains("would-send"), "{log}");
+        assert!(
+            log.contains("error_label: engine:ReferenceError:fetch"),
+            "{log}"
+        );
+        assert!(log.contains("duration_bucket: instant"), "{log}");
+        assert!(
+            log.contains("browser.nav"),
+            "the fingerprint is missing:\n{log}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn entries_over_the_cap_are_written_and_marked() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let reporter = reporter_writing_to(dir.path(), 2).await?;
+        for _ in 0..4 {
+            reporter
+                .report(
+                    true,
+                    "const a = 1;",
+                    "TypeError: read is not a function",
+                    5,
+                    NOW,
+                )
+                .await;
+        }
+        let log = log_contents(&dir.path().join("logs"));
+        assert_eq!(log.matches("would-send").count(), 2, "{log}");
+        assert_eq!(log.matches("over-daily-cap").count(), 2, "{log}");
+        Ok(())
+    }
+
+    /// The dev log is the same payload by the same path, so it is also the place a leak
+    /// would show up first. Assert on the bytes actually on disk.
+    #[tokio::test]
+    async fn the_log_on_disk_holds_no_user_content() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let reporter = reporter_writing_to(dir.path(), 10).await?;
+        let script = "\
+// booking for Amara Okafor, confirmation AX8812\n\
+await browser.input(3).fill(f, 'amara.okafor@example.com');\n\
+await browser.input(3).fill(p, 'hunter2-correct-horse');\n\
+await browser.nav(3).goto('https://bank.test/transfer?to=4471&amount=48201.55');";
+        let error = "Error: declined for amara.okafor@example.com, balance 48,201.55";
+
+        reporter.report(true, script, error, 900, NOW).await;
+
+        let log = log_contents(&dir.path().join("logs"));
+        assert!(!log.is_empty(), "nothing was written");
+        for secret in [
+            "Amara",
+            "Okafor",
+            "AX8812",
+            "amara.okafor@example.com",
+            "hunter2-correct-horse",
+            "bank.test",
+            "4471",
+            "48201.55",
+            "48,201.55",
+        ] {
+            assert!(
+                !log.contains(secret),
+                "leaked {secret:?} into the log:\n{log}"
+            );
+        }
+        assert!(log.contains("browser.input"), "not diagnosable:\n{log}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn consent_off_writes_nothing_at_all() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let reporter = reporter_writing_to(dir.path(), 10).await?;
+        reporter.report(false, "const a = 1;", "boom", 5, NOW).await;
+        assert!(log_contents(&dir.path().join("logs")).is_empty());
+        Ok(())
     }
 }
