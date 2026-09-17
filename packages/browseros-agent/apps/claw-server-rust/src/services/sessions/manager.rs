@@ -308,19 +308,30 @@ impl Sessions {
         self.retired.read().await.get(retired)?.replacement.clone()
     }
 
-    /// Binds one successor to a retired handle, and returns the successor that won.
+    /// Binds one substitute to a handle that does not resolve live, and returns the
+    /// substitute that won.
+    ///
+    /// Records the handle if it was not recorded already, because the case that matters
+    /// most is a handle this server has no memory of at all. Both maps live in memory, so
+    /// a restart makes every handle its agents are holding unrecognised at once. Without a
+    /// binding those mint per call, and an agent faithfully resending one handle collects a
+    /// session and a tab for every call it makes. Observed in the wild: one handle, seven
+    /// calls, seven sessions.
     ///
     /// Compare-and-set under a single write lock, so concurrent calls presenting the same
-    /// dead handle converge on one session instead of racing to two. A caller whose
-    /// `candidate` loses is responsible for discarding it.
-    pub async fn adopt_replacement(
-        &self,
-        retired: &SessionId,
-        candidate: SessionId,
-    ) -> Option<SessionId> {
+    /// handle converge on one session instead of racing to two. A caller whose `candidate`
+    /// loses is responsible for discarding it.
+    ///
+    /// The bound session is always server-minted; a presented handle is only ever a map
+    /// key, so a caller still cannot choose or seed a session id.
+    pub async fn adopt_replacement(&self, handle: &SessionId, candidate: SessionId) -> SessionId {
         let mut entries = self.retired.write().await;
-        let entry = entries.get_mut(retired)?;
-        Some(entry.replacement.get_or_insert(candidate).clone())
+        let entry = entries.entry(handle.clone()).or_insert_with(|| Retired {
+            at: Instant::now(),
+            cause: RetirementCause::Closed,
+            replacement: None,
+        });
+        entry.replacement.get_or_insert(candidate).clone()
     }
 
     async fn retire(&self, id: &SessionId, cause: RetirementCause) {
@@ -895,19 +906,31 @@ mod tests {
         let second = registry
             .adopt_replacement(&id, SessionId::new("second"))
             .await;
-        assert_eq!(first.map(|id| id.to_string()), Some("first".to_string()));
+        assert_eq!(first.to_string(), "first");
         assert_eq!(
-            second.map(|id| id.to_string()),
-            Some("first".to_string()),
-            "the second caller must adopt the first successor, not its own"
+            second.to_string(),
+            "first",
+            "the second caller must adopt the first substitute, not its own"
         );
 
-        // A handle the server does not remember has nothing to bind a successor to.
-        assert!(
+        // A handle the server has no record of binds just the same. This is the case a
+        // restart creates for every handle at once, and leaving it unbound is what handed
+        // one agent seven sessions for one handle.
+        let stranger = SessionId::new("stranger");
+        assert_eq!(
             registry
-                .adopt_replacement(&SessionId::new("stranger"), SessionId::new("third"))
+                .adopt_replacement(&stranger, SessionId::new("third"))
                 .await
-                .is_none()
+                .to_string(),
+            "third"
+        );
+        assert_eq!(
+            registry
+                .adopt_replacement(&stranger, SessionId::new("fourth"))
+                .await
+                .to_string(),
+            "third",
+            "an unknown handle must bind once and then stay bound"
         );
         Ok(())
     }

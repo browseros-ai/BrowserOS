@@ -464,20 +464,27 @@ impl ClawMcpService {
                 handle,
             ));
         }
-        if let Some(handle) = &provided {
-            match self.state.sessions.retirement_of(handle).await {
-                Some(RetirementCause::Cancelled) => return Err(session_was_stopped()),
-                Some(RetirementCause::Closed) => {
-                    return self.succeed_retired_session(handle, client).await;
-                }
-                None => {}
-            }
+        let Some(handle) = provided else {
+            // No handle at all is a request to start something new, and the only honest
+            // reading of it. Nothing here guesses which session a caller "meant".
+            return self.mint_session(client).await;
+        };
+        if matches!(
+            self.state.sessions.retirement_of(&handle).await,
+            Some(RetirementCause::Cancelled)
+        ) {
+            return Err(session_was_stopped());
         }
-        self.mint_session(client).await
+        // Everything else resolves to one stable substitute: a handle whose session ended
+        // on its own, and equally a handle this server has no memory of. The second case is
+        // the common one and used to be the worst: both maps are in memory, so a restart
+        // makes every handle its agents are holding unrecognised at once, and an agent that
+        // keeps presenting one gets a new session, and a new tab, on every call.
+        self.succeed_retired_session(&handle, client).await
     }
 
-    /// Resolves a handle whose session ended on its own to one successor, shared by every
-    /// later call that still presents the dead handle.
+    /// Resolves a handle that does not name a live session to one substitute, shared by
+    /// every later call that still presents that handle.
     ///
     /// Mints first and agrees second. Choosing an id and minting it afterwards makes only
     /// the *choice* atomic: concurrent callers settle on one id, all find it absent, and
@@ -506,15 +513,11 @@ impl ClawMcpService {
             ));
         }
         let (mine, mine_handle) = self.mint_session(client).await?;
-        let Some(winner) = self
+        let winner = self
             .state
             .sessions
             .adopt_replacement(retired, mine_handle.clone())
-            .await
-        else {
-            // Reaped between the two reads. Mine is simply a new session now.
-            return Ok((mine, mine_handle));
-        };
+            .await;
         if winner == mine_handle {
             return Ok((mine, mine_handle));
         }
@@ -1520,19 +1523,61 @@ mod tests {
         Ok(())
     }
 
-    /// A handle nobody remembers is not an error and not a redirect. This is the one path
-    /// that was already right, and it stays right.
+    /// Taken from a real trace. A server restart empties both maps, so every handle its
+    /// agents are holding becomes unrecognised at once. The agent was not at fault: it
+    /// presented the same handle on seven consecutive calls, was told each time that the
+    /// handle was no longer active, and was handed seven different sessions and seven tabs.
+    ///
+    /// The rule that fixes it is that the same handle always resolves to the same session,
+    /// whatever the server remembers about it.
     #[tokio::test]
-    async fn an_unremembered_handle_still_mints() -> anyhow::Result<()> {
+    async fn a_handle_this_server_never_minted_still_resolves_to_one_session() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let before = call.state.sessions.count().await;
+
+        // A handle from before a restart, which this server has no record of at all.
+        let stranger = SessionId::new("b0b6200a-832b-49c8-bfd8-386e0a7f267d");
+        let mut resolved = std::collections::BTreeSet::new();
+        for _ in 0..7 {
+            let (_, handle) = service
+                .resolve_modern_session(Some(stranger.clone()), None, None)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            // The presented handle is a map key, never an identity a caller can seed.
+            assert_ne!(handle.to_string(), stranger.to_string());
+            resolved.insert(handle.to_string());
+        }
+        assert_eq!(
+            resolved.len(),
+            1,
+            "seven calls with one handle produced {resolved:?}"
+        );
+        assert_eq!(
+            call.state.sessions.count().await,
+            before + 1,
+            "seven calls must leave one session, not seven"
+        );
+        Ok(())
+    }
+
+    /// Sending no handle is the one thing that still means "start something new". Nothing
+    /// guesses which session a caller meant, which is what keeps this deterministic.
+    #[tokio::test]
+    async fn no_handle_at_all_starts_something_new_every_time() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state.clone());
 
-        let stranger = SessionId::new("never-minted-by-this-server");
-        let (_, resolved) = service
-            .resolve_modern_session(Some(stranger.clone()), None, None)
-            .await
-            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
-        assert_ne!(resolved.to_string(), stranger.to_string());
+        let mut minted = std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            let (_, handle) = service
+                .resolve_modern_session(None, None, None)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            minted.insert(handle.to_string());
+        }
+        assert_eq!(minted.len(), 3);
         Ok(())
     }
 
