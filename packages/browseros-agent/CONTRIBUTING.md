@@ -23,7 +23,6 @@ The wire types are generated on both sides. [`packages/claw-api`](packages/claw-
 |---|---|---|
 | **Bun** | The package manager and runtime. Version pinned in `package.json` | `curl -fsSL https://bun.sh/install \| bash` |
 | **Go** | The dev supervisor is a Go program compiled on every run | `brew install go` |
-| **Lima** | The dev supervisor requires it and refuses to start without it | `brew install lima` |
 | **Rust** | `claw-server-rust` is built and run with cargo | `brew install rustup && rustup-init` |
 | **BrowserOS neo** | The supervisor launches the installed app | [Download](https://cdn.browseros.com/download/BrowserOS_neo.dmg) |
 | **Docker** | Only if you change the API contract. `codegen:claw-api` runs the generator in a pinned container | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
