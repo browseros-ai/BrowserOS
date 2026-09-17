@@ -21,7 +21,6 @@ The extension talks GraphQL to the server. The schema lives at [`apps/app/schema
 |---|---|---|
 | **Bun** | The package manager and runtime. Version pinned in `package.json` | `curl -fsSL https://bun.sh/install \| bash` |
 | **Go** | The dev supervisor is a Go program compiled on every run | `brew install go` |
-| **Lima** | The dev supervisor requires it and refuses to start without it | `brew install lima` |
 | **BrowserOS** | The supervisor launches the installed app | [Download](https://files.browseros.com/download/BrowserOS.dmg) |
 
 Rust is not needed for this path. It is only required for the BrowserOS neo backend.
