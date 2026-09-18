@@ -19,6 +19,7 @@ import {
   type ReplayKind,
   type ReplayVerb,
   replayEventsRevision,
+  replayMetadataRefetchInterval,
   useReplayEvents,
   useReplayMetadata,
 } from '@/modules/api/replay.hooks'
@@ -93,9 +94,15 @@ export function useReplayData(): UseReplayDataResult {
   const metadataQuery = useReplayMetadata({
     variables: { sessionId },
     enabled: sessionId.length > 0,
-    // Poll for newly available recording only while the session is live; a
-    // finished session's recording is fetched once and does not change.
-    refetchInterval: taskQuery.data?.session.status === 'live' ? 10_000 : false,
+    // Keep polling while live, and briefly after the session ends until the
+    // recording first appears, so a batch that finalises just after teardown is
+    // still picked up without polling forever.
+    refetchInterval: (query) =>
+      replayMetadataRefetchInterval({
+        status: taskQuery.data?.session.status,
+        endedAt: taskQuery.data?.session.endedAt,
+        hasData: query.state.data?.hasData,
+      }),
   })
   const metadataRevision = replayEventsRevision(metadataQuery.data)
   const sessionRevision =

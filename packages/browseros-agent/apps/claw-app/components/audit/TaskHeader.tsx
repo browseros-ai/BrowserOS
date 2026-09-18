@@ -9,7 +9,10 @@ import { useState } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { Button } from '@/components/ui/button'
 import type { TaskDetail } from '@/modules/api/audit.hooks'
-import { useReplayMetadata } from '@/modules/api/replay.hooks'
+import {
+  replayMetadataRefetchInterval,
+  useReplayMetadata,
+} from '@/modules/api/replay.hooks'
 import { formatDuration, formatTokensFull } from '@/screens/audit/audit.helpers'
 import { AgentDot } from './AgentDot'
 import { StatusBadge } from './StatusBadge'
@@ -35,12 +38,17 @@ export function TaskHeader({ detail }: TaskHeaderProps) {
     typeof location.state.from === 'string'
       ? location.state.from
       : '/audit'
-  // Poll the metadata endpoint only while the session is live, so the View
-  // Replay button unlocks within seconds once the first rrweb batch lands. A
-  // finished or cancelled session fetches the final metadata once and stops.
+  // Poll the metadata endpoint while the session is live, and briefly after it
+  // ends until the recording first appears, so the View Replay button unlocks
+  // once the first rrweb batch lands even if it finalises just after teardown.
   const replayMeta = useReplayMetadata({
     variables: { sessionId: task.sessionId },
-    refetchInterval: task.status === 'live' ? 10_000 : false,
+    refetchInterval: (query) =>
+      replayMetadataRefetchInterval({
+        status: task.status,
+        endedAt: task.endedAt,
+        hasData: query.state.data?.hasData,
+      }),
   })
   const replayReady = replayMeta.data?.hasData === true
 
