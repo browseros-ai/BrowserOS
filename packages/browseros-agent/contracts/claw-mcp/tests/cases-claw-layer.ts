@@ -108,9 +108,9 @@ export const clawLayerCases: ContractCase[] = [
     },
   },
 
-  // [1] two-session ownership isolation ------------------------------------
+  // [1] two-session ownership labelling ------------------------------------
   {
-    name: 'ownership: a second session cannot act on the first session pages',
+    name: 'ownership: a second session is told whose page it is, and still allowed to use it',
     smoke: true,
     async run(ctx) {
       const other = await ctx.openSession('agent-other')
@@ -134,24 +134,27 @@ export const clawLayerCases: ContractCase[] = [
           `foreign page not bucketed for the other session:\n${bucketed.slice(0, 300)}`,
         )
       }
-      // And is refused act + close, with an ownership-guard error.
+      // Ownership is a label, never a permission. This test asserted the opposite until
+      // the guard behind it was removed: it made the user's own tabs unreachable from an
+      // agent, and because ownership keys on a per-session id, a lost session handle
+      // orphaned an agent's own pages mid-task. The second session may act here; what it
+      // must get is a clear statement of whose page it is.
       const foreignSnapshot = await other.callTool('snapshot', {
         page: ownPage,
       })
-      const foreignClose = await other.callTool('tabs', {
-        action: 'close',
-        page: ownPage,
-      })
-      for (const [operation, result] of [
-        ['snapshot', foreignSnapshot],
-        ['close', foreignClose],
-      ] as const) {
-        const text = textOf(result)
-        if (!result.isError || errorClass(text) !== 'not-owned') {
-          throw new Error(`foreign ${operation} was not refused: ${text}`)
-        }
+      const snapshotText = expectOk(foreignSnapshot, 'foreign snapshot')
+      if (!/belongs to another agent/i.test(snapshotText)) {
+        throw new Error(
+          `foreign snapshot carried no ownership notice: ${snapshotText.slice(0, 300)}`,
+        )
       }
-      // The owner is unaffected: the page still lists and snapshots.
+      if (!/allowed to use it/i.test(snapshotText)) {
+        throw new Error(
+          `the ownership notice must say the page may be used: ${snapshotText.slice(0, 300)}`,
+        )
+      }
+
+      // Reading someone else's page leaves it theirs: the label does not transfer.
       const stillOwned = textOf(
         await ctx.mcp.callTool('tabs', { action: 'list' }),
       )
@@ -161,6 +164,12 @@ export const clawLayerCases: ContractCase[] = [
       expectOk(
         await ctx.mcp.callTool('snapshot', { page: ownPage }),
         'owner snapshot after foreign attempt',
+      )
+
+      // Closing last, because it is destructive and also permitted.
+      expectOk(
+        await other.callTool('tabs', { action: 'close', page: ownPage }),
+        'foreign close',
       )
     },
   },

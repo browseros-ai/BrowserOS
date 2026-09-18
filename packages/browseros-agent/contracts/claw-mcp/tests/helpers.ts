@@ -64,7 +64,6 @@ const ERROR_CLASSES: Array<[string, RegExp]> = [
   ['stale-ref', /stale ref .*take a new snapshot/i],
   ['unknown-ref', /unknown ref .*take a new snapshot/i],
   ['gone-element', /not found in dom.*take a new snapshot/i],
-  ['not-owned', /is (not )?owned by .*tabs new/i],
   [
     'browser-down',
     /(browser session not connected.*start BrowserClaw|cdp not connected|not running or paired)/is,
