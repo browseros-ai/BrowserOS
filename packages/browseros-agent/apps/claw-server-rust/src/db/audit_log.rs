@@ -475,13 +475,14 @@ impl AuditLog {
                        SELECT COUNT(*) FROM agent_session_ends e
                        WHERE e.session_id = s.session_id
                    ) AS unclosed,
+                   MAX(s.created_at) AS latest_start,
                    COALESCE(
                        (
                            SELECT MAX(d.created_at + d.duration_ms) FROM tool_dispatches d
                            WHERE d.session_id = s.session_id
                        ),
-                       MAX(s.created_at)
-                   ) AS last_activity
+                       0
+                   ) AS latest_dispatch
             FROM agent_session_starts s
             GROUP BY s.session_id
             HAVING unclosed > 0
@@ -494,12 +495,18 @@ impl AuditLog {
             .await?;
         let mut closed = 0;
         for session in stranded {
+            // The later of the two, never just the dispatch. Dispatches are looked up by
+            // session id, so for a reused id they span every life that id has had. A second
+            // life that exited before dispatching anything would otherwise be stamped with
+            // the first life's last dispatch, putting its end before its own start and
+            // corrupting the chronology permanently.
+            let last_activity = session.latest_start.max(session.latest_dispatch);
             // One end per unmatched start, so the counts balance in a single pass and a
             // second boot finds nothing left to do.
             for _ in 0..session.unclosed.max(0) {
                 AgentSessionEnds::insert(agent_session_ends::ActiveModel {
                     id: NotSet,
-                    created_at: Set(session.last_activity),
+                    created_at: Set(last_activity),
                     session_id: Set(session.session_id.clone()),
                     kind: Set("closed".to_owned()),
                     // The only thing actually known. Whether the process was killed, crashed
@@ -1044,6 +1051,17 @@ mod tests {
     use crate::db::{DATABASE_FILENAME, Database};
     use browseros_mcp::token_estimate::estimate_tool_output_tokens;
     use rmcp::model::ContentBlock;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+
+    /// When a session started, so a fixture dispatch can be placed inside it. A dispatch
+    /// timestamped before its own session start is not a state the server can produce, and
+    /// a test that fakes one stops testing anything real.
+    async fn started_at(audit: &AuditLog, session_id: &str) -> anyhow::Result<i64> {
+        Ok(super::query_start(audit.db.connection(), session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("start missing"))?
+            .created_at)
+    }
     use serde_json::json;
     use tempfile::tempdir;
 
@@ -1167,6 +1185,54 @@ mod tests {
         Ok(())
     }
 
+    /// Dispatches are looked up by session id, so for a reused id they span every life that
+    /// id has had. A second life that exited before dispatching anything must not inherit
+    /// the first life's last dispatch, which sits before it even started.
+    #[tokio::test]
+    async fn a_reused_id_is_never_ended_before_it_started() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+
+        // First life: worked, then ended cleanly.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        let mut early = dispatch("a1", "https://one.example.com", false);
+        early.created_at = Some(1_700_000_000_000);
+        audit.record_tool_dispatch(early).await?;
+        audit
+            .record_session_end("a1", "closed", Some("transport closed"))
+            .await?;
+
+        // Second life under the same id, stranded before it dispatched anything.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 1);
+
+        let conn = audit.db.connection();
+        let ends = super::AgentSessionEnds::find()
+            .filter(super::agent_session_ends::Column::SessionId.eq("a1"))
+            .order_by_asc(super::agent_session_ends::Column::Id)
+            .all(conn)
+            .await?;
+        let starts = super::AgentSessionStarts::find()
+            .filter(super::agent_session_starts::Column::SessionId.eq("a1"))
+            .order_by_asc(super::agent_session_starts::Column::Id)
+            .all(conn)
+            .await?;
+        assert_eq!(starts.len(), 2);
+        assert_eq!(ends.len(), 2);
+        let second_start = starts[1].created_at;
+        let reconciled = ends[1].created_at;
+        assert!(
+            reconciled >= second_start,
+            "ended at {reconciled} before it started at {second_start}"
+        );
+        Ok(())
+    }
+
     /// A dispatch row records when its tool *started*, so ending a session at the last
     /// dispatch would backdate it to before that tool ran. A session killed part way
     /// through a long `run` would lose the whole run from its duration.
@@ -1177,8 +1243,9 @@ mod tests {
         audit
             .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
             .await?;
+        let began = started_at(&audit, "a1").await?;
         let mut long_run = dispatch("a1", "https://one.example.com", false);
-        long_run.created_at = Some(1_700_000_000_000);
+        long_run.created_at = Some(began + 1_000);
         long_run.duration_ms = 90_000;
         audit.record_tool_dispatch(long_run).await?;
 
@@ -1189,7 +1256,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("task missing"))?;
         assert_eq!(
             task.summary.ended_at,
-            Some(1_700_000_000_000 + 90_000),
+            Some(began + 1_000 + 90_000),
             "the ninety second run must be inside the session, not after its end"
         );
         Ok(())
@@ -1206,8 +1273,9 @@ mod tests {
         audit
             .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
             .await?;
+        let began = started_at(&audit, "a1").await?;
         let mut worked = dispatch("a1", "https://one.example.com", false);
-        worked.created_at = Some(1_700_000_000_000);
+        worked.created_at = Some(began + 1_000);
         audit.record_tool_dispatch(worked).await?;
 
         // A session that never dispatched has nothing but its start to go on. It is read
@@ -1226,7 +1294,7 @@ mod tests {
         assert_eq!(
             worked.summary.ended_at,
             // The fixture dispatch runs for 10ms, and the end covers it.
-            Some(1_700_000_000_010),
+            Some(began + 1_000 + 10),
             "the end must sit at the end of the last dispatch, not at the reconciliation"
         );
 
@@ -1787,7 +1855,8 @@ struct SessionIdRow {
 struct StrandedSessionRow {
     session_id: String,
     unclosed: i64,
-    last_activity: i64,
+    latest_start: i64,
+    latest_dispatch: i64,
 }
 
 impl AuditLog {
