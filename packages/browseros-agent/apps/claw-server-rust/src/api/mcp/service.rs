@@ -83,6 +83,13 @@ struct ServiceLifecycle {
     client_info: Option<ClientInfo>,
     session_id: Option<SessionId>,
     started: bool,
+    /// Whether this connection has already been told its session went away.
+    ///
+    /// A legacy connection is identified by its transport session, so unlike a stateless
+    /// caller it has no handle it can drop. Refusing it once honours the user's Stop and
+    /// gives the agent something to report; refusing it forever wedges the connection until
+    /// the client reconnects, which is not a recovery path any agent knows to take.
+    stop_reported: bool,
 }
 
 #[derive(Clone)]
@@ -399,18 +406,33 @@ impl ClawMcpService {
         });
 
         if lifecycle.started {
-            let session = self
-                .state
-                .sessions
-                .lookup(&session_id)
-                .await
-                .ok_or_else(|| {
-                    McpError::invalid_request(
-                        format!("BrowserOS neo session {session_id} is no longer live"),
-                        None,
-                    )
-                })?;
-            return Ok(started_session_from(session, &client));
+            if let Some(session) = self.state.sessions.lookup(&session_id).await {
+                return Ok(started_session_from(session, &client));
+            }
+            // The session this connection was working in is gone: stopped from the cockpit,
+            // or swept. Say so once, so the stop is honoured and the agent has something to
+            // tell the user, then let the next call start a new session on the same
+            // connection. Refusing every time leaves the agent with nowhere to go, since the
+            // handle it would otherwise drop is the transport session itself.
+            if !lifecycle.stop_reported {
+                lifecycle.stop_reported = true;
+                return Err(McpError::invalid_request(
+                    format!(
+                        "BrowserOS neo session {session_id} was stopped and will not resume. \
+                         Call again and a new session will start."
+                    ),
+                    None,
+                ));
+            }
+            // A new session rather than the old id revived, so the work the user stopped
+            // stays stopped and closed in the audit instead of gaining a second life.
+            let replacement = SessionId::new(Uuid::new_v4().to_string());
+            let started = self
+                .start_session_in_store(replacement.clone(), client)
+                .await?;
+            lifecycle.session_id = Some(replacement);
+            lifecycle.stop_reported = false;
+            return Ok(started);
         }
 
         let started = self.start_session_in_store(session_id, client).await?;
@@ -1621,6 +1643,56 @@ mod tests {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// The legacy transport, which Codex still speaks. Its session is the transport itself,
+    /// so when the user stops it there is no handle for the agent to drop: it retried four
+    /// times, got the same refusal each time, and told the user to restart the browser.
+    ///
+    /// Say it once, so the stop is honoured and the agent can report it, then let the next
+    /// call through on a new session so the connection is not wedged until the client
+    /// reconnects.
+    #[tokio::test]
+    async fn a_legacy_connection_recovers_after_its_session_is_stopped() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let transport = SessionId::new("mcp-transport-abc");
+
+        let first = service
+            .ensure_session_started(transport.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let stopped = first.session.id().clone();
+
+        call.state.sessions.cancel_by_session(&stopped).await?;
+
+        let refusal = service
+            .ensure_session_started(transport.clone())
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("the stop must be reported, not swallowed"));
+        let message = format!("{refusal:?}");
+        assert!(message.contains("was stopped"), "{message}");
+        assert!(message.contains("a new session will start"), "{message}");
+
+        // The next call must work, or the connection is dead until Codex reconnects.
+        let recovered = service
+            .ensure_session_started(transport.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_ne!(
+            recovered.session.id(),
+            &stopped,
+            "the stopped session must stay stopped, not come back to life"
+        );
+
+        // And the connection settles there rather than churning a session per call.
+        let again = service
+            .ensure_session_started(transport)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(again.session.id(), recovered.session.id());
+        Ok(())
     }
 
     #[tokio::test]
