@@ -455,47 +455,63 @@ impl AuditLog {
     /// Returns how many were closed. `SessionTabLedger::release_all_open` does the same job
     /// for tab claims and runs beside this one.
     pub async fn close_sessions_open_from_previous_run(&self) -> AppResult<usize> {
+        // Counting rather than asking "has this id ever ended". A session id can be
+        // presented again after its session ended, on the legacy transport where the id
+        // comes from the client's `mcp-session-id` header, and that writes a second start
+        // row. An existence check would see the first end and skip the second start, so the
+        // reused session would stay `live` forever, which is the exact state being repaired.
+        //
+        // The end is stamped at `created_at + duration_ms`, not `created_at`. A dispatch row
+        // records when its tool *started*, so a session killed part way through a ninety
+        // second `run` would otherwise have its end backdated to before that run began.
+        // Local-tool rows stamp write time instead, where adding the duration overshoots by
+        // a few milliseconds; an upper bound on the last evidence of life is the right
+        // direction to err.
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r"
+            SELECT s.session_id AS session_id,
+                   COUNT(*) - (
+                       SELECT COUNT(*) FROM agent_session_ends e
+                       WHERE e.session_id = s.session_id
+                   ) AS unclosed,
+                   COALESCE(
+                       (
+                           SELECT MAX(d.created_at + d.duration_ms) FROM tool_dispatches d
+                           WHERE d.session_id = s.session_id
+                       ),
+                       MAX(s.created_at)
+                   ) AS last_activity
+            FROM agent_session_starts s
+            GROUP BY s.session_id
+            HAVING unclosed > 0
+            ",
+            [],
+        );
         let txn = self.db.connection().begin().await?;
-        let stranded = AgentSessionStarts::find()
-            .filter(
-                Condition::all().add(
-                    agent_session_starts::Column::SessionId.not_in_subquery(
-                        sea_orm::sea_query::Query::select()
-                            .column(agent_session_ends::Column::SessionId)
-                            .from(AgentSessionEnds)
-                            .to_owned(),
-                    ),
-                ),
-            )
+        let stranded = StrandedSessionRow::find_by_statement(statement)
             .all(&txn)
             .await?;
-        let closed = stranded.len();
-        for start in stranded {
-            // The last dispatch is the last moment there is evidence the session was alive.
-            // Stamping `now()` instead would report the downtime as part of the session, so
-            // a twenty second task reconciled the next morning would read as an overnight
-            // one. A session that never dispatched ends where it started, which is a zero
-            // duration and honest: nothing happened in it.
-            let last_activity = ToolDispatches::find()
-                .filter(tool_dispatches::Column::SessionId.eq(start.session_id.clone()))
-                .order_by_desc(tool_dispatches::Column::CreatedAt)
-                .order_by_desc(tool_dispatches::Column::Id)
-                .one(&txn)
-                .await?
-                .map_or(start.created_at, |dispatch| dispatch.created_at);
-            AgentSessionEnds::insert(agent_session_ends::ActiveModel {
-                id: NotSet,
-                created_at: Set(last_activity),
-                session_id: Set(start.session_id.clone()),
-                kind: Set("closed".to_owned()),
-                // The only thing actually known. Whether the process was killed, crashed or
-                // restarted by a watcher is recorded nowhere, and naming a cause we did not
-                // observe would put a guess in the audit trail.
-                reason: Set(Some("server exited".to_owned())),
-            })
-            .exec(&txn)
-            .await?;
-            recompute_task(&txn, &start.session_id).await?;
+        let mut closed = 0;
+        for session in stranded {
+            // One end per unmatched start, so the counts balance in a single pass and a
+            // second boot finds nothing left to do.
+            for _ in 0..session.unclosed.max(0) {
+                AgentSessionEnds::insert(agent_session_ends::ActiveModel {
+                    id: NotSet,
+                    created_at: Set(session.last_activity),
+                    session_id: Set(session.session_id.clone()),
+                    kind: Set("closed".to_owned()),
+                    // The only thing actually known. Whether the process was killed, crashed
+                    // or restarted by a watcher is recorded nowhere, and naming a cause we
+                    // did not observe would put a guess in the audit trail.
+                    reason: Set(Some("server exited".to_owned())),
+                })
+                .exec(&txn)
+                .await?;
+                closed += 1;
+            }
+            recompute_task(&txn, &session.session_id).await?;
         }
         txn.commit().await?;
         Ok(closed)
@@ -1113,6 +1129,72 @@ mod tests {
         Ok(())
     }
 
+    /// A session id can be presented again after its session ended, on the legacy transport
+    /// where the id comes from the client's own header, and that writes a second start row.
+    /// Asking "has this id ever ended" would see the first end and skip the second start,
+    /// leaving the reused session `live` forever, which is the state being repaired.
+    #[tokio::test]
+    async fn a_reused_session_id_is_closed_for_its_second_life_too() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+
+        // First life: started, worked, ended cleanly.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://one.example.com", false))
+            .await?;
+        audit
+            .record_session_end("a1", "closed", Some("transport closed"))
+            .await?;
+
+        // Second life under the same id, stranded by a restart.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://two.example.com", false))
+            .await?;
+
+        assert_eq!(
+            audit.close_sessions_open_from_previous_run().await?,
+            1,
+            "the second life was skipped because the first had ended"
+        );
+        // Balanced in one pass: two starts, two ends, nothing left for the next boot.
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 0);
+        Ok(())
+    }
+
+    /// A dispatch row records when its tool *started*, so ending a session at the last
+    /// dispatch would backdate it to before that tool ran. A session killed part way
+    /// through a long `run` would lose the whole run from its duration.
+    #[tokio::test]
+    async fn the_end_covers_the_final_tool_rather_than_starting_it() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        let mut long_run = dispatch("a1", "https://one.example.com", false);
+        long_run.created_at = Some(1_700_000_000_000);
+        long_run.duration_ms = 90_000;
+        audit.record_tool_dispatch(long_run).await?;
+
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 1);
+        let task = audit
+            .get_task("a1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(
+            task.summary.ended_at,
+            Some(1_700_000_000_000 + 90_000),
+            "the ninety second run must be inside the session, not after its end"
+        );
+        Ok(())
+    }
+
     /// The end time is the last moment there is evidence the session was alive, not the
     /// moment we noticed. Stamping `now()` would report the downtime as part of the
     /// session, so a short task reconciled the next morning would read as an overnight one.
@@ -1143,8 +1225,9 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("task missing"))?;
         assert_eq!(
             worked.summary.ended_at,
-            Some(1_700_000_000_000),
-            "the end must sit at the last dispatch"
+            // The fixture dispatch runs for 10ms, and the end covers it.
+            Some(1_700_000_000_010),
+            "the end must sit at the end of the last dispatch, not at the reconciliation"
         );
 
         let conn = audit.db.connection();
@@ -1698,6 +1781,13 @@ pub struct AuditDeleteCounts {
 #[derive(FromQueryResult)]
 struct SessionIdRow {
     session_id: String,
+}
+
+#[derive(FromQueryResult)]
+struct StrandedSessionRow {
+    session_id: String,
+    unclosed: i64,
+    last_activity: i64,
 }
 
 impl AuditLog {

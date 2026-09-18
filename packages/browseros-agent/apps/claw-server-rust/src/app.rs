@@ -72,10 +72,6 @@ impl AppState {
         let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
         let recording_index = Arc::new(RecordingIndex::new(database.clone()));
         session_tabs.release_all_open().await?;
-        // Same reconciliation, one table over. Must stay here, before the runtime starts and
-        // before the listener binds: it closes every session with no end row, which is only
-        // safe while nothing can have minted one.
-        audit_log.close_sessions_open_from_previous_run().await?;
         let recordings = RecordingStore::new(
             config.browserclaw_dir.join("recordings"),
             config.browserclaw_dir.join("replays"),
