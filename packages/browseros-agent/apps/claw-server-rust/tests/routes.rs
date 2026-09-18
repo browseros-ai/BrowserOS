@@ -1069,9 +1069,11 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
     assert!(
         body["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("no longer live")),
+            .is_some_and(|message| message.contains("was stopped and will not resume")),
         "post-stop body: {body:?}"
     );
+
+    // The refusal itself must not have dispatched anything.
     assert_eq!(
         app.state
             .audit_log
@@ -1080,6 +1082,39 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
             .rows
             .len(),
         dispatch_count
+    );
+
+    // Said once, not forever. A legacy connection is identified by its transport session,
+    // so it has no handle to drop: refusing every call leaves it dead until the client
+    // reconnects, which is a state agents report as "the browser is not running" rather
+    // than recovering from.
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 23,
+            "method": "tools/call",
+            "params": { "name": "tabs", "arguments": { "action": "list" } }
+        })),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "the retry after the stop must work: {body:?}"
+    );
+    assert_eq!(
+        app.state
+            .audit_log
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .len(),
+        dispatch_count + 1,
+        "the recovered call should have done real work"
     );
 
     let (status, body) =
