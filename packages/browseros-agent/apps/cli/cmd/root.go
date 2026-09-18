@@ -367,8 +367,8 @@ func normalizeServerURL(raw string) string {
 		normalized = "http://127.0.0.1:" + normalized
 	}
 
-	normalized = strings.TrimSuffix(normalized, "/mcp")
-	return strings.TrimSuffix(normalized, "/")
+	normalized = strings.TrimRight(normalized, "/")
+	return strings.TrimSuffix(normalized, "/mcp")
 }
 
 func isPortOnly(s string) bool {

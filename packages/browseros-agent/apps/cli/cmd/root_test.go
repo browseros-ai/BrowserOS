@@ -405,9 +405,34 @@ func TestDefaultServerURLIgnoresBrowserOSServerJSON(t *testing.T) {
 }
 
 func TestNormalizeServerURLAcceptsMCPEndpoint(t *testing.T) {
-	got := normalizeServerURL(" http://127.0.0.1:9115/mcp ")
-	if got != "http://127.0.0.1:9115" {
-		t.Fatalf("normalizeServerURL() = %q, want %q", got, "http://127.0.0.1:9115")
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "endpoint",
+			input: " http://127.0.0.1:9115/mcp ",
+			want:  "http://127.0.0.1:9115",
+		},
+		{
+			name:  "endpoint with trailing slash",
+			input: "http://127.0.0.1:9115/mcp/",
+			want:  "http://127.0.0.1:9115",
+		},
+		{
+			name:  "endpoint with multiple trailing slashes",
+			input: "http://127.0.0.1:9115/mcp///",
+			want:  "http://127.0.0.1:9115",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeServerURL(tt.input); got != tt.want {
+				t.Fatalf("normalizeServerURL() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
