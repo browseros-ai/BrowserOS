@@ -89,14 +89,45 @@ export async function fetchReplayMetadata({
   return (await apiClient()).getRecording({ sessionId })
 }
 
+// No factory refetchInterval: callers opt in to polling (see
+// replayMetadataRefetchInterval), so a finished session fetches the recording
+// metadata once and stops.
 export const useReplayMetadata = createQuery<
   ReplayMetadata,
   UseReplayMetadataVariables
 >({
   queryKey: ['replay', 'metadata'],
   fetcher: fetchReplayMetadata,
-  refetchInterval: 10_000,
 })
+
+export const REPLAY_METADATA_POLL_MS = 10_000
+// Recording batches upload asynchronously and a final batch can land shortly
+// after a session goes terminal. Keep polling for a bounded window after the
+// end so that trailing batch (and the View Replay unlock) is still picked up,
+// without polling forever on a session that never records. `complete` is NOT
+// used as the stop signal: per the API it flags segment gaps, not finalisation,
+// so it can stay false permanently.
+const REPLAY_FINALIZE_GRACE_MS = 30_000
+
+/**
+ * Poll interval for recording metadata, or false to stop. Polls while the
+ * session is live, and briefly after it ends until the recording first appears
+ * (`hasData`) or the grace window from `endedAt` elapses.
+ */
+export function replayMetadataRefetchInterval(args: {
+  status: string | undefined
+  endedAt: number | null | undefined
+  hasData: boolean | undefined
+  now?: number
+}): number | false {
+  if (args.status === 'live') return REPLAY_METADATA_POLL_MS
+  if (args.hasData) return false
+  if (args.endedAt == null) return false
+  const now = args.now ?? Date.now()
+  return now - args.endedAt < REPLAY_FINALIZE_GRACE_MS
+    ? REPLAY_METADATA_POLL_MS
+    : false
+}
 
 export interface UseReplayEventsVariables {
   sessionId: string

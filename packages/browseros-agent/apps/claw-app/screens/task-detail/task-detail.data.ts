@@ -17,7 +17,13 @@ export function useTaskDetailScreenData(
   sessionId: string,
 ): TaskDetailScreenData {
   const detailQuery = useSessionDetail({ variables: { sessionId } })
-  const screenshotsQuery = useSessionScreenshots({ variables: { sessionId } })
+  // Poll screenshots only while the session is live; a finished or cancelled
+  // session keeps its final snapshot, so stop firing requests.
+  const isLive = detailQuery.data?.session.status === 'live'
+  const screenshotsQuery = useSessionScreenshots({
+    variables: { sessionId },
+    refetchInterval: isLive ? 3000 : false,
+  })
   return {
     detail: detailQuery.data,
     screenshots: screenshotsQuery.data?.items ?? [],

@@ -18,7 +18,7 @@ import { ManualSetupCard } from './ManualSetupCard'
 
 export function Mcp() {
   const [url, setUrl] = useState<string | null>(null)
-  const connections = useConnections()
+  const connections = useConnections({ refetchInterval: 5000 })
   const connect = useConnectHarness()
   const disconnect = useDisconnectHarness()
   const queryClient = useQueryClient()
