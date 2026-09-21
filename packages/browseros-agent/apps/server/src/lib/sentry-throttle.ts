@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  */
 
-import type { ErrorEvent } from '@sentry/bun'
+import type { ErrorEvent, StackFrame } from '@sentry/bun'
 
 /**
  * Per-issue Sentry event budget so one runaway error cannot drain the quota.
@@ -24,25 +24,47 @@ export const DEFAULT_EVENT_BUDGET: EventBudgetConfig = {
   maxKeys: 2000,
 }
 
+// Innermost frames identify the issue the way Sentry groups it. Prefer in-app
+// frames, fall back to all frames, and key on module + filename + function so
+// two same-named functions in different files stay distinct. The exception
+// message is deliberately excluded: a loop whose message carries a varying id
+// (a request id, a timeout handle) would otherwise mint a fresh key per event
+// and escape the cap entirely.
+function frameSignature(frames: StackFrame[] | undefined): string {
+  if (!frames?.length) return ''
+  const inApp = frames.filter((frame) => frame.in_app)
+  const chosen = (inApp.length > 0 ? inApp : frames).slice(-3)
+  return chosen
+    .map(
+      (frame) =>
+        `${frame.module ?? ''}:${frame.filename ?? ''}:${frame.function ?? ''}`,
+    )
+    .join('>')
+}
+
 /**
  * Stable key that matches how Sentry groups the event, so a looping error
  * collapses to one bucket. An explicit fingerprint wins; otherwise fall back to
- * the exception type plus the innermost frame.
+ * the exception type plus a signature of the innermost frames.
  */
 export function throttleKey(event: ErrorEvent): string {
   if (event.fingerprint?.length) return event.fingerprint.join('|')
   const exception = event.exception?.values?.at(-1)
   const type = exception?.type ?? event.level ?? 'event'
-  const innermost = exception?.stacktrace?.frames?.at(-1)
   const where =
-    innermost?.function ?? event.transaction ?? exception?.value ?? ''
+    frameSignature(exception?.stacktrace?.frames) ||
+    event.transaction ||
+    exception?.value ||
+    ''
   return `${type}|${where}`
 }
 
 interface Bucket {
-  windowStart: number
-  sent: number
+  // Ascending timestamps of admitted events still inside the window, bounded to
+  // maxPerKey entries.
+  admitted: number[]
   suppressed: number
+  lastSeen: number
 }
 
 export interface EventBudget {
@@ -61,14 +83,19 @@ export function createEventBudget(
   function enforceBound(now: number): void {
     if (buckets.size <= config.maxKeys) return
     for (const [key, bucket] of buckets) {
-      if (now - bucket.windowStart >= config.windowMs) buckets.delete(key)
+      if (
+        now - bucket.lastSeen >= config.windowMs &&
+        bucket.admitted.length === 0
+      ) {
+        buckets.delete(key)
+      }
     }
     while (buckets.size > config.maxKeys) {
       let oldestKey: string | undefined
-      let oldestStart = Number.POSITIVE_INFINITY
+      let oldestSeen = Number.POSITIVE_INFINITY
       for (const [key, bucket] of buckets) {
-        if (bucket.windowStart < oldestStart) {
-          oldestStart = bucket.windowStart
+        if (bucket.lastSeen < oldestSeen) {
+          oldestSeen = bucket.lastSeen
           oldestKey = key
         }
       }
@@ -82,19 +109,23 @@ export function createEventBudget(
       const key = throttleKey(event)
       let bucket = buckets.get(key)
       if (!bucket) {
-        bucket = { windowStart: now, sent: 0, suppressed: 0 }
+        bucket = { admitted: [], suppressed: 0, lastSeen: now }
         buckets.set(key, bucket)
         enforceBound(now)
-      } else if (now - bucket.windowStart >= config.windowMs) {
-        // Roll the per-window send counter but keep the suppressed tally: it is
-        // "since last admitted event", so it survives the window boundary and is
-        // reported on the next event that gets through.
-        bucket.windowStart = now
-        bucket.sent = 0
       }
-      if (bucket.sent < config.maxPerKey) {
+      bucket.lastSeen = now
+      // Rolling window: expire admissions older than windowMs so the cap holds
+      // over any windowMs span. A fixed window that reset on a boundary would
+      // let nearly 2x maxPerKey through around the edge.
+      const cutoff = now - config.windowMs
+      while (bucket.admitted.length > 0) {
+        const oldest = bucket.admitted[0]
+        if (oldest === undefined || oldest > cutoff) break
+        bucket.admitted.shift()
+      }
+      if (bucket.admitted.length < config.maxPerKey) {
         const suppressed = bucket.suppressed
-        bucket.sent += 1
+        bucket.admitted.push(now)
         bucket.suppressed = 0
         return suppressed
       }

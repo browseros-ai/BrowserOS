@@ -14,7 +14,16 @@ function errorEvent(overrides: Partial<ErrorEvent> = {}): ErrorEvent {
         {
           type: 'Error',
           value: 'boom',
-          stacktrace: { frames: [{ function: 'doThing' }] },
+          stacktrace: {
+            frames: [
+              {
+                function: 'doThing',
+                module: 'app',
+                filename: 'thing.ts',
+                in_app: true,
+              },
+            ],
+          },
         },
       ],
     },
@@ -29,8 +38,44 @@ describe('throttleKey', () => {
     ).toBe('tool-execution|navigate')
   })
 
-  it('falls back to exception type and innermost frame', () => {
-    expect(throttleKey(errorEvent())).toBe('Error|doThing')
+  it('keys on exception type plus the innermost frame identity', () => {
+    expect(throttleKey(errorEvent())).toBe('Error|app:thing.ts:doThing')
+  })
+
+  it('keeps same-named functions in different files distinct', () => {
+    const frame = (filename: string) => ({
+      function: 'prepareQuery',
+      module: 'db',
+      filename,
+      in_app: true,
+    })
+    const a = throttleKey(
+      errorEvent({
+        exception: {
+          values: [
+            {
+              type: 'Error',
+              value: 'x',
+              stacktrace: { frames: [frame('a.ts')] },
+            },
+          ],
+        },
+      }),
+    )
+    const b = throttleKey(
+      errorEvent({
+        exception: {
+          values: [
+            {
+              type: 'Error',
+              value: 'x',
+              stacktrace: { frames: [frame('b.ts')] },
+            },
+          ],
+        },
+      }),
+    )
+    expect(a).not.toBe(b)
   })
 
   it('falls back to the transaction when there is no stack', () => {
@@ -61,6 +106,25 @@ describe('createEventBudget', () => {
     expect(budget.admit(event, 10)).toBe(0)
     expect(budget.admit(event, 20)).toBeNull()
     expect(budget.admit(event, 30)).toBeNull()
+  })
+
+  it('does not reset the whole budget at a window boundary', () => {
+    const budget = createEventBudget({
+      windowMs: 1_000,
+      maxPerKey: 2,
+      maxKeys: 100,
+    })
+    const event = errorEvent()
+    expect(budget.admit(event, 900)).toBe(0)
+    expect(budget.admit(event, 950)).toBe(0)
+    expect(budget.admit(event, 980)).toBeNull()
+    // Just past windowMs from the first admit: a fixed window would reset and
+    // admit a fresh burst here. The rolling window keeps both recent admissions
+    // in scope, so it stays capped.
+    expect(budget.admit(event, 1_001)).toBeNull()
+    // Only once the 900 admission ages out does one slot free up; the admitted
+    // event reports the two dropped in the meantime (at 980 and 1001).
+    expect(budget.admit(event, 1_901)).toBe(2)
   })
 
   it('gives each issue its own independent budget', () => {
