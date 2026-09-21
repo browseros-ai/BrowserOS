@@ -39,7 +39,7 @@ const sourceMigrationsDir = fileURLToPath(
   new URL('./migrations', import.meta.url),
 )
 
-/** Opens BrowserOS SQLite and applies checked-in Drizzle migrations before callers use the DB. */
+/** Opens BrowserOS SQLite and applies the checked-in Drizzle migrations before callers use the DB. */
 export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
   const migrationsDir = resolveMigrationsDir(options)
   mkdirSync(dirname(options.dbPath), { recursive: true })
@@ -50,31 +50,28 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
 
   const db = drizzle(sqlite, { schema })
   if (options.runMigrations !== false) {
-    if (migrationsDir) {
-      try {
-        migrate(db, { migrationsFolder: migrationsDir })
-      } catch (error) {
-        // A drifted database (its ledger says migrations are applied while
-        // tables are missing) can make a migration reference an absent table,
-        // e.g. 0012's ALTER TABLE providers. Repair the schema and continue,
-        // but only when tables are genuinely missing; surface anything else so
-        // a real migration failure is not masked.
-        if (missingRequiredTables(sqlite).length === 0) throw error
-        logger.warn('Migration failed against a drifted schema; repairing', {
-          error: String(error),
-        })
-        reconcileSchema(sqlite)
-      }
-    } else {
-      logger.warn(
-        'Drizzle migrations unavailable; bootstrapping current schema',
-        {
-          dbPath: options.dbPath,
-        },
+    if (!migrationsDir) {
+      // Migrations ship with every build and the server cannot run without
+      // them, so a missing set is a fatal packaging error, not something to
+      // paper over with a parallel schema that can silently drift.
+      throw new Error(
+        'BrowserOS database migrations are unavailable; refusing to start with an unmigrated database',
       )
-      bootstrapCurrentSchema(sqlite)
     }
-    reconcileSchema(sqlite)
+    try {
+      migrate(db, { migrationsFolder: migrationsDir })
+    } catch (error) {
+      // A drifted database (its ledger says migrations are applied while tables
+      // are missing) makes a migration reference an absent table, e.g. 0012's
+      // ALTER TABLE providers, which aborts migrate(). Recover from the same
+      // migrations and continue; re-throw anything else so a real migration bug
+      // is not masked.
+      if (missingRequiredTables(sqlite).length === 0) throw error
+      recoverDriftedSchema(sqlite, migrationsDir)
+    }
+    // Safeguard for a ledger that is fully stamped yet missing tables, where
+    // migrate() succeeds by doing nothing.
+    recoverDriftedSchema(sqlite, migrationsDir)
   }
 
   return {
@@ -83,44 +80,6 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
     sqlite,
     db,
   }
-}
-
-/** Table names the ORM schema declares, so drift checks never lag a hand-list. */
-function requiredTableNames(): string[] {
-  const names: string[] = []
-  for (const value of Object.values(schema)) {
-    if (is(value, SQLiteTable)) names.push(getTableName(value))
-  }
-  return names
-}
-
-/** Schema tables absent from the database, the signal that its schema drifted. */
-function missingRequiredTables(sqlite: BunDatabase): string[] {
-  const present = new Set(
-    sqlite
-      .query<{ name: string }, []>(
-        "SELECT name FROM sqlite_master WHERE type = 'table'",
-      )
-      .all()
-      .map((row) => row.name),
-  )
-  return requiredTableNames().filter((name) => !present.has(name))
-}
-
-/**
- * Repairs a schema that drifted from the migrations. A packaged build that fell
- * back to bootstrapCurrentSchema stamps every migration as applied, and
- * Drizzle's migrator only runs migrations newer than the last recorded one, so a
- * later correct build never recreates the tables that fallback missed, leaving
- * `no such table` on every query. Recreate any table the schema declares but the
- * database lacks. bootstrapCurrentSchema is idempotent (CREATE TABLE IF NOT
- * EXISTS), so existing tables and their rows are left untouched.
- */
-function reconcileSchema(sqlite: BunDatabase): void {
-  const missing = missingRequiredTables(sqlite)
-  if (missing.length === 0) return
-  logger.warn('Schema drift detected; recreating missing tables', { missing })
-  bootstrapCurrentSchema(sqlite)
 }
 
 /** Resolves migrations from explicit test paths, packaged resources, or the source tree. */
@@ -132,8 +91,10 @@ export function resolveMigrationsDir(
       return options.migrationsDir
     }
     logger.warn(
-      'Configured Drizzle migrations directory is missing or incomplete; bootstrapping current schema',
-      { migrationsDir: options.migrationsDir },
+      'Configured Drizzle migrations directory is missing or incomplete',
+      {
+        migrationsDir: options.migrationsDir,
+      },
     )
     return null
   }
@@ -158,15 +119,7 @@ function hasCompleteMigrationSet(migrationsDir: string): boolean {
     join(migrationsDir, 'meta', '_journal.json'),
   )
   if (!journal) return false
-
-  const journalTags = new Set(journal.entries.map((entry) => entry.tag))
-  if (
-    !currentMigrationHistory.every((migration) =>
-      journalTags.has(migration.tag),
-    )
-  ) {
-    return false
-  }
+  if (journal.entries.length === 0) return false
 
   return journal.entries.every((entry) =>
     existsSync(join(migrationsDir, `${entry.tag}.sql`)),
@@ -205,242 +158,84 @@ function isDrizzleJournal(
   )
 }
 
-/** Creates the current schema when packaged builds lack migration files, and marks those migrations applied. */
-function bootstrapCurrentSchema(sqlite: BunDatabase): void {
-  sqlite.exec('BEGIN')
-  try {
-    for (const statement of currentSchemaStatements) {
-      sqlite.exec(statement)
-    }
-    const providerColumns = sqlite
-      .query<{ name: string }, []>('PRAGMA table_info(providers)')
-      .all()
-    if (!providerColumns.some((column) => column.name === 'headers')) {
-      sqlite.exec('ALTER TABLE providers ADD COLUMN headers text')
-    }
-    const insertMigration = sqlite.prepare(`
-      INSERT INTO __drizzle_migrations ("hash", "created_at")
-      SELECT ?, ?
-      WHERE NOT EXISTS (
-        SELECT 1 FROM __drizzle_migrations
-        WHERE created_at = ?
-      )
-    `)
-    for (const migration of currentMigrationHistory) {
-      insertMigration.run(
-        migration.hash,
-        migration.createdAt,
-        migration.createdAt,
-      )
-    }
-    sqlite.exec('COMMIT')
-  } catch (error) {
-    sqlite.exec('ROLLBACK')
-    throw error
+/** Table names the ORM schema declares, so drift checks never lag a hand-list. */
+function requiredTableNames(): string[] {
+  const names: string[] = []
+  for (const value of Object.values(schema)) {
+    if (is(value, SQLiteTable)) names.push(getTableName(value))
   }
+  return names
 }
 
-const currentMigrationHistory = [
-  {
-    tag: '0000_zippy_psylocke',
-    hash: 'aadfc2e86410febb11a974d25d99d5f7196aa797d9635ced9a18cd4eeb503b61',
-    createdAt: 1777750582590,
-  },
-  {
-    tag: '0001_lazy_orphan',
-    hash: '19e693f7b1adcd1d932fa6cf5638b5b158c66ea5de4f154bc59311f4d6f71261',
-    createdAt: 1777752799806,
-  },
-  {
-    tag: '0002_chemical_whirlwind',
-    hash: '02b11bf1dc34a5a289efd216233a48f0b7b950cfc33eaa7ebe6dcbb15d07f75c',
-    createdAt: 1777902205667,
-  },
-  {
-    tag: '0003_scrub_hermes_credentials',
-    hash: '34387e59aa1f0d6dc44c95836d2363b72982663c50d05d0c67ee58c211209f52',
-    createdAt: 1781916712443,
-  },
-  {
-    tag: '0004_sparkling_carnage',
-    hash: '76d3a9d6c383995df79b6d8f66ae1bedd0b97b1f44e90c047d8853666bbcc9fd',
-    createdAt: 1785893663690,
-  },
-  {
-    tag: '0005_yellow_riptide',
-    hash: '44a8d4afc62cc58f0f958f633e5262331370d1e1538981b69c1ec2cb807a3154',
-    createdAt: 1785900211901,
-  },
-  {
-    tag: '0006_add_conversations',
-    hash: 'e9a01f94d41f7718c66039a8483302f6db7c7de946f99987a6dd2e78613bce90',
-    createdAt: 1786538823114,
-  },
-  {
-    tag: '0007_add_custom_acp_agents',
-    hash: '561eb1075d7487ffe0394e587eef7ba35ccd892e3e3b53acace579cb0477576b',
-    createdAt: 1787580067090,
-  },
-  {
-    tag: '0008_add_llm_providers_and_scheduled_jobs',
-    hash: '1e36c60be880a222ae150858c5248a433556bd974c52164c42d1955e84ba6606',
-    createdAt: 1788319873053,
-  },
-  {
-    tag: '0009_add_scheduled_job_runs',
-    hash: '188a9503d889be46926bd6d4d660a1c016c90fac71447c25eec73e421b90fc96',
-    createdAt: 1788413695569,
-  },
-  {
-    tag: '0010_add_unified_providers_table',
-    hash: '9e5731582228e0de16bb28f5465cfd62ec2662822f43122f84b8039dd2c0cf0b',
-    createdAt: 1788426799725,
-  },
-  {
-    tag: '0011_drop_split_provider_tables',
-    hash: 'eb0fa2687c80caf919248f28cda5cd955e01a671b2104308b4d04ec55d450611',
-    createdAt: 1788426855683,
-  },
-  {
-    tag: '0012_add_provider_headers',
-    hash: '5e1894d0aebf4a5b708425f565795b01e4efdb997a1e1e6fc6479f229bd022da',
-    createdAt: 1788724664440,
-  },
-]
+/** Schema tables absent from the database, the signal that its schema drifted. */
+function missingRequiredTables(sqlite: BunDatabase): string[] {
+  const present = new Set(
+    sqlite
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table'",
+      )
+      .all()
+      .map((row) => row.name),
+  )
+  return requiredTableNames().filter((name) => !present.has(name))
+}
 
-// TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.
-const currentSchemaStatements = [
-  `
-    CREATE TABLE IF NOT EXISTS providers (
-      id text PRIMARY KEY NOT NULL,
-      profile_id text,
-      kind text NOT NULL,
-      type text NOT NULL,
-      name text NOT NULL,
-      model_id text,
-      reasoning_effort text,
-      is_default integer DEFAULT false NOT NULL,
-      created_at integer NOT NULL,
-      updated_at integer NOT NULL,
-      base_url text,
-      headers text,
-      supports_images integer DEFAULT true NOT NULL,
-      context_window integer,
-      temperature real DEFAULT 0.2 NOT NULL,
-      api_key text,
-      access_key_id text,
-      secret_access_key text,
-      session_token text,
-      resource_name text,
-      region text,
-      reasoning_summary text,
-      working_directory text,
-      custom_config text,
-      CONSTRAINT "providers_llm_requires_model_and_context" CHECK("providers"."kind" <> 'llm' OR ("providers"."model_id" IS NOT NULL AND "providers"."context_window" IS NOT NULL))
-    )
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS providers_profile_id_idx
-    ON providers (profile_id)
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS providers_kind_updated_at_idx
-    ON providers (kind, updated_at)
-  `,
-  `
-    CREATE UNIQUE INDEX IF NOT EXISTS providers_one_default
-    ON providers (is_default) WHERE "providers"."is_default" = 1
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS scheduled_jobs (
-      id text PRIMARY KEY NOT NULL,
-      profile_id text,
-      name text NOT NULL,
-      query text NOT NULL,
-      schedule_type text NOT NULL,
-      schedule_time text,
-      schedule_interval integer,
-      enabled integer DEFAULT true NOT NULL,
-      provider_id text,
-      last_run_at integer,
-      created_at integer NOT NULL,
-      updated_at integer NOT NULL,
-      FOREIGN KEY (provider_id) REFERENCES providers(id) ON UPDATE no action ON DELETE set null
-    )
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS scheduled_jobs_profile_id_idx
-    ON scheduled_jobs (profile_id)
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS scheduled_jobs_enabled_idx
-    ON scheduled_jobs (enabled)
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS scheduled_job_runs (
-      id text PRIMARY KEY NOT NULL,
-      profile_id text,
-      job_id text NOT NULL,
-      status text NOT NULL,
-      started_at integer NOT NULL,
-      completed_at integer,
-      result text,
-      final_result text,
-      execution_log text,
-      tool_calls text,
-      error text,
-      created_at integer NOT NULL,
-      updated_at integer NOT NULL,
-      FOREIGN KEY (job_id) REFERENCES scheduled_jobs(id) ON UPDATE no action ON DELETE cascade
-    )
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS scheduled_job_runs_job_id_idx
-    ON scheduled_job_runs (job_id)
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS scheduled_job_runs_started_at_idx
-    ON scheduled_job_runs (started_at)
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS oauth_tokens (
-      browseros_id text NOT NULL,
-      provider text NOT NULL,
-      access_token text NOT NULL,
-      refresh_token text NOT NULL,
-      expires_at integer NOT NULL,
-      email text,
-      account_id text,
-      updated_at integer NOT NULL,
-      PRIMARY KEY (browseros_id, provider)
-    )
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS oauth_tokens_browseros_id_idx
-    ON oauth_tokens (browseros_id)
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS conversations (
-      id text PRIMARY KEY NOT NULL,
-      messages text NOT NULL,
-      last_user_message text,
-      origin text,
-      target_type text NOT NULL,
-      agent_id text,
-      last_messaged_at integer NOT NULL,
-      created_at integer NOT NULL,
-      updated_at integer NOT NULL
-    )
-  `,
-  `
-    CREATE INDEX IF NOT EXISTS conversations_last_messaged_at_idx
-    ON conversations (last_messaged_at)
-  `,
-  `
-    CREATE TABLE IF NOT EXISTS __drizzle_migrations (
-      id SERIAL PRIMARY KEY,
-      hash text NOT NULL,
-      created_at numeric
-    )
-  `,
-]
+interface SqliteObject {
+  type: string
+  name: string
+  tbl_name: string
+  sql: string
+}
+
+/**
+ * Recovers a schema that drifted from its migration ledger. Older builds stamped
+ * every migration as applied while creating only part of the schema, and
+ * Drizzle's timestamp-gated migrator never recreates the tables that were
+ * missed. Rebuild the canonical schema from the same migration files in a
+ * throwaway in-memory database, then create any table (and its indexes) the real
+ * database lacks. The DDL comes from the migrations themselves, never a
+ * hand-maintained copy, and existing tables and their rows are untouched.
+ */
+function recoverDriftedSchema(
+  sqlite: BunDatabase,
+  migrationsDir: string,
+): void {
+  const missing = new Set(missingRequiredTables(sqlite))
+  if (missing.size === 0) return
+  logger.warn(
+    'Schema drift detected; recreating missing tables from migrations',
+    {
+      missing: [...missing],
+    },
+  )
+
+  const canonical = new BunDatabase(':memory:')
+  try {
+    migrate(drizzle(canonical), { migrationsFolder: migrationsDir })
+    const objects = canonical
+      .query<SqliteObject, []>(
+        'SELECT type, name, tbl_name, sql FROM sqlite_master WHERE sql IS NOT NULL',
+      )
+      .all()
+
+    sqlite.exec('BEGIN')
+    try {
+      for (const object of objects) {
+        if (object.type === 'table' && missing.has(object.name)) {
+          sqlite.exec(object.sql)
+        }
+      }
+      for (const object of objects) {
+        if (object.type === 'index' && missing.has(object.tbl_name)) {
+          sqlite.exec(object.sql)
+        }
+      }
+      sqlite.exec('COMMIT')
+    } catch (error) {
+      sqlite.exec('ROLLBACK')
+      throw error
+    }
+  } finally {
+    canonical.close()
+  }
+}
