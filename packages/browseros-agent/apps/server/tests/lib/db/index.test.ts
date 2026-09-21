@@ -10,7 +10,10 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { getTableName, is } from 'drizzle-orm'
+import { SQLiteTable } from 'drizzle-orm/sqlite-core'
 import { closeDb, initializeDb } from '../../../src/lib/db'
+import * as schema from '../../../src/lib/db/schema'
 import { providers } from '../../../src/lib/db/schema'
 
 describe('database initialization', () => {
@@ -202,6 +205,54 @@ describe('database initialization', () => {
 
     expect(legacyTable).toBeNull()
     expect(handle.db.select().from(providers).all()).toEqual([])
+  })
+
+  it('recreates a table dropped after its migrations were already stamped', () => {
+    const dbPath = join(mkTempDir(), 'browseros.sqlite')
+    const first = initializeDb({ dbPath })
+    first.sqlite.exec(
+      "INSERT INTO conversations (id, messages, target_type, last_messaged_at, created_at, updated_at) VALUES ('c1', '[]', 'agent', 1, 1, 1)",
+    )
+    // A packaged build's fallback can stamp every migration yet miss a table.
+    // Drop one while the ledger stays intact: the timestamp-gated migrator will
+    // not recreate it on the next launch, so only self-heal can.
+    first.sqlite.exec('DROP TABLE providers')
+    closeDb()
+
+    const repaired = initializeDb({ dbPath })
+
+    expect(repaired.db.select().from(providers).all()).toEqual([])
+    expect(
+      repaired.sqlite
+        .query<{ id: string }, []>('SELECT id FROM conversations')
+        .all(),
+    ).toEqual([{ id: 'c1' }])
+  })
+
+  it('bootstrap creates every table the ORM schema declares', () => {
+    const dir = mkTempDir()
+    const handle = initializeDb({
+      dbPath: join(dir, 'browseros.sqlite'),
+      migrationsDir: join(dir, 'missing-migrations'),
+    })
+
+    const present = new Set(
+      handle.sqlite
+        .query<{ name: string }, []>(
+          "SELECT name FROM sqlite_master WHERE type = 'table'",
+        )
+        .all()
+        .map((row) => row.name),
+    )
+    const declared: string[] = []
+    for (const value of Object.values(schema)) {
+      if (is(value, SQLiteTable)) declared.push(getTableName(value))
+    }
+
+    expect(declared.length).toBeGreaterThan(0)
+    for (const name of declared) {
+      expect(present.has(name)).toBe(true)
+    }
   })
 
   function expectCurrentSchema(handle: ReturnType<typeof initializeDb>): void {

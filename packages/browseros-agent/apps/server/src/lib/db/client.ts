@@ -8,8 +8,10 @@ import { Database as BunDatabase } from 'bun:sqlite'
 import { existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { getTableName, is } from 'drizzle-orm'
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite'
 import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
+import { SQLiteTable } from 'drizzle-orm/sqlite-core'
 import { logger } from '../logger'
 import * as schema from './schema'
 
@@ -59,6 +61,7 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
       )
       bootstrapCurrentSchema(sqlite)
     }
+    reconcileSchema(sqlite)
   }
 
   return {
@@ -67,6 +70,39 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
     sqlite,
     db,
   }
+}
+
+/** Table names the ORM schema declares, so drift checks never lag a hand-list. */
+function requiredTableNames(): string[] {
+  const names: string[] = []
+  for (const value of Object.values(schema)) {
+    if (is(value, SQLiteTable)) names.push(getTableName(value))
+  }
+  return names
+}
+
+/**
+ * Repairs a schema that drifted from the migrations. A packaged build that fell
+ * back to bootstrapCurrentSchema stamps every migration as applied, and
+ * Drizzle's migrator only runs migrations newer than the last recorded one, so a
+ * later correct build never recreates the tables that fallback missed, leaving
+ * `no such table` on every query. Recreate any table the schema declares but the
+ * database lacks. bootstrapCurrentSchema is idempotent (CREATE TABLE IF NOT
+ * EXISTS), so existing tables and their rows are left untouched.
+ */
+function reconcileSchema(sqlite: BunDatabase): void {
+  const present = new Set(
+    sqlite
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table'",
+      )
+      .all()
+      .map((row) => row.name),
+  )
+  const missing = requiredTableNames().filter((name) => !present.has(name))
+  if (missing.length === 0) return
+  logger.warn('Schema drift detected; recreating missing tables', { missing })
+  bootstrapCurrentSchema(sqlite)
 }
 
 /** Resolves migrations from explicit test paths, packaged resources, or the source tree. */
