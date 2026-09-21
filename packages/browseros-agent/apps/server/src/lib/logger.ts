@@ -19,6 +19,47 @@ import pino from 'pino'
 const isDev = process.env.NODE_ENV === 'development'
 const LOG_FILE_NAME = 'browseros-server.log'
 const LOG_FILE_MAX_AGE_MS = 24 * 60 * 60 * 1000 // 1 day
+const LOG_FILE_MAX_BYTES = 50 * 1024 * 1024 // 50 MB
+const LOG_ROTATE_CHECK_MS = 5 * 60 * 1000 // check log size every 5 minutes
+
+type LogDestination = ReturnType<typeof pino.destination>
+
+/**
+ * Degrade a failed destination write (ENOSPC, EACCES, EPIPE) to stderr instead
+ * of letting it surface as an uncaught error. Without this, a full disk turns
+ * one failed log flush into a crash-and-capture loop.
+ */
+function guardDestination(destination: LogDestination, label: string): void {
+  destination.on('error', (error: NodeJS.ErrnoException) => {
+    try {
+      process.stderr.write(
+        `[logger] ${label} destination write failed: ${error?.code ?? error?.message ?? error}\n`,
+      )
+    } catch {
+      // stderr itself is gone; nothing safe is left to do.
+    }
+  })
+}
+
+/** Rotate when the log is older than the max age or larger than the max size. */
+export function shouldRotateLog(
+  sizeBytes: number,
+  mtimeMs: number,
+  now: number,
+): boolean {
+  return now - mtimeMs > LOG_FILE_MAX_AGE_MS || sizeBytes > LOG_FILE_MAX_BYTES
+}
+
+/** Move the current log aside to a single `.old` backup. */
+function moveToBackup(logPath: string): void {
+  const backupPath = `${logPath}.old`
+  try {
+    fs.unlinkSync(backupPath)
+  } catch {
+    // No previous backup; fine.
+  }
+  fs.renameSync(logPath, backupPath)
+}
 
 /**
  * Parse caller info from stack trace.
@@ -70,26 +111,15 @@ function truncateForConsole(
   return result
 }
 
-/**
- * Rotate log file if it's older than max age.
- * Simple startup-time rotation - deletes old backup, renames current to .old
- */
+/** Startup rotation: move the log aside if it is too old or too large. */
 function rotateLogIfNeeded(logPath: string): void {
   try {
     const stat = fs.statSync(logPath)
-    const ageMs = Date.now() - stat.mtimeMs
-
-    if (ageMs > LOG_FILE_MAX_AGE_MS) {
-      const backupPath = `${logPath}.old`
-      try {
-        fs.unlinkSync(backupPath)
-      } catch {
-        // Backup doesn't exist, that's fine
-      }
-      fs.renameSync(logPath, backupPath)
+    if (shouldRotateLog(stat.size, stat.mtimeMs, Date.now())) {
+      moveToBackup(logPath)
     }
   } catch {
-    // File doesn't exist, nothing to rotate
+    // File does not exist yet; nothing to rotate.
   }
 }
 
@@ -117,6 +147,9 @@ function createConsoleTransport(): pino.TransportSingleOptions | null {
 class Logger implements LoggerInterface {
   private consoleLogger: pino.Logger
   private fileLogger: pino.Logger | null = null
+  private fileDestination: LogDestination | null = null
+  private logPath: string | null = null
+  private rotationTimer: ReturnType<typeof setInterval> | null = null
   private level: LogLevel
 
   constructor(level?: LogLevel) {
@@ -148,7 +181,9 @@ class Logger implements LoggerInterface {
     // Production: use pino.destination() for async writes without worker threads.
     // pino.transport() uses thread-stream which fails with Bun compile.
     // pino.destination() uses SonicBoom directly - no workers, bundling-safe.
-    return pino(options, pino.destination({ dest: 1, sync: false }))
+    const destination = pino.destination({ dest: 1, sync: false })
+    guardDestination(destination, 'console')
+    return pino(options, destination)
   }
 
   /**
@@ -157,7 +192,7 @@ class Logger implements LoggerInterface {
   setLogFile(logDir: string): void {
     const logPath = path.join(logDir, LOG_FILE_NAME)
 
-    // Rotate old logs on startup
+    // Rotate old or oversized logs on startup.
     rotateLogIfNeeded(logPath)
 
     // Create async file destination
@@ -166,9 +201,39 @@ class Logger implements LoggerInterface {
       sync: false,
       mkdir: true,
     })
+    guardDestination(fileDestination, 'file')
 
+    this.fileDestination = fileDestination
+    this.logPath = logPath
     // File logger: always JSON, no source tracking (for performance)
     this.fileLogger = pino({ level: this.level }, fileDestination)
+
+    this.startRotationWatch()
+  }
+
+  private startRotationWatch(): void {
+    if (this.rotationTimer) clearInterval(this.rotationTimer)
+    this.rotationTimer = setInterval(
+      () => this.rotateFileIfOversized(),
+      LOG_ROTATE_CHECK_MS,
+    )
+    // Never keep the process alive just to check log size.
+    this.rotationTimer.unref?.()
+  }
+
+  private rotateFileIfOversized(): void {
+    if (!this.logPath || !this.fileDestination) return
+    try {
+      const stat = fs.statSync(this.logPath)
+      if (stat.size <= LOG_FILE_MAX_BYTES) return
+      moveToBackup(this.logPath)
+      // logrotate pattern: after the file is renamed, SonicBoom reopens a fresh
+      // one at the original path.
+      this.fileDestination.reopen()
+    } catch {
+      // A failed stat/rename/reopen (e.g. disk full) must not crash the timer;
+      // the destination error guard already handles write failures.
+    }
   }
 
   setLevel(level: LogLevel): void {
