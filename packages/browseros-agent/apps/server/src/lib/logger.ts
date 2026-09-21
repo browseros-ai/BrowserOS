@@ -24,12 +24,29 @@ const LOG_ROTATE_CHECK_MS = 5 * 60 * 1000 // check log size every 5 minutes
 
 type LogDestination = ReturnType<typeof pino.destination>
 
+let stderrGuarded = false
+
+/**
+ * A write to process.stderr can fail asynchronously (EPIPE when its reader has
+ * closed the pipe); that 'error' event escapes the try/catch in guardDestination
+ * and, with no listener, would crash the process the guard exists to protect.
+ * Register a one-time no-op listener so it stays non-fatal.
+ */
+function ensureStderrGuard(): void {
+  if (stderrGuarded) return
+  stderrGuarded = true
+  process.stderr.on('error', () => {
+    // The last-resort output is gone; there is nowhere safe left to write.
+  })
+}
+
 /**
  * Degrade a failed destination write (ENOSPC, EACCES, EPIPE) to stderr instead
  * of letting it surface as an uncaught error. Without this, a full disk turns
  * one failed log flush into a crash-and-capture loop.
  */
 function guardDestination(destination: LogDestination, label: string): void {
+  ensureStderrGuard()
   destination.on('error', (error: NodeJS.ErrnoException) => {
     try {
       process.stderr.write(
