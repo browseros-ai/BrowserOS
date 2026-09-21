@@ -51,7 +51,20 @@ export function openBrowserOsDatabase(options: OpenDbOptions): DbHandle {
   const db = drizzle(sqlite, { schema })
   if (options.runMigrations !== false) {
     if (migrationsDir) {
-      migrate(db, { migrationsFolder: migrationsDir })
+      try {
+        migrate(db, { migrationsFolder: migrationsDir })
+      } catch (error) {
+        // A drifted database (its ledger says migrations are applied while
+        // tables are missing) can make a migration reference an absent table,
+        // e.g. 0012's ALTER TABLE providers. Repair the schema and continue,
+        // but only when tables are genuinely missing; surface anything else so
+        // a real migration failure is not masked.
+        if (missingRequiredTables(sqlite).length === 0) throw error
+        logger.warn('Migration failed against a drifted schema; repairing', {
+          error: String(error),
+        })
+        reconcileSchema(sqlite)
+      }
     } else {
       logger.warn(
         'Drizzle migrations unavailable; bootstrapping current schema',
@@ -81,6 +94,19 @@ function requiredTableNames(): string[] {
   return names
 }
 
+/** Schema tables absent from the database, the signal that its schema drifted. */
+function missingRequiredTables(sqlite: BunDatabase): string[] {
+  const present = new Set(
+    sqlite
+      .query<{ name: string }, []>(
+        "SELECT name FROM sqlite_master WHERE type = 'table'",
+      )
+      .all()
+      .map((row) => row.name),
+  )
+  return requiredTableNames().filter((name) => !present.has(name))
+}
+
 /**
  * Repairs a schema that drifted from the migrations. A packaged build that fell
  * back to bootstrapCurrentSchema stamps every migration as applied, and
@@ -91,15 +117,7 @@ function requiredTableNames(): string[] {
  * EXISTS), so existing tables and their rows are left untouched.
  */
 function reconcileSchema(sqlite: BunDatabase): void {
-  const present = new Set(
-    sqlite
-      .query<{ name: string }, []>(
-        "SELECT name FROM sqlite_master WHERE type = 'table'",
-      )
-      .all()
-      .map((row) => row.name),
-  )
-  const missing = requiredTableNames().filter((name) => !present.has(name))
+  const missing = missingRequiredTables(sqlite)
   if (missing.length === 0) return
   logger.warn('Schema drift detected; recreating missing tables', { missing })
   bootstrapCurrentSchema(sqlite)

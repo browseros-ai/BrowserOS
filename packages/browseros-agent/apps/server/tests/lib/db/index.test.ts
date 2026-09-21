@@ -229,6 +229,24 @@ describe('database initialization', () => {
     ).toEqual([{ id: 'c1' }])
   })
 
+  it('repairs a drifted database before a migration references the missing table', () => {
+    const dbPath = join(mkTempDir(), 'browseros.sqlite')
+    const old = initializeDb({ dbPath })
+    // A fallback build that lost `providers` yet recorded migrations only
+    // through the one before 0012's `ALTER TABLE providers ADD headers`. On the
+    // next launch migrate() would run that ALTER and throw on the missing table
+    // if the repair ran only after migrate().
+    old.sqlite.exec('DROP TABLE providers')
+    old.sqlite
+      .query('DELETE FROM __drizzle_migrations WHERE created_at = ?')
+      .run(expectedMigrationHistory.at(-1).createdAt)
+    closeDb()
+
+    const repaired = initializeDb({ dbPath })
+
+    expect(repaired.db.select().from(providers).all()).toEqual([])
+  })
+
   it('bootstrap creates every table the ORM schema declares', () => {
     const dir = mkTempDir()
     const handle = initializeDb({
