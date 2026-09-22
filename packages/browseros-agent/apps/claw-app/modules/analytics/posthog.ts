@@ -25,7 +25,7 @@
  * initialised and every capture no-ops.
  */
 
-import posthog, { type PostHogConfig } from 'posthog-js'
+import posthog, { type PostHog, type PostHogConfig } from 'posthog-js'
 import 'posthog-js/dist/posthog-recorder'
 
 const KEY = import.meta.env.VITE_CLAW_POSTHOG_KEY as string | undefined
@@ -139,20 +139,37 @@ function init(distinctId: string): void {
 }
 
 /**
+ * A sidecar update can restore the legacy UUID while this tab stays open.
+ * Stop the old replay before resetting to the server's anonymous identity;
+ * the caller reapplies effective consent because reset clears SDK consent.
+ * Historical A/B linking belongs to the Rust alias worker, never identify().
+ */
+export function reconcileTelemetryIdentity(
+  client: Pick<PostHog, 'get_distinct_id' | 'stopSessionRecording' | 'reset'>,
+  distinctId: string,
+): void {
+  if (client.get_distinct_id() === distinctId) return
+  client.stopSessionRecording()
+  client.reset({ bootstrap: { distinctID: distinctId, isIdentifiedID: false } })
+}
+
+/**
  * Reconciles the posthog client with the server's EFFECTIVE telemetry
  * state. `enabled` already folds in the user's consent, the operator
  * kill-switch, and the server key, so the cockpit respects all three by
  * gating on it. Initialises on first enable, opts in/out on later
- * changes, no-ops without a Vite key. Safe to call repeatedly.
+ * changes, resets a changed identity before resuming capture, and no-ops
+ * without a Vite key. Safe to call repeatedly.
  */
 export function applyTelemetry(input: {
   distinctId: string
   enabled: boolean
 }): void {
-  if (!KEY || !input.distinctId) return
-  if (input.enabled) {
+  if (!KEY) return
+  if (input.enabled && input.distinctId) {
     const wasInitialised = initialised
     if (!wasInitialised) init(input.distinctId)
+    else reconcileTelemetryIdentity(posthog, input.distinctId)
     reconcileSessionRecording(posthog, true, wasInitialised)
   } else {
     reconcileSessionRecording(posthog, false, initialised)
