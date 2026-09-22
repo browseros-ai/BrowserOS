@@ -1,12 +1,54 @@
 import { describe, expect, it } from 'bun:test'
+import { PostHog } from 'posthog-js'
 import {
   createPostHogConfig,
   maskCapturedReplayRequest,
   reconcileSessionRecording,
+  reconcileTelemetryIdentity,
   sanitizeProperties,
 } from './posthog'
 
 describe('BrowserClaw PostHog privacy', () => {
+  it('switches a running anonymous SDK from installation B to canonical A', async () => {
+    const events: Array<{
+      event: string
+      properties: Record<string, unknown>
+    }> = []
+    const client = new PostHog()
+    client.init('test-project-key', {
+      ...createPostHogConfig('installation-B'),
+      persistence: 'memory',
+      advanced_disable_decide: true,
+      before_send: (event) => {
+        if (event) events.push(event)
+        return null // Inspect the actual SDK payload without any network delivery.
+      },
+    })
+    client.capture('before-migration')
+    reconcileTelemetryIdentity(client, 'analytics-A')
+    client.opt_in_capturing({ captureEventName: false })
+    client.capture('after-migration')
+
+    expect(client.get_distinct_id()).toBe('analytics-A')
+    expect(events.map(({ event }) => event)).toEqual([
+      'before-migration',
+      'after-migration',
+    ])
+    expect(events.map(({ properties }) => properties.distinct_id)).toEqual([
+      'installation-B',
+      'analytics-A',
+    ])
+    expect(
+      events.every(
+        ({ properties }) => properties.$process_person_profile === false,
+      ),
+    ).toBe(true)
+    const sessionId = client.get_session_id()
+    reconcileTelemetryIdentity(client, 'analytics-A')
+    expect(client.get_session_id()).toBe(sessionId)
+    await client.shutdown()
+  })
+
   it('configures sampled replay with conservative capture boundaries', () => {
     const config = createPostHogConfig('anonymous-install-id')
 
