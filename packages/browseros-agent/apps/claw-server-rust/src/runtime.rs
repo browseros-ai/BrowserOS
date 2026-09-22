@@ -50,7 +50,7 @@ impl AppRuntime {
     #[must_use]
     pub fn start(state: AppState) -> Self {
         let shutdown = state.shutdown.clone();
-        let tasks = vec![
+        let mut tasks = vec![
             BackgroundTask {
                 name: "browser reconnect loop",
                 handle: state.browser.start(),
@@ -173,6 +173,24 @@ impl AppRuntime {
                 }),
             },
         ];
+        // Reads the cohort from PostHog remote configuration using the analytics
+        // credentials this build already embeds, so shipping it needs nothing else
+        // configured. A build with no PostHog key reaches no source, the cohort stays
+        // empty and nobody is invited, which is the same silent outcome as an unreachable
+        // one, so there is nothing to report.
+        if let Some(source) = crate::services::feedback_cohort::configured_source(
+            state.analytics.remote_config_credentials(),
+        ) {
+            tasks.push(BackgroundTask {
+                name: "feedback cohort refresh",
+                handle: crate::services::feedback_cohort::spawn_refresh_loop(
+                    (*state.feedback_cohort).clone(),
+                    source,
+                    shutdown.child_token(),
+                ),
+            });
+        }
+
         Self { state, tasks }
     }
 

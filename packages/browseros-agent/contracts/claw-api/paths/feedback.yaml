@@ -1,0 +1,37 @@
+invitation:
+  get:
+    operationId: getFeedbackInvitation
+    description: >-
+      Whether this installation should be shown a feedback call invitation.
+    responses:
+      '200':
+        description: The invitation decision for this installation.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/feedback.yaml#/FeedbackInvitation
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  post:
+    operationId: recordFeedbackInvite
+    description: >-
+      Records what happened to the invitation. The first outcome spends this
+      installation's single invitation, so later calls change the recorded
+      outcome without ever granting another.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/feedback.yaml#/RecordFeedbackInviteRequest
+    responses:
+      '200':
+        description: The invitation decision after recording the outcome.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/feedback.yaml#/FeedbackInvitation
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError

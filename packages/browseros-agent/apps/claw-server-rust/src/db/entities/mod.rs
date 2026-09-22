@@ -1,5 +1,6 @@
 pub mod agent_session_ends;
 pub mod agent_session_starts;
+pub mod feedback_invite;
 pub mod recording_batches;
 pub mod recording_payloads;
 pub mod recording_streams;
@@ -17,6 +18,7 @@ pub mod tool_dispatches;
 pub mod prelude {
     pub use super::agent_session_ends::Entity as AgentSessionEnds;
     pub use super::agent_session_starts::Entity as AgentSessionStarts;
+    pub use super::feedback_invite::Entity as FeedbackInvite;
     pub use super::recording_batches::Entity as RecordingBatches;
     pub use super::recording_payloads::Entity as RecordingPayloads;
     pub use super::recording_streams::Entity as RecordingStreams;

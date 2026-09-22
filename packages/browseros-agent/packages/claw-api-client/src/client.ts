@@ -7,7 +7,9 @@ import type {
   CockpitStats,
   Connection,
   ConnectionList,
+  FeedbackInvitation,
   HealthResponse,
+  RecordFeedbackInviteRequest,
   RecordingMetadata,
   SessionDetail,
   SessionList,
@@ -119,6 +121,18 @@ export class ClawApiClient {
 
   async getCockpitStats(): Promise<CockpitStats> {
     return this.unwrap(await this.client.GET('/api/v1/cockpit/stats'))
+  }
+
+  async getFeedbackInvitation(): Promise<FeedbackInvitation> {
+    return this.unwrap(await this.client.GET('/api/v1/feedback/invitation'))
+  }
+
+  async recordFeedbackInvite(
+    body: RecordFeedbackInviteRequest,
+  ): Promise<FeedbackInvitation> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/feedback/invitation', { body }),
+    )
   }
 
   async getTelemetry(): Promise<TelemetryState> {
