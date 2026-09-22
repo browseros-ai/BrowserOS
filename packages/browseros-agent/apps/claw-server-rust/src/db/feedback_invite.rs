@@ -128,9 +128,13 @@ mod tests {
         let repo = repository(&dir).await?;
 
         assert!(!repo.already_invited("install-a").await?);
-        repo.record("install-a", InviteOutcome::Shown, 1_000).await?;
+        repo.record("install-a", InviteOutcome::Shown, 1_000)
+            .await?;
         assert!(repo.already_invited("install-a").await?);
-        assert_eq!(repo.outcome_of("install-a").await?.as_deref(), Some("shown"));
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("shown")
+        );
         Ok(())
     }
 
@@ -150,7 +154,8 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000).await?;
+        repo.record("install-a", InviteOutcome::Shown, 1_000)
+            .await?;
         repo.record("install-a", InviteOutcome::Clicked, 2_000)
             .await?;
         assert_eq!(
@@ -167,10 +172,12 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000).await?;
+        repo.record("install-a", InviteOutcome::Shown, 1_000)
+            .await?;
         repo.record("install-a", InviteOutcome::Clicked, 2_000)
             .await?;
-        repo.record("install-a", InviteOutcome::Shown, 3_000).await?;
+        repo.record("install-a", InviteOutcome::Shown, 3_000)
+            .await?;
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
             Some("clicked")
@@ -202,7 +209,8 @@ mod tests {
         let dir = tempdir()?;
         {
             let repo = repository(&dir).await?;
-            repo.record("install-a", InviteOutcome::Dismissed, 1).await?;
+            repo.record("install-a", InviteOutcome::Dismissed, 1)
+                .await?;
         }
         let reopened = repository(&dir).await?;
         assert!(reopened.already_invited("install-a").await?);
@@ -237,7 +245,10 @@ mod tests {
         assert_eq!(rows, 1, "eight parallel impressions wrote {rows} rows");
         // The first writer's timestamp is the one that stands: the invitation was spent
         // then, not by whichever request happened to finish last.
-        assert_eq!(repo.outcome_of("install-a").await?.as_deref(), Some("shown"));
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("shown")
+        );
         Ok(())
     }
 }

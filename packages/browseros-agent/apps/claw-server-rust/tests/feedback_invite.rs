@@ -42,8 +42,8 @@ async fn nobody_is_invited_before_a_cohort_is_published() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn a_cohort_member_is_invited_and_reading_the_answer_does_not_spend_it()
--> anyhow::Result<()> {
+async fn a_cohort_member_is_invited_and_reading_the_answer_does_not_spend_it() -> anyhow::Result<()>
+{
     let dir = tempfile::tempdir()?;
     let app = test_app(dir.path()).await?;
     let install_id = install_id_of(&app).await;
@@ -69,7 +69,11 @@ async fn the_published_cohort_can_override_the_booking_link() -> anyhow::Result<
     app.state
         .feedback_cohort
         .adopt(
-            cohort_document(now_ms(), &[install_id.as_str()], Some("https://cal.test/book")),
+            cohort_document(
+                now_ms(),
+                &[install_id.as_str()],
+                Some("https://cal.test/book"),
+            ),
             now_ms(),
         )
         .await;
@@ -103,7 +107,10 @@ async fn an_impression_spends_the_invitation_and_survives_a_restart() -> anyhow:
     drop(app);
     let restarted = test_app(dir.path()).await?;
     let same_install = install_id_of(&restarted).await;
-    assert_eq!(same_install, install_id, "the install id outlives the process");
+    assert_eq!(
+        same_install, install_id,
+        "the install id outlives the process"
+    );
     join_cohort(&restarted, &[same_install.as_str()]).await?;
     let (_, after_restart) = request(&restarted.router, "GET", INVITATION, None).await?;
     assert_eq!(after_restart, json!({ "eligible": false }));
