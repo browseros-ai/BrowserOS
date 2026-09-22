@@ -37,4 +37,11 @@ export const useSetTelemetryConsent = createMutation<
     (await apiClient()).updateTelemetry({
       updateTelemetryRequest: { consent },
     }),
+  // Polling can read the old consent before PUT but return after it. Cancel
+  // those reads before the caller publishes the mutation response to the cache;
+  // otherwise an old enabled=true response could resume capture after opt-out.
+  // This runs after PUT so it also catches polls started during the mutation.
+  onSuccess: async (_state, _variables, _result, { client }) => {
+    await client.cancelQueries({ queryKey: TELEMETRY_QUERY_KEY })
+  },
 })
