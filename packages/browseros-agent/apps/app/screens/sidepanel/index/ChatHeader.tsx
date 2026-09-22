@@ -34,7 +34,8 @@ const CreditsBadgeWrapper: FC = () => {
 }
 
 export interface ChatHeaderProps {
-  selectedProvider: Provider
+  /** Null while nothing is connected. The header still renders, saying so. */
+  selectedProvider: Provider | null
   providers: Provider[]
   onSelectProvider: (provider: Provider) => void
   onNewConversation: () => void
@@ -82,13 +83,18 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
             title="Change AI Provider"
           >
             <HeaderProviderIcon provider={selectedProvider} />
-            <span className="font-semibold text-base">
-              {selectedProvider.name}
+            <span
+              className={cn(
+                'font-semibold text-base',
+                !selectedProvider && 'text-muted-foreground',
+              )}
+            >
+              {selectedProvider?.name ?? 'No provider'}
             </span>
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
           </button>
         </ChatProviderSelector>
-        {selectedProvider.type === 'browseros' && <CreditsBadgeWrapper />}
+        {selectedProvider?.type === 'browseros' && <CreditsBadgeWrapper />}
       </div>
 
       <div className="flex items-center gap-1">
@@ -152,7 +158,8 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
   )
 }
 
-function HeaderProviderIcon({ provider }: { provider: Provider }) {
+function HeaderProviderIcon({ provider }: { provider: Provider | null }) {
+  if (!provider) return <Bot className="h-[18px] w-[18px]" />
   if (provider.kind === 'acp') {
     const Mark = BRAND_MARKS[provider.brandKey ?? '']
     return Mark ? (

@@ -1,6 +1,5 @@
 import type { ProviderRoutes } from '@browseros/server'
 import { hc } from 'hono/client'
-import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
 import { toProviderConfigs, toProviderPayload } from './llm-providers.helpers'
@@ -68,25 +67,6 @@ export async function listProviders(): Promise<LlmProviderConfig[]> {
   }
   const { providers } = await response.json()
   return toProviderConfigs(providers)
-}
-
-/**
- * Loads the provider list, seeding the built-in BrowserOS provider when the
- * server has none.
- *
- * The seed lives here rather than in an effect so it can only run on a
- * confirmed empty response. Reacting to an empty list in the component would
- * fire on a failed load too, writing the default over a list that had simply
- * not arrived yet. The write is a PUT on a fixed id, so a retried fetch cannot
- * produce duplicates either.
- */
-export async function fetchProviders(): Promise<LlmProviderConfig[]> {
-  const configs = await listProviders()
-  if (configs.length > 0) return configs
-
-  const seeded = createDefaultBrowserOSProvider()
-  await putProvider(seeded)
-  return [seeded]
 }
 
 /**

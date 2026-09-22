@@ -1,8 +1,5 @@
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
-import {
-  createDefaultBrowserOSProvider,
-  defaultProviderIdStorage,
-} from '@/lib/llm-providers/storage'
+import { defaultProviderIdStorage } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { listProvidersOrNull } from '@/modules/llm-providers/llm-providers.api'
 import {
@@ -32,7 +29,9 @@ const resolveProvider = async (
     const provider = resolveChatProvider(providers, defaultProviderId)
     if (provider) return provider
   }
-  return createDefaultBrowserOSProvider()
+  // Nothing configured. Said plainly rather than run on a fabricated provider,
+  // which is what happened while a built-in one was always seeded.
+  throw new Error('Connect an LLM provider in AI settings to refine a prompt')
 }
 
 interface RefinePromptResponse {

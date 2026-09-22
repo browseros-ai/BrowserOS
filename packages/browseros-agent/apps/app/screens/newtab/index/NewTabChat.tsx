@@ -1,6 +1,7 @@
 import { Loader2 } from 'lucide-react'
 import { type FC, useEffect, useRef } from 'react'
 import { useSearchParams } from 'react-router'
+import { NoProviderNotice } from '@/components/chat/NoProviderNotice'
 import {
   createAITabAction,
   createBrowserOSAction,
@@ -63,6 +64,9 @@ export const NewTabChat: FC = () => {
     handleSubmit,
     handleSuggestionClick,
     retryLastTurn,
+    hasAnyTarget,
+    isSettled,
+    sendBlocked,
   } = useChatActions({
     events: {
       modeChanged: NEWTAB_CHAT_MODE_CHANGED_EVENT,
@@ -135,12 +139,13 @@ export const NewTabChat: FC = () => {
     resetConversation()
   }
 
-  if (!selectedProvider) return null
+  const noTarget = isSettled && !hasAnyTarget
+  if (!selectedProvider && !noTarget) return null
 
   return (
     <div className="absolute inset-0 flex flex-col overflow-hidden">
       <ChatHeader
-        selectedProvider={selectedProvider}
+        selectedProvider={selectedProvider ?? null}
         providers={providers}
         onSelectProvider={handleSelectProvider}
         onNewConversation={handleNewConversation}
@@ -224,6 +229,9 @@ export const NewTabChat: FC = () => {
             }}
             providerType={selectedProvider?.type}
           />
+        )}
+        {noTarget && (
+          <NoProviderNotice blocked={sendBlocked} variant="inline" />
         )}
       </main>
 

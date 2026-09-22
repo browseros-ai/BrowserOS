@@ -1,7 +1,6 @@
 import { agentBrandKey } from '@/components/agents/agent-brand-marks'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import type { AcpAgent, AcpAgentType } from '@/modules/agents/acp-agent-types'
-import { resolveChatProvider } from '../../lib/llm-providers/provider-runtime'
 
 export type SidepanelChatTarget =
   | {
@@ -38,7 +37,7 @@ export interface BuildSidepanelChatTargetsInput {
 
 export interface ResolveSidepanelChatTargetInput {
   targets: SidepanelChatTarget[]
-  defaultProviderId: string
+  defaultProviderId: string | null
   selection?: SidepanelChatTargetSelection | null
 }
 
@@ -94,6 +93,17 @@ function formatAdapterName(adapter: AcpAgentType): string {
   return adapter
 }
 
+/**
+ * The target a surface should use: the persisted selection when it still names
+ * something, otherwise the stored default, otherwise the first target there is.
+ *
+ * The fallback spans both kinds. It used to consider only LLM providers, which
+ * was invisible while a built-in provider was always seeded and guaranteed one.
+ * With nothing seeded, someone who connected only a coding agent and has no
+ * local selection yet would resolve to nothing at all. The server's default
+ * pointer already names a row of either kind, so matching on id across the
+ * whole list is both simpler and closer to what it means.
+ */
 export function resolveSidepanelChatTarget({
   targets,
   defaultProviderId,
@@ -106,14 +116,11 @@ export function resolveSidepanelChatTarget({
     if (selected) return selected
   }
 
-  const llmTargets = targets.filter((target) => target.kind === 'llm')
-  const provider = resolveChatProvider(
-    llmTargets.map((target) => target.provider),
-    defaultProviderId,
-  )
-  return provider
-    ? llmTargets.find((target) => target.id === provider.id)
-    : undefined
+  if (defaultProviderId) {
+    const named = targets.find((target) => target.id === defaultProviderId)
+    if (named) return named
+  }
+  return targets[0]
 }
 
 export type RepairSelectionDecision =

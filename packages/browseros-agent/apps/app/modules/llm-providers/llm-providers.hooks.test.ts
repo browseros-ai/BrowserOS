@@ -10,7 +10,7 @@ const storageValues = new Map<string, unknown>()
 const putDefaultProviderCalls: string[] = []
 
 mock.module('./llm-providers.api', () => ({
-  fetchProviders: async () => [],
+  listProviders: async () => [],
   fetchDefaultProviderId: async () => null,
   putProvider: async () => undefined,
   deleteProvider: async () => undefined,

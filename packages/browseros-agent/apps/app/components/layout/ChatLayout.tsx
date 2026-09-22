@@ -14,9 +14,13 @@ const ChatLayoutContent: FC = () => {
     resetConversation,
     messages,
     isLoading,
+    isSettled,
+    hasAnyTarget,
   } = useChatSessionContext()
 
-  if (isLoading || !selectedProvider) {
+  // Only the loading case spins. Having nothing connected is a settled answer,
+  // not a pending one, and the panel has to say so rather than spin forever.
+  if (isLoading || (!selectedProvider && !(isSettled && !hasAnyTarget))) {
     return (
       <div className="flex h-screen w-screen items-center justify-center bg-background">
         <div className="h-5 w-5 animate-spin rounded-full border-2 border-muted-foreground border-t-transparent" />
@@ -27,7 +31,7 @@ const ChatLayoutContent: FC = () => {
   return (
     <div className="mx-auto flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
       <ChatHeader
-        selectedProvider={selectedProvider}
+        selectedProvider={selectedProvider ?? null}
         onSelectProvider={handleSelectProvider}
         providers={providers}
         onNewConversation={resetConversation}

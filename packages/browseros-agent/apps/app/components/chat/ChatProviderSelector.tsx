@@ -27,7 +27,8 @@ import type { Provider } from './chatComponentTypes'
 
 export interface ChatProviderSelectorProps {
   providers: Provider[]
-  selectedProvider: Provider
+  /** Null while nothing is connected; the list is empty and Add Provider is the only action. */
+  selectedProvider: Provider | null
   onSelectProvider: (provider: Provider) => void
 }
 
@@ -51,7 +52,7 @@ export const ChatProviderSelector: FC<
             {groups.map((group) => (
               <CommandGroup key={group.key} heading={group.label}>
                 {group.options.map((provider) => {
-                  const isSelected = selectedProvider.id === provider.id
+                  const isSelected = selectedProvider?.id === provider.id
                   const subtitle = getProviderSubtitle(provider)
                   return (
                     <CommandItem

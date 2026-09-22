@@ -44,7 +44,7 @@ function findClickableByText(
 describe('SetupAgentStep', () => {
   it('renders the provider and coding-agent clusters with brand marks', () => {
     const html = renderToStaticMarkup(
-      <SetupAgentStep onSetup={() => undefined} onLater={() => undefined} />,
+      <SetupAgentStep onSetup={() => undefined} />,
     )
 
     expect(html).toContain('Set up your')
@@ -53,13 +53,16 @@ describe('SetupAgentStep', () => {
     expect(html).toContain('or any other ACP compatible agent')
     expect(html).toContain('+40')
     expect(html).toContain('Set up my agent')
+    // One exit only. A "later" button read as though BrowserOS would work
+    // without a provider, and it no longer does.
+    expect(html).not.toContain("I'll do this later")
     // Every chip is a brand SVG; there should be many.
     expect((html.match(/<svg/g) ?? []).length).toBeGreaterThan(10)
   })
 
   it('lists the ACP agents alongside the built-in harnesses', () => {
     const html = renderToStaticMarkup(
-      <SetupAgentStep onSetup={() => undefined} onLater={() => undefined} />,
+      <SetupAgentStep onSetup={() => undefined} />,
     )
 
     for (const label of ['Claude Code', 'Codex', 'OpenClaw', 'Hermes']) {
@@ -69,7 +72,7 @@ describe('SetupAgentStep', () => {
 
   it('serves the Hermes mark from the icon resource directory', () => {
     const html = renderToStaticMarkup(
-      <SetupAgentStep onSetup={() => undefined} onLater={() => undefined} />,
+      <SetupAgentStep onSetup={() => undefined} />,
     )
 
     // Referenced by runtime path, never imported: an imported image would be
@@ -84,7 +87,6 @@ describe('SetupAgentStep', () => {
       onSetup: () => {
         setup = true
       },
-      onLater: () => undefined,
     })
 
     const button = findClickableByText(tree, 'Set up my agent')

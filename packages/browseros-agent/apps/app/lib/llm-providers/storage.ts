@@ -98,9 +98,14 @@ export function createDefaultProvidersConfig(): LlmProviderConfig[] {
   return [createDefaultBrowserOSProvider()]
 }
 
+/**
+ * Legacy local copy of the selected provider id, read only by the one-time
+ * migration and by prompt refinement. Empty rather than naming the built-in
+ * provider, which no longer exists.
+ */
 export const defaultProviderIdStorage = storage.defineItem<string>(
   'local:default-provider-id',
   {
-    fallback: DEFAULT_PROVIDER_ID,
+    fallback: '',
   },
 )

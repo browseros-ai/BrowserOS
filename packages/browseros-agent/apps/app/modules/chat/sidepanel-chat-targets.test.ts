@@ -90,6 +90,44 @@ describe('resolveSidepanelChatTarget', () => {
       }),
     ).toMatchObject({ kind: 'llm', id: provider.id })
   })
+
+  it('falls back to a coding agent when that is all there is', () => {
+    // The fallback used to consider only LLM providers, which was invisible
+    // while a built-in one was always present. Someone who connected just a
+    // coding agent and has no stored selection yet resolved to nothing.
+    const agentOnly = buildSidepanelChatTargets({
+      providers: [],
+      agents: [agent],
+    })
+
+    expect(
+      resolveSidepanelChatTarget({
+        targets: agentOnly,
+        defaultProviderId: null,
+        selection: null,
+      }),
+    ).toMatchObject({ kind: 'acp', id: agent.id })
+  })
+
+  it('honours a default id that names a coding agent', () => {
+    expect(
+      resolveSidepanelChatTarget({
+        targets,
+        defaultProviderId: agent.id,
+        selection: null,
+      }),
+    ).toMatchObject({ kind: 'acp', id: agent.id })
+  })
+
+  it('resolves to nothing when nothing is connected', () => {
+    expect(
+      resolveSidepanelChatTarget({
+        targets: [],
+        defaultProviderId: null,
+        selection: null,
+      }),
+    ).toBeUndefined()
+  })
 })
 
 describe('resolveRepairedSelection', () => {

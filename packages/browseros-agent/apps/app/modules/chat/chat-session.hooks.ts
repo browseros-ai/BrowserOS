@@ -25,7 +25,6 @@ import {
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
-import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type { ChatRequestBrowserContext } from '@/lib/messaging/server/buildChatRequestBody'
 import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
@@ -192,6 +191,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     selectChatTarget,
     selectedLlmProvider,
     isLoadingProviders,
+    hasAnyTarget,
+    isSettled,
   } = useChatRefs()
   const invalidateCredits = useInvalidateCredits()
   const queryClient = useQueryClient()
@@ -252,6 +253,20 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   useEffect(() => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
+
+  // Read through a ref because the search-action watcher below installs once
+  // and would otherwise keep the value from first render, when nothing has
+  // loaded yet and every send would look unsendable.
+  const hasAnyTargetRef = useRef(hasAnyTarget)
+
+  useEffect(() => {
+    hasAnyTargetRef.current = hasAnyTarget
+  }, [hasAnyTarget])
+
+  const [sendAttemptBlocked, setSendAttemptBlocked] = useState(false)
+  // Derived rather than cleared in an effect: connecting a provider makes this
+  // false on the next render on its own.
+  const sendBlocked = sendAttemptBlocked && !hasAnyTarget
 
   const canSend =
     !isLoadingAgentUrl &&
@@ -399,12 +414,16 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       },
       prepareSendMessagesRequest: async ({ messages }) => {
         const target = selectedChatTargetRef.current
+        // No fabricated fallback. Sending a provider the user never configured
+        // would run the turn on credentials they did not choose; sending
+        // nothing lets the server resolve its own selection, or say there is
+        // none.
         const fallbackProvider =
           resolveChatProvider(
             selectedLlmProviderRef.current
               ? [selectedLlmProviderRef.current]
               : [],
-          ) ?? createDefaultBrowserOSProvider()
+          ) ?? undefined
         // A contextual panel sends from its owning tab even if another tab
         // becomes active while provider/server preparation is awaiting I/O.
         const tabId =
@@ -906,15 +925,29 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
   }, [agentServerUrl, dispatchMessage, isIntegrationsSynced])
 
+  /**
+   * Sends, or reports why it did not.
+   *
+   * The boolean matters: callers clear the composer after this returns, so a
+   * refusal that looked like a send would take the user's draft with it. Every
+   * chat surface funnels through here, so the no-provider guard only has to
+   * exist once.
+   */
   const sendMessage = (params: {
     text: string
     action?: ChatAction
     files?: FileUIPart[]
-  }) => {
-    if (isRestoringConversation || restoreError) return
+  }): boolean => {
+    if (!hasAnyTargetRef.current) {
+      setSendAttemptBlocked(true)
+      return false
+    }
+    if (isRestoringConversation || restoreError) return false
     if (!isIntegrationsSyncedRef.current || !agentUrlRef.current) {
+      // Queued, not refused: this one does reach the model once the server is
+      // up, so the caller is right to clear the composer.
       pendingMessageRef.current = params
-      return
+      return true
     }
 
     if (params.action) {
@@ -926,6 +959,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       })
     }
     dispatchMessage(params.text, params.files)
+    return true
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
@@ -1056,6 +1090,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     providers,
     selectedProvider,
     isLoading: isLoadingProviders || isLoadingAgentUrl,
+    hasAnyTarget,
+    isSettled,
+    sendBlocked,
     canSend,
     isSyncing: !isIntegrationsSynced,
     isIncognito,

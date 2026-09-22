@@ -78,7 +78,8 @@ export function useChatTargetSelection() {
     () =>
       resolveSidepanelChatTarget({
         targets: chatTargets,
-        defaultProviderId: selectedLlmProvider?.id ?? llmProviders[0]?.id ?? '',
+        defaultProviderId:
+          selectedLlmProvider?.id ?? llmProviders[0]?.id ?? null,
         selection: targetSelection,
       }),
     [chatTargets, llmProviders, selectedLlmProvider, targetSelection],
@@ -150,12 +151,19 @@ export function useChatTargetSelection() {
     [chatTargets, selectChatTarget],
   )
 
+  // Both lists have to have settled before absence means anything. Reading it
+  // mid-load would tell someone their provider is gone every cold start.
+  const isSettled = !isLoadingProviders && agentsSettled
+
   return {
     llmProviders,
     selectedLlmProvider,
     selectedLlmProviderRef,
     setDefaultProvider,
     isLoadingProviders: isLoadingProviders || isLoadingAgents,
+    isSettled,
+    /** Whether anything at all is connected: an LLM provider or a coding agent. */
+    hasAnyTarget: chatTargets.length > 0,
     agents,
     chatTargets,
     providerOptions,
