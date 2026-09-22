@@ -24,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0015_add_skill_run_marks::Migration),
             Box::new(m0016_add_task_summary::Migration),
             Box::new(m0017_add_run_error_budget::Migration),
+            Box::new(m0018_add_feedback_invite::Migration),
         ]
     }
 }
@@ -2158,5 +2159,71 @@ mod m0017_add_run_error_budget {
         Day,
         Sent,
         Suppressed,
+    }
+}
+
+mod m0018_add_feedback_invite {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0018_add_feedback_invite"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // At most one feedback invitation per installation, ever. The install id is
+            // the primary key rather than a column, so the rule is enforced by the schema
+            // instead of by a condition someone has to keep correct: concurrent agents, a
+            // retried dispatch and a restart mid-flight all resolve to one row.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(FeedbackInvite::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(FeedbackInvite::InstallId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(
+                            ColumnDef::new(FeedbackInvite::EmittedAtMs)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(
+                            ColumnDef::new(FeedbackInvite::SessionId)
+                                .string()
+                                .not_null(),
+                        )
+                        // Which client received it, so emissions can be read per agent
+                        // later. Nullable because the label is best effort.
+                        .col(ColumnDef::new(FeedbackInvite::Agent).string().null())
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(FeedbackInvite::Table).to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum FeedbackInvite {
+        Table,
+        InstallId,
+        EmittedAtMs,
+        SessionId,
+        Agent,
     }
 }

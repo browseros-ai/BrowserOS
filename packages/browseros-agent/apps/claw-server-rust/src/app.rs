@@ -46,6 +46,12 @@ pub struct AppState {
     pub skill_runs: Arc<SkillRunService>,
     pub analytics: Arc<AnalyticsService>,
     pub run_failures: Arc<crate::services::run_failures::RunFailureReporter>,
+    pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
+    pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
+    /// Latches once this process has settled the invitation for this installation, so the
+    /// per-dispatch path stops touching the database entirely. See
+    /// `api::mcp::effects::feedback_invite`.
+    pub feedback_invite_settled: Arc<std::sync::atomic::AtomicBool>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     pub session_efficiency: Arc<SessionEfficiencyService>,
@@ -92,6 +98,10 @@ impl AppState {
             crate::db::run_error_budget::RunErrorBudgetRepository::new(database.clone()),
             analytics.get_state().await.distinct_id,
             &config.browserclaw_dir.join("logs"),
+        ));
+        let feedback_cohort = Arc::new(crate::services::feedback_cohort::FeedbackCohort::new());
+        let feedback_invites = Arc::new(crate::db::feedback_invite::FeedbackInviteRepository::new(
+            database.clone(),
         ));
         let skill = load_browserclaw_skill(&config.resources_dir)?;
         let harness = Arc::new(HarnessService::new_with_managed_skill(
@@ -189,6 +199,9 @@ impl AppState {
             skill_runs,
             analytics,
             run_failures,
+            feedback_cohort,
+            feedback_invites,
+            feedback_invite_settled: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             profiles,
             sessions,
             session_efficiency,

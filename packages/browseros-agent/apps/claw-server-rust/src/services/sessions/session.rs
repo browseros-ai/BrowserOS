@@ -111,6 +111,15 @@ impl Session {
             .await;
     }
 
+    /// How many tool dispatches this session has completed.
+    ///
+    /// The same counter that is reported as `dispatch_count` on `agent_session_ended`, so
+    /// anything gating on it agrees with the analytics rather than inventing a second
+    /// notion of how much work a session has done.
+    pub async fn dispatch_count(&self) -> u64 {
+        self.usage.snapshot().await.dispatch_count
+    }
+
     pub(crate) async fn usage_snapshot(&self) -> SessionUsageSnapshot {
         self.usage.snapshot().await
     }
