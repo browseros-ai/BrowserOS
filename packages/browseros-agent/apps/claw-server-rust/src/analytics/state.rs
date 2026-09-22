@@ -223,7 +223,10 @@ mod tests {
                         fs::write(&installation_path, raw)?;
                     }
                     let state = load_or_create_state(&path).await;
-                    let id = state.distinct_id.as_deref().expect("persisted UUID");
+                    let id = state
+                        .distinct_id
+                        .as_deref()
+                        .ok_or_else(|| anyhow::anyhow!("missing persisted UUID"))?;
                     assert!(valid_identity(id));
                     if let Some(expected) = old.or(installation) {
                         assert_eq!(id, expected);

@@ -127,10 +127,10 @@ mod tests {
         assert!(alias_event(a, a).is_none());
         assert!(alias_event(a, "not-an-id").is_none());
         assert!(alias_event("", b).is_none());
-        let mut event = alias_event(a, b).expect("valid pair");
+        let mut event = alias_event(a, b).ok_or_else(|| anyhow::anyhow!("valid pair rejected"))?;
         event.insert_prop("$set", serde_json::json!({"email": "private@example.com"}))?;
         event.insert_prop("$lib", "sdk")?;
-        let event = allowlist(event).expect("valid alias");
+        let event = allowlist(event).ok_or_else(|| anyhow::anyhow!("valid alias rejected"))?;
         assert_eq!(event.properties().len(), 4);
         assert!(!event.properties().contains_key("$set"));
         assert!(!event.properties().contains_key("$lib"));
