@@ -148,6 +148,16 @@ impl AnalyticsService {
     }
 
     /// Returns the persisted identity, effective delivery state, and raw consent choice.
+    /// The PostHog host and public project key this build ships, if it has one.
+    ///
+    /// Exposed so remote configuration can be read with the credentials already embedded,
+    /// rather than making every deployment configure a second location.
+    #[must_use]
+    pub fn remote_config_credentials(&self) -> Option<(String, String)> {
+        let project_key = self.config.project_key.clone()?;
+        Some((self.config.host.clone(), project_key))
+    }
+
     pub async fn get_state(&self) -> TelemetryState {
         let state = self.state.lock().await;
         self.telemetry_state(&state)

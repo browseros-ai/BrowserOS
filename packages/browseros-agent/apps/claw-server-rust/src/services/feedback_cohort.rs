@@ -16,8 +16,23 @@ use std::{
 use tokio::{sync::RwLock, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-/// Where the published document lives. Absent at both build and run time means the feature
-/// is off, which is the same silent posture as an unreachable document.
+/// The PostHog remote configuration flag carrying the cohort.
+///
+/// Remote configuration delivers the same payload to every caller, so membership is still
+/// decided here rather than by PostHog. That matters: PostHog answers targeting questions
+/// from person profiles, and this product deliberately sends `$process_person_profile:
+/// false`, so no profile exists to target.
+const COHORT_FLAG_KEY: &str = "feedback-call-cohort";
+
+/// The identity used when reading remote configuration.
+///
+/// Deliberately constant rather than the installation id. The payload is identical for
+/// everyone, so sending the real id would tell PostHog which installations are polling
+/// without changing the answer.
+const REMOTE_CONFIG_IDENTITY: &str = "browserclaw-remote-config";
+
+/// Overrides the PostHog source with a plain JSON document. For local testing, and as an
+/// escape hatch if remote configuration is ever unavailable.
 const BUILD_COHORT_URL: Option<&str> = option_env!("CLAW_FEEDBACK_COHORT_URL");
 
 /// Where the invitation points when the published document does not override it.
@@ -147,23 +162,86 @@ pub fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
-/// The configured document location, runtime taking precedence over the build default.
+/// Where the cohort is read from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CohortSource {
+    /// A plain JSON document served at a URL.
+    Document(String),
+    /// PostHog remote configuration, read with the credentials this build already ships.
+    RemoteConfig { host: String, project_key: String },
+}
+
+/// The configured source, or `None` when this build can reach neither.
+///
+/// An explicit document URL wins so a developer can point at a local file; otherwise the
+/// analytics credentials the build already embeds are enough, which is the whole point:
+/// shipping this needs no second thing to configure.
 #[must_use]
-pub fn configured_url() -> Option<String> {
-    resolve_url(
+pub fn configured_source(posthog: Option<(String, String)>) -> Option<CohortSource> {
+    resolve_source(
         std::env::var("CLAW_FEEDBACK_COHORT_URL").ok(),
         BUILD_COHORT_URL,
+        posthog,
     )
 }
 
-/// Split from [`configured_url`] so the precedence rule can be tested without mutating the
-/// process environment, which this crate forbids.
-fn resolve_url(runtime: Option<String>, build: Option<&str>) -> Option<String> {
-    runtime
+/// Split from [`configured_source`] so the precedence rule can be tested without mutating
+/// the process environment, which this crate forbids.
+fn resolve_source(
+    runtime: Option<String>,
+    build: Option<&str>,
+    posthog: Option<(String, String)>,
+) -> Option<CohortSource> {
+    let document = runtime
         .filter(|url| !url.trim().is_empty())
         .or_else(|| build.map(str::to_owned))
         .map(|url| url.trim().to_owned())
-        .filter(|url| !url.is_empty())
+        .filter(|url| !url.is_empty());
+    if let Some(url) = document {
+        return Some(CohortSource::Document(url));
+    }
+    let (host, project_key) = posthog?;
+    let host = host.trim().trim_end_matches('/').to_owned();
+    let project_key = project_key.trim().to_owned();
+    (!host.is_empty() && !project_key.is_empty())
+        .then_some(CohortSource::RemoteConfig { host, project_key })
+}
+
+/// PostHog's flag evaluation response. Only the one payload is read; everything else about
+/// the envelope is ignored so PostHog can extend it freely.
+#[derive(Debug, serde::Deserialize)]
+struct FlagsEnvelope {
+    #[serde(default)]
+    flags: std::collections::HashMap<String, FlagEntry>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct FlagEntry {
+    #[serde(default)]
+    metadata: FlagMetadata,
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct FlagMetadata {
+    /// The remote configuration payload, delivered as a JSON-encoded string.
+    #[serde(default)]
+    payload: Option<String>,
+}
+
+/// Pulls the cohort document out of a flag evaluation response.
+fn document_from_flags(body: &[u8]) -> Option<CohortDocument> {
+    let envelope: FlagsEnvelope = serde_json::from_slice(body)
+        .inspect_err(|error| tracing::warn!(%error, "feedback cohort flags response unreadable"))
+        .ok()?;
+    let payload = envelope
+        .flags
+        .get(COHORT_FLAG_KEY)?
+        .metadata
+        .payload
+        .as_ref()?;
+    serde_json::from_str(payload)
+        .inspect_err(|error| tracing::warn!(%error, "feedback cohort payload unreadable"))
+        .ok()
 }
 
 /// Fetches the published document once and adopts it if it is usable.
@@ -171,7 +249,7 @@ fn resolve_url(runtime: Option<String>, build: Option<&str>) -> Option<String> {
 /// Returns whether the cohort changed. Every failure path is a warning and a `false`: a
 /// refused or unreachable document leaves the previous one in place rather than emptying
 /// the cohort, so a brief outage does not stop invitations that were already permitted.
-pub async fn fetch_once(cohort: &FeedbackCohort, url: &str, now_ms: i64) -> bool {
+pub async fn fetch_once(cohort: &FeedbackCohort, source: &CohortSource, now_ms: i64) -> bool {
     let client = match reqwest::Client::builder().timeout(FETCH_TIMEOUT).build() {
         Ok(client) => client,
         Err(error) => {
@@ -179,7 +257,16 @@ pub async fn fetch_once(cohort: &FeedbackCohort, url: &str, now_ms: i64) -> bool
             return false;
         }
     };
-    let response = match client.get(url).send().await {
+    let request = match source {
+        CohortSource::Document(url) => client.get(url),
+        CohortSource::RemoteConfig { host, project_key } => client
+            .post(format!("{host}/flags?v=2"))
+            .json(&serde_json::json!({
+                "api_key": project_key,
+                "distinct_id": REMOTE_CONFIG_IDENTITY,
+            })),
+    };
+    let response = match request.send().await {
         Ok(response) => response,
         Err(error) => {
             tracing::warn!(%error, "feedback cohort fetch failed");
@@ -193,12 +280,18 @@ pub async fn fetch_once(cohort: &FeedbackCohort, url: &str, now_ms: i64) -> bool
     let Some(body) = read_capped(response).await else {
         return false;
     };
-    let document = match serde_json::from_slice::<CohortDocument>(&body) {
-        Ok(document) => document,
-        Err(error) => {
-            tracing::warn!(%error, "feedback cohort document unreadable");
-            return false;
-        }
+    let document = match source {
+        CohortSource::Document(_) => match serde_json::from_slice::<CohortDocument>(&body) {
+            Ok(document) => Some(document),
+            Err(error) => {
+                tracing::warn!(%error, "feedback cohort document unreadable");
+                None
+            }
+        },
+        CohortSource::RemoteConfig { .. } => document_from_flags(&body),
+    };
+    let Some(document) = document else {
+        return false;
     };
     cohort.adopt(document, now_ms).await
 }
@@ -234,7 +327,7 @@ async fn read_capped(mut response: reqwest::Response) -> Option<Vec<u8>> {
 /// document without a six hour delay.
 pub fn spawn_refresh_loop(
     cohort: FeedbackCohort,
-    url: String,
+    source: CohortSource,
     cancel: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -244,7 +337,7 @@ pub fn spawn_refresh_loop(
             tokio::select! {
                 () = cancel.cancelled() => return,
                 _ = ticker.tick() => {
-                    fetch_once(&cohort, &url, now_ms()).await;
+                    fetch_once(&cohort, &source, now_ms()).await;
                 }
             }
         }
@@ -353,7 +446,7 @@ mod tests {
         .await?;
 
         let cohort = FeedbackCohort::new();
-        assert!(fetch_once(&cohort, &url, now).await);
+        assert!(fetch_once(&cohort, &CohortSource::Document(url), now).await);
         assert!(cohort.invitation_url("install-a", now).await.is_some());
         Ok(())
     }
@@ -372,7 +465,7 @@ mod tests {
             body.len()
         ))
         .await?;
-        assert!(!fetch_once(&cohort, &url, now).await);
+        assert!(!fetch_once(&cohort, &CohortSource::Document(url), now).await);
         assert!(
             cohort.invitation_url("install-a", now).await.is_some(),
             "a bad fetch must not empty the cohort"
@@ -387,7 +480,7 @@ mod tests {
         )
         .await?;
         let cohort = FeedbackCohort::new();
-        assert!(!fetch_once(&cohort, &url, now_ms()).await);
+        assert!(!fetch_once(&cohort, &CohortSource::Document(url), now_ms()).await);
         assert!(!cohort.is_loaded().await);
         Ok(())
     }
@@ -407,7 +500,7 @@ mod tests {
         ))
         .await?;
         let cohort = FeedbackCohort::new();
-        assert!(!fetch_once(&cohort, &url, now_ms()).await);
+        assert!(!fetch_once(&cohort, &CohortSource::Document(url), now_ms()).await);
         assert!(!cohort.is_loaded().await);
         Ok(())
     }
@@ -426,7 +519,7 @@ mod tests {
         .await?;
 
         let cohort = FeedbackCohort::new();
-        assert!(fetch_once(&cohort, &url, now).await);
+        assert!(fetch_once(&cohort, &CohortSource::Document(url), now).await);
         assert!(cohort.invitation_url("install-a", now).await.is_some());
         Ok(())
     }
@@ -451,28 +544,113 @@ mod tests {
         }))?)
     }
 
+    fn posthog() -> Option<(String, String)> {
+        Some((
+            "https://us.i.posthog.com/".to_string(),
+            "phc_example".to_string(),
+        ))
+    }
+
+    /// The point of reading PostHog remote configuration: a build that ships analytics
+    /// credentials needs nothing else configured to reach a cohort.
     #[test]
-    fn no_configured_url_means_the_feature_is_off() {
-        assert_eq!(resolve_url(None, None), None);
-        assert_eq!(resolve_url(Some("   ".to_string()), None), None);
-        assert_eq!(resolve_url(Some(String::new()), Some("   ")), None);
+    fn the_shipped_analytics_credentials_are_enough() {
+        assert_eq!(
+            resolve_source(None, None, posthog()),
+            Some(CohortSource::RemoteConfig {
+                host: "https://us.i.posthog.com".to_string(),
+                project_key: "phc_example".to_string(),
+            })
+        );
     }
 
     #[test]
-    fn a_runtime_url_overrides_the_build_default() {
+    fn a_build_without_analytics_credentials_reaches_no_source() {
+        assert_eq!(resolve_source(None, None, None), None);
         assert_eq!(
-            resolve_url(
-                Some("  https://run.test/c.json ".to_string()),
-                Some("https://build.test/c.json")
-            )
-            .as_deref(),
-            Some("https://run.test/c.json")
+            resolve_source(None, None, Some((String::new(), "phc_example".to_string()))),
+            None
+        );
+        assert_eq!(
+            resolve_source(
+                None,
+                None,
+                Some(("https://us.i.posthog.com".to_string(), "  ".to_string()))
+            ),
+            None
+        );
+    }
+
+    /// An explicit document wins so a developer can point at a local file.
+    #[test]
+    fn an_explicit_document_overrides_remote_configuration() {
+        assert_eq!(
+            resolve_source(
+                Some("  http://127.0.0.1:8787/cohort.json ".to_string()),
+                None,
+                posthog()
+            ),
+            Some(CohortSource::Document(
+                "http://127.0.0.1:8787/cohort.json".to_string()
+            ))
         );
         // A blank runtime value falls through rather than disabling a built-in default.
         assert_eq!(
-            resolve_url(Some("  ".to_string()), Some("https://build.test/c.json")).as_deref(),
-            Some("https://build.test/c.json")
+            resolve_source(
+                Some("  ".to_string()),
+                Some("https://build.test/c.json"),
+                posthog()
+            ),
+            Some(CohortSource::Document(
+                "https://build.test/c.json".to_string()
+            ))
         );
+    }
+
+    /// The exact envelope PostHog returns, captured from a live remote configuration flag.
+    #[test]
+    fn a_remote_configuration_payload_is_read_out_of_the_envelope() {
+        let body = serde_json::to_vec(&json!({
+            "errorsWhileComputingFlags": false,
+            "flags": {
+                "feedback-call-cohort": {
+                    "key": "feedback-call-cohort",
+                    "enabled": true,
+                    "variant": null,
+                    "reason": { "code": "condition_match", "condition_index": 0 },
+                    "metadata": {
+                        "id": 902303,
+                        "version": 1,
+                        "payload": "{\"generated_at_ms\": 1790101086157, \"installs\": [\"install-a\"]}",
+                        "has_experiment": false
+                    }
+                }
+            },
+            "requestId": "01e09120-8f07-4a70-bc77-bc29223b2911"
+        }))
+        .unwrap_or_else(|error| panic!("fixture: {error}"));
+
+        let Some(document) = document_from_flags(&body) else {
+            panic!("the payload was not read out of the envelope");
+        };
+        assert_eq!(document.installs, vec!["install-a".to_string()]);
+        assert_eq!(document.generated_at_ms, 1_790_101_086_157);
+    }
+
+    /// The flag being absent, disabled or payload-free all mean the same thing: no cohort.
+    #[test]
+    fn an_envelope_without_our_flag_yields_no_document() {
+        let empty = serde_json::to_vec(&json!({ "flags": {} }))
+            .unwrap_or_else(|error| panic!("fixture: {error}"));
+        assert!(document_from_flags(&empty).is_none());
+
+        let no_payload = serde_json::to_vec(&json!({
+            "flags": { "feedback-call-cohort": { "metadata": { "id": 1 } } }
+        }))
+        .unwrap_or_else(|error| panic!("fixture: {error}"));
+        assert!(document_from_flags(&no_payload).is_none());
+
+        assert!(document_from_flags(b"not json").is_none());
     }
 
     /// Serves one canned response and returns the URL to ask for it.
@@ -524,7 +702,7 @@ mod tests {
         .await?;
 
         let cohort = FeedbackCohort::new();
-        assert!(!fetch_once(&cohort, &url, now_ms()).await);
+        assert!(!fetch_once(&cohort, &CohortSource::Document(url), now_ms()).await);
         assert!(!cohort.is_loaded().await);
         Ok(())
     }
@@ -544,7 +722,7 @@ mod tests {
         .await?;
 
         let cohort = FeedbackCohort::new();
-        assert!(fetch_once(&cohort, &url, now).await);
+        assert!(fetch_once(&cohort, &CohortSource::Document(url), now).await);
         assert!(cohort.invitation_url("install-a", now).await.is_some());
         Ok(())
     }

@@ -173,15 +173,19 @@ impl AppRuntime {
                 }),
             },
         ];
-        // Only runs when a document location is configured. Without one the cohort stays
-        // empty and nobody is invited, which is the same outcome as an unreachable
-        // document, so there is nothing to report.
-        if let Some(url) = crate::services::feedback_cohort::configured_url() {
+        // Reads the cohort from PostHog remote configuration using the analytics
+        // credentials this build already embeds, so shipping it needs nothing else
+        // configured. A build with no PostHog key reaches no source, the cohort stays
+        // empty and nobody is invited, which is the same silent outcome as an unreachable
+        // one, so there is nothing to report.
+        if let Some(source) = crate::services::feedback_cohort::configured_source(
+            state.analytics.remote_config_credentials(),
+        ) {
             tasks.push(BackgroundTask {
                 name: "feedback cohort refresh",
                 handle: crate::services::feedback_cohort::spawn_refresh_loop(
                     (*state.feedback_cohort).clone(),
-                    url,
+                    source,
                     shutdown.child_token(),
                 ),
             });
