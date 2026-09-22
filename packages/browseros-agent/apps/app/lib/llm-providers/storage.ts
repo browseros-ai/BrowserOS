@@ -5,34 +5,18 @@ import {
   migrateLlmProvidersToV3,
   normalizeProviderNames,
 } from './provider-name-normalization'
-import {
-  DEFAULT_PROVIDER_ID,
-  DEFAULT_PROVIDER_NAME,
-} from './provider-selection'
 import { dropRemovedProviderConfigs } from './removed-provider-types'
 import type { LlmProviderConfig, LlmProvidersBackup } from './types'
-
-export { DEFAULT_PROVIDER_ID } from './provider-selection'
 
 export const providersStorage = storage.defineItem<LlmProviderConfig[]>(
   'local:llm-providers',
   {
     version: 5,
     migrations: {
-      2: (
-        providers: LlmProviderConfig[] | null,
-      ): LlmProviderConfig[] | null => {
-        if (!providers) return providers
-        return providers.map((provider) => {
-          if (
-            provider.id === DEFAULT_PROVIDER_ID &&
-            provider.type === 'browseros'
-          ) {
-            return { ...provider, contextWindow: 200000 }
-          }
-          return provider
-        })
-      },
+      // 2 widened the retired hosted provider's context window. Nothing it
+      // could act on survives, and migration 5 drops the type outright.
+      2: (providers: LlmProviderConfig[] | null): LlmProviderConfig[] | null =>
+        providers,
       3: (
         providers: LlmProviderConfig[] | null,
       ): LlmProviderConfig[] | null => {
@@ -76,26 +60,6 @@ export async function loadProviders(): Promise<LlmProviderConfig[]> {
   }
 
   return normalizedProviders
-}
-
-export function createDefaultBrowserOSProvider(): LlmProviderConfig {
-  const timestamp = Date.now()
-  return {
-    id: DEFAULT_PROVIDER_ID,
-    type: 'browseros',
-    name: DEFAULT_PROVIDER_NAME,
-    baseUrl: 'https://api.browseros.com/v1',
-    modelId: 'browseros-auto',
-    supportsImages: true,
-    contextWindow: 200000,
-    temperature: 0.2,
-    createdAt: timestamp,
-    updatedAt: timestamp,
-  }
-}
-
-export function createDefaultProvidersConfig(): LlmProviderConfig[] {
-  return [createDefaultBrowserOSProvider()]
 }
 
 /**

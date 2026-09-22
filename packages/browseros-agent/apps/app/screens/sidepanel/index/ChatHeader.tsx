@@ -11,27 +11,11 @@ import { Link, useLocation, useNavigate } from 'react-router'
 import { BRAND_MARKS } from '@/components/agents/agent-brand-marks'
 import { ChatProviderSelector } from '@/components/chat/ChatProviderSelector'
 import type { Provider } from '@/components/chat/chatComponentTypes'
-import { CreditBadge } from '@/components/credits/CreditBadge'
 import { ThemeToggle } from '@/components/elements/theme-toggle'
-import { Feature } from '@/lib/browseros/capabilities'
 import { productRepositoryUrl } from '@/lib/constants/productUrls'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
-import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
-import { useCredits } from '@/modules/credits/credits.hooks'
-
-const CreditsBadgeWrapper: FC = () => {
-  const { supports } = useCapabilities()
-  const { data } = useCredits()
-  if (!supports(Feature.CREDITS_SUPPORT) || data === undefined) return null
-  return (
-    <CreditBadge
-      credits={data.credits}
-      onClick={() => window.open('/app.html#/settings/usage', '_blank')}
-    />
-  )
-}
 
 export interface ChatHeaderProps {
   /** Null while nothing is connected. The header still renders, saying so. */
@@ -94,7 +78,6 @@ export const ChatHeader: FC<ChatHeaderProps> = ({
             <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-180" />
           </button>
         </ChatProviderSelector>
-        {selectedProvider?.type === 'browseros' && <CreditsBadgeWrapper />}
       </div>
 
       <div className="flex items-center gap-1">
@@ -168,6 +151,5 @@ function HeaderProviderIcon({ provider }: { provider: Provider | null }) {
       <Bot className="h-[18px] w-[18px]" />
     )
   }
-  if (provider.type === 'browseros') return <BrowserOSIcon size={18} />
   return <ProviderIcon type={provider.type as ProviderType} size={18} />
 }

@@ -14,8 +14,10 @@ import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 export function hasHostedModelEvidence(
   sources: ReadonlyArray<readonly LlmProviderConfig[]>,
 ): boolean {
+  // Compared as a plain string: the type is gone from the union, and the
+  // whole point is to recognise it in storage written before it was removed.
   return sources.some((providers) =>
-    providers.some((provider) => provider.type === 'browseros'),
+    providers.some((provider) => String(provider.type) === 'browseros'),
   )
 }
 

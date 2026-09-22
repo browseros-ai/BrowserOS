@@ -38,7 +38,6 @@ import {
   fetchServerConversation,
   SERVER_CONVERSATIONS_QUERY_KEY,
 } from '@/modules/conversations/conversations.hooks'
-import { useInvalidateCredits } from '@/modules/credits/credits.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
 import { GetConversationWithMessagesDocument } from './chat-session-document'
@@ -194,7 +193,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     hasAnyTarget,
     isSettled,
   } = useChatRefs()
-  const invalidateCredits = useInvalidateCredits()
   const queryClient = useQueryClient()
 
   // Incognito chats are never written to history or the cloud (#1189). Resolved
@@ -829,8 +827,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       void queryClient.invalidateQueries({
         queryKey: [SERVER_CONVERSATIONS_QUERY_KEY],
       })
-
-    invalidateCredits()
   }, [status])
 
   // Save the in-flight conversation before it can be lost: on page hide (full
@@ -838,10 +834,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // The durable turn buffer and its flush lived here to survive an
   // interrupted cloud upload. The local server persists each turn during
   // /chat, so there is nothing left to buffer.
-
-  useEffect(() => {
-    if (chatError) invalidateCredits()
-  }, [chatError, invalidateCredits])
 
   const isIntegrationsSynced = options?.isIntegrationsSynced ?? true
   const isIntegrationsSyncedRef = useRef(isIntegrationsSynced)

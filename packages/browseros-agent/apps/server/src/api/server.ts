@@ -8,7 +8,6 @@ import { websocket } from 'hono/bun'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { toChatError } from '../agent/chat-error'
 import { HttpAgentError } from '../agent/errors'
-import { INLINED_ENV } from '../env'
 import { initializeOAuth, shutdownOAuth } from '../lib/clients/oauth'
 import { getDb } from '../lib/db'
 import { logger } from '../lib/logger'
@@ -59,9 +58,6 @@ export async function createHttpServer(config: HttpServerConfig) {
 
   const app = createApiRoutes({
     config: { ...config, activity },
-    gatewayBaseUrl: INLINED_ENV.BROWSEROS_CONFIG_URL
-      ? new URL(INLINED_ENV.BROWSEROS_CONFIG_URL).origin
-      : undefined,
     klavis,
     tokenManager,
     onShutdown: () => {

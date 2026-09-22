@@ -7,10 +7,10 @@ const fetchBodies: Array<Record<string, unknown>> = []
 const originalFetch = globalThis.fetch
 
 const createBrowserOSProvider = () => ({
-  id: 'browseros',
-  type: 'browseros',
-  name: 'BrowserOS',
-  modelId: 'browseros-auto',
+  id: 'openai-1',
+  type: 'openai',
+  name: 'OpenAI',
+  modelId: 'gpt-5',
   supportsImages: true,
   contextWindow: 200000,
   temperature: 0.2,
@@ -25,7 +25,7 @@ const createBrowserOSProvider = () => ({
 // Per-file worker isolation (Level 3 in the 2026-07-17 test
 // reliability audit) covers the general class regardless.
 mock.module('@/lib/llm-providers/storage', () => ({
-  DEFAULT_PROVIDER_ID: 'browseros',
+  DEFAULT_PROVIDER_ID: 'openai-1',
   createDefaultBrowserOSProvider: createBrowserOSProvider,
   createDefaultProvidersConfig: () => [createBrowserOSProvider()],
   loadProviders: async () =>

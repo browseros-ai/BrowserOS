@@ -12,10 +12,10 @@ import {
 } from './sidepanel-chat-targets'
 
 const provider: LlmProviderConfig = {
-  id: 'browseros',
-  type: 'browseros',
-  name: 'BrowserOS',
-  modelId: 'browseros-auto',
+  id: 'openai-1',
+  type: 'openai',
+  name: 'OpenAI',
+  modelId: 'gpt-5',
   supportsImages: true,
   contextWindow: 200000,
   temperature: 0.2,
@@ -289,11 +289,11 @@ function createSelectionStore(
 // that has not caught up destroys a choice the user just made, which is what
 // made selecting a new provider appear to revert to BrowserOS.
 describe('resolveRepairedSelection with an incomplete list', () => {
-  const browserosTarget = {
+  const resolvedLlmTarget = {
     kind: 'llm' as const,
-    id: 'browseros',
-    name: 'BrowserOS',
-    type: 'browseros' as const,
+    id: 'openai-1',
+    name: 'OpenAI',
+    type: 'openai' as const,
     provider: {} as never,
   }
 
@@ -301,9 +301,9 @@ describe('resolveRepairedSelection with an incomplete list', () => {
     expect(
       resolveRepairedSelection({
         selection: { kind: 'llm', id: 'just-created' },
-        resolvedTarget: browserosTarget,
+        resolvedTarget: resolvedLlmTarget,
         ready: true,
-        knownIds: new Set(['browseros']),
+        knownIds: new Set(['openai-1']),
       }).repair,
     ).toBe(false)
   })
@@ -314,18 +314,18 @@ describe('resolveRepairedSelection with an incomplete list', () => {
     expect(
       resolveRepairedSelection({
         selection: { kind: 'llm', id: 'deleted-but-known' },
-        resolvedTarget: browserosTarget,
+        resolvedTarget: resolvedLlmTarget,
         ready: true,
-        knownIds: new Set(['browseros', 'deleted-but-known']),
+        knownIds: new Set(['openai-1', 'deleted-but-known']),
       }),
-    ).toEqual({ repair: true, selection: { kind: 'llm', id: 'browseros' } })
+    ).toEqual({ repair: true, selection: { kind: 'llm', id: 'openai-1' } })
   })
 
   it('repairs as before when no list is given', () => {
     expect(
       resolveRepairedSelection({
         selection: { kind: 'llm', id: 'gone' },
-        resolvedTarget: browserosTarget,
+        resolvedTarget: resolvedLlmTarget,
         ready: true,
       }).repair,
     ).toBe(true)

@@ -20,7 +20,7 @@ describe('chat request preparation', () => {
 
     expect(request.api).toBe('http://127.0.0.1:5151/chat')
     expect(request.body).toMatchObject({
-      target: { type: 'browseros', providerId: 'browseros' },
+      target: { type: 'browseros', providerId: 'openai-1' },
       message: 'Summarize this page',
     })
     // The provider is named, not described: its configuration is resolved
@@ -129,10 +129,10 @@ function commonRequestInput() {
 }
 
 const fallbackProvider: LlmProviderConfig = {
-  id: 'browseros',
-  type: 'browseros',
-  name: 'BrowserOS',
-  modelId: 'browseros-auto',
+  id: 'openai-1',
+  type: 'openai',
+  name: 'OpenAI',
+  modelId: 'gpt-5',
   supportsImages: true,
   contextWindow: 200000,
   temperature: 0.2,

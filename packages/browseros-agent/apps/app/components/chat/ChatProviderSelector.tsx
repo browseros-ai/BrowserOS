@@ -15,7 +15,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
 import {
@@ -114,6 +114,5 @@ function ProviderOptionIcon({ provider }: { provider: Provider }) {
     if (Mark) return <Mark className="h-[18px] w-[18px]" />
     return <Bot size={18} />
   }
-  if (provider.type === 'browseros') return <BrowserOSIcon size={18} />
   return <ProviderIcon type={provider.type as ProviderType} size={18} />
 }

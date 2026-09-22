@@ -21,7 +21,7 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import { Switch } from '@/components/ui/switch'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import { useProvidersQuery } from '@/modules/llm-providers/llm-providers.hooks'
 import { useScheduledJobRuns } from '@/modules/schedules/schedules.hooks'
 import type { ScheduledJob, ScheduledJobRun } from './types'
@@ -131,11 +131,7 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
               <>
                 <span>•</span>
                 <span className="flex items-center gap-1">
-                  {providerInfo.type === 'browseros' ? (
-                    <BrowserOSIcon size={12} />
-                  ) : (
-                    <ProviderIcon type={providerInfo.type} size={12} />
-                  )}
+                  <ProviderIcon type={providerInfo.type} size={12} />
                   {providerInfo.name}
                 </span>
               </>

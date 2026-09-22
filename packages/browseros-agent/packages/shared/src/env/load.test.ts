@@ -199,7 +199,7 @@ describe('resolveEnv', () => {
     tempRoot = await writeRootEnv('production', {
       LOG_LEVEL: 'info',
     })
-    process.env.BROWSEROS_CONFIG_URL = 'not a url'
+    process.env.VITE_PUBLIC_BROWSEROS_API = 'not a url'
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'production' })
 
     expect(requireEnv(resolved, ['LOG_LEVEL'])).toEqual({ LOG_LEVEL: 'info' })
@@ -207,12 +207,12 @@ describe('resolveEnv', () => {
 
   test('validates requested non-empty values only', async () => {
     tempRoot = await writeRootEnv('production', {
-      BROWSEROS_CONFIG_URL: 'not a url',
+      VITE_PUBLIC_BROWSEROS_API: 'not a url',
     })
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'production' })
 
-    expect(() => requireEnv(resolved, ['BROWSEROS_CONFIG_URL'])).toThrow(
-      /Invalid env: BROWSEROS_CONFIG_URL \(section: server\).*url/i,
+    expect(() => requireEnv(resolved, ['VITE_PUBLIC_BROWSEROS_API'])).toThrow(
+      /Invalid env: VITE_PUBLIC_BROWSEROS_API \(section: app\).*url/i,
     )
   })
 

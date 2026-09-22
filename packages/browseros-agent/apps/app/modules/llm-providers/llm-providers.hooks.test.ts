@@ -57,10 +57,10 @@ const MockBrowserOSAdapter = {
 }
 
 const createBrowserOSProvider = () => ({
-  id: 'browseros',
-  type: 'browseros',
-  name: 'BrowserOS',
-  modelId: 'browseros-auto',
+  id: 'openai-1',
+  type: 'openai',
+  name: 'OpenAI',
+  modelId: 'gpt-5',
   supportsImages: true,
   contextWindow: 200000,
   temperature: 0.2,
@@ -81,7 +81,7 @@ mock.module('@/lib/browseros/prefs', () => ({
 }))
 
 mock.module('../../lib/llm-providers/storage', () => ({
-  DEFAULT_PROVIDER_ID: 'browseros',
+  DEFAULT_PROVIDER_ID: 'openai-1',
   createDefaultBrowserOSProvider: createBrowserOSProvider,
   createDefaultProvidersConfig: () => [createBrowserOSProvider()],
   defaultProviderIdStorage: {
@@ -123,10 +123,10 @@ function providerConfig(
 
 const providers: LlmProviderConfig[] = [
   {
-    id: 'browseros',
-    type: 'browseros',
-    name: 'BrowserOS',
-    modelId: 'browseros-auto',
+    id: 'openai-1',
+    type: 'openai',
+    name: 'OpenAI',
+    modelId: 'gpt-5',
     supportsImages: true,
     contextWindow: 200000,
     temperature: 0.2,
@@ -287,7 +287,11 @@ describe('resolveDefaultProviderId', () => {
 
   it('repairs a stale default id to the first configured provider', () => {
     expect(resolveDefaultProviderId(providers, 'missing-provider')).toBe(
-      'browseros',
+      'openai-1',
     )
+  })
+
+  it('resolves to nothing when there are no providers to point at', () => {
+    expect(resolveDefaultProviderId([], 'missing-provider')).toBeNull()
   })
 })

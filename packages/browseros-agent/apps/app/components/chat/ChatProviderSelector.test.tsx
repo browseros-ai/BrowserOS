@@ -7,7 +7,7 @@ import {
 import type { Provider } from './chatComponentTypes'
 
 const options: Provider[] = [
-  { kind: 'llm', id: 'browseros', name: 'BrowserOS', type: 'browseros' },
+  { kind: 'llm', id: 'openai-1', name: 'OpenAI', type: 'openai' },
   {
     kind: 'llm',
     id: 'anthropic-sonnet',

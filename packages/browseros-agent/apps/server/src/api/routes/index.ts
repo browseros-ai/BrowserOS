@@ -20,7 +20,6 @@ import { createAcpxProbeRoutes } from './acpx-probe'
 import { createAgentRoutes } from './agents'
 import { createChatRoutes } from './chat'
 import { createConversationRoutes } from './conversations'
-import { createCreditsRoutes } from './credits'
 import { createHealthRoute } from './health'
 import { createKlavisRoutes } from './klavis'
 import { createMcpRoutes } from './mcp'
@@ -37,7 +36,6 @@ import { createStatusRoute } from './status'
 interface CreateApiRoutesDeps {
   agentRoutes?: Hono<Env>
   config: HttpServerConfig
-  gatewayBaseUrl?: string
   klavis: KlavisService
   onShutdown: () => void
   tokenManager: OAuthTokenManager | null
@@ -45,14 +43,7 @@ interface CreateApiRoutesDeps {
 
 /** Composes the BrowserOS HTTP API from the existing route factories. */
 export function createApiRoutes(deps: CreateApiRoutesDeps) {
-  const {
-    agentRoutes,
-    config,
-    gatewayBaseUrl,
-    klavis,
-    onShutdown,
-    tokenManager,
-  } = deps
+  const { agentRoutes, config, klavis, onShutdown, tokenManager } = deps
   const { browser, browserosId, browserSession, port, resourcesDir, version } =
     config
   const { activity } = config
@@ -94,13 +85,6 @@ export function createApiRoutes(deps: CreateApiRoutesDeps) {
       .route('/status', createStatusRoute({ browser, activity }))
       .route('/oauth', oauthRoutes(tokenManager))
       .route('/klavis', createKlavisRoutes({ klavis }))
-      .route(
-        '/credits',
-        createCreditsRoutes({
-          browserosId,
-          gatewayBaseUrl,
-        }),
-      )
       .route(
         '/mcp',
         createMcpRoutes({
