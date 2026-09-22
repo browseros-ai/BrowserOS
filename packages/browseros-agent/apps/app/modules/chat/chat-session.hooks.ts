@@ -40,6 +40,7 @@ import {
 } from '@/modules/conversations/conversations.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
+import { decideChatSend } from './chat-send-decision'
 import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
@@ -256,10 +257,15 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // and would otherwise keep the value from first render, when nothing has
   // loaded yet and every send would look unsendable.
   const hasAnyTargetRef = useRef(hasAnyTarget)
+  const isSettledRef = useRef(isSettled)
 
   useEffect(() => {
     hasAnyTargetRef.current = hasAnyTarget
   }, [hasAnyTarget])
+
+  useEffect(() => {
+    isSettledRef.current = isSettled
+  }, [isSettled])
 
   const [sendAttemptBlocked, setSendAttemptBlocked] = useState(false)
   // Derived rather than cleared in an effect: connecting a provider makes this
@@ -901,21 +907,40 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isIntegrationsSyncedRef.current = isIntegrationsSynced
   }, [isIntegrationsSynced])
 
+  // Flushes what `sendMessage` held while something was still loading. It waits
+  // on the target lists too: a queued message dispatched before they settle
+  // would name no provider and come back as a server-side rejection.
   useEffect(() => {
-    if (isIntegrationsSynced && agentServerUrl && pendingMessageRef.current) {
-      const pending = pendingMessageRef.current
-      pendingMessageRef.current = null
-      const { action } = pending
-      if (action) {
-        setTextToAction((prev) => {
-          const next = new Map(prev)
-          next.set(pending.text, action)
-          return next
-        })
-      }
-      dispatchMessage(pending.text, pending.files)
+    const pending = pendingMessageRef.current
+    if (!pending || !isSettled) return
+
+    if (!hasAnyTarget) {
+      // The wait resolved to nothing connected. Say so, and keep the message:
+      // connecting a provider re-runs this and sends it, so a handoff whose
+      // query parameters are already gone is not lost.
+      setSendAttemptBlocked(true)
+      return
     }
-  }, [agentServerUrl, dispatchMessage, isIntegrationsSynced])
+
+    if (!isIntegrationsSynced || !agentServerUrl) return
+
+    pendingMessageRef.current = null
+    const { action } = pending
+    if (action) {
+      setTextToAction((prev) => {
+        const next = new Map(prev)
+        next.set(pending.text, action)
+        return next
+      })
+    }
+    dispatchMessage(pending.text, pending.files)
+  }, [
+    agentServerUrl,
+    dispatchMessage,
+    hasAnyTarget,
+    isIntegrationsSynced,
+    isSettled,
+  ])
 
   /**
    * Sends, or reports why it did not.
@@ -930,14 +955,23 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     action?: ChatAction
     files?: FileUIPart[]
   }): boolean => {
-    if (!hasAnyTargetRef.current) {
+    const decision = decideChatSend({
+      isRestoring: isRestoringConversation,
+      hasRestoreError: Boolean(restoreError),
+      isSettled: isSettledRef.current,
+      hasAnyTarget: hasAnyTargetRef.current,
+      isIntegrationsSynced: isIntegrationsSyncedRef.current,
+      hasAgentUrl: Boolean(agentUrlRef.current),
+    })
+
+    if (decision === 'drop') return false
+    if (decision === 'refuse') {
       setSendAttemptBlocked(true)
       return false
     }
-    if (isRestoringConversation || restoreError) return false
-    if (!isIntegrationsSyncedRef.current || !agentUrlRef.current) {
-      // Queued, not refused: this one does reach the model once the server is
-      // up, so the caller is right to clear the composer.
+    if (decision === 'queue') {
+      // Retained, not refused: it still reaches the model once the wait is
+      // over, so the caller is right to clear the composer.
       pendingMessageRef.current = params
       return true
     }

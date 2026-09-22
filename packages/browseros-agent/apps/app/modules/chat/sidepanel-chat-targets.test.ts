@@ -75,7 +75,7 @@ describe('resolveSidepanelChatTarget', () => {
     expect(
       resolveSidepanelChatTarget({
         targets,
-        defaultProviderId: provider.id,
+        defaultTargetId: provider.id,
         selection: { kind: 'acp', id: agent.id },
       }),
     ).toMatchObject({ kind: 'acp', id: agent.id })
@@ -85,7 +85,7 @@ describe('resolveSidepanelChatTarget', () => {
     expect(
       resolveSidepanelChatTarget({
         targets,
-        defaultProviderId: provider.id,
+        defaultTargetId: provider.id,
         selection: { kind: 'acp', id: 'deleted-agent' },
       }),
     ).toMatchObject({ kind: 'llm', id: provider.id })
@@ -103,7 +103,7 @@ describe('resolveSidepanelChatTarget', () => {
     expect(
       resolveSidepanelChatTarget({
         targets: agentOnly,
-        defaultProviderId: null,
+        defaultTargetId: null,
         selection: null,
       }),
     ).toMatchObject({ kind: 'acp', id: agent.id })
@@ -113,7 +113,7 @@ describe('resolveSidepanelChatTarget', () => {
     expect(
       resolveSidepanelChatTarget({
         targets,
-        defaultProviderId: agent.id,
+        defaultTargetId: agent.id,
         selection: null,
       }),
     ).toMatchObject({ kind: 'acp', id: agent.id })
@@ -123,7 +123,7 @@ describe('resolveSidepanelChatTarget', () => {
     expect(
       resolveSidepanelChatTarget({
         targets: [],
-        defaultProviderId: null,
+        defaultTargetId: null,
         selection: null,
       }),
     ).toBeUndefined()

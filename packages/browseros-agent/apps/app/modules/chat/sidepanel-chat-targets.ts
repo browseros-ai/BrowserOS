@@ -37,7 +37,12 @@ export interface BuildSidepanelChatTargetsInput {
 
 export interface ResolveSidepanelChatTargetInput {
   targets: SidepanelChatTarget[]
-  defaultProviderId: string | null
+  /**
+   * The stored default, which names a row of either kind. Named a target id
+   * rather than a provider id because calling it a provider is what led a
+   * caller to resolve it through the LLM-only list first.
+   */
+  defaultTargetId: string | null
   selection?: SidepanelChatTargetSelection | null
 }
 
@@ -106,7 +111,7 @@ function formatAdapterName(adapter: AcpAgentType): string {
  */
 export function resolveSidepanelChatTarget({
   targets,
-  defaultProviderId,
+  defaultTargetId,
   selection,
 }: ResolveSidepanelChatTargetInput): SidepanelChatTarget | undefined {
   if (selection) {
@@ -116,8 +121,8 @@ export function resolveSidepanelChatTarget({
     if (selected) return selected
   }
 
-  if (defaultProviderId) {
-    const named = targets.find((target) => target.id === defaultProviderId)
+  if (defaultTargetId) {
+    const named = targets.find((target) => target.id === defaultTargetId)
     if (named) return named
   }
   return targets[0]

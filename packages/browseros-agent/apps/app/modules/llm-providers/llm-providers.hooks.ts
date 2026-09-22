@@ -20,6 +20,12 @@ export interface UseLlmProvidersReturn {
   providers: LlmProviderConfig[]
   /** Null when nothing is configured, so callers cannot point at a phantom id. */
   defaultProviderId: string | null
+  /**
+   * The selected id exactly as the server holds it, which may name a coding
+   * agent. `defaultProviderId` resolves against the LLM-only list and so
+   * cannot represent one; a caller that works in both kinds needs this.
+   */
+  storedDefaultTargetId: string | null
   selectedProvider: LlmProviderConfig | null
   isLoading: boolean
   /**
@@ -148,6 +154,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
   return {
     providers,
     defaultProviderId,
+    storedDefaultTargetId: storedDefaultId,
     selectedProvider: resolveSelectedProvider(providers, defaultProviderId),
     isLoading: providersQuery.isPending || defaultQuery.isPending,
     isUnavailable: providersQuery.isError || defaultQuery.isError,

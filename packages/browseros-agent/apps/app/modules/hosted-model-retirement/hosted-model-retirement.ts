@@ -41,11 +41,14 @@ export async function detectHostedModelRetirement(
 ): Promise<boolean> {
   if (await deps.isMarked()) return true
 
-  const [stored, backup] = await Promise.all([
-    deps.loadStoredProviders(),
-    deps.loadBackupProviders(),
-  ])
-  if (!hasHostedModelEvidence([stored, backup])) return false
+  // Sequential, backup first, and not a Promise.all. Reading extension storage
+  // can apply a pending migration, and that migration now strips the hosted
+  // provider; the resulting write reaches the pref backup through the watcher
+  // the background registers. Taking the backup before touching extension
+  // storage means the migration cannot erase the evidence on its way past.
+  const backup = await deps.loadBackupProviders()
+  const stored = await deps.loadStoredProviders()
+  if (!hasHostedModelEvidence([backup, stored])) return false
 
   await deps.mark()
   return true

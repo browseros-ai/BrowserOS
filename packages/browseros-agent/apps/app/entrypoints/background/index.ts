@@ -70,8 +70,11 @@ export default defineBackground(() => {
   })
 
   Capabilities.initialize().catch(() => null)
-  setupLlmProvidersBackupToBrowserOS()
+  // Ahead of the backup writer: the watcher it registers mirrors extension
+  // storage into the pref this reads, so registering first gives a migration
+  // a chance to overwrite the evidence before it has been seen.
   startHostedModelRetirementDetection()
+  setupLlmProvidersBackupToBrowserOS()
   startLocalFirstMigration()
 
   scheduledJobRuns()

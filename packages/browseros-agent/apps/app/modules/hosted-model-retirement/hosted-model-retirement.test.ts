@@ -71,6 +71,33 @@ describe('detectHostedModelRetirement', () => {
     expect(marks).toEqual([])
   })
 
+  it('reads the pref backup before touching extension storage', async () => {
+    // Reading extension storage can apply a pending migration, and that
+    // migration strips the hosted provider. The resulting write reaches the
+    // pref backup through the watcher the background registers, so a backup
+    // read that came second could find the evidence already gone.
+    const order: string[] = []
+    let backupErased = false
+
+    const result = await detectHostedModelRetirement({
+      isMarked: async () => false,
+      mark: async () => {},
+      loadBackupProviders: async () => {
+        order.push('backup')
+        return backupErased ? [] : [provider('browseros')]
+      },
+      loadStoredProviders: async () => {
+        order.push('stored')
+        // Stands in for the migration write reaching the pref.
+        backupErased = true
+        return []
+      },
+    })
+
+    expect(order).toEqual(['backup', 'stored'])
+    expect(result).toBe(true)
+  })
+
   it('does not re-read the evidence once the answer is recorded', async () => {
     // Written once on purpose: the sources are legacy and will be cleaned up,
     // and the answer must survive that.
