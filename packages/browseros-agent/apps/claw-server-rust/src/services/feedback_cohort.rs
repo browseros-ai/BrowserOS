@@ -14,7 +14,24 @@ use std::{
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tokio::sync::RwLock;
+use tokio::{sync::RwLock, task::JoinHandle};
+use tokio_util::sync::CancellationToken;
+
+/// Where the published document lives. Absent at both build and run time means the feature
+/// is off, which is the same silent posture as an unreachable document.
+const BUILD_COHORT_URL: Option<&str> = option_env!("CLAW_FEEDBACK_COHORT_URL");
+
+/// How long a single fetch may take before it is abandoned.
+///
+/// A hung request must not pin the refresh task; the previous document stays in place and
+/// the next tick tries again.
+const FETCH_TIMEOUT: Duration = Duration::from_secs(20);
+
+/// Refuses a response larger than this without reading it.
+///
+/// The document is a few kilobytes of identifiers. Anything far larger is a misconfigured
+/// URL or something hostile, and neither is worth buffering.
+const MAX_DOCUMENT_BYTES: u64 = 1024 * 1024;
 
 /// How stale a published cohort may be before it stops being believed.
 ///
@@ -126,6 +143,90 @@ pub fn now_ms() -> i64 {
         .unwrap_or_default()
 }
 
+/// The configured document location, runtime taking precedence over the build default.
+#[must_use]
+pub fn configured_url() -> Option<String> {
+    resolve_url(
+        std::env::var("CLAW_FEEDBACK_COHORT_URL").ok(),
+        BUILD_COHORT_URL,
+    )
+}
+
+/// Split from [`configured_url`] so the precedence rule can be tested without mutating the
+/// process environment, which this crate forbids.
+fn resolve_url(runtime: Option<String>, build: Option<&str>) -> Option<String> {
+    runtime
+        .filter(|url| !url.trim().is_empty())
+        .or_else(|| build.map(str::to_owned))
+        .map(|url| url.trim().to_owned())
+        .filter(|url| !url.is_empty())
+}
+
+/// Fetches the published document once and adopts it if it is usable.
+///
+/// Returns whether the cohort changed. Every failure path is a warning and a `false`: a
+/// refused or unreachable document leaves the previous one in place rather than emptying
+/// the cohort, so a brief outage does not stop invitations that were already permitted.
+pub async fn fetch_once(cohort: &FeedbackCohort, url: &str, now_ms: i64) -> bool {
+    let client = match reqwest::Client::builder().timeout(FETCH_TIMEOUT).build() {
+        Ok(client) => client,
+        Err(error) => {
+            tracing::warn!(%error, "feedback cohort client unavailable");
+            return false;
+        }
+    };
+    let response = match client.get(url).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            tracing::warn!(%error, "feedback cohort fetch failed");
+            return false;
+        }
+    };
+    if !response.status().is_success() {
+        tracing::warn!(status = %response.status(), "feedback cohort fetch rejected");
+        return false;
+    }
+    // Checked before the body is buffered, so an oversized document costs nothing.
+    if response
+        .content_length()
+        .is_some_and(|len| len > MAX_DOCUMENT_BYTES)
+    {
+        tracing::warn!("feedback cohort document is larger than expected; ignoring it");
+        return false;
+    }
+    let document = match response.json::<CohortDocument>().await {
+        Ok(document) => document,
+        Err(error) => {
+            tracing::warn!(%error, "feedback cohort document unreadable");
+            return false;
+        }
+    };
+    cohort.adopt(document, now_ms).await
+}
+
+/// Refreshes the cohort on a timer until the server shuts down.
+///
+/// Fetches immediately rather than waiting a full interval, so a restart picks up a new
+/// document without a six hour delay.
+pub fn spawn_refresh_loop(
+    cohort: FeedbackCohort,
+    url: String,
+    cancel: CancellationToken,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(REFRESH_INTERVAL);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => return,
+                _ = ticker.tick() => {
+                    fetch_once(&cohort, &url, now_ms()).await;
+                }
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +305,118 @@ mod tests {
                 .adopt(document(now + 60_000, &["install-a"]), now)
                 .await
         );
+    }
+
+    /// A served document reaches the cohort. Uses a real listener rather than mocking the
+    /// client, so the JSON contract and the HTTP path are both exercised.
+    #[tokio::test]
+    async fn a_served_document_is_fetched_and_adopted() -> anyhow::Result<()> {
+        let now = now_ms();
+        let body = serde_json::to_string(&serde_json::json!({
+            "generated_at_ms": now,
+            "installs": ["install-a"],
+            "copy": { "book_url": "https://cal.example/book" }
+        }))?;
+        let url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+        .await?;
+
+        let cohort = FeedbackCohort::new();
+        assert!(fetch_once(&cohort, &url, now).await);
+        assert!(cohort.contains("install-a", now).await);
+        Ok(())
+    }
+
+    /// A body that is not a cohort document leaves the previous answer alone rather than
+    /// emptying it, so a bad deploy of the publisher does not stop invitations mid-flight.
+    #[tokio::test]
+    async fn an_unreadable_body_leaves_the_previous_cohort_in_place() -> anyhow::Result<()> {
+        let now = now_ms();
+        let cohort = FeedbackCohort::new();
+        assert!(cohort.adopt(document(now, &["install-a"]), now).await);
+
+        let body = "not json at all";
+        let url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+        .await?;
+        assert!(!fetch_once(&cohort, &url, now).await);
+        assert!(
+            cohort.contains("install-a", now).await,
+            "a bad fetch must not empty the cohort"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failing_response_is_ignored() -> anyhow::Result<()> {
+        let url = serve_once(
+            "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n".to_string(),
+        )
+        .await?;
+        let cohort = FeedbackCohort::new();
+        assert!(!fetch_once(&cohort, &url, now_ms()).await);
+        assert!(!cohort.is_loaded().await);
+        Ok(())
+    }
+
+    /// The document is a few kilobytes of identifiers. A declared size far beyond that is a
+    /// misconfigured URL or something hostile, and is refused without buffering the body.
+    #[tokio::test]
+    async fn an_oversized_document_is_refused_before_it_is_read() -> anyhow::Result<()> {
+        let url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            MAX_DOCUMENT_BYTES + 1
+        ))
+        .await?;
+        let cohort = FeedbackCohort::new();
+        assert!(!fetch_once(&cohort, &url, now_ms()).await);
+        Ok(())
+    }
+
+    #[test]
+    fn no_configured_url_means_the_feature_is_off() {
+        assert_eq!(resolve_url(None, None), None);
+        assert_eq!(resolve_url(Some("   ".to_string()), None), None);
+        assert_eq!(resolve_url(Some(String::new()), Some("   ")), None);
+    }
+
+    #[test]
+    fn a_runtime_url_overrides_the_build_default() {
+        assert_eq!(
+            resolve_url(
+                Some("  https://run.test/c.json ".to_string()),
+                Some("https://build.test/c.json")
+            )
+            .as_deref(),
+            Some("https://run.test/c.json")
+        );
+        // A blank runtime value falls through rather than disabling a built-in default.
+        assert_eq!(
+            resolve_url(Some("  ".to_string()), Some("https://build.test/c.json")).as_deref(),
+            Some("https://build.test/c.json")
+        );
+    }
+
+    /// Serves one canned response and returns the URL to ask for it.
+    async fn serve_once(response: String) -> anyhow::Result<String> {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/cohort.json", listener.local_addr()?);
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut scratch = [0_u8; 1024];
+            let _ = socket.read(&mut scratch).await;
+            let _ = socket.write_all(response.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        });
+        Ok(url)
     }
 
     #[tokio::test]
