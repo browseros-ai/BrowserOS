@@ -368,6 +368,14 @@ jobs:
           sudo apt-get install -y libfuse2 dpkg libc-bin
           "$CHROMIUM_SRC/build/install-build-deps.sh" --no-prompt
 
+      - name: Setup Java for Windows signing
+        if: inputs.sign && inputs.platform == 'windows'
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "11"
+          check-latest: true
+
       - name: Install SSL.com CodeSignTool
         if: inputs.sign && inputs.platform == 'windows'
         shell: pwsh
@@ -375,9 +383,12 @@ jobs:
           $ErrorActionPreference = 'Stop'
           # Canonical source: the app.esigner.com file endpoint rejects the
           # runner's Invoke-WebRequest (run 28835010397, OperationStopped).
-          $uri = 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2-windows.zip'
-          $zipPath = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2-windows.zip'
-          $extractRoot = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2-windows'
+          # The Java-free archive has the same signing JAR. Without the stale
+          # bundled JDK, the shared signer uses setup-java's JAVA_HOME and CA
+          # roots, including when this workflow checks out an older release.
+          $uri = 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2.zip'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2.zip'
+          $extractRoot = Join-Path $env:RUNNER_TEMP 'CodeSignTool-v1.3.2'
           Invoke-WebRequest -Uri $uri -OutFile $zipPath
           Expand-Archive -Path $zipPath -DestinationPath $extractRoot -Force
           $tool = Get-ChildItem -Path $extractRoot -Filter CodeSignTool.bat -Recurse | Select-Object -First 1
