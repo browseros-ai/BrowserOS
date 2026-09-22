@@ -1,0 +1,123 @@
+//! Whether to offer this installation a feedback call, and what came of it.
+//!
+//! # Why this is an endpoint rather than something the agent says
+//!
+//! Delivering the invitation through a tool response reaches every eligible installation,
+//! but the server then cannot see whether it was rendered, read or acted on. An invitation
+//! nobody can count cannot tell you whether the copy or the cohort is wrong, which is the
+//! only thing it exists to find out. The cockpit reaches fewer people and reports all three.
+//!
+//! # Every refusal looks the same from outside
+//!
+//! Consent, cohort membership and whether this installation was already invited are all
+//! answered as `eligible: false`. The caller is the cockpit, which has nothing to do with
+//! the distinction, and saying which check failed would describe the cohort to anyone who
+//! asks.
+
+use super::{error, internal};
+use crate::{
+    AppState,
+    db::feedback_invite::InviteOutcome,
+    error::{AppResult, CanonicalError, RequestId},
+    services::feedback_cohort::now_ms,
+};
+use axum::{
+    Extension, Json,
+    extract::{State, rejection::JsonRejection},
+    http::StatusCode,
+};
+use claw_api::models::{FeedbackInvitation, FeedbackInviteOutcome, RecordFeedbackInviteRequest};
+
+/// Where the invitation points when the published cohort does not override it.
+const DEFAULT_BOOK_URL: &str = "https://cal.com/team/felafax/browseros";
+
+pub(super) async fn invitation(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+) -> Result<Json<FeedbackInvitation>, CanonicalError> {
+    decide(&state)
+        .await
+        .map(Json)
+        .map_err(|source| internal(&request_id, source))
+}
+
+pub(super) async fn respond(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    payload: Result<Json<RecordFeedbackInviteRequest>, JsonRejection>,
+) -> Result<Json<FeedbackInvitation>, CanonicalError> {
+    let Json(payload) = payload.map_err(|_| {
+        error(
+            &request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "outcome must be one of shown, clicked or dismissed",
+        )
+    })?;
+    record(&state, to_outcome(payload.outcome))
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    // Recording anything spends the invitation, so the answer after any outcome is the
+    // same one a fresh page load would get.
+    Ok(Json(not_eligible()))
+}
+
+async fn decide(state: &AppState) -> AppResult<FeedbackInvitation> {
+    let Some(install_id) = invitable_install(state).await else {
+        return Ok(not_eligible());
+    };
+    let now = now_ms();
+    if !state.feedback_cohort.contains(&install_id, now).await {
+        return Ok(not_eligible());
+    }
+    if state.feedback_invites.already_invited(&install_id).await? {
+        return Ok(not_eligible());
+    }
+    let mut invitation = FeedbackInvitation::new(true);
+    invitation.book_url = Some(
+        state
+            .feedback_cohort
+            .book_url()
+            .await
+            .unwrap_or_else(|| DEFAULT_BOOK_URL.to_owned()),
+    );
+    Ok(invitation)
+}
+
+async fn record(state: &AppState, outcome: InviteOutcome) -> AppResult<()> {
+    let Some(install_id) = invitable_install(state).await else {
+        return Ok(());
+    };
+    // Cohort membership is deliberately not rechecked here. The invitation was granted by
+    // an earlier decision, and a refresh between the card appearing and the reader clicking
+    // must not throw away what they did.
+    state
+        .feedback_invites
+        .record(&install_id, outcome, now_ms())
+        .await
+}
+
+/// The installation this request speaks for, if it may be contacted at all.
+///
+/// Consent gates this exactly as it gates the failure reports: an installation that opted
+/// out of analytics has not agreed to be contacted either.
+async fn invitable_install(state: &AppState) -> Option<String> {
+    let analytics = state.analytics.get_state().await;
+    if !analytics.consent {
+        return None;
+    }
+    let install_id = analytics.distinct_id;
+    (!install_id.trim().is_empty()).then_some(install_id)
+}
+
+fn not_eligible() -> FeedbackInvitation {
+    FeedbackInvitation::new(false)
+}
+
+fn to_outcome(outcome: FeedbackInviteOutcome) -> InviteOutcome {
+    match outcome {
+        FeedbackInviteOutcome::Shown => InviteOutcome::Shown,
+        FeedbackInviteOutcome::Clicked => InviteOutcome::Clicked,
+        FeedbackInviteOutcome::Dismissed => InviteOutcome::Dismissed,
+    }
+}

@@ -20,6 +20,7 @@ use ulid::Ulid;
 pub(crate) mod audit;
 mod cockpit;
 mod connections;
+mod feedback;
 mod live;
 mod previews;
 mod recordings;
@@ -41,6 +42,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/system/shutdown", post(system::shutdown))
         .route("/api/v1/system", get(system::info))
         .route("/api/v1/cockpit/stats", get(cockpit::stats))
+        .route(
+            "/api/v1/feedback/invitation",
+            get(feedback::invitation).post(feedback::respond),
+        )
         .route("/api/v1/audit/storage", get(audit::storage))
         .route("/api/v1/audit/retention", put(audit::set_retention))
         .route("/api/v1/audit/cleanup", post(audit::cleanup))

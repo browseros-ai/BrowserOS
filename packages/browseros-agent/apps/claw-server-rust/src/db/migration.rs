@@ -24,6 +24,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0015_add_skill_run_marks::Migration),
             Box::new(m0016_add_task_summary::Migration),
             Box::new(m0017_add_run_error_budget::Migration),
+            Box::new(m0018_add_feedback_invite::Migration),
         ]
     }
 }
@@ -2158,5 +2159,71 @@ mod m0017_add_run_error_budget {
         Day,
         Sent,
         Suppressed,
+    }
+}
+
+mod m0018_add_feedback_invite {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0018_add_feedback_invite"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // The install id is the primary key rather than a column, so at most one
+            // invitation per installation is enforced by the schema instead of by a
+            // condition someone has to keep correct: two cockpit tabs, a retried request
+            // and a restart mid-flight all converge on one row.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(FeedbackInvite::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(FeedbackInvite::InstallId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(
+                            ColumnDef::new(FeedbackInvite::ShownAtMs)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(ColumnDef::new(FeedbackInvite::Outcome).string().not_null())
+                        // Null until the reader acts. An invitation that is only ever
+                        // ignored keeps the impression and never gains a settled time.
+                        .col(
+                            ColumnDef::new(FeedbackInvite::SettledAtMs)
+                                .big_integer()
+                                .null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(FeedbackInvite::Table).to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum FeedbackInvite {
+        Table,
+        InstallId,
+        ShownAtMs,
+        Outcome,
+        SettledAtMs,
     }
 }

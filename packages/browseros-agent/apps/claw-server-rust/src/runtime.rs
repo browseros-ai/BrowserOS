@@ -50,7 +50,7 @@ impl AppRuntime {
     #[must_use]
     pub fn start(state: AppState) -> Self {
         let shutdown = state.shutdown.clone();
-        let tasks = vec![
+        let mut tasks = vec![
             BackgroundTask {
                 name: "browser reconnect loop",
                 handle: state.browser.start(),
@@ -173,6 +173,20 @@ impl AppRuntime {
                 }),
             },
         ];
+        // Only runs when a document location is configured. Without one the cohort stays
+        // empty and nobody is invited, which is the same outcome as an unreachable
+        // document, so there is nothing to report.
+        if let Some(url) = crate::services::feedback_cohort::configured_url() {
+            tasks.push(BackgroundTask {
+                name: "feedback cohort refresh",
+                handle: crate::services::feedback_cohort::spawn_refresh_loop(
+                    (*state.feedback_cohort).clone(),
+                    url,
+                    shutdown.child_token(),
+                ),
+            });
+        }
+
         Self { state, tasks }
     }
 

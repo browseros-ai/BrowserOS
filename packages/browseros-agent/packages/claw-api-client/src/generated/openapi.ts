@@ -85,6 +85,24 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/feedback/invitation': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Whether this installation should be shown a feedback call invitation. */
+    get: operations['getFeedbackInvitation']
+    put?: never
+    /** @description Records what happened to the invitation. The first outcome spends this installation's single invitation, so later calls change the recorded outcome without ever granting another. */
+    post: operations['recordFeedbackInvite']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/settings/telemetry': {
     parameters: {
       query?: never
@@ -494,6 +512,23 @@ export interface components {
       sessionCount: number
       /** Format: int64 */
       toolCallCount: number
+    }
+    /**
+     * @description shown is recorded when the card first reaches the screen, which is also what spends the installation's single invitation; clicked and dismissed record what the reader did with it afterwards.
+     * @enum {string}
+     */
+    FeedbackInviteOutcome: 'shown' | 'clicked' | 'dismissed'
+    FeedbackInvitation: {
+      /** @description Whether this installation should be offered a feedback call right now. False is returned for every refusal without saying which one applied. */
+      eligible: boolean
+      /**
+       * Format: uri
+       * @description Where the invitation points. Present only when eligible.
+       */
+      bookUrl?: string
+    }
+    RecordFeedbackInviteRequest: {
+      outcome: components['schemas']['FeedbackInviteOutcome']
     }
     TelemetryState: {
       distinctId: string
@@ -1087,6 +1122,53 @@ export interface operations {
           'application/json': components['schemas']['CockpitStats']
         }
       }
+      500: components['responses']['InternalError']
+    }
+  }
+  getFeedbackInvitation: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The invitation decision for this installation. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['FeedbackInvitation']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  recordFeedbackInvite: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['RecordFeedbackInviteRequest']
+      }
+    }
+    responses: {
+      /** @description The invitation decision after recording the outcome. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['FeedbackInvitation']
+        }
+      }
+      400: components['responses']['BadRequest']
       500: components['responses']['InternalError']
     }
   }

@@ -1,0 +1,28 @@
+FeedbackInviteOutcome:
+  type: string
+  enum: [shown, clicked, dismissed]
+  description: >-
+    shown is recorded when the card first reaches the screen, which is also
+    what spends the installation's single invitation; clicked and dismissed
+    record what the reader did with it afterwards.
+FeedbackInvitation:
+  type: object
+  additionalProperties: false
+  required: [eligible]
+  properties:
+    eligible:
+      type: boolean
+      description: >-
+        Whether this installation should be offered a feedback call right now.
+        False is returned for every refusal without saying which one applied.
+    bookUrl:
+      type: string
+      format: uri
+      description: Where the invitation points. Present only when eligible.
+RecordFeedbackInviteRequest:
+  type: object
+  additionalProperties: false
+  required: [outcome]
+  properties:
+    outcome:
+      $ref: '#/FeedbackInviteOutcome'

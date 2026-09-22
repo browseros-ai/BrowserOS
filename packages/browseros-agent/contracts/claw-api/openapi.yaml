@@ -16,6 +16,8 @@ paths:
     $ref: ./paths/system.yaml#/info
   /api/v1/cockpit/stats:
     $ref: ./paths/cockpit.yaml#/stats
+  /api/v1/feedback/invitation:
+    $ref: ./paths/feedback.yaml#/invitation
   /api/v1/settings/telemetry:
     $ref: ./paths/settings.yaml#/telemetry
   /api/v1/sessions:
@@ -106,6 +108,12 @@ components:
       $ref: ./schemas/cockpit.yaml#/CockpitStats
     CockpitStatsWindow:
       $ref: ./schemas/cockpit.yaml#/CockpitStatsWindow
+    FeedbackInviteOutcome:
+      $ref: ./schemas/feedback.yaml#/FeedbackInviteOutcome
+    FeedbackInvitation:
+      $ref: ./schemas/feedback.yaml#/FeedbackInvitation
+    RecordFeedbackInviteRequest:
+      $ref: ./schemas/feedback.yaml#/RecordFeedbackInviteRequest
     TelemetryState:
       $ref: ./schemas/settings.yaml#/TelemetryState
     UpdateTelemetryRequest:

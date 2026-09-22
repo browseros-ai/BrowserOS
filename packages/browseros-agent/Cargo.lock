@@ -502,6 +502,7 @@ dependencies = [
  "posthog-rs",
  "pulldown-cmark",
  "rand 0.9.4",
+ "reqwest 0.12.28",
  "ress",
  "rmcp",
  "sea-orm",
