@@ -1,3 +1,4 @@
+pub mod feedback_invite;
 pub mod ownership_claims;
 pub mod page_ownership_notice;
 pub mod session_naming;

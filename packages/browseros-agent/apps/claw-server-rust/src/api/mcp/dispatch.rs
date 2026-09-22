@@ -219,6 +219,13 @@ const EFFECTS: &[NamedToolEffect] = &[
         name: "helper-discovery",
         run: helper_runtime::discovery,
     },
+    NamedToolEffect {
+        // Last, and annotate-only. Everything it checks before its single, once-per-install
+        // database write is held in memory, because this runs on the latency path of every
+        // tool call.
+        name: "feedback-invite",
+        run: effects::feedback_invite::apply,
+    },
 ];
 
 // The distiller (auto-capture of a successful run into a candidate helper) is
@@ -1139,6 +1146,7 @@ mod tests {
                 "session-naming",
                 "page-ownership-notice",
                 "helper-discovery",
+                "feedback-invite",
             ]
         );
         // Ownership must never gate a dispatch. It is a label telling an agent whose
