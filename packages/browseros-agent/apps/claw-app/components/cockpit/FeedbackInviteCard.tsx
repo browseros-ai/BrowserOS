@@ -27,7 +27,7 @@ import {
 type InviteState =
   | { phase: 'waiting' }
   | { phase: 'showing'; bookUrl: string }
-  | { phase: 'answered' }
+  | { phase: 'dismissed' }
 
 export function FeedbackInviteCard() {
   const queryClient = useQueryClient()
@@ -35,6 +35,7 @@ export function FeedbackInviteCard() {
   const record = useRecordFeedbackInvite()
   const [state, setState] = useState<InviteState>({ phase: 'waiting' })
   const appeared = useRef(false)
+  const booked = useRef(false)
 
   const offered =
     invitation.data?.eligible === true ? invitation.data.bookUrl : undefined
@@ -57,8 +58,7 @@ export function FeedbackInviteCard() {
   // The reply to a recorded outcome is the invitation's new state, so it is
   // written straight into the cache rather than invalidated for a refetch that
   // would ask the same question again.
-  const settle = (outcome: 'clicked' | 'dismissed') => {
-    setState({ phase: 'answered' })
+  const recordOutcome = (outcome: 'clicked' | 'dismissed') => {
     report(
       { outcome },
       {
@@ -69,15 +69,23 @@ export function FeedbackInviteCard() {
     )
   }
 
+  // Booking opens a tab and leaves the card alone. Taking it away here would
+  // punish the reader for accepting: they land on a booking page, and if they
+  // come back to finish later the invitation they agreed to has vanished.
+  // Only declining removes it.
   const handleBook = () => {
-    track(AnalyticsEvent.FeedbackInviteClicked)
-    settle('clicked')
+    if (!booked.current) {
+      booked.current = true
+      track(AnalyticsEvent.FeedbackInviteClicked)
+      recordOutcome('clicked')
+    }
     chrome.tabs.create({ url: bookUrl })
   }
 
   const handleDecline = () => {
     track(AnalyticsEvent.FeedbackInviteDismissed)
-    settle('dismissed')
+    setState({ phase: 'dismissed' })
+    recordOutcome('dismissed')
   }
 
   return (

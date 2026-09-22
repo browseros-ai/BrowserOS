@@ -202,6 +202,48 @@ describe('FeedbackInviteCard', () => {
     expect(state.cached).toEqual([
       { key: invitationKey, value: { eligible: false } },
     ])
+  })
+
+  /// Taking the card away on booking would punish the reader for accepting: they
+  /// land on a booking page, and if they come back to finish later the invitation
+  /// they agreed to has gone. Only declining removes it.
+  it('stays on screen after booking', async () => {
+    state.invitation = eligible
+    await render()
+
+    await click(buttonWithText('Book a 15 minute chat'))
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+  })
+
+  it('reopens the link on a second click without reporting it twice', async () => {
+    state.invitation = eligible
+    await render()
+
+    await click(buttonWithText('Book a 15 minute chat'))
+    await click(buttonWithText('Book a 15 minute chat'))
+
+    expect(state.opened).toEqual([
+      'https://cal.test/book',
+      'https://cal.test/book',
+    ])
+    expect(state.recorded).toEqual(['shown', 'clicked'])
+    expect(
+      state.tracked.filter((event) => event === 'feedback_invite_clicked'),
+    ).toHaveLength(1)
+  })
+
+  it('can still be dismissed after booking', async () => {
+    state.invitation = eligible
+    await render()
+
+    await click(buttonWithText('Book a 15 minute chat'))
+    await click(buttonWithText('No thanks'))
+
+    expect(state.recorded).toEqual(['shown', 'clicked', 'dismissed'])
     expect(container.innerHTML).toBe('')
   })
 
