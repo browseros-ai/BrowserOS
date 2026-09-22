@@ -1,3 +1,4 @@
+mod aliases;
 pub mod drift_guards;
 pub mod error_allowlist;
 pub mod events;

@@ -1,7 +1,7 @@
 use super::{
     AnalyticsSink,
+    aliases::{self, AliasDelivery},
     events::{self, EventDefinition},
-    installation::load_or_create_installation_id,
     state::{AnalyticsState, TelemetryState, load_or_create_state, persist_state, state_path},
 };
 use crate::error::{AppError, AppResult};
@@ -82,11 +82,14 @@ fn non_empty_value(value: &str) -> Option<String> {
 struct ActiveClient {
     client: Arc<Client>,
     distinct_id: String,
+    alias_delivery: Option<Arc<AliasDelivery>>,
 }
 
+/// Owns the persisted analytics identity shared with the cockpit and the
+/// consent-gated clients for product events and historical identity links.
 pub struct AnalyticsService {
     path: PathBuf,
-    installation_id: Option<String>,
+    distinct_id: Option<String>,
     config: AnalyticsConfig,
     state: Mutex<AnalyticsState>,
     active: RwLock<Option<ActiveClient>>,
@@ -101,13 +104,11 @@ impl AnalyticsService {
 
     async fn new_with_config(browserclaw_dir: &Path, config: AnalyticsConfig) -> AppResult<Self> {
         let path = state_path(browserclaw_dir);
-        let (installation_id, state) = tokio::join!(
-            load_or_create_installation_id(browserclaw_dir),
-            load_or_create_state(&path)
-        );
+        let state = load_or_create_state(&path).await;
+        let distinct_id = state.distinct_id.clone();
         let active = if state.enabled && config.is_configured() {
-            match installation_id.as_deref() {
-                Some(install_id) => Some(build_client(&config, install_id).await?),
+            match distinct_id.as_deref() {
+                Some(id) => Some(build_client(&config, id, &state.installation_aliases).await?),
                 None => None,
             }
         } else {
@@ -115,7 +116,7 @@ impl AnalyticsService {
         };
         Ok(Self {
             path,
-            installation_id,
+            distinct_id,
             config,
             state: Mutex::new(state),
             active: RwLock::new(active),
@@ -159,7 +160,8 @@ impl AnalyticsService {
      */
     pub async fn set_consent(&self, consent: bool) -> AppResult<TelemetryState> {
         let mut state = self.state.lock().await;
-        let next = AnalyticsState { enabled: consent };
+        let mut next = state.clone();
+        next.enabled = consent;
         let previous = if consent { None } else { self.take_active() };
         if let Err(source) = persist_state(&self.path, &next).await {
             if !consent {
@@ -181,9 +183,9 @@ impl AnalyticsService {
                 previous.client.shutdown().await;
             }
         } else if self.active_client().is_none()
-            && let Some(install_id) = self.installation_id.as_deref()
+            && let Some(id) = self.distinct_id.as_deref()
         {
-            match build_client(&self.config, install_id).await {
+            match build_client(&self.config, id, &state.installation_aliases).await {
                 Ok(client) => self.replace_active(Some(client)),
                 Err(error) => {
                     tracing::error!(%error, "analytics client initialization failed");
@@ -244,10 +246,9 @@ impl AnalyticsService {
 
     fn telemetry_state(&self, state: &AnalyticsState) -> TelemetryState {
         TelemetryState {
-            // The cockpit uses this same ID for its posthog-js client. An
-            // empty value keeps both surfaces disabled when installation
-            // state is corrupt instead of minting a second identity.
-            distinct_id: self.installation_id.clone().unwrap_or_default(),
+            // The cockpit bootstraps this canonical analytics.json ID. Chromium
+            // may keep a different installation ID, linked by a server-side alias.
+            distinct_id: self.distinct_id.clone().unwrap_or_default(),
             enabled: state.enabled && self.config.is_configured() && self.active_client().is_some(),
             consent: state.enabled,
         }
@@ -261,10 +262,20 @@ impl AnalyticsService {
     }
 
     fn take_active(&self) -> Option<ActiveClient> {
-        self.active
+        let active = self
+            .active
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .take()
+            .take();
+        // Abort direct alias requests before draining ordinary events. Otherwise
+        // an offline retry could outlive opt-out or service shutdown.
+        if let Some(delivery) = active
+            .as_ref()
+            .and_then(|active| active.alias_delivery.as_ref())
+        {
+            delivery.stop();
+        }
+        active
     }
 
     fn replace_active(&self, active: Option<ActiveClient>) {
@@ -281,7 +292,11 @@ impl AnalyticsSink for AnalyticsService {
     }
 }
 
-async fn build_client(config: &AnalyticsConfig, distinct_id: &str) -> AppResult<ActiveClient> {
+async fn build_client(
+    config: &AnalyticsConfig,
+    distinct_id: &str,
+    installation_aliases: &[String],
+) -> AppResult<ActiveClient> {
     let project_key = config.project_key.as_ref().ok_or_else(|| {
         AppError::Internal("analytics client requested without a project key".to_string())
     })?;
@@ -296,13 +311,19 @@ async fn build_client(config: &AnalyticsConfig, distinct_id: &str) -> AppResult<
         .before_send(final_allowlist)
         .build()
         .map_err(|error| AppError::Internal(format!("invalid analytics configuration: {error}")))?;
+    let client = Arc::new(posthog_rs::client(options).await);
+    let alias_delivery = AliasDelivery::start(client.clone(), distinct_id, installation_aliases);
     Ok(ActiveClient {
-        client: Arc::new(posthog_rs::client(options).await),
-        distinct_id: distinct_id.to_string(),
+        client,
+        distinct_id: distinct_id.to_owned(),
+        alias_delivery,
     })
 }
 
 fn final_allowlist(mut event: Event) -> Option<Event> {
+    if event.event_name() == aliases::EVENT_NAME {
+        return aliases::allowlist(event);
+    }
     let definition = events::by_wire_name(event.event_name())?;
     if !definition.required_values_are_normalized(event.properties())
         || event
@@ -349,23 +370,31 @@ mod tests {
         AGENT_SESSION_STARTED, AGENT_SESSION_TOOL_USAGE, SERVER_STARTED,
     };
     use crate::analytics::installation::installation_path;
-    use axum::{Router, body::Bytes, routing::any};
+    use axum::{Router, body::Bytes, http::StatusCode, routing::any};
     use serde_json::json;
     use tempfile::tempdir;
     use tokio::{net::TcpListener, sync::mpsc, task::JoinHandle, time::Duration};
 
     async fn local_endpoint()
     -> anyhow::Result<(String, mpsc::UnboundedReceiver<Value>, JoinHandle<()>)> {
+        local_endpoint_with_status(Arc::new(AtomicUsize::new(200))).await
+    }
+
+    async fn local_endpoint_with_status(
+        status: Arc<AtomicUsize>,
+    ) -> anyhow::Result<(String, mpsc::UnboundedReceiver<Value>, JoinHandle<()>)> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let address = listener.local_addr()?;
         let (sender, receiver) = mpsc::unbounded_channel();
         let app = Router::new().fallback(any(move |body: Bytes| {
             let sender = sender.clone();
+            let status = status.clone();
             async move {
                 if let Ok(value) = serde_json::from_slice(&body) {
                     let _ = sender.send(value);
                 }
-                "ok"
+                StatusCode::from_u16(status.load(Ordering::SeqCst) as u16)
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR)
             }
         }));
         let task = tokio::spawn(async move {
@@ -412,7 +441,11 @@ mod tests {
         seed_installation(directory.path(), stable_id).await?;
         persist_state(
             &state_path(directory.path()),
-            &AnalyticsState { enabled: true },
+            &AnalyticsState {
+                distinct_id: Some(stable_id.to_owned()),
+                enabled: true,
+                installation_aliases: vec![],
+            },
         )
         .await?;
         let (host, mut requests, endpoint) = local_endpoint().await?;
@@ -456,7 +489,11 @@ mod tests {
         seed_installation(directory.path(), stable_id).await?;
         persist_state(
             &state_path(directory.path()),
-            &AnalyticsState { enabled: true },
+            &AnalyticsState {
+                distinct_id: Some(stable_id.to_owned()),
+                enabled: true,
+                installation_aliases: vec![],
+            },
         )
         .await?;
         let (host, mut requests, endpoint) = local_endpoint().await?;
@@ -606,7 +643,7 @@ mod tests {
         .await?;
 
         let state = service.get_state().await;
-        assert!(state.consent);
+        assert!(!state.consent);
         assert!(!state.enabled);
         assert!(state.distinct_id.is_empty());
         assert_eq!(
@@ -659,6 +696,143 @@ mod tests {
 
         tokio::time::timeout(Duration::from_secs(5), service.shutdown()).await?;
         endpoint.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn migration_alias_and_product_events_use_the_canonical_id_and_respect_consent()
+    -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let canonical = "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8";
+        let installation = "31eca9ca-566d-4373-8a1c-2f29b32dbed1";
+        seed_installation(directory.path(), installation).await?;
+        let path = state_path(directory.path());
+        tokio::fs::write(
+            &path,
+            json!({"distinctId": canonical, "enabled": false}).to_string(),
+        )
+        .await?;
+        let (host, mut requests, endpoint) = local_endpoint().await?;
+        let service =
+            AnalyticsService::new_with_config(directory.path(), test_config(host, true)).await?;
+        assert_eq!(service.get_state().await.distinct_id, canonical);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), requests.recv())
+                .await
+                .is_err()
+        );
+
+        assert!(service.set_consent(true).await?.enabled);
+        let body = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing alias request"))?;
+        let alias = &body["batch"][0];
+        assert_eq!(alias["event"], "$create_alias");
+        assert_eq!(alias["distinct_id"], canonical);
+        assert_eq!(
+            alias["properties"],
+            json!({
+                "alias": installation, "$process_person_profile": true,
+                "$is_server": true, "$geoip_disable": true,
+            })
+        );
+        service.capture(SERVER_STARTED, json!({}));
+        let body = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing product event"))?;
+        let event = &body["batch"][0];
+        assert_eq!(event["event"], SERVER_STARTED.name());
+        assert_eq!(event["distinct_id"], canonical);
+        assert_eq!(event["properties"]["install_id"], canonical);
+        assert_eq!(event["properties"]["$process_person_profile"], false);
+        service.set_consent(false).await?;
+        let persisted: Value = serde_json::from_str(&tokio::fs::read_to_string(path).await?)?;
+        assert_eq!(
+            persisted,
+            json!({"distinctId": canonical, "enabled": false, "installationAliases": [installation]})
+        );
+        endpoint.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn failed_alias_delivery_retries_and_opt_out_stops_the_worker() -> anyhow::Result<()> {
+        let directory = tempdir()?;
+        let canonical = "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8";
+        let installation = "31eca9ca-566d-4373-8a1c-2f29b32dbed1";
+        seed_installation(directory.path(), installation).await?;
+        tokio::fs::write(
+            state_path(directory.path()),
+            json!({"distinctId": canonical, "enabled": true}).to_string(),
+        )
+        .await?;
+        let status = Arc::new(AtomicUsize::new(400));
+        let (host, mut requests, endpoint) = local_endpoint_with_status(status.clone()).await?;
+        let service =
+            AnalyticsService::new_with_config(directory.path(), test_config(host, true)).await?;
+        let first = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing initial alias"))?;
+        let retry = tokio::time::timeout(Duration::from_secs(8), requests.recv())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing retried alias"))?;
+        assert_eq!(first["batch"][0]["uuid"], retry["batch"][0]["uuid"]);
+        assert_eq!(retry["batch"][0]["properties"]["alias"], installation);
+        service.set_consent(false).await?;
+        while requests.try_recv().is_ok() {}
+        assert!(
+            tokio::time::timeout(Duration::from_millis(2200), requests.recv())
+                .await
+                .is_err()
+        );
+
+        // A later opt-in must retry the durable pair, including after Chromium
+        // removes its identity file. The first failed worker cannot own it forever.
+        tokio::fs::remove_file(installation_path(directory.path())).await?;
+        status.store(200, Ordering::SeqCst);
+        service.set_consent(true).await?;
+        let accepted = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("missing resumed alias"))?;
+        assert_eq!(accepted["batch"][0]["distinct_id"], canonical);
+        assert_eq!(accepted["batch"][0]["properties"]["alias"], installation);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(1200), requests.recv())
+                .await
+                .is_err()
+        );
+        service.shutdown().await;
+        endpoint.abort();
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn configuration_gates_aliases_even_when_both_ids_are_present() -> anyhow::Result<()> {
+        for missing_key in [true, false] {
+            let directory = tempdir()?;
+            seed_installation(directory.path(), "31eca9ca-566d-4373-8a1c-2f29b32dbed1").await?;
+            tokio::fs::write(
+                state_path(directory.path()),
+                json!({"distinctId": "2e087632-1f4e-4ee7-b8bb-cf8ad53e91a8", "enabled": true})
+                    .to_string(),
+            )
+            .await?;
+            let (host, mut requests, endpoint) = local_endpoint().await?;
+            let config = AnalyticsConfig {
+                project_key: (!missing_key).then(|| "test-project-key".to_owned()),
+                host,
+                environment_enabled: missing_key,
+            };
+            let service = AnalyticsService::new_with_config(directory.path(), config).await?;
+            assert!(!service.set_consent(true).await?.enabled);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(100), requests.recv())
+                    .await
+                    .is_err()
+            );
+            service.shutdown().await;
+            endpoint.abort();
+        }
         Ok(())
     }
 }

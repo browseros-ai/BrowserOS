@@ -12,11 +12,12 @@
  *
  * posthog-js defaults are aggressively disabled: no autocapture (would
  * read DOM text), no automatic pageviews, no feature-flag polling, no
- * console recording, and no person profiles. A 20% sample of consenting
+ * console recording, and no client-created person profiles. The server may
+ * link historical UUIDs through an alias with no profile properties. A 20% sample of consenting
  * cockpit sessions may be recorded with inputs masked, task-bearing DOM
  * blocked, and replay URLs replaced by a fixed token. Auto-captured location properties
  * (`$current_url` etc.) are stripped so even the cockpit's own extension
- * URL never leaves. Identity is the server's anonymous install UUID, set
+ * URL never leaves. Identity is the server's canonical analytics.json UUID, set
  * via `bootstrap.distinctID` (no `identify`, no PII).
  *
  * Gated on a build-time project write key (`VITE_CLAW_POSTHOG_KEY`) and
@@ -84,11 +85,12 @@ export function createPostHogConfig(
     // Do not persist browser location metadata outside the event sanitizer.
     save_campaign_params: false,
     save_referrer: false,
-    // We never call identify(), so never create a person profile.
+    // The UI never creates profiles. Server-side migration aliases can associate
+    // this UUID with an existing profile containing only the linked UUIDs.
     person_profiles: 'never',
     persistence: 'localStorage',
-    // Share the server's anonymous install id so both surfaces map to
-    // one install, without identify().
+    // Bootstrap the server's analytics.json UUID so both surfaces use the same
+    // identity, including when Chromium still reports an older installation ID.
     bootstrap: { distinctID: distinctId },
     sanitize_properties: sanitizeProperties,
     session_recording: {
