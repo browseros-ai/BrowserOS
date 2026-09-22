@@ -1,5 +1,6 @@
 import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
+import { FeedbackInviteCard } from '@/components/cockpit/FeedbackInviteCard'
 import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
@@ -75,6 +76,7 @@ export function Cockpit() {
     state !== 'ready' ? (
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
         <ProductHuntBanner />
+        <FeedbackInviteCard />
         <CockpitOnboarding
           state={state}
           connectedHarnesses={connectedHarnesses}
@@ -89,6 +91,7 @@ export function Cockpit() {
           <RunningGrid sessions={sessions} />
         )}
         <ProductHuntBanner />
+        <FeedbackInviteCard />
         <RecentActivity />
       </div>
     )
