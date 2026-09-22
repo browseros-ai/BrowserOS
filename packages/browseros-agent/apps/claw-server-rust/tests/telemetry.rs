@@ -148,7 +148,6 @@ async fn test_router(root: &Path) -> anyhow::Result<Router> {
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
-        auth_token: None,
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
     Ok(build_router(state))

@@ -53,7 +53,6 @@ async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::R
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
-        auth_token: None,
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {
