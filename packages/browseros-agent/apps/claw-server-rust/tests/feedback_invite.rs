@@ -274,6 +274,42 @@ async fn an_answer_survives_the_cohort_moving_on() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// The whole happy path over HTTP: the card appears, the reader books, then closes the
+/// card. Booking is the signal this feature exists to capture, so tidying up afterwards
+/// must not erase it.
+#[tokio::test]
+async fn booking_then_closing_the_card_is_recorded_as_a_click() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+
+    for outcome in ["shown", "clicked", "dismissed"] {
+        let (status, _) = request(
+            &app.router,
+            "POST",
+            INVITATION,
+            Some(json!({ "outcome": outcome })),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+    }
+
+    assert_eq!(
+        app.state
+            .feedback_invites
+            .outcome_of(&install_id)
+            .await?
+            .as_deref(),
+        Some("clicked"),
+        "closing the card after booking must not erase the booking"
+    );
+    // The invitation is still spent either way.
+    let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
+    assert_eq!(after, json!({ "eligible": false }));
+    Ok(())
+}
+
 struct TestApp {
     router: Router,
     state: AppState,

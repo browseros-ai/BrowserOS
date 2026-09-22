@@ -38,6 +38,23 @@ impl InviteOutcome {
         }
     }
 
+    /// How strong a claim this outcome makes about what the reader did.
+    ///
+    /// A recorded outcome may only ever be raised, never lowered, which is what keeps the
+    /// funnel honest when the same installation reports more than once.
+    ///
+    /// `Clicked` outranks `Dismissed` deliberately. Someone who books a call and then
+    /// closes the card has not declined, they have accepted and tidied up, so letting the
+    /// dismissal land last would record the opposite of what happened. `Shown` ranks
+    /// lowest, so an impression arriving late from a second tab cannot erase either.
+    fn rank(self) -> i64 {
+        match self {
+            Self::Shown => 0,
+            Self::Dismissed => 1,
+            Self::Clicked => 2,
+        }
+    }
+
     /// Whether this is the reader acting, rather than the card merely appearing.
     fn is_response(self) -> bool {
         !matches!(self, Self::Shown)
@@ -53,9 +70,11 @@ impl FeedbackInviteRepository {
     /// Records `outcome` for this installation, spending its single invitation if it has
     /// not been spent already.
     ///
-    /// An impression never overwrites a response. A second cockpit tab that renders the
-    /// card and reports `shown` after the reader has already clicked in the first one must
-    /// not turn the click back into an impression, and the ordering is not ours to control.
+    /// A recorded outcome is only ever raised, never lowered, because arrival order says
+    /// nothing about what the reader did. A second tab reporting `shown` after a click, a
+    /// dismissal that follows a booking, and a retried `clicked` that lands after a later
+    /// dismissal all arrive out of order and must not undo the stronger claim. See
+    /// [`InviteOutcome::rank`].
     pub async fn record(
         &self,
         install_id: &str,
@@ -77,19 +96,20 @@ impl FeedbackInviteRepository {
             ))
             .await?;
 
-        if outcome.is_response() {
-            connection
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Sqlite,
-                    "UPDATE feedback_invite SET outcome = ?, settled_at_ms = ? WHERE install_id = ?",
-                    [
-                        Value::from(outcome.as_str().to_owned()),
-                        Value::from(now_ms),
-                        Value::from(install_id.to_owned()),
-                    ],
-                ))
-                .await?;
-        }
+        connection
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "UPDATE feedback_invite SET outcome = ?, settled_at_ms = ? \
+                 WHERE install_id = ? AND ? > (CASE outcome \
+                   WHEN 'clicked' THEN 2 WHEN 'dismissed' THEN 1 ELSE 0 END)",
+                [
+                    Value::from(outcome.as_str().to_owned()),
+                    Value::from(outcome.is_response().then_some(now_ms)),
+                    Value::from(install_id.to_owned()),
+                    Value::from(outcome.rank()),
+                ],
+            ))
+            .await?;
         Ok(())
     }
 
@@ -161,6 +181,64 @@ mod tests {
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
             Some("clicked")
+        );
+        Ok(())
+    }
+
+    /// Booking and then closing the card is not declining. The reader accepted and tidied
+    /// up, so the record has to keep the click; this needs no race at all, it is what a
+    /// happy user does.
+    #[tokio::test]
+    async fn tidying_the_card_away_after_booking_keeps_the_click() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+
+        repo.record("install-a", InviteOutcome::Shown, 1_000)
+            .await?;
+        repo.record("install-a", InviteOutcome::Clicked, 2_000)
+            .await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 3_000)
+            .await?;
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("clicked")
+        );
+        Ok(())
+    }
+
+    /// A retried click can land after a dismissal the reader made while it was in flight.
+    /// Arrival order says nothing about what they did, so the stronger claim still stands.
+    #[tokio::test]
+    async fn a_late_click_retry_outranks_a_dismissal_it_arrives_after() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+
+        repo.record("install-a", InviteOutcome::Shown, 1_000)
+            .await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 2_000)
+            .await?;
+        repo.record("install-a", InviteOutcome::Clicked, 1_500)
+            .await?;
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("clicked")
+        );
+        Ok(())
+    }
+
+    /// Raising still works: a dismissal is a stronger claim than a bare impression.
+    #[tokio::test]
+    async fn a_dismissal_still_replaces_an_impression() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+
+        repo.record("install-a", InviteOutcome::Shown, 1_000)
+            .await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 2_000)
+            .await?;
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("dismissed")
         );
         Ok(())
     }
