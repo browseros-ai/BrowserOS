@@ -65,7 +65,6 @@ pub struct Config {
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
     pub dev_mode: bool,
-    pub auth_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,8 +104,6 @@ struct SidecarConfig {
     #[serde(default)]
     flags: SidecarFlags,
     #[serde(default)]
-    auth: SidecarAuth,
-    #[serde(default)]
     replay: Option<SidecarReplay>,
 }
 
@@ -126,11 +123,6 @@ struct SidecarDirectories {
 #[serde(rename_all = "camelCase")]
 struct SidecarFlags {
     dev_mode: Option<bool>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct SidecarAuth {
-    token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -178,10 +170,6 @@ impl Config {
             .unwrap_or_else(|| cwd.join("resources"));
         let dev_mode = sidecar.flags.dev_mode.unwrap_or(default_dev_mode);
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
-        let auth_token = sidecar
-            .auth
-            .token
-            .and_then(|token| clean_string(token.as_str()));
 
         Ok(Self {
             server_port,
@@ -209,7 +197,6 @@ impl Config {
                 .map(|replay| replay.retention_days.get())
                 .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS),
             dev_mode,
-            auth_token,
         })
     }
 
