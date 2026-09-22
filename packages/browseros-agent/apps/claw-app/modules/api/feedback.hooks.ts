@@ -22,10 +22,15 @@ export const useFeedbackInvitation = createQuery<FeedbackInvitation>({
   fetcher: async () => (await apiClient()).getFeedbackInvitation(),
 })
 
+// Mutations default to no retries. A lost outcome is not free here: the
+// impression would be counted again on the next cockpit load, and a declined
+// invitation would come back, because the server is the authority on both and
+// never heard. Every outcome write is idempotent, so retrying is safe.
 export const useRecordFeedbackInvite = createMutation<
   FeedbackInvitation,
   { outcome: FeedbackInviteOutcome }
 >({
   mutationFn: async ({ outcome }) =>
     (await apiClient()).recordFeedbackInvite({ outcome }),
+  retry: 2,
 })

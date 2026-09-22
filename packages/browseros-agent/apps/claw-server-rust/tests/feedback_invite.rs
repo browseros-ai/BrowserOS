@@ -208,6 +208,72 @@ async fn an_unknown_outcome_is_refused() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Anything able to reach the loopback server can POST here, so an outcome must only ever
+/// spend an invitation this installation was actually offered. Without the check, one
+/// request from an unrelated page would permanently burn it.
+#[tokio::test]
+async fn an_outcome_cannot_spend_an_invitation_that_was_never_offered() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+
+    // No cohort is published, so this installation has been offered nothing.
+    let (status, _) = request(
+        &app.router,
+        "POST",
+        INVITATION,
+        Some(json!({ "outcome": "dismissed" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+
+    // It joins the cohort afterwards and is still invitable: nothing was spent.
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+    let (_, invitation) = request(&app.router, "GET", INVITATION, None).await?;
+    assert_eq!(invitation["eligible"], true);
+    Ok(())
+}
+
+/// The other half of the same rule: once an invitation exists, answering it never consults
+/// the cohort again, so a refresh between the card appearing and the reader answering
+/// cannot discard what they did.
+#[tokio::test]
+async fn an_answer_survives_the_cohort_moving_on() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+
+    request(
+        &app.router,
+        "POST",
+        INVITATION,
+        Some(json!({ "outcome": "shown" })),
+    )
+    .await?;
+
+    // A refresh drops this installation while the card is still on screen.
+    join_cohort(&app, &["someone-else"]).await?;
+    let (status, _) = request(
+        &app.router,
+        "POST",
+        INVITATION,
+        Some(json!({ "outcome": "clicked" })),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        app.state
+            .feedback_invites
+            .outcome_of(&install_id)
+            .await?
+            .as_deref(),
+        Some("clicked"),
+        "the click was recorded even though the cohort had moved on"
+    );
+    Ok(())
+}
+
 struct TestApp {
     router: Router,
     state: AppState,

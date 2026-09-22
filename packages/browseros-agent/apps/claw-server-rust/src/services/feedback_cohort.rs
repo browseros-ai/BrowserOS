@@ -20,6 +20,9 @@ use tokio_util::sync::CancellationToken;
 /// is off, which is the same silent posture as an unreachable document.
 const BUILD_COHORT_URL: Option<&str> = option_env!("CLAW_FEEDBACK_COHORT_URL");
 
+/// Where the invitation points when the published document does not override it.
+pub const DEFAULT_BOOK_URL: &str = "https://cal.com/team/felafax/browseros";
+
 /// How long a single fetch may take before it is abandoned.
 ///
 /// A hung request must not pin the refresh task; the previous document stays in place and
@@ -79,27 +82,29 @@ impl FeedbackCohort {
         Self::default()
     }
 
-    /// Whether this installation is in the current cohort.
+    /// Where to point this installation's invitation, or `None` if it is not in the
+    /// current cohort.
+    ///
+    /// Membership and the link come from one snapshot under one lock. Reading them
+    /// separately would let a refresh land in between and admit an installation on the
+    /// strength of one document while handing it another document's link.
     ///
     /// A set lookup behind a read lock, with no I/O of its own.
-    pub async fn contains(&self, install_id: &str, now_ms: i64) -> bool {
+    pub async fn invitation_url(&self, install_id: &str, now_ms: i64) -> Option<String> {
         let guard = self.state.read().await;
-        let Some(state) = guard.as_ref() else {
-            return false;
-        };
+        let state = guard.as_ref()?;
         if is_stale(state.generated_at_ms, now_ms) {
-            return false;
+            return None;
         }
-        state.installs.contains(install_id)
-    }
-
-    /// The booking link the publisher wants used, if it supplied one.
-    pub async fn book_url(&self) -> Option<String> {
-        self.state
-            .read()
-            .await
-            .as_ref()
-            .and_then(|state| state.book_url.clone())
+        if !state.installs.contains(install_id) {
+            return None;
+        }
+        Some(
+            state
+                .book_url
+                .clone()
+                .unwrap_or_else(|| DEFAULT_BOOK_URL.to_owned()),
+        )
     }
 
     /// Replaces the cohort. A document that is already stale is rejected rather than
@@ -185,15 +190,10 @@ pub async fn fetch_once(cohort: &FeedbackCohort, url: &str, now_ms: i64) -> bool
         tracing::warn!(status = %response.status(), "feedback cohort fetch rejected");
         return false;
     }
-    // Checked before the body is buffered, so an oversized document costs nothing.
-    if response
-        .content_length()
-        .is_some_and(|len| len > MAX_DOCUMENT_BYTES)
-    {
-        tracing::warn!("feedback cohort document is larger than expected; ignoring it");
+    let Some(body) = read_capped(response).await else {
         return false;
-    }
-    let document = match response.json::<CohortDocument>().await {
+    };
+    let document = match serde_json::from_slice::<CohortDocument>(&body) {
         Ok(document) => document,
         Err(error) => {
             tracing::warn!(%error, "feedback cohort document unreadable");
@@ -201,6 +201,31 @@ pub async fn fetch_once(cohort: &FeedbackCohort, url: &str, now_ms: i64) -> bool
         }
     };
     cohort.adopt(document, now_ms).await
+}
+
+/// Reads at most [`MAX_DOCUMENT_BYTES`] of the body, refusing rather than buffering more.
+///
+/// The ceiling is enforced against the bytes actually read rather than against
+/// `Content-Length`, which is advisory and absent altogether on a chunked response.
+async fn read_capped(mut response: reqwest::Response) -> Option<Vec<u8>> {
+    let cap = usize::try_from(MAX_DOCUMENT_BYTES).unwrap_or(usize::MAX);
+    let mut body = Vec::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(chunk)) => {
+                if body.len().saturating_add(chunk.len()) > cap {
+                    tracing::warn!("feedback cohort document is larger than expected; ignoring it");
+                    return None;
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok(None) => return Some(body),
+            Err(error) => {
+                tracing::warn!(%error, "feedback cohort body unreadable");
+                return None;
+            }
+        }
+    }
 }
 
 /// Refreshes the cohort on a timer until the server shuts down.
@@ -248,7 +273,7 @@ mod tests {
         let now = 1_700_000_000_000;
         let cohort = FeedbackCohort::new();
         assert!(
-            !cohort.contains("install-a", now).await,
+            cohort.invitation_url("install-a", now).await.is_none(),
             "empty until adopted"
         );
 
@@ -257,10 +282,10 @@ mod tests {
                 .adopt(document(now, &["install-a", "install-b"]), now)
                 .await
         );
-        assert!(cohort.contains("install-a", now).await);
-        assert!(!cohort.contains("install-c", now).await);
+        assert!(cohort.invitation_url("install-a", now).await.is_some());
+        assert!(cohort.invitation_url("install-c", now).await.is_none());
         assert_eq!(
-            cohort.book_url().await.as_deref(),
+            cohort.invitation_url("install-a", now).await.as_deref(),
             Some("https://cal.example/book")
         );
     }
@@ -274,7 +299,7 @@ mod tests {
         let cohort = FeedbackCohort::new();
 
         assert!(!cohort.adopt(document(stale, &["install-a"]), now).await);
-        assert!(!cohort.contains("install-a", now).await);
+        assert!(cohort.invitation_url("install-a", now).await.is_none());
         assert!(
             !cohort.is_loaded().await,
             "a refused document is not stored"
@@ -288,10 +313,15 @@ mod tests {
         let now = 1_700_000_000_000;
         let cohort = FeedbackCohort::new();
         assert!(cohort.adopt(document(now, &["install-a"]), now).await);
-        assert!(cohort.contains("install-a", now).await);
+        assert!(cohort.invitation_url("install-a", now).await.is_some());
 
         let much_later = now + i64::try_from(MAX_AGE.as_millis()).unwrap_or(i64::MAX) + 1;
-        assert!(!cohort.contains("install-a", much_later).await);
+        assert!(
+            cohort
+                .invitation_url("install-a", much_later)
+                .await
+                .is_none()
+        );
     }
 
     /// A clock skewed into the future is as untrustworthy as one that is too old.
@@ -324,7 +354,7 @@ mod tests {
 
         let cohort = FeedbackCohort::new();
         assert!(fetch_once(&cohort, &url, now).await);
-        assert!(cohort.contains("install-a", now).await);
+        assert!(cohort.invitation_url("install-a", now).await.is_some());
         Ok(())
     }
 
@@ -344,7 +374,7 @@ mod tests {
         .await?;
         assert!(!fetch_once(&cohort, &url, now).await);
         assert!(
-            cohort.contains("install-a", now).await,
+            cohort.invitation_url("install-a", now).await.is_some(),
             "a bad fetch must not empty the cohort"
         );
         Ok(())
@@ -362,18 +392,63 @@ mod tests {
         Ok(())
     }
 
-    /// The document is a few kilobytes of identifiers. A declared size far beyond that is a
-    /// misconfigured URL or something hostile, and is refused without buffering the body.
+    /// The document is a few kilobytes of identifiers. Anything far beyond that is a
+    /// misconfigured URL or something hostile, and the read stops at the ceiling rather
+    /// than buffering whatever arrives.
+    ///
+    /// The body is a document that would parse and be adopted if it were read in full, so
+    /// the refusal can only come from the ceiling.
     #[tokio::test]
-    async fn an_oversized_document_is_refused_before_it_is_read() -> anyhow::Result<()> {
+    async fn an_oversized_document_is_refused() -> anyhow::Result<()> {
+        let body = oversized_but_valid_document(now_ms())?;
         let url = serve_once(format!(
-            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
-            MAX_DOCUMENT_BYTES + 1
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
         ))
         .await?;
         let cohort = FeedbackCohort::new();
         assert!(!fetch_once(&cohort, &url, now_ms()).await);
+        assert!(!cohort.is_loaded().await);
         Ok(())
+    }
+
+    /// A document just inside the ceiling still gets through, so the cap is not simply
+    /// refusing everything large.
+    #[tokio::test]
+    async fn a_document_just_inside_the_ceiling_is_adopted() -> anyhow::Result<()> {
+        let now = now_ms();
+        let body = padded_document(now, usize::try_from(MAX_DOCUMENT_BYTES)? - 4096)?;
+        assert!(body.len() <= usize::try_from(MAX_DOCUMENT_BYTES)?);
+        let url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+            body.len()
+        ))
+        .await?;
+
+        let cohort = FeedbackCohort::new();
+        assert!(fetch_once(&cohort, &url, now).await);
+        assert!(cohort.invitation_url("install-a", now).await.is_some());
+        Ok(())
+    }
+
+    /// A valid document padded past the ceiling. Unknown fields are ignored by the parser,
+    /// so this deserializes cleanly whenever it is read in full.
+    fn oversized_but_valid_document(generated_at_ms: i64) -> anyhow::Result<String> {
+        padded_document(generated_at_ms, usize::try_from(MAX_DOCUMENT_BYTES)? + 4096)
+    }
+
+    fn padded_document(generated_at_ms: i64, target_bytes: usize) -> anyhow::Result<String> {
+        let skeleton = serde_json::to_string(&json!({
+            "generated_at_ms": generated_at_ms,
+            "installs": ["install-a"],
+            "padding": "",
+        }))?;
+        let padding = "a".repeat(target_bytes.saturating_sub(skeleton.len()));
+        Ok(serde_json::to_string(&json!({
+            "generated_at_ms": generated_at_ms,
+            "installs": ["install-a"],
+            "padding": padding,
+        }))?)
     }
 
     #[test]
@@ -418,6 +493,62 @@ mod tests {
         Ok(url)
     }
 
+    /// A document that supplies no link still invites, pointed at the built-in default.
+    #[tokio::test]
+    async fn a_document_without_copy_falls_back_to_the_default_link() {
+        let now = 1_700_000_000_000;
+        let cohort = FeedbackCohort::new();
+        let document: CohortDocument = serde_json::from_value(json!({
+            "generated_at_ms": now,
+            "installs": ["install-a"],
+        }))
+        .unwrap_or_else(|error| panic!("fixture: {error}"));
+
+        assert!(cohort.adopt(document, now).await);
+        assert_eq!(
+            cohort.invitation_url("install-a", now).await.as_deref(),
+            Some(DEFAULT_BOOK_URL)
+        );
+    }
+
+    /// `Content-Length` is advisory and absent on a chunked response, so the ceiling has
+    /// to hold against the bytes actually read.
+    #[tokio::test]
+    async fn an_oversized_chunked_document_is_refused_mid_read() -> anyhow::Result<()> {
+        // No Content-Length at all, which is exactly the case the old check could not see.
+        let body = oversized_but_valid_document(now_ms())?;
+        let url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
+            body.len()
+        ))
+        .await?;
+
+        let cohort = FeedbackCohort::new();
+        assert!(!fetch_once(&cohort, &url, now_ms()).await);
+        assert!(!cohort.is_loaded().await);
+        Ok(())
+    }
+
+    /// The cap must not break the ordinary chunked path.
+    #[tokio::test]
+    async fn a_chunked_document_within_the_cap_is_adopted() -> anyhow::Result<()> {
+        let now = now_ms();
+        let body = serde_json::to_string(&json!({
+            "generated_at_ms": now,
+            "installs": ["install-a"],
+        }))?;
+        let url = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n{:x}\r\n{body}\r\n0\r\n\r\n",
+            body.len()
+        ))
+        .await?;
+
+        let cohort = FeedbackCohort::new();
+        assert!(fetch_once(&cohort, &url, now).await);
+        assert!(cohort.invitation_url("install-a", now).await.is_some());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn a_refresh_replaces_the_previous_cohort() {
         let now = 1_700_000_000_000;
@@ -426,9 +557,9 @@ mod tests {
         assert!(cohort.adopt(document(now, &["install-b"]), now).await);
 
         assert!(
-            !cohort.contains("install-a", now).await,
+            cohort.invitation_url("install-a", now).await.is_none(),
             "dropped on refresh"
         );
-        assert!(cohort.contains("install-b", now).await);
+        assert!(cohort.invitation_url("install-b", now).await.is_some());
     }
 }

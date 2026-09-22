@@ -28,9 +28,6 @@ use axum::{
 };
 use claw_api::models::{FeedbackInvitation, FeedbackInviteOutcome, RecordFeedbackInviteRequest};
 
-/// Where the invitation points when the published cohort does not override it.
-const DEFAULT_BOOK_URL: &str = "https://cal.com/team/felafax/browseros";
-
 pub(super) async fn invitation(
     Extension(request_id): Extension<RequestId>,
     State(state): State<AppState>,
@@ -66,21 +63,18 @@ async fn decide(state: &AppState) -> AppResult<FeedbackInvitation> {
     let Some(install_id) = invitable_install(state).await else {
         return Ok(not_eligible());
     };
-    let now = now_ms();
-    if !state.feedback_cohort.contains(&install_id, now).await {
+    let Some(book_url) = state
+        .feedback_cohort
+        .invitation_url(&install_id, now_ms())
+        .await
+    else {
         return Ok(not_eligible());
-    }
+    };
     if state.feedback_invites.already_invited(&install_id).await? {
         return Ok(not_eligible());
     }
     let mut invitation = FeedbackInvitation::new(true);
-    invitation.book_url = Some(
-        state
-            .feedback_cohort
-            .book_url()
-            .await
-            .unwrap_or_else(|| DEFAULT_BOOK_URL.to_owned()),
-    );
+    invitation.book_url = Some(book_url);
     Ok(invitation)
 }
 
@@ -88,13 +82,34 @@ async fn record(state: &AppState, outcome: InviteOutcome) -> AppResult<()> {
     let Some(install_id) = invitable_install(state).await else {
         return Ok(());
     };
-    // Cohort membership is deliberately not rechecked here. The invitation was granted by
-    // an earlier decision, and a refresh between the card appearing and the reader clicking
-    // must not throw away what they did.
+    if !may_record(state, &install_id).await? {
+        return Ok(());
+    }
     state
         .feedback_invites
         .record(&install_id, outcome, now_ms())
         .await
+}
+
+/// Whether this installation may have an outcome written for it.
+///
+/// An outcome must only ever spend an invitation the installation was actually offered.
+/// Anything able to reach the loopback server can POST here, so without this an unrelated
+/// page or local process could burn an installation's single invitation before it had ever
+/// been shown one, and the row is permanent.
+///
+/// A row that already exists is updated without consulting the cohort, on purpose: that
+/// invitation was granted by an earlier decision, and a refresh between the card appearing
+/// and the reader answering must not discard what they did.
+async fn may_record(state: &AppState, install_id: &str) -> AppResult<bool> {
+    if state.feedback_invites.already_invited(install_id).await? {
+        return Ok(true);
+    }
+    Ok(state
+        .feedback_cohort
+        .invitation_url(install_id, now_ms())
+        .await
+        .is_some())
 }
 
 /// The installation this request speaks for, if it may be contacted at all.
