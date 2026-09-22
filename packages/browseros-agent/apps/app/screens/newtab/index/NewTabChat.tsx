@@ -20,6 +20,7 @@ import { consumePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import { useChatActions } from '@/modules/chat-actions/chat-actions.hooks'
 import { useActiveConversation } from '@/modules/conversations/active-conversation-context'
 import { conversationTitle } from '@/modules/conversations/history-list'
+import { useHostedModelRetired } from '@/modules/hosted-model-retirement/hosted-model-retirement.hooks'
 import { ChatEmptyState } from '@/screens/sidepanel/index/ChatEmptyState'
 import { ChatError } from '@/screens/sidepanel/index/ChatError'
 import { ChatFooter } from '@/screens/sidepanel/index/ChatFooter'
@@ -139,6 +140,7 @@ export const NewTabChat: FC = () => {
     resetConversation()
   }
 
+  const { data: retired } = useHostedModelRetired()
   const noTarget = isSettled && !hasAnyTarget
   if (!selectedProvider && !noTarget) return null
 
@@ -231,7 +233,11 @@ export const NewTabChat: FC = () => {
           />
         )}
         {noTarget && (
-          <NoProviderNotice blocked={sendBlocked} variant="inline" />
+          <NoProviderNotice
+            blocked={sendBlocked}
+            retired={retired}
+            variant="inline"
+          />
         )}
       </main>
 

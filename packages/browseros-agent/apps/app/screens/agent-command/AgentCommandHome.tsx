@@ -9,6 +9,7 @@ import { openSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanel
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 import { stagePendingHomeMessage } from '@/modules/chat/pending-home-message'
 import { useChatTargetSelection } from '@/modules/chat/use-chat-target-selection'
+import { useHostedModelRetired } from '@/modules/hosted-model-retirement/hosted-model-retirement.hooks'
 import { ImportDataHint } from '@/screens/newtab/index/ImportDataHint'
 import { useShowImportHint } from '@/screens/newtab/index/import-hint.hooks'
 import { RecentSites } from '@/screens/newtab/index/RecentSites'
@@ -42,6 +43,7 @@ export const AgentCommandHome: FC = () => {
   } = useChatTargetSelection()
   const waitingForLlmCapabilities =
     selectedProvider?.kind === 'llm' && llmRoutingMode === 'wait'
+  const { data: retired } = useHostedModelRetired()
   const noTarget = isSettled && !hasAnyTarget
   // This composer does not run through the chat session hook, so it carries its
   // own copy of the refused-send state.
@@ -137,6 +139,7 @@ export const AgentCommandHome: FC = () => {
             {noTarget && (
               <NoProviderNotice
                 blocked={sendBlocked}
+                retired={retired}
                 variant="inline"
                 className="text-left"
               />

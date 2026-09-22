@@ -2,6 +2,7 @@ import dayjs from 'dayjs'
 import duration from 'dayjs/plugin/duration'
 import relativeTime from 'dayjs/plugin/relativeTime'
 import {
+  AlertTriangle,
   CheckCircle2,
   ChevronDown,
   Loader2,
@@ -87,6 +88,10 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
   const providerInfo = job.providerId
     ? (providers.find((provider) => provider.id === job.providerId) ?? null)
     : null
+  // Named a provider that is no longer there. The run would fall back to the
+  // selected provider, which is not what this job was set up to use, so it is
+  // worth saying rather than leaving the row looking ordinary.
+  const providerMissing = Boolean(job.providerId) && providerInfo === null
 
   const runs = useMemo(
     () =>
@@ -132,6 +137,15 @@ export const ScheduledTaskCard: FC<ScheduledTaskCardProps> = ({
                     <ProviderIcon type={providerInfo.type} size={12} />
                   )}
                   {providerInfo.name}
+                </span>
+              </>
+            )}
+            {providerMissing && (
+              <>
+                <span>•</span>
+                <span className="flex items-center gap-1 text-[var(--accent-orange)]">
+                  <AlertTriangle aria-hidden className="size-3" />
+                  Provider unavailable
                 </span>
               </>
             )}
