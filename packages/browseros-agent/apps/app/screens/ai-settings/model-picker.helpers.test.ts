@@ -5,6 +5,7 @@ import type { ProviderType } from '../../lib/llm-providers/types'
 import {
   getIncompleteCatalogHint,
   getModelPickerRows,
+  hasInferredCatalog,
   normalizeModelId,
   servesUserLoadedModels,
   shouldOfferCustomModel,
@@ -67,6 +68,18 @@ describe('shouldOfferCustomModel', () => {
   })
 })
 
+describe('hasInferredCatalog', () => {
+  it('covers the catalogues the app assembles rather than reads', () => {
+    expect(hasInferredCatalog('chatgpt-pro')).toBe(true)
+    expect(hasInferredCatalog('qwen-code')).toBe(true)
+  })
+
+  it('excludes catalogues published by the provider itself', () => {
+    expect(hasInferredCatalog('anthropic')).toBe(false)
+    expect(hasInferredCatalog('lmstudio')).toBe(false)
+  })
+})
+
 describe('servesUserLoadedModels', () => {
   it('covers the endpoints that serve locally loaded or proxied models', () => {
     expect(servesUserLoadedModels('lmstudio')).toBe(true)
@@ -92,8 +105,24 @@ describe('getIncompleteCatalogHint', () => {
     )
   })
 
+  it('says a subscription catalogue is only a snapshot', () => {
+    // The regression this guards: a hand-maintained list of twelve models read
+    // as the complete set, so users concluded a newer model was unsupported
+    // rather than pasting its ID, which has always worked.
+    const providerName = getProviderTemplate('chatgpt-pro')?.name
+
+    expect(getIncompleteCatalogHint('chatgpt-pro', 22, providerName)).toBe(
+      `This list is a snapshot, not ${providerName}'s own. Paste the exact ID of any model your plan offers.`,
+    )
+  })
+
+  it('covers the other hand-maintained catalogue too', () => {
+    expect(getIncompleteCatalogHint('qwen-code', 4, 'Qwen Code')).not.toBeNull()
+  })
+
   it('stays silent for providers with an authoritative catalog', () => {
     expect(getIncompleteCatalogHint('anthropic', 12, 'Anthropic')).toBeNull()
+    expect(getIncompleteCatalogHint('openai', 30, 'OpenAI')).toBeNull()
   })
 
   it('stays silent when the field already renders as free-form input', () => {

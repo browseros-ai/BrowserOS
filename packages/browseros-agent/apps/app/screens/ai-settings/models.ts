@@ -15,24 +15,17 @@ export interface ModelInfo {
   reasoningControls?: ReasoningControl[]
 }
 
+/**
+ * Providers whose model list cannot come from the generated catalogue.
+ *
+ * `chatgpt-pro` used to be here, as twelve ids typed by hand. It fell a
+ * generation behind and stayed there, because adding a model meant shipping an
+ * extension release. It is derived in the catalogue generator now.
+ */
 const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
   browseros: [{ modelId: 'browseros-auto', contextLength: 200000 }],
   'openai-compatible': [],
   ollama: [],
-  'chatgpt-pro': [
-    { modelId: 'gpt-5.5', contextLength: 1050000 },
-    { modelId: 'gpt-5.4', contextLength: 1050000 },
-    { modelId: 'gpt-5.4-mini', contextLength: 400000 },
-    { modelId: 'gpt-5.4-nano', contextLength: 400000 },
-    { modelId: 'gpt-5.3-codex', contextLength: 400000 },
-    { modelId: 'gpt-5.3-codex-spark', contextLength: 128000 },
-    { modelId: 'gpt-5.2-codex', contextLength: 400000 },
-    { modelId: 'gpt-5.2', contextLength: 400000 },
-    { modelId: 'gpt-5.1-codex', contextLength: 400000 },
-    { modelId: 'gpt-5.1-codex-max', contextLength: 400000 },
-    { modelId: 'gpt-5.1-codex-mini', contextLength: 400000 },
-    { modelId: 'gpt-5.1', contextLength: 400000 },
-  ],
   'qwen-code': [
     { modelId: 'coder-model', contextLength: 1000000 },
     { modelId: 'qwen3-coder-plus', contextLength: 1000000 },
@@ -76,13 +69,17 @@ export function getModelContextLength(
 
 const DEFAULT_EFFORT_VALUES = ['low', 'medium', 'high']
 
-/** Whether the add-model dialog should show reasoning controls for this model. */
-export function modelSupportsReasoning(
-  model: ModelInfo | undefined,
-  providerType: ProviderType,
-): boolean {
-  // chatgpt-pro models are not in the catalog snapshot but always reason.
-  return Boolean(model?.supportsReasoning) || providerType === 'chatgpt-pro'
+/**
+ * Whether the add-model dialog should show reasoning controls for this model.
+ *
+ * A model the catalogue does not know is assumed to reason, which is what
+ * `buildChatRequestBody` already assumes when it tells the server what the
+ * model can do. The dialog used to assume it for the whole chatgpt-pro
+ * provider instead, because its models were absent from the catalogue; they
+ * are in it now, so the question is about the model rather than the provider.
+ */
+export function modelSupportsReasoning(model: ModelInfo | undefined): boolean {
+  return model === undefined || Boolean(model.supportsReasoning)
 }
 
 /**
