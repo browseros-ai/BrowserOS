@@ -54,6 +54,12 @@ export function sanitizeProperties(
 ): Record<string, unknown> {
   const cleaned = { ...properties }
   for (const key of STRIPPED_PROPS) delete cleaned[key]
+  // Read the installed package at capture time: persisted super-properties can
+  // outlive an extension update, while identity reset clears registered ones.
+  // Web development has no extension manifest, so omit its version.
+  const appVersion = globalThis.chrome?.runtime?.getManifest?.().version
+  if (appVersion) cleaned.app_version = appVersion
+  else delete cleaned.app_version
   return cleaned
 }
 
