@@ -18,6 +18,7 @@ import { createCodexFetch } from '../lib/clients/oauth/codex-fetch'
 import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
 import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
+import { createProxiedFetch } from '../lib/proxy/proxy-fetch'
 import type { ResolvedAgentConfig } from './types'
 
 type ProviderFactory = (
@@ -32,6 +33,7 @@ function createAnthropicFactory(
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -50,6 +52,7 @@ function createOpenAIFactory(
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -61,6 +64,7 @@ function createGoogleFactory(
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -72,7 +76,7 @@ function createOpenRouterFactory(
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
     extraBody: { reasoning: {} },
-    fetch: createOpenRouterCompatibleFetch(),
+    fetch: createProxiedFetch(createOpenRouterCompatibleFetch()),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })
 }
@@ -95,6 +99,7 @@ function createAzureFactory(
     apiKey: config.apiKey,
     ...(config.resourceName && { resourceName: config.resourceName }),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -107,6 +112,7 @@ function createLMStudioFactory(
     name: 'lmstudio',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -119,6 +125,7 @@ function createOllamaFactory(
     name: 'ollama',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -136,6 +143,7 @@ function createBedrockFactory(
     accessKeyId: config.accessKeyId,
     secretAccessKey: config.secretAccessKey,
     sessionToken: config.sessionToken,
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -145,8 +153,8 @@ function createBrowserOSFactory(
   if (!config.baseUrl) throw new Error('BrowserOS provider requires baseUrl')
   const { baseUrl, apiKey, upstreamProvider, browserosId } = config
   const browserosFetch = browserosId
-    ? createBrowserOSFetch(browserosId)
-    : createOpenRouterCompatibleFetch()
+    ? createProxiedFetch(createBrowserOSFetch(browserosId))
+    : createProxiedFetch(createOpenRouterCompatibleFetch())
 
   // BrowserOS-hosted provider: user custom headers are deliberately not
   // forwarded. Its credential is X-BrowserOS-ID (injected by browserosFetch)
@@ -191,6 +199,7 @@ function createOpenAICompatibleFactory(
     name: 'openai-compatible',
     baseURL: config.baseUrl,
     ...(config.apiKey && { apiKey: config.apiKey }),
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -204,6 +213,7 @@ function createMoonshotFactory(
     name: 'moonshot',
     baseURL: config.baseUrl,
     apiKey: config.apiKey,
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -216,6 +226,7 @@ function createQwenCodeFactory(
     name: 'qwen-code',
     baseURL: EXTERNAL_URLS.QWEN_CODE_API,
     apiKey: config.apiKey,
+    fetch: createProxiedFetch(),
   })
 }
 
@@ -229,7 +240,7 @@ function createGitHubCopilotFactory(
     name: 'github-copilot',
     baseURL: EXTERNAL_URLS.GITHUB_COPILOT_API,
     apiKey: config.apiKey,
-    fetch: createCopilotFetch() as typeof globalThis.fetch,
+    fetch: createProxiedFetch(createCopilotFetch() as typeof globalThis.fetch),
   })
 }
 
@@ -240,7 +251,9 @@ function createChatGPTProFactory(
   // Managed OAuth provider: user custom headers are deliberately not forwarded.
   return createOpenAI({
     apiKey: config.apiKey,
-    fetch: createCodexFetch(config.accountId) as typeof globalThis.fetch,
+    fetch: createProxiedFetch(
+      createCodexFetch(config.accountId) as typeof globalThis.fetch,
+    ),
   }).responses
 }
 
