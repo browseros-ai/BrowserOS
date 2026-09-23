@@ -45,62 +45,18 @@ describe('database initialization', () => {
     expect(second).toBe(first)
   })
 
-  it.each([false, true])(
-    'upgrades an existing provider without changing credentials or selection (missing migrations: %s)',
-    (missingMigrations) => {
-      const dbPath = join(mkTempDir(), 'browseros.sqlite')
-      const old = initializeDb({ dbPath })
-      old.sqlite.exec('ALTER TABLE providers DROP COLUMN headers')
-      old.sqlite
-        .query('DELETE FROM __drizzle_migrations WHERE created_at = ?')
-        .run(expectedMigrationHistory.at(-1).createdAt)
-      old.sqlite.exec(
-        "INSERT INTO providers (id, kind, type, name, model_id, context_window, api_key, is_default, created_at, updated_at) VALUES ('existing', 'llm', 'openai', 'Existing', 'model', 128000, 'local-key', 1, 1, 1)",
-      )
-      closeDb()
-
-      const upgraded = initializeDb({
-        dbPath,
-        ...(missingMigrations && {
-          migrationsDir: join(mkTempDir(), 'missing'),
-        }),
-      })
-      expect(upgraded.db.select().from(providers).get()).toMatchObject({
-        id: 'existing',
-        headers: null,
-        apiKey: 'local-key',
-        isDefault: true,
-      })
-    },
-  )
-
-  it('bootstraps the current schema when migration files are unavailable', () => {
+  it('refuses to start when migrations are unavailable', () => {
     const dir = mkTempDir()
-    const handle = initializeDb({
-      dbPath: join(dir, 'browseros.sqlite'),
-      migrationsDir: join(dir, 'missing-migrations'),
-    })
 
-    expectCurrentSchema(handle)
-    expect(handle.db.select().from(providers).all()).toEqual([])
+    expect(() =>
+      initializeDb({
+        dbPath: join(dir, 'browseros.sqlite'),
+        migrationsDir: join(dir, 'missing-migrations'),
+      }),
+    ).toThrow(/migrations are unavailable/)
   })
 
-  it('bootstraps the current schema when a migration directory is empty', () => {
-    const dir = mkTempDir()
-    const migrationsDir = join(dir, 'empty-migrations')
-    mkdirSync(migrationsDir)
-
-    const handle = initializeDb({
-      dbPath: join(dir, 'browseros.sqlite'),
-      migrationsDir,
-    })
-
-    expect(handle.migrationsDir).toBe(null)
-    expectCurrentSchema(handle)
-    expect(handle.db.select().from(providers).all()).toEqual([])
-  })
-
-  it('skips empty packaged migration resources', () => {
+  it('falls back to the source migrations when packaged resources are empty', () => {
     const dir = mkTempDir()
     const resourcesDir = join(dir, 'resources')
     const packagedMigrationsDir = join(resourcesDir, 'db', 'migrations')
@@ -115,17 +71,27 @@ describe('database initialization', () => {
     expect(handle.db.select().from(providers).all()).toEqual([])
   })
 
-  it('does not rerun old migrations after fallback schema bootstrap', () => {
-    const dir = mkTempDir()
-    const dbPath = join(dir, 'browseros.sqlite')
-
-    initializeDb({
-      dbPath,
-      migrationsDir: join(dir, 'missing-migrations'),
-    })
+  it('upgrades an existing provider without changing credentials or selection', () => {
+    const dbPath = join(mkTempDir(), 'browseros.sqlite')
+    const old = initializeDb({ dbPath })
+    // Simulate a database one migration behind: drop the column 0012 adds and
+    // un-record 0012 so the next launch re-applies it.
+    old.sqlite.exec('ALTER TABLE providers DROP COLUMN headers')
+    old.sqlite
+      .query('DELETE FROM __drizzle_migrations WHERE created_at = ?')
+      .run(expectedMigrationHistory.at(-1).createdAt)
+    old.sqlite.exec(
+      "INSERT INTO providers (id, kind, type, name, model_id, context_window, api_key, is_default, created_at, updated_at) VALUES ('existing', 'llm', 'openai', 'Existing', 'model', 128000, 'local-key', 1, 1, 1)",
+    )
     closeDb()
 
-    expect(() => initializeDb({ dbPath })).not.toThrow()
+    const upgraded = initializeDb({ dbPath })
+    expect(upgraded.db.select().from(providers).get()).toMatchObject({
+      id: 'existing',
+      headers: null,
+      apiKey: 'local-key',
+      isDefault: true,
+    })
   })
 
   it('deletes legacy agent records instead of migrating them', () => {
@@ -204,48 +170,45 @@ describe('database initialization', () => {
     expect(handle.db.select().from(providers).all()).toEqual([])
   })
 
-  function expectCurrentSchema(handle: ReturnType<typeof initializeDb>): void {
-    const tables = handle.sqlite
-      .query<{ name: string }, []>(
-        `
-          SELECT name FROM sqlite_master
-          WHERE type = 'table'
-            AND name IN (
-              'providers',
-              'scheduled_jobs',
-              'scheduled_job_runs',
-              'oauth_tokens',
-              '__drizzle_migrations'
-            )
-          ORDER BY name
-        `,
-      )
-      .all()
-      .map((row) => row.name)
+  it('recreates a table dropped after its migrations were already stamped', () => {
+    const dbPath = join(mkTempDir(), 'browseros.sqlite')
+    const first = initializeDb({ dbPath })
+    first.sqlite.exec(
+      "INSERT INTO conversations (id, messages, target_type, last_messaged_at, created_at, updated_at) VALUES ('c1', '[]', 'agent', 1, 1, 1)",
+    )
+    // The ledger stays fully stamped but a table is gone. Drizzle's
+    // timestamp-gated migrator will not recreate it on the next launch, so only
+    // the recovery can.
+    first.sqlite.exec('DROP TABLE providers')
+    closeDb()
 
-    // The fallback has to produce the schema as it stands after every
-    // migration, so the two split provider tables are absent and the unified
-    // one is present. It drifted behind once already, which is what this list
-    // is here to catch.
-    expect(tables).toEqual([
-      '__drizzle_migrations',
-      'oauth_tokens',
-      'providers',
-      'scheduled_job_runs',
-      'scheduled_jobs',
-    ])
-    const migrations = handle.sqlite
-      .query<{ hash: string; createdAt: number }, []>(
-        `
-          SELECT hash, created_at AS createdAt
-          FROM __drizzle_migrations
-          ORDER BY created_at
-        `,
-      )
-      .all()
+    const repaired = initializeDb({ dbPath })
 
-    expect(migrations).toEqual(expectedMigrationHistory)
-  }
+    expect(repaired.db.select().from(providers).all()).toEqual([])
+    expect(
+      repaired.sqlite
+        .query<{ id: string }, []>('SELECT id FROM conversations')
+        .all(),
+    ).toEqual([{ id: 'c1' }])
+  })
+
+  it('recovers a drifted database before a migration references the missing table', () => {
+    const dbPath = join(mkTempDir(), 'browseros.sqlite')
+    const old = initializeDb({ dbPath })
+    // A drifted database that lost `providers` yet recorded migrations only
+    // through the one before 0012's `ALTER TABLE providers ADD headers`. On the
+    // next launch migrate() runs that ALTER and throws on the missing table; the
+    // recovery kicks in from the same migrations.
+    old.sqlite.exec('DROP TABLE providers')
+    old.sqlite
+      .query('DELETE FROM __drizzle_migrations WHERE created_at = ?')
+      .run(expectedMigrationHistory.at(-1).createdAt)
+    closeDb()
+
+    const repaired = initializeDb({ dbPath })
+
+    expect(repaired.db.select().from(providers).all()).toEqual([])
+  })
 
   function mkTempDir(): string {
     const dir = mkdtempSync(join(tmpdir(), 'browseros-db-test-'))
@@ -255,12 +218,8 @@ describe('database initialization', () => {
 })
 
 /**
- * Derived from the journal rather than transcribed.
- *
- * The bootstrap fallback carries its own copy of this history, and a hand
- * written duplicate here is what let that copy fall four migrations behind
- * without any test noticing. Reading the journal and hashing the files means
- * adding a migration and forgetting the fallback now fails.
+ * Derived from the journal rather than transcribed, so a new migration cannot
+ * silently fall out of sync with what the tests exercise.
  */
 const expectedMigrationHistory = JSON.parse(
   readFileSync(
