@@ -67,6 +67,7 @@ export async function formatDiffResult(
 
   if (typeof detail === 'object') {
     return capInlineDiff(
+      diff,
       diffText,
       wrappedDiff,
       origin,
@@ -146,17 +147,27 @@ export async function formatDiffResult(
 /**
  * Caps a changed diff to a caller-supplied character budget: returns it whole
  * when it fits, otherwise an inline excerpt plus the full diff written to a local
- * output file. Char-based to mirror the evaluate maxChars control (#2700).
+ * output file. Char-based to mirror the evaluate maxChars control (#2700). When the
+ * action navigated, diff.text is the new page's snapshot, so the navigation notice
+ * is preserved here just as the full and summary modes do (a truncated snapshot
+ * must not read as an ordinary in-page diff).
  */
 async function capInlineDiff(
+  diff: SnapshotDiff,
   diffText: string,
   wrappedDiff: string,
   origin: string,
   structured: Record<string, unknown>,
   maxChars: number,
 ): Promise<FormattedDiff> {
+  const navNote = diff.urlChanged
+    ? `URL changed (${diff.beforeUrl ?? '?'} -> ${diff.afterUrl ?? '?'}); the content below is the new page's current snapshot, not an in-page diff.\n`
+    : ''
+  const noun = diff.urlChanged ? 'Snapshot' : 'Diff'
+  const nounLower = diff.urlChanged ? 'snapshot' : 'diff'
+
   if (diffText.length <= maxChars) {
-    return { text: wrappedDiff, structured }
+    return { text: `${navNote}${wrappedDiff}`, structured }
   }
 
   const excerpt = wrapUntrusted(diffText.slice(0, maxChars), origin)
@@ -168,8 +179,8 @@ async function capInlineDiff(
     })
     return {
       text: [
+        `${navNote}${noun} truncated at ${maxChars} chars. Full ${nounLower} (${wrappedDiff.length} chars) saved to: ${path}`,
         excerpt,
-        `Diff truncated at ${maxChars} chars. Full diff (${wrappedDiff.length} chars) saved to: ${path}`,
       ].join('\n'),
       structured: {
         ...structured,
@@ -183,8 +194,8 @@ async function capInlineDiff(
     const saveError = error instanceof Error ? error.message : String(error)
     return {
       text: [
+        `${navNote}${noun} truncated at ${maxChars} chars. Full ${nounLower} (${wrappedDiff.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
         excerpt,
-        `Diff truncated at ${maxChars} chars. Full diff (${wrappedDiff.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
       ].join('\n'),
       structured: {
         ...structured,

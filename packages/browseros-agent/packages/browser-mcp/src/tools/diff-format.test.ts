@@ -256,6 +256,26 @@ describe('formatDiffResult detail modes (#2700)', () => {
     expect(result.structured).not.toHaveProperty('truncated')
   })
 
+  it('maxChars preserves the URL-change notice on a navigation', async () => {
+    const result = await formatDiffResult(
+      changedDiff('new page snapshot body', {
+        added: 0,
+        removed: 0,
+        urlChanged: true,
+        beforeUrl: 'https://example.com/a',
+        afterUrl: 'https://example.com/b',
+      }),
+      'https://example.com/b',
+      { maxChars: 10_000 },
+    )
+
+    // A navigation snapshot capped by maxChars must not read as an ordinary diff.
+    expect(result.text).toContain('URL changed')
+    expect(result.text).toContain('https://example.com/a')
+    expect(result.text).toContain('https://example.com/b')
+    expect(result.text).toContain('new page snapshot body')
+  })
+
   it('maxChars truncates a large diff inline and spills the rest to a file', async () => {
     await withBrowserosDir(async () => {
       const firstMarker = 'first-diff-node'

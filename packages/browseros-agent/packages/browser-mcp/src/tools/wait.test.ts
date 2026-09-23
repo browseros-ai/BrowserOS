@@ -30,11 +30,21 @@ describe('resolveTimeWaitMs (#2701)', () => {
     expect(resolveTimeWaitMs('75000')).toEqual({ waitMs: 75000 })
   })
 
+  it('lets an explicit timeout cap the pause from above', () => {
+    // The old semantics (timeout bounds a time pause) are preserved, just no
+    // longer forced down to the 30s page-work cap.
+    expect(resolveTimeWaitMs('75000', 40)).toEqual({ waitMs: 40 })
+    // A timeout above the value does not stretch it.
+    expect(resolveTimeWaitMs('5', 999)).toEqual({ waitMs: 5 })
+    // A timeout above the value leaves a long-but-valid pause honored.
+    expect(resolveTimeWaitMs('75000', 500000)).toEqual({ waitMs: 75000 })
+  })
+
   it('rejects a value above the cap and names the cap', () => {
     const resolved = resolveTimeWaitMs('120001')
     expect(resolved).toHaveProperty('error')
     if ('error' in resolved) {
-      expect(resolved.error).toContain('120000')
+      expect(resolved.error).toContain('90000')
       expect(resolved.error).toContain('120001')
     }
   })
@@ -66,6 +76,6 @@ describe('wait for="time"', () => {
       timeCtx,
     )
     expect(result.isError).toBe(true)
-    expect(textOf(result)).toContain('120000')
+    expect(textOf(result)).toContain('90000')
   })
 })
