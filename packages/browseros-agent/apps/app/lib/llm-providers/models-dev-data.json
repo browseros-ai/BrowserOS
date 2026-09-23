@@ -13787,5 +13787,533 @@
         "outputCost": 2
       }
     ]
+  },
+  "chatgpt-pro": {
+    "name": "ChatGPT",
+    "doc": "https://platform.openai.com/docs/models",
+    "models": [
+      {
+        "id": "gpt-6-luna",
+        "name": "GPT-6 Luna",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 0.1,
+        "outputCost": 0.5
+      },
+      {
+        "id": "gpt-6-sol",
+        "name": "GPT-6 Sol",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 2,
+        "outputCost": 10
+      },
+      {
+        "id": "gpt-6-astra",
+        "name": "GPT-6 Astra",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 10,
+        "outputCost": 50
+      },
+      {
+        "id": "gpt-5.6",
+        "name": "GPT-5.6",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 4,
+        "outputCost": 20
+      },
+      {
+        "id": "gpt-5.6-luna",
+        "name": "GPT-5.6 Luna",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 0.2,
+        "outputCost": 1.2
+      },
+      {
+        "id": "gpt-5.6-sol",
+        "name": "GPT-5.6 Sol",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 4,
+        "outputCost": 20
+      },
+      {
+        "id": "gpt-5.6-terra",
+        "name": "GPT-5.6 Terra",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          }
+        ],
+        "inputCost": 2,
+        "outputCost": 12
+      },
+      {
+        "id": "gpt-5.5",
+        "name": "GPT-5.5",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 5,
+        "outputCost": 30
+      },
+      {
+        "id": "gpt-5.4-mini",
+        "name": "GPT-5.4 mini",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 0.75,
+        "outputCost": 4.5
+      },
+      {
+        "id": "gpt-5.4-nano",
+        "name": "GPT-5.4 nano",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 0.2,
+        "outputCost": 1.25
+      },
+      {
+        "id": "gpt-5.4",
+        "name": "GPT-5.4",
+        "contextWindow": 1050000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 2.5,
+        "outputCost": 15
+      },
+      {
+        "id": "gpt-5.3-codex",
+        "name": "GPT-5.3 Codex",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 1.75,
+        "outputCost": 14
+      },
+      {
+        "id": "gpt-5.3-codex-spark",
+        "name": "GPT-5.3 Codex Spark",
+        "contextWindow": 128000,
+        "maxOutput": 32000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 1.75,
+        "outputCost": 14
+      },
+      {
+        "id": "gpt-5.2",
+        "name": "GPT-5.2",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ],
+        "inputCost": 1.75,
+        "outputCost": 14
+      },
+      {
+        "id": "gpt-5.2-codex",
+        "name": "GPT-5.2 Codex",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.1",
+        "name": "GPT-5.1",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "inputCost": 1.25,
+        "outputCost": 10
+      },
+      {
+        "id": "gpt-5.1-codex",
+        "name": "GPT-5.1 Codex",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.1-codex-max",
+        "name": "GPT-5.1 Codex Max",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "gpt-5.1-codex-mini",
+        "name": "GPT-5.1 Codex Mini",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": true,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "none",
+              "low",
+              "medium",
+              "high",
+              "xhigh"
+            ]
+          }
+        ]
+      },
+      {
+        "id": "gpt-5",
+        "name": "GPT-5",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "inputCost": 1.25,
+        "outputCost": 10
+      },
+      {
+        "id": "gpt-5-mini",
+        "name": "GPT-5 Mini",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "inputCost": 0.25,
+        "outputCost": 2
+      },
+      {
+        "id": "gpt-5-nano",
+        "name": "GPT-5 Nano",
+        "contextWindow": 400000,
+        "maxOutput": 128000,
+        "supportsImages": true,
+        "supportsReasoning": true,
+        "supportsToolCall": true,
+        "supportsTemperature": false,
+        "reasoningControls": [
+          {
+            "type": "effort",
+            "values": [
+              "minimal",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        ],
+        "inputCost": 0.05,
+        "outputCost": 0.4
+      }
+    ]
   }
 }

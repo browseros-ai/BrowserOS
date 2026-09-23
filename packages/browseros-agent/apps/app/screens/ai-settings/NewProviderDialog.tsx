@@ -316,10 +316,7 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   const selectedModel: ModelInfo | undefined = modelInfoList.find(
     (m) => m.modelId === watchedModelId,
   )
-  const showReasoning = modelSupportsReasoning(
-    selectedModel,
-    watchedType as ProviderType,
-  )
+  const showReasoning = modelSupportsReasoning(selectedModel)
   const reasoningEffortOptions = getReasoningEffortOptions(selectedModel)
   const temperatureDisabled = selectedModel?.supportsTemperature === false
   const temperatureRange = getTemperatureRange(watchedType as ProviderType)
