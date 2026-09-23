@@ -40,7 +40,7 @@ import {
 } from '@/modules/conversations/conversations.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
-import { decideChatSend } from './chat-send-decision'
+import { decideChatSend, drainPendingSends } from './chat-send-decision'
 import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
@@ -843,11 +843,20 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const isIntegrationsSynced = options?.isIntegrationsSynced ?? true
   const isIntegrationsSyncedRef = useRef(isIntegrationsSynced)
-  const pendingMessageRef = useRef<{
-    text: string
-    action?: ChatAction
-    files?: FileUIPart[]
-  } | null>(null)
+  /**
+   * Sends held while something was still loading, in the order they were made.
+   *
+   * A list rather than one slot. A send that lands here clears the composer,
+   * so a second one during the same wait used to replace the first and the
+   * first was never dispatched: the user watched their message disappear.
+   */
+  const pendingMessagesRef = useRef<
+    Array<{
+      text: string
+      action?: ChatAction
+      files?: FileUIPart[]
+    }>
+  >([])
 
   const trackMessageSent = useCallback(() => {
     const target = selectedChatTargetRef.current
@@ -891,7 +900,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const dispatchMessage = useCallback(
     (text: string, files?: FileUIPart[]) => {
-      void runLocalRequest(() => {
+      // Returns the turn's promise so a caller sending several can wait for
+      // each before starting the next.
+      return runLocalRequest(() => {
         trackMessageSent()
         startExecutionTask({
           conversationId: conversationIdRef.current,
@@ -911,12 +922,11 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // on the target lists too: a queued message dispatched before they settle
   // would name no provider and come back as a server-side rejection.
   useEffect(() => {
-    const pending = pendingMessageRef.current
-    if (!pending || !isSettled) return
+    if (!isSettled || pendingMessagesRef.current.length === 0) return
 
     if (!hasAnyTarget) {
-      // The wait resolved to nothing connected. Say so, and keep the message:
-      // connecting a provider re-runs this and sends it, so a handoff whose
+      // The wait resolved to nothing connected. Say so, and keep the messages:
+      // connecting a provider re-runs this and sends them, so a handoff whose
       // query parameters are already gone is not lost.
       setSendAttemptBlocked(true)
       return
@@ -924,16 +934,21 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
     if (!isIntegrationsSynced || !agentServerUrl) return
 
-    pendingMessageRef.current = null
-    const { action } = pending
-    if (action) {
-      setTextToAction((prev) => {
-        const next = new Map(prev)
-        next.set(pending.text, action)
-        return next
-      })
-    }
-    dispatchMessage(pending.text, pending.files)
+    // Taken before the first await so a re-run cannot dispatch them twice.
+    const queued = pendingMessagesRef.current
+    pendingMessagesRef.current = []
+
+    void drainPendingSends(queued, (pending) => {
+      const { action } = pending
+      if (action) {
+        setTextToAction((prev) => {
+          const next = new Map(prev)
+          next.set(pending.text, action)
+          return next
+        })
+      }
+      return dispatchMessage(pending.text, pending.files)
+    })
   }, [
     agentServerUrl,
     dispatchMessage,
@@ -972,7 +987,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     if (decision === 'queue') {
       // Retained, not refused: it still reaches the model once the wait is
       // over, so the caller is right to clear the composer.
-      pendingMessageRef.current = params
+      pendingMessagesRef.current.push(params)
       return true
     }
 
@@ -1033,7 +1048,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const resetConversationState = () => {
     const previousConversationId = conversationIdRef.current
     attachmentRef.current?.retire(previousConversationId)
-    pendingMessageRef.current = null
+    pendingMessagesRef.current = []
     localStreamConversationRef.current = undefined
     discardServerSession(previousConversationId)
     const nextId = crypto.randomUUID()

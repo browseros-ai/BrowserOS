@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import {
   type ChatSendDecisionInput,
   decideChatSend,
+  drainPendingSends,
 } from './chat-send-decision'
 
 function input(
@@ -55,5 +56,46 @@ describe('decideChatSend', () => {
         input({ isRestoring: true, isSettled: true, hasAnyTarget: false }),
       ),
     ).toBe('drop')
+  })
+})
+
+describe('drainPendingSends', () => {
+  it('sends every message that was held, in the order it was written', async () => {
+    // The regression this guards: the queue was one slot, so a second send
+    // during the same wait replaced the first and the first never went. The
+    // composer had already cleared for both.
+    const sent: string[] = []
+
+    await drainPendingSends(['first', 'second', 'third'], async (text) => {
+      sent.push(text)
+    })
+
+    expect(sent).toEqual(['first', 'second', 'third'])
+  })
+
+  it('waits for each turn before starting the next', async () => {
+    const events: string[] = []
+    const send = (text: string) =>
+      new Promise<void>((resolve) => {
+        events.push(`start:${text}`)
+        setTimeout(() => {
+          events.push(`end:${text}`)
+          resolve()
+        }, 0)
+      })
+
+    await drainPendingSends(['a', 'b'], send)
+
+    expect(events).toEqual(['start:a', 'end:a', 'start:b', 'end:b'])
+  })
+
+  it('does nothing when nothing was held', async () => {
+    let calls = 0
+
+    await drainPendingSends([], async () => {
+      calls += 1
+    })
+
+    expect(calls).toBe(0)
   })
 })

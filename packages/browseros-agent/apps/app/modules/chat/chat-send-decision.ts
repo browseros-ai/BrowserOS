@@ -30,3 +30,19 @@ export function decideChatSend(input: ChatSendDecisionInput): ChatSendDecision {
   }
   return 'send'
 }
+
+/**
+ * Sends everything held during a wait, in the order it was written.
+ *
+ * Sequential, not concurrent. These are consecutive turns in one conversation,
+ * so starting the next before the previous finishes would put two streams on
+ * the same conversation at once.
+ */
+export async function drainPendingSends<T>(
+  queued: readonly T[],
+  send: (item: T) => Promise<unknown>,
+): Promise<void> {
+  for (const item of queued) {
+    await send(item)
+  }
+}
