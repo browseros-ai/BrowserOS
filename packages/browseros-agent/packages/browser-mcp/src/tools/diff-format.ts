@@ -14,10 +14,19 @@ export interface FormattedDiff {
   structured?: Record<string, unknown>
 }
 
+/**
+ * How much of a changed diff to render. Defaults to 'full' (the token-bounded
+ * inline diff with spill-to-file). 'summary' returns only change counts; a
+ * { maxChars } budget caps the inline diff to that many characters, spilling the
+ * rest to a file (mirrors the evaluate maxChars control) (#2700).
+ */
+export type DiffDetail = 'full' | 'summary' | { maxChars: number }
+
 /** Formats observer diffs for direct tools and automatic post-action readback. */
 export async function formatDiffResult(
   diff: SnapshotDiff,
   origin: string,
+  detail: DiffDetail = 'full',
 ): Promise<FormattedDiff> {
   if (!diff.changed) {
     return {
@@ -37,6 +46,14 @@ export async function formatDiffResult(
       afterUrl: diff.afterUrl,
     }),
   }
+  if (detail === 'summary') {
+    const counts = `${diff.added} added, ${diff.removed} removed`
+    const text = diff.urlChanged
+      ? `URL changed (${diff.beforeUrl ?? '?'} -> ${diff.afterUrl ?? '?'}); ${counts}. Take a snapshot for the current state.`
+      : `changed: ${counts}. Take a snapshot to see details.`
+    return { text, structured }
+  }
+
   const diffText = diff.text || '(empty page)'
 
   if (diff.lineDiffSkipped) {
@@ -47,6 +64,17 @@ export async function formatDiffResult(
   }
 
   const wrappedDiff = wrapUntrusted(diffText, origin)
+
+  if (typeof detail === 'object') {
+    return capInlineDiff(
+      diffText,
+      wrappedDiff,
+      origin,
+      structured,
+      detail.maxChars,
+    )
+  }
+
   const tokenEstimate = estimateTextTokens(wrappedDiff)
 
   if (tokenEstimate > MAX_INLINE_DIFF_TOKENS) {
@@ -112,5 +140,60 @@ export async function formatDiffResult(
   return {
     text: wrappedDiff,
     structured,
+  }
+}
+
+/**
+ * Caps a changed diff to a caller-supplied character budget: returns it whole
+ * when it fits, otherwise an inline excerpt plus the full diff written to a local
+ * output file. Char-based to mirror the evaluate maxChars control (#2700).
+ */
+async function capInlineDiff(
+  diffText: string,
+  wrappedDiff: string,
+  origin: string,
+  structured: Record<string, unknown>,
+  maxChars: number,
+): Promise<FormattedDiff> {
+  if (diffText.length <= maxChars) {
+    return { text: wrappedDiff, structured }
+  }
+
+  const excerpt = wrapUntrusted(diffText.slice(0, maxChars), origin)
+  try {
+    const path = await writeTempToolOutputFile({
+      toolName: 'diff',
+      extension: 'md',
+      content: wrappedDiff,
+    })
+    return {
+      text: [
+        excerpt,
+        `Diff truncated at ${maxChars} chars. Full diff (${wrappedDiff.length} chars) saved to: ${path}`,
+      ].join('\n'),
+      structured: {
+        ...structured,
+        truncated: true,
+        path,
+        contentLength: wrappedDiff.length,
+        writtenToFile: true,
+      },
+    }
+  } catch (error) {
+    const saveError = error instanceof Error ? error.message : String(error)
+    return {
+      text: [
+        excerpt,
+        `Diff truncated at ${maxChars} chars. Full diff (${wrappedDiff.length} chars) could not be saved to a BrowserOS output file: ${saveError}`,
+      ].join('\n'),
+      structured: {
+        ...structured,
+        truncated: true,
+        contentLength: wrappedDiff.length,
+        writtenToFile: false,
+        outputWriteFailed: true,
+        error: saveError,
+      },
+    }
   }
 }

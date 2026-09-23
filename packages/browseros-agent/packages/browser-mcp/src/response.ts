@@ -1,7 +1,7 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import type { SnapshotDiff } from '@browseros/browser-core/core/snapshot/diff'
 import { TIMEOUTS } from '@browseros/shared/constants/timeouts'
-import { formatDiffResult } from './tools/diff-format'
+import { type DiffDetail, formatDiffResult } from './tools/diff-format'
 import { formatSnapshotResult } from './tools/snapshot-format'
 
 export type ContentItem =
@@ -23,6 +23,7 @@ type DiffPostAction = {
   type: 'diff'
   page: number
   includeStructured?: boolean
+  detail?: DiffDetail
 }
 
 export interface ToolResultMetadata {
@@ -101,12 +102,13 @@ export class ToolResponse {
 
   includeDiff(
     page: number,
-    options: { includeStructured?: boolean } = {},
+    options: { includeStructured?: boolean; detail?: DiffDetail } = {},
   ): void {
     this.postActions.push({
       type: 'diff',
       page,
       includeStructured: options.includeStructured,
+      detail: options.detail,
     })
   }
 
@@ -174,7 +176,7 @@ export class ToolResponse {
     diff: SnapshotDiff,
     origin: string,
   ): Promise<void> {
-    const formatted = await formatDiffResult(diff, origin)
+    const formatted = await formatDiffResult(diff, origin, action.detail)
     this.text(`[Page ${action.page} diff]\n${formatted.text}`)
     if (action.includeStructured) {
       this.data({
