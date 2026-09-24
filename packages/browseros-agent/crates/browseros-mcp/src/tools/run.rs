@@ -314,6 +314,7 @@ pub(crate) struct BrowserBridge {
     /// and the inner-call hook lives at `ctx.inner_call_hook`.
     pub(crate) ctx: ToolCtx,
     pub(crate) control: RunControl,
+    pub(crate) pw_activity: Arc<crate::pw::PageActivity>,
 }
 
 pub(crate) enum BrowserCallValue {
@@ -576,6 +577,7 @@ fn install_globals<'js>(
     let bridge = BrowserBridge {
         ctx: tool_ctx,
         control,
+        pw_activity: Arc::default(),
     };
     let call_bridge = {
         let bridge = bridge.clone();
@@ -631,14 +633,25 @@ impl BrowserBridge {
         if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
         }
+        if let Some(page) = page {
+            self.pw_activity.touch(page);
+        }
         let started = Instant::now();
         let outcome = self.dispatch(method, args).await;
-        let mut secrets = Vec::new();
-        if let Ok(result) = &outcome {
-            if let Some(masked_args) = &result.audit_args {
-                recorded_args = masked_args.clone();
-            }
-            secrets.clone_from(&result.secrets);
+        // A failed fill can contain the same secret as a successful one. Carry
+        // leaf metadata through either outcome before the shared audit hook also
+        // uses those secrets to redact the parent script.
+        let (audit_args, secrets) = match &outcome {
+            Ok(result) => (&result.audit_args, &result.secrets),
+            Err(error) => (&error.audit_args, &error.secrets),
+        };
+        if let Some(masked_args) = audit_args {
+            recorded_args = masked_args.clone();
+        }
+        if let Ok(result) = &outcome
+            && let Some(page) = result.created_page
+        {
+            self.pw_activity.touch(page);
         }
         if let Some(hook) = &self.ctx.inner_call_hook {
             let created_page = match &outcome {
@@ -668,7 +681,7 @@ impl BrowserBridge {
                 method,
                 page,
                 args: &recorded_args,
-                secrets: &secrets,
+                secrets,
                 from_helper,
                 is_error: outcome.is_err(),
                 duration_ms: started.elapsed().as_millis() as i64,
@@ -676,14 +689,16 @@ impl BrowserBridge {
             })
             .await;
         }
-        outcome.map(|result| result.value)
+        outcome
+            .map(|result| result.value)
+            .map_err(|error| error.message)
     }
 
     async fn dispatch(
         &self,
         method: &str,
         args: Vec<Value>,
-    ) -> Result<crate::pw::PwCallOutcome, String> {
+    ) -> Result<crate::pw::PwCallOutcome, crate::pw::PwCallError> {
         match method {
             m if crate::pw::is_pw_method(m) => crate::pw::dispatch(self, m, args).await,
             _ => self
@@ -694,7 +709,8 @@ impl BrowserBridge {
                     audit_args: None,
                     created_page: None,
                     secrets: Vec::new(),
-                }),
+                })
+                .map_err(Into::into),
         }
     }
 
@@ -1053,6 +1069,14 @@ fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
 /// variants) carry the page id as their first argument; the rest address no
 /// specific page.
 fn target_page(method: &str, args: &[Value]) -> Option<u32> {
+    // neo.cdp's optional page is third; legacy cdp's third argument is a raw
+    // session id and must keep its existing root-level attribution.
+    if method == "neo.cdp" {
+        return args
+            .get(2)
+            .and_then(Value::as_u64)
+            .and_then(|id| u32::try_from(id).ok());
+    }
     // Playwright leaves carry pageId first so the shared hook can attribute
     // their audit rows and ownership notices before dispatching the operation.
     let page_first = [
@@ -1067,7 +1091,12 @@ fn target_page(method: &str, args: &[Value]) -> Option<u32> {
     .any(|prefix| method.starts_with(prefix))
         || matches!(
             method,
-            "neo.snapshot" | "neo.read" | "neo.grep" | "neo.download" | "neo.page"
+            "neo.snapshot"
+                | "neo.read"
+                | "neo.grep"
+                | "neo.download"
+                | "neo.page"
+                | "context.close"
         )
         || method.starts_with("observe.")
         || method.starts_with("input.")
