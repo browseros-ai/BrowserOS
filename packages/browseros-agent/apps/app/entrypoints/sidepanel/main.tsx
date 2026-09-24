@@ -5,7 +5,7 @@ import { ThemeProvider } from '@/components/theme-provider.tsx'
 import { Toaster } from '@/components/ui/sonner'
 import { AnalyticsProvider } from '@/lib/analytics/AnalyticsProvider'
 import { AuthProvider } from '@/lib/auth/AuthProvider'
-import { QueryProvider } from '@/lib/graphql/QueryProvider'
+import { QueryProvider } from '@/lib/query/QueryProvider'
 import { sentryRootErrorHandler } from '@/lib/sentry/sentryRootErrorHandler'
 import { App } from './App'
 

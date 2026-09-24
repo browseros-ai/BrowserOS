@@ -18,7 +18,6 @@ import { NewTabChat } from '@/screens/newtab/index/NewTabChat'
 import { NewTabLayout } from '@/screens/newtab/layout/NewTabLayout'
 import { Personalize } from '@/screens/newtab/personalize/Personalize'
 import { OnboardingAiPage } from '@/screens/onboarding-ai/OnboardingAiPage'
-import { ProfilePage } from '@/screens/profile/ProfilePage'
 import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
@@ -57,7 +56,6 @@ export const App: FC = () => {
         <Route element={<AuthLayout />}>
           <Route path="login" element={<LoginPage />} />
           <Route path="logout" element={<LogoutPage />} />
-          <Route path="profile" element={<ProfilePage />} />
         </Route>
 
         <Route element={<SidebarLayout />}>
