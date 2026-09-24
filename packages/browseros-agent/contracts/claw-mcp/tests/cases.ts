@@ -58,6 +58,7 @@ export const contractCases: ContractCase[] = [
   ...actCases,
   ...fillCases,
   ...readEvalCases,
+  ...(await import('./cases-playwright')).playwrightCases,
   ...captureIoCases,
   ...clawLayerCases,
 ]
