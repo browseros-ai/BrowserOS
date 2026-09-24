@@ -219,7 +219,9 @@ mod tests {
         }
 
         fn on_page_created<'a>(&'a self, _page_id: u32) -> BoxFuture<'a, ()> {
-            Box::pin(async { panic!("stub calls must not claim a page") })
+            // Leaf implementations may claim a page against the fake browser;
+            // this test only checks routing and attribution, not page effects.
+            Box::pin(async {})
         }
     }
 
@@ -266,15 +268,17 @@ mod tests {
         let output = result
             .structured_content
             .ok_or_else(|| anyhow::anyhow!("missing output"))?;
-        assert_eq!(
-            output["value"],
-            json!(
-                names
-                    .iter()
-                    .map(|method| format!("not implemented yet: {method}"))
-                    .collect::<Vec<_>>()
-            )
-        );
+        // Every leaf errors against the fake browser (stub or real), so the
+        // value is one error message per method. The exact text belongs to the
+        // leaf pieces and their own tests; this test pins routing and audit.
+        let errors = output["value"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("errors are not an array"))?;
+        assert_eq!(errors.len(), names.len());
+        for (method, error) in names.iter().zip(errors) {
+            let text = error.as_str().unwrap_or_default();
+            assert!(!text.is_empty(), "{method} produced an empty error");
+        }
         assert_eq!(
             *hook
                 .authorized
