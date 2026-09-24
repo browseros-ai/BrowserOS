@@ -30,7 +30,8 @@ export type HydrationResult =
     }
   | { ok: false; error: string }
 
-function toLlmConfig(
+/** The stored row as an outbound LLM config. Shared with /refine-prompt. */
+export function providerRowToLlmConfig(
   row: ProviderRow,
 ): Partial<LLMConfig> & { model?: string } {
   return {
@@ -80,7 +81,7 @@ export async function hydrateChatProvider(
   }
 
   const hydrated = row
-    ? { ...request, ...toLlmConfig(row) }
+    ? { ...request, ...providerRowToLlmConfig(row) }
     : { ...request, providerId: namedId }
 
   if (!hydrated.provider) {

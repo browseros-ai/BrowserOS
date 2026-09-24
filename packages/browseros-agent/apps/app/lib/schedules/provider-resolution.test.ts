@@ -156,7 +156,9 @@ describe('scheduled provider resolution', () => {
     ).toBeUndefined()
   })
 
-  it('uses an explicit refine provider', async () => {
+  // Named, not described. The endpoint resolves the model and the credentials
+  // from the id, so nothing about the provider crosses the wire here.
+  it('names the refine provider and sends no configuration', async () => {
     globalThis.fetch = mock(async (_url, init) => {
       fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
       return Response.json({ success: true, refined: 'Refined prompt' })
@@ -170,9 +172,29 @@ describe('scheduled provider resolution', () => {
       providerId: 'anthropic-sonnet',
     })
 
-    expect(fetchBodies[0]).toMatchObject({
-      provider: 'anthropic',
-      model: 'claude-sonnet-4-6',
-    })
+    expect(fetchBodies[0]).toMatchObject({ providerId: 'anthropic-sonnet' })
+    for (const field of [
+      'apiKey',
+      'secretAccessKey',
+      'sessionToken',
+      'baseUrl',
+    ]) {
+      expect(field in (fetchBodies[0] as object)).toBe(false)
+    }
+  })
+
+  it('names nothing when the caller has no provider, so the server picks', async () => {
+    globalThis.fetch = mock(async (_url, init) => {
+      fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
+      return Response.json({ success: true, refined: 'Refined prompt' })
+    }) as unknown as typeof fetch
+
+    const { refinePrompt } = await import('./refine-prompt')
+
+    await refinePrompt({ prompt: 'Check mail', name: 'Morning brief' })
+
+    expect(
+      (fetchBodies[0] as { providerId?: string }).providerId,
+    ).toBeUndefined()
   })
 })

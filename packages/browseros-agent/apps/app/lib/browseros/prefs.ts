@@ -1,7 +1,6 @@
 /** @public */
 export const BROWSEROS_PREFS = {
   MCP_PORT: 'browseros.server.mcp_port',
-  PROVIDERS: 'browseros.providers',
   THIRD_PARTY_LLM_PROVIDERS: 'browseros.third_party_llm.providers',
   PROXY_PORT: 'browseros.server.proxy_port',
   SERVER_PORT: 'browseros.server.server_port',

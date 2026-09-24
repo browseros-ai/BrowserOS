@@ -106,21 +106,3 @@ export async function listScheduledJobRunsOrNull(): Promise<
     return null
   }
 }
-
-/** One-time import of run history from extension storage. */
-export async function importScheduledJobRuns(
-  runs: ScheduledJobRun[],
-): Promise<void> {
-  const client = await runsClient()
-  const response = await client.import.$post({
-    json: {
-      runs: runs.map((run) => ({
-        ...toScheduledJobRunPayload(run),
-        id: run.id,
-      })),
-    },
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to import run history (${response.status})`)
-  }
-}
