@@ -36,7 +36,7 @@ live browser):
 | TypeScript gate | green | `bun run check` |
 | Full real-browser conformance suite incl. 15 new Playwright cases | **150 pass / 0 fail** | `BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' bun contracts/claw-mcp/tests/run.ts` |
 | Mediator's own drive: strict-mode error text, disambiguation, example.com live, `neo.*` from a script, legacy `run` in the same session, two concurrent sessions isolated, 30 s cap, nested audit rows + screenshots, one tab group per session | **10/10** | `BROWSEROS_BINARY=… bun ~/llm/code/browseros-project/grove-ref/main-1/playwright-runtime/reports/mediator-drive.ts` |
-| Cockpit: nested steps under the script row, code block with copy, child error badge, per-tab context, replay captions | unit-tested (437 claw-app tests); **visual check in progress** (wave 4) | `bun run --filter @browseros/claw-app test` |
+| Cockpit: nested steps under the script row, highlighted code with the password already redacted, child error badges, per-tab context, replay captions | **verified by eye** on the real product loop with S01/S07/F13 sessions (screenshots in `reports/w4-cockpit/`); 445 claw-app tests | `bun run --filter @browseros/claw-app test` |
 
 To try it yourself: `cd packages/browseros-agent && bun run dev:claw:watch:new`
 (launches the installed neo with the dev cockpit and this server), connect
@@ -69,8 +69,10 @@ tools as the fallback.
   reports itself visible/focused while it stays a background tab.
 - Only macOS arm64 was exercised; the vendored bundle is plain JS so other
   targets should be unaffected, but no cross-target build was run.
-- Wave 4 (hardening corpus S16–S25 and the cockpit visual pass) may still be
-  running or have landed after this report; see the end of `STATUS.md`.
+- Wave 4 cockpit pass landed and is merged (readability fixes: full-viewport
+  previews, wrapped selectors, bounded code panels, Failed badges, more
+  replay captions). Wave 4 hardening corpus (S16–S25) may still be running
+  or have landed after this report; see the end of `STATUS.md`.
 
 ## 3. What you decided for me (overturn any in 30 seconds)
 
@@ -104,10 +106,10 @@ tools as the fallback.
 
 ## 4. What is left (priority order)
 
-1. Read `wave 4` results at the end of `STATUS.md`; merge `feat/pw-p4-actions`
-   (hardening) and `feat/pw-cockpit` (cockpit fixes) if they landed after
-   this report, re-run the full suite, then push `feat/playwright-runtime`
-   and open the PR yourself (I did not push).
+1. Read the wave-4 hardening result at the end of `STATUS.md`; merge
+   `feat/pw-p4-actions` if it landed after this report, re-run the full
+   suite, then push `feat/playwright-runtime` and open the PR yourself (I
+   did not push).
 2. Chromium follow-up: background default for `Target.createTarget` under
    the pref (one patch in `chromium_patches/content/browser/devtools/protocol/target_handler.cc`).
 3. Playwright-dialect saved helpers (`design/host-seam.md` §HelperDialect).
@@ -119,9 +121,6 @@ tools as the fallback.
 
 ## 5. What I could not verify
 
-- The cockpit rendering with real rows, by eye (wave 4 is producing
-  screenshots under `reports/w4-cockpit/`; if that directory is empty, it
-  is unverified).
 - Behaviour on Windows/Linux builds and the release packaging
   (`scripts/build/claw-server-rust.ts`); no cross-target build was run.
 - Long-running real sites beyond example.com and the local fixtures.
