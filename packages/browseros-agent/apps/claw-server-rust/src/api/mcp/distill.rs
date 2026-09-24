@@ -364,14 +364,13 @@ fn emit_line(tool: &str, args: &[Value], inputs: &mut usize) -> Option<String> {
         "input.press" => format!("  await p.press({});", arg(1)),
         "input.hover" => format!("  await p.hover({});", arg(1)),
         "input.selectOption" => {
-            format!("  await p.selectOption({}, {});", arg(1), next_input(inputs))
+            format!(
+                "  await p.selectOption({}, {});",
+                arg(1),
+                next_input(inputs)
+            )
         }
-        "input.scroll" => format!(
-            "  await p.scroll({}, {}, {});",
-            arg(1),
-            arg(2),
-            arg(3)
-        ),
+        "input.scroll" => format!("  await p.scroll({}, {}, {});", arg(1), arg(2), arg(3)),
         "wait" => format!("  await p.wait({});", arg(1)),
         _ => return None,
     };
@@ -670,7 +669,10 @@ mod tests {
         ];
         let (source_opens, _) =
             distill_source(&opens).ok_or_else(|| anyhow::anyhow!("expected a macro"))?;
-        assert!(source_opens.contains("await browser.open("), "{source_opens}");
+        assert!(
+            source_opens.contains("await browser.open("),
+            "{source_opens}"
+        );
 
         for source in [&source, &source_opens] {
             for stale in ["browser.nav(", "browser.input(", "browser.observe("] {
