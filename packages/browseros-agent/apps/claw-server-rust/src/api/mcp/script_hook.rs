@@ -15,7 +15,7 @@ use futures_util::future::BoxFuture;
 use serde_json::Value;
 use tracing::warn;
 
-/// Host hook a `run`/`execute` script invokes around each browser primitive.
+/// Host hook script tools (`run`, `evaluate`, `playwright`) invoke around each browser primitive.
 /// A script drives the shared browser session directly, bypassing the pipeline
 /// guards and effects, so this hook reproduces what those effects would have
 /// done: it notes whose tab each primitive touched, records each primitive as a child
@@ -85,7 +85,9 @@ impl InnerCallHook for ScriptInnerCallHook {
     }
 
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
-        // Accumulate before audit persistence so the parent sees secrets even if a child write fails.
+        // The bridge owns sensitivity checks and supplies already-masked args.
+        // Accumulate its secrets before any async handoff or child persistence:
+        // cancellation or a failed write must not expose them in the parent row.
         self.call
             .redactions
             .lock()
@@ -630,6 +632,87 @@ mod tests {
         assert_eq!(child.token_estimator_version, TOKEN_ESTIMATOR_VERSION);
         assert!(child.tool_input_token_estimate > 0);
         assert_eq!(child.tool_output_token_estimate, 42);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn record_preserves_masked_args_and_accumulates_every_child_secret() -> anyhow::Result<()>
+    {
+        let call = tool_call("playwright", json!({ "code": "return 1" })).await?;
+        let hook = hook_for(&call);
+        let args = json!([4, "#password", "[redacted]", { "timeout": 10 }]);
+        for secret in ["hunter2", "redacted"] {
+            hook.record(InnerCallRecord {
+                method: "locator.fill",
+                page: Some(4),
+                args: &args,
+                secrets: &[secret.to_string()],
+                from_helper: false,
+                is_error: true,
+                duration_ms: 12,
+                output_token_estimate: 42,
+            })
+            .await;
+        }
+        let rows = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 2);
+        for child in rows {
+            assert_eq!(
+                child.args_json.as_deref(),
+                Some(r##"[4,"#password","[redacted]",{"timeout":10}]"##)
+            );
+            assert_eq!(
+                child.result_meta.as_deref(),
+                Some(
+                    r#"{"cancelled":false,"contentSummary":"0 block(s)","isError":true,"structuredKeys":[]}"#
+                )
+            );
+            assert_eq!(
+                child.parent_dispatch_id.as_deref(),
+                Some(call.dispatch_id.as_str())
+            );
+        }
+        let secrets = call
+            .redactions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("redactions poisoned"))?;
+        assert_eq!(secrets.as_slice(), ["hunter2", "redacted"]);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn record_keeps_parent_secrets_even_when_child_has_no_identity() -> anyhow::Result<()> {
+        let mut call = tool_call("playwright", json!({ "code": "return 1" })).await?;
+        call.identity = None;
+        hook_for(&call)
+            .record(InnerCallRecord {
+                method: "locator.fill",
+                page: None,
+                args: &json!(["[redacted]"]),
+                secrets: &["hunter2".to_string()],
+                from_helper: false,
+                is_error: true,
+                duration_ms: 1,
+                output_token_estimate: 0,
+            })
+            .await;
+        let rows = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows;
+        assert!(rows.is_empty());
+        let secrets = call
+            .redactions
+            .lock()
+            .map_err(|_| anyhow::anyhow!("redactions poisoned"))?;
+        assert_eq!(secrets.as_slice(), ["hunter2"]);
         Ok(())
     }
 

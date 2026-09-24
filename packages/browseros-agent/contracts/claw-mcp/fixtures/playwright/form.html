@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Corpus form</title></head>
+<body>
+<h1>Sign up</h1>
+<form id="signup">
+  <p><label for="name">Full name</label> <input id="name" name="name"></p>
+  <p><label for="email">Email</label> <input id="email" name="email" type="email"></p>
+  <p><label for="password">Password</label> <input id="password" name="password" type="password"></p>
+  <p><label for="plan">Plan</label>
+    <select id="plan" name="plan">
+      <option value="free">Free</option>
+      <option value="pro">Pro</option>
+      <option value="team">Team</option>
+    </select></p>
+  <p><label><input id="terms" name="terms" type="checkbox"> I agree to the terms</label></p>
+  <p><button type="submit">Create account</button></p>
+</form>
+<p id="confirmation" data-testid="confirmation" hidden></p>
+
+<h2>Search</h2>
+<p><input id="search" placeholder="Search" aria-label="Search"> <span data-testid="search-result"></span></p>
+
+<script>
+  // Confirmation renders 200 ms after submit so a script must wait, not assume.
+  document.getElementById('signup').addEventListener('submit', (event) => {
+    event.preventDefault();
+    const name = document.getElementById('name').value;
+    const plan = document.getElementById('plan').value;
+    const terms = document.getElementById('terms').checked;
+    setTimeout(() => {
+      const el = document.getElementById('confirmation');
+      el.textContent = `Account created for ${name} (${plan}, terms: ${terms})`;
+      el.hidden = false;
+    }, 200);
+  });
+  document.getElementById('search').addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      document.querySelector('[data-testid="search-result"]').textContent =
+        'Searched: ' + event.target.value;
+    }
+  });
+</script>
+</body>
+</html>

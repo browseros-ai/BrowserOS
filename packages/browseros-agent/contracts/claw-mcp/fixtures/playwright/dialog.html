@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Corpus dialog</title></head>
+<body>
+<h1>Dialog</h1>
+<button type="button" id="delete">Delete</button>
+<p id="status">untouched</p>
+<script>
+  document.getElementById('delete').addEventListener('click', () => {
+    const ok = window.confirm('Delete it?');
+    document.getElementById('status').textContent = ok ? 'Deleted' : 'Kept';
+  });
+</script>
+</body>
+</html>
