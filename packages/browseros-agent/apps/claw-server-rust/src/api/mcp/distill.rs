@@ -677,6 +677,11 @@ mod tests {
                 assert!(!source.contains(stale), "{stale} still emitted: {source}");
             }
         }
+
+        // A hand-saved helper's call shape is inferred from its parameter list,
+        // not its body, so changing the body must not reclassify either shape.
+        assert!(!crate::services::helpers::analyze_source(&source).0);
+        assert!(crate::services::helpers::analyze_source(&source_opens).0);
         Ok(())
     }
 
