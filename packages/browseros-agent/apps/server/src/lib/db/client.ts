@@ -252,6 +252,11 @@ const currentMigrationHistory = [
     hash: '5e1894d0aebf4a5b708425f565795b01e4efdb997a1e1e6fc6479f229bd022da',
     createdAt: 1788724664440,
   },
+  {
+    tag: '0013_drop_browseros_provider',
+    hash: 'a56bd0e97b0297bf0933b9b06d7e3862957727999762f0834f30e7b42da69a09',
+    createdAt: 1790095966768,
+  },
 ]
 
 // TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.

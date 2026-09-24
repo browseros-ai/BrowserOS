@@ -23,11 +23,7 @@ function getNativeTarget(): { id: string; ext: string } {
   return { id: `${os}-${cpu}`, ext: process.platform === 'win32' ? '.exe' : '' }
 }
 
-const REQUIRED_INLINE_ENV_KEYS = [
-  'BROWSEROS_CONFIG_URL',
-  'POSTHOG_API_KEY',
-  'SENTRY_DSN',
-] as const
+const REQUIRED_INLINE_ENV_KEYS = ['POSTHOG_API_KEY', 'SENTRY_DSN'] as const
 
 const R2_ENV_KEYS = [
   'R2_ACCOUNT_ID',
@@ -39,7 +35,6 @@ const R2_ENV_KEYS = [
 const PROD_SECRET_KEYS = [...REQUIRED_INLINE_ENV_KEYS, ...R2_ENV_KEYS]
 
 const INLINE_ENV_STUBS: Record<string, string> = {
-  BROWSEROS_CONFIG_URL: 'https://server-build-test.invalid/config',
   POSTHOG_API_KEY: 'phc_server_build_test_unique',
   SENTRY_DSN: 'https://server-build-test@sentry.invalid/0',
   LOG_LEVEL: 'info',

@@ -85,13 +85,6 @@ function toThinkingBudget(effort: string | undefined): number {
   }
 }
 
-function effectiveProvider(cfg: ResolvedAgentConfig): string {
-  if (cfg.provider === LLM_PROVIDERS.BROWSEROS && cfg.upstreamProvider) {
-    return cfg.upstreamProvider
-  }
-  return cfg.provider
-}
-
 const GEMINI_2_5 = /(^|\/)gemini-2\.5(?:[.-]|$)/i
 const GEMINI_3_PLUS = /(^|\/)gemini-(3|[4-9])/i
 
@@ -112,7 +105,10 @@ export function buildAgentReasoningConfig(
   // The catalog says this model does not reason: never request reasoning.
   if (cfg.supportsReasoning === false) return {}
 
-  const provider = effectiveProvider(cfg)
+  // cfg.provider directly: the one config that reported a different upstream
+  // was the hosted gateway, and CHATGPT_PRO is handled as its own case below
+  // rather than collapsed into its openai upstream.
+  const provider = cfg.provider
   const effort = cfg.reasoningEffort
   const summary = cfg.reasoningSummary || 'auto'
   const model = cfg.model.toLowerCase()

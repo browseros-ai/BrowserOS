@@ -39,11 +39,6 @@ function supportsToolResultMediaTransport(
       const modelId = config.model.toLowerCase()
       return modelId.includes('gemini-3') && !modelId.includes('gemini-2')
     }
-    case LLM_PROVIDERS.BROWSEROS:
-      return (
-        config.upstreamProvider === LLM_PROVIDERS.ANTHROPIC ||
-        config.upstreamProvider === LLM_PROVIDERS.AZURE
-      )
     default:
       return false
   }

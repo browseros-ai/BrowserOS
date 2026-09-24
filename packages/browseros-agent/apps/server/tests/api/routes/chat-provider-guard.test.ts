@@ -86,9 +86,9 @@ describe('chat provider credentials', () => {
 
   // The provider types the server credentials itself. An unknown id means no
   // row is read, so the provenance flag alone would wave these through, and
-  // the resolver would then hand over this machine's oauth token or the
-  // gateway credential to a caller that proved nothing.
-  it.each(['chatgpt-pro', 'github-copilot', 'qwen-code', 'browseros'])(
+  // the resolver would then hand over this machine's oauth token to a caller
+  // that proved nothing.
+  it.each(['chatgpt-pro', 'github-copilot', 'qwen-code'])(
     'refuses an untrusted caller naming %s with an unknown id',
     async (provider) => {
       const response = await routes().request('/', {

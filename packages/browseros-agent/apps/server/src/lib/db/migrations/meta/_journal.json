@@ -92,6 +92,13 @@
       "when": 1788724664440,
       "tag": "0012_add_provider_headers",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1790095966768,
+      "tag": "0013_drop_browseros_provider",
+      "breakpoints": true
     }
   ]
 }

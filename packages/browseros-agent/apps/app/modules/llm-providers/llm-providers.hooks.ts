@@ -5,12 +5,11 @@ import {
   resolveDefaultProviderId,
   resolveSelectedProvider,
 } from '@/lib/llm-providers/provider-selection'
-import { DEFAULT_PROVIDER_ID } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   deleteProvider as deleteProviderRow,
   fetchDefaultProviderId,
-  fetchProviders,
+  listProviders,
   putDefaultProvider,
   putProvider,
 } from './llm-providers.api'
@@ -19,7 +18,14 @@ import { watchProviderRevision } from './llm-providers.revision'
 
 export interface UseLlmProvidersReturn {
   providers: LlmProviderConfig[]
-  defaultProviderId: string
+  /** Null when nothing is configured, so callers cannot point at a phantom id. */
+  defaultProviderId: string | null
+  /**
+   * The selected id exactly as the server holds it, which may name a coding
+   * agent. `defaultProviderId` resolves against the LLM-only list and so
+   * cannot represent one; a caller that works in both kinds needs this.
+   */
+  storedDefaultTargetId: string | null
   selectedProvider: LlmProviderConfig | null
   isLoading: boolean
   /**
@@ -40,7 +46,7 @@ export interface UseLlmProvidersReturn {
 
 export const useProvidersQuery = createQuery<LlmProviderConfig[]>({
   queryKey: ['llm-providers'],
-  fetcher: fetchProviders,
+  fetcher: listProviders,
 })
 
 /**
@@ -92,7 +98,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
   const providersQuery = useProvidersQuery()
   const defaultQuery = useDefaultProviderIdQuery()
   useProviderRevision()
-  const storedDefaultId = defaultQuery.data ?? DEFAULT_PROVIDER_ID
+  const storedDefaultId = defaultQuery.data ?? null
 
   const providers = providersQuery.data ?? []
   const invalidate = () =>
@@ -117,10 +123,6 @@ export function useLlmProviders(): UseLlmProvidersReturn {
 
   const deleteMutation = useMutation({
     mutationFn: async (providerId: string) => {
-      // The built-in provider is what the app falls back to, so removing it
-      // would leave nothing to chat with.
-      if (providerId === DEFAULT_PROVIDER_ID) return
-
       // Delete first. Moving the default before the row is gone leaves the
       // provider configured but no longer default when the delete fails, with
       // nothing to tell the user it happened. The reverse is harmless: a
@@ -152,6 +154,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
   return {
     providers,
     defaultProviderId,
+    storedDefaultTargetId: storedDefaultId,
     selectedProvider: resolveSelectedProvider(providers, defaultProviderId),
     isLoading: providersQuery.isPending || defaultQuery.isPending,
     isUnavailable: providersQuery.isError || defaultQuery.isError,

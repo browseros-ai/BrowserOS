@@ -23,7 +23,6 @@ export interface ModelInfo {
  * extension release. It is derived in the catalogue generator now.
  */
 const CUSTOM_PROVIDER_MODELS: Partial<Record<ProviderType, ModelInfo[]>> = {
-  browseros: [{ modelId: 'browseros-auto', contextLength: 200000 }],
   'openai-compatible': [],
   ollama: [],
   'qwen-code': [

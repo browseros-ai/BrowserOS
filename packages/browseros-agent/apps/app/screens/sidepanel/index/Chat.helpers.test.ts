@@ -8,13 +8,13 @@ describe('buildChatErrorProps', () => {
 
     const props = buildChatErrorProps({
       chatError: error,
-      selectedProvider: { type: 'browseros' },
+      selectedProvider: { type: 'openai' },
       retryLastTurn,
     })
 
     expect(props).toMatchObject({
       error,
-      providerType: 'browseros',
+      providerType: 'openai',
     })
     expect(props?.onRetry).toBeDefined()
 

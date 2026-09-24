@@ -30,6 +30,7 @@ export function useChatTargetSelection() {
   const {
     providers: llmProviders,
     selectedProvider: selectedLlmProvider,
+    storedDefaultTargetId,
     setDefaultProvider,
     isLoading: isLoadingProviders,
   } = useLlmProviders()
@@ -74,14 +75,19 @@ export function useChatTargetSelection() {
     [chatTargets],
   )
 
+  // The stored id verbatim, not the one resolved through the LLM-only list.
+  // Resolving first replaced a default naming a coding agent with the first
+  // provider, so a profile whose local selection was absent chatted with
+  // something the user never chose. The resolver falls back on its own when
+  // this names nothing.
   const selectedChatTarget = useMemo(
     () =>
       resolveSidepanelChatTarget({
         targets: chatTargets,
-        defaultProviderId: selectedLlmProvider?.id ?? llmProviders[0]?.id ?? '',
+        defaultTargetId: storedDefaultTargetId,
         selection: targetSelection,
       }),
-    [chatTargets, llmProviders, selectedLlmProvider, targetSelection],
+    [chatTargets, storedDefaultTargetId, targetSelection],
   )
   const selectedProvider = useMemo(
     () => (selectedChatTarget ? toProviderOption(selectedChatTarget) : null),
@@ -150,12 +156,19 @@ export function useChatTargetSelection() {
     [chatTargets, selectChatTarget],
   )
 
+  // Both lists have to have settled before absence means anything. Reading it
+  // mid-load would tell someone their provider is gone every cold start.
+  const isSettled = !isLoadingProviders && agentsSettled
+
   return {
     llmProviders,
     selectedLlmProvider,
     selectedLlmProviderRef,
     setDefaultProvider,
     isLoadingProviders: isLoadingProviders || isLoadingAgents,
+    isSettled,
+    /** Whether anything at all is connected: an LLM provider or a coding agent. */
+    hasAnyTarget: chatTargets.length > 0,
     agents,
     chatTargets,
     providerOptions,
