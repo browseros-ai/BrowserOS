@@ -729,8 +729,11 @@ async fn injected_call(r: &Resolved, method: &str, arg: Value) -> Result<Value, 
     })).await?)
 }
 
-async fn cover_check(_engine: &LocatorEngine, r: &Resolved, point: Point) -> Result<(), CoreError> {
-    let result = injected_call(r, "hitTarget", json!({"x":point.x,"y":point.y})).await?;
+async fn cover_check(engine: &LocatorEngine, r: &Resolved, point: Point) -> Result<(), CoreError> {
+    // CDP/input use the target session's viewport; the injected hit test queries
+    // the resolved node's document. Translate only for the hit test, never input.
+    let hit_point = engine.hit_target_point(r, point).await?;
+    let result = injected_call(r, "hitTarget", json!({"x":hit_point.x,"y":hit_point.y})).await?;
     if result == "done" {
         return Ok(());
     }

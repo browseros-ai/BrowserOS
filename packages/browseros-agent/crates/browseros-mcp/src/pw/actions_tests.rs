@@ -154,7 +154,7 @@ impl CdpConnection for ActionConnection {
                     | "DOM.scrollIntoViewIfNeeded"
                     | "Runtime.releaseObject" => Some(json!({})),
                     "DOM.getBoxModel" => Some(
-                        json!({"model":{"content":[10,10,30,10,30,30,10,30],"padding":[10,10,30,10,30,30,10,30]}}),
+                        json!({"model":{"content":[10,10,30,10,30,30,10,30],"padding":[10,10,30,10,30,30,10,30],"border":[10,10,30,10,30,30,10,30]}}),
                     ),
                     "DOM.getContentQuads" => Some(json!({"quads":[[10,10,30,10,30,30,10,30]]})),
                     "DOM.resolveNode" => Some(json!({"object":{"objectId":"main-node"}})),
@@ -184,6 +184,8 @@ impl CdpConnection for ActionConnection {
                                 return futures_util::future::pending().await;
                             }
                             Some(json!({"result":{"objectId":"element"}}))
+                        } else if source.contains("this.getBoundingClientRect()") {
+                            Some(json!({"result":{"value":{"x":10,"y":10}}}))
                         } else if source.contains("return !!this.ownerDocument") {
                             Some(json!({"result":{"value":true}}))
                         } else if params["arguments"][0]["value"] == "fill" {
