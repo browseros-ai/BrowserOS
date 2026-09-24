@@ -308,3 +308,30 @@ ASSUMPTION: the vendored injected script evaluates standalone in a Chromium 151 
 ASSUMPTION: rquickjs evaluates without `JS_EVAL_FLAG_STRIP`, so `Function.prototype.toString` returns source for `page.evaluate(fn)`.
 ASSUMPTION: `Page.createIsolatedWorld` on an OOPIF child session accepts that frame's `frameId` as `FrameRegistry` records it.
 ASSUMPTION: agents' Playwright usage is dominated by navigation, locators, actions, waits, `expect`, `evaluate` and screenshots; `route`, `storageState`, tracing and video are rare and are named as unavailable.
+
+## Corrections from the injected-script spike (added 22:50)
+
+The spike (`spikes/injected/REPORT.md`) confirmed the bundle runs standalone
+in a Chromium 151 isolated world; these facts override anything above that
+differs:
+
+- Vendored asset: `playwright-core@1.63.0` injected script, 320,783 bytes,
+  SHA-256 `94103308b4f5791976b53543f5812be61ffb988574f7a51f412f87ab0ad60a85`,
+  Apache-2.0 with upstream LICENSE and NOTICE kept beside it.
+- Constructor is `new (module.exports.InjectedScript())(window, { isUnderTest, sdkLanguage: 'javascript', frameSeq, testIdAttributeName: 'data-testid', stableRafCount: 1, browserName: 'chromium', shouldPrependErrorPrefix: false, isUtilityWorld: true, customEngines: [] })`
+  with a local `module` stub; `expect(element, options, elements)` has no
+  progress argument; `stable` is only accepted by `checkElementStates`.
+- The engine does not hop frames and does not handle a missing element;
+  both are host responsibilities (`LocatorEngine::frames.rs`, `pw::expect`).
+- DECIDED: the engine enables `Emulation.setFocusEmulationEnabled` once per
+  page session before acting, because hidden background tabs never run
+  animation frames and the stability check would stall.
+  WHY: Playwright does the same for every page it drives; tab selection is
+  unchanged; the page merely sees itself as visible and focused.
+  REVISIT: if a site behaves differently under focus emulation in a way the
+  owner notices.
+- DECIDED: `ExpectOutcome.received` carries only the engine's
+  `received.value`, never `ariaSnapshot`, and masks the value when the
+  element is a password or secret-autocomplete input.
+  WHY: a failed assertion on an unrelated element was observed to include a
+  password field's contents in the snapshot.
