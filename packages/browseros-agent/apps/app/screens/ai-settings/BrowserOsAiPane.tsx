@@ -1,7 +1,6 @@
 import { Plus } from 'lucide-react'
 import { type FC, useState } from 'react'
 import { toast } from 'sonner'
-import { CloudSyncRetiredNotice } from '@/components/cloud-sync/CloudSyncRetiredNotice'
 import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import {
@@ -151,8 +150,6 @@ export const BrowserOsAiPane: FC = () => {
           Pick what runs your chats, and connect anything else you use.
         </p>
       </div>
-
-      <CloudSyncRetiredNotice />
 
       <BrowserClawPromoBanner />
 
