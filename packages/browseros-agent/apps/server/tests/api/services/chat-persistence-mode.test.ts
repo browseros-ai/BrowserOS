@@ -27,4 +27,23 @@ describe('shouldPersist', () => {
     expect(shouldPersist({ persist: false, historyMode: 'local' })).toBe(false)
     expect(shouldPersist({ persist: true, historyMode: 'cloud' })).toBe(true)
   })
+
+  test('keeps a scheduled run out of the conversation list', () => {
+    // The scheduled caller sends neither field, so before the default flipped
+    // it fell through to not persisting. Its record is the run history.
+    expect(shouldPersist({ isScheduledTask: true })).toBe(false)
+  })
+
+  test('keeps a scheduled run out even when the caller asks to persist', () => {
+    // Nothing sends this combination today. It resolves the same way if
+    // something ever does, rather than by whichever check is written first.
+    expect(shouldPersist({ isScheduledTask: true, persist: true })).toBe(false)
+    expect(shouldPersist({ isScheduledTask: true, historyMode: 'local' })).toBe(
+      false,
+    )
+  })
+
+  test('persists an ordinary chat that omits everything', () => {
+    expect(shouldPersist({ isScheduledTask: false })).toBe(true)
+  })
 })
