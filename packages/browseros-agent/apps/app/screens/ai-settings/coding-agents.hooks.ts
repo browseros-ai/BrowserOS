@@ -1,10 +1,8 @@
 import { useState } from 'react'
 import { AGENT_DELETED_EVENT } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
-import { sentry } from '@/lib/sentry/sentry'
 import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import { useAcpAgents, useDeleteAcpAgent } from '@/modules/agents/agents.hooks'
-import { clearSidepanelChatTargetSelectionForAgent } from '@/modules/chat/sidepanel-chat-targets'
 
 export interface CodingAgentsController {
   agents: AcpAgent[]
@@ -30,16 +28,8 @@ export function useCodingAgents(): CodingAgentsController {
         runtime: 'acp',
         agent_id: agent.id,
       })
-      await clearSidepanelChatTargetSelectionForAgent(agent.id).catch(
-        (error) => {
-          sentry.captureException(error, {
-            extra: {
-              message: 'Failed to clear chat target after deleting agent',
-              agentId: agent.id,
-            },
-          })
-        },
-      )
+      // Nothing to unselect by hand: an agent is a row in the same table the
+      // default points into, so deleting it takes the default with it.
     } catch (error) {
       setPageError(error instanceof Error ? error.message : String(error))
     } finally {

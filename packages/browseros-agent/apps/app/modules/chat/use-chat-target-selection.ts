@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import type { Provider } from '@/components/chat/chatComponentTypes'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { useAcpAgents } from '@/modules/agents/agents.hooks'
@@ -6,25 +6,22 @@ import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import { toProviderOption } from './chat-session-request'
 import {
   buildSidepanelChatTargets,
-  commitChatTargetSelection,
-  loadSidepanelChatTargetSelection,
-  persistSidepanelChatTargetSelection,
-  resolveRepairedSelection,
   resolveSidepanelChatTarget,
   type SidepanelChatTarget,
-  type SidepanelChatTargetSelection,
-  watchSidepanelChatTargetSelection,
 } from './sidepanel-chat-targets'
 
 /**
  * Single source of truth for the selected chat target across every surface that
- * picks one (the sidebar, the home composer, and anything added later). Owns the
- * whole lifecycle: build targets from providers + agents, load the persisted
- * selection, resolve the selected target (selection-first with a non-destructive
- * fallback), repair genuinely-stale selections once loads settle, and change the
- * selection via the shared `commitChatTargetSelection` side effect. Consolidating
- * this here is what stops the "agent default does not persist" bug from recurring
- * as new surfaces are added.
+ * picks one (the sidebar, the home composer, and anything added later). Builds
+ * the targets from providers plus agents and resolves the chosen one, with a
+ * non-destructive fallback when it names nothing.
+ *
+ * The choice is the server's default pointer and nothing else. It used to be
+ * mirrored into extension storage as well, which bought a live broadcast
+ * between surfaces at the cost of two records of one fact: the copies drifted
+ * whenever a row was written in one surface and read in another, and a repair
+ * pass existed to reconcile them. The provider revision signal broadcasts the
+ * same way for free, so the mirror only ever added the drift.
  */
 export function useChatTargetSelection() {
   const {
@@ -39,28 +36,6 @@ export function useChatTargetSelection() {
     loading: isLoadingAgents,
     settled: agentsSettled,
   } = useAcpAgents()
-
-  const [targetSelection, setTargetSelection] =
-    useState<SidepanelChatTargetSelection | null>(null)
-
-  useEffect(() => {
-    let cancelled = false
-    loadSidepanelChatTargetSelection().then((selection) => {
-      if (!cancelled) setTargetSelection(selection)
-    })
-    // Live-sync across surfaces: changing the selection in the sidebar, home, or
-    // settings writes storage, and WXT's storage.watch (over browser.storage
-    // .onChanged) fires in every extension context, so the other surfaces update
-    // without a reload. Re-persisting the same value is a no-op, so this cannot
-    // loop with the repair effect.
-    const unwatch = watchSidepanelChatTargetSelection((selection) => {
-      setTargetSelection(selection)
-    })
-    return () => {
-      cancelled = true
-      unwatch()
-    }
-  }, [])
 
   const chatTargets = useMemo(
     () =>
@@ -77,44 +52,20 @@ export function useChatTargetSelection() {
 
   // The stored id verbatim, not the one resolved through the LLM-only list.
   // Resolving first replaced a default naming a coding agent with the first
-  // provider, so a profile whose local selection was absent chatted with
-  // something the user never chose. The resolver falls back on its own when
-  // this names nothing.
+  // provider, so a profile chatted with something the user never chose. The
+  // resolver falls back on its own when this names nothing.
   const selectedChatTarget = useMemo(
     () =>
       resolveSidepanelChatTarget({
         targets: chatTargets,
         defaultTargetId: storedDefaultTargetId,
-        selection: targetSelection,
       }),
-    [chatTargets, storedDefaultTargetId, targetSelection],
+    [chatTargets, storedDefaultTargetId],
   )
   const selectedProvider = useMemo(
     () => (selectedChatTarget ? toProviderOption(selectedChatTarget) : null),
     [selectedChatTarget],
   )
-
-  useEffect(() => {
-    // Only repair once providers and agents are settled. Otherwise a stored ACP
-    // selection is wiped to the LLM fallback during the startup window where the
-    // agents fetch has not resolved yet and the agent is absent from the list.
-    const ready = !isLoadingProviders && agentsSettled
-    const decision = resolveRepairedSelection({
-      selection: targetSelection,
-      resolvedTarget: selectedChatTarget,
-      ready,
-      knownIds: new Set(chatTargets.map((target) => target.id)),
-    })
-    if (!decision.repair) return
-    setTargetSelection(decision.selection)
-    void persistSidepanelChatTargetSelection(selectedChatTarget)
-  }, [
-    agentsSettled,
-    chatTargets,
-    isLoadingProviders,
-    selectedChatTarget,
-    targetSelection,
-  ])
 
   const selectedLlmProviderRef = useRef<LlmProviderConfig | null>(
     selectedLlmProvider,
@@ -138,9 +89,7 @@ export function useChatTargetSelection() {
   const selectChatTarget = useCallback(
     async (target: SidepanelChatTarget | undefined) => {
       selectedChatTargetRef.current = target
-      const selection = target ? { kind: target.kind, id: target.id } : null
-      setTargetSelection(selection)
-      await commitChatTargetSelection(selection, { setDefaultProvider })
+      if (target) await setDefaultProvider(target.id)
     },
     [setDefaultProvider],
   )

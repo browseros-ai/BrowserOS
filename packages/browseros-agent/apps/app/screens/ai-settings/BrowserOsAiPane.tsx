@@ -32,7 +32,7 @@ import { NewProviderDialog } from './NewProviderDialog'
 export const BrowserOsAiPane: FC = () => {
   const {
     providers,
-    defaultProviderId,
+    storedDefaultTargetId,
     saveProvider,
     setDefaultProvider,
     deleteProvider,
@@ -43,7 +43,7 @@ export const BrowserOsAiPane: FC = () => {
   const defaultTarget = useDefaultChatTarget({
     providers,
     agents: coding.agents,
-    defaultProviderId,
+    defaultTargetId: storedDefaultTargetId,
     setDefaultProvider,
   })
   const { effectiveTarget } = defaultTarget

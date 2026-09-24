@@ -140,7 +140,27 @@ export function useLlmProviders(): UseLlmProvidersReturn {
 
   const setDefaultMutation = useMutation({
     mutationFn: persistDefaultProviderId,
-    onSuccess: invalidateDefault,
+    // Write the choice into the cache before the round trip. This is the value
+    // every surface renders the selected target from, and waiting for the
+    // server would leave the row the user just clicked unselected until it
+    // answered. onSettled re-reads either way, so a failed write corrects
+    // itself rather than sticking.
+    onMutate: (providerId: string) => {
+      const previous = queryClient.getQueryData<string | null>(
+        useDefaultProviderIdQuery.getKey(),
+      )
+      queryClient.setQueryData(useDefaultProviderIdQuery.getKey(), providerId)
+      return { previous }
+    },
+    onError: (_error, _providerId, context) => {
+      if (context) {
+        queryClient.setQueryData(
+          useDefaultProviderIdQuery.getKey(),
+          context.previous ?? null,
+        )
+      }
+    },
+    onSettled: invalidateDefault,
   })
 
   const setDefaultProvider = async (providerId: string) => {

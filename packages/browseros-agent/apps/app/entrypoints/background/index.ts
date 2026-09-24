@@ -26,18 +26,19 @@ import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
-const LEGACY_TOOL_APPROVAL_STORAGE_KEYS = [
+const RETIRED_STORAGE_KEYS = [
+  // The unshipped Tool Approvals feature.
   'local:tool-approval-config',
   'local:pending-tool-approvals',
   'local:approval-responses',
   'local:tool-execution-log',
+  // Mirrored the selected chat target, which the server now holds alone.
+  'local:sidepanel-chat-target-selection',
 ] as const
 
-/**
- * Removes persisted state for the unshipped Tool Approvals feature during extension updates.
- */
-const cleanupLegacyToolApprovalStorage = async () => {
-  await storage.removeItems([...LEGACY_TOOL_APPROVAL_STORAGE_KEYS])
+/** Drops state belonging to features that no longer read it. */
+const cleanupRetiredStorage = async () => {
+  await storage.removeItems([...RETIRED_STORAGE_KEYS])
 }
 
 export default defineBackground(() => {
@@ -102,7 +103,7 @@ export default defineBackground(() => {
     }
 
     if (details.reason === chrome.runtime.OnInstalledReason.UPDATE) {
-      cleanupLegacyToolApprovalStorage().catch(() => null)
+      cleanupRetiredStorage().catch(() => null)
       checkAndShowChangelog().catch(() => null)
     }
   })

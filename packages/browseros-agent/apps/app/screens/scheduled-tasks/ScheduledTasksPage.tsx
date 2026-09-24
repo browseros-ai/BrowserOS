@@ -45,8 +45,8 @@ export const ScheduledTasksPage: FC = () => {
   const { jobs, addJob, editJob, toggleJob, removeJob, runJob } =
     useScheduledJobs()
   const { jobRuns, cancelJobRun } = useScheduledJobRuns()
-  // Read directly rather than through useChatTargetSelection: this page has no
-  // business repairing the chat selection as a side effect of being opened.
+  // Read directly rather than through useChatTargetSelection: this page only
+  // needs to know whether anything is connected, not which one is selected.
   const { providers, isLoading: isLoadingProviders } = useLlmProviders()
   const { agents, settled: agentsSettled } = useAcpAgents()
   const noTarget =
