@@ -338,6 +338,7 @@ async fn dispatch_inner(
             let page = page_arg(args).map_err(CoreError::from)?;
             let value = match method {
                 "page.info" | "neo.page" => page_info(bridge, page, dl).await?,
+                "page.title" => page_info(bridge, page, dl).await?["title"].clone(),
                 "page.content" => evaluate_page(bridge, page, "(() => (document.doctype ? new XMLSerializer().serializeToString(document.doctype) + '\\n' : '') + document.documentElement.outerHTML)()", None).await?,
                 "page.evaluate" => evaluate_page(bridge, page, string_arg(args, 1, "function").map_err(CoreError::from)?, Some(args.get(2).cloned().unwrap_or(Value::Null))).await?,
                 "page.screenshot" | "page.pdf" | "neo.read" | "neo.grep" | "neo.download" => return tool_action(bridge, method, args).await,
@@ -728,8 +729,11 @@ async fn injected_call(r: &Resolved, method: &str, arg: Value) -> Result<Value, 
     })).await?)
 }
 
-async fn cover_check(_engine: &LocatorEngine, r: &Resolved, point: Point) -> Result<(), CoreError> {
-    let result = injected_call(r, "hitTarget", json!({"x":point.x,"y":point.y})).await?;
+async fn cover_check(engine: &LocatorEngine, r: &Resolved, point: Point) -> Result<(), CoreError> {
+    // CDP/input use the target session's viewport; the injected hit test queries
+    // the resolved node's document. Translate only for the hit test, never input.
+    let hit_point = engine.hit_target_point(r, point).await?;
+    let result = injected_call(r, "hitTarget", json!({"x":hit_point.x,"y":hit_point.y})).await?;
     if result == "done" {
         return Ok(());
     }

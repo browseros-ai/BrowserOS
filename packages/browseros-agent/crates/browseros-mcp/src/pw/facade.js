@@ -488,11 +488,18 @@
     return page
   }
   function unwrap(response, page) {
+    // The host claims/groups these pages before resolving the triggering action.
+    // Merge now so synchronous context.pages() can see target=_blank popups.
+    if (response && Array.isArray(response.newPages)) {
+      for (const info of response.newPages) remember(info)._owned = true
+    }
     if (
       response &&
       typeof response === 'object' &&
       own(response, 'value') &&
-      (own(response, 'url') || own(response, 'title'))
+      (own(response, 'url') ||
+        own(response, 'title') ||
+        own(response, 'newPages'))
     ) {
       if (page) page._update(response)
       return response.value
@@ -869,7 +876,7 @@
       return (this._resolved || this)._url
     }
     title() {
-      return (this._resolved || this)._title
+      return this._call('page.title')
     }
     isClosed() {
       return (this._resolved || this)._closed
@@ -1026,7 +1033,19 @@
       super()
       this._timeout = 10000
     }
-    async pages() {
+    pages() {
+      const snapshot = [...pages.values()].filter(
+        (page) => page._owned && !page._closed,
+      )
+      // Playwright reads synchronously. Keep the earlier BrowserOS await form as
+      // an explicit host refresh: a thenable array supports both without launching
+      // unawaited bridge work that could outlive the script or reorder audits.
+      Object.defineProperty(snapshot, 'then', {
+        value: (resolve, reject) => this._refreshPages().then(resolve, reject),
+      })
+      return snapshot
+    }
+    async _refreshPages() {
       const open = unwrap(await call('context.pages'))
       const result = open.map((info) => {
         const page = remember(info)

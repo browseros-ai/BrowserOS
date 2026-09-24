@@ -627,6 +627,7 @@ impl BrowserBridge {
     ) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
+        let audit_method = crate::pw::audit_method(method, &args);
         // Kept for the audit record and the self-healing distiller; dispatch
         // consumes the owned args below.
         let mut recorded_args = Value::Array(args.clone());
@@ -648,25 +649,24 @@ impl BrowserBridge {
         if let Some(masked_args) = audit_args {
             recorded_args = masked_args.clone();
         }
-        if let Ok(result) = &outcome
-            && let Some(page) = result.created_page
-        {
-            self.pw_activity.touch(page);
-        }
         if let Some(hook) = &self.ctx.inner_call_hook {
-            let created_page = match &outcome {
-                Ok(result) => result.created_page.or_else(|| {
+            let created_pages = match &outcome {
+                Ok(result) => {
+                    let mut pages = result.created_pages(method);
                     if method == "pages.newPage"
                         && let BrowserCallValue::Json(Value::Number(number)) = &result.value
+                        && let Some(page) =
+                            number.as_u64().and_then(|value| u32::try_from(value).ok())
                     {
-                        return number.as_u64().and_then(|value| u32::try_from(value).ok());
+                        pages.push(page);
                     }
-                    None
-                }),
-                Err(_) => None,
+                    pages
+                }
+                Err(_) => Vec::new(),
             };
-            if let Some(page_id) = created_page {
-                hook.on_page_created(page_id).await;
+            for page_id in created_pages {
+                self.pw_activity.touch(page_id);
+                self.pw_activity.claim(page_id, hook.as_ref()).await;
             }
             let output_token_estimate = match &outcome {
                 Ok(result) => match &result.value {
@@ -677,17 +677,19 @@ impl BrowserBridge {
                 },
                 Err(_) => 0,
             };
-            hook.record(InnerCallRecord {
-                method,
-                page,
-                args: &recorded_args,
-                secrets,
-                from_helper,
-                is_error: outcome.is_err(),
-                duration_ms: started.elapsed().as_millis() as i64,
-                output_token_estimate,
-            })
-            .await;
+            if !crate::pw::is_silent_method(method) {
+                hook.record(InnerCallRecord {
+                    method: &audit_method,
+                    page,
+                    args: &recorded_args,
+                    secrets,
+                    from_helper,
+                    is_error: outcome.is_err(),
+                    duration_ms: started.elapsed().as_millis() as i64,
+                    output_token_estimate,
+                })
+                .await;
+            }
         }
         outcome
             .map(|result| result.value)
@@ -1305,7 +1307,13 @@ fn js_error_message<'js>(ctx: &Ctx<'js>, error: CaughtError<'js>) -> String {
     match error {
         CaughtError::Error(error) => error.to_string(),
         CaughtError::Exception(exception) => {
-            exception.message().unwrap_or_else(|| exception.to_string())
+            let message = exception.message().unwrap_or_else(|| exception.to_string());
+            // Preserve subclasses such as Playwright's TimeoutError in the wire
+            // envelope, while keeping existing plain Error messages unchanged.
+            match exception.as_object().get::<_, String>("name") {
+                Ok(name) if !name.is_empty() && name != "Error" => format!("{name}: {message}"),
+                _ => message,
+            }
         }
         CaughtError::Value(value) => js_value_string(ctx, value),
     }

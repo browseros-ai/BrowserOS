@@ -152,8 +152,9 @@ return {
     rows: [
       'context.newPage',
       'page.goto',
-      'locator.click',
-      '[dialog.accept]',
+      // The armed event wait and its dialog handler can finish before the click
+      // they unblock. Audit rows record completion, not JavaScript call order.
+      '{page.waitForEvent, page.dialog, locator.click}',
       'expect.toHaveText',
       'locator.textContent',
     ],
@@ -449,6 +450,7 @@ const aliases: Record<string, string> = {
   'pages.newPage': 'context.newPage',
   'pages.list': 'context.pages',
   'pages.close': 'page.close',
+  'context.close': 'page.close',
   'page.keyboard.press': 'keyboard.press',
 }
 const errorClasses = {
@@ -728,13 +730,33 @@ async function runScript(
     // than only "mine" so a failed popup ownership check cannot leak a tab.
     try {
       if (session && before) {
-        for (const page of await tabIds(session)) {
-          if (!before.has(page))
-            expectOk(
-              await session.callTool('tabs', { action: 'close', page }),
-              `cleanup page ${page}`,
+        const cleanupSession = session
+        const baseline = before
+        // Closing a grouped tab can invalidate a later inventory entry. Re-list
+        // after each close, and accept a missing-tab error only after proving the
+        // page is gone. Teardown must not fail a passing script for an absent tab.
+        await waitUntil(
+          async () => {
+            const page = (await tabIds(cleanupSession)).find(
+              (id) => !baseline.has(id),
             )
-        }
+            if (page === undefined) return true
+            const closed = await cleanupSession.callTool('tabs', {
+              action: 'close',
+              page,
+            })
+            if (
+              closed.isError &&
+              /Unknown page|No tab with given id/.test(textOf(closed)) &&
+              !(await tabIds(cleanupSession)).includes(page)
+            )
+              return false
+            expectOk(closed, `cleanup page ${page}`)
+            return false
+          },
+          `${script.id}: close corpus pages`,
+          { timeoutMs: 5000, intervalMs: 20 },
+        )
       }
     } finally {
       try {
