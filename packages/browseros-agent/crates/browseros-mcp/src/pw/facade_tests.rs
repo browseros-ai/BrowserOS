@@ -116,7 +116,7 @@ async fn facade_selectors_reach_audited_leaf_with_playwright_bytes() -> anyhow::
         (
             "p.getByText('Hello').first().fill('x')",
             "locator.fill",
-            json!([7, "internal:text=\"Hello\"i >> nth=0", "x", {"timeout":10000}]),
+            json!([7, "internal:text=\"Hello\"i >> nth=0", "[redacted]", {"timeout":10000}]),
         ),
         (
             "p.locator('.item').filter({hasText:'two'}).nth(1).click()",
@@ -126,12 +126,12 @@ async fn facade_selectors_reach_audited_leaf_with_playwright_bytes() -> anyhow::
         (
             "p.frameLocator('#f').getByLabel('Name').fill('Ada')",
             "locator.fill",
-            json!([7, "#f >> internal:control=enter-frame >> internal:label=\"Name\"i", "Ada", {"timeout":10000}]),
+            json!([7, "#f >> internal:control=enter-frame >> internal:label=\"Name\"i", "[redacted]", {"timeout":10000}]),
         ),
         (
             "p.getByPlaceholder('Search', {exact:true}).fill('x')",
             "locator.fill",
-            json!([7, "internal:attr=[placeholder=\"Search\"s]", "x", {"timeout":10000}]),
+            json!([7, "internal:attr=[placeholder=\"Search\"s]", "[redacted]", {"timeout":10000}]),
         ),
         (
             "p.getByAltText('Photo').click()",
@@ -413,7 +413,7 @@ async fn facade_new_page_defaults_and_query_argument_positions() -> anyhow::Resu
     );
     assert_eq!(
         calls[2].args,
-        json!([7,"input","secret",{"timeout":0,"force":true}])
+        json!([7,"input","[redacted]",{"timeout":0,"force":true}])
     );
     assert_eq!(
         calls[3].args,
@@ -524,7 +524,13 @@ async fn facade_events_arm_before_click_and_adapt_dialogs_downloads_popups() -> 
     );
     assert_eq!(calls[1].method, "page.waitForEvent");
     assert_eq!(calls[1].args, json!([7,"dialog",null,{"timeout":0}]));
-    assert_eq!(calls[2].method, "locator.click");
+    // Leaves complete asynchronously, so audit rows are in completion order;
+    // pin only that the dialog wait was armed before the click was issued.
+    let click_index = calls
+        .iter()
+        .position(|call| call.method == "locator.click")
+        .ok_or_else(|| anyhow::anyhow!("locator.click was never recorded"))?;
+    assert!(click_index > 1, "click must follow the armed dialog wait");
     assert!(
         calls
             .iter()

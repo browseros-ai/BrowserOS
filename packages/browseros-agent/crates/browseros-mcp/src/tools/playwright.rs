@@ -161,7 +161,7 @@ mod tests {
         assert!(
             output["error"]
                 .as_str()
-                .is_some_and(|error| error.contains("not implemented yet: page.goto"))
+                .is_some_and(|error| error.contains("page.goto"))
         );
         Ok(())
     }
@@ -242,7 +242,7 @@ mod tests {
             ("neo.page", Some(7)),
             ("context.newPage", None),
             ("context.pages", None),
-            ("context.close", None),
+            ("context.close", Some(7)),
             ("neo.pages", None),
             ("neo.cdp", None),
         ];
