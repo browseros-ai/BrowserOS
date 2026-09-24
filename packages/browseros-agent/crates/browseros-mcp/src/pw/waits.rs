@@ -446,7 +446,7 @@ async fn navigation(
             }
         }
         if url_matches && info.url == nav.url && nav.ready(state) {
-            return navigation_result(is_wait, &info.url, &info.title, nav.status);
+            return navigation_result(session, is_wait, &info.url, &info.title, nav.status).await;
         }
         // readyState covers waits started after load; for an initiated navigation
         // confirm the new loader first, otherwise the previous document is "complete".
@@ -466,7 +466,8 @@ async fn navigation(
         }
         if url_matches && info.url == nav.url && nav.committed && state != LoadState::Idle {
             if state == LoadState::Commit {
-                return navigation_result(is_wait, &info.url, &info.title, nav.status);
+                return navigation_result(session, is_wait, &info.url, &info.title, nav.status)
+                    .await;
             }
             let ready = session
                 .send_value(
@@ -480,7 +481,8 @@ async fn navigation(
                         || (state == LoadState::Dom
                             && value["result"]["value"] == "interactive") =>
                 {
-                    return navigation_result(is_wait, &info.url, &info.title, nav.status);
+                    return navigation_result(session, is_wait, &info.url, &info.title, nav.status)
+                        .await;
                 }
                 Err(err) if !transient_context(&err) => return Err(error(err)),
                 _ => {}
@@ -494,7 +496,8 @@ async fn navigation(
     }
 }
 
-fn navigation_result(
+async fn navigation_result(
+    session: &ProtocolSession,
     is_wait: bool,
     url: &str,
     title: &str,
@@ -503,7 +506,26 @@ fn navigation_result(
     if is_wait {
         return Ok(Value::Null);
     }
+    // The browser tab model can publish its title after the document load event.
+    // Read the committed document directly so goto does not return "about:blank"
+    // as the title of a page that has already loaded. A dialog may block Runtime,
+    // so metadata enrichment must not consume the entire navigation budget.
+    let document = tokio::time::timeout(
+        Duration::from_millis(250),
+        session.send_value(
+            "Runtime.evaluate",
+            json!({
+                "expression": "document.title", "returnByValue": true,
+            }),
+        ),
+    )
+    .await;
     let mut value = json!({"url": url, "title": title});
+    if let Ok(Ok(document)) = document
+        && let Some(title) = document["result"]["value"].as_str()
+    {
+        value["title"] = json!(title);
+    }
     if let Some(status) = status {
         value["status"] = status;
     }

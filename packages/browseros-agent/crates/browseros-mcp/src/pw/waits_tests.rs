@@ -37,6 +37,7 @@ struct State {
     url: String,
     loader: String,
     ready: &'static str,
+    document_title: &'static str,
     automatic_load: bool,
     navigate_error: Option<&'static str>,
     new_tabs: Vec<Value>,
@@ -53,6 +54,7 @@ impl Fake {
                 url: "https://example.test/start".to_owned(),
                 loader: "old".to_owned(),
                 ready: "loading",
+                document_title: "Wait test",
                 automatic_load: true,
                 navigate_error: None,
                 new_tabs: Vec::new(),
@@ -135,7 +137,7 @@ impl CdpConnection for Fake {
                 }
                 "Page.getNavigationHistory" => json!({"currentIndex":0,"entries":[{"id":1,"url":"https://example.test/start"}]}),
                 "Network.getResponseBody" => json!({"body":"{\"answer\":42}","base64Encoded":false}),
-                "Runtime.evaluate" => self.with_state(|s| if params["expression"] == "document.readyState" { json!({"result":{"value":s.ready}}) } else { json!({"result":{"value":s.function_value}}) }),
+                "Runtime.evaluate" => self.with_state(|s| if params["expression"] == "document.readyState" { json!({"result":{"value":s.ready}}) } else if params["expression"] == "document.title" { json!({"result":{"value":s.document_title}}) } else { json!({"result":{"value":s.function_value}}) }),
                 "Network.enable" | "Page.setDownloadBehavior" | "Page.setLifecycleEventsEnabled" | "Target.setDiscoverTargets" => {
                     for evt in self.with_state(|s| std::mem::take(&mut s.on_enable)) { let _ = self.events.send(evt); }
                     json!({})
@@ -661,5 +663,19 @@ async fn download_timeout_restores_browser_behavior() -> anyhow::Result<()> {
             tokio::fs::remove_dir(path).await?;
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn goto_returns_document_title_when_browser_tab_metadata_lags() -> anyhow::Result<()> {
+    let fake = Fake::new();
+    fake.with_state(|s| s.document_title = "Fresh document title");
+    let value = script(
+        &fake.ctx(None),
+        "return await call('page.goto',[1,'https://example.test/title']);",
+        2000,
+    )
+    .await?;
+    assert_eq!(value["value"]["title"], "Fresh document title", "{value}");
     Ok(())
 }
