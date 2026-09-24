@@ -3,8 +3,8 @@
 //! delegating to an existing tool here must never create a second audit row.
 
 use super::{
-    PwCallOutcome, action_error, bounded, deadline, opts, page_arg, page_info, selector_arg,
-    string_arg,
+    PwCallError, PwCallOutcome, action_error, bounded, deadline, opts, page_arg, page_info,
+    selector_arg, string_arg,
 };
 use crate::{
     framework::{ToolDef, execute_tool},
@@ -54,7 +54,7 @@ pub(crate) async fn dispatch(
     bridge: &BrowserBridge,
     method: &str,
     args: &[Value],
-) -> Result<PwCallOutcome, String> {
+) -> Result<PwCallOutcome, PwCallError> {
     let options = opts(args, option_index(method));
     let dl = deadline(bridge, &options, ACTION_TIMEOUT);
     let timeout_ms = options.timeout_ms.unwrap_or(ACTION_TIMEOUT);
@@ -73,8 +73,11 @@ pub(crate) async fn dispatch(
         let probe = if let Some(target) = state.typed_target.as_ref() {
             bounded(&dl, engine.describe(target)).await
         } else if method.starts_with("keyboard.") {
-            bounded(&dl, evaluate_page(bridge, page_arg(args)?,
-                "(() => { const e = document.activeElement; return e ? {type:e.type || '', autocomplete:e.autocomplete || ''} : null; })()", None)).await
+            bounded(&dl, async {
+                let page = page_arg(args).map_err(CoreError::from)?;
+                evaluate_page(bridge, page,
+                    "(() => { const e = document.activeElement; return e ? {type:e.type || '', autocomplete:e.autocomplete || ''} : null; })()", None).await
+            }).await
         } else {
             Err(CoreError::Message(
                 "typed element could not be inspected".into(),
@@ -132,23 +135,26 @@ pub(crate) async fn dispatch(
                 };
                 message.push_str(&format!("\n  - {detail}"));
             }
-            for secret in secrets {
-                message = message.replace(&secret, "[redacted]");
-                if let Ok(encoded) = serde_json::to_string(&secret) {
-                    message = message.replace(encoded.trim_matches('"'), "[redacted]");
+            for secret in &secrets {
+                message = message.replace(secret, "[redacted]");
+                if let Ok(encoded) = serde_json::to_string(secret) {
+                    // Remove exactly the JSON delimiters; trim_matches would also
+                    // remove a secret's trailing escaped quote and expose it.
+                    message = message.replace(&encoded[1..encoded.len() - 1], "[redacted]");
                 }
             }
-            // The shared host currently accepts redaction metadata only on Ok.
-            // Error text is masked here; error audit arguments need that host seam
-            // to carry audit_args/secrets alongside Err as well (outside P4).
-            Err(message)
+            Err(PwCallError {
+                message,
+                audit_args,
+                secrets,
+            })
         }
     }
 }
 
 fn option_index(method: &str) -> usize {
     match method {
-        "locator.evaluate" | "locator.evaluateAll" => 4,
+        "locator.evaluate" | "locator.evaluateAll" | "locator.query" => 4,
         "locator.fill"
         | "locator.type"
         | "locator.press"
@@ -267,11 +273,16 @@ async fn dispatch_inner(
             outcome.created_page = Some(page.0);
             Ok(outcome)
         }
-        "context.pages" | "neo.pages" => {
+        "context.pages" | "context.lastPage" | "neo.pages" => {
             let pages = bridge.ctx.session.pages.list().await?;
             let mut values: Vec<Value> = pages.into_iter().map(|p| json!({"pageId":p.page_id.0,"url":p.url,"title":p.title,"isActive":p.is_active,"windowId":p.window_id.map(|w|w.0)})).collect();
             if let Some(hook) = &bridge.ctx.inner_call_hook {
                 values = hook.annotate_pages(&values).await;
+            }
+            if method == "context.lastPage" {
+                return Ok(PwCallOutcome::json(json!(
+                    bridge.pw_activity.last_owned(&values)
+                )));
             }
             let scope = if method == "context.pages" {
                 "mine"

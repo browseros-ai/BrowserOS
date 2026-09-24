@@ -19,6 +19,7 @@ use tokio::sync::broadcast;
 #[derive(Default)]
 struct Hook {
     events: Mutex<Vec<Value>>,
+    other_pages: Vec<u32>,
 }
 impl Hook {
     fn push(&self, event: Value) {
@@ -55,7 +56,13 @@ impl InnerCallHook for Hook {
                 .iter()
                 .map(|p| {
                     let mut p = p.clone();
-                    p["ownership"] = json!("mine");
+                    p["ownership"] = if p["pageId"].as_u64().is_some_and(|id| {
+                        self.other_pages.iter().any(|other| u64::from(*other) == id)
+                    }) {
+                        json!("other-agent")
+                    } else {
+                        json!("mine")
+                    };
                     p
                 })
                 .collect()
@@ -71,6 +78,10 @@ struct ActionConnection {
     calls: Mutex<Vec<(String, Value)>>,
     hang_input: bool,
     engine: bool,
+    hang_resolve: bool,
+    input_error: Option<String>,
+    tabs: Option<Mutex<Vec<Value>>>,
+    discover_tab: bool,
 }
 impl ActionConnection {
     fn new(probe: Option<Value>) -> Self {
@@ -80,6 +91,10 @@ impl ActionConnection {
             calls: Mutex::new(Vec::new()),
             hang_input: false,
             engine: false,
+            hang_resolve: false,
+            input_error: None,
+            tabs: None,
+            discover_tab: false,
         }
     }
 }
@@ -93,6 +108,26 @@ impl CdpConnection for ActionConnection {
         Box::pin(async move {
             if let Ok(mut calls) = self.calls.lock() {
                 calls.push((method.into(), params.clone()));
+            }
+            if let Some(tabs) = &self.tabs {
+                let mut tabs = tabs.lock().unwrap_or_else(|e| e.into_inner());
+                match method {
+                    "Browser.getTabs" => return Ok(json!({"tabs":*tabs})),
+                    "Browser.getTabInfo" => {
+                        return Ok(
+                            json!({"tab":tabs.iter().find(|tab| tab["tabId"] == params["tabId"])}),
+                        );
+                    }
+                    "Browser.closeTab" => {
+                        tabs.retain(|tab| tab["tabId"] != params["tabId"]);
+                        return Ok(json!({}));
+                    }
+                    "Target.setDiscoverTargets" if self.discover_tab => {
+                        tabs.push(action_tab(4));
+                        return Ok(json!({}));
+                    }
+                    _ => {}
+                }
             }
             if self.engine {
                 let value = match method {
@@ -129,6 +164,9 @@ impl CdpConnection for ActionConnection {
                                 json!({"result":{"value":{"parts":[{"name":"css","body":[],"source":"input"}]}}}),
                             )
                         } else if source.contains("this.querySelector(parsed, document, strict)") {
+                            if self.hang_resolve {
+                                return futures_util::future::pending().await;
+                            }
                             Some(json!({"result":{"objectId":"element"}}))
                         } else if source.contains("return !!this.ownerDocument") {
                             Some(json!({"result":{"value":true}}))
@@ -147,12 +185,19 @@ impl CdpConnection for ActionConnection {
                 }
             }
             match method {
+                "Input.insertText" | "Input.dispatchKeyEvent" if self.input_error.is_some() => {
+                    Err(CdpError::Protocol {
+                        code: -1,
+                        message: self.input_error.clone().unwrap_or_default(),
+                    })
+                }
                 "Input.insertText" | "Input.dispatchKeyEvent" if self.hang_input => {
                     futures_util::future::pending().await
                 }
                 "Input.insertText" | "Input.dispatchKeyEvent" | "Input.dispatchMouseEvent" => {
                     Ok(json!({}))
                 }
+                "Browser.closeTab" | "Target.setDiscoverTargets" => Ok(json!({})),
                 "Runtime.evaluate" => self
                     .probe
                     .clone()
@@ -182,6 +227,10 @@ impl CdpConnection for ActionConnection {
     fn connection_epoch(&self) -> u64 {
         1
     }
+}
+
+fn action_tab(id: i64) -> Value {
+    json!({"tabId":id,"targetId":format!("target-{id}"),"url":"https://example.com","title":"Example","isActive":false,"isLoading":false,"loadProgress":1.0,"isPinned":false,"isHidden":false,"windowId":1,"index":id})
 }
 
 fn context(connection: Arc<ActionConnection>, hook: Arc<Hook>) -> ToolCtx {
@@ -357,6 +406,246 @@ fn actions_describe_redaction_policy() {
     let (args, secrets) = redact_args(&[json!(1), json!("input"), json!("secret")], 2);
     assert_eq!(args, Some(json!([1, "input", "[redacted]"])));
     assert_eq!(secrets, vec!["secret"]);
+}
+
+#[tokio::test]
+async fn actions_failed_typing_preserves_audit_and_error_redaction() -> anyhow::Result<()> {
+    // Quotes/newlines exercise both plaintext and JSON-escaped echoes from CDP.
+    let secret = "keep-me-\n\\secret\"";
+    for method in [
+        "locator.fill",
+        "locator.type",
+        "keyboard.type",
+        "keyboard.insertText",
+    ] {
+        for probe in [Some(json!({"type":"password","autocomplete":""})), None] {
+            let hook = Arc::new(Hook::default());
+            let mut connection = ActionConnection::new(probe);
+            connection.engine = true;
+            connection.input_error = Some(format!(
+                "rejected {secret} encoded {}",
+                serde_json::to_string(secret)?
+            ));
+            let ctx = context(Arc::new(connection), hook.clone());
+            let (args, value_index) = if method.starts_with("locator.") {
+                (json!([1,"css=input",secret,{"force":true}]), 2)
+            } else {
+                (json!([1, secret]), 1)
+            };
+            let code = format!("await __browserosCall('{method}', JSON.stringify({args}), false);");
+            let result = script(&ctx, &code, 1000).await?;
+            assert_eq!(result["ok"], false, "{method}: {result}");
+            let error = result["error"].to_string();
+            assert!(error.contains("rejected"), "{method}: {result}");
+            assert!(!error.contains("keep-me-"), "{method}: {result}");
+            let events = hook.events();
+            assert_eq!(events.len(), 2);
+            assert_eq!(events[0], json!(["authorize", 1]));
+            let mut masked = args;
+            masked[value_index] = json!("[redacted]");
+            assert_eq!(
+                events[1],
+                json!(["record", method, 1, masked, [secret], true])
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_failed_keyboard_page_validation_still_masks() -> anyhow::Result<()> {
+    let hook = Arc::new(Hook::default());
+    let ctx = context(Arc::new(ActionConnection::new(None)), hook.clone());
+    let result = script(
+        &ctx,
+        r#"await __browserosCall('keyboard.insertText','["invalid","secret"]',false);"#,
+        1000,
+    )
+    .await?;
+    assert_eq!(result["ok"], false);
+    assert_eq!(
+        hook.events()[1],
+        json!([
+            "record",
+            "keyboard.insertText",
+            null,
+            ["invalid", "[redacted]"],
+            ["secret"],
+            true
+        ])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_operation_timeout_preserves_failed_probe_redaction() -> anyhow::Result<()> {
+    let hook = Arc::new(Hook::default());
+    let mut connection = ActionConnection::new(Some(json!({"type":"text","autocomplete":""})));
+    connection.hang_input = true;
+    let ctx = context(Arc::new(connection), hook.clone());
+    let result = script(
+        &ctx,
+        r#"await __browserosCall('keyboard.insertText','[1,"secret",{"timeout":20}]',false);"#,
+        1000,
+    )
+    .await?;
+    assert_eq!(result["ok"], false);
+    assert!(result.to_string().contains("TimeoutError"));
+    assert_eq!(
+        hook.events()[1],
+        json!(["record","keyboard.insertText",1,[1,"[redacted]",{"timeout":20}],["secret"],true])
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_query_uses_the_facades_fifth_options_argument() -> anyhow::Result<()> {
+    let mut connection = ActionConnection::new(None);
+    connection.engine = true;
+    connection.hang_resolve = true;
+    let ctx = context(Arc::new(connection), Arc::new(Hook::default()));
+    let result = script(&ctx, r#"return await __browserosCall('locator.query','[1,"css=input","textContent",null,{"timeout":20}]',false);"#, 1000).await?;
+    assert_eq!(result["ok"], false);
+    assert!(
+        result.to_string().contains("Timeout 20ms exceeded"),
+        "{result}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_context_page_wait_can_start_without_tabs() -> anyhow::Result<()> {
+    let mut connection = ActionConnection::new(None);
+    connection.tabs = Some(Mutex::new(Vec::new()));
+    let connection = Arc::new(connection);
+    let hook = Arc::new(Hook::default());
+    let ctx = context(connection.clone(), hook.clone());
+    let (result, ()) = tokio::join!(
+        script(
+            &ctx,
+            "const p = await context.waitForEvent('page', {timeout:500}); return p.pageId;",
+            1000
+        ),
+        async {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if let Some(tabs) = &connection.tabs {
+                tabs.lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .push(action_tab(4));
+            }
+        }
+    );
+    let result = result?;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["value"], 1);
+    assert_eq!(hook.events()[1], json!(["created", 1]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_close_and_cdp_attribute_the_optional_page() -> anyhow::Result<()> {
+    for (method, args, page) in [
+        ("context.close", json!([1]), json!(1)),
+        ("neo.cdp", json!(["Runtime.evaluate", {}, 1]), json!(1)),
+        ("neo.cdp", json!(["Runtime.evaluate", {}]), Value::Null),
+        (
+            "neo.cdp",
+            json!(["Runtime.evaluate", {}, null]),
+            Value::Null,
+        ),
+    ] {
+        let hook = Arc::new(Hook::default());
+        let ctx = context(
+            Arc::new(ActionConnection::new(Some(json!({})))),
+            hook.clone(),
+        );
+        ctx.session.pages.list().await?;
+        let result = script(
+            &ctx,
+            &format!("return await __browserosCall('{method}',JSON.stringify({args}),false);"),
+            1000,
+        )
+        .await?;
+        assert_eq!(result["ok"], true, "{method}: {result}");
+        assert_eq!(hook.events()[0], json!(["authorize", page]));
+        assert_eq!(
+            hook.events()[1],
+            json!(["record", method, page, args, [], false])
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_last_page_checks_liveness_ownership_and_run_activity() -> anyhow::Result<()> {
+    let mut connection = ActionConnection::new(None);
+    connection.tabs = Some(Mutex::new(vec![
+        action_tab(1),
+        action_tab(2),
+        action_tab(3),
+    ]));
+    let hook = Arc::new(Hook {
+        other_pages: vec![3],
+        ..Default::default()
+    });
+    let mut ctx = context(Arc::new(connection), hook);
+    let result = script(
+        &ctx,
+        r#"
+        const call = (m,a=[]) => __browserosCall(m,JSON.stringify(a),false);
+        const values = [await call('context.lastPage')];
+        await call('page.info',[1]);
+        values.push(await call('context.lastPage'));
+        await call('page.info',[3]);
+        values.push(await call('context.lastPage'));
+        await call('context.close',[1]);
+        values.push(await call('context.lastPage'));
+        await call('context.close',[2]);
+        values.push(await call('context.lastPage'));
+        return values;
+    "#,
+        1000,
+    )
+    .await?;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["value"], json!([2, 1, 1, 2, null]));
+    ctx.inner_call_hook = None;
+    assert_eq!(
+        script(
+            &ctx,
+            "return await __browserosCall('context.lastPage','[]',false);",
+            1000
+        )
+        .await?["value"],
+        Value::Null
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_context_page_wait_reuses_waits_and_claims_once() -> anyhow::Result<()> {
+    let mut connection = ActionConnection::new(None);
+    connection.tabs = Some(Mutex::new(vec![action_tab(1)]));
+    connection.discover_tab = true;
+    let hook = Arc::new(Hook::default());
+    let ctx = context(Arc::new(connection), hook.clone());
+    let result = script(
+        &ctx,
+        "const p = await context.waitForEvent('page', {timeout:100}); return p.pageId;",
+        1000,
+    )
+    .await?;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["value"], 2);
+    let events = hook.events();
+    assert_eq!(events.len(), 3);
+    assert_eq!(events[0], json!(["authorize", null]));
+    assert_eq!(events[1], json!(["created", 2]));
+    assert_eq!(
+        events[2],
+        json!(["record","context.waitForEvent",null,["page",null,{"timeout":100}],[],false])
+    );
+    Ok(())
 }
 
 #[tokio::test]
