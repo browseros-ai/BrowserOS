@@ -36,10 +36,19 @@ struct TestApp {
 }
 
 async fn test_app() -> anyhow::Result<TestApp> {
-    test_app_with_cdp_port(49337, false).await
+    test_app_with_options(49337, false, false).await
 }
 
 async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::Result<TestApp> {
+    // These historical browser fixtures exercise granular entrypoints explicitly.
+    test_app_with_options(cdp_port, start_browser, true).await
+}
+
+async fn test_app_with_options(
+    cdp_port: u16,
+    start_browser: bool,
+    legacy_tools: bool,
+) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let config = Arc::new(Config {
@@ -53,6 +62,7 @@ async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::R
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
+        legacy_tools,
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {
@@ -351,8 +361,47 @@ async fn mcp_hygiene_rejects_non_json_writes() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
+async fn mcp_default_surface_hides_and_rejects_legacy_entrypoints() -> anyhow::Result<()> {
     let app = test_app().await?;
+    let session_id = initialize_mcp(&app).await?;
+    let (_, _, list) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}})),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    let names: Vec<_> = list["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("tools missing: {list}"))?
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert_eq!(
+        names,
+        ["playwright", "name_session", "save_skill", "mark_skill_run"]
+    );
+    let mut unknown = None;
+    for name in ["unknown", "run", "snapshot", "tabs", "tab_groups"] {
+        let (_, _, reply) = request_json_with_headers(
+            &app.router, "POST", "/mcp",
+            Some(json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":name,"arguments":{}}})),
+            &[("mcp-session-id", &session_id)],
+        ).await?;
+        assert_eq!(reply["error"]["code"], -32601, "{name}: {reply}");
+        if let Some(expected) = &unknown {
+            assert_eq!(&reply["error"], expected, "{name}");
+        } else {
+            unknown = Some(reply["error"].clone());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_legacy_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
+    let app = test_app_with_cdp_port(49337, false).await?;
     let session_id = initialize_mcp(&app).await?;
 
     let list = json!({

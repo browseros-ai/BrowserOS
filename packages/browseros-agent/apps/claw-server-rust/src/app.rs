@@ -258,6 +258,7 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
+            legacy_tools: false,
         });
 
         let _state = AppState::new_with_home(config, dir.path().join("home")).await?;

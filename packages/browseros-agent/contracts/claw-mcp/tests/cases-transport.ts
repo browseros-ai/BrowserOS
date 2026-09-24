@@ -4,10 +4,13 @@
  * hygiene, session-id handling, DELETE teardown + audit tie-in.
  */
 
+import assert from 'node:assert/strict'
 import type { ContractCase } from './cases'
-import { apiGet, waitUntil } from './helpers'
+import { apiGet, expectOk, waitUntil } from './helpers'
+import { McpRequestError, McpSession, textOf } from './mcp-client'
+import { startRustServer } from './rust-server'
 
-const EXPECTED_TOOLS = [
+const EXPECTED_LEGACY_TOOLS = [
   'act',
   'diff',
   'download',
@@ -31,15 +34,128 @@ const EXPECTED_TOOLS = [
   'windows',
 ]
 
+const DEFAULT_TOOLS = [
+  'playwright',
+  'name_session',
+  'save_skill',
+  'mark_skill_run',
+]
+
 export const transportCases: ContractCase[] = [
   {
-    name: 'transport: tools/list exposes the full catalog including run and playwright',
+    name: 'transport: legacyTools exposes the full catalog including run and playwright',
     smoke: true,
     async run(ctx) {
       const tools = await ctx.mcp.listTools()
       const names = tools.map((tool) => tool.name).sort()
-      if (!Bun.deepEquals(names, EXPECTED_TOOLS)) {
+      if (!Bun.deepEquals(names, EXPECTED_LEGACY_TOOLS)) {
         throw new Error(`unexpected tool catalog: ${names.join(', ')}`)
+      }
+    },
+  },
+  {
+    name: 'transport: default surface exposes only Playwright and session/tasks tools',
+    smoke: true,
+    async run(ctx) {
+      // Use a separate sidecar with legacyTools omitted. The main server keeps
+      // its compatibility opt-in for the older behavioral contracts.
+      const server = await startRustServer(ctx.browser.cdpPort, false)
+      let session: McpSession | undefined
+      try {
+        session = await McpSession.connect(
+          server.baseUrl,
+          'default-surface-contract',
+        )
+        assert.deepEqual(
+          (await session.listTools()).map((tool) => tool.name),
+          DEFAULT_TOOLS,
+        )
+        const hidden = EXPECTED_LEGACY_TOOLS.filter(
+          (name) => !DEFAULT_TOOLS.includes(name),
+        )
+        let unknown: McpRequestError | undefined
+        try {
+          await session.callTool('unknown-surface-tool')
+          assert.fail('unknown tool unexpectedly accepted')
+        } catch (error) {
+          assert.ok(error instanceof McpRequestError, String(error))
+          assert.equal(error.code, -32601)
+          unknown = error
+        }
+        for (const name of hidden) {
+          await assert.rejects(session.callTool(name), (error) => {
+            assert.ok(error instanceof McpRequestError, `${name}: ${error}`)
+            assert.equal(error.code, unknown?.code)
+            assert.equal(error.message, unknown?.message)
+            assert.deepEqual(error.data, unknown?.data)
+            return true
+          })
+        }
+        expectOk(
+          await session.callTool('name_session', { name: 'surface check' }),
+          'name default session',
+        )
+        const active = session
+        await waitUntil(
+          async () => {
+            const result = await active.callTool('playwright', {
+              code: 'return true;',
+            })
+            if (
+              result.isError &&
+              textOf(result).includes('browser session not connected')
+            )
+              return false
+            expectOk(result, 'default playwright readiness')
+            return true
+          },
+          'default server to attach',
+          { timeoutMs: 30000, intervalMs: 100 },
+        )
+        const result = await session.callTool('playwright', {
+          code: `const p = await context.newPage();
+await p.goto(${JSON.stringify(ctx.fixture('/links.html'))});
+await expect(p.getByRole('heading', {name:'Links fixture', exact:true})).toBeVisible();
+return {read:(await neo.read(p)).includes('Plain paragraph text'), pages:context.pages().length};`,
+        })
+        expectOk(result, 'default Playwright and internal read delegation')
+        assert.deepEqual(result.structuredContent?.value, {
+          read: true,
+          pages: 1,
+        })
+        // Claiming a script-created page requires the full internal catalog's
+        // tab_groups handler even when that handler cannot be called over MCP.
+        await waitUntil(async () => {
+          const response = await apiGet(server, '/api/v1/sessions?status=live')
+          assert.equal(response.status, 200)
+          const body = (await response.json()) as {
+            items: Array<{
+              sessionId: string
+              live?: { browserTabs: unknown[] }
+            }>
+          }
+          return (
+            body.items.find((item) => item.sessionId === active.sessionId)?.live
+              ?.browserTabs.length === 1
+          )
+        }, 'default session to own its Playwright page')
+      } finally {
+        try {
+          if (session) {
+            try {
+              expectOk(
+                await session.callTool('playwright', {
+                  code: 'for (const p of await context.pages()) await p.close();',
+                }),
+                'default page cleanup',
+              )
+            } finally {
+              await session.close()
+            }
+          }
+        } finally {
+          await server.stop()
+        }
       }
     },
   },

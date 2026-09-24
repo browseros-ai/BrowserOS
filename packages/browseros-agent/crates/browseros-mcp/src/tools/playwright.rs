@@ -13,47 +13,25 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::Value;
 
-const DESCRIPTION: &str = r#"The primary way to drive BrowserOS neo: standard Playwright JavaScript, no imports. Use top-level await to navigate, act, wait, assert, and extract in one call. Globals include browser, context, page, expect, neo, console, setTimeout, clearTimeout, and sleep(ms). console.log is captured; return a JSON value to read it back. Results are { ok, value?, logs, error? }; script exceptions come back as error results with their name and call log.
-
-Do the whole task in as few calls as possible. Use Promise.all for independent pages; keep steps on the same page sequential. Each call has a default and hard cap of 30000 ms, including waits. Larger timeout values are clamped. Actions and navigation default to 10000 ms; expect retries for 5000 ms. Per-operation timeouts are clamped to the remaining call budget. Split longer work into bounded chunks. Keep to about 5 fresh pages per call unless the user asks for more. Wait for an element, URL, or assertion instead of looping with fixed pauses.
+const DESCRIPTION: &str = r#"Drive BrowserOS neo with standard Playwright JavaScript, no imports. Use top-level await and return a JSON value. Globals: browser, context, page, expect, neo, console, setTimeout, clearTimeout, sleep(ms); test and chromium support pasted test bodies. Results are { ok, value?, logs, error? }; console.log is captured and errors include the failing locator and call log.
 
 Pages and identity:
-  context is your agent session, using the already signed-in profile.
-  context.newPage() -> a new background Page, claimed and grouped before it resolves. It never steals focus.
-  context.pages() -> your conversation's own tabs only.
-  page -> lazy: your most recently used own tab that is still open, else a new background tab on first use. await page.goto(url) needs no setup.
-  neo.pages({ ownership: 'all' }) -> [{ pageId, url, title, ownership, ownerLabel }] for everyone's tabs. Other scopes: 'mine', 'user', 'other-agent'.
-  neo.page(pageId) -> a Page for any tab. Ownership is a label; use of another owner's tab is reported, never refused. Leave it as you found it unless the user asked you to change it.
-  Carry the URL or page.pageId between calls; re-derive with context.pages() or neo.page(id). Confirm the tab is still open and is the intended page. Prefer your own tab for exploration. Leave useful pages open for the user.
+  context is your session in the user's signed-in browser. context.newPage() opens and groups your background tab; context.pages() lists your tabs.
+  page is lazy: your most recently used own open tab, or a new tab on first use. No browser launch or connection is needed.
+  neo.pages({ ownership: 'all' }) lists { pageId, url, title, ownership, ownerLabel } for everyone's tabs; scopes also include 'mine', 'user', 'other-agent'. neo.page(pageId) selects a tab.
+  Carry URLs or page.pageId between calls and confirm the intended tab. Leave other people's tabs as found unless asked to change them. Prefer your own tabs for exploration and leave useful pages open.
+  Tabs never steal focus. browser.newContext() returns the same context with a warning; browser.close(), context.close(), and page.bringToFront() warn and do nothing. Use page.close() for one tab.
 
-COVERED
-  browser: contexts newContext newPage close version
-  context: pages newPage setDefaultTimeout setDefaultNavigationTimeout on('page', h) waitForEvent('page') close
-  page: goto reload goBack goForward waitForLoadState waitForURL waitForFunction title url content evaluate screenshot pdf close frames
-        waitForEvent('download'|'dialog'|'popup'|'response'|'request')
-  keyboard: press type insertText; mouse: click move wheel
-  locators: locator getByRole getByText getByLabel getByPlaceholder getByAltText getByTitle getByTestId
-            filter({ hasText, has, hasNot, hasNotText }) nth first last and or chaining frameLocator
-  actions: click dblclick hover fill type press check uncheck selectOption setInputFiles focus blur clear scrollIntoViewIfNeeded dragTo waitFor
-  queries: count textContent innerText innerHTML inputValue getAttribute isVisible isHidden isEnabled isChecked isEditable boundingBox allTextContents allInnerTexts ariaSnapshot evaluate evaluateAll
-  expect: toBeVisible, toBeHidden, toBeAttached, toBeEnabled, toBeDisabled, toBeChecked, toBeEditable, toBeEmpty, toBeFocused, toHaveText, toContainText, toHaveValue, toHaveCount, toHaveAttribute, toHaveClass, toHaveId, toHaveCSS, toHaveTitle, toHaveURL, .not
-  value expect: toBe, toEqual, toContain, toBeTruthy, toBeGreaterThan, toMatch, .not
-  neo: pages page snapshot read grep download cdp
-       neo.snapshot(page) -> { text, refs }; neo.read(page) -> markdown; neo.grep(page, opts); neo.download(page, opts); neo.cdp(method, params?, page?).
+Use standard locators (getByRole, getByLabel, locator, filter, nth, frameLocator), actions (click, fill, press, selectOption, setInputFiles, dragTo), and expect assertions including .not. Navigation, keyboard/mouse, dialog/popup/download events, waitForRequest/waitForResponse, JSON response bodies, evaluate/evaluateAll, and screenshot bytes are supported.
+page.evaluate(fn, arg) sends the function's source to the page with JSON arguments/results. The script itself has no DOM or Node globals.
+Extras: neo.read(page) -> markdown; neo.grep(page, opts); neo.snapshot(page) -> { text, refs }; neo.download(page, opts); neo.cdp(method, params?, page?).
 
-DIFFERS
-  context is the agent session. context.pages() is scoped to your tabs; neo.pages({ ownership: 'all' }) lists everyone's.
-  browser.contexts() returns [context]. browser.newContext() returns context plus a warning: one signed-in profile, no isolation. browser.newPage() equals context.newPage().
-  browser.close(), context.close(), and page.bringToFront() warn and do nothing. Use page.close() to close an individual tab. Agents never steal focus.
-  page.evaluate(fn, arg) sends String(fn); arg and the result are JSON. DOM and site code run there, not in the script's server runtime.
-  Actions/navigation default to 10 s, expect to 5 s, inside the 30 s call cap. context.setDefaultTimeout, context.setDefaultNavigationTimeout, and per-call timeout cannot extend that cap.
-  test(name, fn), chromium.launch(), and chromium.connectOverCDP() use this same browser for pasted test bodies. Write directly against context and page; no launch or connection is needed.
-  No saved helpers or helpersAvailable here. Use run for saved helpers and the legacy browser.cdp escape hatch.
+One bounded chunk per call, with a default and hard cap of 30000 ms including waits. Actions/navigation default to 10000 ms; expect retries for 5000 ms. All timeouts are clamped to the remaining call budget. Wait on elements, URLs, or assertions instead of the clock. Use Promise.all for independent pages (about 5 at a time); keep each page's steps sequential.
 
 NOT AVAILABLE
-  route/unroute, request (APIRequestContext), cookies/addCookies/storageState ("you are already signed in"), addInitScript, setViewportSize, emulateMedia, tracing, video, exposeFunction, page.pause.
-  These throw Error: not available in BrowserOS neo: <api>. <hint>.
-  require, import, fetch, process, fs fail with a one-line hint. The runtime has no window or document; use page.evaluate(fn, arg) for page code or the site's API. Use the signed-in profile and normal site UI for browser flows. Use neo.snapshot, screenshots, console.log, and cockpit audit/replay to inspect progress.
+  route/unroute, request (APIRequestContext), cookies/addCookies/storageState, addInitScript, setViewportSize, emulateMedia, tracing, video, exposeFunction, page.pause.
+  Unsupported methods throw Error: not available in BrowserOS neo: <api>. <hint>.
+  No require, import, fetch, process, fs, window or document in the script. Use page.evaluate(fn, arg) for page code or site APIs and the signed-in profile for browser flows. Inspect progress through screenshots, console.log and the cockpit.
 
 Examples (code bodies, no imports):
 1. Navigate, act, assert, extract:
