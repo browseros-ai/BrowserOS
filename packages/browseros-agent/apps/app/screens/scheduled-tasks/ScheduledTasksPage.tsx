@@ -26,7 +26,6 @@ import {
 import { track } from '@/lib/metrics/track'
 import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
 import { useAcpAgents } from '@/modules/agents/agents.hooks'
-import { useHostedModelRetired } from '@/modules/hosted-model-retirement/hosted-model-retirement.hooks'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import {
   useScheduledJobRuns,
@@ -50,7 +49,6 @@ export const ScheduledTasksPage: FC = () => {
   // business repairing the chat selection as a side effect of being opened.
   const { providers, isLoading: isLoadingProviders } = useLlmProviders()
   const { agents, settled: agentsSettled } = useAcpAgents()
-  const { data: retired } = useHostedModelRetired()
   const noTarget =
     !isLoadingProviders &&
     agentsSettled &&
@@ -175,7 +173,7 @@ export const ScheduledTasksPage: FC = () => {
 
       {/* Every run resolves a provider server side, so with nothing connected
           each one fails rather than falling back to anything. */}
-      {noTarget && <NoProviderNotice retired={retired} variant="inline" />}
+      {noTarget && <NoProviderNotice variant="inline" />}
 
       <Tabs value={activeTab} onValueChange={setSelectedTab}>
         <TabsList>

@@ -11,28 +11,18 @@ export interface NoProviderNoticeProps {
    * same thing twice.
    */
   blocked?: boolean
-  /**
-   * Whether this profile used to run on the retired built-in model. Someone who
-   * had a working chat yesterday needs to be told it is gone, not told to get
-   * started.
-   */
-  retired?: boolean
   /** `inline` drops the outer margin for composers that own their gutter. */
   variant?: 'panel' | 'inline'
   className?: string
 }
 
-function headline(blocked: boolean, retired: boolean): string {
-  if (blocked) return 'Nothing to send this to yet'
-  return retired
-    ? 'BrowserOS no longer ships a built-in model'
+function headline(blocked: boolean): string {
+  return blocked
+    ? 'Nothing to send this to yet'
     : 'Connect a provider to start chatting'
 }
 
-function body(blocked: boolean, retired: boolean): string {
-  if (retired) {
-    return 'Connect an LLM provider or a coding agent to keep chatting. Your conversations and settings are unchanged.'
-  }
+function body(blocked: boolean): string {
   return blocked
     ? 'Connect an LLM provider or a coding agent, then send again. Your message is still here.'
     : 'Connect an LLM provider or a coding agent you already use.'
@@ -47,7 +37,6 @@ function body(blocked: boolean, retired: boolean): string {
  */
 export const NoProviderNotice: FC<NoProviderNoticeProps> = ({
   blocked = false,
-  retired = false,
   variant = 'panel',
   className,
 }) => (
@@ -70,11 +59,9 @@ export const NoProviderNotice: FC<NoProviderNoticeProps> = ({
       )}
     />
     <div className="min-w-0 flex-1 space-y-1">
-      <p className="font-medium text-foreground text-sm">
-        {headline(blocked, retired)}
-      </p>
+      <p className="font-medium text-foreground text-sm">{headline(blocked)}</p>
       <p className="text-muted-foreground text-xs leading-relaxed">
-        {body(blocked, retired)}
+        {body(blocked)}
       </p>
       <a
         href={SETUP_URL}

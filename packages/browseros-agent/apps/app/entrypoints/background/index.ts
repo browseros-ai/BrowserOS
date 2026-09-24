@@ -14,7 +14,6 @@ import {
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
-import { setupLlmProvidersBackupToBrowserOS } from '@/lib/llm-providers/storage'
 import { fetchMcpTools } from '@/lib/mcp/client'
 import {
   onRuntimeMessage,
@@ -25,10 +24,6 @@ import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepan
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
-import {
-  startHostedModelRetirementDetection,
-  startLocalFirstMigration,
-} from '@/modules/local-first-migration/start-local-first-migration'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
 const LEGACY_TOOL_APPROVAL_STORAGE_KEYS = [
@@ -69,12 +64,6 @@ export default defineBackground(() => {
   })
 
   Capabilities.initialize().catch(() => null)
-  // Ahead of the backup writer: the watcher it registers mirrors extension
-  // storage into the pref this reads, so registering first gives a migration
-  // a chance to overwrite the evidence before it has been seen.
-  startHostedModelRetirementDetection()
-  setupLlmProvidersBackupToBrowserOS()
-  startLocalFirstMigration()
 
   scheduledJobRuns()
 

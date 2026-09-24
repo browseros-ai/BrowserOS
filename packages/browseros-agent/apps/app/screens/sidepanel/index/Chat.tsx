@@ -13,7 +13,6 @@ import {
 import { track } from '@/lib/metrics/track'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
-import { useHostedModelRetired } from '@/modules/hosted-model-retirement/hosted-model-retirement.hooks'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
 import { buildChatErrorProps } from './Chat.helpers'
 import { ChatEmptyState } from './ChatEmptyState'
@@ -163,8 +162,6 @@ export const Chat = () => {
     executeMessage(suggestion)
   }
 
-  const { data: retired } = useHostedModelRetired()
-
   const chatErrorProps = buildChatErrorProps({
     chatError,
     selectedProvider,
@@ -207,7 +204,7 @@ export const Chat = () => {
         )}
         {chatErrorProps && <ChatError {...chatErrorProps} />}
         {isSettled && !hasAnyTarget && (
-          <NoProviderNotice blocked={sendBlocked} retired={retired} />
+          <NoProviderNotice blocked={sendBlocked} />
         )}
       </main>
 
