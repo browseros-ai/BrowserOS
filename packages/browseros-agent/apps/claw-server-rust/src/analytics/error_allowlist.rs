@@ -126,10 +126,12 @@ const ENGINE_KINDS: &[&str] = &[
 pub fn classify(message: &str) -> ErrorClass {
     let trimmed = message.trim();
 
-    if trimmed.starts_with("run exceeded") {
+    // Both script tools share the QuickJS runtime, which names the tool in
+    // its deadline and syntax messages (`run exceeded …`, `playwright exceeded …`).
+    if trimmed.starts_with("run exceeded") || trimmed.starts_with("playwright exceeded") {
         return ErrorClass::Timeout;
     }
-    if trimmed.starts_with("run: syntax error") {
+    if trimmed.starts_with("run: syntax error") || trimmed.starts_with("playwright: syntax error") {
         return ErrorClass::SyntaxError;
     }
     if trimmed.starts_with("run return value exceeded") {

@@ -164,11 +164,12 @@ mod tests {
     #[test]
     fn the_timeout_message_the_tool_emits_still_classifies_as_a_timeout() {
         assert!(
-            RUN_TOOL_SOURCE.contains("run exceeded {timeout_ms}ms"),
-            "the run timeout message changed. Update classify() in error_allowlist.rs, \
+            RUN_TOOL_SOURCE.contains("{tool_name} exceeded {timeout_ms}ms"),
+            "the script timeout message changed. Update classify() in error_allowlist.rs, \
              or timeouts will start reporting as unrecognised errors."
         );
         assert_eq!(classify("run exceeded 30000ms"), ErrorClass::Timeout);
+        assert_eq!(classify("playwright exceeded 30000ms"), ErrorClass::Timeout);
     }
 
     /// Same reasoning for the syntax error prefix.
