@@ -79,6 +79,7 @@ async function writeSidecar(
   root: string,
   serverPort: number,
   cdpPort: number,
+  legacyTools: boolean,
 ): Promise<string> {
   const resources = join(root, 'resources')
   await mkdir(resources, { recursive: true })
@@ -88,7 +89,9 @@ async function writeSidecar(
     JSON.stringify({
       ports: { server: serverPort, cdp: cdpPort },
       directories: { resources },
-      flags: { devMode: false },
+      // Most contracts intentionally cover the retained legacy catalog. The
+      // default-surface case omits the flag to test the production default.
+      flags: { devMode: false, ...(legacyTools ? { legacyTools: true } : {}) },
     }),
   )
   return path
@@ -132,10 +135,11 @@ async function startServer(
   cmd: string[],
   cdpPort: number,
   tmpPrefix: string,
+  legacyTools: boolean,
 ): Promise<ContractServer> {
   const root = await mkdtemp(join(tmpdir(), tmpPrefix))
   const serverPort = await findFreePort()
-  const sidecar = await writeSidecar(root, serverPort, cdpPort)
+  const sidecar = await writeSidecar(root, serverPort, cdpPort, legacyTools)
   const child = Bun.spawn({
     cmd: [...cmd, '--config', sidecar],
     cwd: MONOREPO_ROOT,
@@ -184,9 +188,15 @@ export function buildRustServer(): void {
 
 export async function startRustServer(
   cdpPort: number,
+  legacyTools = true,
 ): Promise<ContractServer> {
   if (!(await Bun.file(RUST_BINARY).exists())) {
     buildRustServer()
   }
-  return await startServer([RUST_BINARY], cdpPort, 'claw-mcp-rust-')
+  return await startServer(
+    [RUST_BINARY],
+    cdpPort,
+    'claw-mcp-rust-',
+    legacyTools,
+  )
 }

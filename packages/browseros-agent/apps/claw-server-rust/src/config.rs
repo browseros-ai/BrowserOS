@@ -65,6 +65,8 @@ pub struct Config {
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
     pub dev_mode: bool,
+    /// Re-expose legacy MCP entrypoints; internal tool delegation is always available.
+    pub legacy_tools: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -123,6 +125,7 @@ struct SidecarDirectories {
 #[serde(rename_all = "camelCase")]
 struct SidecarFlags {
     dev_mode: Option<bool>,
+    legacy_tools: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -197,6 +200,7 @@ impl Config {
                 .map(|replay| replay.retention_days.get())
                 .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS),
             dev_mode,
+            legacy_tools: sidecar.flags.legacy_tools.unwrap_or(false),
         })
     }
 
@@ -335,6 +339,7 @@ mod tests {
             &config_path,
             &ConfigEnv::with_vars(vars, PathBuf::from("/tmp/home")),
         )?;
+        assert!(!cfg.legacy_tools);
         assert_eq!(cfg.server_port, 9200);
         assert_eq!(cfg.cdp_port, 49337);
         assert_eq!(cfg.proxy_port, None);
@@ -345,6 +350,25 @@ mod tests {
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9200/mcp");
         // No proxy configured (dev): falls back to the direct server port.
         assert_eq!(cfg.public_base_url(), "http://127.0.0.1:9200");
+        Ok(())
+    }
+
+    #[test]
+    fn legacy_tools_requires_an_explicit_sidecar_opt_in() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("sidecar.json");
+        let env = ConfigEnv::with_vars(BTreeMap::new(), dir.path().join("home"));
+        for (flags, expected) in [
+            (serde_json::json!({}), false),
+            (serde_json::json!({"legacyTools":false}), false),
+            (serde_json::json!({"legacyTools":true}), true),
+        ] {
+            fs::write(&path, serde_json::json!({"flags":flags}).to_string())?;
+            for dev in [false, true] {
+                let cfg = Config::load_with_env_and_default_dev_mode(&path, &env, dev)?;
+                assert_eq!(cfg.legacy_tools, expected);
+            }
+        }
         Ok(())
     }
 
