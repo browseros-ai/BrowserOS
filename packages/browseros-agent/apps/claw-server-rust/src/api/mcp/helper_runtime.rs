@@ -135,7 +135,7 @@ const _: ToolEffect = discovery;
 #[must_use]
 fn discovery_note(available: &[Value]) -> String {
     let mut lines = vec![
-        "Reusable helpers for your tabs. Call the one you need with the form shown, or read its full doc with browser.readHelper(name, { host }):".to_string(),
+        "Reusable helpers for your tabs. Call the one you need with the form shown, or read its full doc with page.helpers.read(name):".to_string(),
     ];
     for entry in available {
         let host = entry
@@ -242,7 +242,7 @@ mod tests {
         let entry = helper_info_json(&meta("search-amazon", "amazon.in", MS_PER_DAY, true), now);
         let available = vec![json!({ "host": "amazon.in", "helpers": [entry] })];
         let note = discovery_note(&available);
-        assert!(note.contains("browser.readHelper"));
+        assert!(note.contains("page.helpers.read"));
         assert!(note.contains("- amazon.in:"));
         // Freshness, candidate flag, and the description ride the helper line.
         assert!(
