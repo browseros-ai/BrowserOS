@@ -335,3 +335,29 @@ differs:
   element is a password or secret-autocomplete input.
   WHY: a failed assertion on an unrelated element was observed to include a
   password field's contents in the snapshot.
+
+## Decisions made while integrating (added after the full real-browser suite)
+
+- DECIDED: the facade's internal reads (`page.info` refreshes of url/title,
+  `context.lastPage`) are authorized for ownership notices but never
+  written as audit rows; explicit `page.title()` and `page.content()` are.
+  WHY: the timeline must show what the script did, not the facade's
+  bookkeeping; eleven corpus cases failed on the noise.
+  REVISIT: if the cockpit wants a "reads" filter instead.
+- DECIDED: query rows are recorded under their Playwright name
+  (`locator.count`, `locator.textContent`, …), not the bridge's
+  `locator.query`; named errors keep their class in the envelope
+  (`TimeoutError: locator.click: …`).
+- DECIDED: actions that can open tabs (`locator.click`, `keyboard.press`,
+  `mouse.click`, `page.goto`) return the new related tabs (`newPages`,
+  opener-checked) after the host has claimed and grouped them, and the
+  facade merges them into its cache before the action resolves, so
+  `context.pages()` stays synchronous like Playwright's and still sees
+  popups. `await context.pages()` refreshes through the bridge.
+- DECIDED: iframe hit-target checks translate the viewport point into the
+  target document's coordinate space (`LocatorEngine::hit_target_point`);
+  the trusted input keeps viewport coordinates. Transformed (scaled or
+  rotated) iframes are not handled, as in Playwright's simple path.
+- Verified overnight: full real-browser conformance suite 150 pass / 0 fail
+  on the integration branch, including the 15 Playwright corpus cases and
+  every pre-existing tool case.
