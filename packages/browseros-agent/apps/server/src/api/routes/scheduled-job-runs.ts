@@ -43,11 +43,6 @@ const UpsertRunSchema = z.object({
   createdAt: z.number().optional(),
 })
 
-/** Bulk one-time import. Insert-if-absent, for the reason on the provider route. */
-const ImportRunsSchema = z.object({
-  runs: z.array(UpsertRunSchema.extend({ id: z.string().min(1) })),
-})
-
 export function createScheduledJobRunRoutes(
   options: { store?: ScheduledJobRunStore } = {},
 ) {
@@ -55,15 +50,6 @@ export function createScheduledJobRunRoutes(
 
   return new Hono<Env>()
     .get('/', async (c) => c.json({ runs: await store.list() }))
-    .post('/import', zValidator('json', ImportRunsSchema), async (c) => {
-      const imported: string[] = []
-      const skipped: string[] = []
-      for (const run of c.req.valid('json').runs) {
-        const saved = await store.insertIfAbsent(run)
-        ;(saved ? imported : skipped).push(run.id)
-      }
-      return c.json({ imported, skipped })
-    })
     .get('/:runId', zValidator('param', IdParamSchema), async (c) => {
       const run = await store.get(c.req.valid('param').runId)
       if (!run) return c.json({ error: 'Unknown run' }, 404)

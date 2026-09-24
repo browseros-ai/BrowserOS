@@ -83,15 +83,6 @@ export interface ProviderStore {
   getWithCredentials(id: string): Promise<ProviderRow | null>
   /** Insert or replace by id. This is the app's ordinary write path. */
   upsert(row: ProviderUpsert): Promise<ProviderRow>
-  /**
-   * Insert only when the id is absent; returns null when a row already exists.
-   *
-   * The one-time import uses this rather than `upsert` because the app writes
-   * to this table directly as well. A second import run must never replace a
-   * provider the user has edited since with the stale copy still sitting in
-   * extension storage.
-   */
-  insertIfAbsent(row: ProviderUpsert): Promise<ProviderRow | null>
   remove(id: string): Promise<boolean>
   /** The one selected provider, of any kind, or null when none is set. */
   getDefault(): Promise<PublicProviderRow | null>
@@ -186,25 +177,6 @@ async function upsert(row: ProviderUpsert): Promise<ProviderRow> {
   return saved
 }
 
-async function insertIfAbsent(
-  row: ProviderUpsert,
-): Promise<ProviderRow | null> {
-  const now = Date.now()
-  // onConflictDoNothing returns no row on conflict, so the absent/present
-  // decision and the write are one statement rather than a select then insert.
-  const [saved] = await getDb()
-    .insert(providers)
-    .values({
-      ...row,
-      kind: 'llm' as const,
-      createdAt: row.createdAt ?? now,
-      updatedAt: now,
-    })
-    .onConflictDoNothing({ target: providers.id })
-    .returning()
-  return saved ?? null
-}
-
 async function remove(id: string): Promise<boolean> {
   const deleted = await getDb()
     .delete(providers)
@@ -257,7 +229,6 @@ export const dbProviderStore: ProviderStore = {
   get,
   getWithCredentials,
   upsert,
-  insertIfAbsent,
   remove,
   getDefault,
   getDefaultWithCredentials,
