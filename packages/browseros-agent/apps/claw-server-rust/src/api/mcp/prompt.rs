@@ -1,4 +1,4 @@
-pub const BROWSERCLAW_MCP_INSTRUCTIONS: &str = r#"BrowserOS neo is a real browser dedicated to agent work.
+pub const BROWSERCLAW_MCP_INSTRUCTIONS: &str = r#"BrowserOS neo — the browser for agents. A real browser dedicated to agent work:
 The user doesn't browse here; they set this browser up for agents and signed
 it into their accounts, so you get live logins, cookies, and a persistent
 profile. When a task touches a browser or a website (open, read, act, fill,
@@ -68,7 +68,8 @@ The granular evaluate tool is a one-off page-context escape hatch.
 Parallelize when it helps: independent subtasks get their own tabs; at most
 5 at a time unless the user asks for more.
 
-Helpers are a run feature. Reuse what already works. A run's result may include
+Helpers are a run feature. Reach for run first when reusing saved helpers or
+needing raw CDP. Reuse what already works. A run's result may include
 helpersAvailable: saved helpers for the hosts your tabs are on, each with an
 ageDays freshness signal, a description, and the exact call form to copy.
 browser.listHelpers({ page }) lists
@@ -105,7 +106,10 @@ mod tests {
     #[test]
     fn prompt_prefers_playwright_and_keeps_run_for_helpers_and_cdp() {
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("Reach for playwright first"));
-        assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("Reach for run first"));
+        assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("Reach for run first; the granular tools"));
+        assert!(
+            BROWSERCLAW_MCP_INSTRUCTIONS.contains("Reach for run first when reusing saved helpers")
+        );
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("Use run for saved helpers"));
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("raw browser.cdp escape hatch"));
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("Helpers are a run feature"));
