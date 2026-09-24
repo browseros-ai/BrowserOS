@@ -1,4 +1,4 @@
-//! Reduces a `run` script to its shape.
+//! Reduces a `run` or `playwright` script to its shape.
 //!
 //! # Allowlist, not blocklist
 //!
@@ -31,8 +31,8 @@ pub const FINGERPRINT_MAX_BYTES: usize = 4_000;
 
 const TRUNCATION_MARKER: &str = "\n/* truncated */";
 
-/// The `browser` SDK surface. The fallback path emits only these, so it cannot carry a
-/// name the user chose.
+/// The BrowserOS and Playwright SDK surface. The fallback path emits only these,
+/// so it cannot carry a name the user chose.
 const SDK_SURFACE: &[&str] = &[
     "browser",
     "pages",
@@ -75,6 +75,43 @@ const SDK_SURFACE: &[&str] = &[
     "console",
     "sleep",
     "setTimeout",
+    // Playwright identifiers supplement the shared names above. Keep this list
+    // explicit: the scanner-failure path must never echo agent-chosen names.
+    "page",
+    "context",
+    "expect",
+    "neo",
+    "locator",
+    "getByRole",
+    "getByText",
+    "getByLabel",
+    "getByPlaceholder",
+    "getByTestId",
+    "getByAltText",
+    "getByTitle",
+    "frameLocator",
+    "check",
+    "uncheck",
+    "waitFor",
+    "waitForURL",
+    "waitForLoadState",
+    "waitForEvent",
+    "keyboard",
+    "mouse",
+    "first",
+    "last",
+    "nth",
+    "filter",
+    "toBeVisible",
+    "toHaveText",
+    "toContainText",
+    "toHaveURL",
+    "toHaveCount",
+    "toHaveValue",
+    "toBeEnabled",
+    "toBeChecked",
+    "toHaveTitle",
+    "toHaveAttribute",
 ];
 
 /// Rewrites `source` into a structural fingerprint. Never returns literal text from the
@@ -387,6 +424,39 @@ mod tests {
         assert!(out.contains("unscannable"), "{out}");
         assert!(!out.contains("unterminated"), "{out}");
         assert!(!out.contains("@@@"), "{out}");
+    }
+
+    #[test]
+    fn an_unscannable_playwright_script_reports_only_known_calls() {
+        let out = fingerprint(
+            "const privateCustomer = await context.newPage();\n\
+             await page.getByLabel('Password').fill('hunter2');\n\
+             await expect(page.getByRole('button')).toBeVisible();\n\
+             await neo.snapshot(page); const privateToken = 'unterminated",
+        );
+        assert_eq!(
+            out,
+            "/* unscannable script; SDK calls seen: context, newPage, page, getByLabel, fill, expect, page, getByRole, toBeVisible, neo, snapshot, page */"
+        );
+        for private in [
+            "privateCustomer",
+            "privateToken",
+            "Password",
+            "hunter2",
+            "unterminated",
+        ] {
+            assert!(!out.contains(private), "{out}");
+        }
+    }
+
+    #[test]
+    fn a_playwright_script_keeps_call_structure_and_masks_literals() {
+        assert_eq!(
+            fingerprint(
+                "await page.getByLabel('Password').fill('hunter2'); await expect(page).toHaveURL('https://private.test');"
+            ),
+            "await page.getByLabel(<str>).fill(<str>);await expect(page).toHaveURL(<str>);"
+        );
     }
 
     #[test]

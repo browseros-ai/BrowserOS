@@ -19,7 +19,7 @@ use browseros_mcp::{
 };
 use futures_util::future::BoxFuture;
 use serde_json::Value;
-use std::sync::Arc;
+use std::{borrow::Cow, cmp::Reverse, sync::Arc};
 use tracing::warn;
 
 const AUDIT_IDENTITY_TEXT_MAX: usize = 512;
@@ -77,7 +77,7 @@ pub async fn record_local_tool_dispatch(
             url: None,
             title: None,
             args_json: bounded_args_json(dispatch.raw_args),
-            result_meta: tool_result_meta(dispatch.result, false),
+            result_meta: tool_result_meta(dispatch.result, false, &[]),
             duration_ms: dispatch.duration_ms,
             created_at: None,
             dispatch_id: dispatch.dispatch_id,
@@ -117,6 +117,16 @@ async fn build_event(
         _ => None,
     }
     .or_else(|| call.page_snapshot.clone());
+    // The bridge awaits each child hook before execution returns, so all child
+    // secrets are available before this parent event is built. Snapshot the list
+    // without holding its lock across persistence, and mask before JSON encoding
+    // or truncation could escape or split a secret. Execution input stays intact.
+    let redactions = call
+        .redactions
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    let audit_args = redact_value(&call.raw_args, &redactions);
     Some(AuditEvent {
         input: RecordToolDispatchInput {
             agent_id: bounded_text(
@@ -138,8 +148,8 @@ async fn build_event(
             title: live
                 .as_ref()
                 .map(|page| bounded_text(&page.title, AUDIT_TITLE_MAX)),
-            args_json: bounded_args_json(&call.raw_args),
-            result_meta: tool_result_meta(result, cancelled),
+            args_json: bounded_args_json(&audit_args),
+            result_meta: tool_result_meta(result, cancelled, &redactions),
             duration_ms,
             // Stamp the tool's start so a script dispatch sorts before the child
             // primitives it records while executing; top-level rows have no parent.
@@ -204,12 +214,60 @@ pub(crate) async fn persist_screenshot(
     }
 }
 
-fn tool_result_meta(result: &ToolResult, cancelled: bool) -> String {
+/// Mask JSON strings (including keys) before either audit summary is bounded.
+/// Borrowing the no-secret case preserves the existing serialization path.
+fn redact_value<'a>(value: &'a Value, secrets: &[String]) -> Cow<'a, Value> {
+    if secrets.is_empty() {
+        return Cow::Borrowed(value);
+    }
+    Cow::Owned(match value {
+        Value::String(text) => Value::String(redact_text(text, secrets)),
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(|value| redact_value(value, secrets).into_owned())
+                .collect(),
+        ),
+        Value::Object(values) => Value::Object(
+            values
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        redact_text(key, secrets),
+                        redact_value(value, secrets).into_owned(),
+                    )
+                })
+                .collect(),
+        ),
+        _ => value.clone(),
+    })
+}
+
+fn redact_text(mut text: &str, secrets: &[String]) -> String {
+    let mut masked = String::with_capacity(text.len());
+    // Match only the original text: a short secret must not rewrite the marker
+    // inserted for another secret. Prefer the longest secret at the same offset
+    // so a shared prefix does not leave the longer value's suffix behind.
+    while let Some((start, secret)) = secrets
+        .iter()
+        .filter(|secret| !secret.is_empty())
+        .filter_map(|secret| text.find(secret.as_str()).map(|start| (start, secret)))
+        .min_by_key(|(start, secret)| (*start, Reverse(secret.len())))
+    {
+        masked.push_str(&text[..start]);
+        masked.push_str("[redacted]");
+        text = &text[start + secret.len()..];
+    }
+    masked.push_str(text);
+    masked
+}
+
+fn tool_result_meta(result: &ToolResult, cancelled: bool, secrets: &[String]) -> String {
     match result.structured_content.as_ref() {
         Some(structured_content) => result_meta(
             cancelled || result.is_error,
             cancelled,
-            structured_content,
+            &redact_value(structured_content, secrets),
             result.content.len(),
         ),
         None => result_meta(
@@ -237,11 +295,13 @@ const _: ToolObserver = apply;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::mcp::{script_hook::ScriptInnerCallHook, test_support::tool_call};
     use crate::db::audit_log::ListDispatchesQuery;
     use base64::{Engine as _, engine::general_purpose::STANDARD};
     use browseros_mcp::token_estimate::{
         TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
     };
+    use browseros_mcp::{InnerCallHook, InnerCallRecord};
     use rmcp::model::ContentBlock;
     use serde_json::json;
 
@@ -250,6 +310,233 @@ mod tests {
         bytes.extend_from_slice(&width.to_be_bytes());
         bytes.extend_from_slice(&height.to_be_bytes());
         STANDARD.encode(bytes)
+    }
+
+    #[tokio::test]
+    async fn script_parent_masks_secrets_recorded_by_children() -> anyhow::Result<()> {
+        for tool_name in ["run", "playwright"] {
+            let call = tool_call(
+                tool_name,
+                json!({ "code": "await page.getByLabel('Password').fill('hunter2');" }),
+            )
+            .await?;
+            ScriptInnerCallHook::new(call.clone())
+                .record(InnerCallRecord {
+                    method: "locator.fill",
+                    page: None,
+                    args: &json!(["[redacted]"]),
+                    secrets: &["hunter2".to_string()],
+                    from_helper: false,
+                    is_error: true,
+                    duration_ms: 3,
+                    output_token_estimate: 0,
+                })
+                .await;
+            let result = ToolResult {
+                content: vec![ContentBlock::text("locator.fill failed for hunter2")],
+                is_error: true,
+                structured_content: Some(json!({
+                    "error": "locator.fill failed for hunter2",
+                    "ok": false
+                })),
+            };
+            apply(ToolObserverContext {
+                call: &call,
+                result: &result,
+                cancelled: false,
+                duration_ms: 4,
+            })
+            .await?;
+            call.state
+                .audit_worker
+                .flush_session(call.session_id.as_str())
+                .await?;
+            let rows = call
+                .state
+                .audit_log
+                .list_dispatches(ListDispatchesQuery::default())
+                .await?
+                .rows;
+            assert_eq!(rows.len(), 2);
+            let child = rows
+                .iter()
+                .find(|row| row.tool_name == "locator.fill")
+                .ok_or_else(|| anyhow::anyhow!("child missing"))?;
+            assert_eq!(child.args_json.as_deref(), Some(r#"["[redacted]"]"#));
+            assert_eq!(
+                child.parent_dispatch_id.as_deref(),
+                Some(call.dispatch_id.as_str())
+            );
+            let parent = rows
+                .iter()
+                .find(|row| row.tool_name == tool_name)
+                .ok_or_else(|| anyhow::anyhow!("parent missing"))?;
+            assert_eq!(
+                parent.args_json.as_deref(),
+                Some(r#"{"code":"await page.getByLabel('Password').fill('[redacted]');"}"#)
+            );
+            assert!(
+                !parent
+                    .result_meta
+                    .as_deref()
+                    .unwrap_or_default()
+                    .contains("hunter2")
+            );
+            assert!(parent.parent_dispatch_id.is_none());
+            assert_eq!(parent.created_at, call.started_at_ms);
+            // The observer masks its persisted copy, not execution input or output.
+            assert!(
+                call.raw_args["code"]
+                    .as_str()
+                    .is_some_and(|code| code.contains("hunter2"))
+            );
+            assert_eq!(
+                result
+                    .structured_content
+                    .as_ref()
+                    .map(|value| &value["error"]),
+                Some(&json!("locator.fill failed for hunter2"))
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_without_secrets_preserves_the_existing_row_bytes() -> anyhow::Result<()> {
+        let mut call =
+            tool_call("run", json!({ "code": "return 'hunter2';", "timeout": 42 })).await?;
+        call.started_at_ms = 123;
+        let result = ToolResult::text("ok", Some(json!({ "ok": true, "value": "hunter2" })));
+        apply(ToolObserverContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 4,
+        })
+        .await?;
+        call.state
+            .audit_worker
+            .flush_session(call.session_id.as_str())
+            .await?;
+        let rows = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 1);
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        // Pin the persisted row's original JSON bytes as well as its attribution
+        // and accounting. Merely reparsing args/meta would miss format changes.
+        let expected = json!({
+            "id": 1, "createdAt": 123,
+            "agentId": identity.session.convo_id().as_str(),
+            "slug": "codex", "agentLabel": "Codex", "sessionId": "s1", "toolName": "run",
+            "pageId": null, "tabId": null, "targetId": null, "url": null, "title": null,
+            "argsJson": r#"{"code":"return 'hunter2';","timeout":42}"#,
+            "resultMeta": r#"{"cancelled":false,"contentSummary":"1 block(s)","isError":false,"structuredKeys":["ok","value"]}"#,
+            "durationMs": 4,
+            "toolInputTokenEstimate": estimate_tool_input_tokens("run", &call.raw_args),
+            "toolOutputTokenEstimate": 1, "tokenEstimatorVersion": TOKEN_ESTIMATOR_VERSION,
+            "dispatchId": call.dispatch_id.as_str(), "hasScreenshot": false,
+        });
+        assert_eq!(
+            serde_json::to_vec(&serde_json::to_value(&rows[0])?)?,
+            serde_json::to_vec(&expected)?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parent_masks_json_strings_and_metadata_before_encoding_and_bounds()
+    -> anyhow::Result<()> {
+        for secret in ["p\"ass\\🔑\nword".to_string(), "sensitive".repeat(600)] {
+            let call = tool_call(
+                "playwright",
+                json!({
+                    "code": format!("// {secret}\nreturn 1;"),
+                    "nested": [{ secret.clone(): secret.clone() }],
+                }),
+            )
+            .await?;
+            ScriptInnerCallHook::new(call.clone())
+                .record(InnerCallRecord {
+                    method: "locator.fill",
+                    page: None,
+                    args: &json!(["[redacted]"]),
+                    secrets: std::slice::from_ref(&secret),
+                    from_helper: false,
+                    is_error: true,
+                    duration_ms: 1,
+                    output_token_estimate: 0,
+                })
+                .await;
+            // Error bodies are not retained today. Structured keys and the
+            // cancellation kind are, so exercise both routes into metadata.
+            let result = ToolResult {
+                content: vec![ContentBlock::text(format!("failed: {secret}"))],
+                is_error: true,
+                structured_content: Some(json!({
+                    secret.clone(): true, "cancellationKind": format!("failed: {secret}"),
+                    "error": format!("failed: {secret}"),
+                })),
+            };
+            let event = build_event(&call, &result, 1, true)
+                .await
+                .ok_or_else(|| anyhow::anyhow!("event missing"))?;
+            assert_eq!(
+                event.input.args_json,
+                r#"{"code":"// [redacted]\nreturn 1;","nested":[{"[redacted]":"[redacted]"}]}"#
+            );
+            let meta: Value = serde_json::from_str(&event.input.result_meta)?;
+            assert_eq!(meta["cancellationKind"], "failed: [redacted]");
+            assert_eq!(
+                meta["structuredKeys"],
+                json!(["[redacted]", "cancellationKind", "error"])
+            );
+            assert!(event.input.args_json.len() <= 4096);
+            assert!(event.input.result_meta.len() <= 4096);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn parent_masks_repeated_secrets_without_rewriting_replacement_markers()
+    -> anyhow::Result<()> {
+        let call = tool_call(
+            "playwright",
+            json!({ "code": "hunter2 hunter2-long hunter2 red" }),
+        )
+        .await?;
+        ScriptInnerCallHook::new(call.clone())
+            .record(InnerCallRecord {
+                method: "locator.fill",
+                page: None,
+                args: &json!(["[redacted]"]),
+                secrets: &[
+                    "".to_string(),
+                    "hunter2".to_string(),
+                    "hunter2-long".to_string(),
+                    "red".to_string(),
+                ],
+                from_helper: false,
+                is_error: false,
+                duration_ms: 1,
+                output_token_estimate: 0,
+            })
+            .await;
+        let result = ToolResult::text("ok", None);
+        let event = build_event(&call, &result, 1, false)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("event missing"))?;
+        assert_eq!(
+            event.input.args_json,
+            r#"{"code":"[redacted] [redacted] [redacted] [redacted]"}"#
+        );
+        Ok(())
     }
 
     #[tokio::test]
