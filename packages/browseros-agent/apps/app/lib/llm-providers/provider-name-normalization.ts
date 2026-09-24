@@ -1,8 +1,4 @@
 import { CHATGPT_PROVIDER_DISPLAY_NAME } from './provider-display-names'
-import {
-  DEFAULT_PROVIDER_ID,
-  DEFAULT_PROVIDER_NAME,
-} from './provider-selection'
 import type { LlmProviderConfig } from './types'
 
 /** Applies the v3 provider display-name compatibility migration. */
@@ -18,16 +14,6 @@ export function normalizeProviderNames(
   providers: LlmProviderConfig[],
 ): LlmProviderConfig[] {
   return providers.map((provider) => {
-    if (
-      provider.id === DEFAULT_PROVIDER_ID &&
-      provider.type === 'browseros' &&
-      provider.name !== DEFAULT_PROVIDER_NAME
-    ) {
-      return {
-        ...provider,
-        name: DEFAULT_PROVIDER_NAME,
-      }
-    }
     if (
       provider.type === 'chatgpt-pro' &&
       isLegacyChatGPTProviderName(provider.name)

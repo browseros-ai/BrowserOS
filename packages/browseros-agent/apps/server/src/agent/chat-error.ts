@@ -34,8 +34,6 @@ export interface ChatErrorContext {
 // Bounded, but large, so a pathological body still cannot flood the wire or card.
 const DETAILS_MAX_LENGTH = 20000
 
-const USAGE_DOCS_URL = 'https://dub.sh/browseros-usage-limit'
-const USAGE_PAGE_URL = '/app.html#/settings/usage'
 const CONNECTION_DOCS_URL =
   'https://docs.browseros.com/troubleshooting/connection-issues'
 
@@ -128,25 +126,6 @@ function errorText(error: unknown): string {
   return String(error)
 }
 
-/**
- * Recover the gateway's error code. `browseros-fetch` and `openrouter-fetch`
- * stash it on `data`, but the 12 direct-provider paths build their own
- * APICallError where `responseBody` is the only structured evidence.
- */
-function gatewayCode(error: APICallError): string | undefined {
-  const fromData = (error.data as { code?: unknown } | undefined)?.code
-  if (typeof fromData === 'string' && fromData) return fromData
-
-  if (!error.responseBody) return undefined
-  try {
-    const parsed = JSON.parse(error.responseBody)
-    const code = parsed?.error?.code
-    return typeof code === 'string' && code ? code : undefined
-  } catch {
-    return undefined
-  }
-}
-
 function retryAfterSeconds(error: APICallError): number | undefined {
   const headers = error.responseHeaders
   if (!headers) return undefined
@@ -166,23 +145,6 @@ function fromApiCallError(
     statusCode: error.statusCode,
     details: upstreamDetails(error),
   }
-  const code = gatewayCode(error)
-  const isBrowserOs = ctx.provider === 'browseros'
-
-  if (code === 'CREDITS_EXHAUSTED') {
-    return {
-      ...base,
-      code: 'credits_exhausted',
-      title: 'Daily limit reached',
-      message: safeMessage(
-        error.message,
-        'You have used all your BrowserOS credits. They reset at midnight UTC.',
-      ),
-      retryable: false,
-      docsUrl: USAGE_PAGE_URL,
-    }
-  }
-
   switch (error.statusCode) {
     case 401:
     case 403:
@@ -206,7 +168,6 @@ function fromApiCallError(
           'The provider is rate limiting requests. Wait a moment and try again.',
         ),
         retryable: true,
-        docsUrl: isBrowserOs ? USAGE_DOCS_URL : undefined,
         retryAfterSeconds: retryAfterSeconds(error),
       }
     case 413:

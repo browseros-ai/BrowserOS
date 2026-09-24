@@ -17,7 +17,12 @@ export interface BuildSidepanelPreparedSendMessagesRequestInput
   extends CommonSidepanelRequestInput {
   agentServerUrl: string
   target: SidepanelChatTarget | undefined
-  fallbackProvider: LlmProviderConfig
+  /**
+   * Used when the target does not carry its own config. Undefined when nothing
+   * is connected, which sends no provider id at all and lets the server answer
+   * that none is selected.
+   */
+  fallbackProvider: LlmProviderConfig | undefined
   message?: string
   attachments?: Array<{ mediaType: string; data: string }>
 }

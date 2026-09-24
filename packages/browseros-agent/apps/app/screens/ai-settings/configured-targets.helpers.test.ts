@@ -51,7 +51,6 @@ function providerActions(
 ) {
   return helpers.buildProviderActions({
     provider,
-    isBuiltIn: false,
     isTesting: false,
     onSelectProvider: noop,
     onTestProvider: noop,
@@ -85,24 +84,18 @@ describe('agentDescription', () => {
 })
 
 describe('providerDescription', () => {
-  it('describes the built-in provider without leaking config', () => {
-    expect(helpers.providerDescription(provider, true)).toBe(
-      'BrowserOS-hosted model with strict rate limits',
-    )
-  })
-
   it('shows model and base url for a configured provider', () => {
-    expect(helpers.providerDescription(provider, false)).toBe(
+    expect(helpers.providerDescription(provider)).toBe(
       'gpt-5.5 · https://api.openai.com/v1',
     )
   })
 
   it('omits the separator when there is no base url', () => {
     expect(
-      helpers.providerDescription(
-        { ...provider, baseUrl: '' } as LlmProviderConfig,
-        false,
-      ),
+      helpers.providerDescription({
+        ...provider,
+        baseUrl: '',
+      } as LlmProviderConfig),
     ).toBe('gpt-5.5')
   })
 })
@@ -110,14 +103,6 @@ describe('providerDescription', () => {
 describe('buildProviderActions', () => {
   it('always offers set-as-default first', () => {
     expect(providerActions()[0].label).toBe('Set as default')
-  })
-
-  // The built-in provider is not user-owned, so it must not offer destructive
-  // or editing actions.
-  it('gives the built-in provider nothing beyond set-as-default', () => {
-    const actions = providerActions({ isBuiltIn: true })
-    expect(actions).toHaveLength(1)
-    expect(actions.map((a) => a.label)).not.toContain('Delete')
   })
 
   it('offers test, edit and delete for a configured provider', () => {
@@ -147,7 +132,6 @@ describe('buildProviderActions', () => {
     let deleted = ''
     const actions = helpers.buildProviderActions({
       provider,
-      isBuiltIn: false,
       isTesting: false,
       onSelectProvider: (id) => {
         selected = id

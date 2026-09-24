@@ -8,15 +8,13 @@ import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
-import { createBrowserOSFetch } from '../lib/browseros-fetch'
 import { resolveProviderHeaders } from '../lib/clients/llm/headers'
 import {
-  createMockBrowserOSLanguageModel,
-  shouldUseMockBrowserOSLLM,
+  createMockLanguageModel,
+  shouldUseMockLLM,
 } from '../lib/clients/llm/mock-language-model'
 import { createCodexFetch } from '../lib/clients/oauth/codex-fetch'
 import { createCopilotFetch } from '../lib/clients/oauth/copilot-fetch'
-import { logger } from '../lib/logger'
 import { createOpenRouterCompatibleFetch } from '../lib/openrouter-fetch'
 import type { ResolvedAgentConfig } from './types'
 
@@ -139,48 +137,6 @@ function createBedrockFactory(
   })
 }
 
-function createBrowserOSFactory(
-  config: ResolvedAgentConfig,
-): (modelId: string) => unknown {
-  if (!config.baseUrl) throw new Error('BrowserOS provider requires baseUrl')
-  const { baseUrl, apiKey, upstreamProvider, browserosId } = config
-  const browserosFetch = browserosId
-    ? createBrowserOSFetch(browserosId)
-    : createOpenRouterCompatibleFetch()
-
-  // BrowserOS-hosted provider: user custom headers are deliberately not
-  // forwarded. Its credential is X-BrowserOS-ID (injected by browserosFetch)
-  // and there is no user-facing custom-header path for it.
-  if (upstreamProvider === LLM_PROVIDERS.OPENROUTER) {
-    return createOpenRouter({
-      baseURL: baseUrl,
-      ...(apiKey && { apiKey }),
-      fetch: browserosFetch,
-    })
-  }
-  if (upstreamProvider === LLM_PROVIDERS.ANTHROPIC) {
-    return createAnthropic({
-      baseURL: baseUrl,
-      ...(apiKey && { apiKey }),
-      fetch: browserosFetch,
-    })
-  }
-  if (upstreamProvider === LLM_PROVIDERS.AZURE) {
-    return createAzure({
-      baseURL: baseUrl,
-      ...(apiKey && { apiKey }),
-      fetch: browserosFetch,
-    })
-  }
-  logger.debug('Creating OpenAI-compatible provider for BrowserOS')
-  return createOpenAICompatible({
-    name: 'browseros',
-    baseURL: baseUrl,
-    ...(apiKey && { apiKey }),
-    fetch: browserosFetch,
-  })
-}
-
 function createOpenAICompatibleFactory(
   config: ResolvedAgentConfig,
 ): (modelId: string) => unknown {
@@ -253,7 +209,6 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioFactory,
   [LLM_PROVIDERS.OLLAMA]: createOllamaFactory,
   [LLM_PROVIDERS.BEDROCK]: createBedrockFactory,
-  [LLM_PROVIDERS.BROWSEROS]: createBrowserOSFactory,
   [LLM_PROVIDERS.OPENAI_COMPATIBLE]: createOpenAICompatibleFactory,
   [LLM_PROVIDERS.MOONSHOT]: createMoonshotFactory,
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProFactory,
@@ -268,8 +223,8 @@ export interface LanguageModelWithCleanup {
 export async function createLanguageModel(
   config: ResolvedAgentConfig,
 ): Promise<LanguageModelWithCleanup> {
-  if (shouldUseMockBrowserOSLLM(config)) {
-    return { model: createMockBrowserOSLanguageModel() }
+  if (shouldUseMockLLM()) {
+    return { model: createMockLanguageModel() }
   }
   const provider = config.provider as string
   const factory = PROVIDER_FACTORIES[provider]

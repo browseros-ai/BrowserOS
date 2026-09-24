@@ -1,5 +1,6 @@
 import { Loader2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
+import { NoProviderNotice } from '@/components/chat/NoProviderNotice'
 import { createBrowserOSAction } from '@/lib/chat-actions/types'
 import {
   SIDEPANEL_AI_TRIGGERED_EVENT,
@@ -12,6 +13,7 @@ import {
 import { track } from '@/lib/metrics/track'
 import { useChatSessionContext } from '@/modules/chat/chat-session-context'
 import type { ChatMode } from '@/modules/chat/chat-types'
+import { useHostedModelRetired } from '@/modules/hosted-model-retirement/hosted-model-retirement.hooks'
 import { useJtbdPopup } from '@/modules/jtbd-popup/jtbd-popup.hooks'
 import { buildChatErrorProps } from './Chat.helpers'
 import { ChatEmptyState } from './ChatEmptyState'
@@ -43,6 +45,9 @@ export const Chat = () => {
     isRestoringConversation,
     isIncognito,
     retryLastTurn,
+    hasAnyTarget,
+    isSettled,
+    sendBlocked,
   } = useChatSessionContext()
 
   const {
@@ -123,16 +128,21 @@ export const Chat = () => {
 
     recordMessageSent()
 
-    if (attachedTabs.length) {
-      const action = createBrowserOSAction({
-        mode,
-        message: messageText,
-        tabs: attachedTabs,
-      })
-      sendMessage({ text: messageText, action })
-    } else {
-      sendMessage({ text: messageText })
-    }
+    const sent = attachedTabs.length
+      ? sendMessage({
+          text: messageText,
+          action: createBrowserOSAction({
+            mode,
+            message: messageText,
+            tabs: attachedTabs,
+          }),
+        })
+      : sendMessage({ text: messageText })
+
+    // Keep the draft when the send did not happen. Clearing unconditionally
+    // threw away what the user typed whenever sendMessage refused, which is
+    // every send made with nothing connected.
+    if (!sent) return
     setInput('')
     setAttachedTabs([])
   }
@@ -152,6 +162,8 @@ export const Chat = () => {
     track(SIDEPANEL_SUGGESTION_CLICKED_EVENT, { mode })
     executeMessage(suggestion)
   }
+
+  const { data: retired } = useHostedModelRetired()
 
   const chatErrorProps = buildChatErrorProps({
     chatError,
@@ -194,6 +206,9 @@ export const Chat = () => {
           />
         )}
         {chatErrorProps && <ChatError {...chatErrorProps} />}
+        {isSettled && !hasAnyTarget && (
+          <NoProviderNotice blocked={sendBlocked} retired={retired} />
+        )}
       </main>
 
       {isIncognito && <IncognitoNotice />}

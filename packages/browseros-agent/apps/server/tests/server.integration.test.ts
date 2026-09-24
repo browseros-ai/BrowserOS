@@ -12,7 +12,7 @@ import { URL } from 'node:url'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 
-import { MOCK_BROWSEROS_RESPONSE_TEXT } from '../src/lib/clients/llm/mock-language-model'
+import { MOCK_LLM_RESPONSE_TEXT } from '../src/lib/clients/llm/mock-language-model'
 import { cleanupBrowserOS, ensureBrowserOS } from './__helpers__/index'
 import type { TestEnvironmentConfig } from './__helpers__/setup'
 
@@ -169,19 +169,21 @@ describe('HTTP Server Integration Tests', () => {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            // The browseros provider takes the server's gateway credential
-            // rather than one the request carries, so this path is only open
-            // to the extension. Chrome puts this header on every fetch the app
-            // makes, including the ones the background alarm runner makes to
-            // the already guarded schedule routes.
+            // Chrome puts this header on every fetch the app makes, including
+            // the ones the background alarm runner makes to the already
+            // guarded schedule routes. Kept so this exercises the same
+            // app-origin path the extension uses.
             Origin: 'chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk',
           },
           body: JSON.stringify({
             conversationId,
             message: 'Open amazon.com in a new tab',
-            target: { type: 'browseros', providerId: 'browseros' },
-            provider: 'browseros',
-            model: 'claude-sonnet-4-20250514',
+            // No stored provider is named: the harness swaps in a canned model
+            // before any credential is resolved, so the request only has to be
+            // well formed.
+            target: { type: 'browseros' },
+            provider: 'openai',
+            model: 'gpt-5',
           }),
         })
 
@@ -220,7 +222,7 @@ describe('HTTP Server Integration Tests', () => {
           'Should contain SSE data events',
         )
         assert.ok(
-          fullResponse.includes(MOCK_BROWSEROS_RESPONSE_TEXT),
+          fullResponse.includes(MOCK_LLM_RESPONSE_TEXT),
           'Should include the mocked BrowserOS chat response',
         )
 
@@ -262,8 +264,8 @@ describe('HTTP Server Integration Tests', () => {
         body: JSON.stringify({
           conversationId: crypto.randomUUID(),
           message: 'Hello',
-          provider: 'browseros',
-          model: 'claude-sonnet-4-20250514',
+          provider: 'openai',
+          model: 'gpt-5',
         }),
       })
 

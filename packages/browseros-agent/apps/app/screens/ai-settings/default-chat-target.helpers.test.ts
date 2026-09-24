@@ -10,11 +10,11 @@ const timestamp = 1000
 
 const providers: LlmProviderConfig[] = [
   {
-    id: 'browseros',
-    type: 'browseros',
-    name: 'BrowserOS',
-    baseUrl: 'https://api.browseros.com/v1',
-    modelId: 'browseros-auto',
+    id: 'openai-1',
+    type: 'openai',
+    name: 'OpenAI',
+    baseUrl: 'https://api.openai.com/v1',
+    modelId: 'gpt-5',
     supportsImages: true,
     contextWindow: 200000,
     temperature: 0.2,
@@ -44,7 +44,7 @@ describe('resolveEffectiveDefaultTarget', () => {
         providers,
         agents,
         selection: { kind: 'acp', id: 'agent-cc-1' },
-        defaultProviderId: 'browseros',
+        defaultProviderId: 'openai-1',
       }),
     ).toEqual({ kind: 'acp', id: 'agent-cc-1' })
   })
@@ -66,7 +66,7 @@ describe('resolveEffectiveDefaultTarget', () => {
         providers,
         agents,
         selection: { kind: 'llm', id: 'anthropic-sonnet' },
-        defaultProviderId: 'browseros',
+        defaultProviderId: 'openai-1',
       }),
     ).toEqual({ kind: 'llm', id: 'anthropic-sonnet' })
   })
@@ -77,9 +77,9 @@ describe('resolveEffectiveDefaultTarget', () => {
         providers,
         agents,
         selection: { kind: 'llm', id: 'provider-deleted' },
-        defaultProviderId: 'browseros',
+        defaultProviderId: 'openai-1',
       }),
-    ).toEqual({ kind: 'llm', id: 'browseros' })
+    ).toEqual({ kind: 'llm', id: 'openai-1' })
   })
 
   it('resolves a null selection to the default provider', () => {
@@ -101,15 +101,15 @@ describe('resolveEffectiveDefaultTarget', () => {
         selection: null,
         defaultProviderId: 'provider-deleted',
       }),
-    ).toEqual({ kind: 'llm', id: 'browseros' })
+    ).toEqual({ kind: 'llm', id: 'openai-1' })
   })
 })
 
 describe('encodeTargetValue / decodeTargetValue', () => {
   it('round-trips llm and acp selections', () => {
     expect(
-      decodeTargetValue(encodeTargetValue({ kind: 'llm', id: 'browseros' })),
-    ).toEqual({ kind: 'llm', id: 'browseros' })
+      decodeTargetValue(encodeTargetValue({ kind: 'llm', id: 'openai-1' })),
+    ).toEqual({ kind: 'llm', id: 'openai-1' })
     expect(
       decodeTargetValue(encodeTargetValue({ kind: 'acp', id: 'agent-cc-1' })),
     ).toEqual({ kind: 'acp', id: 'agent-cc-1' })

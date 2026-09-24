@@ -268,21 +268,6 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     },
   },
   {
-    key: 'BROWSEROS_CONFIG_URL',
-    section: 'server',
-    description: 'BrowserOS server config URL required by production builds.',
-    secret: false,
-    schema: urlSchema,
-    modes: {
-      development: {
-        value: 'https://llm.browseros.com/api/browseros-server/config',
-      },
-      production: {
-        value: 'https://llm.browseros.com/api/browseros-server/config',
-      },
-    },
-  },
-  {
     key: 'BROWSEROS_TRUSTED_ORIGINS',
     section: 'server',
     description: 'Trusted origins for local server development.',

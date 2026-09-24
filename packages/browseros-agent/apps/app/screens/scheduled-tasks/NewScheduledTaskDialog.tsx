@@ -37,7 +37,7 @@ import {
 import { Textarea } from '@/components/ui/textarea'
 import { SCHEDULED_TASK_PROMPT_REFINED_EVENT } from '@/lib/constants/analyticsEvents'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
 import { refinePrompt } from '@/lib/schedules/refine-prompt'
@@ -362,14 +362,10 @@ export const NewScheduledTaskDialog: FC<NewScheduledTaskDialogProps> = ({
                   >
                     <span className="flex items-center gap-2">
                       <span className="text-muted-foreground">
-                        {resolvedProvider.type === 'browseros' ? (
-                          <BrowserOSIcon size={16} />
-                        ) : (
-                          <ProviderIcon
-                            type={resolvedProvider.type as ProviderType}
-                            size={16}
-                          />
-                        )}
+                        <ProviderIcon
+                          type={resolvedProvider.type as ProviderType}
+                          size={16}
+                        />
                       </span>
                       {resolvedProvider.name}
                     </span>

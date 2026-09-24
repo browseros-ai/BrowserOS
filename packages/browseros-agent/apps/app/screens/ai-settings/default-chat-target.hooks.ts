@@ -12,12 +12,13 @@ import { resolveEffectiveDefaultTarget } from './default-chat-target.helpers'
 export interface UseDefaultChatTargetInput {
   providers: LlmProviderConfig[]
   agents: ReadonlyArray<{ id: string }>
-  defaultProviderId: string
+  defaultProviderId: string | null
   setDefaultProvider: (providerId: string) => Promise<void>
 }
 
 export interface DefaultChatTargetController {
-  effectiveTarget: SidepanelChatTargetSelection
+  /** Null when nothing is configured: the radio group then shows no selection. */
+  effectiveTarget: SidepanelChatTargetSelection | null
   selectProvider: (providerId: string) => void
   selectAgent: (agentId: string) => void
   selectTarget: (selection: SidepanelChatTargetSelection) => void

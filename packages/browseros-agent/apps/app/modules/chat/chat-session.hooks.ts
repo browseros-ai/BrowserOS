@@ -25,7 +25,6 @@ import {
 import { formatConversationHistory } from '@/lib/conversations/formatConversationHistory'
 import { declinedAppsStorage } from '@/lib/declined-apps/storage'
 import { resolveChatProvider } from '@/lib/llm-providers/provider-runtime'
-import { createDefaultBrowserOSProvider } from '@/lib/llm-providers/storage'
 import type { ChatRequestBrowserContext } from '@/lib/messaging/server/buildChatRequestBody'
 import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
@@ -39,9 +38,9 @@ import {
   fetchServerConversation,
   SERVER_CONVERSATIONS_QUERY_KEY,
 } from '@/modules/conversations/conversations.hooks'
-import { useInvalidateCredits } from '@/modules/credits/credits.hooks'
 import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
+import { decideChatSend, drainPendingSends } from './chat-send-decision'
 import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
@@ -192,8 +191,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     selectChatTarget,
     selectedLlmProvider,
     isLoadingProviders,
+    hasAnyTarget,
+    isSettled,
   } = useChatRefs()
-  const invalidateCredits = useInvalidateCredits()
   const queryClient = useQueryClient()
 
   // Incognito chats are never written to history or the cloud (#1189). Resolved
@@ -252,6 +252,25 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   useEffect(() => {
     agentUrlRef.current = agentServerUrl
   }, [agentServerUrl])
+
+  // Read through a ref because the search-action watcher below installs once
+  // and would otherwise keep the value from first render, when nothing has
+  // loaded yet and every send would look unsendable.
+  const hasAnyTargetRef = useRef(hasAnyTarget)
+  const isSettledRef = useRef(isSettled)
+
+  useEffect(() => {
+    hasAnyTargetRef.current = hasAnyTarget
+  }, [hasAnyTarget])
+
+  useEffect(() => {
+    isSettledRef.current = isSettled
+  }, [isSettled])
+
+  const [sendAttemptBlocked, setSendAttemptBlocked] = useState(false)
+  // Derived rather than cleared in an effect: connecting a provider makes this
+  // false on the next render on its own.
+  const sendBlocked = sendAttemptBlocked && !hasAnyTarget
 
   const canSend =
     !isLoadingAgentUrl &&
@@ -399,12 +418,16 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       },
       prepareSendMessagesRequest: async ({ messages }) => {
         const target = selectedChatTargetRef.current
+        // No fabricated fallback. Sending a provider the user never configured
+        // would run the turn on credentials they did not choose; sending
+        // nothing lets the server resolve its own selection, or say there is
+        // none.
         const fallbackProvider =
           resolveChatProvider(
             selectedLlmProviderRef.current
               ? [selectedLlmProviderRef.current]
               : [],
-          ) ?? createDefaultBrowserOSProvider()
+          ) ?? undefined
         // A contextual panel sends from its owning tab even if another tab
         // becomes active while provider/server preparation is awaiting I/O.
         const tabId =
@@ -810,8 +833,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       void queryClient.invalidateQueries({
         queryKey: [SERVER_CONVERSATIONS_QUERY_KEY],
       })
-
-    invalidateCredits()
   }, [status])
 
   // Save the in-flight conversation before it can be lost: on page hide (full
@@ -820,17 +841,22 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   // interrupted cloud upload. The local server persists each turn during
   // /chat, so there is nothing left to buffer.
 
-  useEffect(() => {
-    if (chatError) invalidateCredits()
-  }, [chatError, invalidateCredits])
-
   const isIntegrationsSynced = options?.isIntegrationsSynced ?? true
   const isIntegrationsSyncedRef = useRef(isIntegrationsSynced)
-  const pendingMessageRef = useRef<{
-    text: string
-    action?: ChatAction
-    files?: FileUIPart[]
-  } | null>(null)
+  /**
+   * Sends held while something was still loading, in the order they were made.
+   *
+   * A list rather than one slot. A send that lands here clears the composer,
+   * so a second one during the same wait used to replace the first and the
+   * first was never dispatched: the user watched their message disappear.
+   */
+  const pendingMessagesRef = useRef<
+    Array<{
+      text: string
+      action?: ChatAction
+      files?: FileUIPart[]
+    }>
+  >([])
 
   const trackMessageSent = useCallback(() => {
     const target = selectedChatTargetRef.current
@@ -874,7 +900,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
 
   const dispatchMessage = useCallback(
     (text: string, files?: FileUIPart[]) => {
-      void runLocalRequest(() => {
+      // Returns the turn's promise so a caller sending several can wait for
+      // each before starting the next.
+      return runLocalRequest(() => {
         trackMessageSent()
         startExecutionTask({
           conversationId: conversationIdRef.current,
@@ -890,10 +918,27 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     isIntegrationsSyncedRef.current = isIntegrationsSynced
   }, [isIntegrationsSynced])
 
+  // Flushes what `sendMessage` held while something was still loading. It waits
+  // on the target lists too: a queued message dispatched before they settle
+  // would name no provider and come back as a server-side rejection.
   useEffect(() => {
-    if (isIntegrationsSynced && agentServerUrl && pendingMessageRef.current) {
-      const pending = pendingMessageRef.current
-      pendingMessageRef.current = null
+    if (!isSettled || pendingMessagesRef.current.length === 0) return
+
+    if (!hasAnyTarget) {
+      // The wait resolved to nothing connected. Say so, and keep the messages:
+      // connecting a provider re-runs this and sends them, so a handoff whose
+      // query parameters are already gone is not lost.
+      setSendAttemptBlocked(true)
+      return
+    }
+
+    if (!isIntegrationsSynced || !agentServerUrl) return
+
+    // Taken before the first await so a re-run cannot dispatch them twice.
+    const queued = pendingMessagesRef.current
+    pendingMessagesRef.current = []
+
+    void drainPendingSends(queued, (pending) => {
       const { action } = pending
       if (action) {
         setTextToAction((prev) => {
@@ -902,19 +947,48 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           return next
         })
       }
-      dispatchMessage(pending.text, pending.files)
-    }
-  }, [agentServerUrl, dispatchMessage, isIntegrationsSynced])
+      return dispatchMessage(pending.text, pending.files)
+    })
+  }, [
+    agentServerUrl,
+    dispatchMessage,
+    hasAnyTarget,
+    isIntegrationsSynced,
+    isSettled,
+  ])
 
+  /**
+   * Sends, or reports why it did not.
+   *
+   * The boolean matters: callers clear the composer after this returns, so a
+   * refusal that looked like a send would take the user's draft with it. Every
+   * chat surface funnels through here, so the no-provider guard only has to
+   * exist once.
+   */
   const sendMessage = (params: {
     text: string
     action?: ChatAction
     files?: FileUIPart[]
-  }) => {
-    if (isRestoringConversation || restoreError) return
-    if (!isIntegrationsSyncedRef.current || !agentUrlRef.current) {
-      pendingMessageRef.current = params
-      return
+  }): boolean => {
+    const decision = decideChatSend({
+      isRestoring: isRestoringConversation,
+      hasRestoreError: Boolean(restoreError),
+      isSettled: isSettledRef.current,
+      hasAnyTarget: hasAnyTargetRef.current,
+      isIntegrationsSynced: isIntegrationsSyncedRef.current,
+      hasAgentUrl: Boolean(agentUrlRef.current),
+    })
+
+    if (decision === 'drop') return false
+    if (decision === 'refuse') {
+      setSendAttemptBlocked(true)
+      return false
+    }
+    if (decision === 'queue') {
+      // Retained, not refused: it still reaches the model once the wait is
+      // over, so the caller is right to clear the composer.
+      pendingMessagesRef.current.push(params)
+      return true
     }
 
     if (params.action) {
@@ -926,6 +1000,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
       })
     }
     dispatchMessage(params.text, params.files)
+    return true
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: only need to run this once
@@ -973,7 +1048,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const resetConversationState = () => {
     const previousConversationId = conversationIdRef.current
     attachmentRef.current?.retire(previousConversationId)
-    pendingMessageRef.current = null
+    pendingMessagesRef.current = []
     localStreamConversationRef.current = undefined
     discardServerSession(previousConversationId)
     const nextId = crypto.randomUUID()
@@ -1056,6 +1131,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     providers,
     selectedProvider,
     isLoading: isLoadingProviders || isLoadingAgentUrl,
+    hasAnyTarget,
+    isSettled,
+    sendBlocked,
     canSend,
     isSyncing: !isIntegrationsSynced,
     isIncognito,
