@@ -85,6 +85,7 @@ fn route(method: &str) -> Route {
         | "page.waitForURL"
         | "page.waitForFunction"
         | "page.waitForEvent"
+        | "page.frames"
         | "page.dialog"
         | "context.waitForEvent"
         | "locator.waitFor" => Route::Waits,

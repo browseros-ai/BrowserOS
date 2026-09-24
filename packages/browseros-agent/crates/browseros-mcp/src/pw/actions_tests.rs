@@ -70,6 +70,7 @@ struct ActionConnection {
     probe: Option<Value>,
     calls: Mutex<Vec<(String, Value)>>,
     hang_input: bool,
+    engine: bool,
 }
 impl ActionConnection {
     fn new(probe: Option<Value>) -> Self {
@@ -78,6 +79,7 @@ impl ActionConnection {
             probe,
             calls: Mutex::new(Vec::new()),
             hang_input: false,
+            engine: false,
         }
     }
 }
@@ -91,6 +93,56 @@ impl CdpConnection for ActionConnection {
         Box::pin(async move {
             if let Ok(mut calls) = self.calls.lock() {
                 calls.push((method.into(), params.clone()));
+            }
+            if self.engine {
+                let value = match method {
+                    "Page.getFrameTree" => Some(json!({"frameTree":{"frame":{"id":"root"}}})),
+                    "Page.createIsolatedWorld" => Some(json!({"executionContextId":42})),
+                    "Emulation.setFocusEmulationEnabled"
+                    | "DOM.focus"
+                    | "DOM.scrollIntoViewIfNeeded"
+                    | "Runtime.releaseObject" => Some(json!({})),
+                    "DOM.getBoxModel" => Some(
+                        json!({"model":{"content":[10,10,30,10,30,30,10,30],"padding":[10,10,30,10,30,30,10,30]}}),
+                    ),
+                    "DOM.getContentQuads" => Some(json!({"quads":[[10,10,30,10,30,30,10,30]]})),
+                    "DOM.resolveNode" => Some(json!({"object":{"objectId":"main-node"}})),
+                    "DOM.describeNode" if params.get("objectId").is_some() => {
+                        Some(json!({"node":{"backendNodeId":5}}))
+                    }
+                    "DOM.describeNode" => {
+                        let probe = self.probe.as_ref().ok_or_else(|| CdpError::Protocol {
+                            code: -1,
+                            message: "describe probe failed".into(),
+                        })?;
+                        Some(
+                            json!({"node":{"backendNodeId":5,"localName":"input","attributes":["type",probe["type"],"autocomplete",probe["autocomplete"]]}}),
+                        )
+                    }
+                    "Runtime.evaluate" if params.get("contextId").is_some() => {
+                        Some(json!({"result":{"objectId":"engine"}}))
+                    }
+                    "Runtime.callFunctionOn" => {
+                        let source = params["functionDeclaration"].as_str().unwrap_or("");
+                        if source.contains("this.parseSelector") {
+                            Some(
+                                json!({"result":{"value":{"parts":[{"name":"css","body":[],"source":"input"}]}}}),
+                            )
+                        } else if source.contains("this.querySelector(parsed, document, strict)") {
+                            Some(json!({"result":{"objectId":"element"}}))
+                        } else if source.contains("return !!this.ownerDocument") {
+                            Some(json!({"result":{"value":true}}))
+                        } else if params["arguments"][0]["value"] == "hitTarget" {
+                            Some(json!({"result":{"value":"done"}}))
+                        } else {
+                            Some(json!({"result":{"value":null}}))
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    return Ok(value);
+                }
             }
             match method {
                 "Input.insertText" | "Input.dispatchKeyEvent" if self.hang_input => {
@@ -179,8 +231,16 @@ fn actions_method_prefixes() {
 #[tokio::test]
 async fn actions_click_keeps_one_authorize_then_record() -> anyhow::Result<()> {
     let hook = Arc::new(Hook::default());
-    let ctx = context(Arc::new(ActionConnection::new(None)), hook.clone());
-    let result=script(&ctx,"try { await __browserosCall('locator.click', '[1,\"css=button\"]', false); } catch (e) {} return 1;",1000).await?;
+    let mut connection = ActionConnection::new(None);
+    connection.engine = true;
+    let connection = Arc::new(connection);
+    let ctx = context(connection.clone(), hook.clone());
+    let result = script(
+        &ctx,
+        "await __browserosCall('locator.click', '[1,\"css=button\"]', false); return 1;",
+        1000,
+    )
+    .await?;
     assert_eq!(result["ok"], true);
     let events = hook.events();
     assert_eq!(events.len(), 2);
@@ -189,6 +249,43 @@ async fn actions_click_keeps_one_authorize_then_record() -> anyhow::Result<()> {
     assert_eq!(events[1][1], "locator.click");
     assert_eq!(events[1][2], 1);
     assert_eq!(events[1][3], json!([1, "css=button"]));
+    assert_eq!(
+        events[1][5], false,
+        "click must succeed against the fake engine"
+    );
+    let calls = connection
+        .calls
+        .lock()
+        .map_err(|_| anyhow::anyhow!("poisoned calls"))?;
+    let scroll = calls
+        .iter()
+        .position(|(m, _)| m == "DOM.scrollIntoViewIfNeeded")
+        .ok_or_else(|| anyhow::anyhow!("no scroll"))?;
+    let states = calls
+        .iter()
+        .position(|(m, p)| {
+            m == "Runtime.callFunctionOn"
+                && p["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("this.checkElementStates(el, states)"))
+        })
+        .ok_or_else(|| anyhow::anyhow!("no state wait"))?;
+    let hit = calls
+        .iter()
+        .position(|(m, p)| {
+            m == "Runtime.callFunctionOn" && p["arguments"][0]["value"] == "hitTarget"
+        })
+        .ok_or_else(|| anyhow::anyhow!("no hit target"))?;
+    let input = calls
+        .iter()
+        .position(|(m, p)| m == "Input.dispatchMouseEvent" && p["type"] == "mousePressed")
+        .ok_or_else(|| anyhow::anyhow!("no trusted click"))?;
+    assert!(scroll < states && states < hit && hit < input);
+    assert!(
+        calls
+            .iter()
+            .any(|(m, p)| m == "Runtime.releaseObject" && p["objectId"] == "element")
+    );
     Ok(())
 }
 
@@ -376,5 +473,24 @@ async fn actions_context_pages_uses_hook_ownership() -> anyhow::Result<()> {
     assert_eq!(result["value"][0]["ownership"], "mine");
     ctx.inner_call_hook = None;
     assert_eq!(script(&ctx, code, 1000).await?["value"], json!([]));
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_locator_type_masks_describe_password_and_failure() -> anyhow::Result<()> {
+    for probe in [Some(json!({"type":"password","autocomplete":""})), None] {
+        let hook = Arc::new(Hook::default());
+        let mut connection = ActionConnection::new(probe);
+        connection.engine = true;
+        let ctx = context(Arc::new(connection), hook.clone());
+        let result=script(&ctx,r#"await __browserosCall('locator.type','[1,"css=input","keep-me-secret"]',false); return true;"#,1000).await?;
+        assert_eq!(result["ok"], true, "{result}");
+        let events = hook.events();
+        let row = events
+            .last()
+            .ok_or_else(|| anyhow::anyhow!("no audit row"))?;
+        assert_eq!(row[3], json!([1, "css=input", "[redacted]"]));
+        assert_eq!(row[4], json!(["keep-me-secret"]));
+    }
     Ok(())
 }

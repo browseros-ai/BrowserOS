@@ -329,10 +329,6 @@ async fn dispatch_inner(
                 "page.info" | "neo.page" => page_info(bridge, page, dl).await?,
                 "page.content" => evaluate_page(bridge, page, "(() => (document.doctype ? new XMLSerializer().serializeToString(document.doctype) + '\\n' : '') + document.documentElement.outerHTML)()", None).await?,
                 "page.evaluate" => evaluate_page(bridge, page, string_arg(args, 1, "function").map_err(CoreError::from)?, Some(args.get(2).cloned().unwrap_or(Value::Null))).await?,
-                "page.frames" => {
-                    let session = bridge.ctx.session.pages.get_session(page).await?.session;
-                    session.send_value("Page.getFrameTree", json!({})).await?
-                }
                 "page.screenshot" | "page.pdf" | "neo.read" | "neo.grep" | "neo.download" => return tool_action(bridge, method, args).await,
                 "neo.snapshot" => {
                     let snapshot = bridge.ctx.session.observe(page).await.snapshot().await?;
