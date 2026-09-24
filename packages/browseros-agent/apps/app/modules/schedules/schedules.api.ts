@@ -7,7 +7,7 @@ import type {
   ScheduledJob,
   ScheduledJobRun,
 } from '@/lib/schedules/scheduleTypes'
-import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
+import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import {
   type ScheduledJobRow,
   type ScheduledJobRunRow,
@@ -19,12 +19,12 @@ import {
 import { bumpScheduleRevision } from './schedules.revision'
 
 async function jobsClient() {
-  const baseUrl = await resolveAgentServerUrlWithRetry()
+  const baseUrl = await resolveAgentServerUrl()
   return hc<ScheduledJobRoutes>(`${baseUrl}/scheduled-jobs`)
 }
 
 async function runsClient() {
-  const baseUrl = await resolveAgentServerUrlWithRetry()
+  const baseUrl = await resolveAgentServerUrl()
   return hc<ScheduledJobRunRoutes>(`${baseUrl}/scheduled-job-runs`)
 }
 

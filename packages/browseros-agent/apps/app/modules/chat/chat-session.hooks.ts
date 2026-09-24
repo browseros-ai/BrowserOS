@@ -31,7 +31,7 @@ import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
-import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
+import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import {
   fetchServerConversation,
@@ -391,7 +391,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   if (!transportRef.current) {
     transportRef.current = new DefaultChatTransport<UIMessage>({
       prepareReconnectToStreamRequest: async ({ body }) => {
-        const serverUrl = await resolveAgentServerUrlWithRetry()
+        const serverUrl = await resolveAgentServerUrl()
         return {
           api: conversationReconnectUrl(
             serverUrl,
@@ -475,7 +475,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         const message = getLastMessageText(messages)
 
         const result = await prepareSidepanelSendMessagesRequest({
-          resolveAgentServerUrl: resolveAgentServerUrlWithRetry,
+          resolveAgentServerUrl,
           target,
           fallbackProvider,
           message,
@@ -558,8 +558,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const stoppedConversationId = conversationIdRef.current
     const detaching = detachView()
     try {
-      const serverUrl =
-        agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry())
+      const serverUrl = agentUrlRef.current ?? (await resolveAgentServerUrl())
       const response = await fetch(
         `${serverUrl}/chat/${encodeURIComponent(stoppedConversationId)}/stop`,
         { method: 'POST' },
@@ -589,7 +588,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const attachment = new PanelConversationAttachment({
       load: async (id, signal) =>
         fetchConversationRunState(
-          agentUrlRef.current ?? (await resolveAgentServerUrlWithRetry()),
+          agentUrlRef.current ?? (await resolveAgentServerUrl()),
           id,
           fetch,
           AbortSignal.any([signal, AbortSignal.timeout(10_000)]),
