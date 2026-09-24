@@ -29,6 +29,28 @@ const SDK_SURFACE: &[&str] = &[
     "saveHelper",
     "listHelpers",
     "readHelper",
+    // the page handle, and the browser members that hand one out
+    "page",
+    "open",
+    "history",
+    "helpers",
+    "id",
+    "info",
+    "check",
+    "uncheck",
+    "focus",
+    "drag",
+    "insertText",
+    "clickAt",
+    "typeAt",
+    "hoverAt",
+    "dragAt",
+    "dialogAccept",
+    "dialogDismiss",
+    "waitForSelector",
+    "waitForText",
+    "waitForTime",
+    "save",
     // chained methods, the ones agents reach for on the wrong shape
     "snapshot",
     "diff",
@@ -65,6 +87,46 @@ const SDK_SURFACE: &[&str] = &[
     "Buffer",
     "__dirname",
     "global",
+];
+
+/// Members of other browser-automation libraries that this SDK deliberately does not
+/// have. The handle's runtime guard answers each of these with the way to do it here;
+/// echoing the name too is what makes those misses countable, and turns the counts into
+/// a demand signal for what to build next.
+///
+/// Same construction as `SDK_SURFACE`, and safe for the same reason: the fallback can
+/// only emit a name drawn from this list, never a span of the message.
+const ABSENT_SURFACE: &[&str] = &[
+    "locator",
+    "getByRole",
+    "getByText",
+    "getByLabel",
+    "getByTestId",
+    "getByPlaceholder",
+    "frameLocator",
+    "expect",
+    "route",
+    "unroute",
+    "waitForRequest",
+    "waitForResponse",
+    "waitForEvent",
+    "on",
+    "frames",
+    "mainFrame",
+    "setContent",
+    "setViewportSize",
+    "addInitScript",
+    "exposeFunction",
+    "ariaSnapshot",
+    "content",
+    "waitForTimeout",
+    "waitForURL",
+    "waitForLoadState",
+    "goBack",
+    "goForward",
+    "setInputFiles",
+    "dragAndDrop",
+    "dblclick",
 ];
 
 /// What we are willing to say about a failure.
@@ -157,24 +219,31 @@ pub fn classify(message: &str) -> ErrorClass {
     }
 }
 
-/// Pulls the first SDK-surface identifier out of free text. Returning `None` is always
-/// safe; returning a value is only possible for names we ship.
+/// Pulls the first identifier we own out of free text. Returning `None` is always safe;
+/// returning a value is only possible for a name drawn from `SDK_SURFACE` or
+/// `ABSENT_SURFACE`, never from the message itself.
 fn sdk_identifier_in(rest: &str) -> Option<String> {
     let mut token = String::new();
-    let mut found: Option<String> = None;
+    let mut absent: Option<String> = None;
+    let mut ours: Option<String> = None;
     for c in rest.chars().chain(std::iter::once(' ')) {
         if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
             token.push(c);
             continue;
         }
         if !token.is_empty() {
-            if SDK_SURFACE.contains(&token.as_str()) && found.is_none() {
-                found = Some(token.clone());
+            if absent.is_none() && ABSENT_SURFACE.contains(&token.as_str()) {
+                absent = Some(token.clone());
+            } else if ours.is_none() && SDK_SURFACE.contains(&token.as_str()) {
+                ours = Some(token.clone());
             }
             token.clear();
         }
     }
-    found
+    // A refused member is the informative half of `page.getByRole is not a
+    // function`: the receiver is on our surface in every one of these, so
+    // reporting it would collapse every miss onto the same label.
+    absent.or(ours)
 }
 
 #[cfg(test)]
@@ -211,6 +280,36 @@ mod tests {
         assert_eq!(
             classify("ReferenceError: document is not defined").label(),
             "engine:ReferenceError:document"
+        );
+    }
+
+    /// The failure class the page handle can still produce: a caller reaching for a
+    /// member of another browser-automation library. Without a name on the label we
+    /// cannot tell one of these apart from any other type error, and the counts are
+    /// what say which one to build next.
+    #[test]
+    fn a_member_another_library_has_is_countable_by_name() {
+        assert_eq!(
+            classify("TypeError: page.getByRole is not a function").label(),
+            "engine:TypeError:getByRole"
+        );
+        assert_eq!(
+            classify("TypeError: page.waitForResponse is not a function").label(),
+            "engine:TypeError:waitForResponse"
+        );
+    }
+
+    /// The names the uniform handle added have to survive the same way, or a failure
+    /// naming one degrades to a bare `engine:TypeError`.
+    #[test]
+    fn the_page_handle_members_keep_their_identifier() {
+        assert_eq!(
+            classify("ReferenceError: waitForTime is not defined").label(),
+            "engine:ReferenceError:waitForTime"
+        );
+        assert_eq!(
+            classify("TypeError: browser.open is not a function").label(),
+            "engine:TypeError:browser"
         );
     }
 
