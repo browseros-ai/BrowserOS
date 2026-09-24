@@ -23,6 +23,31 @@ describe('mapTaskStatus', () => {
 })
 
 describe('mapDispatchToFrame', () => {
+  it.each([
+    ['playwright', 'type', 'ran a Playwright script'],
+    ['page.goto', 'navigate', 'navigated'],
+    ['locator.click', 'click', 'clicked'],
+    ['locator.fill', 'type', 'filled'],
+    ['locator.press', 'type', 'pressed'],
+    ['expect.toBeVisible', 'read', 'checked'],
+    ['expect.toHaveText', 'read', 'checked'],
+    ['locator.hover', 'read', 'locator.hover'],
+    ['page.reload', 'read', 'page.reload'],
+    ['run', 'type', 'run'],
+    ['act', 'click', 'act'],
+  ] as const)(
+    'describes %s in the replay without changing the existing icon categories',
+    (toolName, verb, caption) => {
+      const frame = mapDispatchToFrame(
+        row({ toolName }),
+        SESSION_START_MS,
+        new Map(),
+      )
+      expect(frame.verb).toBe(verb)
+      expect(frame.caption).toBe(caption)
+    },
+  )
+
   it('carries the source duration alongside the completion offset', () => {
     const frame = mapDispatchToFrame(
       row({ durationMs: 1_500 }),

@@ -7,7 +7,8 @@ import {
   Copy,
   Image as ImageIcon,
 } from 'lucide-react'
-import { useState } from 'react'
+import { type ReactNode, useMemo, useState } from 'react'
+import { CodeBlock } from '@/components/ai-elements/code-block'
 import { AspectRatio } from '@/components/ui/aspect-ratio'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -20,6 +21,7 @@ import { parseResultMeta } from '@/screens/audit/audit.helpers'
 
 interface TimelineProps {
   dispatches: ToolDispatchRow[]
+  parentToolNames?: ReadonlyMap<string, string>
   startedAt: number
   endEvent: {
     createdAt: number
@@ -36,44 +38,140 @@ interface TimelineProps {
   onScreenshotClick: (screenshotId: number) => void
 }
 
-const NOTABLE_TOOLS = new Set(['act', 'evaluate', 'run', 'download'])
+const NOTABLE_TOOLS = new Set([
+  'act',
+  'evaluate',
+  'run',
+  'playwright',
+  'download',
+])
 
-function defaultExpandedSet(dispatches: ToolDispatchRow[]): Set<number> {
-  const ids = new Set<number>()
-  for (const d of dispatches) {
-    if (NOTABLE_TOOLS.has(d.toolName)) ids.add(d.dispatchId)
+/** Links script steps by wire dispatch key; numeric IDs only identify UI rows. */
+interface DispatchNode {
+  dispatch: ToolDispatchRow
+  children: DispatchNode[]
+  code: string | null
+}
+
+function groupDispatches(dispatches: ToolDispatchRow[]): DispatchNode[] {
+  const nodes = dispatches.map(
+    (dispatch): DispatchNode => ({
+      dispatch,
+      children: [],
+      code: scriptCode(dispatch.argsJson),
+    }),
+  )
+  const byKey = new Map(
+    nodes.flatMap((node) =>
+      node.dispatch.dispatchKey
+        ? [[node.dispatch.dispatchKey, node] as const]
+        : [],
+    ),
+  )
+  const roots: DispatchNode[] = []
+  for (const node of nodes) {
+    const parent = node.dispatch.parentDispatchId
+      ? byKey.get(node.dispatch.parentDispatchId)
+      : undefined
+    // Children can arrive before their parent and per-tab lists omit page-less
+    // parents. Keep those steps visible at the top level until a parent exists.
+    if (parent && parent !== node) parent.children.push(node)
+    else roots.push(node)
   }
-  return ids
+  for (const node of nodes) {
+    node.children.sort(
+      (a, b) =>
+        a.dispatch.createdAt - b.dispatch.createdAt ||
+        a.dispatch.dispatchId - b.dispatch.dispatchId,
+    )
+  }
+  return roots
+}
+
+function isNotable(node: DispatchNode): boolean {
+  return (
+    NOTABLE_TOOLS.has(node.dispatch.toolName) ||
+    node.children.length > 0 ||
+    node.code !== null
+  )
+}
+
+function scriptCode(argsJson: string | undefined): string | null {
+  if (!argsJson) return null
+  try {
+    const args: unknown = JSON.parse(argsJson)
+    return args !== null &&
+      typeof args === 'object' &&
+      'code' in args &&
+      typeof args.code === 'string'
+      ? args.code
+      : null
+  } catch {
+    return null
+  }
 }
 
 export function Timeline({
   dispatches,
+  parentToolNames,
   startedAt,
   endEvent,
   showSessionEnd = true,
   onScreenshotClick,
 }: TimelineProps) {
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
-  // Initial state: notable action rows pre-expanded. Lazy init so the
-  // dispatch list is only walked once per mount; future polling
-  // updates do not reset the user's manual toggles.
-  const [expanded, setExpanded] = useState<Set<number>>(() =>
-    defaultExpandedSet(dispatches),
+  const roots = useMemo(() => groupDispatches(dispatches), [dispatches])
+  // Polling may deliver a script parent after its steps. Defaults apply to new
+  // rows too, while explicit user toggles survive regrouping and later polls.
+  const [expansionOverrides, setExpansionOverrides] = useState(
+    new Map<number, boolean>(),
   )
-  const toggle = (id: number): void => {
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(id)) next.delete(id)
-      else next.add(id)
-      return next
-    })
+  const expanded = new Set<number>()
+  const collectExpanded = (node: DispatchNode): void => {
+    if (expansionOverrides.get(node.dispatch.dispatchId) ?? isNotable(node)) {
+      expanded.add(node.dispatch.dispatchId)
+    }
+    node.children.forEach(collectExpanded)
   }
+  roots.forEach(collectExpanded)
+  const toggle = (id: number): void =>
+    setExpansionOverrides((prev) => new Map(prev).set(id, !expanded.has(id)))
   const expandAll = (): void =>
-    setExpanded(new Set(dispatches.map((d) => d.dispatchId)))
-  const collapseAll = (): void => setExpanded(new Set())
+    setExpansionOverrides(new Map(dispatches.map((d) => [d.dispatchId, true])))
+  const collapseAll = (): void =>
+    setExpansionOverrides(new Map(dispatches.map((d) => [d.dispatchId, false])))
   const allExpanded =
     dispatches.length > 0 && dispatches.every((d) => expanded.has(d.dispatchId))
   const noneExpanded = expanded.size === 0
+
+  const renderRow = (node: DispatchNode, nested = false): ReactNode => (
+    <TimelineRow
+      key={node.dispatch.dispatchId}
+      dispatch={node.dispatch}
+      offsetMs={Math.max(0, node.dispatch.createdAt - startedAt)}
+      expanded={expanded.has(node.dispatch.dispatchId)}
+      notable={isNotable(node)}
+      code={node.code}
+      parentToolName={
+        !nested && node.dispatch.parentDispatchId
+          ? parentToolNames?.get(node.dispatch.parentDispatchId)
+          : undefined
+      }
+      childCount={node.children.length}
+      hasChildError={node.children.some(
+        (child) => parseResultMeta(child.dispatch.resultMeta)?.isError === true,
+      )}
+      screenshotBaseUrl={screenshotBaseUrl}
+      onToggle={() => toggle(node.dispatch.dispatchId)}
+      onScreenshotClick={onScreenshotClick}
+    >
+      {node.children.length > 0 && (
+        <ol className="mt-3 ml-4 space-y-1.5 border-border-2 border-l pl-3">
+          {node.children.map((child) => renderRow(child, true))}
+        </ol>
+      )}
+    </TimelineRow>
+  )
 
   return (
     <section className="rounded-2xl border border-border-2 bg-card p-4">
@@ -110,17 +208,7 @@ export function Timeline({
         </div>
       </header>
       <ol className="space-y-1.5">
-        {dispatches.map((d) => (
-          <TimelineRow
-            key={d.dispatchId}
-            dispatch={d}
-            offsetMs={Math.max(0, d.createdAt - startedAt)}
-            expanded={expanded.has(d.dispatchId)}
-            screenshotBaseUrl={screenshotBaseUrl}
-            onToggle={() => toggle(d.dispatchId)}
-            onScreenshotClick={onScreenshotClick}
-          />
-        ))}
+        {roots.map((node) => renderRow(node))}
         {showSessionEnd && (
           <SessionEndRow startedAt={startedAt} endEvent={endEvent} />
         )}
@@ -133,6 +221,12 @@ interface TimelineRowProps {
   dispatch: ToolDispatchRow
   offsetMs: number
   expanded: boolean
+  notable: boolean
+  code: string | null
+  parentToolName?: string
+  childCount: number
+  hasChildError: boolean
+  children: ReactNode
   screenshotBaseUrl: string | null
   onToggle: () => void
   onScreenshotClick: (screenshotId: number) => void
@@ -142,11 +236,16 @@ function TimelineRow({
   dispatch,
   offsetMs,
   expanded,
+  notable,
+  code,
+  parentToolName,
+  childCount,
+  hasChildError,
+  children,
   screenshotBaseUrl,
   onToggle,
   onScreenshotClick,
 }: TimelineRowProps) {
-  const isNotable = NOTABLE_TOOLS.has(dispatch.toolName)
   const meta = parseResultMeta(dispatch.resultMeta)
   const isError = meta?.isError ?? false
   const screenshotId = dispatch.screenshotId
@@ -155,13 +254,14 @@ function TimelineRow({
     <li
       className={cn(
         'rounded-lg border border-transparent px-2 py-1.5',
-        isNotable && 'border-primary/30 bg-primary/5',
+        notable && 'border-primary/30 bg-primary/5',
         isError && 'border-red-500/30 bg-red-500/5',
       )}
     >
       <button
         type="button"
         onClick={onToggle}
+        aria-expanded={expanded}
         className={cn(
           'grid w-full grid-cols-[auto_5rem_minmax(0,1fr)_auto] items-center gap-3 rounded-md px-1 py-1 text-left transition-colors',
           // Hover-tint only the header, never the body. Otherwise the
@@ -179,11 +279,26 @@ function TimelineRow({
           T+{formatOffset(offsetMs)}
         </span>
         <div className="flex min-w-0 items-center gap-2">
+          {parentToolName && (
+            <span className="shrink-0 text-[11px] text-ink-3">
+              in {parentToolName} script
+            </span>
+          )}
           <span className="font-mono font-semibold text-[12.5px] text-ink">
             {dispatch.toolName}
           </span>
+          {childCount > 0 && (
+            <span className="shrink-0 rounded bg-card-tint px-1.5 text-[11px] text-ink-3">
+              {childCount} {childCount === 1 ? 'step' : 'steps'}
+            </span>
+          )}
+          {hasChildError && (
+            <span className="shrink-0 rounded bg-red-500/10 px-1.5 text-[11px] text-red-500">
+              Step failed
+            </span>
+          )}
           <span className="truncate text-[12.5px] text-ink-3">
-            {argsSummary(dispatch.argsJson)}
+            {argsSummary(code ?? dispatch.argsJson)}
           </span>
         </div>
         <span className="font-mono text-[11.5px] text-ink-3">
@@ -192,12 +307,16 @@ function TimelineRow({
       </button>
       {expanded && (
         <div className="mt-2 space-y-2 border-border-2 border-t px-1 pt-2">
-          {dispatch.argsJson && (
-            <Block label="args" copyText={dispatch.argsJson}>
-              <pre className="overflow-x-auto whitespace-pre-wrap break-all text-[11.5px]">
-                {dispatch.argsJson}
-              </pre>
-            </Block>
+          {code !== null ? (
+            <ScriptCode code={code} />
+          ) : (
+            dispatch.argsJson && (
+              <Block label="args" copyText={dispatch.argsJson}>
+                <pre className="overflow-x-auto whitespace-pre-wrap break-all text-[11.5px]">
+                  {dispatch.argsJson}
+                </pre>
+              </Block>
+            )
           )}
           {dispatch.resultMeta && (
             <Block label="result" copyText={dispatch.resultMeta}>
@@ -258,9 +377,40 @@ function TimelineRow({
                 No extra detail recorded.
               </div>
             )}
+          {children}
         </div>
       )}
     </li>
+  )
+}
+
+const SCRIPT_PREVIEW_LINES = 40
+
+function ScriptCode({ code }: { code: string }) {
+  const [showAll, setShowAll] = useState(false)
+  const lines = code.split('\n')
+  const truncated = lines.length > SCRIPT_PREVIEW_LINES
+  const visibleCode = showAll
+    ? code
+    : lines.slice(0, SCRIPT_PREVIEW_LINES).join('\n')
+  return (
+    <Block label="code" copyText={code}>
+      <CodeBlock
+        code={visibleCode}
+        language="javascript"
+        className="border-0 [&_code]:text-[11.5px] [&_pre]:p-0"
+      />
+      {truncated && (
+        <button
+          type="button"
+          onClick={() => setShowAll((prev) => !prev)}
+          aria-expanded={showAll}
+          className="mt-2 text-[11.5px] text-accent hover:underline"
+        >
+          {showAll ? 'Show less' : `Show all ${lines.length} lines`}
+        </button>
+      )}
+    </Block>
   )
 }
 
@@ -275,7 +425,7 @@ function Block({
 }) {
   const [copied, setCopied] = useState(false)
   const handleCopy = (): void => {
-    if (!copyText) return
+    if (copyText === undefined) return
     void navigator.clipboard.writeText(copyText).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 1500)
@@ -287,7 +437,7 @@ function Block({
         <div className="font-mono font-semibold text-[10.5px] text-ink-3 uppercase tracking-wide">
           {label}
         </div>
-        {copyText && (
+        {copyText !== undefined && (
           <button
             type="button"
             onClick={handleCopy}
