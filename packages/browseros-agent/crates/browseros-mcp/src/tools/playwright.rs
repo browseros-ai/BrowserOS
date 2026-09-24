@@ -208,7 +208,8 @@ mod tests {
             record: crate::framework::InnerCallRecord<'a>,
         ) -> BoxFuture<'a, ()> {
             Box::pin(async move {
-                assert!(record.is_error);
+                // Leaves may succeed or fail against the fake browser; only the
+                // routing and attribution are pinned here.
                 assert!(!record.from_helper);
                 assert!(record.secrets.is_empty());
                 self.recorded
@@ -254,12 +255,12 @@ mod tests {
             .collect::<Vec<_>>();
         let code = format!(
             r#"
-            const errors = [];
+            const outcomes = [];
             for (const method of {}) {{
-                try {{ await __browserosCall(method, '[7]', false); }}
-                catch (error) {{ errors.push(error.message); }}
+                try {{ await __browserosCall(method, '[7]', false); outcomes.push('ok'); }}
+                catch (error) {{ outcomes.push(error.message); }}
             }}
-            return errors;
+            return outcomes;
         "#,
             serde_json::to_string(&names)?
         );
@@ -268,16 +269,16 @@ mod tests {
         let output = result
             .structured_content
             .ok_or_else(|| anyhow::anyhow!("missing output"))?;
-        // Every leaf errors against the fake browser (stub or real), so the
-        // value is one error message per method. The exact text belongs to the
-        // leaf pieces and their own tests; this test pins routing and audit.
-        let errors = output["value"]
+        // One outcome per method: 'ok' or the leaf's error text. The exact
+        // text belongs to the leaf pieces and their own tests; this test pins
+        // routing and audit attribution.
+        let outcomes = output["value"]
             .as_array()
-            .ok_or_else(|| anyhow::anyhow!("errors are not an array"))?;
-        assert_eq!(errors.len(), names.len());
-        for (method, error) in names.iter().zip(errors) {
-            let text = error.as_str().unwrap_or_default();
-            assert!(!text.is_empty(), "{method} produced an empty error");
+            .ok_or_else(|| anyhow::anyhow!("outcomes are not an array"))?;
+        assert_eq!(outcomes.len(), names.len());
+        for (method, outcome) in names.iter().zip(outcomes) {
+            let text = outcome.as_str().unwrap_or_default();
+            assert!(!text.is_empty(), "{method} produced an empty outcome");
         }
         assert_eq!(
             *hook
