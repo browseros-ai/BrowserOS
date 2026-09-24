@@ -13,11 +13,3 @@ processes:
     depends_on:
       install:
         condition: process_completed_successfully
-
-  agent-codegen:
-    command: bun --cwd apps/app codegen --watch
-    availability:
-      restart: always
-    depends_on:
-      install:
-        condition: process_completed_successfully

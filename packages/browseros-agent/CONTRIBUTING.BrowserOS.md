@@ -10,10 +10,10 @@ BrowserOS is two pieces that run together.
 
 | Project | What it is | Stack |
 |---|---|---|
-| [`apps/app`](apps/app/) | The extension. New tab, side panel chat, onboarding and settings | WXT + React extension, GraphQL with codegen and graphqlsp, AI SDK React bindings, Radix and shadcn, PostHog |
+| [`apps/app`](apps/app/) | The extension. New tab, side panel chat, onboarding and settings | WXT + React extension, AI SDK React bindings, Radix and shadcn, PostHog |
 | [`apps/server`](apps/server/) | The server. The MCP tool surface plus the agent loop that runs your tasks | Bun. Hono with zod-validator, MCP served over Hono, Drizzle ORM with drizzle-kit, AI SDK across Anthropic, OpenAI, Google, Bedrock, Azure, OpenRouter and more |
 
-The extension talks GraphQL to the server. The schema lives at [`apps/app/schema/schema.graphql`](apps/app/schema/schema.graphql) and the typed documents are generated, so run `bun run codegen:agent` after changing it rather than editing generated files.
+The extension talks to the server over its HTTP routes, typed end to end with Hono RPC. There is no schema to regenerate.
 
 ## Prerequisites
 
@@ -37,7 +37,7 @@ cp .env.development.example .env.development
 
 Everything in `.env.development` is optional for a first run. It holds analytics keys, Sentry DSNs, and port overrides, none of which you need to get the dev loop working. Copy it and move on.
 
-`bun run dev:setup` does the same install with a frozen lockfile and then runs codegen, which is what CI does.
+`bun run dev:setup` does the same install with a frozen lockfile, which is what CI does.
 
 ## Run it
 
@@ -80,12 +80,6 @@ bun test         # TypeScript suites
 ```
 
 Lint and formatting are Biome. `bun run lint:fix` applies what it can.
-
-If you changed the GraphQL schema, regenerate and commit the output:
-
-```bash
-bun run codegen:agent
-```
 
 ## Handy extras
 

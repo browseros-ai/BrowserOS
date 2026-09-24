@@ -144,7 +144,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}()
 	defer reservations.ReleaseAll()
 
-	if err := runDevSetup(cmd.Context(), root, setupModeIfNeeded); err != nil {
+	if err := runDevSetup(cmd.Context(), root); err != nil {
 		return err
 	}
 

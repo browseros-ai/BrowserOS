@@ -23,14 +23,9 @@
     "pino-pretty",
     "dotenv",
     "picocolors",
-    "@browseros/cdp-protocol",
-    "@graphql-typed-document-node/core"
+    "@browseros/cdp-protocol"
   ],
-  "ignoreUnresolvedImports": [
-    "@/assets/**",
-    "@/generated/graphql/**",
-    "@/styles/global.css"
-  ],
+  "ignoreUnresolvedImports": ["@/assets/**", "@/styles/global.css"],
   "ignorePatterns": [
     "**/*.d.ts",
     "**/dist/**",
@@ -74,8 +69,7 @@
         "**/*.spec.ts",
         "**/*.spec.tsx",
         "**/tests/**",
-        "**/*.config.ts",
-        "**/codegen.ts"
+        "**/*.config.ts"
       ],
       "rules": {
         "unused-exports": "off",

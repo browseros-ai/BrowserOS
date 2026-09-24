@@ -39,7 +39,7 @@ cp .env.development.example .env.development
 
 Everything in `.env.development` is optional for a first run. It holds analytics keys, Sentry DSNs, and port overrides, none of which you need to get the dev loop working. Copy it and move on.
 
-`bun run dev:setup` does the same install with a frozen lockfile and then runs codegen, which is what CI does.
+`bun run dev:setup` does the same install with a frozen lockfile, which is what CI does.
 
 ## Run it
 
