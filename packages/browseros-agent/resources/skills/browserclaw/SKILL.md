@@ -19,7 +19,7 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 
 - `snapshot` renders the page as an accessibility tree; interactive elements carry `[ref=eN]` handles.
 - `act` drives elements by ref and batches whole forms with `fields[]`.
-- `act` reads back a settled diff of what changed. Treat that as verification instead of reflexively waiting or taking another snapshot.
+- `act` reads back a settled diff of what changed. Treat that as verification instead of reflexively waiting or taking another snapshot. On a large page, pass `diff` (`"summary"` for counts only, `"none"` to skip it, or a number to cap the inline diff) so the readback does not flood context.
 - When an action fails, fix the cause reported by the error instead of retrying blindly.
 - Refs go stale when the page changes. Take another snapshot before reusing them.
 - If the page is still loading, wait for expected text or a selector instead of using a bare timed wait.

@@ -1,5 +1,8 @@
 use crate::{
-    format::{diff::format_diff_result, snapshot::format_snapshot_result},
+    format::{
+        diff::{DiffDetail, format_diff_result},
+        snapshot::format_snapshot_result,
+    },
     framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, catalog, execute_tool},
     output_file::create_browser_output_file_access,
     response::ToolResponse,
@@ -1185,6 +1188,7 @@ async fn diff_formatter_keeps_unchanged_compact() {
         },
         "https://example.com/current",
         &fake_ctx(),
+        DiffDetail::Full,
     )
     .await;
     assert_eq!(formatted.text, "no change since last snapshot");
@@ -1195,7 +1199,7 @@ async fn diff_formatter_keeps_unchanged_compact() {
 async fn diff_post_action_failure_is_visible() {
     let ctx = fake_ctx();
     let mut response = ToolResponse::new();
-    response.include_diff(7, true);
+    response.include_diff(7, true, DiffDetail::Full);
     let built = response
         .build_for_session(&ctx, None)
         .await
@@ -1228,6 +1232,107 @@ fn wait_parse_ms_matches_ts_fallback_rules() {
     assert_eq!(wait::parse_wait_ms(Some(""), 2_000), 2_000);
     assert_eq!(wait::parse_wait_ms(Some("-1"), 2_000), 2_000);
     assert_eq!(wait::parse_wait_ms(Some("1500.6"), 2_000), 1_501);
+}
+
+#[test]
+fn wait_time_resolution_honors_long_values_and_caps() {
+    // 75000ms (the reporter's case) is honored, not silently clamped to 30000 (#2701).
+    assert_eq!(wait::resolve_time_wait_ms(Some("75000"), None), Ok(75_000));
+    // An explicit timeout still bounds the pause from above.
+    assert_eq!(
+        wait::resolve_time_wait_ms(Some("75000"), Some(40.0)),
+        Ok(40)
+    );
+    assert_eq!(wait::resolve_time_wait_ms(Some("5"), Some(999.0)), Ok(5));
+    // A timeout above the value leaves a long-but-valid pause honored.
+    assert_eq!(
+        wait::resolve_time_wait_ms(Some("75000"), Some(500_000.0)),
+        Ok(75_000)
+    );
+    // A missing value defaults to the default pause.
+    assert_eq!(wait::resolve_time_wait_ms(None, None), Ok(2_000));
+    // A value past the cap is rejected, naming the cap.
+    let err = wait::resolve_time_wait_ms(Some("120001"), None)
+        .err()
+        .unwrap_or_else(|| panic!("expected over-cap value to be rejected"));
+    assert!(err.contains("90000"));
+    assert!(err.contains("120001"));
+}
+
+#[tokio::test]
+async fn diff_formatter_summary_returns_counts_only() {
+    let formatted = format_diff_result(
+        &SnapshotDiff {
+            changed: true,
+            text: "+ button \"Save\" [ref=e1]".to_string(),
+            added: 4,
+            removed: 1,
+            ..SnapshotDiff::default()
+        },
+        "https://example.com/current",
+        &fake_ctx(),
+        DiffDetail::Summary,
+    )
+    .await;
+    assert!(formatted.text.contains("4 added, 1 removed"));
+    assert!(!formatted.text.contains("+ button \"Save\" [ref=e1]"));
+}
+
+#[tokio::test]
+async fn diff_formatter_maxchars_keeps_nav_notice() {
+    // Fits within budget -> whole diff.
+    let fits = format_diff_result(
+        &SnapshotDiff {
+            changed: true,
+            text: "+ node \"Save\"".to_string(),
+            added: 1,
+            ..SnapshotDiff::default()
+        },
+        "https://example.com/current",
+        &fake_ctx(),
+        DiffDetail::MaxChars(10_000),
+    )
+    .await;
+    assert!(fits.text.contains("+ node \"Save\""));
+
+    // A navigation snapshot capped by maxChars must keep the URL-change notice.
+    let nav = format_diff_result(
+        &SnapshotDiff {
+            changed: true,
+            text: "new page snapshot body".to_string(),
+            url_changed: true,
+            before_url: Some("https://example.com/a".to_string()),
+            after_url: Some("https://example.com/b".to_string()),
+            ..SnapshotDiff::default()
+        },
+        "https://example.com/b",
+        &fake_ctx(),
+        DiffDetail::MaxChars(10_000),
+    )
+    .await;
+    assert!(nav.text.contains("URL changed"));
+    assert!(nav.text.contains("https://example.com/a"));
+    assert!(nav.text.contains("https://example.com/b"));
+}
+
+#[tokio::test]
+async fn diff_formatter_maxchars_truncates_large_diff() {
+    let body = format!("{}{}", "x".repeat(500), "TAILMARKER");
+    let formatted = format_diff_result(
+        &SnapshotDiff {
+            changed: true,
+            text: body,
+            added: 1,
+            ..SnapshotDiff::default()
+        },
+        "https://example.com/large",
+        &fake_ctx(),
+        DiffDetail::MaxChars(50),
+    )
+    .await;
+    assert!(formatted.text.contains("truncated at 50 chars"));
+    assert!(!formatted.text.contains("TAILMARKER"));
+    assert_eq!(formatted.structured.get("truncated"), Some(&json!(true)));
 }
 
 fn assert_no_boolean_schema_nodes(tool_name: &str, schema_kind: &str, schema: &Value) {
