@@ -5,13 +5,14 @@ import { cloudSyncNoticeDismissedStorage } from '@/lib/cloud-sync/cloud-sync-sto
 /**
  * Tells the user what changed, once, wherever their synced data used to live.
  *
- * Deliberately past tense. Sync stops in the same release this ships, so a
- * warning about the future would be describing something that has already
- * happened. It also answers the question people will actually have, which is
- * not whether sync is going away but whether they are about to lose anything.
+ * Deliberately past tense: all of it has already happened by the time this
+ * renders. It answers the question people actually have, which is not whether
+ * sync is going away but whether they are losing anything, and the honest
+ * answer now includes something they are.
  *
- * Dismissal persists: this is a one-time announcement, not a standing banner,
- * and it should not reappear on every visit to settings.
+ * Dismissal persists: this is a one-time announcement, not a standing banner.
+ * The key is versioned, so the earlier and now inaccurate wording being
+ * dismissed does not hide this one.
  */
 export const CloudSyncRetiredNotice: FC = () => {
   const [visible, setVisible] = useState(false)
@@ -45,9 +46,9 @@ export const CloudSyncRetiredNotice: FC = () => {
           Your data now stays on this device
         </p>
         <p className="text-muted-foreground text-xs">
-          Cloud sync has been turned off. Your providers, agents and schedules
-          are stored on this machine and keep working. Chats saved to the cloud
-          stay visible in history for now.
+          Accounts and cloud sync have been turned off. Your providers, agents
+          and schedules are stored on this machine and keep working. Chats that
+          were only ever saved to your account are no longer shown in history.
         </p>
       </div>
       <button
