@@ -15,6 +15,7 @@ const EXPECTED_PAGES = [
   'cursor.html',
   'dialog.html',
   'dynamic.html',
+  'fill.html',
   'form.html',
   'iframe-child.html',
   'iframe-grandchild.html',
