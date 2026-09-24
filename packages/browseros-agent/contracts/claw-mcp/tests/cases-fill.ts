@@ -1,10 +1,14 @@
-/** Fill is tested through both public MCP surfaces, with page-observed values
+/** Fill is tested through every public MCP surface, with page-observed values
  * and events. These contracts intentionally avoid the implementation's CDP calls.
+ *
+ * `run-legacy` drives the pre-handle call shape. Saved helpers on user machines
+ * hold that shape as source and are hot-loaded verbatim, so it has to keep
+ * behaving identically; these cases are what says so.
  */
 import type { CaseContext, ContractCase } from './cases'
 import { expectError, expectOk } from './helpers'
 
-type Surface = 'act' | 'run'
+type Surface = 'act' | 'run' | 'run-legacy'
 
 async function fieldRef(
   ctx: CaseContext,
@@ -25,11 +29,20 @@ async function fill(
   ref: string,
   value: string,
 ) {
-  return surface === 'act'
-    ? ctx.mcp.callTool('act', { page, kind: 'fill', fields: [{ ref, value }] })
-    : ctx.mcp.callTool('run', {
-        code: `await browser.input(${page}).fill(${JSON.stringify(ref)}, ${JSON.stringify(value)})`,
-      })
+  if (surface === 'act') {
+    return ctx.mcp.callTool('act', {
+      page,
+      kind: 'fill',
+      fields: [{ ref, value }],
+    })
+  }
+  // 'run-legacy' is the pre-handle call shape. Saved helpers on user machines
+  // hold it as source, so it is a compatibility contract now, not a duplicate.
+  const code =
+    surface === 'run-legacy'
+      ? `await browser.input(${page}).fill(${JSON.stringify(ref)}, ${JSON.stringify(value)})`
+      : `await browser.page(${page}).fill(${JSON.stringify(ref)}, ${JSON.stringify(value)})`
+  return ctx.mcp.callTool('run', { code })
 }
 
 async function assertPage(
@@ -49,7 +62,7 @@ async function assertPage(
 }
 
 export const fillCases: ContractCase[] = [
-  ...(['act', 'run'] as const).flatMap((surface) => [
+  ...(['act', 'run', 'run-legacy'] as const).flatMap((surface) => [
     {
       name: `${surface}: fill replaces text, textarea, editable and native input types`,
       async run(ctx: CaseContext) {

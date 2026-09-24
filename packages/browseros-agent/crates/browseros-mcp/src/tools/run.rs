@@ -3,7 +3,10 @@ use crate::framework::{
     execute_tool, page_json, parse_args, text_result,
 };
 use browseros_core::{
-    PageId, Ref, SessionId, WindowId, input::ScrollDirection, pages::NewPageOptions,
+    PageId, Ref, SessionId, WindowId,
+    input::ScrollDirection,
+    pages::NewPageOptions,
+    snapshot::{SnapshotMode, SnapshotOptions},
 };
 use futures_util::future::BoxFuture;
 use rquickjs::{
@@ -34,43 +37,43 @@ const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run f
 
 Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `sleep(ms)`, `setTimeout`/`clearTimeout`, and nothing else. There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through browser.evaluate, which runs inside the page.
 
-Two call shapes. Do not mix them:
-  chained, the pageId returns an object - browser.observe(id).x() / browser.input(id).x() / browser.nav(id).x()
-  flat, the pageId is the first argument - browser.read(id, opts) / grep / wait / evaluate / screenshot / download / pdf / upload
-  So browser.nav(id).goto(url) is right, and browser.wait(id).forText('x') is NOT a thing - it is browser.wait(id, { for: "text", value: "x" }).
+One rule: anything that needs a page hangs off a page handle, anything that does not hangs off `browser`. Get a handle with `browser.open(url)`, or `browser.page(id)` for an id you already have. Page actions address a snapshot ref like "e12", never a CSS selector.
 
 The return shapes below are stable. Do NOT probe them at runtime (no typeof / Object.keys / getOwnPropertyNames) and do NOT re-open a page to inspect what a call returned; that just piles up duplicate tabs.
 
-Pages (pageId is a NUMBER):
-  browser.pages.newPage(url)   -> pageId (number). Use it directly; it is not an object. Always opens in the background; it never switches the user's tab.
-  browser.pages.close(pageId)  -> undefined. Closes a page you own.
-  browser.pages.list()         -> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab in the browser, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act only on your own ("mine") tabs. Leave "user" and "other-agent" tabs alone unless the user explicitly asks you to work on one.
-  browser.pages.getInfo(pageId)-> { pageId, url, title, ... } or null
-  A pageId stays valid only while that tab is open and still yours. Reuse one across steps and across calls while that holds. If a call fails instantly on an id from an earlier turn, the tab is gone or was taken over - do not retry the same id. Re-derive it from browser.pages.list() filtered to ownership === "mine", or open a fresh page. Carrying the URL between calls is safer than carrying the id.
-Observe / act (refs eN come from a snapshot's text/refs):
-  browser.observe(pageId).snapshot() -> { text, refs, url }
-  browser.observe(pageId).diff()     -> { text, added, removed, changed }
-  browser.observe(pageId).resolveRef(ref) -> { backendNodeId, sessionId }
-  browser.input(pageId).click(ref) / fill(ref,value) / type(text) / press(key) / hover(ref) / selectOption(ref,value) / scroll(dir,amount,ref?)
-  browser.nav(pageId).goto(url) / back() / forward() / reload()
-Read / wait / capture:
-  browser.read(pageId)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
-  browser.grep(pageId, { pattern })  -> matching lines as a STRING
-  browser.wait(pageId, { for: "text", value: "..." } | { for: "selector", value: "..." } | { value: ms }) -> resolves when ready. For content that loads in, wait on the thing itself with { for: "selector" } (or { for: "text" }); it resolves the moment it appears - e.g. await browser.wait(3, { for: "selector", value: 'div[data-component-type="s-search-result"]' }). Use { value: ms } only for a plain fixed pause. setTimeout(fn, ms) and `await sleep(ms)` also work for a fixed pause. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
-  browser.evaluate(pageId, { code: "..." } | { func: "() => ..." }) - the second argument is an OBJECT and both forms take a STRING. Args are JSON-serialized on the way out, so a real function value is dropped: neither browser.evaluate(id, () => ...) nor { func: () => ... } works.
-  browser.screenshot(pageId) / pdf(pageId)
-  browser.download(pageId, opts) / upload(pageId, opts)
-  browser.tabGroups(opts) / windows(opts)
-Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page).
-  browser.saveHelper(name, source, { page } | { host }) - source is a function expression, e.g. async (browser, page) => { ... }
-  browser.listHelpers({ page } | { host }) -> { host, helpers: [{ name, ageDays, candidate }] }; browser.readHelper(name, { page } | { host }) -> source string
-Raw escape hatch: browser.cdp(method, params?, sessionId?) / browser.cdpJsonForPage(pageId, method, paramsJson).
+browser (nothing here takes a page):
+  browser.open(url)   -> a Page handle. Always opens in the background; it never switches the user's tab.
+  browser.page(id)    -> a Page handle for an id you already have. Safe to call on a handle too.
+  browser.pages.list()-> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act only on your own ("mine") tabs. Leave the others alone unless the user explicitly asks.
+  browser.history({ maxResults }) / tabGroups(opts) / windows(opts)
+  A handle stays valid only while that tab is open and still yours. Reuse one across steps and across calls while that holds. If a call fails instantly on a handle from an earlier turn, the tab is gone or was taken over - do not retry it. Re-derive from browser.pages.list() filtered to ownership === "mine", or open a fresh page. Carrying the URL between calls is safer than carrying the id.
+Page handle (refs eN come from a snapshot's text/refs):
+  page.id                            -> the page id as a NUMBER, for logs and return values
+  page.goto(url) / back() / forward() / reload()
+  page.snapshot({ mode, depth }?)    -> { text, refs, url }. mode "interactive" plus depth keeps a big page small.
+  page.diff()                        -> { text, added, removed, changed }
+  page.resolveRef(ref)               -> { backendNodeId, sessionId }
+  page.read(selector?)               -> the page as a markdown STRING (large pages are truncated with a note pointing to a saved file)
+  page.grep(pattern, { over, limit }?) -> matching lines as a STRING
+  page.click(ref) / fill(ref,value) / hover(ref) / selectOption(ref,value)
+  page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
+  page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
+  page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
+  page.dialogAccept() / dialogDismiss()
+  page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears. Use waitForTime only for a plain fixed pause; `await sleep(ms)` also works. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
+  page.evaluate(fn, arg?)            - runs INSIDE the page. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
+  page.screenshot(opts?) / pdf(opts?)
+  page.download(ref) / upload(ref, files)
+  page.close() / info()
+Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
+  page.helpers.save(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
+  page.helpers.list() -> { host, helpers: [{ name, ageDays, candidate }] }; page.helpers.read(name) -> source string
+Raw escape hatch: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson).
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
-  const ids = await Promise.all(urls.map(u => browser.pages.newPage(u)));
-  await Promise.all(ids.map(id => browser.wait(id, { value: 2500 })));
-  const docs = await Promise.all(ids.map(id => browser.read(id)));
-  return docs;"#;
+  const pages = await Promise.all(urls.map(u => browser.open(u)));
+  await Promise.all(pages.map(p => p.waitForSelector('.result')));
+  return await Promise.all(pages.map(p => p.read()));"#;
 
 const BOOTSTRAP_JS: &str = r#"
 (() => {
@@ -127,7 +130,210 @@ const BOOTSTRAP_JS: &str = r#"
     return (name, args) => call(`${prefix}.${name}`, [pageId, ...args]);
   }
 
+  const REF_PATTERN = /^e\d+$/;
+
+  // Page actions address a snapshot ref, not a selector. The handle is shaped
+  // like the browser-automation APIs a caller already knows, so a selector is
+  // the likeliest wrong guess; catching it here names the fix instead of
+  // letting it reach the wire as an unresolvable ref.
+  function asRef(value, method) {
+    if (typeof value === 'string' && REF_PATTERN.test(value)) return value;
+    throw new Error(
+      `page.${method}() takes a snapshot ref like "e12", not a CSS selector. ` +
+      'Call await page.snapshot() and use the [ref=eN] handle for the element you want.'
+    );
+  }
+
+  // A helper is stored as source text. Accept a real function too, for symmetry
+  // with page.evaluate, and serialize it here rather than letting the JSON
+  // boundary drop it and the bridge complain about a missing string.
+  function helperSource(source) {
+    const text = typeof source === 'function' ? String(source) : source;
+    if (typeof text !== 'string' || !text.trim()) {
+      throw new Error(
+        'saveHelper: source must be a function, or a non-empty function-expression string'
+      );
+    }
+    let fn;
+    try { fn = new Function('return (' + text + '\n);')(); }
+    catch (e) { throw new Error('saveHelper: source must be valid JS (' + e + ')'); }
+    if (typeof fn !== 'function') {
+      throw new Error('saveHelper: source must evaluate to a function, e.g. async (browser, page) => { ... }');
+    }
+    return text;
+  }
+
+  // Members of other browser-automation libraries that this SDK deliberately
+  // does not have, each with the way to do it here. Kept in the runtime rather
+  // than in the tool description: a caller that never reaches for one pays
+  // nothing, and a caller that does gets the answer for what it actually tried.
+  // Mirrored by ABSENT_SURFACE in error_allowlist.rs so the misses stay countable.
+  const ABSENT = {
+    locator: 'There are no locators or selectors. Call await page.snapshot() and use the [ref=eN] handles.',
+    getByRole: 'There are no locators or selectors. Call await page.snapshot() and use the [ref=eN] handles.',
+    getByText: 'There are no locators. Call await page.snapshot() and use the [ref=eN] handles, or page.waitForText(text).',
+    getByLabel: 'There are no locators. Call await page.snapshot() and use the [ref=eN] handles.',
+    getByTestId: 'There are no locators. Call await page.snapshot() and use the [ref=eN] handles.',
+    getByPlaceholder: 'There are no locators. Call await page.snapshot() and use the [ref=eN] handles.',
+    frameLocator: 'There are no frame locators. Use page.cdp(method, paramsJson) for cross-frame work.',
+    expect: 'There are no assertions. Use page.waitForSelector/waitForText, or assert inside page.evaluate.',
+    route: 'There is no network interception. Call the site API from inside page.evaluate.',
+    unroute: 'There is no network interception. Call the site API from inside page.evaluate.',
+    waitForRequest: 'There is no network interception. Call the site API from inside page.evaluate.',
+    waitForResponse: 'There is no network interception. Call the site API from inside page.evaluate.',
+    waitForEvent: 'There is no event subscription in this runtime. Wait on the page instead: page.waitForSelector(sel).',
+    on: 'There is no event subscription in this runtime. Wait on the page instead: page.waitForSelector(sel).',
+    frames: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
+    mainFrame: 'Frames are not addressable. Use page.cdp(method, paramsJson).',
+    setContent: 'Set content from inside page.evaluate instead.',
+    setViewportSize: 'The viewport is the user\'s. Pass { size } to page.screenshot to cap a capture.',
+    addInitScript: 'There is no init-script hook. Run the script with page.evaluate after page.goto.',
+    exposeFunction: 'There is no binding hook. Return a value from page.evaluate instead.',
+    ariaSnapshot: 'Use page.snapshot(), which returns { text, refs, url } rather than YAML.',
+    content: 'Use page.read() for markdown, or page.evaluate("return document.documentElement.outerHTML") for raw HTML.',
+    waitForTimeout: 'Use page.waitForTime(ms).',
+    waitForURL: 'Not available. Poll with page.info() or wait on something the new page renders.',
+    waitForLoadState: 'Not available. Wait on the thing itself: page.waitForSelector(sel).',
+    goBack: 'Use page.back().',
+    goForward: 'Use page.forward().',
+    setInputFiles: 'Use page.upload(ref, files).',
+    dragAndDrop: 'Use page.drag(fromRef, toRef).',
+    dblclick: 'Use page.clickAt(x, y) twice, or page.click(ref).',
+  };
+
+  // Property reads a host does on any object. These must answer rather than
+  // throw: `await page` probes then, JSON.stringify probes toJSON.
+  const PROBES = new Set([
+    'then', 'toJSON', 'inspect', 'constructor', 'valueOf', 'toString',
+    'nodeType', 'length', 'name', '$$typeof', 'asymmetricMatch',
+  ]);
+
+  function nearest(name, names) {
+    const target = name.toLowerCase();
+    let best = null;
+    let bestScore = Infinity;
+    for (const candidate of names) {
+      const other = candidate.toLowerCase();
+      // Cheap prefix/substring affinity is enough to point at the right family.
+      let score = Math.abs(other.length - target.length);
+      if (other.startsWith(target) || target.startsWith(other)) score -= 8;
+      else if (other.includes(target) || target.includes(other)) score -= 4;
+      else continue;
+      if (score < bestScore) { bestScore = score; best = candidate; }
+    }
+    return best ? ` Did you mean page.${best}()?` : '';
+  }
+
+  function guard(handle) {
+    const names = Object.keys(handle);
+    return new Proxy(handle, {
+      get(target, prop) {
+        if (prop in target) return target[prop];
+        if (typeof prop !== 'string' || PROBES.has(prop)) return undefined;
+        if (Object.hasOwn(ABSENT, prop)) {
+          throw new Error(`page.${prop} is not part of this SDK. ${ABSENT[prop]}`);
+        }
+        throw new Error(
+          `page.${prop} is not a method of the page handle.${nearest(prop, names)} ` +
+          'Every page action hangs off the handle you got from browser.open(url) or browser.page(id).'
+        );
+      },
+    });
+  }
+
+  function pageHandle(pageId) {
+    // Idempotent, so browser.page(x) is always safe to write.
+    if (pageId !== null && typeof pageId === 'object') return pageId;
+
+    const obs = scoped('observe', pageId);
+    const inp = scoped('input', pageId);
+    const nav = scoped('nav', pageId);
+    const tool = (name, opts) => call(`tool:${name}`, [pageId, opts]);
+    const act = (kind, extra) => call('tool:act', [pageId, { kind, ...extra }]);
+
+    return guard({
+      id: pageId,
+
+      goto: (url) => nav('goto', [url]),
+      back: () => nav('back', []),
+      forward: () => nav('forward', []),
+      reload: () => nav('reload', []),
+      info: () => call('pages.getInfo', [pageId]),
+      close: () => call('pages.close', [pageId]),
+
+      snapshot: (opts) => obs('snapshot', [opts]),
+      diff: () => obs('diff', []),
+      resolveRef: (ref) => obs('resolveRef', [asRef(ref, 'resolveRef')]),
+      // The subject comes first and options last, so the natural positional
+      // call is the correct one.
+      read: (selector, opts) =>
+        tool('read', typeof selector === 'string' ? { ...opts, selector } : selector),
+      grep: (pattern, opts) =>
+        tool('grep', typeof pattern === 'string' ? { ...opts, pattern } : pattern),
+
+      click: (ref) => inp('click', [asRef(ref, 'click')]),
+      fill: (ref, value) => inp('fill', [asRef(ref, 'fill'), value]),
+      hover: (ref) => inp('hover', [asRef(ref, 'hover')]),
+      selectOption: (ref, value) => inp('selectOption', [asRef(ref, 'selectOption'), value]),
+      check: (ref) => act('check', { ref: asRef(ref, 'check') }),
+      uncheck: (ref) => act('uncheck', { ref: asRef(ref, 'uncheck') }),
+      focus: (ref) => act('focus', { ref: asRef(ref, 'focus') }),
+      drag: (fromRef, toRef) =>
+        act('drag', { ref: asRef(fromRef, 'drag'), targetRef: asRef(toRef, 'drag') }),
+      upload: (ref, files) =>
+        tool('upload', Array.isArray(files)
+          ? { ref: asRef(ref, 'upload'), files }
+          : { ref: asRef(ref, 'upload'), file: files }),
+      download: (ref) => tool('download', { ref: asRef(ref, 'download') }),
+
+      type: (text) => inp('type', [text]),
+      press: (key) => inp('press', [key]),
+      insertText: (text) => inp('type', [text]),
+      scroll: (dir, amount, ref) => inp('scroll', [dir, amount, ref]),
+      clickAt: (x, y, opts) => act('click_at', { x, y, ...opts }),
+      typeAt: (x, y, text) => act('type_at', { x, y, text }),
+      hoverAt: (x, y) => act('hover_at', { x, y }),
+      dragAt: (x1, y1, x2, y2) =>
+        act('drag_at', { startX: x1, startY: y1, endX: x2, endY: y2 }),
+      dialogAccept: () => act('dialog_accept', {}),
+      dialogDismiss: () => act('dialog_dismiss', {}),
+
+      waitForSelector: (value, opts) => tool('wait', { ...opts, for: 'selector', value }),
+      waitForText: (value, opts) => tool('wait', { ...opts, for: 'text', value }),
+      waitForTime: (ms) => tool('wait', { value: ms }),
+      wait: (opts) => tool('wait', opts),
+
+      screenshot: (opts) => tool('screenshot', opts),
+      pdf: (opts) => tool('pdf', opts),
+      // A real function is serialized here, before the JSON boundary drops it.
+      // For a function, the second argument is its input; for a code string,
+      // which cannot take one, the second argument is the options object.
+      evaluate: (code, argOrOpts, opts) => {
+        if (typeof code === 'function') {
+          const source = String(code);
+          const func = argOrOpts === undefined
+            ? source
+            : `() => (${source})(${JSON.stringify(argOrOpts)})`;
+          return tool('evaluate', { ...opts, func });
+        }
+        if (typeof code === 'string') return tool('evaluate', { ...argOrOpts, code });
+        return tool('evaluate', code);
+      },
+
+      cdp: (method, paramsJson) => call('cdpJsonForPage', [pageId, method, paramsJson]),
+      helpers: {
+        list: () => call('helpers.list', [{ page: pageId }]),
+        read: (name) => call('helpers.read', [String(name), { page: pageId }]),
+        save: (name, source) =>
+          call('helpers.save', [String(name), helperSource(source), { page: pageId }]),
+      },
+    });
+  }
+
   const browser = {
+    page: (pageId) => pageHandle(pageId),
+    open: async (url, opts) => pageHandle(await call('pages.newPage', [url, opts])),
+    history: (opts) => call('tool:history', [opts]),
     pages: {
       list: () => call('pages.list', []),
       newPage: (url, opts) => call('pages.newPage', [url, opts]),
@@ -176,18 +382,8 @@ const BOOTSTRAP_JS: &str = r#"
     upload: (pageId, opts) => call('tool:upload', [pageId, opts]),
     tabGroups: (opts) => call('tool:tab_groups', [opts]),
     windows: (opts) => call('tool:windows', [opts]),
-    saveHelper: (name, source, opts) => {
-      if (typeof source !== 'string' || !source.trim()) {
-        throw new Error('saveHelper: source must be a non-empty function-expression string');
-      }
-      let fn;
-      try { fn = new Function('return (' + source + '\n);')(); }
-      catch (e) { throw new Error('saveHelper: source must be valid JS (' + e + ')'); }
-      if (typeof fn !== 'function') {
-        throw new Error('saveHelper: source must evaluate to a function, e.g. async (browser, page) => { ... }');
-      }
-      return call('helpers.save', [String(name), source, opts || {}]);
-    },
+    saveHelper: (name, source, opts) =>
+      call('helpers.save', [String(name), helperSource(source), opts || {}]),
     listHelpers: (opts) => call('helpers.list', [opts || {}]),
     readHelper: (name, opts) => call('helpers.read', [String(name), opts || {}]),
   };
@@ -696,8 +892,13 @@ impl BrowserBridge {
             }
             "observe.snapshot" => {
                 let page_id = page_arg(&args, 0)?;
+                let opts = optional_object_arg(&args, 1)?;
+                let options = snapshot_options(opts)?;
                 let observer = self.ctx.session.observe(page_id).await;
-                let snapshot = self.control.race(observer.snapshot()).await?;
+                let snapshot = self
+                    .control
+                    .race(observer.snapshot_with_options(options))
+                    .await?;
                 Ok(BrowserCallValue::Json(json!({
                     "text": snapshot.text,
                     "refs": refs_json(&snapshot.refs),
@@ -947,6 +1148,10 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         "upload" => tools::upload::definition(),
         "tab_groups" => tools::tab_groups::definition(),
         "windows" => tools::windows::definition(),
+        // `act` backs the handle's check/uncheck/focus/drag, the coordinate
+        // variants and the dialog pair, so the SDK reaches every act kind.
+        "act" => tools::act::definition(),
+        "history" => tools::history::definition(),
         _ => return None,
     })
 }
@@ -967,6 +1172,26 @@ fn build_tool_args(args: &[Value]) -> Value {
         Some(object @ Value::Object(_)) => object.clone(),
         _ => Value::Object(Map::new()),
     }
+}
+
+/// Snapshot presentation options from `page.snapshot({ mode, depth })`. Depth is
+/// clamped the same way the granular snapshot tool clamps it.
+fn snapshot_options(opts: Option<&Map<String, Value>>) -> Result<SnapshotOptions, String> {
+    let mode = match optional_string_field(opts, "mode")?.as_deref() {
+        None | Some("full") => SnapshotMode::Full,
+        Some("interactive") => SnapshotMode::Interactive,
+        Some(other) => {
+            return Err(format!(
+                "snapshot: mode must be \"full\" or \"interactive\", got {other:?}"
+            ));
+        }
+    };
+    let depth = opts
+        .and_then(|object| object.get("depth"))
+        .and_then(Value::as_f64)
+        .filter(|depth| depth.is_finite())
+        .map(|depth| depth.floor().clamp(1.0, 100.0) as usize);
+    Ok(SnapshotOptions { mode, depth })
 }
 
 fn tool_result_text(result: &ToolResult) -> String {
@@ -2313,6 +2538,304 @@ return seen;
             .and_then(|content| content.as_text())
             .map(|content| content.text.as_str())
             .ok_or_else(|| anyhow::anyhow!("missing text result"))
+    }
+
+    // --- the uniform page handle -------------------------------------------
+    //
+    // The fake connection answers tab management but not page-level CDP, so
+    // these assert on what reached the wire rather than on a CDP result. That
+    // is the right level anyway: the change is a marshalling change, and what
+    // it must preserve is the wire method names.
+
+    /// Drives one page primitive from each of the three groups that used to
+    /// have different call shapes: navigation and observation were chained,
+    /// reading and waiting took the page as a first argument.
+    const ONE_OF_EACH: &str = "const page = browser.page(1);
+         for (const step of [
+           () => page.goto('https://example.com'),
+           () => page.snapshot(),
+           () => page.read(),
+           () => page.waitForSelector('.row'),
+         ]) { try { await step(); } catch (error) {} }
+         return page.id;";
+
+    #[tokio::test]
+    async fn every_page_primitive_hangs_off_one_handle() -> anyhow::Result<()> {
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        run_tool_with_ctx(ONE_OF_EACH, None, &ctx).await?;
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let methods: Vec<&str> = log.recorded.iter().map(|(m, _, _)| m.as_str()).collect();
+        // Unchanged wire names, so the audit log and the analytics history stay
+        // comparable across this change.
+        assert_eq!(
+            methods,
+            vec!["nav.goto", "observe.snapshot", "tool:read", "tool:wait"]
+        );
+        assert!(log.recorded.iter().all(|(_, page, _)| *page == Some(1)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_legacy_call_shapes_reach_the_same_wire_methods() -> anyhow::Result<()> {
+        // Saved helpers live as source strings on user machines and were
+        // generated in the old shape. They must keep running untouched.
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        run_tool_with_ctx(
+            "for (const step of [
+               () => browser.nav(1).goto('https://example.com'),
+               () => browser.observe(1).snapshot(),
+               () => browser.read(1),
+               () => browser.wait(1, { for: 'selector', value: '.row' }),
+             ]) { try { await step(); } catch (error) {} }
+             return 'ok';",
+            None,
+            &ctx,
+        )
+        .await?;
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let methods: Vec<&str> = log.recorded.iter().map(|(m, _, _)| m.as_str()).collect();
+        assert_eq!(
+            methods,
+            vec!["nav.goto", "observe.snapshot", "tool:read", "tool:wait"]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn open_returns_a_handle_and_page_is_idempotent() -> anyhow::Result<()> {
+        let result = run_tool(
+            "const page = await browser.open('https://new.example');
+             const again = browser.page(page);
+             return { id: page.id, same: again.id === page.id };",
+            None,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["id"], json!(1));
+        assert_eq!(structured["value"]["same"], json!(true));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn newpage_still_returns_a_plain_number() -> anyhow::Result<()> {
+        // The safer split: the legacy entry point's return type is untouched,
+        // so a stored helper doing arithmetic or a typeof check on it keeps
+        // working. browser.page(id) is how a number becomes a handle.
+        let result = run_tool(
+            "const id = await browser.pages.newPage('https://new.example');
+             return { kind: typeof id, plus: id + 1 };",
+            None,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["kind"], json!("number"));
+        assert_eq!(structured["value"]["plus"], json!(2));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_subject_comes_before_the_options() -> anyhow::Result<()> {
+        // A positional grep used to fail with `missing field pattern`, which is
+        // the whole InvalidCallArguments error class. Whatever else happens
+        // downstream, the arguments must now parse.
+        let result = run_tool("await browser.page(1).grep('Total');", None).await?;
+        let text = result_text(&result)?;
+        assert!(!text.contains("missing field"), "{text}");
+        let read = run_tool("await browser.page(1).read('.results');", None).await?;
+        assert!(!result_text(&read)?.contains("missing field"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_selector_where_a_ref_belongs_names_the_fix() -> anyhow::Result<()> {
+        // The handle is shaped like the browser APIs a caller already knows, so
+        // a CSS selector is the likeliest wrong guess. It must not reach the
+        // wire as an unresolvable ref.
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result =
+            run_tool_with_ctx("await browser.page(1).click('.add-to-cart');", None, &ctx).await?;
+        assert!(result.is_error);
+        let text = result_text(&result)?;
+        assert!(text.contains("snapshot ref"), "{text}");
+        assert!(text.contains("page.snapshot()"), "{text}");
+        assert!(
+            log.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .recorded
+                .is_empty(),
+            "the selector must be caught before it reaches the wire"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn an_unknown_handle_method_points_at_the_right_one() -> anyhow::Result<()> {
+        let result = run_tool("await browser.page(1).waitFor('.row');", None).await?;
+        assert!(result.is_error);
+        assert!(
+            result_text(&result)?.contains("Did you mean page.wait"),
+            "{}",
+            result_text(&result)?
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_member_of_another_library_says_how_to_do_it_here() -> anyhow::Result<()> {
+        // The boundary lives here rather than in the tool description: a caller
+        // that never reaches for one of these pays no context for it.
+        let result = run_tool("browser.page(1).getByRole('button');", None).await?;
+        assert!(result.is_error);
+        let text = result_text(&result)?;
+        assert!(text.contains("not part of this SDK"), "{text}");
+        assert!(text.contains("[ref=eN]"), "{text}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_guard_answers_the_probes_a_host_makes() -> anyhow::Result<()> {
+        // A get-trap that throws on everything unknown breaks `await handle`
+        // (which probes .then) and JSON.stringify (which probes .toJSON).
+        let result = run_tool(
+            "const page = await browser.open('https://new.example');
+             const round = JSON.parse(JSON.stringify({ id: page.id }));
+             return { awaited: (await page).id, round: round.id };",
+            None,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["awaited"], json!(1));
+        assert_eq!(structured["value"]["round"], json!(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn evaluate_takes_a_real_function_and_an_argument() -> anyhow::Result<()> {
+        // Args are JSON-serialized on the way out, so a function value used to
+        // be dropped silently, and `provide code or func` was its own error
+        // class. The shim serializes it before that boundary and folds the
+        // argument into the source.
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "try { await browser.page(1).evaluate((sel) => sel.length, '.row'); } catch (e) {}
+             return 'ok';",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        assert_eq!(log.recorded[0].0, "tool:evaluate");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_act_backed_kinds_are_reachable_from_run() -> anyhow::Result<()> {
+        // check/uncheck/focus/drag, the coordinate variants and the dialog pair
+        // existed only on the granular act tool, which contradicted "run is the
+        // primary way to drive the browser". history had no SDK route at all.
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        run_tool_with_ctx(
+            "const page = browser.page(1);
+             for (const step of [
+               () => page.check('e1'),
+               () => page.dialogAccept(),
+               () => browser.history({ maxResults: 5 }),
+             ]) { try { await step(); } catch (error) {} }
+             return 'ok';",
+            None,
+            &ctx,
+        )
+        .await?;
+        let log = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let methods: Vec<&str> = log.recorded.iter().map(|(m, _, _)| m.as_str()).collect();
+        assert!(methods.contains(&"tool:act"), "{methods:?}");
+        assert!(methods.contains(&"tool:history"), "{methods:?}");
+        // history is page-less, so it must not be authorized against a page.
+        assert_eq!(
+            log.recorded
+                .iter()
+                .find(|(m, _, _)| m == "tool:history")
+                .map(|(_, page, _)| *page),
+            Some(None)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn snapshot_rejects_an_unknown_compactness_mode() -> anyhow::Result<()> {
+        // The granular snapshot tool has taken mode and depth for a while; the
+        // SDK's snapshot took no arguments at all, so a big page could only be
+        // read at full cost from inside run.
+        let bad = run_tool("await browser.page(1).snapshot({ mode: 'nope' });", None).await?;
+        assert!(bad.is_error);
+        let text = result_text(&bad)?;
+        assert!(text.contains("interactive"), "{text}");
+        // A valid mode gets past argument parsing and fails only at the wire,
+        // which the fake connection does not serve.
+        let good = run_tool(
+            "await browser.page(1).snapshot({ mode: 'interactive', depth: 4 });",
+            None,
+        )
+        .await?;
+        assert!(!result_text(&good)?.contains("mode must be"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_helper_can_be_saved_from_a_real_function() -> anyhow::Result<()> {
+        // The source is stored as text, so a function used to be dropped at the
+        // JSON boundary and the bridge complained about a missing string. Both
+        // save paths serialize it first, matching page.evaluate.
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "await browser.page(1).helpers.save('search', async (browser, page) => page.read());
+             return 'ok';",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let saved = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .saved
+            .clone();
+        let (_, name, source) = saved.first().cloned().unwrap_or_default();
+        assert_eq!(name, "search");
+        assert!(source.contains("async (browser, page)"), "{source}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_helper_source_that_is_not_a_function_is_refused() -> anyhow::Result<()> {
+        let result = run_tool("await browser.page(1).helpers.save('x', 42);", None).await?;
+        assert!(result.is_error);
+        assert!(result_text(&result)?.contains("must be a function"));
+        Ok(())
     }
 
     fn fake_tab_json(
