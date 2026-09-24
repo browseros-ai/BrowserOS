@@ -227,12 +227,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const isRestoringConversation =
     !!conversationIdParam && restoredConversationId !== conversationIdParam
 
-  // 'local' persists to SQLite during /chat; 'cloud' is a misnomer that now
-  // only marks incognito and temporary chats, meaning persist nothing.
   // Read via a ref because the transport closure below is created only once.
-  const historyModeRef = useRef<'local' | 'cloud'>('cloud')
+  const persistRef = useRef(persistHistory)
   useEffect(() => {
-    historyModeRef.current = persistHistory ? 'local' : 'cloud'
+    persistRef.current = persistHistory
   }, [persistHistory])
 
   const agentUrlRef = useRef(agentServerUrl)
@@ -444,12 +442,13 @@ export const useChatSession = (options?: ChatSessionOptions) => {
         })
 
         const declinedApps = await declinedAppsStorage.getValue()
-        const historyMode = historyModeRef.current
+        const persist = persistRef.current
         const previousMessages = messagesRef.current
-        // In local mode the server owns history and loads it from SQLite, so
-        // the client stops replaying it. Cloud mode still ships the projection.
+        // When the server persists, it owns history and loads it itself, so
+        // the client stops replaying it. Only an unpersisted conversation has
+        // to ship its own projection.
         const history =
-          historyMode === 'cloud' && previousMessages.length > 0
+          !persist && previousMessages.length > 0
             ? formatConversationHistory(previousMessages)
             : undefined
         const previousConversation = history?.length ? history : undefined
@@ -465,7 +464,7 @@ export const useChatSession = (options?: ChatSessionOptions) => {
           userSystemPrompt,
           userWorkingDir: workingDirRef.current,
           previousConversation,
-          historyMode,
+          persist,
           declinedApps,
           attachments: getLastUserMessageFiles(messages).map((file) => ({
             mediaType: file.mediaType,

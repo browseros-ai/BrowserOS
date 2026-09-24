@@ -244,6 +244,7 @@ describe('ChatService activity tracking', () => {
     const response = await service.processMessage(
       {
         target: BROWSEROS_TARGET,
+        persist: false,
         conversationId,
         message: 'stop after the first chunk',
         isScheduledTask: false,
@@ -305,6 +306,7 @@ describe('ChatService scheduled task page lifecycle', () => {
     await service.processMessage(
       {
         target: BROWSEROS_TARGET,
+        persist: false,
         conversationId: crypto.randomUUID(),
         message: 'Run the scheduled task',
         isScheduledTask: true,
@@ -409,6 +411,7 @@ describe('ChatService scheduled task page lifecycle', () => {
     await service.processMessage(
       {
         target: BROWSEROS_TARGET,
+        persist: false,
         conversationId: crypto.randomUUID(),
         message: 'Run the scheduled task',
         isScheduledTask: true,
@@ -474,6 +477,7 @@ describe('ChatService browser tool config', () => {
     const createCallsBefore = createAgentSpy.mock.calls.length
     const request = {
       target: BROWSEROS_TARGET,
+      persist: false,
       conversationId: crypto.randomUUID(),
       message: 'check integrations',
       isScheduledTask: false,
@@ -547,6 +551,7 @@ describe('ChatService Klavis session rebuilds', () => {
     const conversationId = crypto.randomUUID()
     const request = {
       target: BROWSEROS_TARGET,
+      persist: false,
       conversationId,
       message: 'check integrations',
       isScheduledTask: false,
@@ -627,6 +632,7 @@ describe('ChatService Klavis session rebuilds', () => {
     const conversationId = crypto.randomUUID()
     const request = {
       target: BROWSEROS_TARGET,
+      persist: false,
       conversationId,
       message: 'check browser only',
       isScheduledTask: false,
@@ -696,6 +702,10 @@ describe('ChatService chat/agent mode switches', () => {
       isScheduledTask: false,
       mode,
       origin: 'newtab',
+      // These cases are about rebuilding the tool set, not history. They used
+      // to reach no database only because omitting the flag meant persisting
+      // nothing, which stopped being the default when it became `persist`.
+      persist: false,
       browserContext: {
         activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
       },
@@ -862,6 +872,7 @@ describe('ChatService single-rebuild reconciliation', () => {
     const conversationId = crypto.randomUUID()
     const base = {
       target: BROWSEROS_TARGET,
+      persist: false,
       conversationId,
       isScheduledTask: false,
       origin: 'newtab',
@@ -903,6 +914,7 @@ describe('ChatService single-rebuild reconciliation', () => {
     const conversationId = crypto.randomUUID()
     const base = {
       target: BROWSEROS_TARGET,
+      persist: false,
       conversationId,
       isScheduledTask: false,
       origin: 'newtab',
@@ -948,6 +960,7 @@ describe('ChatService single-rebuild reconciliation', () => {
     const conversationId = crypto.randomUUID()
     const base = {
       target: BROWSEROS_TARGET,
+      persist: false,
       conversationId,
       isScheduledTask: false,
       origin: 'newtab',
@@ -1002,10 +1015,7 @@ describe('ChatService history persistence', () => {
     }
   }
 
-  function browserOsRequest(
-    conversationId: string,
-    historyMode: 'local' | 'cloud',
-  ) {
+  function browserOsRequest(conversationId: string, persist: boolean) {
     return {
       target: BROWSEROS_TARGET,
       conversationId,
@@ -1013,7 +1023,7 @@ describe('ChatService history persistence', () => {
       isScheduledTask: false,
       mode: 'agent',
       origin: 'sidepanel',
-      historyMode,
+      persist,
       browserContext: {
         activeTab: { id: 3, url: 'https://example.com', title: 'Example' },
       },
@@ -1069,7 +1079,7 @@ describe('ChatService history persistence', () => {
     const conversationId = crypto.randomUUID()
 
     await service.processMessage(
-      browserOsRequest(conversationId, 'local'),
+      browserOsRequest(conversationId, true),
       new AbortController().signal,
     )
 
@@ -1112,7 +1122,7 @@ describe('ChatService history persistence', () => {
     })
 
     await service.processMessage(
-      browserOsRequest(conversationId, 'local'),
+      browserOsRequest(conversationId, true),
       new AbortController().signal,
     )
 
@@ -1149,7 +1159,7 @@ describe('ChatService history persistence', () => {
 
     await service.processMessage(
       {
-        ...browserOsRequest(crypto.randomUUID(), 'cloud'),
+        ...browserOsRequest(crypto.randomUUID(), false),
         previousConversation: [{ role: 'user', content: 'from client' }],
       } as never,
       new AbortController().signal,
@@ -1201,7 +1211,7 @@ describe('ChatService history persistence', () => {
     })
 
     await service.processMessage(
-      browserOsRequest(crypto.randomUUID(), 'local'),
+      browserOsRequest(crypto.randomUUID(), true),
       new AbortController().signal,
     )
 
