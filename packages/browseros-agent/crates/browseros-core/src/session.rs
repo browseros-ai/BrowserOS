@@ -3,6 +3,7 @@ use crate::{
     connection::CdpConnection,
     frames::FrameRegistry,
     input::Input,
+    locator::LocatorEngine,
     navigation::Navigation,
     observer::Observer,
     page_signals::PageSignals,
@@ -14,7 +15,10 @@ use crate::{
 };
 use browseros_cdp::CdpEvent;
 use serde_json::Value;
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+};
 use tokio::sync::{Mutex, broadcast, mpsc};
 
 #[derive(Clone, Default)]
@@ -28,6 +32,7 @@ pub struct BrowserSession {
     pub page_signals: Arc<PageSignals>,
     pub windows: Arc<WindowManager>,
     frames: Arc<FrameRegistry>,
+    locator: OnceLock<Arc<LocatorEngine>>,
     observers: Mutex<HashMap<PageId, Arc<Observer>>>,
 }
 
@@ -83,10 +88,19 @@ impl BrowserSession {
             page_signals,
             windows,
             frames,
+            locator: OnceLock::new(),
             observers: Mutex::new(HashMap::new()),
         });
         Self::spawn_detach_listener(session.clone());
         session
+    }
+
+    /// One lazily initialized engine per session shares the page and frame lifecycle.
+    #[must_use]
+    pub fn locator(&self) -> Arc<LocatorEngine> {
+        self.locator
+            .get_or_init(|| Arc::new(LocatorEngine::new(self.pages.clone(), self.frames.clone())))
+            .clone()
     }
 
     pub async fn observe(&self, page_id: PageId) -> Arc<Observer> {

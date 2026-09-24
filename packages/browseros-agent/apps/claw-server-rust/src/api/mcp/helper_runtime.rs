@@ -4,7 +4,7 @@
 
 use crate::{
     AppState,
-    api::mcp::dispatch::{ARBITRARY_SCRIPT_TOOLS, ToolEffect, ToolEffectContext},
+    api::mcp::dispatch::{ToolEffect, ToolEffectContext},
     clock::now_epoch_ms,
     ids::ConvoId,
     services::helpers::{self, HelperMeta},
@@ -41,10 +41,15 @@ pub(crate) fn helper_info_json(meta: &HelperMeta, now: i64) -> Value {
 /// hosts of the agent's currently owned tabs. Cheap-gated so a browser with no
 /// helpers pays nothing (no page scan).
 pub(crate) async fn preload_helpers(
+    tool_name: &str,
     state: &AppState,
     caller: &ConvoId,
     session: &BrowserSession,
 ) -> Vec<HelperSource> {
+    // Saved helpers target the legacy browser SDK and cannot run in other facades.
+    if tool_name != "run" {
+        return Vec::new();
+    }
     let dir = &state.config.browserclaw_dir;
     if !helpers::has_any_helpers(dir) {
         return Vec::new();
@@ -89,10 +94,7 @@ pub fn discovery(
     context: ToolEffectContext<'_>,
 ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
-        if context.result.is_error
-            || context.cancelled
-            || !ARBITRARY_SCRIPT_TOOLS.contains(&context.call.tool().name)
-        {
+        if context.result.is_error || context.cancelled || context.call.tool().name != "run" {
             return Ok(None);
         }
         let (Some(identity), Some(session)) =

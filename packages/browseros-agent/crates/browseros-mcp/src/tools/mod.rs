@@ -9,6 +9,7 @@ pub mod grep;
 pub mod history;
 pub mod navigate;
 pub mod pdf;
+pub mod playwright;
 pub mod read;
 pub mod run;
 pub mod screenshot;
@@ -39,6 +40,7 @@ pub fn catalog() -> Vec<ToolDef> {
         windows::definition(),
         evaluate::definition(),
         run::definition(),
+        playwright::definition(),
     ]
 }
 

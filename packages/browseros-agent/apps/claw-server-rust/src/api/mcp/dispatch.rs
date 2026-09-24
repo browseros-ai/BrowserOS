@@ -22,7 +22,7 @@ use tracing::warn;
 
 const CANCELLATION_REASON: &str = "Operation cancelled by the User";
 const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
-pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
+pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate", "playwright"];
 const DISPATCH_ERROR_TEXT_MAX: usize = 200;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -71,6 +71,8 @@ pub struct ToolCall {
     /// from its arguments the way it is for a granular tool. The script hook records what
     /// the script actually touched, and `effects::page_ownership_notice` reports it.
     pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
+    /// Values masked by script primitives, retained across cloned calls for parent audit redaction.
+    pub redactions: Arc<std::sync::Mutex<Vec<String>>>,
 }
 
 impl ToolCall {
@@ -116,6 +118,7 @@ impl ToolCall {
             ToolFlags::default()
         };
         Self {
+            redactions: Arc::new(std::sync::Mutex::new(Vec::new())),
             foreign_pages: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             catalog,
             tool_index,
@@ -442,6 +445,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
             let preloaded_helpers = match &call.identity {
                 Some(identity) if is_script => {
                     crate::api::mcp::helper_runtime::preload_helpers(
+                        call.tool().name,
                         &call.state,
                         &identity.ownership_key,
                         browser_session,

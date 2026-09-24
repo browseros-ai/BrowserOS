@@ -151,6 +151,8 @@ pub struct InnerCallRecord<'a> {
     /// The primitive's arguments as a JSON array, so the audit shows what ran
     /// and the self-healing distiller can replay the sequence.
     pub args: &'a Value,
+    /// Literal values masked in args, for the host to redact in the parent script.
+    pub secrets: &'a [String],
     /// Whether this primitive ran inside a hot-loaded helper call (a replay), so
     /// the distiller can skip a successful reuse's actions.
     pub from_helper: bool,

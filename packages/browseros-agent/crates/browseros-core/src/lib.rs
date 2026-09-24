@@ -4,6 +4,7 @@ pub mod content_markdown;
 pub mod error;
 pub mod frames;
 pub mod input;
+pub mod locator;
 pub mod navigation;
 pub mod observer;
 pub mod page_signals;

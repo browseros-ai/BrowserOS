@@ -13,7 +13,7 @@ use geometry::{
 };
 use mouse::{MouseButton, dispatch_click, dispatch_drag, dispatch_hover, dispatch_scroll};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 pub use keyboard::{
     KeyInfo, clear_field, get_key_info, modifier_bitmask, normalize_key, press_combo, type_text,
@@ -83,6 +83,39 @@ impl InputTarget {
 }
 
 impl Input {
+    // Locator input keeps the resolved frame session rather than reconstructing a snapshot ref.
+    pub async fn check_backend_node(
+        &self,
+        _session: &ProtocolSession,
+        _backend_node_id: i64,
+        _checked: bool,
+    ) -> Result<bool, CoreError> {
+        Err(CoreError::Message(
+            "not implemented yet: check_backend_node".to_string(),
+        ))
+    }
+
+    pub async fn upload_backend_node(
+        &self,
+        _session: &ProtocolSession,
+        _backend_node_id: i64,
+        _paths: &[PathBuf],
+    ) -> Result<(), CoreError> {
+        Err(CoreError::Message(
+            "not implemented yet: upload_backend_node".to_string(),
+        ))
+    }
+
+    pub async fn focus_backend_node(
+        &self,
+        _session: &ProtocolSession,
+        _backend_node_id: i64,
+    ) -> Result<(), CoreError> {
+        Err(CoreError::Message(
+            "not implemented yet: focus_backend_node".to_string(),
+        ))
+    }
+
     #[must_use]
     pub fn new(observer: Arc<Observer>, pages: Arc<PageManager>, page_id: PageId) -> Self {
         Self {

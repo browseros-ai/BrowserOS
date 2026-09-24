@@ -85,6 +85,12 @@ impl InnerCallHook for ScriptInnerCallHook {
     }
 
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
+        // Accumulate before audit persistence so the parent sees secrets even if a child write fails.
+        self.call
+            .redactions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .extend_from_slice(record.secrets);
         // Strip the internal `tool:` routing prefix so the audit shows the plain
         // capability (read, wait, screenshot) rather than a routing detail.
         let tool_name = record
@@ -565,6 +571,7 @@ mod tests {
             method: "input.click",
             page: Some(1),
             args: &json!([1, "e5"]),
+            secrets: &[],
             from_helper: false,
             is_error: false,
             duration_ms: 3,
@@ -591,6 +598,7 @@ mod tests {
             method: "input.click",
             page: Some(4),
             args: &json!([4, "e5"]),
+            secrets: &[],
             from_helper: false,
             is_error: false,
             duration_ms: 12,

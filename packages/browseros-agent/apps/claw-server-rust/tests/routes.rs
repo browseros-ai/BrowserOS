@@ -396,6 +396,7 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
             "windows",
             "evaluate",
             "run",
+            "playwright",
             "name_session",
             "save_skill",
             "mark_skill_run",
