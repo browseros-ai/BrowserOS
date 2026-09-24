@@ -887,3 +887,27 @@ async fn facade_p5_numeric_popups_and_flat_frames_keep_their_identity() -> anyho
     leaf(&calls, "page.frames", Some(9), json!([9]));
     Ok(())
 }
+
+#[tokio::test]
+async fn facade_does_not_require_post_es2020_object_builtins() -> anyhow::Result<()> {
+    let (output, calls) = run(
+        r#"
+        Object.hasOwn = undefined;
+        const p = await neo.page(7);
+        expect({value:1}).toEqual({value:1});
+        await expect(p.locator('button')).toBeVisible();
+        return p.title();
+    "#,
+        json!({"neo.page":{"pageId":7,"title":"ES2020"},"expect.toBeVisible":{"matches":true}}),
+    )
+    .await?;
+    success(&output);
+    assert_eq!(output["value"], "ES2020");
+    leaf(
+        &calls,
+        "expect.toBeVisible",
+        Some(7),
+        json!([7,"button",true,{"timeout":5000,"isNot":false}]),
+    );
+    Ok(())
+}

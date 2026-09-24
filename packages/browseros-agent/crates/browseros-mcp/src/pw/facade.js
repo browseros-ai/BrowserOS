@@ -65,7 +65,8 @@
     error: sink('error: '),
     debug: sink(''),
   }
-  const own = (value, key) => Object.hasOwn(value, key)
+  // biome-ignore lint/suspicious/noPrototypeBuiltins: Object.hasOwn requires ES2022; this facade targets ES2020.
+  const own = (value, key) => Object.prototype.hasOwnProperty.call(value, key)
   const defaultHint =
     'Use page.evaluate() or neo.cdp() for supported browser operations.'
   function unavailable(api, hint = defaultHint) {
@@ -430,6 +431,8 @@
       return `locator(${JSON.stringify(this.selector)})`
     }
   }
+  // An immutable selector path to a frame element. Enter-frame controls are
+  // appended only when composing a descendant locator, exactly as upstream.
   class FrameLocator extends Selectors {
     constructor(page, selector) {
       super()
@@ -743,6 +746,8 @@
     return data
   }
 
+  // Page identity and synchronous metadata live for one script run. Browser
+  // effects resolve the lazy identity first, then cross the shared audit bridge.
   class Page extends Events {
     constructor(id) {
       super()
@@ -1014,6 +1019,8 @@
     }
   }
 
+  // One conversation maps to the existing signed-in browser session. The host
+  // owns tab membership, claiming, grouping and cross-run recency.
   class Context extends Events {
     constructor() {
       super()
