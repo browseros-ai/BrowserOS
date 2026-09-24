@@ -511,3 +511,139 @@ async fn wait_states_preserves_missing_state_and_honors_cancellation()
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn hit_target_point_converts_child_viewport_but_keeps_dispatch_point()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::input::Point;
+    let fake = Fake::new();
+    let engine = engine(fake.clone()).await?;
+    let node = Resolved {
+        session: ProtocolSession::for_session(fake.clone(), SessionId::from("page")),
+        backend_node_id: 7,
+        object_id: "child-button".to_owned(),
+        frame_id: Some(FrameId("child".to_owned())),
+    };
+    // S03's actual CDP border quad and child getBoundingClientRect. The frame's
+    // (8,113.875) origin plus its 2px border contributes (10,115.875).
+    fake.push("DOM.getBoxModel", Ok(json!({"model": {"border": [18,123.875,113.28125,123.875,113.28125,144.875,18,144.875]}})))?;
+    fake.push(
+        "Runtime.callFunctionOn",
+        Ok(value(json!({"x":8,"y":8,"width":95.28125,"height":21}))),
+    )?;
+    let dispatch_point = Point {
+        x: 65.640625,
+        y: 134.375,
+    };
+    let hit_point = engine.hit_target_point(&node, dispatch_point).await?;
+    assert_eq!(
+        hit_point,
+        Point {
+            x: 55.640625,
+            y: 18.5
+        }
+    );
+    assert_eq!(
+        dispatch_point,
+        Point {
+            x: 65.640625,
+            y: 134.375
+        }
+    );
+    let calls = fake.calls()?;
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.0 == "Runtime.callFunctionOn" && c.1["objectId"] == "child-button")
+    );
+    assert!(
+        calls
+            .iter()
+            .filter(|c| c.0 != "Browser.getTabs")
+            .all(|c| c.2.as_ref() == node.session.session_id())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn hit_target_point_preserves_root_and_oopif_basis_and_nested_offsets()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::input::Point;
+    let fake = Fake::new();
+    let engine = engine(fake.clone()).await?;
+    // Root/OOPIF-root points are already local. A nested same-process frame has
+    // accumulated offsets; negative coordinates model a scrolled frame origin.
+    for (session, viewport_x, viewport_y, local_x, local_y) in [
+        ("page", 8.0, 8.0, 8.0, 8.0),
+        ("oopif", 8.0, 8.0, 8.0, 8.0),
+        ("page", 188.0, 312.5, 8.0, 8.0),
+        ("oopif", -20.0, -10.0, 8.0, 8.0),
+    ] {
+        let node = Resolved {
+            session: ProtocolSession::for_session(fake.clone(), SessionId::from(session)),
+            backend_node_id: 7,
+            object_id: "button".to_owned(),
+            frame_id: Some(FrameId("frame".to_owned())),
+        };
+        fake.push("DOM.getBoxModel", Ok(json!({"model": {"border": [viewport_x,viewport_y,viewport_x+100.0,viewport_y,viewport_x+100.0,viewport_y+20.0,viewport_x,viewport_y+20.0]}})))?;
+        fake.push(
+            "Runtime.callFunctionOn",
+            Ok(value(json!({"x":local_x,"y":local_y}))),
+        )?;
+        let point = engine
+            .hit_target_point(
+                &node,
+                Point {
+                    x: viewport_x + 13.25,
+                    y: viewport_y + 4.5,
+                },
+            )
+            .await?;
+        assert_eq!(
+            point,
+            Point {
+                x: local_x + 13.25,
+                y: local_y + 4.5
+            }
+        );
+        let calls = fake.calls()?;
+        assert_eq!(
+            calls.last().and_then(|c| c.2.as_ref()),
+            node.session.session_id()
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn hit_target_point_rejects_detached_and_invalid_geometry()
+-> Result<(), Box<dyn std::error::Error>> {
+    use crate::input::Point;
+    let fake = Fake::new();
+    let engine = engine(fake.clone()).await?;
+    let node = Resolved {
+        session: ProtocolSession::for_session(fake.clone(), SessionId::from("page")),
+        backend_node_id: 7,
+        object_id: "button".to_owned(),
+        frame_id: None,
+    };
+    fake.push("DOM.getBoxModel", Ok(json!({"model":{"border":[1,2,3]}})))?;
+    assert!(
+        engine
+            .hit_target_point(&node, Point { x: 0.0, y: 0.0 })
+            .await
+            .is_err()
+    );
+    fake.push(
+        "DOM.getBoxModel",
+        Ok(json!({"model":{"border":[0,0,10,0,10,10,0,10]}})),
+    )?;
+    fake.push("Runtime.callFunctionOn", Ok(value(Value::Null)))?;
+    assert_eq!(
+        engine
+            .hit_target_point(&node, Point { x: 5.0, y: 5.0 })
+            .await,
+        Err(CoreError::DocumentChanged)
+    );
+    Ok(())
+}
