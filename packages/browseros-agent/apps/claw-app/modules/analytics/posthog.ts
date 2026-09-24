@@ -29,8 +29,10 @@ import posthog, { type PostHog, type PostHogConfig } from 'posthog-js'
 import 'posthog-js/dist/posthog-recorder'
 
 const KEY = import.meta.env.VITE_CLAW_POSTHOG_KEY as string | undefined
+// Optional release secrets arrive as empty strings. Passing one to PostHog
+// overrides its default host and resolves requests against chrome-extension://.
 const HOST =
-  (import.meta.env.VITE_CLAW_POSTHOG_HOST as string | undefined) ??
+  (import.meta.env.VITE_CLAW_POSTHOG_HOST as string | undefined)?.trim() ||
   'https://us.i.posthog.com'
 const REDACTED_REPLAY_URL = 'browserclaw://redacted'
 
@@ -54,6 +56,12 @@ export function sanitizeProperties(
 ): Record<string, unknown> {
   const cleaned = { ...properties }
   for (const key of STRIPPED_PROPS) delete cleaned[key]
+  // Read the installed package at capture time: persisted super-properties can
+  // outlive an extension update, while identity reset clears registered ones.
+  // Web development has no extension manifest, so omit its version.
+  const appVersion = globalThis.chrome?.runtime?.getManifest?.().version
+  if (appVersion) cleaned.app_version = appVersion
+  else delete cleaned.app_version
   return cleaned
 }
 

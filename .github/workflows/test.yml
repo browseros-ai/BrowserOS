@@ -175,7 +175,9 @@ jobs:
         id: test
         env:
           BROWSEROS_BINARY: ${{ github.workspace }}/packages/browseros-agent/.ci/bin/browseros
-          BROWSEROS_TEST_HEADLESS: ${{ matrix.suite == 'claw-mcp' && 'false' || 'true' }}
+          # The hidden-window APIs that required X11 have been retired. Use the
+          # suite's headless default so native input does not depend on Xvfb focus.
+          BROWSEROS_TEST_HEADLESS: "true"
           BROWSEROS_TEST_EXTRA_ARGS: --no-sandbox --disable-dev-shm-usage
           BROWSEROS_JUNIT_PATH: ${{ github.workspace }}/packages/browseros-agent/${{ matrix.junit_path }}
         run: |

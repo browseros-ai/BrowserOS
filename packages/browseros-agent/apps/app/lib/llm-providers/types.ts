@@ -9,7 +9,6 @@ export type ProviderType =
   | 'ollama'
   | 'lmstudio'
   | 'bedrock'
-  | 'browseros'
   | 'moonshot'
   | 'chatgpt-pro'
   | 'github-copilot'

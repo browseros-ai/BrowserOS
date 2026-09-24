@@ -73,16 +73,20 @@ export function useChatActions(config: ChatActionsConfig) {
     const messageText = customMessageText ? customMessageText : input.trim()
     if (!messageText) return
 
-    if (attachedTabs.length) {
-      const action = createBrowserOSAction({
-        mode,
-        message: messageText,
-        tabs: attachedTabs,
-      })
-      sendMessage({ text: messageText, action })
-    } else {
-      sendMessage({ text: messageText })
-    }
+    const sent = attachedTabs.length
+      ? sendMessage({
+          text: messageText,
+          action: createBrowserOSAction({
+            mode,
+            message: messageText,
+            tabs: attachedTabs,
+          }),
+        })
+      : sendMessage({ text: messageText })
+
+    // Keep the draft when the send did not happen, so a refusal does not cost
+    // the user what they typed.
+    if (!sent) return
     setInput('')
     setAttachedTabs([])
   }

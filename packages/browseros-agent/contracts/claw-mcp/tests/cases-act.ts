@@ -179,7 +179,7 @@ export const actCases: ContractCase[] = [
     },
   },
   {
-    name: 'act: fill sets a single field',
+    name: 'act: fill replaces a prefilled single field',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
@@ -187,7 +187,7 @@ export const actCases: ContractCase[] = [
         await ctx.mcp.callTool('act', {
           page,
           kind: 'fill',
-          ref: refFor(snap, '"Name '),
+          ref: refFor(snap, '"Nickname '),
           value: 'Grace Hopper',
         }),
         'act fill',
@@ -195,17 +195,22 @@ export const actCases: ContractCase[] = [
       const value = await evalIn(
         ctx,
         page,
-        'return document.getElementById("name").value',
+        'return document.getElementById("nickname").value === "Grace Hopper"',
       )
-      if (!value.includes('Grace Hopper')) {
+      if (!value.includes('true')) {
         throw new Error(`fill did not set the field: ${value}`)
       }
     },
   },
   {
-    name: 'act: fill sets a whole form via fields[] in one call',
+    name: 'act: fill replaces a whole form via fields[] in one call',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
+      await evalIn(
+        ctx,
+        page,
+        'document.getElementById("name").value="old name"; document.getElementById("bio").value="old bio"',
+      )
       const snap = await snapshot(ctx, page)
       expectOk(
         await ctx.mcp.callTool('act', {
@@ -221,17 +226,14 @@ export const actCases: ContractCase[] = [
       const name = await evalIn(
         ctx,
         page,
-        'return document.getElementById("name").value',
+        'return document.getElementById("name").value === "Katherine Johnson"',
       )
       const bio = await evalIn(
         ctx,
         page,
-        'return document.getElementById("bio").value',
+        'return document.getElementById("bio").value === "orbital mechanics"',
       )
-      if (
-        !name.includes('Katherine Johnson') ||
-        !bio.includes('orbital mechanics')
-      ) {
+      if (!name.includes('true') || !bio.includes('true')) {
         throw new Error(`batch fill missed a field: name=${name} bio=${bio}`)
       }
     },

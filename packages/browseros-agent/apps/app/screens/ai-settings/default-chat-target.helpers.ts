@@ -8,21 +8,24 @@ export interface ResolveEffectiveDefaultTargetInput {
   providers: LlmProviderConfig[]
   agents: ReadonlyArray<{ id: string }>
   selection: SidepanelChatTargetSelection | null
-  defaultProviderId: string
+  defaultProviderId: string | null
 }
 
 /**
- * Resolves which single row (LLM provider or coding agent) the AI-settings
- * pane shows as selected: the persisted chat-target selection when it still
- * points at an existing row, otherwise the resolved default provider —
- * mirroring `resolveSidepanelChatTarget`'s fallback.
+ * Resolves which single row (LLM provider or coding agent) the AI-settings pane
+ * shows as selected: the persisted chat-target selection when it still points at
+ * an existing row, otherwise the resolved default provider, mirroring
+ * `resolveSidepanelChatTarget`'s fallback.
+ *
+ * Null when nothing is configured, so the radio group shows no selection rather
+ * than one naming a row that is not there.
  */
 export function resolveEffectiveDefaultTarget({
   providers,
   agents,
   selection,
   defaultProviderId,
-}: ResolveEffectiveDefaultTargetInput): SidepanelChatTargetSelection {
+}: ResolveEffectiveDefaultTargetInput): SidepanelChatTargetSelection | null {
   if (
     selection?.kind === 'acp' &&
     agents.some((agent) => agent.id === selection.id)
@@ -35,10 +38,8 @@ export function resolveEffectiveDefaultTarget({
   ) {
     return { kind: 'llm', id: selection.id }
   }
-  return {
-    kind: 'llm',
-    id: resolveDefaultProviderId(providers, defaultProviderId),
-  }
+  const resolvedId = resolveDefaultProviderId(providers, defaultProviderId)
+  return resolvedId ? { kind: 'llm', id: resolvedId } : null
 }
 
 /** Encodes a selection as a Select item value; ids may themselves contain ':'. */

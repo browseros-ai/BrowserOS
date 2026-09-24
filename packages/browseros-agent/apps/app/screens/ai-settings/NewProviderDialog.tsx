@@ -97,12 +97,11 @@ const DEFAULT_CONTEXT_WINDOW = 128000
  */
 const KEEP_SAVED_PLACEHOLDER = 'Leave blank to keep the saved value'
 
-// Managed-auth providers (OAuth + BrowserOS-hosted) drop custom headers
-// server-side, so the editor is hidden for them rather than letting users save
-// headers that would be silently ignored. Keep in sync with the provider
-// factories that omit config.headers.
+// Managed-auth (OAuth) providers drop custom headers server-side, so the editor
+// is hidden for them rather than letting users save headers that would be
+// silently ignored. Keep in sync with the provider factories that omit
+// config.headers.
 const HEADERLESS_PROVIDER_TYPES = new Set<string>([
-  'browseros',
   'chatgpt-pro',
   'github-copilot',
   'qwen-code',

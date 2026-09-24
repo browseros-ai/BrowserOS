@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it } from 'bun:test'
 import { PostHog } from 'posthog-js'
 import {
   createPostHogConfig,
@@ -8,8 +8,23 @@ import {
   sanitizeProperties,
 } from './posthog'
 
+const originalChrome = globalThis.chrome
+
+afterEach(() => {
+  Object.defineProperty(globalThis, 'chrome', {
+    configurable: true,
+    value: originalChrome,
+  })
+})
+
 describe('BrowserClaw PostHog privacy', () => {
-  it('switches a running anonymous SDK from installation B to canonical A', async () => {
+  it('keeps the installed app version when switching anonymous identity', async () => {
+    Object.defineProperty(globalThis, 'chrome', {
+      configurable: true,
+      value: {
+        runtime: { getManifest: () => ({ version: '0.2.25.7' }) },
+      },
+    })
     const events: Array<{
       event: string
       properties: Record<string, unknown>
@@ -24,7 +39,9 @@ describe('BrowserClaw PostHog privacy', () => {
         return null // Inspect the actual SDK payload without any network delivery.
       },
     })
-    client.capture('before-migration')
+    // A prior build's persisted properties must not override this package.
+    client.register({ app_version: '0.2.24.0' })
+    client.capture('before-migration', { app_version: 'caller-override' })
     reconcileTelemetryIdentity(client, 'analytics-A')
     client.opt_in_capturing({ captureEventName: false })
     client.capture('after-migration')
@@ -37,6 +54,10 @@ describe('BrowserClaw PostHog privacy', () => {
     expect(events.map(({ properties }) => properties.distinct_id)).toEqual([
       'installation-B',
       'analytics-A',
+    ])
+    expect(events.map(({ properties }) => properties.app_version)).toEqual([
+      '0.2.25.7',
+      '0.2.25.7',
     ])
     expect(
       events.every(
@@ -97,6 +118,7 @@ describe('BrowserClaw PostHog privacy', () => {
         $initial_pathname: '/',
         $initial_referrer: 'https://private.example',
         $initial_referring_domain: 'private.example',
+        app_version: 'stale-without-extension-runtime',
         screen: 'cockpit',
       }),
     ).toEqual({ screen: 'cockpit' })

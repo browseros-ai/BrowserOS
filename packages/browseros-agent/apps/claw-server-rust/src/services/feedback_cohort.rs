@@ -264,6 +264,9 @@ pub async fn fetch_once(cohort: &FeedbackCohort, source: &CohortSource, now_ms: 
             .json(&serde_json::json!({
                 "api_key": project_key,
                 "distinct_id": REMOTE_CONFIG_IDENTITY,
+                // PostHog omits server-only flags unless the caller declares this
+                // runtime, leaving the cohort empty and every invitation ineligible.
+                "evaluation_runtime": "server",
             })),
     };
     let response = match request.send().await {
@@ -651,6 +654,56 @@ mod tests {
         assert!(document_from_flags(&no_payload).is_none());
 
         assert!(document_from_flags(b"not json").is_none());
+    }
+
+    /// PostHog omits server-only remote configurations unless the caller declares its
+    /// runtime. Exercise the HTTP boundary so a successful but empty response cannot
+    /// silently leave an otherwise eligible installation without an invitation.
+    #[tokio::test]
+    async fn a_server_only_remote_configuration_allows_invitations() -> anyhow::Result<()> {
+        let now = now_ms();
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let source = CohortSource::RemoteConfig {
+            host: format!("http://{}", listener.local_addr()?),
+            project_key: "test-project-key".to_string(),
+        };
+        let payload = serde_json::to_string(&json!({
+            "generated_at_ms": now,
+            "installs": ["install-a"],
+        }))?;
+        let app = axum::Router::new().route(
+            "/flags",
+            axum::routing::post(
+                async move |axum::Json(body): axum::Json<serde_json::Value>| {
+                    let flags = if body["evaluation_runtime"] == "server" {
+                        json!({
+                            "feedback-call-cohort": {
+                                "enabled": true,
+                                "metadata": { "payload": payload }
+                            }
+                        })
+                    } else {
+                        json!({})
+                    };
+                    axum::Json(json!({ "flags": flags, "errorsWhileComputingFlags": false }))
+                },
+            ),
+        );
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+        let cohort = FeedbackCohort::new();
+        let adopted = fetch_once(&cohort, &source, now).await;
+        server.abort();
+
+        assert!(
+            adopted,
+            "the server-only cohort must be returned and adopted"
+        );
+        assert_eq!(
+            cohort.invitation_url("install-a", now).await.as_deref(),
+            Some(DEFAULT_BOOK_URL)
+        );
+        assert!(cohort.invitation_url("install-b", now).await.is_none());
+        Ok(())
     }
 
     /// Serves one canned response and returns the URL to ask for it.

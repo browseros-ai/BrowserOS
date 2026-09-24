@@ -17,11 +17,9 @@
 export const INLINED_ENV = {
   SENTRY_DSN: process.env.SENTRY_DSN,
   POSTHOG_API_KEY: process.env.POSTHOG_API_KEY,
-  BROWSEROS_CONFIG_URL: process.env.BROWSEROS_CONFIG_URL,
 } as const
 
 export const REQUIRED_FOR_PRODUCTION = [
   'SENTRY_DSN',
   'POSTHOG_API_KEY',
-  'BROWSEROS_CONFIG_URL',
 ] as const satisfies readonly (keyof typeof INLINED_ENV)[]

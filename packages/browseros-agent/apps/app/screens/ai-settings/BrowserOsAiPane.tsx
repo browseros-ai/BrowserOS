@@ -65,9 +65,9 @@ export const BrowserOsAiPane: FC = () => {
   })
   const { effectiveTarget } = defaultTarget
   const selectedProviderId =
-    effectiveTarget.kind === 'llm' ? effectiveTarget.id : null
+    effectiveTarget?.kind === 'llm' ? effectiveTarget.id : null
   const selectedAgentId =
-    effectiveTarget.kind === 'acp' ? effectiveTarget.id : null
+    effectiveTarget?.kind === 'acp' ? effectiveTarget.id : null
 
   const userId = sessionInfo.user?.id
 

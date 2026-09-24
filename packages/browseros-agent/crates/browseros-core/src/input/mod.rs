@@ -1,3 +1,4 @@
+mod fill;
 pub mod geometry;
 pub mod keyboard;
 pub mod mouse;
@@ -7,8 +8,8 @@ use crate::{
     pages::PageManager, snapshot::RefEntry,
 };
 use geometry::{
-    call_on_element, click_blocker_at_point, focus_element, focus_element_js, get_element_center,
-    get_input_value, js_click, scroll_into_view,
+    call_on_element, click_blocker_at_point, focus_element_js, get_element_center, js_click,
+    scroll_into_view,
 };
 use mouse::{MouseButton, dispatch_click, dispatch_drag, dispatch_hover, dispatch_scroll};
 use serde_json::{Value, json};
@@ -214,47 +215,6 @@ impl Input {
         self.check_click_point(session, &target, point).await?;
         dispatch_hover(session, point.x, point.y).await?;
         Ok(point)
-    }
-
-    pub async fn fill(
-        &self,
-        ref_id: &Ref,
-        value: &str,
-        clear: bool,
-    ) -> Result<Option<Point>, CoreError> {
-        let resolved = self.observer.resolve_ref(ref_id).await?;
-        self.fill_node(&resolved.session, resolved.backend_node_id, value, clear)
-            .await
-    }
-
-    async fn fill_node(
-        &self,
-        session: &ProtocolSession,
-        backend_node_id: i64,
-        value: &str,
-        clear: bool,
-    ) -> Result<Option<Point>, CoreError> {
-        scroll_into_view(session, backend_node_id).await;
-        let mut coords = None;
-        if let Ok(point) = get_element_center(session, backend_node_id).await {
-            dispatch_click(session, point.x, point.y, MouseButton::Left, 1, 0).await?;
-            coords = Some(point);
-        } else {
-            focus_element(session, backend_node_id).await?;
-        }
-
-        let key_session = self.page_session().await?;
-        if clear {
-            clear_field(&key_session).await?;
-            if coords.is_some()
-                && !get_input_value(session, backend_node_id).await.is_empty()
-                && let Some(point) = coords
-            {
-                dispatch_click(session, point.x, point.y, MouseButton::Left, 3, 0).await?;
-            }
-        }
-        type_text(&key_session, value).await?;
-        Ok(coords)
     }
 
     pub async fn focus(&self, ref_id: &Ref) -> Result<(), CoreError> {

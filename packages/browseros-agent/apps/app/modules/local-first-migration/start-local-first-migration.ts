@@ -14,6 +14,8 @@ import {
 } from '@/lib/schedules/scheduleStorage'
 import { sentry } from '@/lib/sentry/sentry'
 import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
+import { detectHostedModelRetirement } from '@/modules/hosted-model-retirement/hosted-model-retirement'
+import { hostedModelRetiredStorage } from '@/modules/hosted-model-retirement/hosted-model-retirement.hooks'
 import { putDefaultProvider } from '@/modules/llm-providers/llm-providers.api'
 import { importScheduledJobRuns } from '@/modules/schedules/schedules.api'
 import {
@@ -99,6 +101,23 @@ async function importScheduledJobs(jobs: ScheduledJobImport[]): Promise<void> {
  * seeing rather than swallowing: it is the difference between a slow start and
  * data that never came across.
  */
+/**
+ * Records whether this profile ran on the retired hosted provider.
+ *
+ * Reads only local sources, so unlike the imports below it does not wait on
+ * the agent server. It has to run whether or not the server ever comes up:
+ * what it decides is which sentence the user is shown when nothing is
+ * connected, and that is most needed when things are not working.
+ */
+export function startHostedModelRetirementDetection(): void {
+  void detectHostedModelRetirement({
+    isMarked: () => hostedModelRetiredStorage.getValue(),
+    mark: () => hostedModelRetiredStorage.setValue(true),
+    loadStoredProviders: async () => (await providersStorage.getValue()) ?? [],
+    loadBackupProviders,
+  }).catch(() => undefined)
+}
+
 export function startLocalFirstMigration(): void {
   void (async () => {
     if (!(await waitForAgentServer())) {

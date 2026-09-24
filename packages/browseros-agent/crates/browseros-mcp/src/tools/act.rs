@@ -17,6 +17,8 @@ kinds: click, type (into focused element), fill (ref+value, or many via fields[]
 press (key/combo), hover, focus, check, uncheck, select (option value), scroll, drag. \
 dialog_accept/dialog_dismiss handle pending JavaScript dialogs. \
 ALWAYS fill a whole form in one call via fields[], never field-by-field. \
+Fill replaces text by default (clear=false appends) and verifies the field value; \
+use type/press for keyboard handlers and wait for application-specific readiness. \
 Reads back a post-settle diff - no follow-up diff/snapshot needed; \
 re-snapshot only for fresh refs.";
 
@@ -134,6 +136,7 @@ struct ActArgs {
     button: Option<ActMouseButton>,
     #[serde(rename = "clickCount")]
     click_count: Option<i64>,
+    /// Defaults to true for fill (replace; false appends), false for type_at.
     clear: Option<bool>,
 }
 
@@ -217,7 +220,7 @@ async fn run_kind(
                         .fill(
                             &Ref(field.r#ref.clone()),
                             &field.value,
-                            args.clear.unwrap_or(false),
+                            args.clear.unwrap_or(true),
                         )
                         .await?;
                 }
@@ -225,7 +228,7 @@ async fn run_kind(
                 (args.r#ref.as_deref(), args.value.as_deref())
             {
                 input
-                    .fill(&Ref(ref_id.to_string()), value, args.clear.unwrap_or(false))
+                    .fill(&Ref(ref_id.to_string()), value, args.clear.unwrap_or(true))
                     .await?;
             } else {
                 return Ok(Some(error_result(

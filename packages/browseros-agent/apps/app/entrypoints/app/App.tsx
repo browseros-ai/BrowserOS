@@ -20,7 +20,6 @@ import { Personalize } from '@/screens/newtab/personalize/Personalize'
 import { OnboardingAiPage } from '@/screens/onboarding-ai/OnboardingAiPage'
 import { ProfilePage } from '@/screens/profile/ProfilePage'
 import { ScheduledTasksPage } from '@/screens/scheduled-tasks/ScheduledTasksPage'
-import { UsagePage } from '@/screens/usage/UsagePage'
 
 function getSurveyParams(): { maxTurns?: number; experimentId?: string } {
   const params = new URLSearchParams(window.location.search)
@@ -85,7 +84,6 @@ export const App: FC = () => {
               element={<Navigate to="/settings/ai" replace />}
             />
             <Route path="survey" element={<SurveyPage {...surveyParams} />} />
-            <Route path="usage" element={<UsagePage />} />
             <Route path="*" element={<Navigate to="/settings/ai" replace />} />
           </Route>
         </Route>
