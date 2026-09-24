@@ -1,5 +1,5 @@
 use crate::{
-    format::diff::format_diff_result,
+    format::diff::{DiffDetail, format_diff_result},
     framework::{
         ToolCtx, ToolExecResult, ToolResult, parse_args, pending_dialog_result, text_result,
     },
@@ -51,7 +51,7 @@ fn handler<'a>(
                 .map(|info| info.url)
                 .unwrap_or_else(|| "unknown".to_string()),
         };
-        let formatted = format_diff_result(&diff, &origin, ctx).await;
+        let formatted = format_diff_result(&diff, &origin, ctx, DiffDetail::Full).await;
         Ok(Some(text_result(
             formatted.text,
             Some(formatted.structured),

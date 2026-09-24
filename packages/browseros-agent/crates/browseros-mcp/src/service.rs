@@ -33,7 +33,7 @@ Shared environment. The user (and possibly other agents) are using this browser 
 Core loop: snapshot -> act -> verify.
 - snapshot renders the page as an accessibility tree; interactive elements carry [ref=eN] handles.
 - act drives them by ref: click, fill, type, press, hover, check, select, scroll, drag; fill batches a whole form via fields[].
-- act reads back a post-settle diff (the server waits out navigation/DOM churn) - trust it; don't reflexively wait or re-diff.
+- act reads back a post-settle diff (the server waits out navigation/DOM churn) - trust it; don't reflexively wait or re-diff. On a large page pass diff="summary"/"none"/a char cap so the readback stays small.
 - A click on a covered element fails and names the blocker - deal with it; don't blind-retry.
 - Dialogs surface inline on results; act kind="dialog_accept"/"dialog_dismiss" handles them (alerts auto-accept).
 - Console errors land on the act result; read format="console" lists recent ones.

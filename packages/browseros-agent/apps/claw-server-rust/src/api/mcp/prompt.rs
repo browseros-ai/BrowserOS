@@ -39,7 +39,8 @@ Core loop: snapshot -> act -> verify.
 - act drives them by ref: click, fill, type, press, hover, check, select,
   scroll, drag; fill batches a whole form via fields[].
 - act reads back a diff of what changed — trust it; don't reflexively wait
-  or re-snapshot.
+  or re-snapshot. On a large page pass diff="summary"/"none"/a char cap to
+  keep it small.
 - When an act fails, the error says why — fix the cause; don't blind-retry.
 - Refs go stale when the page changes (navigate, submit, re-render) —
   re-snapshot before reusing them.
