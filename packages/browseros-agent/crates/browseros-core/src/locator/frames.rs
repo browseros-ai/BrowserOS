@@ -15,6 +15,73 @@ pub(super) struct Scope {
 }
 
 impl LocatorEngine {
+    /// Translate a point from `r.session`'s viewport into the element's document
+    /// viewport for `expectHitTarget`. Keep the original point for trusted input.
+    /// This handles frame offsets, borders and scrolling; it is not a transform matrix
+    /// for rotated/skewed/scaled frame elements.
+    pub async fn hit_target_point(
+        &self,
+        r: &super::Resolved,
+        point: crate::input::Point,
+    ) -> Result<crate::input::Point, CoreError> {
+        let model = r
+            .session
+            .send_value(
+                "DOM.getBoxModel",
+                json!({"backendNodeId": r.backend_node_id}),
+            )
+            .await?;
+        let quad = model["model"]["border"]
+            .as_array()
+            .filter(|q| q.len() == 8)
+            .ok_or_else(|| CoreError::from("Element has no border quad for hit testing"))?;
+        let coords = quad
+            .iter()
+            .map(|v| {
+                v.as_f64()
+                    .filter(|v| v.is_finite())
+                    .ok_or_else(|| CoreError::from("Invalid element border quad"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        // Both measurements describe this same border box, but CDP includes the
+        // enclosing same-process frame offsets and DOMRect is document-local. Their
+        // origins differ by the full offset, including nested frame borders/scroll.
+        // Measure on the existing isolated handle: no parent DOM access (SOP), frame
+        // ancestry cache, or main-world adoption is needed. OOPIFs keep their session.
+        let rect = super::world::runtime_result(r.session.send_value("Runtime.callFunctionOn", json!({
+            "objectId": r.object_id,
+            "functionDeclaration": "function() { if (!this.isConnected) return null; const r = this.getBoundingClientRect(); return {x:r.x, y:r.y}; }",
+            "returnByValue": true
+        })).await?)?;
+        let rect = &rect["value"];
+        if rect.is_null() {
+            return Err(CoreError::DocumentChanged);
+        }
+        let local_x = rect["x"]
+            .as_f64()
+            .filter(|v| v.is_finite())
+            .ok_or_else(|| CoreError::from("Invalid local element bounds"))?;
+        let local_y = rect["y"]
+            .as_f64()
+            .filter(|v| v.is_finite())
+            .ok_or_else(|| CoreError::from("Invalid local element bounds"))?;
+        let viewport_x = coords
+            .iter()
+            .step_by(2)
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        let viewport_y = coords
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .copied()
+            .fold(f64::INFINITY, f64::min);
+        Ok(crate::input::Point {
+            x: point.x - viewport_x + local_x,
+            y: point.y - viewport_y + local_y,
+        })
+    }
+
     pub(super) async fn scope(
         &self,
         page: PageId,
