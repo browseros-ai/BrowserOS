@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { QueryClient, type QueryKey } from '@tanstack/react-query'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   resolveDefaultProviderId,
@@ -29,12 +30,6 @@ mock.module('@wxt-dev/storage', () => ({
       },
       watch: () => () => {},
     }),
-  },
-}))
-
-mock.module('@/lib/auth/sessionStorage', () => ({
-  sessionStorage: {
-    getValue: async () => null,
   },
 }))
 
@@ -147,9 +142,18 @@ const providers: LlmProviderConfig[] = [
 ]
 
 let persistDefaultProviderId: (providerId: string) => Promise<void>
+let rollBackDefaultProvider: (
+  queryClient: QueryClient,
+  attempted: string,
+  previous: string | null | undefined,
+) => void
+let defaultProviderKey: QueryKey
 
 beforeAll(async () => {
-  ;({ persistDefaultProviderId } = await import('./llm-providers.hooks'))
+  const hooks = await import('./llm-providers.hooks')
+  persistDefaultProviderId = hooks.persistDefaultProviderId
+  rollBackDefaultProvider = hooks.rollBackDefaultProvider
+  defaultProviderKey = hooks.useDefaultProviderIdQuery.getKey()
 })
 
 beforeEach(() => {
@@ -293,5 +297,46 @@ describe('resolveDefaultProviderId', () => {
 
   it('resolves to nothing when there are no providers to point at', () => {
     expect(resolveDefaultProviderId([], 'missing-provider')).toBeNull()
+  })
+})
+
+describe('rollBackDefaultProvider', () => {
+  function client(cached: string | null) {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(defaultProviderKey, cached)
+    return queryClient
+  }
+
+  it('puts the previous selection back when its own write failed', () => {
+    const queryClient = client('openai-1')
+
+    rollBackDefaultProvider(queryClient, 'openai-1', 'anthropic-provider')
+
+    expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
+      'anthropic-provider',
+    )
+  })
+
+  it('leaves a newer selection alone', () => {
+    // Two picks in quick succession, the second landing first. Restoring here
+    // would move the user back to what was selected before either, and the
+    // send path reads the target derived from this cache.
+    const queryClient = client('anthropic-provider')
+
+    rollBackDefaultProvider(queryClient, 'openai-1', 'openai-2')
+
+    expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
+      'anthropic-provider',
+    )
+  })
+
+  it('clears the selection when there was none to restore', () => {
+    const queryClient = client('openai-1')
+
+    rollBackDefaultProvider(queryClient, 'openai-1', undefined)
+
+    expect(
+      queryClient.getQueryData<string | null>(defaultProviderKey),
+    ).toBeNull()
   })
 })

@@ -1,4 +1,8 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  type QueryClient,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { createQuery } from 'react-query-kit'
 import {
@@ -60,6 +64,25 @@ export const useDefaultProviderIdQuery = createQuery<string | null>({
   queryKey: ['provider-default'],
   fetcher: fetchDefaultProviderId,
 })
+
+/**
+ * Puts back the selection a failed write replaced, unless a newer one landed.
+ *
+ * The cache is the only record of the selected target, and the send path reads
+ * the target derived from it, so restoring blindly can hand a message to a
+ * provider nobody chose: someone who picks twice quickly, whose first write
+ * fails after the second has already succeeded, would be moved back to
+ * whatever was selected before either. Only this write's own value is undone.
+ */
+export function rollBackDefaultProvider(
+  queryClient: QueryClient,
+  attempted: string,
+  previous: string | null | undefined,
+): void {
+  const key = useDefaultProviderIdQuery.getKey()
+  if (queryClient.getQueryData(key) !== attempted) return
+  queryClient.setQueryData(key, previous ?? null)
+}
 
 /** Persists the configured default provider id used by provider selection. */
 export async function persistDefaultProviderId(
@@ -152,12 +175,9 @@ export function useLlmProviders(): UseLlmProvidersReturn {
       queryClient.setQueryData(useDefaultProviderIdQuery.getKey(), providerId)
       return { previous }
     },
-    onError: (_error, _providerId, context) => {
+    onError: (_error, providerId, context) => {
       if (context) {
-        queryClient.setQueryData(
-          useDefaultProviderIdQuery.getKey(),
-          context.previous ?? null,
-        )
+        rollBackDefaultProvider(queryClient, providerId, context.previous)
       }
     },
     onSettled: invalidateDefault,
