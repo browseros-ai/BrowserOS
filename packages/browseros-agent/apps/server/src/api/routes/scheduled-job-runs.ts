@@ -30,7 +30,6 @@ const ToolCallSchema = z.object({
  * consistent with the other tables here.
  */
 const UpsertRunSchema = z.object({
-  profileId: z.string().nullish(),
   jobId: z.string().min(1),
   status: z.enum(['running', 'completed', 'failed']),
   startedAt: z.number(),

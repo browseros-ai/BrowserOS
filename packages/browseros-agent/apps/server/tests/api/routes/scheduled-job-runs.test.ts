@@ -11,7 +11,6 @@ const RUN_ID = 'run-1'
 function row(overrides: Partial<ScheduledJobRunRow> = {}): ScheduledJobRunRow {
   return {
     id: RUN_ID,
-    profileId: null,
     jobId: 'job-1',
     status: 'completed',
     startedAt: 1000,

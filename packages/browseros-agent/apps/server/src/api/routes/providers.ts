@@ -24,7 +24,6 @@ const SetDefaultSchema = z.object({ providerId: z.string().min(1) })
  * migration and this table, which is what makes re-importing idempotent.
  */
 const UpsertProviderSchema = z.object({
-  profileId: z.string().nullish(),
   type: z.string().min(1),
   name: z.string().min(1),
   baseUrl: z.string().nullish(),

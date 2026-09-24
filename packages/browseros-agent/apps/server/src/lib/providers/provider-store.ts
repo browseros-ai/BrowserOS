@@ -25,7 +25,6 @@ function isSet(column: AnySQLiteColumn) {
 
 const publicColumns = {
   id: providers.id,
-  profileId: providers.profileId,
   kind: providers.kind,
   type: providers.type,
   name: providers.name,

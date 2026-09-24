@@ -21,7 +21,6 @@ const IdParamSchema = z.object({ jobId: z.string().min(1) })
  * consistent with the other tables here.
  */
 const UpsertJobSchema = z.object({
-  profileId: z.string().nullish(),
   name: z.string().min(1),
   query: z.string().min(1),
   scheduleType: z.enum(['daily', 'hourly', 'minutes']),

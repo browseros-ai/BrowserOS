@@ -11,7 +11,6 @@ const JOB_ID = 'job-1'
 function row(overrides: Partial<ScheduledJobRow> = {}): ScheduledJobRow {
   return {
     id: JOB_ID,
-    profileId: null,
     name: 'Morning digest',
     query: 'summarise my inbox',
     scheduleType: 'daily',

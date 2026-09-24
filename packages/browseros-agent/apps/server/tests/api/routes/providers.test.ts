@@ -11,7 +11,6 @@ const PROVIDER_ID = 'provider-1'
 function row(overrides: Partial<ProviderRow> = {}): ProviderRow {
   return {
     id: PROVIDER_ID,
-    profileId: null,
     type: 'openai',
     name: 'My OpenAI',
     baseUrl: 'https://api.openai.com/v1',

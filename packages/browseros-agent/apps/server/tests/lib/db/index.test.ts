@@ -57,6 +57,7 @@ describe('database initialization', () => {
       old.sqlite
         .query('DELETE FROM __drizzle_migrations WHERE created_at >= ?')
         .run(migrationCreatedAt('0012_add_provider_headers'))
+      restoreProfileIdColumns(old.sqlite)
       old.sqlite.exec(
         "INSERT INTO providers (id, kind, type, name, model_id, context_window, api_key, is_default, created_at, updated_at) VALUES ('existing', 'llm', 'openai', 'Existing', 'model', 128000, 'local-key', 1, 1, 1)",
       )
@@ -264,8 +265,9 @@ describe('database initialization', () => {
     // Stand the database up as it was before the hosted provider was retired,
     // by undoing the migration that removes it and re-inserting the row.
     old.sqlite
-      .query('DELETE FROM __drizzle_migrations WHERE created_at = ?')
+      .query('DELETE FROM __drizzle_migrations WHERE created_at >= ?')
       .run(migrationCreatedAt('0013_drop_browseros_provider'))
+    restoreProfileIdColumns(old.sqlite)
     old.sqlite.exec(
       "INSERT INTO providers (id, kind, type, name, model_id, context_window, base_url, is_default, created_at, updated_at) VALUES ('browseros', 'llm', 'browseros', 'BrowserOS', 'browseros-auto', 200000, 'https://api.browseros.com/v1', 1, 1, 1)",
     )
@@ -333,6 +335,25 @@ const expectedMigrationHistory = JSON.parse(
     .digest('hex'),
   createdAt: entry.when,
 }))
+
+/**
+ * Puts back the columns the profile_id migration drops.
+ *
+ * Rewinding the applied markers replays every migration from that point on,
+ * and none of them are written to survive being applied twice: dropping a
+ * column that is already gone fails the same way adding one that already
+ * exists does. A test that rewinds past a migration has to stand the database
+ * up as that migration expects to find it.
+ */
+function restoreProfileIdColumns(sqlite: BunDatabase): void {
+  sqlite.exec('ALTER TABLE providers ADD COLUMN profile_id text')
+  sqlite.exec('CREATE INDEX providers_profile_id_idx ON providers (profile_id)')
+  sqlite.exec('ALTER TABLE scheduled_jobs ADD COLUMN profile_id text')
+  sqlite.exec(
+    'CREATE INDEX scheduled_jobs_profile_id_idx ON scheduled_jobs (profile_id)',
+  )
+  sqlite.exec('ALTER TABLE scheduled_job_runs ADD COLUMN profile_id text')
+}
 
 /**
  * A migration's applied-marker timestamp, by tag.
