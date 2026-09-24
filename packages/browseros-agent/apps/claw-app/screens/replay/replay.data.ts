@@ -320,6 +320,8 @@ const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   'locator.click': 'click',
   'locator.fill': 'type',
   'locator.press': 'type',
+  'locator.selectOption': 'type',
+  'locator.check': 'click',
 }
 
 // ReplayVerb selects the shared icon/style; captions can describe script
@@ -330,6 +332,14 @@ const SCRIPT_TOOL_CAPTIONS: Record<string, string> = {
   'locator.click': 'clicked',
   'locator.fill': 'filled',
   'locator.press': 'pressed',
+  'locator.selectOption': 'selected an option',
+  'locator.check': 'set a checkbox',
+  'locator.textContent': 'read text',
+  'context.newPage': 'opened a tab',
+  'context.pages': 'listed tabs',
+  'page.waitForLoadState': 'waited for the page to load',
+  'page.waitForTimeout': 'waited',
+  'page.title': 'read the page title',
 }
 
 /**

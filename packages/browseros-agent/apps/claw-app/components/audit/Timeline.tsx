@@ -278,26 +278,28 @@ function TimelineRow({
         <span className="font-mono text-[11.5px] text-ink-3">
           T+{formatOffset(offsetMs)}
         </span>
-        <div className="flex min-w-0 items-center gap-2">
+        <div className="min-w-0 space-y-0.5">
           {parentToolName && (
-            <span className="shrink-0 text-[11px] text-ink-3">
+            <span className="block text-[11px] text-ink-3">
               in {parentToolName} script
             </span>
           )}
-          <span className="font-mono font-semibold text-[12.5px] text-ink">
-            {dispatch.toolName}
-          </span>
-          {childCount > 0 && (
-            <span className="shrink-0 rounded bg-card-tint px-1.5 text-[11px] text-ink-3">
-              {childCount} {childCount === 1 ? 'step' : 'steps'}
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+            <span className="font-mono font-semibold text-[12.5px] text-ink [overflow-wrap:anywhere]">
+              {dispatch.toolName}
             </span>
-          )}
-          {hasChildError && (
-            <span className="shrink-0 rounded bg-red-500/10 px-1.5 text-[11px] text-red-500">
-              Step failed
-            </span>
-          )}
-          <span className="truncate text-[12.5px] text-ink-3">
+            {childCount > 0 && (
+              <span className="shrink-0 rounded bg-card-tint px-1.5 text-[11px] text-ink-3">
+                {childCount} {childCount === 1 ? 'step' : 'steps'}
+              </span>
+            )}
+            {(isError || hasChildError) && (
+              <span className="shrink-0 rounded bg-red-500/10 px-1.5 text-[11px] text-red-500">
+                {hasChildError ? 'Step failed' : 'Failed'}
+              </span>
+            )}
+          </div>
+          <span className="line-clamp-2 text-[12.5px] text-ink-3 [overflow-wrap:anywhere]">
             {argsSummary(code ?? dispatch.argsJson)}
           </span>
         </div>
@@ -330,7 +332,7 @@ function TimelineRow({
               <button
                 type="button"
                 onClick={() => onScreenshotClick(screenshotId)}
-                className="block w-64 overflow-hidden rounded-md border border-border-2"
+                className="block w-64 max-w-full overflow-hidden rounded-md border border-border-2"
               >
                 <AspectRatio ratio={16 / 10}>
                   <img
@@ -340,7 +342,7 @@ function TimelineRow({
                       screenshotBaseUrl,
                     )}
                     alt={`Screenshot at T+${formatOffset(offsetMs)}`}
-                    className="h-full w-full object-cover"
+                    className="h-full w-full object-contain"
                     loading="lazy"
                   />
                 </AspectRatio>
@@ -349,7 +351,7 @@ function TimelineRow({
           )}
           {isScreenshot && screenshotBaseUrl === null && (
             <Block label="screenshot">
-              <div className="w-64 overflow-hidden rounded-md border border-border-2">
+              <div className="w-64 max-w-full overflow-hidden rounded-md border border-border-2">
                 <AspectRatio ratio={16 / 10}>
                   <div className="h-full w-full animate-pulse bg-card-tint" />
                 </AspectRatio>
@@ -362,7 +364,7 @@ function TimelineRow({
                 href={dispatch.url}
                 target="_blank"
                 rel="noreferrer"
-                className="text-[12.5px] text-accent hover:underline"
+                className="text-[12.5px] text-accent [overflow-wrap:anywhere] hover:underline"
               >
                 {dispatch.url}
               </a>
@@ -398,7 +400,9 @@ function ScriptCode({ code }: { code: string }) {
       <CodeBlock
         code={visibleCode}
         language="javascript"
-        className="border-0 [&_code]:text-[11.5px] [&_pre]:p-0"
+        // Keep large scripts bounded so their child steps remain reachable.
+        // Wrapping applies before and after Shiki replaces raw text with tokens.
+        className="max-h-80 overflow-auto border-0 [&_code]:text-[11.5px] [&_pre]:whitespace-pre-wrap [&_pre]:p-0 [&_pre]:[overflow-wrap:anywhere]"
       />
       {truncated && (
         <button
@@ -503,6 +507,7 @@ function formatOffset(ms: number): string {
 
 function argsSummary(argsJson: string | null | undefined): string {
   if (!argsJson || argsJson === '{}') return ''
-  if (argsJson.length <= 80) return argsJson
-  return `${argsJson.slice(0, 80)}…`
+  // Let the row's line clamp adapt to available width; cutting at 80 characters
+  // hid the useful end of selectors even when there was room to display it.
+  return argsJson
 }

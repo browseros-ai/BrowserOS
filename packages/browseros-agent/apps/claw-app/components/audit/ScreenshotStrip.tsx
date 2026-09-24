@@ -45,6 +45,7 @@ export function ScreenshotStrip({
         id: screenshot.screenshotId,
         offset: Math.max(0, screenshot.capturedAt - startedAt),
         url: dispatch?.url ?? null,
+        tool: dispatch?.toolName,
       }
     })
   }, [dispatches, screenshots, startedAt])
@@ -84,13 +85,20 @@ export function ScreenshotStrip({
                   <img
                     src={taskScreenshotUrl(sessionId, s.id, screenshotBaseUrl)}
                     alt={`Screenshot ${idx + 1}`}
-                    className="h-full w-full object-cover"
+                    // Audit thumbnails preserve the whole viewport: centering a
+                    // portrait screenshot otherwise crops away the action.
+                    className="h-full w-full object-contain"
                     loading="lazy"
                   />
                 ) : (
                   <div className="h-full w-full animate-pulse bg-card-tint" />
                 )}
               </AspectRatio>
+              {s.tool && (
+                <div className="mt-1.5 truncate font-mono text-[11.5px] text-ink-2">
+                  {s.tool}
+                </div>
+              )}
               <div className="mt-1.5 flex items-center justify-between gap-2 text-[11.5px]">
                 <span className="font-mono text-ink-3">
                   T+{formatOffset(s.offset)}

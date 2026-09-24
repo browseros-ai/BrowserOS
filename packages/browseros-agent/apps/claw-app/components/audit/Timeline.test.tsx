@@ -168,6 +168,9 @@ describe('Timeline', () => {
     const header = document.querySelector('ol > li > button')
     expect(header?.textContent).toContain('1 step')
     expect(header?.textContent).toContain('Step failed')
+    const childHeader = document.querySelector('ol ol > li > button')
+    expect(childHeader?.textContent).toContain('Failed')
+    expect(childHeader?.getAttribute('aria-expanded')).toBe('false')
   })
 
   it('nests script steps in timestamp and dispatch-id order under an auto-expanded parent', () => {
