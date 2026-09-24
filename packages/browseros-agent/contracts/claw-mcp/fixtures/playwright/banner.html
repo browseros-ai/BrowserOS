@@ -1,0 +1,48 @@
+<!-- biome-ignore-all lint/a11y/noNoninteractiveElementToInteractiveRole: Preserve the corpus ARIA menu markup so locator fidelity is tested against the original fixture. -->
+<!-- biome-ignore-all lint/a11y/useFocusableInteractive: These static menu items exercise role matching after hover, not keyboard navigation. -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Corpus banner</title>
+<style>
+  /* The banner covers the whole viewport until dismissed, so a click on Buy
+     must fail actionability (element is covered) until Accept is clicked. */
+  #consent { position: fixed; inset: 0; background: rgba(20, 20, 20, 0.85); color: #fff;
+             display: flex; align-items: center; justify-content: center; z-index: 10; }
+  #consent[hidden] { display: none; }
+  #menu[hidden] { display: none; }
+</style>
+</head>
+<body>
+<h1>Shop</h1>
+<p><button type="button" id="buy">Buy</button> <span data-testid="buy-status">not bought</span></p>
+
+<div data-testid="menu-trigger" id="menu-trigger">Menu</div>
+<ul id="menu" role="menu" hidden>
+  <li role="menuitem">Orders</li>
+  <li role="menuitem">Returns</li>
+  <li role="menuitem">Account</li>
+</ul>
+
+<div id="consent" role="dialog" aria-label="Consent">
+  <div>
+    <p>We use cookies.</p>
+    <button type="button" id="accept">Accept</button>
+  </div>
+</div>
+
+<script>
+  document.getElementById('accept').addEventListener('click', () => {
+    document.getElementById('consent').hidden = true;
+  });
+  document.getElementById('buy').addEventListener('click', () => {
+    document.querySelector('[data-testid="buy-status"]').textContent = 'Bought';
+  });
+  const trigger = document.getElementById('menu-trigger');
+  const menu = document.getElementById('menu');
+  trigger.addEventListener('mouseenter', () => { menu.hidden = false; });
+  trigger.addEventListener('mouseover', () => { menu.hidden = false; });
+</script>
+</body>
+</html>

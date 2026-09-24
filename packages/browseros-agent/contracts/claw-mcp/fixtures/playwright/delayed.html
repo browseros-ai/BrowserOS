@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Corpus delayed</title></head>
+<body>
+<h1>Delayed</h1>
+<p id="status">Loading…</p>
+<script>
+  // The element does not exist at load; a script must wait for it, not poll blindly.
+  setTimeout(() => {
+    const el = document.createElement('p');
+    el.id = 'loaded';
+    el.setAttribute('data-testid', 'loaded');
+    el.textContent = 'Loaded!';
+    document.body.appendChild(el);
+    document.getElementById('status').remove();
+  }, 800);
+</script>
+</body>
+</html>
