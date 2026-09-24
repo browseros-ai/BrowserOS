@@ -1,6 +1,6 @@
-//! Exercise the facade through the real tool/runtime/audit seam. The P0 bridge
-//! leaves fail deliberately, so scripted replies supply only the host values
-//! needed to reach later calls; every invocation still crosses the Rust hook.
+//! Exercise the facade through the real tool/runtime/audit seam. Scripted
+//! replies supply host values beyond the fake CDP connection, while each call
+//! still crosses authorization and the production audit policy.
 use crate::{
     framework::{BrowserToolDefaults, InnerCallHook, InnerCallRecord, ToolCtx, execute_tool},
     tools::{
@@ -57,8 +57,8 @@ fn ctx_with_hook(hook: Arc<MockHook>) -> ToolCtx {
 async fn run(code: &str, replies: Value) -> anyhow::Result<(Value, Vec<Call>)> {
     let hook = Arc::new(MockHook::default());
     let ctx = ctx_with_hook(hook.clone());
-    // Replies replace a stub result after authorization/recording, never the
-    // bridge itself. Missing replies retain the real dispatch failure.
+    // Replies replace fake-browser results after authorization/audit, never the
+    // bridge itself. Missing replies retain the real dispatch outcome.
     let code = format!(
         r#"
         const nativeCall = __browserosCall;
@@ -330,12 +330,13 @@ async fn facade_lazy_page_creates_once_for_concurrent_first_use() -> anyhow::Res
     let (output, calls) = run(
         r#"
         await Promise.all([page.goto('https://example.com'), page.getByText('Hello').click()]);
-        return {id:page.pageId,url:page.url(),title:page.title()};
+        return {id:page.pageId,url:page.url(),title:await page.title()};
     "#,
         json!({
             "context.lastPage":null, "context.newPage":9,
             "page.goto":{"value":null,"url":"https://example.com","title":"Example"},
             "page.info":{"url":"https://example.com","title":"Example"},
+            "page.title":"Example",
             "locator.click":null
         }),
     )
@@ -352,9 +353,13 @@ async fn facade_lazy_page_creates_once_for_concurrent_first_use() -> anyhow::Res
             .count(),
         1
     );
-    assert_eq!(calls[0].method, "context.lastPage");
-    assert_eq!(calls[1].method, "context.newPage");
-    assert_eq!(calls[1].args, json!([null,{"timeout":10000}]));
+    assert_eq!(calls[0].method, "context.newPage");
+    assert_eq!(calls[0].args, json!([null,{"timeout":10000}]));
+    assert!(
+        !calls
+            .iter()
+            .any(|call| super::is_silent_method(&call.method))
+    );
     assert!(calls.iter().any(|call| call.method == "page.goto"
         && call.page == Some(9)
         && call.args == json!([9,"https://example.com",{"timeout":10000}])));
@@ -367,11 +372,12 @@ async fn facade_lazy_page_uses_host_recency_and_metadata_from_each_leaf() -> any
         r#"
         const locator = page.getByRole('button');
         await locator.click();
-        return {id:page.pageId,url:page.url(),title:page.title()};
+        return {id:page.pageId,url:page.url(),title:await page.title()};
     "#,
         json!({
             "context.lastPage":{"pageId":4,"url":"https://before.test","title":"Before"},
-            "locator.click":{"value":null,"url":"https://after.test","title":"After"}
+            "locator.click":{"value":null,"url":"https://after.test","title":"After"},
+            "page.title":"After"
         }),
     )
     .await?;
@@ -381,12 +387,12 @@ async fn facade_lazy_page_uses_host_recency_and_metadata_from_each_leaf() -> any
         json!({"id":4,"url":"https://after.test","title":"After"})
     );
     assert_eq!(calls.len(), 2);
-    leaf(
-        &calls,
-        "locator.click",
-        Some(4),
-        json!([4,"internal:role=button",{"timeout":10000}]),
+    assert_eq!(calls[0].method, "locator.click");
+    assert_eq!(
+        calls[0].args,
+        json!([4,"internal:role=button",{"timeout":10000}])
     );
+    leaf(&calls, "page.title", Some(4), json!([4]));
     Ok(())
 }
 
@@ -430,8 +436,8 @@ async fn facade_evaluate_sends_source_and_keeps_json_result_envelope_separate() 
         const p = await neo.page(7);
         const fn = () => 1 + 1;
         const value = await p.evaluate(fn);
-        return {source:String(fn), value, url:p.url(), title:p.title()};
-    "#, json!({"page.evaluate":{"value":{"value":2,"url":"user data","title":"user title"},"url":"https://example.test","title":"Page title"}})).await?;
+        return {source:String(fn), value, url:p.url(), title:await p.title()};
+    "#, json!({"page.evaluate":{"value":{"value":2,"url":"user data","title":"user title"},"url":"https://example.test","title":"Page title"},"page.title":"Page title"})).await?;
     success(&output);
     assert_eq!(calls[1].args[1], output["value"]["source"]);
     assert!(
@@ -688,7 +694,7 @@ async fn facade_page_lifecycle_reuses_identity_and_replaces_closed_lazy_page() -
             .iter()
             .filter(|call| call.method == "context.lastPage")
             .count(),
-        1
+        0
     );
     leaf(
         &calls,
@@ -704,7 +710,7 @@ async fn facade_neo_rehydrates_metadata_and_routes_all_extras() -> anyhow::Resul
     let (output, calls) = run(
         r#"
         const p = await neo.page(7);
-        const before = [p.pageId,p.url(),p.title()];
+        const before = [p.pageId,p.url(),await p.title()];
         for (const op of [
             () => neo.pages({ownership:'other-agent'}), () => neo.snapshot(p),
             () => neo.read(p,{format:'markdown'}), () => neo.grep(p,{pattern:'hello'}),
@@ -713,7 +719,7 @@ async fn facade_neo_rehydrates_metadata_and_routes_all_extras() -> anyhow::Resul
         ]) { try { await op(); } catch (_) {} }
         return before;
     "#,
-        json!({"neo.page":{"pageId":7,"url":"https://example.test","title":"Example"}}),
+        json!({"neo.page":{"pageId":7,"url":"https://example.test","title":"Example"},"page.title":"Example"}),
     )
     .await?;
     success(&output);
@@ -723,16 +729,18 @@ async fn facade_neo_rehydrates_metadata_and_routes_all_extras() -> anyhow::Resul
     );
     assert_eq!(calls[0].args, json!([7]));
     assert_eq!(calls[0].page, Some(7));
-    assert_eq!(calls[1].args, json!([{"ownership":"other-agent"}]));
-    assert_eq!(calls[2].args, json!([7]));
-    assert_eq!(calls[3].args, json!([7,{"format":"markdown"}]));
-    assert_eq!(calls[4].args, json!([7,{"pattern":"hello"}]));
+    assert_eq!(calls[1].method, "page.title");
+    assert_eq!(calls[1].args, json!([7]));
+    assert_eq!(calls[2].args, json!([{"ownership":"other-agent"}]));
+    assert_eq!(calls[3].args, json!([7]));
+    assert_eq!(calls[4].args, json!([7,{"format":"markdown"}]));
+    assert_eq!(calls[5].args, json!([7,{"pattern":"hello"}]));
     assert_eq!(
-        calls[5].args,
+        calls[6].args,
         json!([7,{"url":"https://example.test/file"}])
     );
     assert_eq!(
-        calls[6].args,
+        calls[7].args,
         json!(["Runtime.evaluate",{"expression":"2"},7])
     );
     Ok(())
@@ -789,7 +797,7 @@ async fn facade_lazy_stub_failure_identifies_requested_api_and_dependency() -> a
         .ok_or_else(|| anyhow::anyhow!("missing error"))?;
     assert!(error.contains("not implemented yet: page.goto"), "{error}");
     assert!(error.contains("context.lastPage"), "{error}");
-    leaf(&calls, "context.lastPage", None, json!([]));
+    assert!(calls.is_empty(), "internal discovery must remain silent");
     Ok(())
 }
 
@@ -902,18 +910,14 @@ async fn facade_does_not_require_post_es2020_object_builtins() -> anyhow::Result
         const p = await neo.page(7);
         expect({value:1}).toEqual({value:1});
         await expect(p.locator('button')).toBeVisible();
-        return p.title();
+        return await p.title();
     "#,
-        json!({"neo.page":{"pageId":7,"title":"ES2020"},"expect.toBeVisible":{"matches":true}}),
+        json!({"neo.page":{"pageId":7,"title":"ES2020"},"page.title":"ES2020","expect.toBeVisible":{"matches":true}}),
     )
     .await?;
     success(&output);
     assert_eq!(output["value"], "ES2020");
-    leaf(
-        &calls,
-        "expect.toBeVisible",
-        Some(7),
-        json!([7,"button",true,{"timeout":5000,"isNot":false}]),
-    );
+    assert_eq!(calls[calls.len() - 2].method, "expect.toBeVisible");
+    leaf(&calls, "page.title", Some(7), json!([7]));
     Ok(())
 }

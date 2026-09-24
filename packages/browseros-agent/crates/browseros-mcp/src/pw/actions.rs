@@ -338,6 +338,7 @@ async fn dispatch_inner(
             let page = page_arg(args).map_err(CoreError::from)?;
             let value = match method {
                 "page.info" | "neo.page" => page_info(bridge, page, dl).await?,
+                "page.title" => page_info(bridge, page, dl).await?["title"].clone(),
                 "page.content" => evaluate_page(bridge, page, "(() => (document.doctype ? new XMLSerializer().serializeToString(document.doctype) + '\\n' : '') + document.documentElement.outerHTML)()", None).await?,
                 "page.evaluate" => evaluate_page(bridge, page, string_arg(args, 1, "function").map_err(CoreError::from)?, Some(args.get(2).cloned().unwrap_or(Value::Null))).await?,
                 "page.screenshot" | "page.pdf" | "neo.read" | "neo.grep" | "neo.download" => return tool_action(bridge, method, args).await,

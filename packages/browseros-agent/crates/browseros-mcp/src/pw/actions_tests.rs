@@ -82,6 +82,7 @@ struct ActionConnection {
     input_error: Option<String>,
     tabs: Option<Mutex<Vec<Value>>>,
     discover_tab: bool,
+    open_on_input: bool,
 }
 impl ActionConnection {
     fn new(probe: Option<Value>) -> Self {
@@ -95,6 +96,7 @@ impl ActionConnection {
             input_error: None,
             tabs: None,
             discover_tab: false,
+            open_on_input: false,
         }
     }
 }
@@ -112,6 +114,20 @@ impl CdpConnection for ActionConnection {
             if let Some(tabs) = &self.tabs {
                 let mut tabs = tabs.lock().unwrap_or_else(|e| e.into_inner());
                 match method {
+                    "Input.dispatchMouseEvent"
+                        if self.open_on_input && params["type"] == "mouseReleased" =>
+                    {
+                        for id in [4, 5, 6] {
+                            if !tabs.iter().any(|tab| tab["tabId"] == id) {
+                                tabs.push(action_tab(id));
+                            }
+                        }
+                    }
+                    "Target.getTargetInfo" => {
+                        return Ok(
+                            json!({"targetInfo":{"openerId":if params["targetId"] == "target-6" { "unrelated" } else { "target-1" }}}),
+                        );
+                    }
                     "Browser.getTabs" => return Ok(json!({"tabs":*tabs})),
                     "Browser.getTabInfo" => {
                         return Ok(
@@ -280,6 +296,127 @@ fn actions_method_prefixes() {
 }
 
 #[tokio::test]
+async fn actions_bookkeeping_is_silent_but_explicit_reads_are_audited() -> anyhow::Result<()> {
+    let hook = Arc::new(Hook::default());
+    let ctx = context(
+        Arc::new(ActionConnection::new(Some(json!("document content")))),
+        hook.clone(),
+    );
+    let result = script(
+        &ctx,
+        r#"
+        await __browserosCall('context.lastPage','[]',false);
+        await __browserosCall('page.info','[1]',false);
+        const title = await __browserosCall('page.title','[1]',false);
+        const content = await __browserosCall('page.content','[1]',false);
+        try { await __browserosCall('page.info','[99]',false); } catch (_) {}
+        return [title.value,content.value];
+    "#,
+        1000,
+    )
+    .await?;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["value"], json!(["Example", "document content"]));
+    let events = hook.events();
+    let records: Vec<_> = events
+        .iter()
+        .filter(|row| row[0] == "record")
+        .map(|row| row[1].clone())
+        .collect();
+    assert_eq!(records, vec![json!("page.title"), json!("page.content")]);
+    assert!(events.contains(&json!(["authorize", 99])));
+    assert!(events.contains(&json!(["authorize", 1])));
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_query_audit_uses_public_name_even_on_failure() -> anyhow::Result<()> {
+    let hook = Arc::new(Hook::default());
+    let ctx = context(Arc::new(ActionConnection::new(None)), hook.clone());
+    let result = script(&ctx,r#"
+        try { await __browserosCall('locator.query','[99,"css=input","textContent",null]',false); } catch (_) {}
+        try { await __browserosCall('locator.query','[99,"css=input","madeUp",null]',false); } catch (_) {}
+    "#,1000).await?;
+    assert_eq!(result["ok"], true, "{result}");
+    let records: Vec<_> = hook
+        .events()
+        .into_iter()
+        .filter(|row| row[0] == "record")
+        .collect();
+    assert_eq!(records[0][1], "locator.textContent");
+    assert_eq!(records[0][3], json!([99, "css=input", "textContent", null]));
+    assert_eq!(records[0][5], true);
+    assert_eq!(records[1][1], "locator.query");
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_named_errors_keep_their_class_in_the_wire_envelope() -> anyhow::Result<()> {
+    let ctx = context(
+        Arc::new(ActionConnection::new(None)),
+        Arc::new(Hook::default()),
+    );
+    for (source, expected) in [
+        ("throw new Error('plain');", "plain"),
+        ("throw new TypeError('typed');", "TypeError: typed"),
+        (
+            "const e = new Error('late'); e.name = 'TimeoutError'; throw e;",
+            "TimeoutError: late",
+        ),
+    ] {
+        let result = script(&ctx, source, 1000).await?;
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"], expected);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_popups_are_claimed_before_click_resolves_and_sync_pages_reads()
+-> anyhow::Result<()> {
+    let mut connection = ActionConnection::new(None);
+    connection.engine = true;
+    connection.open_on_input = true;
+    connection.tabs = Some(Mutex::new(vec![action_tab(1)]));
+    let hook = Arc::new(Hook {
+        other_pages: vec![4],
+        ..Default::default()
+    });
+    let ctx = context(Arc::new(connection), hook.clone());
+    let result = script(
+        &ctx,
+        r#"
+        const [source] = await context.pages();
+        await source.locator('a').click();
+        const sync = context.pages().map(p => p.pageId);
+        const refreshed = (await context.pages()).map(p => p.pageId);
+        return {sync,refreshed};
+    "#,
+        1000,
+    )
+    .await?;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["value"], json!({"sync":[1,2,3],"refreshed":[1,2,3]}));
+    let events = hook.events();
+    let click = events
+        .iter()
+        .position(|row| row[0] == "record" && row[1] == "locator.click")
+        .ok_or_else(|| anyhow::anyhow!("missing click audit"))?;
+    for id in [2, 3] {
+        let claimed = events
+            .iter()
+            .position(|row| *row == json!(["created", id]))
+            .ok_or_else(|| anyhow::anyhow!("missing popup claim"))?;
+        assert!(claimed < click);
+    }
+    assert!(
+        !events.contains(&json!(["created", 4])),
+        "unrelated tab was claimed"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn actions_click_keeps_one_authorize_then_record() -> anyhow::Result<()> {
     let hook = Arc::new(Hook::default());
     let mut connection = ActionConnection::new(None);
@@ -336,6 +473,39 @@ async fn actions_click_keeps_one_authorize_then_record() -> anyhow::Result<()> {
         calls
             .iter()
             .any(|(m, p)| m == "Runtime.releaseObject" && p["objectId"] == "element")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_click_and_explicit_popup_wait_share_one_claim() -> anyhow::Result<()> {
+    let mut connection = ActionConnection::new(None);
+    connection.engine = true;
+    connection.open_on_input = true;
+    connection.tabs = Some(Mutex::new(vec![action_tab(1)]));
+    let hook = Arc::new(Hook::default());
+    let ctx = context(Arc::new(connection), hook.clone());
+    let result = script(
+        &ctx,
+        r#"
+        const [source] = await context.pages();
+        const [popup] = await Promise.all([
+            context.waitForEvent('page', {timeout:500}),
+            source.locator('a').click()
+        ]);
+        return popup.pageId;
+    "#,
+        1000,
+    )
+    .await?;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(result["value"], 2);
+    assert_eq!(
+        hook.events()
+            .iter()
+            .filter(|row| **row == json!(["created", 2]))
+            .count(),
+        1
     );
     Ok(())
 }
