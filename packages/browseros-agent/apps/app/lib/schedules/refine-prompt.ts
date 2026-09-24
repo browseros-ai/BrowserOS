@@ -1,38 +1,4 @@
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
-import { defaultProviderIdStorage } from '@/lib/llm-providers/storage'
-import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import { listProvidersOrNull } from '@/modules/llm-providers/llm-providers.api'
-import {
-  findChatProviderById,
-  resolveChatProvider,
-} from '../llm-providers/provider-runtime'
-
-const resolveProvider = async (
-  providerId?: string,
-): Promise<LlmProviderConfig> => {
-  const loaded = await listProvidersOrNull()
-  // Same rule as the scheduled run: the configured default is a choice too, and
-  // its model and credentials are in the list that failed to load. Callers here
-  // already catch and surface this.
-  if (loaded === null) {
-    throw new Error(
-      'Cannot reach the BrowserOS server to load the selected provider',
-    )
-  }
-
-  const providers = loaded
-  if (providers.length) {
-    const explicitProvider = findChatProviderById(providers, providerId)
-    if (explicitProvider) return explicitProvider
-
-    const defaultProviderId = await defaultProviderIdStorage.getValue()
-    const provider = resolveChatProvider(providers, defaultProviderId)
-    if (provider) return provider
-  }
-  // Nothing configured. Said plainly rather than run on a fabricated provider,
-  // which is what happened while a built-in one was always seeded.
-  throw new Error('Connect an LLM provider in AI settings to refine a prompt')
-}
 
 interface RefinePromptResponse {
   success: boolean
@@ -40,13 +6,20 @@ interface RefinePromptResponse {
   message?: string
 }
 
+/**
+ * Asks the server to rewrite a scheduled task's prompt.
+ *
+ * The provider is named and nothing more, the way /chat names one. This used
+ * to resolve the provider here and post its whole configuration, so the API
+ * key, the AWS secret and the session token crossed the wire on every refine.
+ * The server holds the list and which one is selected, so it resolves them.
+ */
 export async function refinePrompt(params: {
   prompt: string
   name: string
   providerId?: string
 }): Promise<string> {
   const agentServerUrl = await getAgentServerUrl()
-  const provider = await resolveProvider(params.providerId)
 
   const response = await fetch(`${agentServerUrl}/refine-prompt`, {
     method: 'POST',
@@ -54,15 +27,9 @@ export async function refinePrompt(params: {
     body: JSON.stringify({
       prompt: params.prompt,
       name: params.name,
-      provider: provider.type,
-      model: provider.modelId ?? 'default',
-      apiKey: provider.apiKey,
-      baseUrl: provider.baseUrl,
-      resourceName: provider.resourceName,
-      accessKeyId: provider.accessKeyId,
-      secretAccessKey: provider.secretAccessKey,
-      region: provider.region,
-      sessionToken: provider.sessionToken,
+      // Absent when the caller has none, which tells the server to use the
+      // selected provider.
+      providerId: params.providerId,
     }),
   })
 

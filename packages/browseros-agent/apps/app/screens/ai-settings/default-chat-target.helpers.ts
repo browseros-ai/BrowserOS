@@ -1,5 +1,5 @@
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import type { SidepanelChatTargetSelection } from '@/modules/chat/sidepanel-chat-targets'
+import type { ChatTargetRef } from '@/modules/chat/sidepanel-chat-targets'
 // Relative (not `@/`) so this module stays loadable under `bun test`, which
 // resolves tsconfig `@/` aliases for erased type imports only, not values.
 import { resolveDefaultProviderId } from '../../lib/llm-providers/provider-selection'
@@ -7,15 +7,17 @@ import { resolveDefaultProviderId } from '../../lib/llm-providers/provider-selec
 export interface ResolveEffectiveDefaultTargetInput {
   providers: LlmProviderConfig[]
   agents: ReadonlyArray<{ id: string }>
-  selection: SidepanelChatTargetSelection | null
-  defaultProviderId: string | null
+  /** The stored id verbatim, which names a row of either kind. */
+  defaultTargetId: string | null
 }
 
 /**
- * Resolves which single row (LLM provider or coding agent) the AI-settings pane
- * shows as selected: the persisted chat-target selection when it still points at
- * an existing row, otherwise the resolved default provider, mirroring
- * `resolveSidepanelChatTarget`'s fallback.
+ * Which single row (LLM provider or coding agent) the pane shows as selected.
+ *
+ * The kind is read off whichever list holds the id rather than stored beside
+ * it. Agents are checked first only because the id is unique across both, so
+ * order decides nothing. Falling back through `resolveDefaultProviderId` keeps
+ * the LLM-only behaviour for an id that names nothing.
  *
  * Null when nothing is configured, so the radio group shows no selection rather
  * than one naming a row that is not there.
@@ -23,39 +25,16 @@ export interface ResolveEffectiveDefaultTargetInput {
 export function resolveEffectiveDefaultTarget({
   providers,
   agents,
-  selection,
-  defaultProviderId,
-}: ResolveEffectiveDefaultTargetInput): SidepanelChatTargetSelection | null {
-  if (
-    selection?.kind === 'acp' &&
-    agents.some((agent) => agent.id === selection.id)
-  ) {
-    return { kind: 'acp', id: selection.id }
+  defaultTargetId,
+}: ResolveEffectiveDefaultTargetInput): ChatTargetRef | null {
+  if (defaultTargetId) {
+    if (agents.some((agent) => agent.id === defaultTargetId)) {
+      return { kind: 'acp', id: defaultTargetId }
+    }
+    if (providers.some((provider) => provider.id === defaultTargetId)) {
+      return { kind: 'llm', id: defaultTargetId }
+    }
   }
-  if (
-    selection?.kind === 'llm' &&
-    providers.some((provider) => provider.id === selection.id)
-  ) {
-    return { kind: 'llm', id: selection.id }
-  }
-  const resolvedId = resolveDefaultProviderId(providers, defaultProviderId)
+  const resolvedId = resolveDefaultProviderId(providers, defaultTargetId)
   return resolvedId ? { kind: 'llm', id: resolvedId } : null
-}
-
-/** Encodes a selection as a Select item value; ids may themselves contain ':'. */
-export function encodeTargetValue(
-  selection: SidepanelChatTargetSelection,
-): string {
-  return `${selection.kind}:${selection.id}`
-}
-
-export function decodeTargetValue(
-  value: string,
-): SidepanelChatTargetSelection | null {
-  const separatorIndex = value.indexOf(':')
-  if (separatorIndex === -1) return null
-  const kind = value.slice(0, separatorIndex)
-  const id = value.slice(separatorIndex + 1)
-  if ((kind !== 'llm' && kind !== 'acp') || !id) return null
-  return { kind, id }
 }

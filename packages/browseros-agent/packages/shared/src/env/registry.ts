@@ -25,7 +25,6 @@ export interface EnvKeySpec {
 }
 
 const stringSchema = z.string()
-const urlSchema = z.string().url()
 const portSchema = z.string().refine((value) => {
   if (!/^\d+$/.test(value)) {
     return false
@@ -111,34 +110,12 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     modes: { development: { value: '' } },
   },
   {
-    key: 'VITE_PUBLIC_BROWSEROS_API',
-    section: 'app',
-    description: 'Public BrowserOS API URL exposed to the browser bundle.',
-    secret: false,
-    schema: urlSchema,
-    modes: { development: { value: 'https://api.browseros.com' } },
-  },
-  {
     key: 'VITE_ALPHA_FEATURES',
     section: 'app',
     description: 'Alpha feature flag for the browser bundle.',
     secret: false,
     schema: stringSchema,
     modes: { development: { value: 'true' } },
-  },
-  {
-    key: 'GRAPHQL_SCHEMA_PATH',
-    section: 'app',
-    description:
-      'Optional GraphQL schema path; falls back to schema/schema.graphql.',
-    secret: false,
-    schema: stringSchema,
-    modes: {
-      development: {
-        value: '/path/to/api-repo/.../schema.graphql',
-        commented: true,
-      },
-    },
   },
   {
     key: 'SENTRY_AUTH_TOKEN',

@@ -1,27 +1,15 @@
-/**
- * Pins the copy each audience sees. A brand-new user and someone whose hosted
- * provider was retired both have nothing connected, and telling the second one
- * to "get started" would not explain why a working chat stopped working.
- */
+/** Pins the copy shown when nothing is connected, resting and after a refused send. */
 
 import { describe, expect, it } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { NoProviderNotice } from './NoProviderNotice'
 
 describe('NoProviderNotice', () => {
-  it('invites a first-time user to connect something', () => {
+  it('invites the reader to connect something', () => {
     const html = renderToStaticMarkup(<NoProviderNotice />)
 
     expect(html).toContain('Connect a provider to start chatting')
     expect(html).toContain('Connect a provider')
-    expect(html).not.toContain('no longer ships')
-  })
-
-  it('explains the retirement to someone who was on the built-in model', () => {
-    const html = renderToStaticMarkup(<NoProviderNotice retired />)
-
-    expect(html).toContain('BrowserOS no longer ships a built-in model')
-    expect(html).toContain('Your conversations and settings are unchanged.')
   })
 
   it('answers a refused send and says the message was kept', () => {
@@ -41,7 +29,7 @@ describe('NoProviderNotice', () => {
   })
 
   it('always offers the way out', () => {
-    for (const props of [{}, { retired: true }, { blocked: true }]) {
+    for (const props of [{}, { blocked: true }]) {
       const html = renderToStaticMarkup(<NoProviderNotice {...props} />)
       expect(html).toContain('/app.html#/onboarding/ai')
     }

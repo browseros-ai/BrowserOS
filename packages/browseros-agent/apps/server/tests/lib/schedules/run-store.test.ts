@@ -88,18 +88,6 @@ describe('dbScheduledJobRunStore', () => {
     expect(await dbScheduledJobRunStore.list()).toHaveLength(1)
   })
 
-  test('insertIfAbsent leaves an existing run untouched', async () => {
-    await useTempDbWithJob()
-    await dbScheduledJobRunStore.upsert(baseRun({ result: 'original' }))
-
-    const saved = await dbScheduledJobRunStore.insertIfAbsent(
-      baseRun({ result: 'stale import' }),
-    )
-
-    expect(saved).toBeNull()
-    expect((await dbScheduledJobRunStore.get(RUN_ID))?.result).toBe('original')
-  })
-
   // Cascade, unlike the job to provider reference which is set null. A run
   // whose job is gone means nothing, and deleting a job already removed its
   // runs before this table existed.

@@ -5,11 +5,6 @@ export const importHintDismissedAtStorage = storage.defineItem<number | null>(
   { fallback: null },
 )
 
-export const authRedirectPathStorage = storage.defineItem<string | null>(
-  'local:authRedirectPath',
-  { fallback: null },
-)
-
 export const firstRunConfettiShownStorage = storage.defineItem<boolean>(
   'local:firstRunConfettiShown',
   { fallback: false },

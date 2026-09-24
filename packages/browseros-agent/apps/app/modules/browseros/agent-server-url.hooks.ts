@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { resolveAgentServerUrlWithRetry } from './agent-server-url.helpers'
+import { resolveAgentServerUrl } from './agent-server-url.helpers'
 
 export type UseAgentServerUrlResult =
   | { baseUrl: string; isLoading: false; error: null }
@@ -18,7 +18,7 @@ export function useAgentServerUrl(): UseAgentServerUrlResult {
 
     async function loadUrl() {
       try {
-        const url = await resolveAgentServerUrlWithRetry()
+        const url = await resolveAgentServerUrl()
         if (!cancelled) {
           setState({ baseUrl: url, isLoading: false, error: null })
         }

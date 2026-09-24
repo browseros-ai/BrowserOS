@@ -6,7 +6,6 @@ import type { ProviderRow } from '../../../src/lib/db/schema'
 function storedProvider(): ProviderRow {
   return {
     id: 'anthropic-1',
-    profileId: null,
     kind: 'llm',
     type: 'anthropic',
     name: 'My Claude',

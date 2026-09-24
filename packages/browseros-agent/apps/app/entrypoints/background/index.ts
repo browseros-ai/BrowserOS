@@ -14,7 +14,6 @@ import {
   toggleSidePanel,
 } from '@/lib/browseros/toggleSidePanel'
 import { checkAndShowChangelog } from '@/lib/changelog/changelog-notifier'
-import { setupLlmProvidersBackupToBrowserOS } from '@/lib/llm-providers/storage'
 import { fetchMcpTools } from '@/lib/mcp/client'
 import {
   onRuntimeMessage,
@@ -22,28 +21,24 @@ import {
 } from '@/lib/messaging/runtime/runtimeMessages'
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
-import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
-import {
-  startHostedModelRetirementDetection,
-  startLocalFirstMigration,
-} from '@/modules/local-first-migration/start-local-first-migration'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
-const LEGACY_TOOL_APPROVAL_STORAGE_KEYS = [
+const RETIRED_STORAGE_KEYS = [
+  // The unshipped Tool Approvals feature.
   'local:tool-approval-config',
   'local:pending-tool-approvals',
   'local:approval-responses',
   'local:tool-execution-log',
+  // Mirrored the selected chat target, which the server now holds alone.
+  'local:sidepanel-chat-target-selection',
 ] as const
 
-/**
- * Removes persisted state for the unshipped Tool Approvals feature during extension updates.
- */
-const cleanupLegacyToolApprovalStorage = async () => {
-  await storage.removeItems([...LEGACY_TOOL_APPROVAL_STORAGE_KEYS])
+/** Drops state belonging to features that no longer read it. */
+const cleanupRetiredStorage = async () => {
+  await storage.removeItems([...RETIRED_STORAGE_KEYS])
 }
 
 export default defineBackground(() => {
@@ -70,12 +65,6 @@ export default defineBackground(() => {
   })
 
   Capabilities.initialize().catch(() => null)
-  // Ahead of the backup writer: the watcher it registers mirrors extension
-  // storage into the pref this reads, so registering first gives a migration
-  // a chance to overwrite the evidence before it has been seen.
-  startHostedModelRetirementDetection()
-  setupLlmProvidersBackupToBrowserOS()
-  startLocalFirstMigration()
 
   scheduledJobRuns()
 
@@ -114,32 +103,13 @@ export default defineBackground(() => {
     }
 
     if (details.reason === chrome.runtime.OnInstalledReason.UPDATE) {
-      cleanupLegacyToolApprovalStorage().catch(() => null)
+      cleanupRetiredStorage().catch(() => null)
       checkAndShowChangelog().catch(() => null)
     }
   })
 
   onRuntimeMessage(RuntimeMessageType.getTabId, ({ sender }) => {
     return { tabId: sender.tab?.id }
-  })
-
-  onRuntimeMessage(RuntimeMessageType.authSuccess, async ({ sender }) => {
-    if (!sender.tab?.id) return
-
-    const tabId = sender.tab.id
-
-    try {
-      const redirectPath = await authRedirectPathStorage.getValue()
-      const hash = redirectPath || '/home'
-      await chrome.tabs.update(tabId, {
-        url: chrome.runtime.getURL(`app.html#${hash}`),
-      })
-      if (redirectPath) await authRedirectPathStorage.removeValue()
-    } catch {
-      await chrome.tabs.update(tabId, {
-        url: chrome.runtime.getURL('app.html#/home'),
-      })
-    }
   })
 
   onRuntimeMessage(RuntimeMessageType.stopAgent, async ({ data }) => {

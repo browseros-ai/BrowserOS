@@ -132,14 +132,6 @@ SENTRY_PROJECT=your-project
 SENTRY_AUTH_TOKEN=your-token
 ```
 
-### GraphQL Schema
-
-Codegen requires a GraphQL schema. By default it uses the bundled `schema/schema.graphql`, so no extra setup is needed. If you have access to the original API source, you can set the following environment variable:
-
-```env
-GRAPHQL_SCHEMA_PATH=/path/to/api-repo/.../schema.graphql
-```
-
 ## Release Flow
 
 BrowserOS agent extension releases are built as signed CRX artifacts through

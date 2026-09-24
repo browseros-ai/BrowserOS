@@ -99,6 +99,13 @@
       "when": 1790095966768,
       "tag": "0013_drop_browseros_provider",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "6",
+      "when": 1790235209541,
+      "tag": "0014_drop_profile_id",
+      "breakpoints": true
     }
   ]
 }

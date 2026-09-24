@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it, mock } from 'bun:test'
+import { QueryClient, type QueryKey } from '@tanstack/react-query'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   resolveDefaultProviderId,
@@ -29,12 +30,6 @@ mock.module('@wxt-dev/storage', () => ({
       },
       watch: () => () => {},
     }),
-  },
-}))
-
-mock.module('@/lib/auth/sessionStorage', () => ({
-  sessionStorage: {
-    getValue: async () => null,
   },
 }))
 
@@ -147,9 +142,20 @@ const providers: LlmProviderConfig[] = [
 ]
 
 let persistDefaultProviderId: (providerId: string) => Promise<void>
+let rollBackDefaultProvider: (
+  queryClient: QueryClient,
+  write: number,
+  previous: string | null | undefined,
+) => void
+let nextSelectionWrite: () => number
+let defaultProviderKey: QueryKey
 
 beforeAll(async () => {
-  ;({ persistDefaultProviderId } = await import('./llm-providers.hooks'))
+  const hooks = await import('./llm-providers.hooks')
+  persistDefaultProviderId = hooks.persistDefaultProviderId
+  rollBackDefaultProvider = hooks.rollBackDefaultProvider
+  nextSelectionWrite = hooks.nextSelectionWrite
+  defaultProviderKey = hooks.useDefaultProviderIdQuery.getKey()
 })
 
 beforeEach(() => {
@@ -293,5 +299,75 @@ describe('resolveDefaultProviderId', () => {
 
   it('resolves to nothing when there are no providers to point at', () => {
     expect(resolveDefaultProviderId([], 'missing-provider')).toBeNull()
+  })
+})
+
+describe('rollBackDefaultProvider', () => {
+  function client(cached: string | null) {
+    const queryClient = new QueryClient()
+    queryClient.setQueryData(defaultProviderKey, cached)
+    return queryClient
+  }
+
+  /** What the mutation does before the request goes out. */
+  function select(queryClient: QueryClient, providerId: string) {
+    const previous = queryClient.getQueryData<string | null>(defaultProviderKey)
+    queryClient.setQueryData(defaultProviderKey, providerId)
+    return { previous, write: nextSelectionWrite() }
+  }
+
+  it('puts the previous selection back when its own write failed', () => {
+    const queryClient = client('openai-1')
+
+    const pick = select(queryClient, 'anthropic-provider')
+    rollBackDefaultProvider(queryClient, pick.write, pick.previous)
+
+    expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
+      'openai-1',
+    )
+  })
+
+  it('leaves a newer selection alone', () => {
+    // Two picks in quick succession, the second landing first. Restoring here
+    // would move the user back to what was selected before either, and the
+    // send path reads the target derived from this cache.
+    const queryClient = client('openai-1')
+
+    const first = select(queryClient, 'anthropic-provider')
+    select(queryClient, 'openai-2')
+
+    rollBackDefaultProvider(queryClient, first.write, first.previous)
+
+    expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
+      'openai-2',
+    )
+  })
+
+  it('leaves a newer selection alone when it chose the same provider', () => {
+    // A, then B, then A again. Comparing ids cannot tell the third write's
+    // value from the first write's, so the first would undo a choice the user
+    // has since made again.
+    const queryClient = client('openai-1')
+
+    const first = select(queryClient, 'anthropic-provider')
+    select(queryClient, 'openai-2')
+    select(queryClient, 'anthropic-provider')
+
+    rollBackDefaultProvider(queryClient, first.write, first.previous)
+
+    expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
+      'anthropic-provider',
+    )
+  })
+
+  it('clears the selection when there was none to restore', () => {
+    const queryClient = client(null)
+
+    const pick = select(queryClient, 'openai-1')
+    rollBackDefaultProvider(queryClient, pick.write, pick.previous)
+
+    expect(
+      queryClient.getQueryData<string | null>(defaultProviderKey),
+    ).toBeNull()
   })
 })

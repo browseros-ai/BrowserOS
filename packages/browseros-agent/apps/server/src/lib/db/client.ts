@@ -257,6 +257,11 @@ const currentMigrationHistory = [
     hash: 'a56bd0e97b0297bf0933b9b06d7e3862957727999762f0834f30e7b42da69a09',
     createdAt: 1790095966768,
   },
+  {
+    tag: '0014_drop_profile_id',
+    hash: 'bc71831be007936b7d04aa24c4496a06517e204a78d35af93935f3fc97eb49f9',
+    createdAt: 1790235209541,
+  },
 ]
 
 // TODO(nikhil): Remove this fallback once Windows/Linux packaging always includes Drizzle migrations.
@@ -264,7 +269,6 @@ const currentSchemaStatements = [
   `
     CREATE TABLE IF NOT EXISTS providers (
       id text PRIMARY KEY NOT NULL,
-      profile_id text,
       kind text NOT NULL,
       type text NOT NULL,
       name text NOT NULL,
@@ -291,10 +295,6 @@ const currentSchemaStatements = [
     )
   `,
   `
-    CREATE INDEX IF NOT EXISTS providers_profile_id_idx
-    ON providers (profile_id)
-  `,
-  `
     CREATE INDEX IF NOT EXISTS providers_kind_updated_at_idx
     ON providers (kind, updated_at)
   `,
@@ -305,7 +305,6 @@ const currentSchemaStatements = [
   `
     CREATE TABLE IF NOT EXISTS scheduled_jobs (
       id text PRIMARY KEY NOT NULL,
-      profile_id text,
       name text NOT NULL,
       query text NOT NULL,
       schedule_type text NOT NULL,
@@ -320,17 +319,12 @@ const currentSchemaStatements = [
     )
   `,
   `
-    CREATE INDEX IF NOT EXISTS scheduled_jobs_profile_id_idx
-    ON scheduled_jobs (profile_id)
-  `,
-  `
     CREATE INDEX IF NOT EXISTS scheduled_jobs_enabled_idx
     ON scheduled_jobs (enabled)
   `,
   `
     CREATE TABLE IF NOT EXISTS scheduled_job_runs (
       id text PRIMARY KEY NOT NULL,
-      profile_id text,
       job_id text NOT NULL,
       status text NOT NULL,
       started_at integer NOT NULL,

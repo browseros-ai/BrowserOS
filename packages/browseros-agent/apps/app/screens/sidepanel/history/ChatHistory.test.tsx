@@ -1,96 +1,63 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test'
 import { createElement, type FC } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
+import { MemoryRouter } from 'react-router'
 
-let sessionUserId: string | undefined
 let localRows: Array<{
   id: string
   lastMessagedAt: number
   lastUserMessage: string
 }>
-let cloudProps: { userId: string; localIds: ReadonlySet<string> } | null = null
 
-mock.module('@/lib/auth/sessionStorage', () => ({
-  useSessionInfo: () => ({
-    sessionInfo: { user: sessionUserId ? { id: sessionUserId } : undefined },
-  }),
-}))
 mock.module('@/modules/conversations/conversations.hooks', () => ({
   useServerConversations: () => ({ data: localRows }),
   useDeleteServerConversation: () => ({ mutate: () => {} }),
 }))
-mock.module('./local/LocalChatHistory', () => ({
-  LocalChatHistory: () => createElement('div', { 'data-testid': 'local' }),
-}))
-mock.module('./cloud/CloudChatHistory', () => ({
-  CloudChatHistory: (props: {
-    userId: string
-    localIds: ReadonlySet<string>
-  }) => {
-    cloudProps = props
-    return createElement('div', { 'data-testid': 'cloud' })
-  },
+mock.module('@/modules/chat/chat-session-context', () => ({
+  useChatSessionContext: () => ({ conversationId: 'active' }),
 }))
 
 const { ChatHistory } = (await import('./ChatHistory')) as { ChatHistory: FC }
 
 beforeEach(() => {
-  sessionUserId = undefined
   localRows = []
-  cloudProps = null
 })
 
+// The real ConversationList links to each conversation, so it needs a router.
+// The previous version of this test never hit that, because it mocked the list
+// away and only checked which sections rendered.
 function render() {
-  return renderToStaticMarkup(createElement(ChatHistory))
+  return renderToStaticMarkup(
+    createElement(MemoryRouter, null, createElement(ChatHistory)),
+  )
 }
 
 describe('ChatHistory', () => {
-  it('always shows the local list', () => {
-    expect(render()).toContain('data-testid="local"')
-  })
-
-  // Signed out there is no account to read, so the cloud section is absent
-  // rather than empty.
-  it('omits the cloud section when signed out', () => {
-    expect(render()).not.toContain('data-testid="cloud"')
-  })
-
-  // It used to be one or the other: a signed-in user saw only the cloud and
-  // could not see what their own machine was storing.
-  it('shows both lists when signed in', () => {
-    sessionUserId = 'user-1'
-    const html = render()
-    expect(html).toContain('data-testid="local"')
-    expect(html).toContain('data-testid="cloud"')
-  })
-
-  it('puts the local list first', () => {
-    sessionUserId = 'user-1'
-    const html = render()
-    expect(html.indexOf('data-testid="local"')).toBeLessThan(
-      html.indexOf('data-testid="cloud"'),
-    )
-  })
-
-  // One id space across the stores, so a conversation synced before sync was
-  // turned off would otherwise appear in both lists.
-  it('passes the local ids to the cloud section so it can deduplicate', () => {
-    sessionUserId = 'user-1'
+  it('lists the conversations stored on this machine', () => {
     localRows = [
-      { id: 'a', lastMessagedAt: 1, lastUserMessage: 'hi' },
-      { id: 'b', lastMessagedAt: 2, lastUserMessage: 'there' },
+      { id: 'a', lastMessagedAt: Date.now(), lastUserMessage: 'hello there' },
     ]
-    render()
-    expect(cloudProps?.userId).toBe('user-1')
-    expect([...(cloudProps?.localIds ?? [])].sort()).toEqual(['a', 'b'])
+
+    expect(render()).toContain('hello there')
   })
 
-  // Two lists in one scroll area. Each list owning its own worked only while
-  // exactly one of them ever rendered.
-  it('renders a single scroll container for both lists', () => {
-    sessionUserId = 'user-1'
+  it('says so when this machine has none, rather than rendering nothing', () => {
+    expect(render()).toContain('No conversations on this device yet')
+  })
+
+  // There is one source now. The account list, the heading that introduced it
+  // and the deduplication between the two are all gone with sign-in.
+  it('shows no account section', () => {
+    localRows = [
+      { id: 'a', lastMessagedAt: Date.now(), lastUserMessage: 'hello' },
+    ]
     const html = render()
-    expect((html.match(/<main/g) ?? []).length).toBe(1)
-    expect(html).toContain('overflow-y-auto')
+
+    expect(html).not.toContain('account')
+    expect(html).not.toContain('Account')
+  })
+
+  it('keeps one scroll container', () => {
+    expect((render().match(/<main/g) ?? []).length).toBe(1)
   })
 })

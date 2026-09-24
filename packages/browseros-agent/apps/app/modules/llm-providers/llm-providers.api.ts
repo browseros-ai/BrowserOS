@@ -1,12 +1,12 @@
 import type { ProviderRoutes } from '@browseros/server'
 import { hc } from 'hono/client'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
-import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
+import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import { toProviderConfigs, toProviderPayload } from './llm-providers.helpers'
 import { bumpProviderRevision } from './llm-providers.revision'
 
 async function providersClient() {
-  const baseUrl = await resolveAgentServerUrlWithRetry()
+  const baseUrl = await resolveAgentServerUrl()
   return hc<ProviderRoutes>(`${baseUrl}/providers`)
 }
 
