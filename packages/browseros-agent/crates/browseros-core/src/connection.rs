@@ -93,6 +93,12 @@ impl fmt::Debug for ProtocolSession {
 }
 
 impl ProtocolSession {
+    /// Internal consumers share the transport's epoch and event stream; they must not open
+    /// another connection because object and flattened session ids belong to this transport.
+    pub(crate) fn connection(&self) -> &Arc<dyn CdpConnection> {
+        &self.connection
+    }
+
     #[must_use]
     pub fn root(connection: Arc<dyn CdpConnection>) -> Self {
         Self {
