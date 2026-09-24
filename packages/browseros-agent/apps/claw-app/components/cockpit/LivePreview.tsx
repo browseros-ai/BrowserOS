@@ -221,7 +221,7 @@ function recordedSize(events: readonly RrwebEvent[]): {
   return { width, height }
 }
 
-/** Scales rrweb's fixed-size player to cover the card, tracking resizes. */
+/** Fits the complete recorded viewport inside the card, tracking resizes. */
 function scaleToFit(
   mount: HTMLElement,
   size: { width: number; height: number },
@@ -234,7 +234,9 @@ function scaleToFit(
   const apply = (): void => {
     const rect = mount.getBoundingClientRect()
     if (rect.width === 0 || rect.height === 0) return
-    const scale = Math.max(rect.width / size.width, rect.height / size.height)
+    // Cover/center cropped the form out of tall viewports, leaving a blank
+    // "live" card even though rrweb had successfully rebuilt the page.
+    const scale = Math.min(rect.width / size.width, rect.height / size.height)
     wrapper.style.transform = `scale(${scale})`
     wrapper.style.left = `${(rect.width - size.width * scale) / 2}px`
     wrapper.style.top = `${(rect.height - size.height * scale) / 2}px`
