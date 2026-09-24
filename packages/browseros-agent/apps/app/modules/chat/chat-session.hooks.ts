@@ -6,7 +6,6 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import useDeepCompareEffect from 'use-deep-compare-effect'
 import type { Provider } from '@/components/chat/chatComponentTypes'
-import { useSessionInfo } from '@/lib/auth/sessionStorage'
 import {
   conversationForTab,
   conversationPanelViewsStorage,
@@ -38,10 +37,8 @@ import {
   fetchServerConversation,
   SERVER_CONVERSATIONS_QUERY_KEY,
 } from '@/modules/conversations/conversations.hooks'
-import { useGraphqlQuery } from '@/modules/graphql/graphql-query.hooks'
 import { useChatRefs } from './chat-refs.hooks'
 import { decideChatSend, drainPendingSends } from './chat-send-decision'
-import { GetConversationWithMessagesDocument } from './chat-session-document'
 import {
   didStreamingTurnFinish,
   getPersistableMessages,
@@ -218,16 +215,10 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     error: agentUrlError,
   } = useAgentServerUrl()
 
-  // Identity is still needed to read a cloud conversation back. Nothing on
-  // this screen writes to the cloud any more.
-  const { sessionInfo } = useSessionInfo()
-  const userId = sessionInfo.user?.id
-  const isLoggedIn = !!userId
   const [searchParams, setSearchParams] = useSearchParams()
   const setSearchParamsRef = useRef(setSearchParams)
   setSearchParamsRef.current = setSearchParams
   const conversationIdParam = searchParams.get('conversationId')
-  const restoreLocally = options?.origin === 'newtab' || !isLoggedIn
   const [restoreError, setRestoreError] = useState<string | null>(null)
   const [restoreAttempt, setRestoreAttempt] = useState(0)
   const [restoredConversationId, setRestoredConversationId] = useState<
@@ -236,11 +227,8 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const isRestoringConversation =
     !!conversationIdParam && restoredConversationId !== conversationIdParam
 
-  // 'local': the local server owns history, persisting it to SQLite during
-  // /chat. Every signed-in user now takes this path too, where the client used
-  // to upload their turns to the cloud instead. 'cloud' survives only as the
-  // incognito case, where it means nothing is persisted at all, because the
-  // client no longer writes anywhere.
+  // 'local' persists to SQLite during /chat; 'cloud' is a misnomer that now
+  // only marks incognito and temporary chats, meaning persist nothing.
   // Read via a ref because the transport closure below is created only once.
   const historyModeRef = useRef<'local' | 'cloud'>('cloud')
   useEffect(() => {
@@ -684,46 +672,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     if (cleaned !== messages) setMessages(cleaned)
   }, [messages, status, setMessages])
 
-  const {
-    data: remoteConversationData,
-    isFetched: isRemoteConversationFetched,
-  } = useGraphqlQuery(
-    GetConversationWithMessagesDocument,
-    { conversationId: conversationIdParam ?? '' },
-    {
-      enabled: !!conversationIdParam && !restoreLocally,
-    },
-  )
-
   // The URL is retained in new tabs for refresh/back navigation. Its keyed
   // provider isolates each selection; sidepanel keeps its existing transient URL.
   // biome-ignore lint/correctness/useExhaustiveDependencies: target selection changes during restore; only restart for route/load/retry changes
   useEffect(() => {
     if (!conversationIdParam) return
     if (restoredConversationId === conversationIdParam) return
-
-    if (!restoreLocally) {
-      if (!isRemoteConversationFetched) return
-
-      if (remoteConversationData?.conversation) {
-        const restoredMessages =
-          remoteConversationData.conversation.conversationMessages.nodes
-            .filter((node): node is NonNullable<typeof node> => node !== null)
-            .map((node) => node.message as UIMessage)
-
-        setConversationId(
-          conversationIdParam as ReturnType<typeof crypto.randomUUID>,
-        )
-        setMessages(restoredMessages)
-        setRestoredConversationId(conversationIdParam)
-        setSearchParams({}, { replace: true })
-        return
-      }
-      // Not in the cloud. Since #2542 the local server owns a signed-in user's
-      // history too, so a conversation opened from the local history list has
-      // no cloud record: read it from the server instead of giving up, which
-      // left the side panel snapping back to its previous view (#2665).
-    }
 
     if (isLoadingProviders || isLoadingAgentUrl) return
     let cancelled = false
@@ -785,9 +739,6 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     }
   }, [
     conversationIdParam,
-    remoteConversationData,
-    isRemoteConversationFetched,
-    restoreLocally,
     isLoadingProviders,
     isLoadingAgentUrl,
     restoreAttempt,
