@@ -623,11 +623,147 @@ async fn locator_attempt(
                 cover_check(engine, r, from).await?;
                 cover_check(engine, &target, to).await?;
             }
-            mouse::dispatch_drag(&r.session, from, to).await?;
+            drag_to(bridge, r, from, to).await?;
         }
         _ => return Err(format!("not available in BrowserOS neo: {method}").into()),
     }
     Ok(PwCallOutcome::json(Value::Null))
+}
+
+/// Native HTML drags enter Chromium's drag loop, which ordinary mouse-up cannot
+/// reliably finish. Intercept that loop and replay its real DataTransfer payload
+/// through CDP; custom pointer-based drags still receive normal mouse events.
+async fn drag_to(
+    bridge: &BrowserBridge,
+    source: &Resolved,
+    from: Point,
+    to: Point,
+) -> Result<(), CoreError> {
+    let session = &source.session;
+    let mut events = bridge.ctx.session.cdp_events();
+    let mut cleanup = DragCleanup {
+        session: session.clone(),
+        point: to,
+        watcher: None,
+        complete: false,
+    };
+    let result = async {
+        // Retain the listener in the source's isolated world. A canceled
+        // dragstart must behave like an ordinary mouse gesture, not wait for a
+        // dragIntercepted event that Chromium will never emit.
+        let watcher = session.send_value("Runtime.callFunctionOn", json!({
+            "objectId":source.object_id,
+            "functionDeclaration":r"function() {
+                const view = this.ownerDocument.defaultView;
+                let started;
+                const onStart = event => { started = event; };
+                view.addEventListener('dragstart', onStart, true);
+                return {
+                    dispose() { view.removeEventListener('dragstart', onStart, true); },
+                    async started() {
+                        await new Promise(resolve => view.setTimeout(resolve, 0));
+                        this.dispose();
+                        return !!started && !started.defaultPrevented;
+                    }
+                };
+            }"
+        })).await?;
+        let watcher = watcher["result"]["objectId"].as_str()
+            .ok_or_else(|| CoreError::from("could not observe dragstart"))?.to_owned();
+        cleanup.watcher = Some(watcher.clone());
+        session.send_value("Input.setInterceptDrags", json!({"enabled":true})).await?;
+        for (kind, point, buttons) in [
+            ("mouseMoved", from, 0),
+            ("mousePressed", from, 1),
+            ("mouseMoved", to, 1),
+        ] {
+            session.send_value("Input.dispatchMouseEvent", json!({
+                "type":kind,"x":point.x,"y":point.y,"button":if buttons == 1 { "left" } else { "none" },
+                "buttons":buttons,"clickCount":if kind == "mousePressed" {1} else {0}
+            })).await?;
+        }
+        let started = evaluated_value(session.send_value("Runtime.callFunctionOn", json!({
+            "objectId":watcher,"functionDeclaration":"function() { return this.started(); }",
+            "awaitPromise":true,"returnByValue":true
+        })).await?)? == json!(true);
+        if started {
+            let data = loop {
+                let event = events.recv().await.map_err(|error| CoreError::from(error.to_string()))?;
+                if event.session_id.as_ref() == session.session_id() && event.method == "Input.dragIntercepted" {
+                    break event.params["data"].clone();
+                }
+            };
+            for kind in ["dragEnter", "dragOver", "drop"] {
+                session.send_value("Input.dispatchDragEvent", json!({
+                    "type":kind,"x":to.x,"y":to.y,"data":data
+                })).await?;
+            }
+        } else {
+            // A second move delivers the destination's dragover/pointer update
+            // even when no native drag session was started.
+            session.send_value("Input.dispatchMouseEvent", json!({
+                "type":"mouseMoved","x":to.x,"y":to.y,"button":"left","buttons":1
+            })).await?;
+        }
+        Ok(())
+    }.await;
+    cleanup.release(result.is_err()).await;
+    result
+}
+
+/// An operation deadline can drop drag_to during any CDP await. Restore browser
+/// input state even then; otherwise one timed-out drag can stall later scripts.
+struct DragCleanup {
+    session: ProtocolSession,
+    point: Point,
+    watcher: Option<String>,
+    complete: bool,
+}
+impl DragCleanup {
+    async fn release(&mut self, cancel: bool) {
+        restore_drag(&self.session, self.point, self.watcher.as_deref(), cancel).await;
+        self.complete = true;
+    }
+}
+impl Drop for DragCleanup {
+    fn drop(&mut self) {
+        if !self.complete {
+            let session = self.session.clone();
+            let point = self.point;
+            let watcher = self.watcher.take();
+            tokio::spawn(async move {
+                restore_drag(&session, point, watcher.as_deref(), true).await;
+            });
+        }
+    }
+}
+async fn restore_drag(
+    session: &ProtocolSession,
+    point: Point,
+    watcher: Option<&str>,
+    cancel: bool,
+) {
+    // Cleanup is bounded independently because the operation's deadline may
+    // already have expired. It only undoes input/listener state, never retries
+    // the user action or keeps a dropped script alive.
+    let _ = tokio::time::timeout(Duration::from_secs(1), async {
+        if cancel {
+            let _ = session.send_value("Input.dispatchDragEvent", json!({
+                "type":"dragCancel","x":point.x,"y":point.y,
+                "data":{"items":[],"dragOperationsMask":65535}
+            })).await;
+        }
+        let _ = session.send_value("Input.dispatchMouseEvent", json!({
+            "type":"mouseReleased","x":point.x,"y":point.y,"button":"left","buttons":0,"clickCount":1
+        })).await;
+        let _ = session.send_value("Input.setInterceptDrags", json!({"enabled":false})).await;
+        if let Some(watcher) = watcher {
+            let _ = session.send_value("Runtime.callFunctionOn", json!({
+                "objectId":watcher,"functionDeclaration":"function() { this.dispose(); }"
+            })).await;
+            let _ = session.send_value("Runtime.releaseObject", json!({"objectId":watcher})).await;
+        }
+    }).await;
 }
 
 async fn scroll(r: &Resolved) -> Result<(), CoreError> {
@@ -1258,9 +1394,10 @@ async fn tool_action(
         .cloned()
         .unwrap_or_default();
     options.remove("timeout");
-    if method == "page.screenshot"
-        && let Some(kind) = options.remove("type")
-    {
+    if method == "page.screenshot" {
+        // The public screenshot tool optimizes for JPEG; Playwright defaults
+        // to PNG, including captures with only {fullPage:true} supplied.
+        let kind = options.remove("type").unwrap_or_else(|| json!("png"));
         options.insert("format".into(), kind);
     }
     options.insert(
@@ -1285,7 +1422,20 @@ async fn tool_action(
     if result.is_error {
         return Err(content.into());
     }
-    let value = if text {
+    // The standalone screenshot tool's structured value is only metadata; its
+    // image lives in MCP content. Preserve the encoded payload across the JSON
+    // bridge so the facade can expose bytes without loading Node's Buffer.
+    let value = if method == "page.screenshot" {
+        let image = result
+            .content
+            .iter()
+            .find_map(|content| match content {
+                rmcp::model::ContentBlock::Image(image) => Some(image),
+                _ => None,
+            })
+            .ok_or_else(|| CoreError::from("screenshot did not return image data"))?;
+        json!({"body":image.data,"base64Encoded":true})
+    } else if text {
         Value::String(content)
     } else {
         result.structured_content.unwrap_or(Value::String(content))

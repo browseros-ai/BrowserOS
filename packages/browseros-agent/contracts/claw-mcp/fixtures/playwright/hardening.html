@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Playwright hardening</title></head>
+<body>
+  <h1>Agent habits</h1>
+  <div id="shadow-host"></div>
+  <button type="button">Save</button><button type="button">Save draft</button>
+  <span id="display-label">Display name</span><input aria-labelledby="display-label">
+  <label>Topics<select multiple class="ready" data-state="ready"><option value="rust">Rust</option><option value="js">JavaScript</option><option value="css">CSS</option></select></label>
+  <label>Attachment<input type="file" id="attachment"></label>
+  <button id="prompt" type="button">Ask name</button><output id="prompt-result"></output>
+  <label>Shortcut input<input id="shortcut"></label>
+  <div id="drag" draggable="true" style="width:120px;height:60px;background:lightblue">Card</div>
+  <div id="drop" style="width:200px;height:80px;margin:30px;background:lightgreen">Drop here</div>
+  <output id="drop-result">waiting</output>
+  <button id="fetch" type="button">Load items</button><output id="fetch-result"></output>
+  <ul id="items"><li>Rust</li><li>JavaScript</li><li>CSS</li></ul>
+  <form method="post" action="/submit"><input name="name" value="Ada"><button type="submit">Submit redirect</button></form>
+  <div style="height:1800px">Tall page for full-page capture</div>
+  <script>
+    const root = document.querySelector('#shadow-host').attachShadow({ mode: 'open' });
+    root.innerHTML = '<button type="button">Save profile</button><output>idle</output>';
+    root.querySelector('button').onclick = () => { root.querySelector('output').textContent = 'saved'; };
+    document.querySelector('#prompt').onclick = () => { document.querySelector('#prompt-result').textContent = 'Hello ' + prompt('Your name?', 'Guest'); };
+    window.typedAt = [];
+    const shortcut = document.querySelector('#shortcut');
+    shortcut.addEventListener('input', event => { if (event.isTrusted) window.typedAt.push(performance.now()); });
+    // This page implements a web-app shortcut; Control+A has a different native
+    // text-editing meaning on macOS, so assert delivery without assuming the OS.
+    shortcut.addEventListener('keydown', event => { if (event.ctrlKey && event.key.toLowerCase() === 'a') { event.preventDefault(); shortcut.select(); } });
+    document.querySelector('#drag').ondragstart = event => { event.dataTransfer.setData('text/plain', 'Card'); };
+    document.querySelector('#drop').ondragover = event => event.preventDefault();
+    document.querySelector('#drop').ondrop = event => { event.preventDefault(); document.querySelector('#drop-result').textContent = event.dataTransfer.getData('text/plain'); };
+    document.querySelector('#fetch').onclick = async () => { const result = await (await fetch('/api/items')).json(); document.querySelector('#fetch-result').textContent = result.items.join(', '); };
+  </script>
+</body>
+</html>

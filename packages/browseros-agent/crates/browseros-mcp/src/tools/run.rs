@@ -413,7 +413,15 @@ pub(crate) async fn execute_script(
     let timeout_ms = spec.timeout_ms;
     let duration = Duration::from_millis(timeout_ms);
     let deadline = Instant::now() + duration;
-    let timeout_message: Arc<str> = Arc::from(format!("run exceeded {timeout_ms}ms"));
+    // The host-selected bootstrap identifies the public tool even when both
+    // facades share this deadline and QuickJS interrupt handler. Keep legacy
+    // run wording for its bootstrap (and isolated bridge test bootstraps).
+    let tool_name = if spec.bootstrap_js == crate::pw::FACADE_JS {
+        "playwright"
+    } else {
+        "run"
+    };
+    let timeout_message: Arc<str> = Arc::from(format!("{tool_name} exceeded {timeout_ms}ms"));
     let control = RunControl {
         cancel: ctx.cancel.clone(),
         deadline,

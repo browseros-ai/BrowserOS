@@ -83,6 +83,9 @@ struct ActionConnection {
     tabs: Option<Mutex<Vec<Value>>>,
     discover_tab: bool,
     open_on_input: bool,
+    native_drag: bool,
+    hang_drop: bool,
+    drag_events: Option<broadcast::Sender<CdpEvent>>,
 }
 impl ActionConnection {
     fn new(probe: Option<Value>) -> Self {
@@ -97,6 +100,9 @@ impl ActionConnection {
             tabs: None,
             discover_tab: false,
             open_on_input: false,
+            native_drag: false,
+            hang_drop: false,
+            drag_events: None,
         }
     }
 }
@@ -175,7 +181,11 @@ impl CdpConnection for ActionConnection {
                     }
                     "Runtime.callFunctionOn" => {
                         let source = params["functionDeclaration"].as_str().unwrap_or("");
-                        if source.contains("this.parseSelector") {
+                        if source.contains("view.addEventListener('dragstart'") {
+                            Some(json!({"result":{"objectId":"drag-watcher"}}))
+                        } else if source.contains("return this.started()") {
+                            Some(json!({"result":{"value":self.native_drag}}))
+                        } else if source.contains("this.parseSelector") {
                             Some(
                                 json!({"result":{"value":{"parts":[{"name":"css","body":[],"source":"input"}]}}}),
                             )
@@ -202,7 +212,29 @@ impl CdpConnection for ActionConnection {
                     return Ok(value);
                 }
             }
+            if let Some(events) = &self.drag_events
+                && method == "Input.dispatchMouseEvent"
+                && params["type"] == "mouseMoved"
+                && params["buttons"] == 1
+                && self.native_drag
+            {
+                // Unrelated sessions must never supply another tab's drag data.
+                for (session_id, text) in [
+                    (Some(SessionId::from("foreign")), "foreign"),
+                    (session.cloned(), "Card"),
+                ] {
+                    let _ = events.send(CdpEvent {
+                        method: "Input.dragIntercepted".into(), session_id,
+                        params: json!({"data":{"items":[{"mimeType":"text/plain","data":text}],"dragOperationsMask":1}}),
+                    });
+                }
+            }
             match method {
+                "Input.dispatchDragEvent" if self.hang_drop && params["type"] == "drop" => {
+                    futures_util::future::pending().await
+                }
+                "Input.setInterceptDrags" | "Input.dispatchDragEvent" => Ok(json!({})),
+                "Page.captureScreenshot" => Ok(json!({"data":"iVBORw0KGgo="})),
                 "Input.insertText" | "Input.dispatchKeyEvent" if self.input_error.is_some() => {
                     Err(CdpError::Protocol {
                         code: -1,
@@ -237,7 +269,9 @@ impl CdpConnection for ActionConnection {
         self.base.send_raw_json(method, params, session)
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
-        self.base.events()
+        self.drag_events
+            .as_ref()
+            .map_or_else(|| self.base.events(), broadcast::Sender::subscribe)
     }
     fn is_connected(&self) -> bool {
         true
@@ -994,5 +1028,148 @@ async fn actions_empty_fill_uses_delete_and_force_skips_states() -> anyhow::Resu
         });
         assert_eq!(waited, !force);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_script_deadline_names_playwright_for_cpu_and_async_work() -> anyhow::Result<()> {
+    for code in ["while (true) {}", "await new Promise(() => {});"] {
+        let result = script(&test_ctx(), code, 20).await?;
+        assert_eq!(result["ok"], false);
+        assert_eq!(result["error"], "playwright exceeded 20ms");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_screenshot_transports_image_bytes_to_the_script() -> anyhow::Result<()> {
+    let connection = Arc::new(ActionConnection::new(None));
+    let hook = Arc::new(Hook::default());
+    let ctx = context(connection.clone(), hook.clone());
+    let result = script(
+        &ctx,
+        r#"const p = await neo.page(1);
+        const bytes = await p.screenshot({fullPage:true});
+        return {typed:bytes instanceof Uint8Array, length:bytes.byteLength, bytes:Array.from(bytes)};"#,
+        1000,
+    ).await?;
+    assert_eq!(result["ok"], true, "{result}");
+    assert_eq!(
+        result["value"],
+        json!({"typed":true,"length":8,"bytes":[137,80,78,71,13,10,26,10]})
+    );
+    let calls = connection.calls.lock().unwrap_or_else(|e| e.into_inner());
+    let capture = calls
+        .iter()
+        .find(|(method, _)| method == "Page.captureScreenshot")
+        .ok_or_else(|| anyhow::anyhow!("missing capture"))?;
+    assert_eq!(capture.1["format"], "png");
+    assert_eq!(capture.1["captureBeyondViewport"], true);
+    assert_eq!(
+        hook.events()
+            .iter()
+            .filter(|row| row[0] == "record" && row[1] == "page.screenshot")
+            .count(),
+        1
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_drag_preserves_native_data_and_custom_mouse_gestures() -> anyhow::Result<()> {
+    for native_drag in [false, true] {
+        let mut connection = ActionConnection::new(None);
+        connection.engine = true;
+        connection.native_drag = native_drag;
+        connection.drag_events = Some(broadcast::channel(32).0);
+        let connection = Arc::new(connection);
+        let ctx = context(connection.clone(), Arc::new(Hook::default()));
+        let result = script(&ctx, "const p = await neo.page(1); await p.locator('#from').dragTo(p.locator('#to'),{force:true}); return true;",1000).await?;
+        assert_eq!(result["value"], true, "{result}");
+        let calls = connection.calls.lock().unwrap_or_else(|e| e.into_inner());
+        let drags: Vec<_> = calls
+            .iter()
+            .filter(|(method, _)| method == "Input.dispatchDragEvent")
+            .map(|(_, params)| params)
+            .collect();
+        if native_drag {
+            assert_eq!(
+                drags
+                    .iter()
+                    .map(|p| p["type"].as_str().unwrap_or_default())
+                    .collect::<Vec<_>>(),
+                ["dragEnter", "dragOver", "drop"]
+            );
+            for drag in drags {
+                assert_eq!(
+                    drag["data"],
+                    json!({"items":[{"mimeType":"text/plain","data":"Card"}],"dragOperationsMask":1})
+                );
+            }
+        } else {
+            assert!(drags.is_empty());
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|(method, p)| method == "Input.dispatchMouseEvent"
+                        && p["type"] == "mouseMoved"
+                        && p["buttons"] == 1)
+                    .count(),
+                2
+            );
+        }
+        let interception: Vec<_> = calls
+            .iter()
+            .filter(|(m, _)| m == "Input.setInterceptDrags")
+            .map(|(_, p)| p["enabled"].clone())
+            .collect();
+        assert_eq!(interception, [json!(true), json!(false)]);
+        assert!(
+            calls
+                .iter()
+                .any(|(m, p)| m == "Runtime.releaseObject" && p["objectId"] == "drag-watcher")
+        );
+        assert!(calls.iter().any(|(m, p)| m == "Input.dispatchMouseEvent"
+            && p["type"] == "mouseReleased"
+            && p["buttons"] == 0));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_cancelled_drag_restores_interception_and_button_state() -> anyhow::Result<()> {
+    let mut connection = ActionConnection::new(None);
+    connection.engine = true;
+    connection.native_drag = true;
+    connection.hang_drop = true;
+    connection.drag_events = Some(broadcast::channel(32).0);
+    let connection = Arc::new(connection);
+    let ctx = context(connection.clone(), Arc::new(Hook::default()));
+    let result = script(&ctx,"const p = await neo.page(1); await p.locator('#from').dragTo(p.locator('#to'),{force:true});",40).await?;
+    assert_eq!(result["ok"], false);
+    tokio::time::timeout(std::time::Duration::from_millis(200), async {
+        loop {
+            if connection
+                .calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .any(|(m, p)| m == "Input.setInterceptDrags" && p["enabled"] == false)
+            {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let calls = connection.calls.lock().unwrap_or_else(|e| e.into_inner());
+    assert!(
+        calls
+            .iter()
+            .any(|(m, p)| m == "Input.dispatchDragEvent" && p["type"] == "dragCancel")
+    );
+    assert!(calls.iter().any(|(m, p)| m == "Input.dispatchMouseEvent"
+        && p["type"] == "mouseReleased"
+        && p["buttons"] == 0));
     Ok(())
 }

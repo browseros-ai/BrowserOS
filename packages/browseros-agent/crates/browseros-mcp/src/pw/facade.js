@@ -941,8 +941,13 @@
         'Use page.evaluate() to return JSON.',
       )
     }
-    screenshot(options) {
-      return this._call('page.screenshot', [this._options(options)])
+    async screenshot(options) {
+      // MCP images cross the host bridge as base64. QuickJS has no Buffer, but
+      // Uint8Array retains the byte indexing, length and byteLength of a capture.
+      const image = await this._call('page.screenshot', [
+        this._options(options),
+      ])
+      return new Uint8Array(bodyBytes(image))
     }
     pdf(options) {
       return this._call('page.pdf', [this._options(options)])
@@ -1023,6 +1028,23 @@
         spec.options,
       ])
       return eventValue(kind, data, await this._resolve())
+    }
+    async _waitForNetwork(kind, urlOrPredicate, options) {
+      // Reuse the host's subscribed event stream and request correlation. URL
+      // globs/regexes and event predicates have the same wire as waitForURL;
+      // response bodies remain lazy and are fetched by their request ID.
+      const data = await this._call('page.waitForEvent', [
+        kind,
+        urlPattern(urlOrPredicate),
+        this._options(options),
+      ])
+      return eventValue(kind, data, await this._resolve())
+    }
+    waitForResponse(urlOrPredicate, options) {
+      return this._waitForNetwork('response', urlOrPredicate, options)
+    }
+    waitForRequest(urlOrPredicate, options) {
+      return this._waitForNetwork('request', urlOrPredicate, options)
     }
   }
 

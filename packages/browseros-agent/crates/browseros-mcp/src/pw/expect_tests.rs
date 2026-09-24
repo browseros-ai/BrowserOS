@@ -573,7 +573,7 @@ async fn sixty_second_assertion_is_clamped_to_remaining_run_budget() -> anyhow::
     // At the exact run deadline the parent runtime can win the race. Either
     // timeout envelope is valid; neither may leave a detached polling task.
     assert!(
-        result["value"]["timedOut"] == true || result["error"] == "run exceeded 150ms",
+        result["value"]["timedOut"] == true || result["error"] == "playwright exceeded 150ms",
         "{result}"
     );
     let calls = connection.calls()?.len();

@@ -1,5 +1,5 @@
 /**
- * The fifteen Playwright corpus scripts exercise the real MCP tool, then its
+ * The twenty-five Playwright corpus scripts exercise the real MCP tool, then its
  * persisted child dispatches and live session page projection. Each script
  * owns a fresh session and fixture server; teardown also removes unclaimed
  * popups so an ownership regression cannot contaminate later suite cases.
@@ -23,8 +23,9 @@ interface CorpusScript {
   pages: number
 }
 
-// Ported verbatim from playwright-runtime/conformance/corpus.md. Only BASE/
-// changes at execution time; the deliberately invalid F15 must stay invalid.
+// S01–F15 are ported from playwright-runtime/conformance/corpus.md. S16–S25
+// cover common pasted agent scripts. BASE/ and UPLOAD_FILE are harness inputs;
+// the deliberately invalid F15 must stay invalid.
 const corpus: CorpusScript[] = [
   {
     id: 'S01',
@@ -444,6 +445,237 @@ return 'unreachable';`,
 await page.goto('BASE/form.html');
 return 'unreachable';`,
   },
+  {
+    id: 'S16',
+    ok: true,
+    pages: 1,
+    title: 'S16 shadow roots, regex and exact roles, aria-labelledby',
+    value: { saved: 'saved', exact: 1, regex: 2, name: 'Ada' },
+    rows: [
+      'context.newPage',
+      'page.goto',
+      'locator.click',
+      'locator.fill',
+      'locator.textContent',
+      'locator.count',
+      'locator.count',
+      'locator.inputValue',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+await page.locator('#shadow-host').getByRole('button', { name: /save profile/i }).click();
+await page.getByLabel('Display name').fill('Ada');
+return { saved: await page.locator('#shadow-host output').textContent(), exact: await page.getByRole('button', { name: 'Save', exact: true }).count(), regex: await page.getByRole('button', { name: /^Save(?: draft)?$/ }).count(), name: await page.getByLabel('Display name').inputValue() };`,
+  },
+  {
+    id: 'S17',
+    ok: true,
+    pages: 1,
+    title: 'S17 multiple select and negated attribute, class, count assertions',
+    value: ['rust', 'css'],
+    rows: [
+      'context.newPage',
+      'page.goto',
+      'locator.selectOption',
+      'expect.toHaveAttribute',
+      'expect.toHaveAttribute',
+      'expect.toHaveClass',
+      'expect.toHaveClass',
+      'expect.toHaveCount',
+      'expect.toHaveCount',
+      'locator.evaluate',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+const topics = page.getByLabel('Topics');
+await topics.selectOption(['rust', 'css']);
+await expect(topics).toHaveAttribute('data-state', 'ready');
+await expect(topics).not.toHaveAttribute('data-state', 'busy');
+await expect(topics).toHaveClass('ready');
+await expect(topics).not.toHaveClass('busy');
+await expect(page.locator('#items li')).toHaveCount(3);
+await expect(page.locator('#items li')).not.toHaveCount(2);
+return await topics.evaluate(el => [...el.selectedOptions].map(option => option.value));`,
+  },
+  {
+    id: 'S18',
+    ok: true,
+    pages: 1,
+    title: 'S18 setInputFiles uploads a real temporary file',
+    value: { name: 'agent-upload.txt', size: 6 },
+    rows: [
+      'context.newPage',
+      'page.goto',
+      'locator.setInputFiles',
+      'locator.evaluate',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+await page.getByLabel('Attachment').setInputFiles(UPLOAD_FILE);
+return await page.getByLabel('Attachment').evaluate(el => ({ name: el.files[0].name, size: el.files[0].size }));`,
+  },
+  {
+    id: 'S19',
+    ok: true,
+    pages: 1,
+    title: 'S19 prompt accepts text from a once dialog handler',
+    value: 'Hello Ada',
+    rows: [
+      'context.newPage',
+      'page.goto',
+      '{page.waitForEvent, page.dialog, locator.click}',
+      'expect.toHaveText',
+      'locator.textContent',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+page.once('dialog', dialog => dialog.accept('Ada'));
+await page.getByRole('button', { name: 'Ask name' }).click();
+await expect(page.locator('#prompt-result')).toHaveText('Hello Ada');
+return await page.locator('#prompt-result').textContent();`,
+  },
+  {
+    id: 'S20',
+    ok: true,
+    pages: 1,
+    title: 'S20 delayed trusted typing and Control+A',
+    value: { value: 'replacement', delayed: true },
+    rows: [
+      'context.newPage',
+      'page.goto',
+      'locator.focus',
+      'keyboard.type',
+      'keyboard.press',
+      'keyboard.insertText',
+      'page.evaluate',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+await page.getByLabel('Shortcut input').focus();
+await page.keyboard.type('abcd', { delay: 30 });
+await page.keyboard.press('Control+A');
+await page.keyboard.insertText('replacement');
+return await page.evaluate(() => ({ value: document.querySelector('#shortcut').value, delayed: window.typedAt.length >= 4 && window.typedAt[3] - window.typedAt[0] >= 60 }));`,
+  },
+  {
+    id: 'S21',
+    ok: true,
+    pages: 1,
+    title: 'S21 dragTo triggers native HTML drag and drop',
+    value: 'Card',
+    rows: [
+      'context.newPage',
+      'page.goto',
+      'locator.dragTo',
+      'expect.toHaveText',
+      'locator.textContent',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+await page.locator('#drag').dragTo(page.locator('#drop'));
+await expect(page.locator('#drop-result')).toHaveText('Card', { timeout: 2000 });
+return await page.locator('#drop-result').textContent();`,
+  },
+  {
+    id: 'S22',
+    ok: true,
+    pages: 1,
+    title: 'S22 waitForResponse correlates fetch and reads JSON body',
+    value: { items: ['Rust', 'JavaScript', 'CSS'] },
+    rows: [
+      'context.newPage',
+      'page.goto',
+      '{page.waitForEvent, locator.click}',
+      'page.waitForEvent',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+const [response] = await Promise.all([
+  page.waitForResponse(response => response.url().endsWith('/api/items') && response.status() === 200),
+  page.getByRole('button', { name: 'Load items' }).click(),
+]);
+return await response.json();`,
+  },
+  {
+    id: 'S23',
+    ok: true,
+    pages: 1,
+    title: 'S23 nested evaluate, evaluateAll, and full-page PNG bytes',
+    value: {
+      nested: {
+        matrix: [[1, 2], [3]],
+        options: { enabled: true, empty: null },
+      },
+      items: ['Rust', 'JavaScript', 'CSS'],
+      png: true,
+      fullPage: true,
+    },
+    rows: [
+      'context.newPage',
+      'page.goto',
+      'page.evaluate',
+      'locator.evaluateAll',
+      'page.screenshot',
+    ],
+    code: `const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+const nested = await page.evaluate(arg => ({ matrix: arg, options: { enabled: true, empty: null } }), [[1, 2], [3]]);
+const items = await page.locator('#items li').evaluateAll(elements => elements.map(el => el.textContent));
+const bytes = await page.screenshot({ fullPage: true });
+const height = ((bytes[20] << 24) | (bytes[21] << 16) | (bytes[22] << 8) | bytes[23]) >>> 0;
+return { nested, items, png: bytes.byteLength > 100 && bytes[0] === 137 && bytes[1] === 80 && bytes[2] === 78 && bytes[3] === 71, fullPage: height > 1800 };`,
+  },
+  {
+    id: 'S24',
+    ok: true,
+    pages: 1,
+    title: 'S24 form POST redirect waitForURL and goBack URL assertion',
+    value: 'BASE/hardening.html',
+    rows: [
+      'context.newPage',
+      'page.goto',
+      '{page.waitForURL, locator.click}',
+      'expect.toHaveURL',
+      'page.goBack',
+      'expect.toHaveURL',
+    ],
+    code: String.raw`const page = await context.newPage();
+await page.goto('BASE/hardening.html');
+await Promise.all([page.waitForURL('**/posted.html'), page.getByRole('button', { name: 'Submit redirect' }).click()]);
+await expect(page).toHaveURL(/posted\.html$/);
+await page.goBack();
+await expect(page).toHaveURL(/hardening\.html$/);
+return page.url();`,
+  },
+  {
+    id: 'S25',
+    ok: true,
+    pages: 0,
+    title: 'S25 pasted test body, concurrent new pages, per-page close',
+    rows: [
+      'context.newPage',
+      'page.goto',
+      'expect.toHaveTitle',
+      'context.newPage',
+      'context.newPage',
+      'context.newPage',
+      'page.goto',
+      'page.goto',
+      'page.goto',
+      'page.close',
+      'page.close',
+      'page.close',
+      'page.close',
+    ],
+    code: `test('pasted agent test', async ({ page }) => {
+  await page.goto('BASE/hardening.html');
+  await expect(page).toHaveTitle('Playwright hardening');
+  const pages = await Promise.all([context.newPage(), context.newPage(), context.newPage()]);
+  await Promise.all(pages.map(tab => tab.goto('BASE/hardening.html')));
+  await Promise.all(pages.map(tab => tab.close()));
+  await page.close();
+});`,
+  },
 ]
 
 const aliases: Record<string, string> = {
@@ -481,6 +713,15 @@ function startCorpusFixtures() {
         port: 10101 + Math.floor(Math.random() * 10102),
         async fetch(request) {
           const { pathname } = new URL(request.url)
+          if (pathname === '/api/items')
+            return Response.json({ items: ['Rust', 'JavaScript', 'CSS'] })
+          if (pathname === '/submit' && request.method === 'POST') {
+            await request.text()
+            return new Response(null, {
+              status: 303,
+              headers: { location: '/posted.html' },
+            })
+          }
           if (!/^\/[\w-]+\.(html|txt)$/.test(pathname)) {
             return new Response('not found', { status: 404 })
           }
@@ -552,9 +793,12 @@ function assertResult(
   assert.equal(result.isError === true, !script.ok, message)
   assert.equal(output?.ok, script.ok, message)
   if (script.ok) {
-    const expected: unknown = JSON.parse(
-      JSON.stringify(script.value).replaceAll('BASE/', `${base}/`),
-    )
+    const expected: unknown =
+      script.value === undefined
+        ? undefined
+        : JSON.parse(
+            JSON.stringify(script.value).replaceAll('BASE/', `${base}/`),
+          )
     assert.deepEqual(output?.value, expected, message)
   } else {
     assert.equal(typeof output?.error, 'string', message)
@@ -719,8 +963,15 @@ async function runScript(
       )
       await response.body?.cancel()
     }
+    // The harness owns scratchDir and removes it after the real browser exits.
+    // Upload an actual file instead of simulating File objects in page JS.
+    const uploadFile = resolve(ctx.scratchDir, 'agent-upload.txt')
+    if (script.code.includes('UPLOAD_FILE'))
+      await Bun.write(uploadFile, 'hello\n')
     const result = await session.callTool('playwright', {
-      code: script.code.replaceAll('BASE/', `${base}/`),
+      code: script.code
+        .replaceAll('BASE/', `${base}/`)
+        .replaceAll('UPLOAD_FILE', JSON.stringify(uploadFile)),
     })
     assertResult(script, result, base)
     await assertAudit(ctx, session.sessionId, script)
