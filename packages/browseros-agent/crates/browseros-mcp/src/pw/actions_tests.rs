@@ -132,6 +132,8 @@ impl CdpConnection for ActionConnection {
                             Some(json!({"result":{"objectId":"element"}}))
                         } else if source.contains("return !!this.ownerDocument") {
                             Some(json!({"result":{"value":true}}))
+                        } else if params["arguments"][0]["value"] == "fill" {
+                            Some(json!({"result":{"value":"needsinput"}}))
                         } else if params["arguments"][0]["value"] == "hitTarget" {
                             Some(json!({"result":{"value":"done"}}))
                         } else {
@@ -491,6 +493,45 @@ async fn actions_locator_type_masks_describe_password_and_failure() -> anyhow::R
             .ok_or_else(|| anyhow::anyhow!("no audit row"))?;
         assert_eq!(row[3], json!([1, "css=input", "[redacted]"]));
         assert_eq!(row[4], json!(["keep-me-secret"]));
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn actions_empty_fill_uses_delete_and_force_skips_states() -> anyhow::Result<()> {
+    for force in [false, true] {
+        let mut connection = ActionConnection::new(Some(json!({"type":"text","autocomplete":""})));
+        connection.engine = true;
+        let connection = Arc::new(connection);
+        let ctx = context(connection.clone(), Arc::new(Hook::default()));
+        let args = serde_json::to_string(&json!([1,"css=input","",{"force":force}]))?;
+        let code = format!(
+            "await __browserosCall('locator.fill',{},false);return true;",
+            serde_json::to_string(&args)?
+        );
+        let result = script(&ctx, &code, 1000).await?;
+        assert_eq!(result["ok"], true, "{result}");
+        let calls = connection
+            .calls
+            .lock()
+            .map_err(|_| anyhow::anyhow!("poisoned calls"))?;
+        assert!(
+            calls
+                .iter()
+                .any(|(m, p)| m == "Input.dispatchKeyEvent" && p["key"] == "Delete")
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|(m, p)| m == "Input.dispatchKeyEvent" && p["key"] == "Backspace")
+        );
+        let waited = calls.iter().any(|(m, p)| {
+            m == "Runtime.callFunctionOn"
+                && p["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|s| s.contains("this.checkElementStates(el, states)"))
+        });
+        assert_eq!(waited, !force);
     }
     Ok(())
 }

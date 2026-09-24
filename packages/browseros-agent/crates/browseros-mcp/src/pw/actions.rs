@@ -478,9 +478,28 @@ async fn locator_attempt(
             } else {
                 string_arg(args, 2, "value").map_err(CoreError::from)?
             };
-            input
-                .fill_backend_node(&r.session, r.backend_node_id, value)
-                .await?;
+            if value.is_empty() || options.force {
+                // The existing core fill uses Backspace for empty strings and
+                // always cover-checks. Playwright selects via injected fill and
+                // presses Delete; force must bypass the pointer cover check.
+                let result = injected_call(r, "fill", json!(value)).await?;
+                match result.as_str() {
+                    Some("needsinput") if value.is_empty() => {
+                        keyboard::press_combo(&r.session, "Delete").await?
+                    }
+                    Some("needsinput") => {
+                        r.session
+                            .send_value("Input.insertText", json!({"text":value}))
+                            .await?;
+                    }
+                    Some("done") => {}
+                    _ => return Err(format!("fill failed: {result}").into()),
+                }
+            } else {
+                input
+                    .fill_backend_node(&r.session, r.backend_node_id, value)
+                    .await?;
+            }
         }
         "locator.type" | "locator.press" => {
             input
@@ -687,6 +706,7 @@ async fn injected_call(r: &Resolved, method: &str, arg: Value) -> Result<Value, 
             case 'state': return engine.elementState(this, arg);
             case 'aria': return engine.ariaSnapshot(this, {{}});
             case 'select': return engine.selectOptions(this, arg);
+            case 'fill': return engine.fill(this, arg);
         }}
         throw new Error('Unknown injected action');
     }}"#
