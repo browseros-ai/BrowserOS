@@ -1,7 +1,8 @@
 # Morning report: `playwright` tool for BrowserOS neo
 
 Branch: `feat/playwright-runtime` (worktree `.wt/feat/playwright-runtime`),
-53 commits on top of `main` (8d9a40820), not pushed. Everything below is on
+~60 commits on top of `main` (8d9a40820), not pushed. Final tip: see
+`git log --oneline main..feat/playwright-runtime | head -1`. Everything below is on
 that branch. All documents: `~/llm/code/browseros-project/grove-ref/main-1/playwright-runtime/`
 (this dir; `STATUS.md` is the full night log, `DECISION.md` the contract,
 `briefs/`, `design/`, `spikes/`, `conformance/`, `reports/`).
@@ -34,7 +35,7 @@ live browser):
 |---|---|---|
 | Rust gates (build, core/mcp/server tests, clippy `-D warnings`, fmt) | green | `cd packages/browseros-agent && cargo test -p browseros-mcp --locked` (167+ tests) |
 | TypeScript gate | green | `bun run check` |
-| Full real-browser conformance suite incl. 15 new Playwright cases | **150 pass / 0 fail** | `BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' bun contracts/claw-mcp/tests/run.ts` |
+| Full real-browser conformance suite incl. 25 new Playwright cases (S01–S25: forms, pagination, iframes, dialogs, downloads, popups, covered elements, shadow DOM, drag, network waits, uploads, keyboard modifiers, screenshots, redirects, pasted test bodies; 3 must-fail) | **160 pass / 0 fail** | `BROWSEROS_BINARY='/Applications/BrowserOS neo.app/Contents/MacOS/BrowserOS neo' bun contracts/claw-mcp/tests/run.ts` |
 | Mediator's own drive: strict-mode error text, disambiguation, example.com live, `neo.*` from a script, legacy `run` in the same session, two concurrent sessions isolated, 30 s cap, nested audit rows + screenshots, one tab group per session | **10/10** | `BROWSEROS_BINARY=… bun ~/llm/code/browseros-project/grove-ref/main-1/playwright-runtime/reports/mediator-drive.ts` |
 | Cockpit: nested steps under the script row, highlighted code with the password already redacted, child error badges, per-tab context, replay captions | **verified by eye** on the real product loop with S01/S07/F13 sessions (screenshots in `reports/w4-cockpit/`); 445 claw-app tests | `bun run --filter @browseros/claw-app test` |
 
@@ -69,10 +70,12 @@ tools as the fallback.
   reports itself visible/focused while it stays a background tab.
 - Only macOS arm64 was exercised; the vendored bundle is plain JS so other
   targets should be unaffected, but no cross-target build was run.
-- Wave 4 cockpit pass landed and is merged (readability fixes: full-viewport
+- Wave 4 landed and is merged: cockpit readability fixes (full-viewport
   previews, wrapped selectors, bounded code panels, Failed badges, more
-  replay captions). Wave 4 hardening corpus (S16–S25) may still be running
-  or have landed after this report; see the end of `STATUS.md`.
+  replay captions) and the hardening corpus S16–S25, which found and fixed
+  three real bugs (native drag via `Input.setInterceptDrags`, missing
+  `waitForResponse`/`waitForRequest` in the facade, screenshot bytes not
+  crossing the bridge). No API had to be marked unsupported.
 
 ## 3. What you decided for me (overturn any in 30 seconds)
 
@@ -106,10 +109,8 @@ tools as the fallback.
 
 ## 4. What is left (priority order)
 
-1. Read the wave-4 hardening result at the end of `STATUS.md`; merge
-   `feat/pw-p4-actions` if it landed after this report, re-run the full
-   suite, then push `feat/playwright-runtime` and open the PR yourself (I
-   did not push).
+1. Push `feat/playwright-runtime` and open the PR yourself (I did not
+   push). Everything is merged and the final gates ran on the tip.
 2. Chromium follow-up: background default for `Target.createTarget` under
    the pref (one patch in `chromium_patches/content/browser/devtools/protocol/target_handler.cc`).
 3. Playwright-dialect saved helpers (`design/host-seam.md` §HelperDialect).
