@@ -144,7 +144,9 @@ mod tests {
     fn the_allowlist_knows_every_member_the_handle_refuses() {
         let mut unknown = Vec::new();
         for member in live_absent_members() {
-            let probe = format!("TypeError: {member} is not a function");
+            // Probed in member position, which is the only place a refused name
+            // counts: several of them are ordinary English words.
+            let probe = format!("TypeError: page.{member} is not a function");
             if !matches!(
                 classify(&probe),
                 ErrorClass::Engine {

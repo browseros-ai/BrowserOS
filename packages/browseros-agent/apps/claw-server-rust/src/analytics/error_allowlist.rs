@@ -226,19 +226,30 @@ fn sdk_identifier_in(rest: &str) -> Option<String> {
     let mut token = String::new();
     let mut absent: Option<String> = None;
     let mut ours: Option<String> = None;
+    let mut after_dot = false;
+    let mut previous = ' ';
     for c in rest.chars().chain(std::iter::once(' ')) {
         if c.is_ascii_alphanumeric() || c == '_' || c == '$' {
+            if token.is_empty() {
+                after_dot = previous == '.';
+            }
             token.push(c);
+            previous = c;
             continue;
         }
         if !token.is_empty() {
-            if absent.is_none() && ABSENT_SURFACE.contains(&token.as_str()) {
+            // A refused member counts only where one is actually being called,
+            // as in `page.getByRole`. Several of these names are ordinary
+            // English words, so matching them anywhere in the message would
+            // label a routine browser error as a miss.
+            if after_dot && absent.is_none() && ABSENT_SURFACE.contains(&token.as_str()) {
                 absent = Some(token.clone());
             } else if ours.is_none() && SDK_SURFACE.contains(&token.as_str()) {
                 ours = Some(token.clone());
             }
             token.clear();
         }
+        previous = c;
     }
     // A refused member is the informative half of `page.getByRole is not a
     // function`: the receiver is on our surface in every one of these, so
@@ -296,6 +307,29 @@ mod tests {
         assert_eq!(
             classify("TypeError: page.waitForResponse is not a function").label(),
             "engine:TypeError:waitForResponse"
+        );
+    }
+
+    /// Several refused members are ordinary English words, so a routine browser error
+    /// that happens to contain one must not be counted as a miss.
+    #[test]
+    fn a_refused_name_in_prose_is_not_counted_as_a_miss() {
+        assert_eq!(
+            classify("TypeError: Failed to execute 'querySelector' on 'Document'").label(),
+            "engine:TypeError"
+        );
+        assert_eq!(
+            classify("TypeError: cannot access content of a detached node").label(),
+            "engine:TypeError"
+        );
+        // The same names still count where a member is actually being called.
+        assert_eq!(
+            classify("TypeError: page.on is not a function").label(),
+            "engine:TypeError:on"
+        );
+        assert_eq!(
+            classify("TypeError: page.content is not a function").label(),
+            "engine:TypeError:content"
         );
     }
 

@@ -66,7 +66,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.download(ref) / upload(ref, files)
   page.close() / info()
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
-  page.helpers.save(name, source) - source is a function expression, e.g. async (browser, page) => { ... }
+  page.helpers.save(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
   page.helpers.list() -> { host, helpers: [{ name, ageDays, candidate }] }; page.helpers.read(name) -> source string
 Raw escape hatch: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson).
 
@@ -142,6 +142,25 @@ const BOOTSTRAP_JS: &str = r#"
       `page.${method}() takes a snapshot ref like "e12", not a CSS selector. ` +
       'Call await page.snapshot() and use the [ref=eN] handle for the element you want.'
     );
+  }
+
+  // A helper is stored as source text. Accept a real function too, for symmetry
+  // with page.evaluate, and serialize it here rather than letting the JSON
+  // boundary drop it and the bridge complain about a missing string.
+  function helperSource(source) {
+    const text = typeof source === 'function' ? String(source) : source;
+    if (typeof text !== 'string' || !text.trim()) {
+      throw new Error(
+        'saveHelper: source must be a function, or a non-empty function-expression string'
+      );
+    }
+    let fn;
+    try { fn = new Function('return (' + text + '\n);')(); }
+    catch (e) { throw new Error('saveHelper: source must be valid JS (' + e + ')'); }
+    if (typeof fn !== 'function') {
+      throw new Error('saveHelper: source must evaluate to a function, e.g. async (browser, page) => { ... }');
+    }
+    return text;
   }
 
   // Members of other browser-automation libraries that this SDK deliberately
@@ -305,7 +324,8 @@ const BOOTSTRAP_JS: &str = r#"
       helpers: {
         list: () => call('helpers.list', [{ page: pageId }]),
         read: (name) => call('helpers.read', [String(name), { page: pageId }]),
-        save: (name, source) => call('helpers.save', [String(name), source, { page: pageId }]),
+        save: (name, source) =>
+          call('helpers.save', [String(name), helperSource(source), { page: pageId }]),
       },
     });
   }
@@ -362,18 +382,8 @@ const BOOTSTRAP_JS: &str = r#"
     upload: (pageId, opts) => call('tool:upload', [pageId, opts]),
     tabGroups: (opts) => call('tool:tab_groups', [opts]),
     windows: (opts) => call('tool:windows', [opts]),
-    saveHelper: (name, source, opts) => {
-      if (typeof source !== 'string' || !source.trim()) {
-        throw new Error('saveHelper: source must be a non-empty function-expression string');
-      }
-      let fn;
-      try { fn = new Function('return (' + source + '\n);')(); }
-      catch (e) { throw new Error('saveHelper: source must be valid JS (' + e + ')'); }
-      if (typeof fn !== 'function') {
-        throw new Error('saveHelper: source must evaluate to a function, e.g. async (browser, page) => { ... }');
-      }
-      return call('helpers.save', [String(name), source, opts || {}]);
-    },
+    saveHelper: (name, source, opts) =>
+      call('helpers.save', [String(name), helperSource(source), opts || {}]),
     listHelpers: (opts) => call('helpers.list', [opts || {}]),
     readHelper: (name, opts) => call('helpers.read', [String(name), opts || {}]),
   };
@@ -2791,6 +2801,40 @@ return seen;
         )
         .await?;
         assert!(!result_text(&good)?.contains("mode must be"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_helper_can_be_saved_from_a_real_function() -> anyhow::Result<()> {
+        // The source is stored as text, so a function used to be dropped at the
+        // JSON boundary and the bridge complained about a missing string. Both
+        // save paths serialize it first, matching page.evaluate.
+        let log = Arc::new(Mutex::new(HookLog::default()));
+        let ctx = ctx_with_hook(log.clone());
+        let result = run_tool_with_ctx(
+            "await browser.page(1).helpers.save('search', async (browser, page) => page.read());
+             return 'ok';",
+            None,
+            &ctx,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let saved = log
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .saved
+            .clone();
+        let (_, name, source) = saved.first().cloned().unwrap_or_default();
+        assert_eq!(name, "search");
+        assert!(source.contains("async (browser, page)"), "{source}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_helper_source_that_is_not_a_function_is_refused() -> anyhow::Result<()> {
+        let result = run_tool("await browser.page(1).helpers.save('x', 42);", None).await?;
+        assert!(result.is_error);
+        assert!(result_text(&result)?.contains("must be a function"));
         Ok(())
     }
 
