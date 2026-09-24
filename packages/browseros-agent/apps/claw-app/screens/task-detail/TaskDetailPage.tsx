@@ -107,6 +107,7 @@ export function TaskDetailPage() {
       <TabView
         sessionId={sessionId}
         group={g}
+        allDispatches={detail.dispatches}
         startedAt={session.startedAt}
         endEvent={endEvent}
         onScreenshotClick={(screenshotId) => setOpenScreenshotId(screenshotId)}
