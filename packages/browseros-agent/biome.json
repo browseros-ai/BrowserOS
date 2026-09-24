@@ -14,6 +14,7 @@
       "!packages/claw-api/src/generated",
       "!contracts/claw-mcp/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
+      "!crates/browseros-core/src/locator/assets/injected_script.js",
       "!apps/server/src/lib/db/migrations"
     ]
   },

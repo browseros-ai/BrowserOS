@@ -450,6 +450,7 @@ fn catalog_order_matches_typescript_registry() {
             "windows",
             "evaluate",
             "run",
+            "playwright",
         ]
     );
 }
@@ -480,6 +481,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("windows", false),
             ("evaluate", true),
             ("run", false),
+            ("playwright", false),
         ]
     );
 }

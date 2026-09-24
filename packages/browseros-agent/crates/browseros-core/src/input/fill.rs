@@ -22,6 +22,17 @@ enum PreparedSelection {
 }
 
 impl Input {
+    pub async fn fill_backend_node(
+        &self,
+        _session: &ProtocolSession,
+        _backend_node_id: i64,
+        _value: &str,
+    ) -> Result<(), CoreError> {
+        Err(CoreError::Message(
+            "not implemented yet: fill_backend_node".to_string(),
+        ))
+    }
+
     /// Replaces the field's text, or appends when clear is explicitly false.
     /// Application outcomes (such as search readiness) are separate from this
     /// value guarantee. Neither failed readback nor a detached ref means empty.

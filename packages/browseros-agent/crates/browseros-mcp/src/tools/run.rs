@@ -228,7 +228,7 @@ struct RunArgs {
 }
 
 #[derive(Debug, Clone, serde::Serialize, JsonSchema)]
-struct RunOutput {
+pub(crate) struct RunOutput {
     ok: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     value: Option<Value>,
@@ -253,7 +253,17 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: RunArgs = parse_args(raw)?;
-        let outcome = match execute_run(args, ctx).await {
+        let outcome = match execute_script(
+            ScriptSpec {
+                bootstrap_js: BOOTSTRAP_JS,
+                code: args.code,
+                timeout_ms: normalized_timeout_ms(args.timeout),
+                helpers: true,
+            },
+            ctx,
+        )
+        .await
+        {
             Ok(outcome) => outcome,
             Err(RunError::Syntax(message)) => {
                 RunOutcome::failure(format!("run: syntax error - {message}"), Vec::new())
@@ -265,19 +275,19 @@ fn handler<'a>(
     })
 }
 
-fn default_timeout() -> f64 {
+pub(crate) fn default_timeout() -> f64 {
     DEFAULT_TIMEOUT_MS
 }
 
 #[derive(Clone)]
-struct RunControl {
-    cancel: tokio_util::sync::CancellationToken,
-    deadline: Instant,
+pub(crate) struct RunControl {
+    pub(crate) cancel: tokio_util::sync::CancellationToken,
+    pub(crate) deadline: Instant,
     timeout_message: Arc<str>,
 }
 
 impl RunControl {
-    async fn race<F, T>(&self, future: F) -> Result<T, String>
+    pub(crate) async fn race<F, T>(&self, future: F) -> Result<T, String>
     where
         F: Future<Output = Result<T, browseros_core::CoreError>>,
     {
@@ -298,27 +308,27 @@ impl RunControl {
 }
 
 #[derive(Clone)]
-struct BrowserBridge {
+pub(crate) struct BrowserBridge {
     /// The full tool context: session-direct primitives use `ctx.session`,
     /// tool-backed primitives dispatch through `execute_tool` with this ctx,
     /// and the inner-call hook lives at `ctx.inner_call_hook`.
-    ctx: ToolCtx,
-    control: RunControl,
+    pub(crate) ctx: ToolCtx,
+    pub(crate) control: RunControl,
 }
 
-enum BrowserCallValue {
+pub(crate) enum BrowserCallValue {
     Json(Value),
     Undefined,
 }
 
 #[derive(Debug)]
-enum RunError {
+pub(crate) enum RunError {
     Syntax(String),
     Cancelled,
     Engine(String),
 }
 
-struct RunOutcome {
+pub(crate) struct RunOutcome {
     ok: bool,
     value: Option<Value>,
     return_text: Option<String>,
@@ -351,7 +361,7 @@ impl RunOutcome {
         }
     }
 
-    fn failure(error: impl Into<String>, logs: Vec<String>) -> Self {
+    pub(crate) fn failure(error: impl Into<String>, logs: Vec<String>) -> Self {
         Self {
             ok: false,
             value: None,
@@ -361,7 +371,7 @@ impl RunOutcome {
         }
     }
 
-    fn into_tool_result(self) -> ToolResult {
+    pub(crate) fn into_tool_result(self) -> ToolResult {
         let text = format_outcome(&self);
         let structured = if self.ok {
             let mut object = Map::new();
@@ -384,10 +394,22 @@ impl RunOutcome {
     }
 }
 
-async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunError> {
+/// Both facades use the same sandbox lifecycle and bridge so cancellation,
+/// marshalling, audit hooks, and page ownership retain one implementation.
+pub(crate) struct ScriptSpec {
+    pub bootstrap_js: &'static str,
+    pub code: String,
+    pub timeout_ms: u64,
+    pub helpers: bool,
+}
+
+pub(crate) async fn execute_script(
+    spec: ScriptSpec,
+    ctx: &ToolCtx,
+) -> Result<RunOutcome, RunError> {
     ctx.throw_if_cancelled().map_err(|_| RunError::Cancelled)?;
     let logs = Arc::new(Mutex::new(CapturedLogs::default()));
-    let timeout_ms = normalized_timeout_ms(args.timeout);
+    let timeout_ms = spec.timeout_ms;
     let duration = Duration::from_millis(timeout_ms);
     let deadline = Instant::now() + duration;
     let timeout_message: Arc<str> = Arc::from(format!("run exceeded {timeout_ms}ms"));
@@ -396,13 +418,7 @@ async fn execute_run(args: RunArgs, ctx: &ToolCtx) -> Result<RunOutcome, RunErro
         deadline,
         timeout_message: timeout_message.clone(),
     };
-    let run = execute_quickjs(
-        args.code,
-        ctx.clone(),
-        logs.clone(),
-        control.clone(),
-        duration,
-    );
+    let run = execute_quickjs(spec, ctx.clone(), logs.clone(), control.clone(), duration);
     tokio::select! {
         () = ctx.cancel.cancelled() => Err(RunError::Cancelled),
         () = sleep_until(deadline) => Ok(RunOutcome::failure(timeout_message.to_string(), logs_snapshot(&logs))),
@@ -433,7 +449,7 @@ fn load_preloaded_helpers(ctx: &Ctx<'_>, helpers: &[HelperSource]) {
 }
 
 async fn execute_quickjs(
-    code: String,
+    spec: ScriptSpec,
     mut tool_ctx: ToolCtx,
     logs: SharedLogs,
     control: RunControl,
@@ -454,13 +470,17 @@ async fn execute_quickjs(
     let result = context
         .async_with(async |ctx| {
             install_globals(&ctx, tool_ctx, logs.clone(), control.clone())?;
-            ctx.eval::<(), _>(BOOTSTRAP_JS).catch(&ctx).map_err(|err| {
-                RunError::Engine(format!(
-                    "failed to initialize run runtime: {}",
-                    js_error_message(&ctx, err)
-                ))
-            })?;
-            load_preloaded_helpers(&ctx, &preloaded_helpers);
+            ctx.eval::<(), _>(spec.bootstrap_js)
+                .catch(&ctx)
+                .map_err(|err| {
+                    RunError::Engine(format!(
+                        "failed to initialize run runtime: {}",
+                        js_error_message(&ctx, err)
+                    ))
+                })?;
+            if spec.helpers {
+                load_preloaded_helpers(&ctx, &preloaded_helpers);
+            }
 
             let make_run: Function<'_> = ctx
                 .globals()
@@ -468,7 +488,7 @@ async fn execute_quickjs(
                 .catch(&ctx)
                 .map_err(|err| RunError::Engine(js_error_message(&ctx, err)))?;
             let user_fn: Function<'_> = make_run
-                .call((code,))
+                .call((spec.code,))
                 .catch(&ctx)
                 .map_err(|err| RunError::Syntax(js_error_message(&ctx, err)))?;
             let browser: Object<'_> = ctx
@@ -607,29 +627,48 @@ impl BrowserBridge {
         let page = target_page(method, &args);
         // Kept for the audit record and the self-healing distiller; dispatch
         // consumes the owned args below.
-        let recorded_args = Value::Array(args.clone());
+        let mut recorded_args = Value::Array(args.clone());
         if let Some(hook) = &self.ctx.inner_call_hook {
             hook.authorize(page).await?;
         }
         let started = Instant::now();
         let outcome = self.dispatch(method, args).await;
+        let mut secrets = Vec::new();
+        if let Ok(result) = &outcome {
+            if let Some(masked_args) = &result.audit_args {
+                recorded_args = masked_args.clone();
+            }
+            secrets.clone_from(&result.secrets);
+        }
         if let Some(hook) = &self.ctx.inner_call_hook {
-            if method == "pages.newPage"
-                && let Ok(BrowserCallValue::Json(Value::Number(number))) = &outcome
-                && let Some(page_id) = number.as_u64().and_then(|value| u32::try_from(value).ok())
-            {
+            let created_page = match &outcome {
+                Ok(result) => result.created_page.or_else(|| {
+                    if method == "pages.newPage"
+                        && let BrowserCallValue::Json(Value::Number(number)) = &result.value
+                    {
+                        return number.as_u64().and_then(|value| u32::try_from(value).ok());
+                    }
+                    None
+                }),
+                Err(_) => None,
+            };
+            if let Some(page_id) = created_page {
                 hook.on_page_created(page_id).await;
             }
             let output_token_estimate = match &outcome {
-                Ok(BrowserCallValue::Json(value)) => {
-                    crate::token_estimate::estimate_json_output_tokens(value)
-                }
-                Ok(BrowserCallValue::Undefined) | Err(_) => 0,
+                Ok(result) => match &result.value {
+                    BrowserCallValue::Json(value) => {
+                        crate::token_estimate::estimate_json_output_tokens(value)
+                    }
+                    BrowserCallValue::Undefined => 0,
+                },
+                Err(_) => 0,
             };
             hook.record(InnerCallRecord {
                 method,
                 page,
                 args: &recorded_args,
+                secrets: &secrets,
                 from_helper,
                 is_error: outcome.is_err(),
                 duration_ms: started.elapsed().as_millis() as i64,
@@ -637,10 +676,33 @@ impl BrowserBridge {
             })
             .await;
         }
-        outcome
+        outcome.map(|result| result.value)
     }
 
-    async fn dispatch(&self, method: &str, args: Vec<Value>) -> Result<BrowserCallValue, String> {
+    async fn dispatch(
+        &self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<crate::pw::PwCallOutcome, String> {
+        match method {
+            m if crate::pw::is_pw_method(m) => crate::pw::dispatch(self, m, args).await,
+            _ => self
+                .dispatch_legacy(method, args)
+                .await
+                .map(|value| crate::pw::PwCallOutcome {
+                    value,
+                    audit_args: None,
+                    created_page: None,
+                    secrets: Vec::new(),
+                }),
+        }
+    }
+
+    async fn dispatch_legacy(
+        &self,
+        method: &str,
+        args: Vec<Value>,
+    ) -> Result<BrowserCallValue, String> {
         match method {
             "pages.list" => {
                 let pages = self.control.race(self.ctx.session.pages.list()).await?;
@@ -991,7 +1053,23 @@ fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
 /// variants) carry the page id as their first argument; the rest address no
 /// specific page.
 fn target_page(method: &str, args: &[Value]) -> Option<u32> {
-    let page_first = method.starts_with("observe.")
+    // Playwright leaves carry pageId first so the shared hook can attribute
+    // their audit rows and ownership notices before dispatching the operation.
+    let page_first = [
+        "page.",
+        "locator.",
+        "expect.",
+        "keyboard.",
+        "mouse.",
+        "frame.",
+    ]
+    .iter()
+    .any(|prefix| method.starts_with(prefix))
+        || matches!(
+            method,
+            "neo.snapshot" | "neo.read" | "neo.grep" | "neo.download" | "neo.page"
+        )
+        || method.starts_with("observe.")
         || method.starts_with("input.")
         || method.starts_with("nav.")
         || method.starts_with("tool:")
@@ -1243,7 +1321,7 @@ fn format_outcome(outcome: &RunOutcome) -> String {
     sections.join("\n")
 }
 
-fn normalized_timeout_ms(timeout_ms: f64) -> u64 {
+pub(crate) fn normalized_timeout_ms(timeout_ms: f64) -> u64 {
     if !timeout_ms.is_finite() || timeout_ms <= 0.0 {
         MIN_TIMEOUT_MS
     } else {
@@ -1283,7 +1361,7 @@ fn engine_error(error: rquickjs::Error) -> RunError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::framework::InnerCallHook;
     use crate::{
@@ -1297,7 +1375,7 @@ mod tests {
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
-    struct RunFakeConnection {
+    pub(crate) struct RunFakeConnection {
         sender: broadcast::Sender<CdpEvent>,
         state: Arc<Mutex<RunFakeState>>,
     }
@@ -1309,7 +1387,7 @@ mod tests {
     }
 
     impl RunFakeConnection {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let (sender, _receiver) = broadcast::channel(8);
             Self {
                 sender,
@@ -1440,14 +1518,17 @@ mod tests {
         }
     }
 
-    fn test_ctx() -> ToolCtx {
+    pub(crate) fn test_ctx() -> ToolCtx {
         test_ctx_for(
             Arc::new(RunFakeConnection::new()),
             BrowserToolDefaults::default(),
         )
     }
 
-    fn test_ctx_for(connection: Arc<RunFakeConnection>, defaults: BrowserToolDefaults) -> ToolCtx {
+    pub(crate) fn test_ctx_for(
+        connection: Arc<RunFakeConnection>,
+        defaults: BrowserToolDefaults,
+    ) -> ToolCtx {
         ToolCtx::new(BrowserToolOptions {
             session: BrowserSession::new(connection, BrowserSessionHooks::default()),
             defaults,

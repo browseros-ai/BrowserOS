@@ -18,6 +18,7 @@ const EXPECTED_TOOLS = [
   'name_session',
   'navigate',
   'pdf',
+  'playwright',
   'read',
   'run',
   'save_skill',
@@ -32,7 +33,7 @@ const EXPECTED_TOOLS = [
 
 export const transportCases: ContractCase[] = [
   {
-    name: 'transport: tools/list exposes the full catalog including run',
+    name: 'transport: tools/list exposes the full catalog including run and playwright',
     smoke: true,
     async run(ctx) {
       const tools = await ctx.mcp.listTools()

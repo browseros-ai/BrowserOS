@@ -1,0 +1,15 @@
+Playwright injected script
+Version: 1.63.0
+Origin: playwright-core@1.63.0, lib/coreBundle.js
+Upstream source: packages/playwright-core/src/generated/injectedScriptSource.ts
+Upstream project: https://github.com/microsoft/playwright
+Extraction: decoded generated string without executing package modules; no modifications.
+SHA-256 (injected_script.js): 94103308b4f5791976b53543f5812be61ffb988574f7a51f412f87ab0ad60a85
+SHA-256 (origin coreBundle.js): 549070af3acabb3efcc4f55bfe6210f9f7c2fcf633cf7eaa59bfe60719969171
+License: Apache-2.0 (see LICENSE)
+
+Playwright
+Copyright (c) Microsoft Corporation
+
+This software contains code derived from the Puppeteer project (https://github.com/puppeteer/puppeteer),
+available under the Apache 2.0 license (https://github.com/puppeteer/puppeteer/blob/master/LICENSE).
