@@ -144,15 +144,17 @@ const providers: LlmProviderConfig[] = [
 let persistDefaultProviderId: (providerId: string) => Promise<void>
 let rollBackDefaultProvider: (
   queryClient: QueryClient,
-  attempted: string,
+  write: number,
   previous: string | null | undefined,
 ) => void
+let nextSelectionWrite: () => number
 let defaultProviderKey: QueryKey
 
 beforeAll(async () => {
   const hooks = await import('./llm-providers.hooks')
   persistDefaultProviderId = hooks.persistDefaultProviderId
   rollBackDefaultProvider = hooks.rollBackDefaultProvider
+  nextSelectionWrite = hooks.nextSelectionWrite
   defaultProviderKey = hooks.useDefaultProviderIdQuery.getKey()
 })
 
@@ -307,13 +309,21 @@ describe('rollBackDefaultProvider', () => {
     return queryClient
   }
 
+  /** What the mutation does before the request goes out. */
+  function select(queryClient: QueryClient, providerId: string) {
+    const previous = queryClient.getQueryData<string | null>(defaultProviderKey)
+    queryClient.setQueryData(defaultProviderKey, providerId)
+    return { previous, write: nextSelectionWrite() }
+  }
+
   it('puts the previous selection back when its own write failed', () => {
     const queryClient = client('openai-1')
 
-    rollBackDefaultProvider(queryClient, 'openai-1', 'anthropic-provider')
+    const pick = select(queryClient, 'anthropic-provider')
+    rollBackDefaultProvider(queryClient, pick.write, pick.previous)
 
     expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
-      'anthropic-provider',
+      'openai-1',
     )
   })
 
@@ -321,9 +331,29 @@ describe('rollBackDefaultProvider', () => {
     // Two picks in quick succession, the second landing first. Restoring here
     // would move the user back to what was selected before either, and the
     // send path reads the target derived from this cache.
-    const queryClient = client('anthropic-provider')
+    const queryClient = client('openai-1')
 
-    rollBackDefaultProvider(queryClient, 'openai-1', 'openai-2')
+    const first = select(queryClient, 'anthropic-provider')
+    select(queryClient, 'openai-2')
+
+    rollBackDefaultProvider(queryClient, first.write, first.previous)
+
+    expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
+      'openai-2',
+    )
+  })
+
+  it('leaves a newer selection alone when it chose the same provider', () => {
+    // A, then B, then A again. Comparing ids cannot tell the third write's
+    // value from the first write's, so the first would undo a choice the user
+    // has since made again.
+    const queryClient = client('openai-1')
+
+    const first = select(queryClient, 'anthropic-provider')
+    select(queryClient, 'openai-2')
+    select(queryClient, 'anthropic-provider')
+
+    rollBackDefaultProvider(queryClient, first.write, first.previous)
 
     expect(queryClient.getQueryData<string | null>(defaultProviderKey)).toBe(
       'anthropic-provider',
@@ -331,9 +361,10 @@ describe('rollBackDefaultProvider', () => {
   })
 
   it('clears the selection when there was none to restore', () => {
-    const queryClient = client('openai-1')
+    const queryClient = client(null)
 
-    rollBackDefaultProvider(queryClient, 'openai-1', undefined)
+    const pick = select(queryClient, 'openai-1')
+    rollBackDefaultProvider(queryClient, pick.write, pick.previous)
 
     expect(
       queryClient.getQueryData<string | null>(defaultProviderKey),

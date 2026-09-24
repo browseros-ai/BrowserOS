@@ -65,6 +65,14 @@ export const useDefaultProviderIdQuery = createQuery<string | null>({
   fetcher: fetchDefaultProviderId,
 })
 
+let latestSelectionWrite = 0
+
+/** Claims the next place in the order of selection writes. */
+export function nextSelectionWrite(): number {
+  latestSelectionWrite += 1
+  return latestSelectionWrite
+}
+
 /**
  * Puts back the selection a failed write replaced, unless a newer one landed.
  *
@@ -72,16 +80,20 @@ export const useDefaultProviderIdQuery = createQuery<string | null>({
  * the target derived from it, so restoring blindly can hand a message to a
  * provider nobody chose: someone who picks twice quickly, whose first write
  * fails after the second has already succeeded, would be moved back to
- * whatever was selected before either. Only this write's own value is undone.
+ * whatever was selected before either.
+ *
+ * Ordered rather than compared by value. Asking whether the cache still holds
+ * the id this write put there cannot tell that id apart from the same id put
+ * there by a later write, so picking A, then B, then A again would let the
+ * first write undo the third.
  */
 export function rollBackDefaultProvider(
   queryClient: QueryClient,
-  attempted: string,
+  write: number,
   previous: string | null | undefined,
 ): void {
-  const key = useDefaultProviderIdQuery.getKey()
-  if (queryClient.getQueryData(key) !== attempted) return
-  queryClient.setQueryData(key, previous ?? null)
+  if (write !== latestSelectionWrite) return
+  queryClient.setQueryData(useDefaultProviderIdQuery.getKey(), previous ?? null)
 }
 
 /** Persists the configured default provider id used by provider selection. */
@@ -173,11 +185,11 @@ export function useLlmProviders(): UseLlmProvidersReturn {
         useDefaultProviderIdQuery.getKey(),
       )
       queryClient.setQueryData(useDefaultProviderIdQuery.getKey(), providerId)
-      return { previous }
+      return { previous, write: nextSelectionWrite() }
     },
-    onError: (_error, providerId, context) => {
+    onError: (_error, _providerId, context) => {
       if (context) {
-        rollBackDefaultProvider(queryClient, providerId, context.previous)
+        rollBackDefaultProvider(queryClient, context.write, context.previous)
       }
     },
     onSettled: invalidateDefault,
