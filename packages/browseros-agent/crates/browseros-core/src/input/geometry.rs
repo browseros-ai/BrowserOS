@@ -258,18 +258,29 @@ pub async fn js_click(session: &ProtocolSession, backend_node_id: i64) -> Result
     Ok(())
 }
 
-pub async fn get_input_value(session: &ProtocolSession, backend_node_id: i64) -> String {
-    call_on_element(
-        session,
-        backend_node_id,
-        "function(){return this.value??this.textContent??\"\"}",
-        None,
-    )
-    .await
-    .ok()
-    .and_then(|value| value.as_str().map(ToString::to_string))
-    .unwrap_or_default()
+/// Read the connected field, preserving the distinction between empty and unreadable.
+pub async fn get_input_value(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+) -> Result<String, CoreError> {
+    let value = call_on_element(session, backend_node_id, READ_INPUT_VALUE_JS, None).await?;
+    value.as_str().map(ToString::to_string).ok_or_else(|| {
+        CoreError::Message("Could not read the field value. Take a new snapshot.".to_string())
+    })
 }
+
+// Blink keeps a lone <br> as the caret placeholder in an emptied editing host.
+// Its innerText is a newline, but it represents no user text. Do not trim actual
+// whitespace or multiple line breaks from a nonempty editor.
+const READ_INPUT_VALUE_JS: &str = r#"
+function() {
+    if (!this.isConnected) return null;
+    if (typeof this.value === 'string') return this.value;
+    if (!this.isContentEditable) return null;
+    if (this.childNodes.length === 1 && this.firstChild.nodeName === 'BR') return '';
+    return this.innerText;
+}
+"#;
 
 pub async fn call_on_element(
     session: &ProtocolSession,
