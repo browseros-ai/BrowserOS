@@ -921,3 +921,48 @@ async fn facade_does_not_require_post_es2020_object_builtins() -> anyhow::Result
     leaf(&calls, "page.title", Some(7), json!([7]));
     Ok(())
 }
+
+#[tokio::test]
+async fn facade_network_waits_transport_url_filters_and_expose_response_bodies()
+-> anyhow::Result<()> {
+    for (expression, filter) in [
+        ("'**/api/items'", json!("**/api/items")),
+        (
+            "/api\\/items$/i",
+            json!({"source":"api\\/items$","flags":"i"}),
+        ),
+        (
+            "r => r.status() === 200",
+            json!({"predicate":"r => r.status() === 200"}),
+        ),
+    ] {
+        let (output, calls) = run(
+            &format!("const p = await neo.page(7); const response = await p.waitForResponse({expression}, {{timeout:40}}); return {{url:response.url(),status:response.status(),data:await response.json()}};"),
+            json!({"page.waitForEvent":{"url":"https://example.test/api/items","status":200,"body":"{\"items\":[1]}","base64Encoded":false}}),
+        ).await?;
+        success(&output);
+        assert_eq!(
+            output["value"],
+            json!({"url":"https://example.test/api/items","status":200,"data":{"items":[1]}})
+        );
+        leaf(
+            &calls,
+            "page.waitForEvent",
+            Some(7),
+            json!([7,"response",filter,{"timeout":40}]),
+        );
+    }
+    let (output, calls) = run(
+        "const p = await neo.page(7); const request = await p.waitForRequest('**/api/items'); return request.method();",
+        json!({"page.waitForEvent":{"url":"https://example.test/api/items","method":"POST"}}),
+    ).await?;
+    success(&output);
+    assert_eq!(output["value"], "POST");
+    leaf(
+        &calls,
+        "page.waitForEvent",
+        Some(7),
+        json!([7,"request","**/api/items",{"timeout":10000}]),
+    );
+    Ok(())
+}
