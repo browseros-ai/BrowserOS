@@ -199,7 +199,7 @@ describe('resolveEnv', () => {
     tempRoot = await writeRootEnv('production', {
       LOG_LEVEL: 'info',
     })
-    process.env.VITE_PUBLIC_BROWSEROS_API = 'not a url'
+    process.env.BROWSEROS_SERVER_PORT = 'not a port'
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'production' })
 
     expect(requireEnv(resolved, ['LOG_LEVEL'])).toEqual({ LOG_LEVEL: 'info' })
@@ -207,12 +207,12 @@ describe('resolveEnv', () => {
 
   test('validates requested non-empty values only', async () => {
     tempRoot = await writeRootEnv('production', {
-      VITE_PUBLIC_BROWSEROS_API: 'not a url',
+      BROWSEROS_SERVER_PORT: 'not a port',
     })
     const resolved = resolveEnv({ rootDir: tempRoot, mode: 'production' })
 
-    expect(() => requireEnv(resolved, ['VITE_PUBLIC_BROWSEROS_API'])).toThrow(
-      /Invalid env: VITE_PUBLIC_BROWSEROS_API \(section: app\).*url/i,
+    expect(() => requireEnv(resolved, ['BROWSEROS_SERVER_PORT'])).toThrow(
+      /Invalid env: BROWSEROS_SERVER_PORT \(section: app\).*port/i,
     )
   })
 

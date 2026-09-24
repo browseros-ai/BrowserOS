@@ -25,7 +25,6 @@ export interface EnvKeySpec {
 }
 
 const stringSchema = z.string()
-const urlSchema = z.string().url()
 const portSchema = z.string().refine((value) => {
   if (!/^\d+$/.test(value)) {
     return false
@@ -109,14 +108,6 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     secret: false,
     schema: stringSchema,
     modes: { development: { value: '' } },
-  },
-  {
-    key: 'VITE_PUBLIC_BROWSEROS_API',
-    section: 'app',
-    description: 'Public BrowserOS API URL exposed to the browser bundle.',
-    secret: false,
-    schema: urlSchema,
-    modes: { development: { value: 'https://api.browseros.com' } },
   },
   {
     key: 'VITE_ALPHA_FEATURES',

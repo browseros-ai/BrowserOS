@@ -10,11 +10,7 @@
     "turbo.json"
   ],
   "globalEnv": ["CI"],
-  "globalPassThroughEnv": [
-    "VITE_PUBLIC_BROWSEROS_API",
-    "BROWSEROS_*",
-    "NODE_ENV"
-  ],
+  "globalPassThroughEnv": ["BROWSEROS_*", "NODE_ENV"],
   "tasks": {
     "codegen": {
       "outputs": ["generated/**", "src/**/*.gen.ts"]

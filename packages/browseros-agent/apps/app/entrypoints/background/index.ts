@@ -22,7 +22,6 @@ import {
 } from '@/lib/messaging/runtime/runtimeMessages'
 import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
-import { authRedirectPathStorage } from '@/lib/onboarding/onboardingStorage'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
@@ -121,25 +120,6 @@ export default defineBackground(() => {
 
   onRuntimeMessage(RuntimeMessageType.getTabId, ({ sender }) => {
     return { tabId: sender.tab?.id }
-  })
-
-  onRuntimeMessage(RuntimeMessageType.authSuccess, async ({ sender }) => {
-    if (!sender.tab?.id) return
-
-    const tabId = sender.tab.id
-
-    try {
-      const redirectPath = await authRedirectPathStorage.getValue()
-      const hash = redirectPath || '/home'
-      await chrome.tabs.update(tabId, {
-        url: chrome.runtime.getURL(`app.html#${hash}`),
-      })
-      if (redirectPath) await authRedirectPathStorage.removeValue()
-    } catch {
-      await chrome.tabs.update(tabId, {
-        url: chrome.runtime.getURL('app.html#/home'),
-      })
-    }
   })
 
   onRuntimeMessage(RuntimeMessageType.stopAgent, async ({ data }) => {
