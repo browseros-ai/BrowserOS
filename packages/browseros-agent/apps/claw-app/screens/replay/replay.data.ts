@@ -315,6 +315,21 @@ const TOOL_TO_VERB: Record<string, ReplayVerb> = {
   wait: 'read',
   run: 'type',
   evaluate: 'type',
+  playwright: 'type',
+  'page.goto': 'navigate',
+  'locator.click': 'click',
+  'locator.fill': 'type',
+  'locator.press': 'type',
+}
+
+// ReplayVerb selects the shared icon/style; captions can describe script
+// methods without growing that closed set for every Playwright method.
+const SCRIPT_TOOL_CAPTIONS: Record<string, string> = {
+  playwright: 'ran a Playwright script',
+  'page.goto': 'navigated',
+  'locator.click': 'clicked',
+  'locator.fill': 'filled',
+  'locator.press': 'pressed',
 }
 
 /**
@@ -362,6 +377,13 @@ function buildCaption(
 ): string {
   if (cancelled) return `${row.toolName}: cancelled by operator`
   if (isError) return `${row.toolName}: errored`
+  const scriptCaption =
+    SCRIPT_TOOL_CAPTIONS[row.toolName] ??
+    (row.toolName.startsWith('expect.') ? 'checked' : undefined)
+  if (scriptCaption) {
+    if (verb === 'navigate' && row.url) return `${scriptCaption} to ${row.url}`
+    return row.title ? `${scriptCaption}: ${row.title}` : scriptCaption
+  }
   if (verb === 'navigate' && row.url) return `Navigate to ${row.url}`
   if (row.title) return `${row.toolName}: ${row.title}`
   return row.toolName
