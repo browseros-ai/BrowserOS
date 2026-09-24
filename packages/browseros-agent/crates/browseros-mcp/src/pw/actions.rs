@@ -1187,18 +1187,25 @@ async fn evaluate_all(
     // Backend node ids cross worlds, object ids do not. Resolve the whole set
     // into the default main world before invoking fn once on an element array.
     let mut handles = Vec::new();
-    let result = async {
-        for node in nodes {
-            let resolved = first.session.send_value("DOM.resolveNode",json!({"backendNodeId":node.backend_node_id})).await?;
-            let id = resolved.pointer("/object/objectId").and_then(Value::as_str).ok_or_else(||CoreError::from("Could not resolve main-world element"))?.to_string();
-            state.handles.push((first.session.clone(),id.clone()));
-            handles.push(id);
-        }
-        let mut arguments = vec![json!({"value":arg})];
-        arguments.extend(handles.iter().map(|id|json!({"objectId":id})));
-        evaluated_value(first.session.send_value("Runtime.callFunctionOn",json!({"objectId":handles[0],"functionDeclaration":format!("function(arg, ...elements) {{ return ({source})(elements, arg); }}"),"arguments":arguments,"awaitPromise":true,"returnByValue":true})).await?)
-    }.await;
-    result
+    for node in nodes {
+        let resolved = first
+            .session
+            .send_value(
+                "DOM.resolveNode",
+                json!({"backendNodeId":node.backend_node_id}),
+            )
+            .await?;
+        let id = resolved
+            .pointer("/object/objectId")
+            .and_then(Value::as_str)
+            .ok_or_else(|| CoreError::from("Could not resolve main-world element"))?
+            .to_string();
+        state.handles.push((first.session.clone(), id.clone()));
+        handles.push(id);
+    }
+    let mut arguments = vec![json!({"value":arg})];
+    arguments.extend(handles.iter().map(|id| json!({"objectId":id})));
+    evaluated_value(first.session.send_value("Runtime.callFunctionOn",json!({"objectId":handles[0],"functionDeclaration":format!("function(arg, ...elements) {{ return ({source})(elements, arg); }}"),"arguments":arguments,"awaitPromise":true,"returnByValue":true})).await?)
 }
 
 async fn tool_action(
