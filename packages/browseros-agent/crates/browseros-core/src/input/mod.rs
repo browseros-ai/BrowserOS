@@ -86,34 +86,89 @@ impl Input {
     // Locator input keeps the resolved frame session rather than reconstructing a snapshot ref.
     pub async fn check_backend_node(
         &self,
-        _session: &ProtocolSession,
-        _backend_node_id: i64,
-        _checked: bool,
+        session: &ProtocolSession,
+        backend_node_id: i64,
+        checked: bool,
     ) -> Result<bool, CoreError> {
-        Err(CoreError::Message(
-            "not implemented yet: check_backend_node".to_string(),
-        ))
+        let read_checked = || async {
+            call_on_element(
+                session,
+                backend_node_id,
+                "function(){return this.isConnected ? this.checked : null}",
+                None,
+            )
+            .await?
+            .as_bool()
+            .ok_or_else(|| CoreError::Message("Element has no readable checked state.".to_string()))
+        };
+        let current = read_checked().await?;
+        if current == checked {
+            return Ok(current);
+        }
+        self.click_node(
+            session,
+            InputTarget::from_backend_node(backend_node_id),
+            ClickOptions::default(),
+        )
+        .await?;
+        // A canceled click or a controlled input can undo the toggle. Report
+        // the state after handlers run, never infer success from dispatch alone.
+        let current = read_checked().await?;
+        if current != checked {
+            return Err(CoreError::Message(
+                "Click did not set the requested checked state.".to_string(),
+            ));
+        }
+        Ok(current)
     }
 
     pub async fn upload_backend_node(
         &self,
-        _session: &ProtocolSession,
-        _backend_node_id: i64,
-        _paths: &[PathBuf],
+        session: &ProtocolSession,
+        backend_node_id: i64,
+        paths: &[PathBuf],
     ) -> Result<(), CoreError> {
-        Err(CoreError::Message(
-            "not implemented yet: upload_backend_node".to_string(),
-        ))
+        let mut files = Vec::with_capacity(paths.len());
+        for path in paths {
+            if !path.is_absolute() {
+                return Err(CoreError::Message(
+                    "Upload paths must be absolute.".to_string(),
+                ));
+            }
+            let metadata = tokio::fs::metadata(path).await.map_err(|err| {
+                CoreError::Message(format!(
+                    "Could not access upload file {}: {err}",
+                    path.display()
+                ))
+            })?;
+            if !metadata.is_file() {
+                return Err(CoreError::Message(format!(
+                    "Upload path is not a file: {}",
+                    path.display()
+                )));
+            }
+            files.push(path.to_str().ok_or_else(|| {
+                CoreError::Message("Upload paths must be valid UTF-8.".to_string())
+            })?);
+        }
+        let _: Value = session
+            .send(
+                "DOM.setFileInputFiles",
+                json!({ "backendNodeId": backend_node_id, "files": files }),
+            )
+            .await?;
+        Ok(())
     }
 
     pub async fn focus_backend_node(
         &self,
-        _session: &ProtocolSession,
-        _backend_node_id: i64,
+        session: &ProtocolSession,
+        backend_node_id: i64,
     ) -> Result<(), CoreError> {
-        Err(CoreError::Message(
-            "not implemented yet: focus_backend_node".to_string(),
-        ))
+        let _: Value = session
+            .send("DOM.focus", json!({ "backendNodeId": backend_node_id }))
+            .await?;
+        Ok(())
     }
 
     #[must_use]
@@ -499,6 +554,253 @@ const SELECT_OPTION_FN: &str = "function(val){\
   }\
   return null;\
 }";
+
+#[cfg(test)]
+mod backend_node_tests {
+    use super::*;
+    use crate::{
+        SessionId,
+        frames::FrameRegistry,
+        pages::PageManagerHooks,
+        test_support::{TestCall, TestConnection},
+    };
+
+    pub(super) struct BackendHarness {
+        pub input: Input,
+        pub session: ProtocolSession,
+        connection: Arc<TestConnection>,
+        setup_calls: usize,
+        methods: Vec<&'static str>,
+    }
+
+    impl BackendHarness {
+        pub async fn new(responses: Vec<(&'static str, Value)>) -> Result<Self, CoreError> {
+            let methods = responses.iter().map(|(method, _)| *method).collect();
+            let mut setup = vec![
+                (
+                    "Browser.getTabs",
+                    json!({ "tabs": [{
+                    "tabId": 101, "targetId": "target-1", "url": "https://example.com/",
+                    "title": "Test", "isActive": true, "isLoading": false,
+                    "loadProgress": 1, "isPinned": false, "isHidden": false, "windowId": 1
+                }] }),
+                ),
+                (
+                    "Target.attachToTarget",
+                    json!({ "sessionId": "page-session" }),
+                ),
+                ("Page.enable", json!({})),
+                ("DOM.enable", json!({})),
+                ("Runtime.enable", json!({})),
+                ("Accessibility.enable", json!({})),
+                ("Runtime.runIfWaitingForDebugger", json!({})),
+            ];
+            setup.extend(responses);
+            let connection = TestConnection::new(setup);
+            let pages = Arc::new(PageManager::new(
+                connection.clone(),
+                PageManagerHooks::default(),
+            ));
+            pages.get_session(PageId(1)).await?;
+            let observer = Arc::new(Observer::new(
+                pages.clone(),
+                FrameRegistry::new(connection.clone()),
+                PageId(1),
+            ));
+            Ok(Self {
+                input: Input::new(observer, pages, PageId(1)),
+                session: ProtocolSession::for_session(
+                    connection.clone(),
+                    SessionId::from("frame-session"),
+                ),
+                setup_calls: connection.calls()?.len(),
+                connection,
+                methods,
+            })
+        }
+
+        pub fn assert_sequence(&self) -> Result<Vec<TestCall>, CoreError> {
+            let calls = self
+                .connection
+                .calls()?
+                .into_iter()
+                .skip(self.setup_calls)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|call| call.method.as_str())
+                    .collect::<Vec<_>>(),
+                self.methods
+            );
+            for call in &calls {
+                if call.method == "DOM.resolveNode" {
+                    assert_eq!(call.params, json!({ "backendNodeId": 42 }));
+                }
+            }
+            Ok(calls)
+        }
+    }
+
+    pub(super) fn element_result(value: Value) -> Vec<(&'static str, Value)> {
+        vec![
+            (
+                "DOM.resolveNode",
+                json!({ "object": { "objectId": "element" } }),
+            ),
+            (
+                "Runtime.callFunctionOn",
+                json!({ "result": { "value": value } }),
+            ),
+        ]
+    }
+
+    pub(super) fn click_responses(blocker: Value) -> Vec<(&'static str, Value)> {
+        let mut responses = vec![
+            ("DOM.scrollIntoViewIfNeeded", json!({})),
+            (
+                "DOM.getContentQuads",
+                json!({ "quads": [[0, 0, 100, 0, 100, 50, 0, 50]] }),
+            ),
+        ];
+        responses.extend(element_result(blocker.clone()));
+        if blocker.is_null() {
+            responses.extend((0..3).map(|_| ("Input.dispatchMouseEvent", json!({}))));
+        }
+        responses
+    }
+
+    #[tokio::test]
+    async fn check_already_desired_does_not_click() -> Result<(), CoreError> {
+        for checked in [true, false] {
+            let h = BackendHarness::new(element_result(json!(checked))).await?;
+            assert_eq!(
+                h.input.check_backend_node(&h.session, 42, checked).await?,
+                checked
+            );
+            h.assert_sequence()?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_clicks_then_verifies_both_states() -> Result<(), CoreError> {
+        for checked in [true, false] {
+            let mut responses = element_result(json!(!checked));
+            responses.extend(click_responses(Value::Null));
+            responses.extend(element_result(json!(checked)));
+            let h = BackendHarness::new(responses).await?;
+            assert_eq!(
+                h.input.check_backend_node(&h.session, 42, checked).await?,
+                checked
+            );
+            let calls = h.assert_sequence()?;
+            let events = calls
+                .iter()
+                .filter(|call| call.method == "Input.dispatchMouseEvent")
+                .collect::<Vec<_>>();
+            assert_eq!(
+                events
+                    .iter()
+                    .map(|call| call.params["type"].as_str())
+                    .collect::<Vec<_>>(),
+                [
+                    Some("mouseMoved"),
+                    Some("mousePressed"),
+                    Some("mouseReleased")
+                ]
+            );
+            assert_eq!(events[1].params["x"], 50.0);
+            assert_eq!(events[1].params["y"], 25.0);
+            assert_eq!(events[1].params["button"], "left");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_rejects_unchanged_or_unreadable_state() -> Result<(), CoreError> {
+        for final_state in [json!(false), Value::Null] {
+            let mut responses = element_result(json!(false));
+            responses.extend(click_responses(Value::Null));
+            responses.extend(element_result(final_state));
+            let h = BackendHarness::new(responses).await?;
+            assert!(
+                h.input
+                    .check_backend_node(&h.session, 42, true)
+                    .await
+                    .is_err()
+            );
+            h.assert_sequence()?;
+        }
+        let h = BackendHarness::new(element_result(Value::Null)).await?;
+        assert!(
+            h.input
+                .check_backend_node(&h.session, 42, false)
+                .await
+                .is_err()
+        );
+        h.assert_sequence()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn check_preserves_cover_error_without_clicking() -> Result<(), CoreError> {
+        let mut responses = element_result(json!(false));
+        responses.extend(click_responses(json!("div#overlay")));
+        let h = BackendHarness::new(responses).await?;
+        assert!(
+            matches!(h.input.check_backend_node(&h.session, 42, true).await,
+            Err(CoreError::ElementCovered { target, blocker })
+                if target.backend_node_id == Some(42) && blocker == "div#overlay")
+        );
+        h.assert_sequence()?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upload_sends_validated_absolute_paths_and_allows_clearing() -> Result<(), CoreError> {
+        let paths = vec![PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml")];
+        for files in [paths, Vec::new()] {
+            let h = BackendHarness::new(vec![("DOM.setFileInputFiles", json!({}))]).await?;
+            h.input.upload_backend_node(&h.session, 42, &files).await?;
+            let calls = h.assert_sequence()?;
+            assert_eq!(
+                calls[0].params,
+                json!({ "backendNodeId": 42, "files": files })
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn upload_validates_entire_batch_before_sending() -> Result<(), CoreError> {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        for invalid in [
+            PathBuf::from("Cargo.toml"),
+            root.join(uuid::Uuid::new_v4().to_string()),
+            root.clone(),
+        ] {
+            let h = BackendHarness::new(Vec::new()).await?;
+            assert!(
+                h.input
+                    .upload_backend_node(&h.session, 42, &[root.join("Cargo.toml"), invalid])
+                    .await
+                    .is_err()
+            );
+            h.assert_sequence()?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn focus_uses_backend_node_id() -> Result<(), CoreError> {
+        let h = BackendHarness::new(vec![("DOM.focus", json!({}))]).await?;
+        h.input.focus_backend_node(&h.session, 42).await?;
+        let calls = h.assert_sequence()?;
+        assert_eq!(calls[0].params, json!({ "backendNodeId": 42 }));
+        Ok(())
+    }
+}
 
 #[cfg(test)]
 mod tests {
