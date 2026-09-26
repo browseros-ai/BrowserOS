@@ -39,7 +39,7 @@ browseros-cli -p "$page" snapshot -i                                  # 4. re-sn
 ## Page handles
 
 ```bash
-browseros-cli open --json <url> | jq -r .page   # open a tab; returns its page id (--bg, --hidden, --window <id>)
+browseros-cli open --json <url> | jq -r .page   # open a tab; returns its page id (--bg, --window <id>)
 browseros-cli tabs --json                        # list open tabs with page ids (alias: pages)
 browseros-cli active --json                      # the focused tab's page id
 browseros-cli -p "$page" close                   # close a tab
