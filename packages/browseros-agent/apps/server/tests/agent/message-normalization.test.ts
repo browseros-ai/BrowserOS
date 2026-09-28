@@ -4,8 +4,8 @@ import type { ModelMessage, ToolResultPart } from 'ai'
 import {
   getMessageNormalizationOptions,
   normalizeMessagesForModel,
-} from './message-normalization'
-import type { ResolvedAgentConfig } from './types'
+} from '../../src/agent/message-normalization'
+import type { ResolvedAgentConfig } from '../../src/agent/types'
 
 type ToolResultContentPart = Extract<
   ToolResultPart['output'],
