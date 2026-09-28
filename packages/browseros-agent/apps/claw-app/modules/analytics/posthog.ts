@@ -50,6 +50,15 @@ const STRIPPED_PROPS = [
 ]
 
 let initialised = false
+const captureStateListeners = new Set<() => void>()
+let lastCaptureState = false
+
+function notifyCaptureStateListeners(): void {
+  const nextCaptureState = isCapturing()
+  if (nextCaptureState === lastCaptureState) return
+  lastCaptureState = nextCaptureState
+  for (const listener of captureStateListeners) listener()
+}
 
 export function sanitizeProperties(
   properties: Record<string, unknown>,
@@ -182,11 +191,18 @@ export function applyTelemetry(input: {
   } else {
     reconcileSessionRecording(posthog, false, initialised)
   }
+  notifyCaptureStateListeners()
 }
 
 /** Whether posthog is initialised AND currently opted in to capturing. */
 export function isCapturing(): boolean {
   return initialised && !posthog.has_opted_out_capturing()
+}
+
+/** Subscribes React consumers to changes in effective capture readiness. */
+export function subscribeToCaptureState(listener: () => void): () => void {
+  captureStateListeners.add(listener)
+  return () => captureStateListeners.delete(listener)
 }
 
 /** Fire-and-forget event. No-ops until capturing. */

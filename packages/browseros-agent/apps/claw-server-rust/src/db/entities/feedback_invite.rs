@@ -12,6 +12,8 @@ pub struct Model {
     pub shown_at_ms: i64,
     pub outcome: String,
     pub settled_at_ms: Option<i64>,
+    /// Set once the reader asks to stop seeing the card. Never cleared.
+    pub dismissed_at_ms: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
