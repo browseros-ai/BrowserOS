@@ -13,6 +13,7 @@ import { CalendarCheck, X } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import { isCapturing } from '@/modules/analytics/posthog'
 import {
   useFeedbackInvitation,
   useRecordFeedbackInvite,
@@ -25,6 +26,34 @@ import {
  * repeated impression and never a missed invitation.
  */
 const SHOWN_TRACKED_KEY = 'feedbackInviteShownTracked'
+
+/**
+ * Remembers that the reader dismissed the card, so the other cockpit tabs they
+ * already have open stop showing it too. The card now returns on every load
+ * until dismissed, so without this a dismissal in one tab leaves every other
+ * open tab still offering it until each one reloads.
+ *
+ * Only ever suppresses. The server remains the authority on whether anyone is
+ * invited, so a cleared key costs at most one more appearance and can never
+ * reveal an invitation the server has refused.
+ */
+const DISMISSED_KEY = 'feedbackInviteDismissed'
+
+function dismissedHere(): boolean {
+  try {
+    return localStorage.getItem(DISMISSED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function rememberDismissal(): void {
+  try {
+    localStorage.setItem(DISMISSED_KEY, 'true')
+  } catch {
+    // Without storage access the other open tabs keep showing it until reload.
+  }
+}
 
 function impressionAlreadyCounted(): boolean {
   try {
@@ -61,7 +90,9 @@ export function FeedbackInviteCard() {
   const booked = useRef(false)
 
   const offered =
-    invitation.data?.eligible === true ? invitation.data.bookUrl : undefined
+    invitation.data?.eligible === true && !dismissedHere()
+      ? invitation.data.bookUrl
+      : undefined
   const report = record.mutate
 
   // The impression belongs to the card appearing, and there is no user action
@@ -76,7 +107,11 @@ export function FeedbackInviteCard() {
     if (!offered || appeared.current) return
     appeared.current = true
     setState({ phase: 'showing', bookUrl: offered })
-    if (!impressionAlreadyCounted()) {
+    // The marker is only written once the event has somewhere to go. Analytics
+    // readiness is settled by its own request, so the invitation can arrive
+    // first; marking the impression then would drop it and never retry, leaving
+    // the profile out of the count for good.
+    if (!impressionAlreadyCounted() && isCapturing()) {
       rememberImpression()
       track(AnalyticsEvent.FeedbackInviteShown)
     }
@@ -115,6 +150,7 @@ export function FeedbackInviteCard() {
 
   const handleDecline = () => {
     track(AnalyticsEvent.FeedbackInviteDismissed)
+    rememberDismissal()
     setState({ phase: 'dismissed' })
     recordOutcome('dismissed')
   }

@@ -9,6 +9,7 @@ interface HookState {
   cached: unknown[]
   tracked: string[]
   opened: string[]
+  capturing: boolean
 }
 
 const state: HookState = {
@@ -17,6 +18,7 @@ const state: HookState = {
   cached: [],
   tracked: [],
   opened: [],
+  capturing: true,
 }
 
 const invitationKey = ['api', 'feedback', 'invitation']
@@ -42,6 +44,10 @@ mock.module('@tanstack/react-query', () => ({
       state.cached.push({ key, value })
     },
   }),
+}))
+
+mock.module('@/modules/analytics/posthog', () => ({
+  isCapturing: () => state.capturing,
 }))
 
 mock.module('@/modules/analytics/events', () => ({
@@ -87,6 +93,7 @@ beforeEach(async () => {
   state.tracked = []
   for (const key of Object.keys(storage)) delete storage[key]
   state.opened = []
+  state.capturing = true
 
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -259,6 +266,50 @@ describe('FeedbackInviteCard', () => {
       ['shown'],
       // The server is still told, because it holds the first-seen timestamp.
     )
+  })
+
+  /// Analytics readiness is settled by its own request, so the invitation can arrive first.
+  /// Writing the permanent marker then would drop the event and never retry, leaving that
+  /// profile out of the impression count for good.
+  it('does not mark the impression while analytics cannot capture', async () => {
+    state.invitation = eligible
+    state.capturing = false
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(state.tracked).toEqual([])
+    expect(storage.feedbackInviteShownTracked).toBeUndefined()
+
+    // Analytics comes up, a later load counts it.
+    state.capturing = true
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+    expect(state.tracked).toEqual(['feedback_invite_shown'])
+  })
+
+  /// The card returns on every load until dismissed, so a dismissal in one tab has to reach
+  /// the tabs the reader already has open rather than leaving them still offering it.
+  it('stays away in another tab once dismissed', async () => {
+    state.invitation = eligible
+    await render()
+    await click(buttonWithText('No thanks'))
+    expect(container.innerHTML).toBe('')
+
+    // Another cockpit tab, same profile, whose cached answer still says eligible.
+    state.tracked = []
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.innerHTML).toBe('')
+    expect(state.tracked).toEqual([])
+    expect(state.recorded).toEqual([])
   })
 
   it('reopens the link on a second click without reporting it twice', async () => {

@@ -82,48 +82,53 @@ impl FeedbackInviteRepository {
         now_ms: i64,
     ) -> AppResult<()> {
         let connection = self.db.connection();
+        let dismissed_at = (outcome == InviteOutcome::Dismissed).then_some(now_ms);
         connection
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "INSERT INTO feedback_invite (install_id, shown_at_ms, outcome, settled_at_ms) \
-                 VALUES (?, ?, ?, ?) ON CONFLICT(install_id) DO NOTHING",
+                "INSERT INTO feedback_invite \
+                 (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms) \
+                 VALUES (?, ?, ?, ?, ?) ON CONFLICT(install_id) DO NOTHING",
                 [
                     Value::from(install_id.to_owned()),
                     Value::from(now_ms),
                     Value::from(outcome.as_str().to_owned()),
                     Value::from(outcome.is_response().then_some(now_ms)),
+                    Value::from(dismissed_at),
                 ],
             ))
             .await?;
 
+        // One statement, so the funnel outcome and the dismissal gate cannot end up
+        // disagreeing. Written as two, a crash in between could leave `outcome` saying
+        // dismissed while the gate stayed null, and the card would come back after a
+        // restart with no migration left to repair it.
+        //
+        // Each column carries its own guard. The outcome only ever rises, by rank. The gate
+        // is only ever set, never moved or cleared, so the first dismissal is the one that
+        // stands and a later click cannot reopen it.
         connection
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
-                "UPDATE feedback_invite SET outcome = ?, settled_at_ms = ? \
-                 WHERE install_id = ? AND ? > (CASE outcome \
-                   WHEN 'clicked' THEN 2 WHEN 'dismissed' THEN 1 ELSE 0 END)",
+                "UPDATE feedback_invite SET \
+                   outcome = CASE WHEN ? > (CASE outcome \
+                     WHEN 'clicked' THEN 2 WHEN 'dismissed' THEN 1 ELSE 0 END) \
+                     THEN ? ELSE outcome END, \
+                   settled_at_ms = CASE WHEN ? > (CASE outcome \
+                     WHEN 'clicked' THEN 2 WHEN 'dismissed' THEN 1 ELSE 0 END) \
+                     THEN ? ELSE settled_at_ms END, \
+                   dismissed_at_ms = COALESCE(dismissed_at_ms, ?) \
+                 WHERE install_id = ?",
                 [
-                    Value::from(outcome.as_str().to_owned()),
-                    Value::from(outcome.is_response().then_some(now_ms)),
-                    Value::from(install_id.to_owned()),
                     Value::from(outcome.rank()),
+                    Value::from(outcome.as_str().to_owned()),
+                    Value::from(outcome.rank()),
+                    Value::from(outcome.is_response().then_some(now_ms)),
+                    Value::from(dismissed_at),
+                    Value::from(install_id.to_owned()),
                 ],
             ))
             .await?;
-
-        // Stamped separately from `outcome`, and only ever set. A click outranks a later
-        // dismissal in the funnel, so reading the reader's request to stop off `outcome`
-        // would let the card come back after they asked it not to.
-        if outcome == InviteOutcome::Dismissed {
-            connection
-                .execute(Statement::from_sql_and_values(
-                    DatabaseBackend::Sqlite,
-                    "UPDATE feedback_invite SET dismissed_at_ms = ? \
-                     WHERE install_id = ? AND dismissed_at_ms IS NULL",
-                    [Value::from(now_ms), Value::from(install_id.to_owned())],
-                ))
-                .await?;
-        }
         Ok(())
     }
 

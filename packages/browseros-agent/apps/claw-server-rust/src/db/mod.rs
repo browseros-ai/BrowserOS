@@ -452,6 +452,11 @@ mod tests {
             gate("dismissed-before").await?,
             "a dismissal recorded before the gate existed must carry across"
         );
+        // Deliberate, and lossy in one direction: a reader who booked and then closed the
+        // card is stored as `clicked`, because a click outranks a later dismissal, and is
+        // indistinguishable here from one who booked and never dismissed. Carrying every
+        // `clicked` row across as a dismissal would permanently silence the most engaged
+        // group, so the gap is accepted and costs at most one more appearance.
         assert!(!gate("clicked-before").await?);
         assert!(!gate("shown-before").await?);
         Ok(())

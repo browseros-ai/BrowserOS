@@ -2261,6 +2261,18 @@ mod m0019_add_feedback_invite_dismissal {
                 .await?;
             // Installations already recorded as dismissed asked to stop under the previous
             // rule. Carry that across rather than showing them the card again.
+            //
+            // Rows recorded as `clicked` are deliberately left alone, and that choice is
+            // lossy in one direction. A click outranks a later dismissal in `outcome`, so a
+            // reader who booked and then closed the card is stored as `clicked` and is
+            // indistinguishable here from one who booked and never dismissed. The old
+            // schema cannot separate them.
+            //
+            // Of the two available policies this is the better loss. Treating every
+            // `clicked` row as a dismissal would permanently silence everyone who booked
+            // and never asked it to stop, which is the most engaged group and the one the
+            // card exists to reach. Leaving them alone costs at most one more appearance,
+            // after which their answer is recorded in the column properly.
             manager
                 .get_connection()
                 .execute_unprepared(
