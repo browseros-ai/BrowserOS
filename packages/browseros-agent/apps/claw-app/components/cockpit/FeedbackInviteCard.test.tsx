@@ -5,18 +5,24 @@ import type { Root } from 'react-dom/client'
 
 interface HookState {
   invitation: { eligible: boolean; bookUrl?: string }
+  invitationUpdatedAt: number
   recorded: string[]
+  recordSucceeds: boolean
   cached: unknown[]
   tracked: string[]
+  errors: string[]
   opened: string[]
   capturing: boolean
 }
 
 const state: HookState = {
   invitation: { eligible: false },
+  invitationUpdatedAt: 1_000,
   recorded: [],
+  recordSucceeds: true,
   cached: [],
   tracked: [],
+  errors: [],
   opened: [],
   capturing: true,
 }
@@ -24,16 +30,26 @@ const state: HookState = {
 const invitationKey = ['api', 'feedback', 'invitation']
 
 mock.module('@/modules/api/feedback.hooks', () => ({
-  useFeedbackInvitation: Object.assign(() => ({ data: state.invitation }), {
-    getKey: () => invitationKey,
-  }),
+  useFeedbackInvitation: Object.assign(
+    () => ({
+      data: state.invitation,
+      dataUpdatedAt: state.invitationUpdatedAt,
+    }),
+    {
+      getKey: () => invitationKey,
+    },
+  ),
   useRecordFeedbackInvite: () => ({
     mutate: (
       { outcome }: { outcome: string },
-      options?: { onSuccess?: (settled: unknown) => void },
+      options?: {
+        onSuccess?: (settled: unknown) => void
+        onError?: (error: Error) => void
+      },
     ) => {
       state.recorded.push(outcome)
-      options?.onSuccess?.({ eligible: false })
+      if (state.recordSucceeds) options?.onSuccess?.({ eligible: false })
+      else options?.onError?.(new Error('sidecar unavailable'))
     },
   }),
 }))
@@ -46,8 +62,14 @@ mock.module('@tanstack/react-query', () => ({
   }),
 }))
 
+const captureStateListeners = new Set<() => void>()
+
 mock.module('@/modules/analytics/posthog', () => ({
   isCapturing: () => state.capturing,
+  subscribeToCaptureState: (listener: () => void) => {
+    captureStateListeners.add(listener)
+    return () => captureStateListeners.delete(listener)
+  },
 }))
 
 mock.module('@/modules/analytics/events', () => ({
@@ -58,6 +80,12 @@ mock.module('@/modules/analytics/events', () => ({
   },
   track: (event: string) => {
     state.tracked.push(event)
+  },
+}))
+
+mock.module('sonner', () => ({
+  toast: {
+    error: (message: string) => state.errors.push(message),
   },
 }))
 
@@ -88,9 +116,12 @@ let container: HTMLElement
 
 beforeEach(async () => {
   state.invitation = { eligible: false }
+  state.invitationUpdatedAt = 1_000
   state.recorded = []
+  state.recordSucceeds = true
   state.cached = []
   state.tracked = []
+  state.errors = []
   for (const key of Object.keys(storage)) delete storage[key]
   state.opened = []
   state.capturing = true
@@ -167,6 +198,25 @@ function dismissControl(): HTMLElement {
 async function click(element: HTMLElement) {
   await act(async () => {
     element.dispatchEvent(new window.Event('click', { bubbles: true }))
+  })
+}
+
+async function setCapturing(capturing: boolean) {
+  await act(async () => {
+    state.capturing = capturing
+    for (const listener of captureStateListeners) listener()
+  })
+}
+
+async function publishDismissal(dismissedAt: number) {
+  storage['feedbackInviteDismissedAt:v1'] = String(dismissedAt)
+  await act(async () => {
+    const event = new window.Event('storage')
+    Object.defineProperty(event, 'key', {
+      configurable: true,
+      value: 'feedbackInviteDismissedAt:v1',
+    })
+    window.dispatchEvent(event)
   })
 }
 
@@ -268,10 +318,7 @@ describe('FeedbackInviteCard', () => {
     )
   })
 
-  /// Analytics readiness is settled by its own request, so the invitation can arrive first.
-  /// Writing the permanent marker then would drop the event and never retry, leaving that
-  /// profile out of the impression count for good.
-  it('does not mark the impression while analytics cannot capture', async () => {
+  it('counts the impression when analytics becomes ready on the same mount', async () => {
     state.invitation = eligible
     state.capturing = false
     await render()
@@ -282,13 +329,10 @@ describe('FeedbackInviteCard', () => {
     expect(state.tracked).toEqual([])
     expect(storage.feedbackInviteShownTracked).toBeUndefined()
 
-    // Analytics comes up, a later load counts it.
-    state.capturing = true
-    await act(async () => root.unmount())
-    const { createRoot } = await import('react-dom/client')
-    root = createRoot(container)
-    await render()
+    await setCapturing(true)
+
     expect(state.tracked).toEqual(['feedback_invite_shown'])
+    expect(storage.feedbackInviteShownTracked).toBe('true')
   })
 
   /// The card returns on every load until dismissed, so a dismissal in one tab has to reach
@@ -310,6 +354,53 @@ describe('FeedbackInviteCard', () => {
     expect(container.innerHTML).toBe('')
     expect(state.tracked).toEqual([])
     expect(state.recorded).toEqual([])
+  })
+
+  it('does not persist a browser dismissal when the server write fails', async () => {
+    state.invitation = eligible
+    state.recordSucceeds = false
+    await render()
+
+    await click(buttonWithText('No thanks'))
+
+    expect(container.innerHTML).toBe('')
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeUndefined()
+    expect(state.errors).toEqual([
+      'Could not save your response. The invitation may appear again.',
+    ])
+
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(state.recorded).toEqual(['shown'])
+  })
+
+  it('lets a fresh eligible server answer override an older dismissal fence', async () => {
+    state.invitation = eligible
+    storage['feedbackInviteDismissedAt:v1'] = '2000'
+    state.invitationUpdatedAt = 3_000
+
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+  })
+
+  it('hides an already-visible card when another tab confirms dismissal', async () => {
+    state.invitation = eligible
+    state.invitationUpdatedAt = 1_000
+    await render()
+
+    await publishDismissal(2_000)
+
+    expect(container.innerHTML).toBe('')
   })
 
   it('reopens the link on a second click without reporting it twice', async () => {

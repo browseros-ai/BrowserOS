@@ -4,16 +4,20 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Invites the most active installations to a feedback call. The server decides
- * who is eligible and enforces that this is offered once ever; the card asks,
- * shows, and reports back what happened.
+ * who is eligible and keeps the invitation open until dismissal; the card
+ * asks, shows, and reports back what happened.
  */
 
 import { useQueryClient } from '@tanstack/react-query'
 import { CalendarCheck, X } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
-import { isCapturing } from '@/modules/analytics/posthog'
+import {
+  isCapturing,
+  subscribeToCaptureState,
+} from '@/modules/analytics/posthog'
 import {
   useFeedbackInvitation,
   useRecordFeedbackInvite,
@@ -28,31 +32,35 @@ import {
 const SHOWN_TRACKED_KEY = 'feedbackInviteShownTracked'
 
 /**
- * Remembers that the reader dismissed the card, so the other cockpit tabs they
- * already have open stop showing it too. The card now returns on every load
- * until dismissed, so without this a dismissal in one tab leaves every other
- * open tab still offering it until each one reloads.
- *
- * Only ever suppresses. The server remains the authority on whether anyone is
- * invited, so a cleared key costs at most one more appearance and can never
- * reveal an invitation the server has refused.
+ * Fences stale eligible query results after a server-confirmed dismissal. The
+ * timestamp is compared with React Query's dataUpdatedAt, so a newer server
+ * answer always wins and browser storage never becomes an eligibility source.
  */
-const DISMISSED_KEY = 'feedbackInviteDismissed'
+const DISMISSED_AT_KEY = 'feedbackInviteDismissedAt:v1'
 
-function dismissedHere(): boolean {
+function readDismissedAt(): number | null {
   try {
-    return localStorage.getItem(DISMISSED_KEY) === 'true'
+    const value = Number(localStorage.getItem(DISMISSED_AT_KEY))
+    return Number.isFinite(value) && value > 0 ? value : null
   } catch {
-    return false
+    return null
   }
 }
 
 function rememberDismissal(): void {
   try {
-    localStorage.setItem(DISMISSED_KEY, 'true')
+    localStorage.setItem(DISMISSED_AT_KEY, String(Date.now()))
   } catch {
-    // Without storage access the other open tabs keep showing it until reload.
+    // The server still holds the durable dismissal when storage is unavailable.
   }
+}
+
+function subscribeToDismissals(listener: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === DISMISSED_AT_KEY) listener()
+  }
+  window.addEventListener('storage', onStorage)
+  return () => window.removeEventListener('storage', onStorage)
 }
 
 function impressionAlreadyCounted(): boolean {
@@ -85,12 +93,24 @@ export function FeedbackInviteCard() {
   const queryClient = useQueryClient()
   const invitation = useFeedbackInvitation()
   const record = useRecordFeedbackInvite()
+  const dismissedAt = useSyncExternalStore(
+    subscribeToDismissals,
+    readDismissedAt,
+    () => null,
+  )
+  const capturing = useSyncExternalStore(
+    subscribeToCaptureState,
+    isCapturing,
+    () => false,
+  )
   const [state, setState] = useState<InviteState>({ phase: 'waiting' })
   const appeared = useRef(false)
   const booked = useRef(false)
 
+  const fencedByNewerDismissal =
+    dismissedAt !== null && dismissedAt >= invitation.dataUpdatedAt
   const offered =
-    invitation.data?.eligible === true && !dismissedHere()
+    invitation.data?.eligible === true && !fencedByNewerDismissal
       ? invitation.data.bookUrl
       : undefined
   const report = record.mutate
@@ -107,29 +127,44 @@ export function FeedbackInviteCard() {
     if (!offered || appeared.current) return
     appeared.current = true
     setState({ phase: 'showing', bookUrl: offered })
-    // The marker is only written once the event has somewhere to go. Analytics
-    // readiness is settled by its own request, so the invitation can arrive
-    // first; marking the impression then would drop it and never retry, leaving
-    // the profile out of the count for good.
-    if (!impressionAlreadyCounted() && isCapturing()) {
-      rememberImpression()
-      track(AnalyticsEvent.FeedbackInviteShown)
-    }
     report({ outcome: 'shown' })
   }, [offered, report])
 
-  if (state.phase !== 'showing') return null
+  // PostHog readiness changes independently of invitation eligibility. A
+  // subscribed snapshot lets the same mounted card count its impression when
+  // capture comes online, without polling or waiting for another page load.
+  useEffect(() => {
+    if (state.phase !== 'showing' || !capturing || impressionAlreadyCounted()) {
+      return
+    }
+    rememberImpression()
+    track(AnalyticsEvent.FeedbackInviteShown)
+  }, [capturing, state.phase])
+
+  if (state.phase !== 'showing' || fencedByNewerDismissal) return null
   const { bookUrl } = state
 
   // The reply to a recorded outcome is the invitation's new state, so it is
   // written straight into the cache rather than invalidated for a refetch that
   // would ask the same question again.
-  const recordOutcome = (outcome: 'clicked' | 'dismissed') => {
+  const recordOutcome = (
+    outcome: 'clicked' | 'dismissed',
+    onSuccess?: () => void,
+  ) => {
     report(
       { outcome },
       {
         onSuccess: (settled) => {
           queryClient.setQueryData(useFeedbackInvitation.getKey(), settled)
+          onSuccess?.()
+        },
+        onError: () => {
+          if (outcome === 'clicked') booked.current = false
+          toast.error(
+            outcome === 'dismissed'
+              ? 'Could not save your response. The invitation may appear again.'
+              : 'Could not record your response. Please try again.',
+          )
         },
       },
     )
@@ -150,9 +185,8 @@ export function FeedbackInviteCard() {
 
   const handleDecline = () => {
     track(AnalyticsEvent.FeedbackInviteDismissed)
-    rememberDismissal()
     setState({ phase: 'dismissed' })
-    recordOutcome('dismissed')
+    recordOutcome('dismissed', rememberDismissal)
   }
 
   return (
