@@ -66,8 +66,8 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.download(ref) / upload(ref, files)
   page.close() / info()
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
-  page.helpers.save(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
-  page.helpers.list() -> { host, helpers: [{ name, ageDays, candidate }] }; page.helpers.read(name) -> source string
+  page.saveHelper(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
+  page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
 Raw escape hatch: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson).
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
@@ -321,12 +321,12 @@ const BOOTSTRAP_JS: &str = r#"
       },
 
       cdp: (method, paramsJson) => call('cdpJsonForPage', [pageId, method, paramsJson]),
-      helpers: {
-        list: () => call('helpers.list', [{ page: pageId }]),
-        read: (name) => call('helpers.read', [String(name), { page: pageId }]),
-        save: (name, source) =>
-          call('helpers.save', [String(name), helperSource(source), { page: pageId }]),
-      },
+      // Same names as on `browser`, one hop like every other member. The page
+      // is implied, so these take no options object.
+      saveHelper: (name, source) =>
+        call('helpers.save', [String(name), helperSource(source), { page: pageId }]),
+      listHelpers: () => call('helpers.list', [{ page: pageId }]),
+      readHelper: (name) => call('helpers.read', [String(name), { page: pageId }]),
     });
   }
 
@@ -2812,7 +2812,7 @@ return seen;
         let log = Arc::new(Mutex::new(HookLog::default()));
         let ctx = ctx_with_hook(log.clone());
         let result = run_tool_with_ctx(
-            "await browser.page(1).helpers.save('search', async (browser, page) => page.read());
+            "await browser.page(1).saveHelper('search', async (browser, page) => page.read());
              return 'ok';",
             None,
             &ctx,
@@ -2832,9 +2832,33 @@ return seen;
 
     #[tokio::test]
     async fn a_helper_source_that_is_not_a_function_is_refused() -> anyhow::Result<()> {
-        let result = run_tool("await browser.page(1).helpers.save('x', 42);", None).await?;
+        let result = run_tool("await browser.page(1).saveHelper('x', 42);", None).await?;
         assert!(result.is_error);
         assert!(result_text(&result)?.contains("must be a function"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn the_handle_has_no_nested_namespaces() -> anyhow::Result<()> {
+        // One hop for every page-scoped call, with no exceptions. A nested
+        // namespace would reintroduce exactly the "which shape does this one
+        // want" question the handle exists to remove, and it is why the
+        // keyboard and mouse groupings were not adopted either.
+        let result = run_tool(
+            "const page = browser.page(1);
+             const nested = Object.keys(page).filter(
+               (key) => typeof page[key] === 'object' && page[key] !== null
+             );
+             return { nested, saveHelper: typeof page.saveHelper };",
+            None,
+        )
+        .await?;
+        assert!(!result.is_error, "{:?}", result.content);
+        let structured = result
+            .structured_content
+            .ok_or_else(|| anyhow::anyhow!("structured content"))?;
+        assert_eq!(structured["value"]["nested"], json!([]));
+        assert_eq!(structured["value"]["saveHelper"], json!("function"));
         Ok(())
     }
 

@@ -66,13 +66,13 @@ Parallelize when it helps: independent subtasks get their own tabs — at most
 
 Reuse what already works. A run's result may include helpersAvailable: saved
 helpers for the hosts your tabs are on, each with an ageDays freshness signal, a
-description, and the exact call form to copy. page.helpers.list() lists
-them and page.helpers.read(name) shows one helper's full doc; read the
+description, and the exact call form to copy. page.listHelpers() lists
+them and page.readHelper(name) shows one helper's full doc; read the
 relevant helper before inventing an approach, and call a hot-loaded one with
 bracket access using the call form shown: helpers["name"](browser, inputs) for a
 helper that opens its own page and returns it, or helpers["name"](browser, page,
 inputs) for one that acts on a page you pass. When a multi-step flow works, save
-it with page.helpers.save(name, source) where source is a function
+it with page.saveHelper(name, source) where source is a function
 expression like async (browser, page, inputs = {}) => { ... }. Helpers are saved
 only when you save them, so save the flow yourself once it works. Treat a stale
 helper (high ageDays) as a hint, not a guarantee: cross-check it against the live
