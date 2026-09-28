@@ -83,8 +83,11 @@ async fn the_published_cohort_can_override_the_booking_link() -> anyhow::Result<
     Ok(())
 }
 
+/// The card keeps coming back until it is dismissed. An impression used to spend the
+/// invitation, which meant one appearance per installation ever: most of a new tab's
+/// openings are incidental, so almost nobody actually read it.
 #[tokio::test]
-async fn an_impression_spends_the_invitation_and_survives_a_restart() -> anyhow::Result<()> {
+async fn an_impression_does_not_stop_the_card_coming_back() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let app = test_app(dir.path()).await?;
     let install_id = install_id_of(&app).await;
@@ -98,22 +101,102 @@ async fn an_impression_spends_the_invitation_and_survives_a_restart() -> anyhow:
     )
     .await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(recorded, json!({ "eligible": false }));
+    assert_eq!(
+        recorded["eligible"], true,
+        "the reply must agree with the next page load"
+    );
 
     let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
-    assert_eq!(after, json!({ "eligible": false }));
+    assert_eq!(after["eligible"], true);
+    Ok(())
+}
 
-    // The rule has to outlive the process that recorded it, or a restart re-invites.
+/// Opening the booking page is not the same as booking, so it does not take the card away
+/// either. The reader may well come back to finish later.
+#[tokio::test]
+async fn booking_does_not_stop_the_card_coming_back() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+
+    for outcome in ["shown", "clicked"] {
+        request(
+            &app.router,
+            "POST",
+            INVITATION,
+            Some(json!({ "outcome": outcome })),
+        )
+        .await?;
+    }
+
+    let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
+    assert_eq!(after["eligible"], true);
+    Ok(())
+}
+
+/// Dismissal is the only answer that ends it, and it has to outlive the process that
+/// recorded it or a restart starts nagging again.
+#[tokio::test]
+async fn a_dismissal_ends_it_and_survives_a_restart() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+
+    let (_, recorded) = request(
+        &app.router,
+        "POST",
+        INVITATION,
+        Some(json!({ "outcome": "dismissed" })),
+    )
+    .await?;
+    assert_eq!(recorded, json!({ "eligible": false }));
+
     drop(app);
     let restarted = test_app(dir.path()).await?;
     let same_install = install_id_of(&restarted).await;
-    assert_eq!(
-        same_install, install_id,
-        "the install id outlives the process"
-    );
+    assert_eq!(same_install, install_id);
     join_cohort(&restarted, &[same_install.as_str()]).await?;
     let (_, after_restart) = request(&restarted.router, "GET", INVITATION, None).await?;
     assert_eq!(after_restart, json!({ "eligible": false }));
+    Ok(())
+}
+
+/// A click landing after a dismissal raises the funnel outcome, because clicking is the
+/// stronger claim about what the reader did. It must not un-dismiss the card.
+#[tokio::test]
+async fn a_click_after_a_dismissal_does_not_bring_the_card_back() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+
+    for outcome in ["shown", "dismissed", "clicked"] {
+        request(
+            &app.router,
+            "POST",
+            INVITATION,
+            Some(json!({ "outcome": outcome })),
+        )
+        .await?;
+    }
+
+    assert_eq!(
+        app.state
+            .feedback_invites
+            .outcome_of(&install_id)
+            .await?
+            .as_deref(),
+        Some("clicked"),
+        "the funnel keeps the stronger claim"
+    );
+    let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
+    assert_eq!(
+        after,
+        json!({ "eligible": false }),
+        "but the reader asked it to stop"
+    );
     Ok(())
 }
 

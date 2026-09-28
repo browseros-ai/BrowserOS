@@ -110,12 +110,41 @@ impl FeedbackInviteRepository {
                 ],
             ))
             .await?;
+
+        // Stamped separately from `outcome`, and only ever set. A click outranks a later
+        // dismissal in the funnel, so reading the reader's request to stop off `outcome`
+        // would let the card come back after they asked it not to.
+        if outcome == InviteOutcome::Dismissed {
+            connection
+                .execute(Statement::from_sql_and_values(
+                    DatabaseBackend::Sqlite,
+                    "UPDATE feedback_invite SET dismissed_at_ms = ? \
+                     WHERE install_id = ? AND dismissed_at_ms IS NULL",
+                    [Value::from(now_ms), Value::from(install_id.to_owned())],
+                ))
+                .await?;
+        }
         Ok(())
     }
 
     /// Whether this installation has already been offered an invitation.
+    ///
+    /// Only says the card has been on screen before. It does not gate anything: the card
+    /// keeps appearing until the reader dismisses it, so use [`Self::has_dismissed`] for
+    /// that question.
     pub async fn already_invited(&self, install_id: &str) -> AppResult<bool> {
         Ok(self.outcome_of(install_id).await?.is_some())
+    }
+
+    /// Whether the reader has asked to stop seeing the card. Final once true.
+    pub async fn has_dismissed(&self, install_id: &str) -> AppResult<bool> {
+        use crate::db::entities::prelude::FeedbackInvite;
+        use sea_orm::EntityTrait;
+
+        Ok(FeedbackInvite::find_by_id(install_id.to_owned())
+            .one(self.db.connection())
+            .await?
+            .is_some_and(|row| row.dismissed_at_ms.is_some()))
     }
 
     /// The recorded outcome for this installation, if it has one.
@@ -143,7 +172,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_impression_spends_the_invitation() -> anyhow::Result<()> {
+    async fn an_impression_is_recorded_without_ending_the_offer() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
@@ -155,6 +184,65 @@ mod tests {
             repo.outcome_of("install-a").await?.as_deref(),
             Some("shown")
         );
+        assert!(
+            !repo.has_dismissed("install-a").await?,
+            "an impression is not the reader asking it to stop"
+        );
+        Ok(())
+    }
+
+    /// Only a dismissal shuts the gate, and nothing reopens it. A click afterwards raises
+    /// the funnel outcome because it is the stronger claim about what the reader did, and
+    /// must still leave the gate shut.
+    #[tokio::test]
+    async fn only_a_dismissal_shuts_the_gate_and_nothing_reopens_it() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+
+        repo.record("install-a", InviteOutcome::Shown, 1_000)
+            .await?;
+        repo.record("install-a", InviteOutcome::Clicked, 2_000)
+            .await?;
+        assert!(!repo.has_dismissed("install-a").await?);
+
+        repo.record("install-a", InviteOutcome::Dismissed, 3_000)
+            .await?;
+        assert!(repo.has_dismissed("install-a").await?);
+
+        repo.record("install-a", InviteOutcome::Clicked, 4_000)
+            .await?;
+        assert!(
+            repo.has_dismissed("install-a").await?,
+            "a later click must not undo the dismissal"
+        );
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("clicked"),
+            "while the funnel still keeps the stronger claim"
+        );
+        Ok(())
+    }
+
+    /// The gate keeps the first dismissal's time, not a later one's.
+    #[tokio::test]
+    async fn a_second_dismissal_does_not_move_the_gate() -> anyhow::Result<()> {
+        use crate::db::entities::prelude::FeedbackInvite;
+        use sea_orm::EntityTrait;
+
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000)
+            .await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 9_000)
+            .await?;
+
+        let Some(row) = FeedbackInvite::find_by_id("install-a".to_owned())
+            .one(repo.db.connection())
+            .await?
+        else {
+            panic!("the dismissal row is missing");
+        };
+        assert_eq!(row.dismissed_at_ms, Some(1_000));
         Ok(())
     }
 
@@ -263,10 +351,10 @@ mod tests {
         Ok(())
     }
 
-    /// A response with no impression before it still spends the invitation, so a client
-    /// that skipped the impression cannot be invited again.
+    /// A response with no impression before it is still recorded, so a client that skipped
+    /// the impression still has its answer honoured.
     #[tokio::test]
-    async fn a_response_without_an_impression_still_spends_it() -> anyhow::Result<()> {
+    async fn a_response_without_an_impression_is_still_recorded() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 

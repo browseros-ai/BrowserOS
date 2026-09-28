@@ -19,10 +19,33 @@ import {
 } from '@/modules/api/feedback.hooks'
 
 /**
- * What this page load has decided to show. Recording the impression is exactly
- * what makes the server answer 'not eligible', so the card cannot follow the
- * query: it would erase itself the moment it appeared. The invitation is
- * copied here once and the card lives on that until the reader answers.
+ * Remembers that the impression has already been counted for this browser
+ * profile. Only the analytics event is deduplicated here; whether the card
+ * appears at all stays the server's answer, so losing this key costs at most a
+ * repeated impression and never a missed invitation.
+ */
+const SHOWN_TRACKED_KEY = 'feedbackInviteShownTracked'
+
+function impressionAlreadyCounted(): boolean {
+  try {
+    return localStorage.getItem(SHOWN_TRACKED_KEY) === 'true'
+  } catch {
+    return false
+  }
+}
+
+function rememberImpression(): void {
+  try {
+    localStorage.setItem(SHOWN_TRACKED_KEY, 'true')
+  } catch {
+    // A new tab without storage access simply counts the impression again.
+  }
+}
+
+/**
+ * What this page load has decided to show. The card is copied here once so it
+ * cannot be pulled out from under the reader by the query answering again
+ * mid-view; it lives on that until they dismiss it.
  */
 type InviteState =
   | { phase: 'waiting' }
@@ -42,13 +65,21 @@ export function FeedbackInviteCard() {
   const report = record.mutate
 
   // The impression belongs to the card appearing, and there is no user action
-  // to hang that on. The ref keeps it to the first appearance even though the
-  // query keeps answering around it.
+  // to hang that on. The ref keeps it to the first appearance in this page.
+  //
+  // The card now returns on every cockpit load until it is dismissed, and the
+  // cockpit is the new tab page, so tracking every appearance would report
+  // thousands of impressions for one reader and make the funnel's denominator
+  // meaningless. The analytics event is counted once per profile; the server is
+  // told every time, because it is what holds the first-seen timestamp.
   useEffect(() => {
     if (!offered || appeared.current) return
     appeared.current = true
     setState({ phase: 'showing', bookUrl: offered })
-    track(AnalyticsEvent.FeedbackInviteShown)
+    if (!impressionAlreadyCounted()) {
+      rememberImpression()
+      track(AnalyticsEvent.FeedbackInviteShown)
+    }
     report({ outcome: 'shown' })
   }, [offered, report])
 

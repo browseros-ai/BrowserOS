@@ -55,6 +55,20 @@ mock.module('@/modules/analytics/events', () => ({
   },
 }))
 
+const storage: Record<string, string> = {}
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  value: {
+    getItem: (key: string) => storage[key] ?? null,
+    setItem: (key: string, value: string) => {
+      storage[key] = value
+    },
+    removeItem: (key: string) => {
+      delete storage[key]
+    },
+  },
+})
+
 const globalDescriptors = new Map(
   ['window', 'document', 'navigator', 'HTMLElement', 'Node', 'Event'].map(
     (name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)],
@@ -71,6 +85,7 @@ beforeEach(async () => {
   state.recorded = []
   state.cached = []
   state.tracked = []
+  for (const key of Object.keys(storage)) delete storage[key]
   state.opened = []
 
   const dom = parseHTML(
@@ -217,6 +232,33 @@ describe('FeedbackInviteCard', () => {
       "You're one of our most active users",
     )
     expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+  })
+
+  /// The card returns on every cockpit load until it is dismissed, and the cockpit is the
+  /// new tab page. Counting every appearance would report thousands of impressions for one
+  /// reader and leave the funnel without a usable denominator.
+  it('counts the impression once per profile but still shows the card', async () => {
+    state.invitation = eligible
+    await render()
+    expect(state.tracked).toEqual(['feedback_invite_shown'])
+    expect(state.recorded).toEqual(['shown'])
+
+    // A later cockpit load, same profile.
+    state.tracked = []
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(state.tracked).toEqual([])
+    expect(state.recorded).toEqual(
+      ['shown'],
+      // The server is still told, because it holds the first-seen timestamp.
+    )
   })
 
   it('reopens the link on a second click without reporting it twice', async () => {

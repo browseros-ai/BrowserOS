@@ -331,7 +331,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 18);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -404,6 +404,56 @@ mod tests {
             migrations[17].try_get::<String>("", "version")?,
             "m0018_add_feedback_invite"
         );
+        assert_eq!(
+            migrations[18].try_get::<String>("", "version")?,
+            "m0019_add_feedback_invite_dismissal"
+        );
+        Ok(())
+    }
+
+    struct MigratorThrough18;
+
+    #[async_trait::async_trait]
+    impl MigratorTrait for MigratorThrough18 {
+        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+            Migrator::migrations().into_iter().take(18).collect()
+        }
+    }
+
+    /// Installations that dismissed the card under the old rule, where dismissal lived only
+    /// in `outcome`, must stay dismissed. Getting this wrong starts nagging people who
+    /// already said no.
+    #[tokio::test]
+    async fn the_dismissal_gate_is_backfilled_from_older_rows() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join(DATABASE_FILENAME);
+
+        let through_18 = open_and_migrate::<MigratorThrough18>(&path).await?;
+        through_18
+            .execute_unprepared(
+                "INSERT INTO feedback_invite (install_id, shown_at_ms, outcome, settled_at_ms) \
+                 VALUES ('dismissed-before', 1000, 'dismissed', 2000), \
+                        ('clicked-before', 1000, 'clicked', 3000), \
+                        ('shown-before', 1000, 'shown', NULL)",
+            )
+            .await?;
+        through_18.close().await?;
+
+        let upgraded = Database::open(&path).await?;
+        let gate = |install_id: &'static str| {
+            let db = upgraded.clone();
+            async move {
+                crate::db::feedback_invite::FeedbackInviteRepository::new(db)
+                    .has_dismissed(install_id)
+                    .await
+            }
+        };
+        assert!(
+            gate("dismissed-before").await?,
+            "a dismissal recorded before the gate existed must carry across"
+        );
+        assert!(!gate("clicked-before").await?);
+        assert!(!gate("shown-before").await?);
         Ok(())
     }
 
@@ -443,7 +493,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 18);
+        assert_eq!(migration_count, 19);
         conn.close().await?;
         Ok(())
     }
@@ -507,7 +557,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 18);
+        assert_eq!(migrations.len(), 19);
         assert_eq!(
             migrations
                 .iter()
@@ -530,7 +580,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 18);
+        assert_eq!(migration_count, 19);
         Ok(())
     }
 
@@ -666,7 +716,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 18);
+        assert_eq!(migrations.len(), 19);
         Ok(())
     }
 
