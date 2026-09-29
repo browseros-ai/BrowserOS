@@ -10,7 +10,9 @@ const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (
 
 const DESCRIPTION = `Run JavaScript against the \`browser\` SDK in the server runtime for multi-step flows and data extraction that would otherwise take many tool calls. \`console.log\` is captured; \`return\` a value to read it back; exceptions come back as a result, not a thrown error. The run honors its \`timeout\`, but each inner evaluate/wait call is individually capped at 30000 ms; for long or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
-Available as \`browser\`:
+Available as \`browser\`. This path predates the uniform page handle the Rust server
+exposes; the call shapes below are the ones it serves, and the canonical surface is
+the \`run\` tool description in crates/browseros-mcp/src/tools/run.rs:
   browser.pages.list() / newPage(url) / close(pageId) / getInfo(pageId)
   browser.observe(pageId).snapshot()  -> { text, refs }
   browser.observe(pageId).diff()      -> { text, added, removed, changed }

@@ -36,7 +36,6 @@ Derive the page you work on inside the same script that uses it. When you do car
 - **One bounded chunk per call.** A run is hard-capped at 30 seconds and cannot be extended. Batching reads of loaded pages is cheap; batching fresh navigations is not, so keep to about five new pages per call.
 - **Re-derive handles, do not assume them.** A page id from an earlier turn may point at a tab that has closed or changed hands. List your own pages, or open a new one.
 - **Wait on the thing, not the clock.** Wait for the selector or text you need; it returns the moment it appears. Never loop, re-checking with a fixed pause between tries.
-- **Check the call shape before writing it.** Some calls take the page id and return an object to chain from; others take it as a plain first argument. Guessing produces a method-not-found error on line one. The tool description lists which is which.
 
 ## Reading and output
 

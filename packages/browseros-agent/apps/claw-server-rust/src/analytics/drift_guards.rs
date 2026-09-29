@@ -17,6 +17,61 @@ mod tests {
     /// The `browser` SDK as the running tool defines it.
     const RUN_TOOL_SOURCE: &str = include_str!("../../../../crates/browseros-mcp/src/tools/run.rs");
 
+    /// Pulls the members out of one object literal in the shim, given the line that
+    /// opens it and the indentation its members sit at.
+    fn literal_members(opener: &str, indent: &str) -> Vec<String> {
+        let Some((_, bootstrap)) = RUN_TOOL_SOURCE.split_once("const BOOTSTRAP_JS") else {
+            panic!("shim moved: BOOTSTRAP_JS not found in run.rs")
+        };
+        let Some((_, block)) = bootstrap.split_once(opener) else {
+            panic!("shim moved: {opener} not found")
+        };
+        let terminator = format!("\n{}}}", &indent[2..]);
+        let Some((block, _)) = block.split_once(terminator.as_str()) else {
+            panic!("shim moved: {opener} is unterminated")
+        };
+
+        let mut members = Vec::new();
+        for line in block.lines() {
+            let Some(rest) = line.strip_prefix(indent) else {
+                continue;
+            };
+            if rest.starts_with(' ') || rest.starts_with("//") {
+                continue;
+            }
+            let Some((name, _)) = rest.split_once(':') else {
+                continue;
+            };
+            let name = name.trim();
+            if !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                members.push(name.to_string());
+            }
+        }
+        members
+    }
+
+    /// The page handle every page-scoped call hangs off. Parsed separately from the
+    /// `browser` literal because it is built by a factory, not spelled inline.
+    fn live_handle_members() -> Vec<String> {
+        let members = literal_members("return guard({", "      ");
+        assert!(
+            members.len() >= 30,
+            "parsed only {members:?} from the page handle, the parser has drifted"
+        );
+        members
+    }
+
+    /// Members of other browser-automation libraries the handle deliberately refuses,
+    /// each with the way to do it here.
+    fn live_absent_members() -> Vec<String> {
+        let members = literal_members("const ABSENT = {", "    ");
+        assert!(
+            members.len() >= 20,
+            "parsed only {members:?} from the absent map, the parser has drifted"
+        );
+        members
+    }
+
     /// Pulls the top-level members out of the shim's `const browser = { ... }` literal.
     fn live_sdk_members() -> Vec<String> {
         let Some((_, bootstrap)) = RUN_TOOL_SOURCE.split_once("const BOOTSTRAP_JS") else {
@@ -58,7 +113,7 @@ mod tests {
     #[test]
     fn the_allowlist_knows_every_member_of_the_live_sdk() {
         let mut unknown = Vec::new();
-        for member in live_sdk_members() {
+        for member in live_sdk_members().into_iter().chain(live_handle_members()) {
             // An identifier is only echoed when the allowlist recognises it, so probe
             // through the public behaviour rather than the private table.
             let probe = format!("ReferenceError: {member} is not defined");
@@ -82,9 +137,40 @@ mod tests {
 
     /// Nothing user-derived can be smuggled into the echo list by pasting it in. Every
     /// identifier the allowlist is willing to repeat must look like an identifier.
+    /// The handle answers a member of another library with the way to do it here. The
+    /// allowlist has to know those names too, or the misses report as a bare
+    /// `engine:TypeError` and we cannot tell which one an agent reached for.
+    #[test]
+    fn the_allowlist_knows_every_member_the_handle_refuses() {
+        let mut unknown = Vec::new();
+        for member in live_absent_members() {
+            // Probed in member position, which is the only place a refused name
+            // counts: several of them are ordinary English words.
+            let probe = format!("TypeError: page.{member} is not a function");
+            if !matches!(
+                classify(&probe),
+                ErrorClass::Engine {
+                    identifier: Some(_),
+                    ..
+                }
+            ) {
+                unknown.push(member);
+            }
+        }
+        assert!(
+            unknown.is_empty(),
+            "the handle refuses {unknown:?} but the allowlist cannot name them. Add them \
+             to ABSENT_SURFACE in error_allowlist.rs so the misses stay countable."
+        );
+    }
+
     #[test]
     fn the_allowlist_only_ever_echoes_identifier_shaped_names() {
-        for member in live_sdk_members() {
+        for member in live_sdk_members()
+            .into_iter()
+            .chain(live_handle_members())
+            .chain(live_absent_members())
+        {
             let label = classify(&format!("TypeError: {member} is not a function")).label();
             let echoed = label.rsplit(':').next().unwrap_or_default();
             assert!(
@@ -110,6 +196,10 @@ mod tests {
             "browser.nav(1).goto('https://h.test/?q=MARKER');",
             "browser.input(1).fill(ref, 'MARKER');",
             "browser.grep(1, { pattern: 'MARKER' });",
+            "browser.page(1).fill(ref, 'MARKER');",
+            "browser.page(1).grep('MARKER');",
+            "await browser.open('https://h.test/?q=MARKER');",
+            "await browser.page(1).evaluate((v) => v, 'MARKER');",
             "// MARKER",
             "/* MARKER */ const a = 1;",
             "const a = { key: 'MARKER' };",
