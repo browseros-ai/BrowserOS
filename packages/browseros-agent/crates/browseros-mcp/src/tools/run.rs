@@ -844,11 +844,7 @@ impl BrowserBridge {
     /// set, so the script's next call, page.dialogAccept()/dialogDismiss() or any
     /// tool that surfaces a pending dialog, resolves it and unblocks the renderer.
     /// Returns Ok(None) when a dialog interrupted the action.
-    async fn race_input<F, T>(
-        &self,
-        page_id: &PageId,
-        future: F,
-    ) -> Result<Option<T>, String>
+    async fn race_input<F, T>(&self, page_id: &PageId, future: F) -> Result<Option<T>, String>
     where
         F: Future<Output = Result<T, browseros_core::CoreError>>,
     {
@@ -1754,12 +1750,22 @@ mod tests {
             Some("session-1"),
         );
         for _ in 0..100 {
-            if ctx.session.page_signals.pending_dialog(&PageId(1)).is_some() {
+            if ctx
+                .session
+                .page_signals
+                .pending_dialog(&PageId(1))
+                .is_some()
+            {
                 break;
             }
             sleep(Duration::from_millis(5)).await;
         }
-        assert!(ctx.session.page_signals.pending_dialog(&PageId(1)).is_some());
+        assert!(
+            ctx.session
+                .page_signals
+                .pending_dialog(&PageId(1))
+                .is_some()
+        );
 
         // The action future never resolves, standing in for a click whose CDP ack
         // never returns while the renderer is frozen by the dialog.

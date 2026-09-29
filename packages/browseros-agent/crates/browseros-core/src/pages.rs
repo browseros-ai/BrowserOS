@@ -626,8 +626,14 @@ mod tests {
     #[tokio::test]
     async fn agent_created_tab_gets_focus_emulation_on_attach() -> Result<(), Box<dyn Error>> {
         let mut responses = vec![
-            ("Browser.createTab", json!({ "tab": tab_json(7, "target-7") })),
-            ("Browser.getTabInfo", json!({ "tab": tab_json(7, "target-7") })),
+            (
+                "Browser.createTab",
+                json!({ "tab": tab_json(7, "target-7") }),
+            ),
+            (
+                "Browser.getTabInfo",
+                json!({ "tab": tab_json(7, "target-7") }),
+            ),
         ];
         responses.extend(attach_responses());
         responses.push(("Emulation.setFocusEmulationEnabled", json!({})));
@@ -643,7 +649,10 @@ mod tests {
         let focus = calls
             .iter()
             .find(|call| call.method == "Emulation.setFocusEmulationEnabled");
-        assert_eq!(focus.map(|call| &call.params), Some(&json!({ "enabled": true })));
+        assert_eq!(
+            focus.map(|call| &call.params),
+            Some(&json!({ "enabled": true }))
+        );
         Ok(())
     }
 
@@ -658,7 +667,7 @@ mod tests {
         let manager = PageManager::new(connection.clone(), PageManagerHooks::default());
 
         let pages = manager.list().await?;
-        let page_id = pages.first().expect("one adopted page").page_id.clone();
+        let page_id = pages.first().ok_or("adopted page missing")?.page_id.clone();
         manager.get_session(page_id).await?;
 
         let calls = connection.calls()?;
