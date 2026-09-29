@@ -54,9 +54,13 @@ pub(super) async fn respond(
     record(&state, to_outcome(payload.outcome))
         .await
         .map_err(|source| internal(&request_id, source))?;
-    // Recording anything spends the invitation, so the answer after any outcome is the
-    // same one a fresh page load would get.
-    Ok(Json(not_eligible()))
+    // The answer a fresh page load would now get, which is still eligible for an impression
+    // or a click and only refused once dismissed. Returning a blanket refusal here would
+    // make the caller's cache disagree with the next load.
+    decide(&state)
+        .await
+        .map(Json)
+        .map_err(|source| internal(&request_id, source))
 }
 
 async fn decide(state: &AppState) -> AppResult<FeedbackInvitation> {
@@ -70,7 +74,12 @@ async fn decide(state: &AppState) -> AppResult<FeedbackInvitation> {
     else {
         return Ok(not_eligible());
     };
-    if state.feedback_invites.already_invited(&install_id).await? {
+    // The card stays available until the reader dismisses it. An impression used to spend
+    // the invitation, which meant one appearance per installation ever, whether or not
+    // anyone read it: the overwhelming majority of a new tab's openings are incidental, so
+    // spending the offer on the first paint threw away nearly all of its reach. Booking is
+    // not an answer either, since opening the booking page is not the same as booking.
+    if state.feedback_invites.has_dismissed(&install_id).await? {
         return Ok(not_eligible());
     }
     let mut invitation = FeedbackInvitation::new(true);
