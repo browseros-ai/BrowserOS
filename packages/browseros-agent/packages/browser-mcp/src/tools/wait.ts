@@ -13,7 +13,7 @@ import {
 // timeout can't balloon a no-value pause (a model that crams the duration
 // into timeout still only pauses this long by default).
 export const DEFAULT_PAUSE_MS = 2_000
-const DEFAULT_WAIT_TIMEOUT_MS = 2_000
+const DEFAULT_WAIT_TIMEOUT_MS = 10_000
 const MAX_WAIT_TIMEOUT_MS = 30_000
 // A for="time" pause does no page work (it is an abortable sleep), so it is not
 // bound by the 30s page-work polling cap that text/selector waits use. An explicit
@@ -27,7 +27,7 @@ const MAX_TIME_WAIT_MS = TIMEOUTS.TOOL_CALL - 30_000
 export const wait = defineTool({
   name: 'wait',
   description:
-    'Pause before continuing. Prefer acting directly and reading the diff; use wait only when there is no reliable UI signal yet. for="time" (default) pauses for value ms (honored up to 90000; an explicit timeout caps it lower, and a larger value is rejected, not silently shortened); "text" waits for a substring to appear; "selector" waits for a CSS selector to match. value is optional; for "time" it defaults to 2000ms, so calling wait with just a page pauses ~2s.',
+    'Pause before continuing. Prefer acting directly and reading the diff; use wait only when there is no reliable UI signal yet. for="time" (default) pauses for value ms (honored up to 90000; an explicit timeout caps it lower, and a larger value is rejected, not silently shortened); "text" waits for a substring to appear; "selector" waits for a CSS selector to match. "text"/"selector" poll up to timeout (default 10000, capped at 30000) and return { matched: true } or, on timeout, { matched: false } - they do not throw, so check matched before trusting the page is ready. value is optional; for "time" it defaults to 2000ms, so calling wait with just a page pauses ~2s.',
   input: z
     .object({
       page: z.number().int(),
@@ -45,7 +45,7 @@ export const wait = defineTool({
         .number()
         .optional()
         .describe(
-          'Max wait in ms. For "text"/"selector" it caps polling before giving up (default 2000, capped at 30000). For "time" it optionally caps the pause from above (default: pause for value).',
+          'Max wait in ms. For "text"/"selector" it caps polling before giving up (default 10000, capped at 30000). For "time" it optionally caps the pause from above (default: pause for value).',
         ),
     })
     .strict(),
