@@ -59,7 +59,7 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
   page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
-  page.dialogAccept() / dialogDismiss()
+  page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
   page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. Use waitForTime only for a plain fixed pause; `await sleep(ms)` also works. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
   page.evaluate(fn, arg?)            - runs INSIDE the page. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
   page.screenshot(opts?) / pdf(opts?)
@@ -837,13 +837,13 @@ impl BrowserBridge {
     }
 
     /// Runs a page input action but stops waiting if a blocking JavaScript dialog
-    /// opens on that page. A confirm/prompt/beforeunload freezes the renderer main
-    /// thread, so the action's CDP ack never returns and the run would otherwise
-    /// hang to its 30s cap (#2780). The dialog listener records it concurrently, so
-    /// polling pending_dialog lets us hand control back; the pending dialog is left
-    /// set, so the script's next call, page.dialogAccept()/dialogDismiss() or any
-    /// tool that surfaces a pending dialog, resolves it and unblocks the renderer.
-    /// Returns Ok(None) when a dialog interrupted the action.
+    /// opens on that page (or is already open). A confirm/prompt/beforeunload freezes
+    /// the renderer main thread, so the action's CDP ack never returns and the run
+    /// would otherwise hang to its 30s cap (#2780). The dialog listener records it
+    /// concurrently, so polling pending_dialog lets us hand control back; the pending
+    /// dialog is left set for page.dialogAccept()/dialogDismiss() to resolve. Returns
+    /// Ok(None) when a dialog interrupted the action, so callers surface the dialog
+    /// rather than reporting the action as done.
     async fn race_input<F, T>(&self, page_id: &PageId, future: F) -> Result<Option<T>, String>
     where
         F: Future<Output = Result<T, browseros_core::CoreError>>,
@@ -859,6 +859,20 @@ impl BrowserBridge {
             biased;
             result = self.control.race(future) => result.map(Some),
             () = dialog => Ok(None),
+        }
+    }
+
+    /// The value an input action returns when a blocking dialog interrupted it: a
+    /// marker plus the dialog's kind and message, so the script can see that the
+    /// action did not complete and must accept or dismiss the dialog next (#2780).
+    fn dialog_open_value(&self, page_id: &PageId) -> BrowserCallValue {
+        match self.ctx.session.page_signals.pending_dialog(page_id) {
+            Some(dialog) => BrowserCallValue::Json(json!({
+                "dialogOpen": true,
+                "kind": dialog.kind,
+                "message": dialog.message,
+            })),
+            None => BrowserCallValue::Undefined,
         }
     }
 
@@ -953,46 +967,63 @@ impl BrowserBridge {
             "input.click" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let input = self.ctx.session.input(page_id.clone()).await;
-                self.race_input(&page_id, input.click(&Ref(ref_id), Default::default()))
-                    .await?;
-                Ok(BrowserCallValue::Undefined)
+                match self
+                    .race_input(&page_id, input.click(&Ref(ref_id), Default::default()))
+                    .await?
+                {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.fill" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
                 let input = self.ctx.session.input(page_id.clone()).await;
-                self.race_input(&page_id, input.fill(&Ref(ref_id), &value, true))
-                    .await?;
-                Ok(BrowserCallValue::Undefined)
+                match self
+                    .race_input(&page_id, input.fill(&Ref(ref_id), &value, true))
+                    .await?
+                {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.type" => {
                 let page_id = page_arg(&args, 0)?;
                 let text = string_arg(&args, 1, "text")?;
                 let input = self.ctx.session.input(page_id.clone()).await;
-                self.race_input(&page_id, input.type_text(&text)).await?;
-                Ok(BrowserCallValue::Undefined)
+                match self.race_input(&page_id, input.type_text(&text)).await? {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.press" => {
                 let page_id = page_arg(&args, 0)?;
                 let key = string_arg(&args, 1, "key")?;
                 let input = self.ctx.session.input(page_id.clone()).await;
-                self.race_input(&page_id, input.press(&key)).await?;
-                Ok(BrowserCallValue::Undefined)
+                match self.race_input(&page_id, input.press(&key)).await? {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.hover" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let input = self.ctx.session.input(page_id.clone()).await;
-                self.race_input(&page_id, input.hover(&Ref(ref_id))).await?;
-                Ok(BrowserCallValue::Undefined)
+                match self.race_input(&page_id, input.hover(&Ref(ref_id))).await? {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.selectOption" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
                 let input = self.ctx.session.input(page_id.clone()).await;
-                let selected = self
+                match self
                     .race_input(&page_id, input.select_option(&Ref(ref_id), &value))
-                    .await?;
-                Ok(BrowserCallValue::Json(json!(selected.flatten())))
+                    .await?
+                {
+                    Some(selected) => Ok(BrowserCallValue::Json(json!(selected))),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.scroll" => {
                 let page_id = page_arg(&args, 0)?;
@@ -1000,9 +1031,13 @@ impl BrowserBridge {
                 let amount = optional_f64_arg(&args, 2).unwrap_or(3.0).round() as i64;
                 let ref_id = optional_string_arg(&args, 3)?.map(Ref);
                 let input = self.ctx.session.input(page_id.clone()).await;
-                self.race_input(&page_id, input.scroll(direction, amount, ref_id.as_ref()))
-                    .await?;
-                Ok(BrowserCallValue::Undefined)
+                match self
+                    .race_input(&page_id, input.scroll(direction, amount, ref_id.as_ref()))
+                    .await?
+                {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "nav.goto" => {
                 let page_id = page_arg(&args, 0)?;
@@ -1778,6 +1813,42 @@ mod tests {
             .await
             .map_err(|message| anyhow::anyhow!(message))?;
         assert!(outcome.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dialog_open_value_describes_the_pending_dialog() -> anyhow::Result<()> {
+        let connection = Arc::new(RunFakeConnection::new());
+        let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
+        ctx.session
+            .page_signals
+            .attach_page(PageId(1), SessionId::from("session-1"));
+        connection.emit(
+            "Page.javascriptDialogOpening",
+            json!({ "type": "confirm", "message": "sure?" }),
+            Some("session-1"),
+        );
+        for _ in 0..100 {
+            if ctx
+                .session
+                .page_signals
+                .pending_dialog(&PageId(1))
+                .is_some()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+
+        let bridge = test_bridge(ctx);
+        match bridge.dialog_open_value(&PageId(1)) {
+            BrowserCallValue::Json(value) => {
+                assert_eq!(value["dialogOpen"], json!(true));
+                assert_eq!(value["kind"], json!("confirm"));
+                assert_eq!(value["message"], json!("sure?"));
+            }
+            BrowserCallValue::Undefined => anyhow::bail!("expected a dialog value"),
+        }
         Ok(())
     }
 

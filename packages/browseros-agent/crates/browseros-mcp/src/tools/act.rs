@@ -11,6 +11,7 @@ use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 const DESCRIPTION: &str = "\
 Act on the page using refs from the last snapshot. \
@@ -193,11 +194,42 @@ fn handler<'a>(
         }
         let console_start = ctx.session.page_signals.console_mark(&page_id);
         let input = ctx.session.input(page_id.clone()).await;
-        if let Some(err) = run_kind(&args, &input).await? {
-            return Ok(Some(err));
-        }
         if args.kind.is_dialog() {
+            if let Some(err) = run_kind(&args, &input).await? {
+                return Ok(Some(err));
+            }
             ctx.session.page_signals.clear_dialog(&page_id);
+        } else {
+            // A confirm/prompt/beforeunload opened by this action freezes the
+            // renderer, so the action's CDP ack never returns; race it against the
+            // page's dialog signal and hand control back with the pending dialog so
+            // the caller can accept or dismiss it, instead of hanging to the run cap
+            // (#2780).
+            let signals = ctx.session.page_signals.clone();
+            let watched = page_id.clone();
+            let dialog = async move {
+                while signals.pending_dialog(&watched).is_none() {
+                    tokio::time::sleep(Duration::from_millis(25)).await;
+                }
+            };
+            tokio::select! {
+                biased;
+                result = run_kind(&args, &input) => {
+                    if let Some(err) = result? {
+                        return Ok(Some(err));
+                    }
+                }
+                () = dialog => {
+                    return Ok(Some(pending_dialog_result(ctx, page_id.clone()).unwrap_or_else(
+                        || {
+                            text_result(
+                                "a JavaScript dialog is open on this page; use act kind=\"dialog_accept\" or \"dialog_dismiss\" before other actions".to_string(),
+                                None,
+                            )
+                        },
+                    )));
+                }
+            }
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if let Some(detail) = resolve_diff_detail(args.diff) {
