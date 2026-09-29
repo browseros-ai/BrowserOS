@@ -196,6 +196,44 @@ describe('scheduled job routes', () => {
     }
   })
 
+  it('allows maintenance writes on a job with a legacy-invalid cadence', async () => {
+    // A job stored before this validation can have a missing time. Recording
+    // lastRunAt after a run, or toggling enabled, keeps the same (invalid)
+    // cadence, so those writes must still succeed, otherwise run reporting and
+    // missed-run processing break and the job cannot be toggled to fix it.
+    const { store, rows } = memoryStore([
+      row({ scheduleType: 'daily', scheduleTime: null }),
+    ])
+    const routes = createScheduledJobRoutes({ store })
+
+    const runWriteBack = await put(routes, {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+      lastRunAt: 1234,
+    })
+    expect(runWriteBack.status).toBe(200)
+    expect(rows.get(JOB_ID)?.lastRunAt).toBe(1234)
+
+    const toggle = await put(routes, {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+      enabled: false,
+    })
+    expect(toggle.status).toBe(200)
+  })
+
+  it('rejects changing an existing job to an invalid cadence', async () => {
+    const { store } = memoryStore([row()]) // stored as a valid daily 09:00 job
+    const response = await put(createScheduledJobRoutes({ store }), {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+    })
+    expect(response.status).toBe(400)
+  })
+
   it('deletes a job', async () => {
     const { store, rows } = memoryStore([row()])
     const routes = createScheduledJobRoutes({ store })
