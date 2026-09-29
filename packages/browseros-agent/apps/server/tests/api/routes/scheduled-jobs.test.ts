@@ -125,6 +125,77 @@ describe('scheduled job routes', () => {
     expect(response.status).toBe(400)
   })
 
+  it('rejects a daily job with no time', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    const response = await put(routes, {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('rejects a daily job with a malformed time', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    for (const scheduleTime of ['9am', '24:00', '09:60', '9:5', '']) {
+      const response = await put(routes, { ...body, scheduleTime })
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('accepts daily edge times', async () => {
+    for (const scheduleTime of ['00:00', '23:59']) {
+      const response = await put(createScheduledJobRoutes(memoryStore()), {
+        ...body,
+        scheduleTime,
+      })
+      expect(response.status).toBe(200)
+    }
+  })
+
+  it('rejects an interval job with no interval', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    for (const scheduleType of ['hourly', 'minutes'] as const) {
+      const response = await put(routes, {
+        ...body,
+        scheduleType,
+        scheduleTime: null,
+        scheduleInterval: null,
+      })
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('rejects an out-of-range or non-integer interval', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    for (const scheduleInterval of [0, -1, 61, 1.5]) {
+      const response = await put(routes, {
+        ...body,
+        scheduleType: 'minutes',
+        scheduleTime: null,
+        scheduleInterval,
+      })
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('accepts a valid interval job and persists the interval', async () => {
+    for (const [scheduleType, scheduleInterval] of [
+      ['hourly', 6],
+      ['minutes', 30],
+    ] as const) {
+      const { store, rows } = memoryStore()
+      const response = await put(createScheduledJobRoutes({ store }), {
+        ...body,
+        scheduleType,
+        scheduleTime: null,
+        scheduleInterval,
+      })
+      expect(response.status).toBe(200)
+      expect(rows.get(JOB_ID)?.scheduleInterval).toBe(scheduleInterval)
+    }
+  })
+
   it('deletes a job', async () => {
     const { store, rows } = memoryStore([row()])
     const routes = createScheduledJobRoutes({ store })
