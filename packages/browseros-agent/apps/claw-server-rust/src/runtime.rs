@@ -50,7 +50,7 @@ impl AppRuntime {
     #[must_use]
     pub fn start(state: AppState) -> Self {
         let shutdown = state.shutdown.clone();
-        let tasks = vec![
+        let mut tasks = vec![
             BackgroundTask {
                 name: "browser reconnect loop",
                 handle: state.browser.start(),
@@ -173,6 +173,24 @@ impl AppRuntime {
                 }),
             },
         ];
+        // Reads the cohort from PostHog remote configuration using the analytics
+        // credentials this build already embeds, so shipping it needs nothing else
+        // configured. A build with no PostHog key reaches no source, the cohort stays
+        // empty and nobody is invited, which is the same silent outcome as an unreachable
+        // one, so there is nothing to report.
+        if let Some(source) = crate::services::feedback_cohort::configured_source(
+            state.analytics.remote_config_credentials(),
+        ) {
+            tasks.push(BackgroundTask {
+                name: "feedback cohort refresh",
+                handle: crate::services::feedback_cohort::spawn_refresh_loop(
+                    (*state.feedback_cohort).clone(),
+                    source,
+                    shutdown.child_token(),
+                ),
+            });
+        }
+
         Self { state, tasks }
     }
 
@@ -354,7 +372,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let audit_log = state.audit_log.clone();
@@ -407,7 +424,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let preview_started = Arc::new(Notify::new());
@@ -454,7 +470,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         state
@@ -506,7 +521,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let host = format!("http://{}", listener.local_addr()?);
@@ -659,7 +673,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
         let mut state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let analytics = Arc::new(

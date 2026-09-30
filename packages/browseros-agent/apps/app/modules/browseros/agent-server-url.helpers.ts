@@ -1,10 +1,10 @@
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 
-export const MAX_AGENT_SERVER_URL_ATTEMPTS = 3
-export const AGENT_SERVER_URL_RETRY_DELAY_MS = 500
+const MAX_ATTEMPTS = 3
+const RETRY_DELAY_MS = 500
 
-export type ResolveAgentServerUrlWithRetryOptions = {
-  resolve?: () => Promise<string>
+type ResolveAgentServerUrlOptions = {
+  read?: () => Promise<string>
   maxAttempts?: number
   retryDelayMs?: number
   sleep?: (ms: number) => Promise<void>
@@ -13,17 +13,25 @@ export type ResolveAgentServerUrlWithRetryOptions = {
 const defaultSleep = (ms: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, ms))
 
-export async function resolveAgentServerUrlWithRetry({
-  resolve = getAgentServerUrl,
-  maxAttempts = MAX_AGENT_SERVER_URL_ATTEMPTS,
-  retryDelayMs = AGENT_SERVER_URL_RETRY_DELAY_MS,
+/**
+ * The local server's base URL, waiting out the startup window.
+ *
+ * The URL is built from a browser pref the binary publishes shortly after the
+ * extension loads, so a surface that asks too early gets a throw rather than a
+ * URL. getAgentServerUrl is that single read; this waits for it. Anything that
+ * can run before the browser has settled wants this one.
+ */
+export async function resolveAgentServerUrl({
+  read = getAgentServerUrl,
+  maxAttempts = MAX_ATTEMPTS,
+  retryDelayMs = RETRY_DELAY_MS,
   sleep = defaultSleep,
-}: ResolveAgentServerUrlWithRetryOptions = {}): Promise<string> {
+}: ResolveAgentServerUrlOptions = {}): Promise<string> {
   let lastError: unknown
 
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
-      return await resolve()
+      return await read()
     } catch (error) {
       lastError = error
       if (attempt < maxAttempts) {

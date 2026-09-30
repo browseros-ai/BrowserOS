@@ -62,9 +62,6 @@ func runWatch(cmd *cobra.Command, args []string) error {
 			return err
 		}
 	}
-	if err := ensureLimactlPresent(); err != nil {
-		return err
-	}
 
 	defaultPorts, err := resolveWatchDefaultPorts(root, watchClaw)
 	if err != nil {
@@ -147,7 +144,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	}()
 	defer reservations.ReleaseAll()
 
-	if err := runDevSetup(cmd.Context(), root, setupModeIfNeeded); err != nil {
+	if err := runDevSetup(cmd.Context(), root); err != nil {
 		return err
 	}
 
@@ -610,16 +607,6 @@ func waitForCDP(ctx context.Context, port int) {
 	} else {
 		proc.LogMsg(proc.TagServer, proc.WarnColor.Sprint("CDP not available, starting server anyway"))
 	}
-}
-
-func ensureLimactlPresent() error {
-	if _, err := exec.LookPath("limactl"); err != nil {
-		return fmt.Errorf("%s %s",
-			proc.ErrorColor.Sprint("Lima is not installed."),
-			proc.DimColor.Sprintf("Install with %s.", proc.BoldColor.Sprint("brew install lima")),
-		)
-	}
-	return nil
 }
 
 func ensureCargoPresent() error {

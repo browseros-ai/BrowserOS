@@ -207,3 +207,101 @@ describe('formatDiffResult', () => {
     })
   })
 })
+
+describe('formatDiffResult detail modes (#2700)', () => {
+  it('summary returns only change counts, not the diff body', async () => {
+    const result = await formatDiffResult(
+      changedDiff('+ button "Save" [ref=e1]', { added: 4, removed: 1 }),
+      'https://example.com/current',
+      'summary',
+    )
+
+    expect(result.text).toContain('4 added, 1 removed')
+    expect(result.text).not.toContain('+ button "Save" [ref=e1]')
+    expect(result.structured).toMatchObject({
+      changed: true,
+      added: 4,
+      removed: 1,
+    })
+  })
+
+  it('summary on a URL change reports the before and after urls', async () => {
+    const result = await formatDiffResult(
+      changedDiff('- heading "Home"', {
+        added: 0,
+        removed: 0,
+        urlChanged: true,
+        beforeUrl: 'https://example.com/a',
+        afterUrl: 'https://example.com/b',
+      }),
+      'https://example.com/b',
+      'summary',
+    )
+
+    expect(result.text).toContain('URL changed')
+    expect(result.text).toContain('https://example.com/a')
+    expect(result.text).toContain('https://example.com/b')
+    expect(result.text).not.toContain('- heading "Home"')
+  })
+
+  it('maxChars returns the diff whole when it fits the budget', async () => {
+    const body = '+ node "Save" [ref=e1]'
+    const result = await formatDiffResult(
+      changedDiff(body),
+      'https://example.com/current',
+      { maxChars: 10_000 },
+    )
+
+    expect(result.text).toContain(body)
+    expect(result.structured).not.toHaveProperty('truncated')
+  })
+
+  it('maxChars preserves the URL-change notice on a navigation', async () => {
+    const result = await formatDiffResult(
+      changedDiff('new page snapshot body', {
+        added: 0,
+        removed: 0,
+        urlChanged: true,
+        beforeUrl: 'https://example.com/a',
+        afterUrl: 'https://example.com/b',
+      }),
+      'https://example.com/b',
+      { maxChars: 10_000 },
+    )
+
+    // A navigation snapshot capped by maxChars must not read as an ordinary diff.
+    expect(result.text).toContain('URL changed')
+    expect(result.text).toContain('https://example.com/a')
+    expect(result.text).toContain('https://example.com/b')
+    expect(result.text).toContain('new page snapshot body')
+  })
+
+  it('maxChars truncates a large diff inline and spills the rest to a file', async () => {
+    await withBrowserosDir(async () => {
+      const firstMarker = 'first-diff-node'
+      const lastMarker = 'last-diff-node'
+      const result = await formatDiffResult(
+        changedDiff(`${firstMarker}\n${'x'.repeat(5_000)}\n${lastMarker}`),
+        'https://example.com/large',
+        { maxChars: 200 },
+      )
+      const data = result.structured as
+        | {
+            truncated?: boolean
+            writtenToFile?: boolean
+            path?: string
+            contentLength?: number
+          }
+        | undefined
+
+      expect(data).toMatchObject({ truncated: true, writtenToFile: true })
+      const path = data?.path
+      if (typeof path !== 'string') throw new Error('expected output path')
+      expect(result.text).toContain('truncated at 200 chars')
+      expect(result.text).toContain(firstMarker)
+      expect(result.text).not.toContain(lastMarker)
+      const saved = readFileSync(path, 'utf8')
+      expect(saved).toContain(lastMarker)
+    })
+  })
+})

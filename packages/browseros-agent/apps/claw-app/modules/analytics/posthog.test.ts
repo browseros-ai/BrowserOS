@@ -1,12 +1,75 @@
-import { describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it } from 'bun:test'
+import { PostHog } from 'posthog-js'
 import {
   createPostHogConfig,
   maskCapturedReplayRequest,
   reconcileSessionRecording,
+  reconcileTelemetryIdentity,
   sanitizeProperties,
 } from './posthog'
 
+const originalChrome = globalThis.chrome
+
+afterEach(() => {
+  Object.defineProperty(globalThis, 'chrome', {
+    configurable: true,
+    value: originalChrome,
+  })
+})
+
 describe('BrowserClaw PostHog privacy', () => {
+  it('keeps the installed app version when switching anonymous identity', async () => {
+    Object.defineProperty(globalThis, 'chrome', {
+      configurable: true,
+      value: {
+        runtime: { getManifest: () => ({ version: '0.2.25.7' }) },
+      },
+    })
+    const events: Array<{
+      event: string
+      properties: Record<string, unknown>
+    }> = []
+    const client = new PostHog()
+    client.init('test-project-key', {
+      ...createPostHogConfig('installation-B'),
+      persistence: 'memory',
+      advanced_disable_decide: true,
+      before_send: (event) => {
+        if (event) events.push(event)
+        return null // Inspect the actual SDK payload without any network delivery.
+      },
+    })
+    // A prior build's persisted properties must not override this package.
+    client.register({ app_version: '0.2.24.0' })
+    client.capture('before-migration', { app_version: 'caller-override' })
+    reconcileTelemetryIdentity(client, 'analytics-A')
+    client.opt_in_capturing({ captureEventName: false })
+    client.capture('after-migration')
+
+    expect(client.get_distinct_id()).toBe('analytics-A')
+    expect(events.map(({ event }) => event)).toEqual([
+      'before-migration',
+      'after-migration',
+    ])
+    expect(events.map(({ properties }) => properties.distinct_id)).toEqual([
+      'installation-B',
+      'analytics-A',
+    ])
+    expect(events.map(({ properties }) => properties.app_version)).toEqual([
+      '0.2.25.7',
+      '0.2.25.7',
+    ])
+    expect(
+      events.every(
+        ({ properties }) => properties.$process_person_profile === false,
+      ),
+    ).toBe(true)
+    const sessionId = client.get_session_id()
+    reconcileTelemetryIdentity(client, 'analytics-A')
+    expect(client.get_session_id()).toBe(sessionId)
+    await client.shutdown()
+  })
+
   it('configures sampled replay with conservative capture boundaries', () => {
     const config = createPostHogConfig('anonymous-install-id')
 
@@ -55,6 +118,7 @@ describe('BrowserClaw PostHog privacy', () => {
         $initial_pathname: '/',
         $initial_referrer: 'https://private.example',
         $initial_referring_domain: 'private.example',
+        app_version: 'stale-without-extension-runtime',
         screen: 'cockpit',
       }),
     ).toEqual({ screen: 'cockpit' })

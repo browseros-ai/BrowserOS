@@ -5,18 +5,13 @@ import {
 
 export const SERVER_BUNDLE_ENTRYPOINT = 'apps/server/src/compiled-bootstrap.ts'
 
-const REQUIRED_PROD_VARS = [
-  'BROWSEROS_CONFIG_URL',
-  'POSTHOG_API_KEY',
-  'SENTRY_DSN',
-]
+const REQUIRED_PROD_VARS = ['POSTHOG_API_KEY', 'SENTRY_DSN']
 const INLINED_ENV_VARS = [
   ...REQUIRED_PROD_VARS,
   'NODE_ENV',
   'LOG_LEVEL',
 ] as const
 const CI_INLINE_ENV_DEFAULTS = {
-  BROWSEROS_CONFIG_URL: 'https://browseros.invalid/api/browseros-server/config',
   LOG_LEVEL: 'info',
   NODE_ENV: 'production',
   POSTHOG_API_KEY: 'phc_browseros_ci',

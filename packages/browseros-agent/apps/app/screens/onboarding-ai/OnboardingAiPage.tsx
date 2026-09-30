@@ -1,6 +1,5 @@
 import type { FC } from 'react'
 import { useNavigate } from 'react-router'
-import { commitChatTargetSelection } from '@/modules/chat/sidepanel-chat-targets'
 import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import { AddProviderSection } from '@/screens/ai-settings/AddProviderSection'
 import {
@@ -28,24 +27,17 @@ export const OnboardingAiPage: FC = () => {
 
   // Adding a provider or a coding agent both count as connecting something, so
   // either makes what was just added the active chat target and then hands off.
-  // commitChatTargetSelection writes the unified selection new chats read (and
-  // updates the default-provider id for an LLM target); await it before the hop
-  // so the new tab page opens on the target the user just set up.
+  // The default is what new chats read, and it names a row of either kind;
+  // await it before the hop so the new tab page opens on what was just set up.
   const addProvider = useAddProvider({
     providers,
     saveProvider,
     onProviderAdded: async (provider) => {
-      await commitChatTargetSelection(
-        { kind: 'llm', id: provider.id },
-        { setDefaultProvider },
-      )
+      await setDefaultProvider(provider.id)
       goHome()
     },
     onAgentAdded: async (agentId) => {
-      await commitChatTargetSelection(
-        { kind: 'acp', id: agentId },
-        { setDefaultProvider },
-      )
+      await setDefaultProvider(agentId)
       goHome()
     },
   })
@@ -57,8 +49,9 @@ export const OnboardingAiPage: FC = () => {
           Set up your <span className="text-[var(--accent-orange)]">agent</span>
         </h1>
         <p className="mb-8 text-muted-foreground">
-          Connect a provider or a coding agent harness you already use. You can
-          change this any time in settings.
+          BrowserOS runs on the provider you bring. Connect an LLM provider or a
+          coding agent harness you already use. You can change this any time in
+          settings.
         </p>
 
         <AddProviderSection
@@ -66,16 +59,6 @@ export const OnboardingAiPage: FC = () => {
           onCreateCustomAgent={addProvider.onCreateCustomAgent}
           onUseTemplate={addProvider.onUseTemplate}
         />
-
-        <div className="mt-10 border-border border-t pt-6">
-          <button
-            type="button"
-            onClick={goHome}
-            className="text-muted-foreground text-sm underline underline-offset-4 transition-colors hover:text-foreground"
-          >
-            Skip for now
-          </button>
-        </div>
 
         <AddProviderDialogs controller={addProvider} />
       </div>

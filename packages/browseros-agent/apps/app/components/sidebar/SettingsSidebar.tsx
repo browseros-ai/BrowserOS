@@ -4,7 +4,6 @@ import {
   BookOpen,
   Bot,
   Compass,
-  CreditCard,
   MessageSquare,
   Palette,
   Server,
@@ -12,7 +11,7 @@ import {
 import type { FC } from 'react'
 import { NavLink } from 'react-router'
 import { ThemeToggle } from '@/components/elements/theme-toggle'
-import { Feature } from '@/lib/browseros/capabilities'
+import type { Feature } from '@/lib/browseros/capabilities'
 import { cn } from '@/lib/utils'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
 
@@ -76,12 +75,6 @@ const primarySettingsSections: NavSection[] = [
         icon: Palette,
       },
       { name: 'BrowserOS as MCP', to: '/settings/mcp', icon: Server },
-      {
-        name: 'Usage & Billing',
-        to: '/settings/usage',
-        icon: CreditCard,
-        feature: Feature.CREDITS_SUPPORT,
-      },
     ],
   },
 ]

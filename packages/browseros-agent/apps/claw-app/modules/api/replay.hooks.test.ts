@@ -27,6 +27,8 @@ const {
   fetchReplayEvents,
   fetchReplayMetadata,
   replayEventsRevision,
+  replayMetadataRefetchInterval,
+  REPLAY_METADATA_POLL_MS,
   useReplayEvents,
 } = await import('./replay.hooks')
 
@@ -197,5 +199,62 @@ describe('replay queries', () => {
       tabIds: [],
       documentIds: [],
     })
+  })
+})
+
+describe('replayMetadataRefetchInterval', () => {
+  it('polls while the session is live', () => {
+    expect(
+      replayMetadataRefetchInterval({
+        status: 'live',
+        endedAt: null,
+        hasData: false,
+      }),
+    ).toBe(REPLAY_METADATA_POLL_MS)
+  })
+
+  it('stops once the recording has appeared', () => {
+    expect(
+      replayMetadataRefetchInterval({
+        status: 'done',
+        endedAt: 1_000,
+        hasData: true,
+        now: 1_500,
+      }),
+    ).toBe(false)
+  })
+
+  it('keeps polling briefly after the session ends until the recording appears', () => {
+    // Ended 5s ago, still no recording: a trailing batch may still land.
+    expect(
+      replayMetadataRefetchInterval({
+        status: 'done',
+        endedAt: 1_000,
+        hasData: false,
+        now: 6_000,
+      }),
+    ).toBe(REPLAY_METADATA_POLL_MS)
+  })
+
+  it('stops after the grace window even if the recording never arrived', () => {
+    // Ended 31s ago with no recording: give up rather than poll forever.
+    expect(
+      replayMetadataRefetchInterval({
+        status: 'done',
+        endedAt: 1_000,
+        hasData: false,
+        now: 32_000,
+      }),
+    ).toBe(false)
+  })
+
+  it('does not poll a terminal session with no end timestamp', () => {
+    expect(
+      replayMetadataRefetchInterval({
+        status: 'done',
+        endedAt: null,
+        hasData: false,
+      }),
+    ).toBe(false)
   })
 })

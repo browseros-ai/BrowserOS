@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import modelsDevData from '../apps/app/lib/llm-providers/models-dev-data.json'
 import {
+  CHATGPT_SUBSCRIPTION_ID,
+  deriveChatGptSubscription,
   formatModelsData,
   generateModelsData,
   type ModelsDevModel,
@@ -18,6 +20,9 @@ const REQUIRED_PROVIDER_IDS = [
   'lmstudio',
   'moonshot',
   'github-copilot',
+  // Derived from the openai catalogue rather than mapped from models.dev,
+  // which carries no provider for a ChatGPT subscription.
+  'chatgpt-pro',
 ]
 
 const NON_CHAT_MODEL_CLASS_PATTERN =
@@ -260,5 +265,87 @@ describe('generateModelsData', () => {
       expect(ids.size).toBe(provider.models.length)
       expect(REQUIRED_PROVIDER_IDS).toContain(providerId)
     }
+  })
+})
+
+describe('deriveChatGptSubscription', () => {
+  function openai(ids: string[]): ModelsDevProvider {
+    return provider(
+      Object.fromEntries(
+        ids.map((id) => [
+          id,
+          model({ id, name: id, reasoning: true, last_updated: '2026-01-01' }),
+        ]),
+      ),
+    )
+  }
+
+  function idsFor(ids: string[]): string[] {
+    return deriveChatGptSubscription(openai(ids)).models.map((m) => m.id)
+  }
+
+  test('serves a new GPT generation without being told about it', () => {
+    // The hand-written list this replaced went stale the day a generation
+    // shipped. A floor rather than a list of generations is what fixes that,
+    // so an id from a generation nobody has heard of still comes through.
+    expect(idsFor(['gpt-9-something'])).toContain('gpt-9-something')
+  })
+
+  test('drops what the Codex backend does not serve', () => {
+    const ids = idsFor(['gpt-5.6', 'gpt-4.1', 'gpt-4o', 'gpt-realtime-2.1'])
+
+    expect(ids).toContain('gpt-5.6')
+    expect(ids).not.toContain('gpt-4.1')
+    expect(ids).not.toContain('gpt-4o')
+    expect(ids).not.toContain('gpt-realtime-2.1')
+  })
+
+  test('drops the pro tier while the chat path forces streaming', () => {
+    // These answer on a background channel and createCodexFetch sets
+    // stream:true on every request, so offering one hands the user an option
+    // that fails when used.
+    const ids = idsFor(['gpt-5.5', 'gpt-5.5-pro', 'gpt-6-pro'])
+
+    expect(ids).toContain('gpt-5.5')
+    expect(ids).not.toContain('gpt-5.5-pro')
+    expect(ids).not.toContain('gpt-6-pro')
+  })
+
+  test('adds back the codex variants the platform API never exposed', () => {
+    const ids = idsFor(['gpt-5.6'])
+
+    expect(ids).toContain('gpt-5.1-codex-max')
+    expect(ids).toContain('gpt-5.1-codex-mini')
+    expect(ids).toContain('gpt-5.2-codex')
+  })
+
+  test('orders newest first so the picker opens on current models', () => {
+    const models = deriveChatGptSubscription(
+      provider({
+        old: model({
+          id: 'gpt-5',
+          reasoning: true,
+          last_updated: '2025-08-07',
+        }),
+        new: model({
+          id: 'gpt-6',
+          reasoning: true,
+          last_updated: '2026-07-09',
+        }),
+      }),
+    ).models
+
+    expect(models[0].id).toBe('gpt-6')
+  })
+
+  test('is emitted as a provider of its own', () => {
+    const output = generateModelsData(
+      { openai: openai(['gpt-5.6']) },
+      { openai: 'openai' },
+    )
+
+    expect(output[CHATGPT_SUBSCRIPTION_ID].models.map((m) => m.id)).toContain(
+      'gpt-5.6',
+    )
   })
 })

@@ -302,6 +302,10 @@
     {
       "source": "/browserclaw/comparisons/browser-use",
       "destination": "/"
+    },
+    {
+      "source": "/bring-your-own-keys/claude",
+      "destination": "/browseros/features/bring-your-own-llm"
     }
   ],
   "logo": {

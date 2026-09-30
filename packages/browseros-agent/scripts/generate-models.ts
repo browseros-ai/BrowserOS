@@ -71,6 +71,91 @@ export interface OutputProvider {
   models: OutputModel[]
 }
 
+/**
+ * BrowserOS id for the provider added by signing in with a ChatGPT
+ * subscription. models.dev has no entry for it: it describes the platform API,
+ * and a subscription reaches the Codex backend instead. So this one is derived
+ * rather than mapped, from the openai catalogue plus the corrections below.
+ */
+export const CHATGPT_SUBSCRIPTION_ID = 'chatgpt-pro'
+
+/**
+ * Lowest GPT generation the Codex backend serves.
+ *
+ * A floor rather than a list of generations, on purpose. The hand-written
+ * catalogue this replaces went stale the day a new generation shipped, and
+ * naming the generations here would have reintroduced exactly that. Below the
+ * floor sit GPT-4.x, the o-series, realtime and embedding models, none of
+ * which that backend accepts.
+ */
+const CODEX_MIN_GENERATION = 5
+
+/**
+ * Codex variants models.dev does not carry, because they are not on the
+ * platform API.
+ *
+ * `lastUpdated` here only orders the picker and is aligned with each model's
+ * generation; it is not sourced from anywhere.
+ */
+const CODEX_ONLY_MODELS: Array<{ lastUpdated: string; model: OutputModel }> = [
+  {
+    lastUpdated: '2025-12-11',
+    model: codexVariant('gpt-5.2-codex', 'GPT-5.2 Codex', 400000),
+  },
+  {
+    lastUpdated: '2025-11-13',
+    model: codexVariant('gpt-5.1-codex-max', 'GPT-5.1 Codex Max', 400000),
+  },
+  {
+    lastUpdated: '2025-11-13',
+    model: codexVariant('gpt-5.1-codex', 'GPT-5.1 Codex', 400000),
+  },
+  {
+    lastUpdated: '2025-11-13',
+    model: codexVariant('gpt-5.1-codex-mini', 'GPT-5.1 Codex Mini', 400000),
+  },
+]
+
+function codexVariant(
+  id: string,
+  name: string,
+  contextWindow: number,
+): OutputModel {
+  return {
+    id,
+    name,
+    contextWindow,
+    maxOutput: 128000,
+    supportsImages: true,
+    supportsReasoning: true,
+    supportsToolCall: true,
+    supportsTemperature: true,
+    reasoningControls: [
+      { type: 'effort', values: ['none', 'low', 'medium', 'high', 'xhigh'] },
+    ],
+  }
+}
+
+/** The generation in a `gpt-<n>` id, or null when the id is not of that shape. */
+function gptGeneration(id: string): number | null {
+  const match = /^gpt-(\d+)/.exec(id)
+  return match ? Number(match[1]) : null
+}
+
+/**
+ * Whether the Codex backend both serves this model and can stream it.
+ *
+ * The `-pro` tier answers on a background channel, while the Codex request
+ * wrapper sets `stream: true` on every request, so offering one would hand the
+ * user an option that fails when used. Remove that condition once the Codex
+ * path can read a non-streaming response.
+ */
+function isServedByCodexChat(model: OutputModel): boolean {
+  const generation = gptGeneration(model.id)
+  if (generation === null || generation < CODEX_MIN_GENERATION) return false
+  return !model.id.endsWith('-pro')
+}
+
 export const PROVIDER_MAP: Record<string, string> = {
   anthropic: 'anthropic',
   openai: 'openai',
@@ -166,23 +251,8 @@ export function generateModelsData(
       throw new Error(`Provider not found in models.dev: ${modelsDevId}`)
     }
 
-    const models = Object.values(provider.models)
-      .map((model) => {
-        const transformed = transformModel(model)
-
-        return transformed
-          ? { lastUpdated: model.last_updated, model: transformed }
-          : null
-      })
-      .filter(
-        (m): m is { lastUpdated: string; model: OutputModel } => m !== null,
-      )
-      .sort((a, b) => {
-        const byLastUpdated = b.lastUpdated.localeCompare(a.lastUpdated)
-
-        return byLastUpdated || a.model.id.localeCompare(b.model.id)
-      })
-      .map(({ model }) => model)
+    const dated = datedModels(provider)
+    const models = sortByRecency(dated)
 
     assertUniqueModels(browserosId, models)
 
@@ -194,7 +264,63 @@ export function generateModelsData(
     }
   }
 
+  const openai = data.openai
+  if (openai) {
+    output[CHATGPT_SUBSCRIPTION_ID] = deriveChatGptSubscription(openai)
+    assertUniqueModels(
+      CHATGPT_SUBSCRIPTION_ID,
+      output[CHATGPT_SUBSCRIPTION_ID].models,
+    )
+  }
+
   return output
+}
+
+type DatedModel = { lastUpdated: string; model: OutputModel }
+
+function datedModels(provider: ModelsDevProvider): DatedModel[] {
+  return Object.values(provider.models)
+    .map((model) => {
+      const transformed = transformModel(model)
+
+      return transformed
+        ? { lastUpdated: model.last_updated, model: transformed }
+        : null
+    })
+    .filter((m): m is DatedModel => m !== null)
+}
+
+function sortByRecency(models: DatedModel[]): OutputModel[] {
+  return [...models]
+    .sort((a, b) => {
+      const byLastUpdated = b.lastUpdated.localeCompare(a.lastUpdated)
+
+      return byLastUpdated || a.model.id.localeCompare(b.model.id)
+    })
+    .map(({ model }) => model)
+}
+
+/**
+ * The catalogue for a ChatGPT subscription.
+ *
+ * Built from the openai catalogue rather than listed by hand, so a new
+ * generation is selectable the day models.dev carries it. Two corrections are
+ * applied on top, both narrower than the catalogue itself: models the Codex
+ * chat path cannot serve are dropped, and the codex-only variants the platform
+ * API never exposed are added back.
+ */
+export function deriveChatGptSubscription(
+  openai: ModelsDevProvider,
+): OutputProvider {
+  const served = datedModels(openai).filter((entry) =>
+    isServedByCodexChat(entry.model),
+  )
+
+  return {
+    name: 'ChatGPT',
+    doc: openai.doc,
+    models: sortByRecency([...served, ...CODEX_ONLY_MODELS]),
+  }
 }
 
 export function formatModelsData(

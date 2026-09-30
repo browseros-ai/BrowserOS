@@ -18,24 +18,20 @@ type FeatureConfig = {
 export enum Feature {
   ALPHA_FEATURES_SUPPORT = 'ALPHA_FEATURES_SUPPORT',
   NEWTAB_CHAT_SUPPORT = 'NEWTAB_CHAT_SUPPORT',
-  NEWTAB_CHAT_HISTORY_SUPPORT = 'NEWTAB_CHAT_HISTORY_SUPPORT',
   VERTICAL_TABS_SUPPORT = 'VERTICAL_TABS_SUPPORT',
   CHATGPT_PRO_SUPPORT = 'CHATGPT_PRO_SUPPORT',
   GITHUB_COPILOT_SUPPORT = 'GITHUB_COPILOT_SUPPORT',
   QWEN_CODE_SUPPORT = 'QWEN_CODE_SUPPORT',
-  CREDITS_SUPPORT = 'CREDITS_SUPPORT',
   AGENT_HARNESS_SUPPORT = 'AGENT_HARNESS_SUPPORT',
 }
 
 const FEATURE_CONFIG: { [K in Feature]: FeatureConfig } = {
   [Feature.ALPHA_FEATURES_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.NEWTAB_CHAT_SUPPORT]: { minBrowserOSVersion: '0.40.0.0' },
-  [Feature.NEWTAB_CHAT_HISTORY_SUPPORT]: { requiresAlphaFlag: true },
   [Feature.VERTICAL_TABS_SUPPORT]: { minBrowserOSVersion: '0.42.0.0' },
   [Feature.CHATGPT_PRO_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.GITHUB_COPILOT_SUPPORT]: { minServerVersion: '0.0.77' },
   [Feature.QWEN_CODE_SUPPORT]: { minServerVersion: '0.0.77' },
-  [Feature.CREDITS_SUPPORT]: { minServerVersion: '0.0.78' },
   [Feature.AGENT_HARNESS_SUPPORT]: { minBrowserOSVersion: '0.46.0.0' },
 }
 

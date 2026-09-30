@@ -179,7 +179,7 @@ export const actCases: ContractCase[] = [
     },
   },
   {
-    name: 'act: fill sets a single field',
+    name: 'act: fill replaces a prefilled single field',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
@@ -187,7 +187,7 @@ export const actCases: ContractCase[] = [
         await ctx.mcp.callTool('act', {
           page,
           kind: 'fill',
-          ref: refFor(snap, '"Name '),
+          ref: refFor(snap, '"Nickname '),
           value: 'Grace Hopper',
         }),
         'act fill',
@@ -195,17 +195,22 @@ export const actCases: ContractCase[] = [
       const value = await evalIn(
         ctx,
         page,
-        'return document.getElementById("name").value',
+        'return document.getElementById("nickname").value === "Grace Hopper"',
       )
-      if (!value.includes('Grace Hopper')) {
+      if (!value.includes('true')) {
         throw new Error(`fill did not set the field: ${value}`)
       }
     },
   },
   {
-    name: 'act: fill sets a whole form via fields[] in one call',
+    name: 'act: fill replaces a whole form via fields[] in one call',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
+      await evalIn(
+        ctx,
+        page,
+        'document.getElementById("name").value="old name"; document.getElementById("bio").value="old bio"',
+      )
       const snap = await snapshot(ctx, page)
       expectOk(
         await ctx.mcp.callTool('act', {
@@ -221,17 +226,14 @@ export const actCases: ContractCase[] = [
       const name = await evalIn(
         ctx,
         page,
-        'return document.getElementById("name").value',
+        'return document.getElementById("name").value === "Katherine Johnson"',
       )
       const bio = await evalIn(
         ctx,
         page,
-        'return document.getElementById("bio").value',
+        'return document.getElementById("bio").value === "orbital mechanics"',
       )
-      if (
-        !name.includes('Katherine Johnson') ||
-        !bio.includes('orbital mechanics')
-      ) {
+      if (!name.includes('true') || !bio.includes('true')) {
         throw new Error(`batch fill missed a field: name=${name} bio=${bio}`)
       }
     },
@@ -368,11 +370,11 @@ export const actCases: ContractCase[] = [
     },
   },
   {
-    name: 'act: focus by ref reports the current DOM-domain limitation',
+    name: 'act: focus by ref focuses the referenced element',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      expectError(
+      expectOk(
         await ctx.mcp.callTool('act', {
           page,
           kind: 'focus',
@@ -385,9 +387,28 @@ export const actCases: ContractCase[] = [
         page,
         'return document.activeElement && document.activeElement.id',
       )
-      if (active.includes('bio')) {
-        throw new Error('failed focus action unexpectedly moved focus')
+      if (!active.includes('bio')) {
+        throw new Error(
+          `focus by ref did not move focus to the bio field (active: ${active})`,
+        )
       }
+    },
+  },
+  {
+    name: 'act: focus by ref rejects an element that cannot receive focus',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/form.html'))
+      const snap = await snapshot(ctx, page)
+      // A disabled control still exposes HTMLElement.focus(); focus must report
+      // an error rather than a false success when focus does not actually move.
+      expectError(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'focus',
+          ref: refFor(snap, 'Disabled action'),
+        }),
+        'act focus by ref on a disabled control',
+      )
     },
   },
   {

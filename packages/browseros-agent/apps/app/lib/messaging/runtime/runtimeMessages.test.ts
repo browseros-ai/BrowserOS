@@ -13,17 +13,14 @@ describe('runtime message protocol', () => {
     const source = readAgentFile('lib/messaging/runtime/runtimeMessages.ts')
 
     expect(source).toContain("getTabId: 'runtime.getTabId'")
-    expect(source).toContain("authSuccess: 'runtime.authSuccess'")
     expect(source).toContain("stopAgent: 'runtime.stopAgent'")
     expect(source).not.toContain("'get-tab-id'")
-    expect(source).not.toContain("'AUTH_SUCCESS'")
     expect(source).not.toContain("'stop-agent'")
   })
 
   it('keeps the vulnerable content scripts off raw runtime message shapes', () => {
     const files = [
       'entrypoints/selection.content.ts',
-      'entrypoints/auth.content/index.ts',
       'entrypoints/glow.content/index.ts',
     ]
 

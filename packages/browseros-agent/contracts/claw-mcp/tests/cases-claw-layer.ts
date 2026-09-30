@@ -1,6 +1,6 @@
 /**
  * name_session (3) + the claw-layer cross-cutting invariants: two-session
- * ownership isolation [1], browser-down guidance [2], trust-boundary
+ * ownership labeling [1], browser-down guidance [2], trust-boundary
  * nonce fencing [3], auto-context embedding [4], REST audit tie-in [5],
  * and cancellation [6]. ([7] transport lives in cases-transport.)
  *
@@ -108,9 +108,9 @@ export const clawLayerCases: ContractCase[] = [
     },
   },
 
-  // [1] two-session ownership isolation ------------------------------------
+  // [1] two-session ownership labeling -------------------------------------
   {
-    name: 'ownership: a second session cannot act on the first session pages',
+    name: 'ownership: cross-session access preserves labels without blocking',
     smoke: true,
     async run(ctx) {
       const other = await ctx.openSession('agent-other')
@@ -134,24 +134,19 @@ export const clawLayerCases: ContractCase[] = [
           `foreign page not bucketed for the other session:\n${bucketed.slice(0, 300)}`,
         )
       }
-      // And is refused act + close, with an ownership-guard error.
+      // Ownership identifies whose work this is, rather than granting access.
+      // A foreign read must succeed, name the owner, and leave the claim intact.
       const foreignSnapshot = await other.callTool('snapshot', {
         page: ownPage,
       })
-      const foreignClose = await other.callTool('tabs', {
-        action: 'close',
-        page: ownPage,
-      })
-      for (const [operation, result] of [
-        ['snapshot', foreignSnapshot],
-        ['close', foreignClose],
-      ] as const) {
-        const text = textOf(result)
-        if (!result.isError || errorClass(text) !== 'not-owned') {
-          throw new Error(`foreign ${operation} was not refused: ${text}`)
-        }
+      expectOk(foreignSnapshot, 'foreign snapshot')
+      const notice = textOf(foreignSnapshot)
+      if (
+        !notice.includes(`page ${ownPage} belongs to another agent`) ||
+        !notice.includes('You are allowed to use it')
+      ) {
+        throw new Error(`foreign snapshot lost its ownership notice: ${notice}`)
       }
-      // The owner is unaffected: the page still lists and snapshots.
       const stillOwned = textOf(
         await ctx.mcp.callTool('tabs', { action: 'list' }),
       )
@@ -162,6 +157,17 @@ export const clawLayerCases: ContractCase[] = [
         await ctx.mcp.callTool('snapshot', { page: ownPage }),
         'owner snapshot after foreign attempt',
       )
+
+      // Explicit cross-session mutations are allowed too. Closing must remove
+      // the page from the owner's list, rather than retain a stale owned tab.
+      expectOk(
+        await other.callTool('tabs', { action: 'close', page: ownPage }),
+        'foreign close',
+      )
+      await waitUntil(async () => {
+        const pages = textOf(await ctx.mcp.callTool('tabs', { action: 'list' }))
+        return !pages.includes(`[${ownPage}]`)
+      }, 'the owner list to remove the closed page')
     },
   },
 
@@ -372,7 +378,7 @@ export const clawLayerCases: ContractCase[] = [
       } catch (error) {
         rejection = error
       }
-      if (!String(rejection).includes('no longer live')) {
+      if (!String(rejection).includes('was stopped and will not resume')) {
         throw new Error(
           `post-cancel browser call was not rejected: ${rejection}`,
         )

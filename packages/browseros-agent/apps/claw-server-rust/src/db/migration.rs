@@ -23,6 +23,9 @@ impl MigratorTrait for Migrator {
             Box::new(m0014_add_skills_and_runs::Migration),
             Box::new(m0015_add_skill_run_marks::Migration),
             Box::new(m0016_add_task_summary::Migration),
+            Box::new(m0017_add_run_error_budget::Migration),
+            Box::new(m0018_add_feedback_invite::Migration),
+            Box::new(m0019_add_feedback_invite_dismissal::Migration),
         ]
     }
 }
@@ -2094,5 +2097,208 @@ mod m0001_baseline {
         CursorId,
         HasScreenshots,
         UpdatedAt,
+    }
+}
+
+mod m0017_add_run_error_budget {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0017_add_run_error_budget"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Caps how many run failures this install forwards per day. Keyed by UTC day
+            // alone: the database is already per-install, so the per-user dimension is
+            // implicit and needs no identifier stored here.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(RunErrorBudget::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(RunErrorBudget::Day)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(
+                            ColumnDef::new(RunErrorBudget::Sent)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .col(
+                            ColumnDef::new(RunErrorBudget::Suppressed)
+                                .big_integer()
+                                .not_null()
+                                .default(0),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(RunErrorBudget::Table).to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum RunErrorBudget {
+        Table,
+        Day,
+        Sent,
+        Suppressed,
+    }
+}
+
+mod m0018_add_feedback_invite {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0018_add_feedback_invite"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // The install id is the primary key rather than a column, so at most one
+            // invitation per installation is enforced by the schema instead of by a
+            // condition someone has to keep correct: two cockpit tabs, a retried request
+            // and a restart mid-flight all converge on one row.
+            manager
+                .create_table(
+                    Table::create()
+                        .table(FeedbackInvite::Table)
+                        .if_not_exists()
+                        .col(
+                            ColumnDef::new(FeedbackInvite::InstallId)
+                                .string()
+                                .not_null()
+                                .primary_key(),
+                        )
+                        .col(
+                            ColumnDef::new(FeedbackInvite::ShownAtMs)
+                                .big_integer()
+                                .not_null(),
+                        )
+                        .col(ColumnDef::new(FeedbackInvite::Outcome).string().not_null())
+                        // Null until the reader acts. An invitation that is only ever
+                        // ignored keeps the impression and never gains a settled time.
+                        .col(
+                            ColumnDef::new(FeedbackInvite::SettledAtMs)
+                                .big_integer()
+                                .null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .drop_table(Table::drop().table(FeedbackInvite::Table).to_owned())
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum FeedbackInvite {
+        Table,
+        InstallId,
+        ShownAtMs,
+        Outcome,
+        SettledAtMs,
+    }
+}
+
+mod m0019_add_feedback_invite_dismissal {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0019_add_feedback_invite_dismissal"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Dismissal gets its own column rather than being read off `outcome`, because
+            // the two answer different questions. `outcome` is the funnel's strongest claim
+            // about what the reader did, where a click outranks a later dismissal; this is
+            // the reader's instruction to stop showing the card, which nothing outranks.
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(FeedbackInvite::Table)
+                        .add_column_if_not_exists(
+                            ColumnDef::new(FeedbackInvite::DismissedAtMs)
+                                .big_integer()
+                                .null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            // Installations already recorded as dismissed asked to stop under the previous
+            // rule. Carry that across rather than showing them the card again.
+            //
+            // Rows recorded as `clicked` are deliberately left alone, and that choice is
+            // lossy in one direction. A click outranks a later dismissal in `outcome`, so a
+            // reader who booked and then closed the card is stored as `clicked` and is
+            // indistinguishable here from one who booked and never dismissed. The old
+            // schema cannot separate them.
+            //
+            // Of the two available policies this is the better loss. Treating every
+            // `clicked` row as a dismissal would permanently silence everyone who booked
+            // and never asked it to stop, which is the most engaged group and the one the
+            // card exists to reach. Leaving them alone costs at most one more appearance,
+            // after which their answer is recorded in the column properly.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    "UPDATE feedback_invite SET dismissed_at_ms = COALESCE(settled_at_ms, shown_at_ms) \
+                     WHERE outcome = 'dismissed' AND dismissed_at_ms IS NULL",
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(FeedbackInvite::Table)
+                        .drop_column(FeedbackInvite::DismissedAtMs)
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum FeedbackInvite {
+        Table,
+        DismissedAtMs,
     }
 }

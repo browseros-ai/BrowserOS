@@ -53,7 +53,6 @@ async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::R
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
-        auth_token: None,
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {
@@ -529,7 +528,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
                 },
                 "session": {
                     "type": "string",
-                    "description": "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it only on your first call to start a new session."
+                    "description": "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it on your first call, and again if the server tells you this session was stopped or is no longer active; resending a dead handle will not revive it."
                 }
             },
             "required": ["name"]
@@ -832,7 +831,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn same_name_mcp_sessions_have_distinct_groups_and_reject_cross_page_access()
+async fn same_name_mcp_sessions_have_distinct_groups_and_label_cross_page_access()
 -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
@@ -908,12 +907,29 @@ async fn same_name_mcp_sessions_have_distinct_groups_and_reject_cross_page_acces
         )
         .await?;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], true, "cross-page body: {body:?}");
-        assert_eq!(
-            body["result"]["content"][0]["text"],
-            format!(
-                "page {page_b} is not owned by this agent; call `tabs new` to open a fresh page and use the returned page id."
-            )
+        // Ownership informs, it never blocks. Session A reaches session B's page instead
+        // of being turned away at the door. This assertion was the opposite until the
+        // guard that enforced it was retired: it made the user's own tabs unusable, and
+        // orphaned an agent's own pages whenever a session handle went missing.
+        //
+        // The call may still fail for its own reasons, and here it does, because the
+        // mock CDP only serves snapshots for the page it was set up with. What matters
+        // is that it is no longer refused on ownership grounds. The notice an agent sees
+        // on a successful cross-page call is covered by the unit tests in
+        // `effects::page_ownership_notice`.
+        let text = body["result"]["content"]
+            .as_array()
+            .map(|blocks| {
+                blocks
+                    .iter()
+                    .filter_map(|block| block["text"].as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+            .unwrap_or_default();
+        assert!(
+            !text.contains("not owned by this agent"),
+            "ownership refused a dispatch; it must only ever label: {text}"
         );
     }
     let (_status, _headers, body) = request_json_with_headers(
@@ -1052,9 +1068,11 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
     assert!(
         body["error"]["message"]
             .as_str()
-            .is_some_and(|message| message.contains("no longer live")),
+            .is_some_and(|message| message.contains("was stopped and will not resume")),
         "post-stop body: {body:?}"
     );
+
+    // The refusal itself must not have dispatched anything.
     assert_eq!(
         app.state
             .audit_log
@@ -1063,6 +1081,39 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
             .rows
             .len(),
         dispatch_count
+    );
+
+    // Said once, not forever. A legacy connection is identified by its transport session,
+    // so it has no handle to drop: refusing every call leaves it dead until the client
+    // reconnects, which is a state agents report as "the browser is not running" rather
+    // than recovering from.
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0",
+            "id": 23,
+            "method": "tools/call",
+            "params": { "name": "tabs", "arguments": { "action": "list" } }
+        })),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body["error"].is_null(),
+        "the retry after the stop must work: {body:?}"
+    );
+    assert_eq!(
+        app.state
+            .audit_log
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .len(),
+        dispatch_count + 1,
+        "the recovered call should have done real work"
     );
 
     let (status, body) =

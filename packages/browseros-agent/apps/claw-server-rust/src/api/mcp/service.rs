@@ -13,7 +13,7 @@ use crate::{
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
     services::{
-        sessions::Session,
+        sessions::{RetirementCause, Session},
         skills::{CreateSkill, SkillOrigin},
     },
 };
@@ -57,7 +57,7 @@ const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 /// as the `session` argument on subsequent calls.
 const SESSION_META_KEY: &str = "com.browseros.neo/session";
 const AGENT_NAME_ARG: &str = "agentName";
-const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it only on your first call to start a new session.";
+const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it on your first call, and again if the server tells you this session was stopped or is no longer active; resending a dead handle will not revive it.";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Your own agent name, e.g. \"claude-code\", \"codex\", \"cursor\". Send it on every call. It names this browser session, titles and colours the tab group your tabs live in, and is how the operator filters your runs in the audit log. 2026-07-28 removed the initialize handshake, so this argument is the only way the server can learn who you are.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
@@ -83,6 +83,13 @@ struct ServiceLifecycle {
     client_info: Option<ClientInfo>,
     session_id: Option<SessionId>,
     started: bool,
+    /// Whether this connection has already been told its session went away.
+    ///
+    /// A legacy connection is identified by its transport session, so unlike a stateless
+    /// caller it has no handle it can drop. Refusing it once honours the user's Stop and
+    /// gives the agent something to report; refusing it forever wedges the connection until
+    /// the client reconnects, which is not a recovery path any agent knows to take.
+    stop_reported: bool,
 }
 
 #[derive(Clone)]
@@ -399,18 +406,33 @@ impl ClawMcpService {
         });
 
         if lifecycle.started {
-            let session = self
-                .state
-                .sessions
-                .lookup(&session_id)
-                .await
-                .ok_or_else(|| {
-                    McpError::invalid_request(
-                        format!("BrowserOS neo session {session_id} is no longer live"),
-                        None,
-                    )
-                })?;
-            return Ok(started_session_from(session, &client));
+            if let Some(session) = self.state.sessions.lookup(&session_id).await {
+                return Ok(started_session_from(session, &client));
+            }
+            // The session this connection was working in is gone: stopped from the cockpit,
+            // or swept. Say so once, so the stop is honoured and the agent has something to
+            // tell the user, then let the next call start a new session on the same
+            // connection. Refusing every time leaves the agent with nowhere to go, since the
+            // handle it would otherwise drop is the transport session itself.
+            if !lifecycle.stop_reported {
+                lifecycle.stop_reported = true;
+                return Err(McpError::invalid_request(
+                    format!(
+                        "BrowserOS neo session {session_id} was stopped and will not resume. \
+                         Call again and a new session will start."
+                    ),
+                    None,
+                ));
+            }
+            // A new session rather than the old id revived, so the work the user stopped
+            // stays stopped and closed in the audit instead of gaining a second life.
+            let replacement = SessionId::new(Uuid::new_v4().to_string());
+            let started = self
+                .start_session_in_store(replacement.clone(), client)
+                .await?;
+            lifecycle.session_id = Some(replacement);
+            lifecycle.stop_reported = false;
+            return Ok(started);
         }
 
         let started = self.start_session_in_store(session_id, client).await?;
@@ -423,6 +445,17 @@ impl ClawMcpService {
     /// honored, so a caller cannot choose or seed a session id and concurrent calls
     /// never mint the same id. Does not touch `self.lifecycle`, so the per-request
     /// service `Drop` never reaps it; idle sweeping owns cleanup.
+    ///
+    /// A handle has three fates, not two, and conflating the last two is what produced
+    /// bursts of one-call sessions after a cockpit Stop. A live handle is reused. A handle
+    /// the user stopped refuses, because the right answer to "stop" is not to quietly
+    /// start again elsewhere. A handle that ended on its own redirects to a single
+    /// remembered successor, because nobody asked for it to end and failing would be
+    /// hostile. Only a handle with no history left mints freely.
+    ///
+    /// The redirect exists because the fix cannot rely on the agent adopting the handle it
+    /// is handed back: the server already returns a fresh handle on every call, and agents
+    /// have been observed resending the dead one anyway.
     async fn resolve_modern_session(
         &self,
         provided: Option<SessionId>,
@@ -437,7 +470,7 @@ impl ClawMcpService {
         let client = declared
             .or(client)
             .unwrap_or_else(default_agent_client_info);
-        if let Some(handle) = provided
+        if let Some(handle) = provided.clone()
             && let Some(session) = self.state.sessions.lookup(&handle).await
         {
             // A reused session keeps the identity it was minted with. This request's
@@ -453,6 +486,91 @@ impl ClawMcpService {
                 handle,
             ));
         }
+        let Some(handle) = provided else {
+            // No handle at all is a request to start something new, and the only honest
+            // reading of it. Nothing here guesses which session a caller "meant".
+            return self.mint_session(client).await;
+        };
+        if matches!(
+            self.state.sessions.retirement_of(&handle).await,
+            Some(RetirementCause::Cancelled)
+        ) {
+            return Err(session_was_stopped());
+        }
+        // Everything else resolves to one stable substitute: a handle whose session ended
+        // on its own, and equally a handle this server has no memory of. The second case is
+        // the common one and used to be the worst: both maps are in memory, so a restart
+        // makes every handle its agents are holding unrecognised at once, and an agent that
+        // keeps presenting one gets a new session, and a new tab, on every call.
+        self.succeed_retired_session(&handle, client).await
+    }
+
+    /// Resolves a handle that does not name a live session to one substitute, shared by
+    /// every later call that still presents that handle.
+    ///
+    /// Mints first and agrees second. Choosing an id and minting it afterwards makes only
+    /// the *choice* atomic: concurrent callers settle on one id, all find it absent, and
+    /// each then builds a session of its own under it. One insert wins the map and the
+    /// rest are orphans, live in their caller's hands, claiming tabs under a conversation
+    /// id nothing will ever tear down, each with its own session-start row and no end.
+    /// Minting first means every caller owns a real, reapable session before any of them
+    /// agree on which one survives, so the loser has something it can cleanly discard.
+    async fn succeed_retired_session(
+        &self,
+        retired: &SessionId,
+        client: ClientInfo,
+    ) -> Result<(StartedSession, SessionId), McpError> {
+        // Settled already: take the successor without minting one to throw away. The race
+        // happens at most once per dead handle; every resend after it lands here.
+        if let Some(existing) = self.state.sessions.replacement_of(retired).await
+            && let Some(session) = self.state.sessions.lookup(&existing).await
+        {
+            let agent_label = session.agent().label().to_string();
+            return Ok((
+                StartedSession {
+                    session,
+                    agent_label,
+                },
+                existing,
+            ));
+        }
+        let (mine, mine_handle) = self.mint_session(client).await?;
+        let winner = self
+            .state
+            .sessions
+            .adopt_replacement(retired, mine_handle.clone())
+            .await;
+        if winner == mine_handle {
+            return Ok((mine, mine_handle));
+        }
+        // The winner inserted its session before it adopted, and adoption is serialized, so
+        // a winner that is still live is visible here. One that is not was torn down in the
+        // gap; keep mine rather than chase a chain of tombstones.
+        let Some(session) = self.state.sessions.lookup(&winner).await else {
+            return Ok((mine, mine_handle));
+        };
+        if let Err(error) = self
+            .state
+            .sessions
+            .remove(&mine_handle, "closed", Some("superseded"))
+            .await
+        {
+            warn!(error = %error, "discarding a superseded replacement session failed");
+        }
+        let agent_label = session.agent().label().to_string();
+        Ok((
+            StartedSession {
+                session,
+                agent_label,
+            },
+            winner,
+        ))
+    }
+
+    async fn mint_session(
+        &self,
+        client: ClientInfo,
+    ) -> Result<(StartedSession, SessionId), McpError> {
         let handle = SessionId::new(Uuid::new_v4().to_string());
         let started = self.start_session_in_store(handle.clone(), client).await?;
         Ok((started, handle))
@@ -468,8 +586,21 @@ impl ClawMcpService {
     }
 
     async fn learn_session_from_notification(&self, context: &NotificationContext<RoleServer>) {
-        let session_id = session_id_from_extensions(&context.extensions)
-            .unwrap_or_else(|| self.fallback_session_id.clone());
+        // Only a connection that actually has a transport session gets one here.
+        //
+        // This used to fall back to `fallback_session_id`, a fresh `stdio-{Ulid}` minted
+        // per service instance. A stateless client sending `notifications/initialized`
+        // therefore created a brand-new agent session on every connection, and since
+        // such clients often connect several times to list tools and then leave, the
+        // audit and the cockpit filled with sessions that never dispatched anything.
+        // The observed case was one client producing six empty sessions in a second.
+        //
+        // A handshake without a transport session is not a unit of work. If such a
+        // client goes on to call a tool, `call_tool` mints the session then, which is
+        // the first moment there is anything to record.
+        let Some(session_id) = session_id_from_extensions(&context.extensions) else {
+            return;
+        };
         if let Err(error) = self.ensure_session_started(session_id).await {
             warn!(error = %error, "mcp session start failed");
         }
@@ -637,6 +768,7 @@ impl ServerHandler for ClawMcpService {
             map.remove("session");
             map.remove(AGENT_NAME_ARG);
         }
+        let presented_handle = provided_handle.clone();
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
             && session_id_from_extensions(&context.extensions).is_none();
@@ -718,7 +850,7 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
-        attach_session_handle(finished, session_handle).map(Into::into)
+        attach_session_handle(finished, session_handle, presented_handle).map(Into::into)
     }
 }
 
@@ -1070,13 +1202,33 @@ fn with_agent_name_arg(mut tool: Tool) -> Tool {
     tool
 }
 
+/// The one answer an agent cannot ignore by accident.
+///
+/// Stop is an instruction from the user, so this refuses rather than quietly continuing the
+/// work somewhere else. It names the exact next move, because an error the agent cannot act
+/// on would just become a different way to produce a burst.
+fn session_was_stopped() -> McpError {
+    McpError::invalid_request(
+        "This browser session was stopped from the BrowserOS neo cockpit and will not \
+         resume. Omit the `session` argument on your next call to start a new one, and do \
+         not resend this handle.",
+        None,
+    )
+}
+
 fn attach_session_handle(
     result: Result<CallToolResult, McpError>,
     handle: Option<SessionId>,
+    presented: Option<SessionId>,
 ) -> Result<CallToolResult, McpError> {
     let Some(handle) = handle else {
         return result;
     };
+    // An agent that presented a handle and got a different one back has changed session
+    // without asking to. Saying so is the difference between an agent that adopts the new
+    // handle and one that keeps resending a dead one, which is what fills the cockpit with
+    // one-call sessions.
+    let replaced = presented.is_some_and(|presented| presented != handle);
     let handle = handle.to_string();
     result.map(|mut call_result| {
         // The stateless handle is transport identity, not tool output, so it rides in
@@ -1088,9 +1240,18 @@ fn attach_session_handle(
             .meta
             .get_or_insert_with(MetaObject::new)
             .insert(SESSION_META_KEY.to_string(), Value::String(handle.clone()));
-        call_result.content.push(rmcp::model::ContentBlock::text(format!(
-            "[browseros-neo session: {handle}. Pass this exact value as the `session` argument on every following call to keep this browser session and its tab ownership.]"
-        )));
+        let line = if replaced {
+            format!(
+                "[browseros-neo session: {handle}. The handle you sent is no longer active, so this call continued in a new session. Pass this exact value as the `session` argument from now on, and stop sending the previous one.]"
+            )
+        } else {
+            format!(
+                "[browseros-neo session: {handle}. Pass this exact value as the `session` argument on every following call to keep this browser session and its tab ownership.]"
+            )
+        };
+        call_result
+            .content
+            .push(rmcp::model::ContentBlock::text(line));
         call_result
     })
 }
@@ -1222,6 +1383,318 @@ mod tests {
         Ok(())
     }
 
+    /// The incident, replayed. Dani presses Stop, then asks the agent another question.
+    /// The agent resends the handle it was told to resend, and before this change every
+    /// such call minted a session of its own, so one question became a burst.
+    #[tokio::test]
+    async fn a_stopped_handle_refuses_instead_of_minting() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+
+        let (_, handle) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state.sessions.cancel_by_session(&handle).await?;
+        let after_stop = call.state.sessions.count().await;
+
+        let refused = service
+            .resolve_modern_session(Some(handle.clone()), None, None)
+            .await;
+        let error = refused
+            .err()
+            .unwrap_or_else(|| panic!("a stopped session must refuse, not mint"));
+        let message = format!("{error:?}");
+        assert!(message.contains("stopped"), "{message}");
+        assert!(message.contains("Omit the `session` argument"), "{message}");
+        assert_eq!(
+            call.state.sessions.count().await,
+            after_stop,
+            "refusing must not leave a session behind"
+        );
+        Ok(())
+    }
+
+    /// An agent that ignores the refusal and keeps resending the handle must not be able to
+    /// produce the burst by persistence alone.
+    #[tokio::test]
+    async fn a_stopped_handle_refuses_every_time_it_is_presented() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+
+        let (_, handle) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state.sessions.cancel_by_session(&handle).await?;
+        let after_stop = call.state.sessions.count().await;
+
+        for attempt in 0..10 {
+            assert!(
+                service
+                    .resolve_modern_session(Some(handle.clone()), None, None)
+                    .await
+                    .is_err(),
+                "attempt {attempt} was allowed through"
+            );
+        }
+        assert_eq!(call.state.sessions.count().await, after_stop);
+        Ok(())
+    }
+
+    /// Nobody asked for an idle sweep or a restart, so those redirect rather than refuse.
+    /// One successor, however many times the dead handle arrives: the fix cannot depend on
+    /// the agent adopting the handle it is handed back, because agents demonstrably do not.
+    #[tokio::test]
+    async fn a_closed_handle_yields_one_successor_however_often_it_is_resent() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+
+        let (_, handle) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state
+            .sessions
+            .remove(&handle, "closed", Some("idle timeout"))
+            .await?;
+        let before = call.state.sessions.count().await;
+
+        let mut successors = std::collections::BTreeSet::new();
+        for _ in 0..10 {
+            let (_, resolved) = service
+                .resolve_modern_session(Some(handle.clone()), None, None)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            assert_ne!(resolved.to_string(), handle.to_string());
+            successors.insert(resolved.to_string());
+        }
+        assert_eq!(successors.len(), 1, "ten calls produced {successors:?}");
+        assert_eq!(
+            call.state.sessions.count().await,
+            before + 1,
+            "ten calls must leave exactly one new session"
+        );
+        Ok(())
+    }
+
+    /// Two calls arriving together on one dead handle must converge, or the burst simply
+    /// moves from sequential to concurrent.
+    #[tokio::test]
+    async fn concurrent_calls_on_one_closed_handle_converge() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = std::sync::Arc::new(ClawMcpService::new(call.state.clone()));
+
+        let (_, handle) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state
+            .sessions
+            .remove(&handle, "closed", Some("transport closed"))
+            .await?;
+        let before = call.state.sessions.count().await;
+
+        let racers = (0..4).map(|_| {
+            let service = service.clone();
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                service
+                    .resolve_modern_session(Some(handle), None, None)
+                    .await
+                    .map(|(started, resolved)| {
+                        (
+                            resolved.to_string(),
+                            started.session.convo_id().as_str().to_string(),
+                        )
+                    })
+                    .map_err(|error| anyhow::anyhow!("{error:?}"))
+            })
+        });
+        let mut resolved = std::collections::BTreeSet::new();
+        for racer in racers.collect::<Vec<_>>() {
+            resolved.insert(racer.await??);
+        }
+        // Agreeing on the handle is not enough. Two callers can name the same successor and
+        // still each build a session of their own under it, and the one that loses the map
+        // insert stays live in its caller's hands while nothing can ever tear it down. The
+        // conversation identity is what tells those sessions apart, so it is what the
+        // assertion has to compare.
+        assert_eq!(
+            resolved.len(),
+            1,
+            "concurrent calls split into {resolved:?}"
+        );
+        let (winner, convo) = resolved
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| panic!("no successor"));
+        let live = call
+            .state
+            .sessions
+            .lookup(&SessionId::new(winner))
+            .await
+            .unwrap_or_else(|| panic!("the successor every caller returned is not in the store"));
+        assert_eq!(
+            live.convo_id().as_str(),
+            convo,
+            "callers were handed a session the store does not hold"
+        );
+        assert_eq!(call.state.sessions.count().await, before + 1);
+        Ok(())
+    }
+
+    /// Taken from a real trace. A server restart empties both maps, so every handle its
+    /// agents are holding becomes unrecognised at once. The agent was not at fault: it
+    /// presented the same handle on seven consecutive calls, was told each time that the
+    /// handle was no longer active, and was handed seven different sessions and seven tabs.
+    ///
+    /// The rule that fixes it is that the same handle always resolves to the same session,
+    /// whatever the server remembers about it.
+    #[tokio::test]
+    async fn a_handle_this_server_never_minted_still_resolves_to_one_session() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let before = call.state.sessions.count().await;
+
+        // A handle from before a restart, which this server has no record of at all.
+        let stranger = SessionId::new("b0b6200a-832b-49c8-bfd8-386e0a7f267d");
+        let mut resolved = std::collections::BTreeSet::new();
+        for _ in 0..7 {
+            let (_, handle) = service
+                .resolve_modern_session(Some(stranger.clone()), None, None)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            // The presented handle is a map key, never an identity a caller can seed.
+            assert_ne!(handle.to_string(), stranger.to_string());
+            resolved.insert(handle.to_string());
+        }
+        assert_eq!(
+            resolved.len(),
+            1,
+            "seven calls with one handle produced {resolved:?}"
+        );
+        assert_eq!(
+            call.state.sessions.count().await,
+            before + 1,
+            "seven calls must leave one session, not seven"
+        );
+        Ok(())
+    }
+
+    /// Sending no handle is the one thing that still means "start something new". Nothing
+    /// guesses which session a caller meant, which is what keeps this deterministic.
+    #[tokio::test]
+    async fn no_handle_at_all_starts_something_new_every_time() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+
+        let mut minted = std::collections::BTreeSet::new();
+        for _ in 0..3 {
+            let (_, handle) = service
+                .resolve_modern_session(None, None, None)
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            minted.insert(handle.to_string());
+        }
+        assert_eq!(minted.len(), 3);
+        Ok(())
+    }
+
+    /// The agent has to be able to see that its session changed. `_meta` is not surfaced to
+    /// the model by MCP clients, so the difference has to be in the content.
+    #[test]
+    fn a_replaced_handle_says_so_in_the_content() -> anyhow::Result<()> {
+        let replaced = attach_session_handle(
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text("ok"),
+            ])),
+            Some(SessionId::new("successor")),
+            Some(SessionId::new("dead-handle")),
+        )
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let text = text_of(&replaced);
+        assert!(text.contains("no longer active"), "{text}");
+        assert!(text.contains("stop sending the previous one"), "{text}");
+
+        // An agent that presented the handle it got back is not told anything unusual.
+        let unchanged = attach_session_handle(
+            Ok(CallToolResult::success(vec![
+                rmcp::model::ContentBlock::text("ok"),
+            ])),
+            Some(SessionId::new("same")),
+            Some(SessionId::new("same")),
+        )
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let text = text_of(&unchanged);
+        assert!(!text.contains("no longer active"), "{text}");
+        Ok(())
+    }
+
+    fn text_of(result: &CallToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                rmcp::model::ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// The legacy transport, which Codex still speaks. Its session is the transport itself,
+    /// so when the user stops it there is no handle for the agent to drop: it retried four
+    /// times, got the same refusal each time, and told the user to restart the browser.
+    ///
+    /// Say it once, so the stop is honoured and the agent can report it, then let the next
+    /// call through on a new session so the connection is not wedged until the client
+    /// reconnects.
+    #[tokio::test]
+    async fn a_legacy_connection_recovers_after_its_session_is_stopped() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let transport = SessionId::new("mcp-transport-abc");
+
+        let first = service
+            .ensure_session_started(transport.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let stopped = first.session.id().clone();
+
+        call.state.sessions.cancel_by_session(&stopped).await?;
+
+        let refusal = service
+            .ensure_session_started(transport.clone())
+            .await
+            .err()
+            .unwrap_or_else(|| panic!("the stop must be reported, not swallowed"));
+        let message = format!("{refusal:?}");
+        assert!(message.contains("was stopped"), "{message}");
+        assert!(message.contains("a new session will start"), "{message}");
+
+        // The next call must work, or the connection is dead until Codex reconnects.
+        let recovered = service
+            .ensure_session_started(transport.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_ne!(
+            recovered.session.id(),
+            &stopped,
+            "the stopped session must stay stopped, not come back to life"
+        );
+
+        // And the connection settles there rather than churning a session per call.
+        let again = service
+            .ensure_session_started(transport)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(again.session.id(), recovered.session.id());
+        Ok(())
+    }
+
     #[tokio::test]
     async fn modern_session_adopts_the_inline_client_name() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
@@ -1269,6 +1742,7 @@ mod tests {
                 rmcp::model::ContentBlock::text("ok"),
             ])),
             Some(SessionId::new("handle-xyz")),
+            None,
         )
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
         assert!(
@@ -1295,6 +1769,7 @@ mod tests {
             Ok(CallToolResult::success(vec![
                 rmcp::model::ContentBlock::text("ok"),
             ])),
+            None,
             None,
         )
         .map_err(|error| anyhow::anyhow!("{error:?}"))?;
@@ -1431,7 +1906,7 @@ mod tests {
             "- Name your session early with name_session: a 2-3 word task label, the category\n  that best fits the task, and a short PII-free summary you can search for later;\n  tabs group as <agentName>/<name>."
         ));
         assert!(instructions.contains(
-            "- If the user points you at a tab you don't own, open its URL with\n  tabs action=\"new\" and work on that copy; leave the original untouched."
+            "- A tab that is not yours is still someone's. Leave it as you found it unless the\n  user asked you to change it, and prefer your own tab for anything exploratory."
         ));
         assert!(
             instructions

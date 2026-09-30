@@ -12,7 +12,11 @@ export interface CockpitData {
 
 /** Builds Running now exclusively from the complete live-session snapshot. */
 export function useCockpitData(): CockpitData {
-  const liveSessions = useLiveSessions()
+  // Running now needs a live snapshot: opt in to background polling here.
+  const liveSessions = useLiveSessions({
+    refetchInterval: 1500,
+    refetchIntervalInBackground: true,
+  })
   const selectedTabBySessionRef = useRef<Map<string, number>>(new Map())
   const sessions = sessionsToLiveCards(liveSessions.data?.items ?? [], {
     stickySelection: selectedTabBySessionRef.current,

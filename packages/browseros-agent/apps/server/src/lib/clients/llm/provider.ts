@@ -17,15 +17,13 @@ import { EXTERNAL_URLS } from '@browseros/shared/constants/urls'
 import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
-import { createBrowserOSFetch } from '../../browseros-fetch'
-import { logger } from '../../logger'
 import { createOpenRouterCompatibleFetch } from '../../openrouter-fetch'
 import { createProxiedFetch } from '../../proxy/proxy-fetch'
 import { createCodexFetch } from '../oauth/codex-fetch'
 import { createCopilotFetch } from '../oauth/copilot-fetch'
 import {
-  createMockBrowserOSLanguageModel,
-  shouldUseMockBrowserOSLLM,
+  createMockLanguageModel,
+  shouldUseMockLLM,
 } from './mock-language-model'
 import type { ResolvedLLMConfig } from './types'
 
@@ -240,7 +238,6 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.OLLAMA]: createOllamaModel,
   [LLM_PROVIDERS.LMSTUDIO]: createLMStudioModel,
   [LLM_PROVIDERS.BEDROCK]: createBedrockModel,
-  [LLM_PROVIDERS.BROWSEROS]: createBrowserOSModel,
   [LLM_PROVIDERS.OPENAI_COMPATIBLE]: createOpenAICompatibleModel,
   [LLM_PROVIDERS.MOONSHOT]: createMoonshotModel,
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
@@ -249,8 +246,8 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
 }
 
 export function createLLMProvider(config: ResolvedLLMConfig): LanguageModel {
-  if (shouldUseMockBrowserOSLLM(config)) {
-    return createMockBrowserOSLanguageModel()
+  if (shouldUseMockLLM()) {
+    return createMockLanguageModel()
   }
   const factory = PROVIDER_FACTORIES[config.provider]
   if (!factory) throw new Error(`Unknown provider: ${config.provider}`)

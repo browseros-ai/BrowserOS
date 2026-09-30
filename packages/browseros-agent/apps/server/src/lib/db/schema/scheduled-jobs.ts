@@ -26,7 +26,6 @@ export const scheduledJobs = sqliteTable(
   'scheduled_jobs',
   {
     id: text('id').primaryKey(),
-    profileId: text('profile_id'),
     name: text('name').notNull(),
     query: text('query').notNull(),
     scheduleType: text('schedule_type', {
@@ -42,10 +41,7 @@ export const scheduledJobs = sqliteTable(
     createdAt: integer('created_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },
-  (table) => [
-    index('scheduled_jobs_profile_id_idx').on(table.profileId),
-    index('scheduled_jobs_enabled_idx').on(table.enabled),
-  ],
+  (table) => [index('scheduled_jobs_enabled_idx').on(table.enabled)],
 )
 
 export type ScheduledJobRow = InferSelectModel<typeof scheduledJobs>

@@ -49,13 +49,14 @@ beforeEach(() => {
 })
 
 describe('useCockpitStats', () => {
-  it('uses a stable API key, polls, and delegates without clamping', async () => {
+  it('uses a stable API key and delegates without clamping, polling opt-in', async () => {
     expect(Array.from(useCockpitStats.getKey())).toEqual([
       'api',
       'cockpit',
       'stats',
     ])
-    expect(useCockpitStats.getOptions().refetchInterval).toBe(3000)
+    // No factory-level polling: Cockpit.tsx opts in to the interval.
+    expect(useCockpitStats.getOptions().refetchInterval).toBeUndefined()
 
     const result = await useCockpitStats.fetcher(undefined)
 

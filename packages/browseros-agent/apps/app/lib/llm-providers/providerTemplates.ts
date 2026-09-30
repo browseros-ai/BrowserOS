@@ -161,7 +161,6 @@ export const providerTypeOptions: { value: ProviderType; label: string }[] = [
   { value: 'ollama', label: 'Ollama' },
   { value: 'lmstudio', label: 'LM Studio' },
   { value: 'bedrock', label: 'AWS Bedrock' },
-  { value: 'browseros', label: 'BrowserOS' },
 ]
 
 /**
@@ -192,7 +191,6 @@ const DEFAULT_BASE_URLS: Record<ProviderType, string> = {
   ollama: 'http://localhost:11434/v1',
   lmstudio: 'http://localhost:1234/v1',
   bedrock: '',
-  browseros: '',
 }
 
 /**

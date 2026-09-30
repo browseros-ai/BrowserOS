@@ -29,14 +29,11 @@ import {
  * `kind` carries the distinction. Columns that only one kind uses are nullable
  * and grouped below, with the per-kind requirements held by a check constraint
  * rather than by the column definitions.
- *
- * `profileId` is reserved and currently always null, as in the other tables.
  */
 export const providers = sqliteTable(
   'providers',
   {
     id: text('id').primaryKey(),
-    profileId: text('profile_id'),
     kind: text('kind', { enum: ['llm', 'acp'] }).notNull(),
     type: text('type').notNull(),
     name: text('name').notNull(),
@@ -70,16 +67,9 @@ export const providers = sqliteTable(
     customConfig: text('custom_config'),
   },
   (table) => [
-    index('providers_profile_id_idx').on(table.profileId),
     index('providers_kind_updated_at_idx').on(table.kind, table.updatedAt),
     // Every row in this index has is_default = 1, so uniqueness on that single
     // column admits exactly one default row.
-    //
-    // Deliberately not keyed by profile_id. SQLite treats NULLs as distinct in
-    // a unique index, so a (profile_id, is_default) pair would let every row be
-    // default at once while profile_id is unset, which is its state today. The
-    // per-profile form belongs in the migration that starts populating
-    // profile_id, not in this one.
     uniqueIndex('providers_one_default')
       .on(table.isDefault)
       .where(sql`${table.isDefault} = 1`),

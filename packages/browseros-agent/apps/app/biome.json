@@ -9,7 +9,13 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!public", "!dist", "!**/*.svg"]
+    "includes": [
+      "**",
+      "!public",
+      "!dist",
+      "!**/*.svg",
+      "!lib/llm-providers/models-dev-data.json"
+    ]
   },
   "formatter": {
     "enabled": true,

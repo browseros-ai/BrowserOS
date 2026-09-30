@@ -15,7 +15,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from '@/components/ui/popover'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { cn } from '@/lib/utils'
 import {
@@ -27,7 +27,8 @@ import type { Provider } from './chatComponentTypes'
 
 export interface ChatProviderSelectorProps {
   providers: Provider[]
-  selectedProvider: Provider
+  /** Null while nothing is connected; the list is empty and Add Provider is the only action. */
+  selectedProvider: Provider | null
   onSelectProvider: (provider: Provider) => void
 }
 
@@ -51,7 +52,7 @@ export const ChatProviderSelector: FC<
             {groups.map((group) => (
               <CommandGroup key={group.key} heading={group.label}>
                 {group.options.map((provider) => {
-                  const isSelected = selectedProvider.id === provider.id
+                  const isSelected = selectedProvider?.id === provider.id
                   const subtitle = getProviderSubtitle(provider)
                   return (
                     <CommandItem
@@ -113,6 +114,5 @@ function ProviderOptionIcon({ provider }: { provider: Provider }) {
     if (Mark) return <Mark className="h-[18px] w-[18px]" />
     return <Bot size={18} />
   }
-  if (provider.type === 'browseros') return <BrowserOSIcon size={18} />
   return <ProviderIcon type={provider.type as ProviderType} size={18} />
 }

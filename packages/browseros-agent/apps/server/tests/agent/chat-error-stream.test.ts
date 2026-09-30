@@ -11,17 +11,17 @@ import { createAgentUIStreamResponse, ToolLoopAgent } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 import { toChatErrorText } from '../../src/agent/chat-error'
 
-function creditsExhausted(): APICallError {
+function rateLimited(): APICallError {
   return new APICallError({
-    message: 'Daily credits exhausted',
-    url: 'https://llm.browseros.com/v1/chat/completions',
+    message: 'Too many requests',
+    url: 'https://openrouter.ai/api/v1/chat/completions',
     requestBodyValues: {},
     statusCode: 429,
     responseBody: JSON.stringify({
-      error: { code: 'CREDITS_EXHAUSTED', message: 'Daily credits exhausted' },
+      error: { code: 'RATE_LIMITED', message: 'Too many requests' },
     }),
     isRetryable: false,
-    data: { code: 'CREDITS_EXHAUSTED' },
+    data: { code: 'RATE_LIMITED' },
   })
 }
 
@@ -50,12 +50,12 @@ function agentThatFails(error: unknown): ToolLoopAgent {
 describe('chat stream error propagation', () => {
   it('emits the classified envelope instead of the SDK mask', async () => {
     const response = await createAgentUIStreamResponse({
-      agent: agentThatFails(creditsExhausted()),
+      agent: agentThatFails(rateLimited()),
       uiMessages: [
         { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
       ],
       onError: (error: unknown) =>
-        toChatErrorText(error, { provider: 'browseros' }),
+        toChatErrorText(error, { provider: 'openrouter' }),
     })
 
     const errorText = await readErrorFrame(response)
@@ -64,16 +64,16 @@ describe('chat stream error propagation', () => {
     expect(errorText).not.toBe('An error occurred.')
 
     const envelope = parseChatErrorEnvelope(errorText as string)
-    expect(envelope?.code).toBe('credits_exhausted')
-    expect(envelope?.message).toBe('Daily credits exhausted')
-    expect(envelope?.retryable).toBe(false)
+    expect(envelope?.code).toBe('rate_limited')
+    expect(envelope?.message).toBe('Too many requests')
+    expect(envelope?.retryable).toBe(true)
     expect(envelope?.statusCode).toBe(429)
-    expect(envelope?.provider).toBe('browseros')
+    expect(envelope?.provider).toBe('openrouter')
   })
 
   it('masks the failure when no onError is supplied (the bug being fixed)', async () => {
     const response = await createAgentUIStreamResponse({
-      agent: agentThatFails(creditsExhausted()),
+      agent: agentThatFails(rateLimited()),
       uiMessages: [
         { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] },
       ],

@@ -129,8 +129,12 @@ pub(crate) enum DistillTarget {
 /// Synthesizes a single-page action macro from the recorded child sequence, plus
 /// how to resolve its host. Handles two shapes: a flow that opens its own page
 /// (`newPage(url)`, common for search-by-URL) becomes
-/// `async (browser, inputs) => { const page = await browser.pages.newPage(...); ...; return page; }`;
-/// a flow that acts on an existing page keeps `async (browser, page, inputs) => { ... }`.
+/// `async (browser, inputs) => { const p = await browser.open(...); ...; return p.id; }`;
+/// a flow that acts on an existing page keeps `async (browser, page, inputs) => { ... }`
+/// and binds a handle from the id it is passed.
+///
+/// Both shapes hand back and take a page **id**, not a handle: the hot-load
+/// contract passes a number, and a helper's return value is read the same way.
 /// `None` unless at least two recognized actions target one page (multi-page
 /// replays are a follow-up).
 #[must_use]
@@ -200,11 +204,9 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, Di
     }
     match opened {
         Some((url_expr, host)) => {
-            let mut body = vec![format!(
-                "  const page = await browser.pages.newPage({url_expr});"
-            )];
+            let mut body = vec![format!("  const p = await browser.open({url_expr});")];
             body.extend(lines);
-            body.push("  return page;".to_string());
+            body.push("  return p.id;".to_string());
             let source = format!(
                 "async (browser, inputs = {{}}) => {{\n{}\n}}",
                 body.join("\n")
@@ -217,9 +219,11 @@ pub(crate) fn distill_source(children: &[ToolDispatchRow]) -> Option<(String, Di
         }
         None => {
             let page = *pages.iter().next()?;
+            let mut body = vec!["  const p = browser.page(page);".to_string()];
+            body.extend(lines);
             let source = format!(
                 "async (browser, page, inputs = {{}}) => {{\n{}\n}}",
-                lines.join("\n")
+                body.join("\n")
             );
             Some((source, DistillTarget::Page(page)))
         }
@@ -339,8 +343,8 @@ fn result_meta_flag(row: &ToolDispatchRow, key: &str) -> bool {
         .unwrap_or(false)
 }
 
-/// Maps one recorded driving primitive to its SDK call line, `page` standing in
-/// for the recorded page id. Typed values (fill/type/selectOption) are read from
+/// Maps one recorded driving primitive to its SDK call line, `p` standing in for
+/// the page handle both shapes bind before the first action. Typed values (fill/type/selectOption) are read from
 /// `inputs.field<n>` rather than embedded, so a distilled helper never persists a
 /// credential or personal data. Returns `None` for anything not worth replaying
 /// (pure reads, page management, escape hatches).
@@ -350,36 +354,24 @@ fn emit_line(tool: &str, args: &[Value], inputs: &mut usize) -> Option<String> {
             .map_or_else(|| "undefined".to_string(), Value::to_string)
     };
     let line = match tool {
-        "nav.goto" => format!(
-            "  await browser.nav(page).goto({});",
-            url_arg(args, 1, inputs)
-        ),
-        "nav.back" => "  await browser.nav(page).back();".to_string(),
-        "nav.forward" => "  await browser.nav(page).forward();".to_string(),
-        "nav.reload" => "  await browser.nav(page).reload();".to_string(),
-        "input.click" => format!("  await browser.input(page).click({});", arg(1)),
-        "input.fill" => format!(
-            "  await browser.input(page).fill({}, {});",
-            arg(1),
-            next_input(inputs)
-        ),
-        "input.type" => format!("  await browser.input(page).type({});", next_input(inputs)),
-        "input.press" => format!("  await browser.input(page).press({});", arg(1)),
-        "input.hover" => format!("  await browser.input(page).hover({});", arg(1)),
+        "nav.goto" => format!("  await p.goto({});", url_arg(args, 1, inputs)),
+        "nav.back" => "  await p.back();".to_string(),
+        "nav.forward" => "  await p.forward();".to_string(),
+        "nav.reload" => "  await p.reload();".to_string(),
+        "input.click" => format!("  await p.click({});", arg(1)),
+        "input.fill" => format!("  await p.fill({}, {});", arg(1), next_input(inputs)),
+        "input.type" => format!("  await p.type({});", next_input(inputs)),
+        "input.press" => format!("  await p.press({});", arg(1)),
+        "input.hover" => format!("  await p.hover({});", arg(1)),
         "input.selectOption" => {
             format!(
-                "  await browser.input(page).selectOption({}, {});",
+                "  await p.selectOption({}, {});",
                 arg(1),
                 next_input(inputs)
             )
         }
-        "input.scroll" => format!(
-            "  await browser.input(page).scroll({}, {}, {});",
-            arg(1),
-            arg(2),
-            arg(3)
-        ),
-        "wait" => format!("  await browser.wait(page, {});", arg(1)),
+        "input.scroll" => format!("  await p.scroll({}, {}, {});", arg(1), arg(2), arg(3)),
+        "wait" => format!("  await p.wait({});", arg(1)),
         _ => return None,
     };
     Some(line)
@@ -562,9 +554,10 @@ mod tests {
         assert_eq!(
             source,
             "async (browser, page, inputs = {}) => {\n  \
-             await browser.nav(page).goto(\"https://example.com/login\");\n  \
-             await browser.input(page).fill(\"e5\", inputs.field0);\n  \
-             await browser.input(page).click(\"e6\");\n}"
+             const p = browser.page(page);\n  \
+             await p.goto(\"https://example.com/login\");\n  \
+             await p.fill(\"e5\", inputs.field0);\n  \
+             await p.click(\"e6\");\n}"
         );
         Ok(())
     }
@@ -592,11 +585,13 @@ mod tests {
         );
         assert!(
             source.contains(
-                "const page = await browser.pages.newPage(\"https://www.amazon.in/s?k=\" + encodeURIComponent(inputs.field0));"
+                "const p = await browser.open(\"https://www.amazon.in/s?k=\" + encodeURIComponent(inputs.field0));"
             ),
             "got: {source}"
         );
-        assert!(source.contains("return page;"));
+        // A helper hands back an id, not a handle: the hot-load contract passes
+        // a number in and a caller reads a number out.
+        assert!(source.contains("return p.id;"));
         Ok(())
     }
 
@@ -651,7 +646,44 @@ mod tests {
             "helper-replayed action leaked: {source}"
         );
         assert!(source.contains("e7"), "repair action missing: {source}");
-        assert_eq!(source.matches("await browser").count(), 2);
+        assert_eq!(source.matches("await p.").count(), 2);
+        Ok(())
+    }
+
+    /// The distiller writes SDK source, so it is the one place an API change has a
+    /// generated-code dimension. Both shapes must bind a handle before the first
+    /// action and must not emit the pre-handle call forms.
+    #[test]
+    fn distilled_helpers_are_written_against_the_page_handle() -> anyhow::Result<()> {
+        let passed = [
+            child("nav.goto", json!([3, "https://example.com/"])),
+            child("input.click", json!([3, "e6"])),
+        ];
+        let (source, _) =
+            distill_source(&passed).ok_or_else(|| anyhow::anyhow!("expected a macro"))?;
+        assert!(source.contains("const p = browser.page(page);"), "{source}");
+
+        let opens = [
+            child("pages.newPage", json!(["https://example.com/"])),
+            child("input.click", json!([3, "e6"])),
+        ];
+        let (source_opens, _) =
+            distill_source(&opens).ok_or_else(|| anyhow::anyhow!("expected a macro"))?;
+        assert!(
+            source_opens.contains("await browser.open("),
+            "{source_opens}"
+        );
+
+        for source in [&source, &source_opens] {
+            for stale in ["browser.nav(", "browser.input(", "browser.observe("] {
+                assert!(!source.contains(stale), "{stale} still emitted: {source}");
+            }
+        }
+
+        // A hand-saved helper's call shape is inferred from its parameter list,
+        // not its body, so changing the body must not reclassify either shape.
+        assert!(!crate::services::helpers::analyze_source(&source).0);
+        assert!(crate::services::helpers::analyze_source(&source_opens).0);
         Ok(())
     }
 

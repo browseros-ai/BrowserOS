@@ -65,6 +65,12 @@ pub struct ToolCall {
     pub state: AppState,
     pub dispatch_id: DispatchId,
     pub output_files: OutputFileAccess,
+    /// Pages a `run` script acted on that belong to the user or another agent.
+    ///
+    /// `run` has no top-level `page` argument, so the ownership notice cannot be derived
+    /// from its arguments the way it is for a granular tool. The script hook records what
+    /// the script actually touched, and `effects::page_ownership_notice` reports it.
+    pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
 }
 
 impl ToolCall {
@@ -110,6 +116,7 @@ impl ToolCall {
             ToolFlags::default()
         };
         Self {
+            foreign_pages: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             catalog,
             tool_index,
             raw_args,
@@ -173,10 +180,12 @@ pub struct NamedToolObserver {
     pub run: ToolObserver,
 }
 
+// Ownership is not a guard and must not become one. An agent is allowed to act on
+// the user's tabs and on other agents' tabs; it is simply told whose they are, by
+// `effects::page_ownership_notice`. See that module for why.
 const GUARDS: &[ToolGuard] = &[
     guards::navigate_scheme::guard,
     guards::browser_connected::guard,
-    guards::page_ownership::guard,
 ];
 
 const EFFECTS: &[NamedToolEffect] = &[
@@ -201,6 +210,12 @@ const EFFECTS: &[NamedToolEffect] = &[
         run: effects::session_naming::apply,
     },
     NamedToolEffect {
+        // Runs late so it annotates the result the agent will actually read, and
+        // never changes it beyond appending a note. Informational only.
+        name: "page-ownership-notice",
+        run: effects::page_ownership_notice::apply,
+    },
+    NamedToolEffect {
         name: "helper-discovery",
         run: helper_runtime::discovery,
     },
@@ -210,10 +225,16 @@ const EFFECTS: &[NamedToolEffect] = &[
 // intentionally not wired. Self-healing keeps its agent-driven surface
 // (saveHelper/listHelpers/readHelper, discovery, hot-load) but does not
 // auto-distill. Re-add a NamedToolObserver for `distill::distill` to re-enable.
-const OBSERVERS: &[NamedToolObserver] = &[NamedToolObserver {
-    name: "audit",
-    run: observers::audit::apply,
-}];
+const OBSERVERS: &[NamedToolObserver] = &[
+    NamedToolObserver {
+        name: "audit",
+        run: observers::audit::apply,
+    },
+    NamedToolObserver {
+        name: "run_failure",
+        run: observers::run_failure::apply,
+    },
+];
 
 struct ExecutionOutcome {
     result: ToolResult,
@@ -530,7 +551,7 @@ pub fn page_id(call: &ToolCall, result: &ToolResult) -> Option<PageId> {
         .map(PageId)
 }
 
-fn dispatch_error_text(result: &ToolResult) -> Option<String> {
+pub(crate) fn dispatch_error_text(result: &ToolResult) -> Option<String> {
     result.content.iter().find_map(|block| match block {
         ContentBlock::Text(text) => Some(text.text.chars().take(DISPATCH_ERROR_TEXT_MAX).collect()),
         _ => None,
@@ -1116,15 +1137,25 @@ mod tests {
                 "tab-activity",
                 "tab-groups",
                 "session-naming",
+                "page-ownership-notice",
                 "helper-discovery",
             ]
+        );
+        // Ownership must never gate a dispatch. It is a label telling an agent whose
+        // tab it is looking at, and agents are allowed to use the user's tabs and other
+        // agents' tabs. This assertion exists so the guard that used to refuse them
+        // cannot be reintroduced without someone deleting this line on purpose.
+        assert_eq!(
+            GUARDS.len(),
+            2,
+            "a guard was added. Ownership must not be one of them: it informs, it never blocks"
         );
         assert_eq!(
             OBSERVERS
                 .iter()
                 .map(|observer| observer.name)
                 .collect::<Vec<_>>(),
-            ["audit"]
+            ["audit", "run_failure"]
         );
     }
 

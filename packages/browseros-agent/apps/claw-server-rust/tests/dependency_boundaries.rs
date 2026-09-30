@@ -243,7 +243,13 @@ fn analytics_catalog_and_sdk_have_single_source_boundaries()
             "analytics wire name {name} escaped the catalog"
         );
     }
-    assert_eq!(sdk_locations, ["analytics/service.rs"]);
+    // Product callers still go through the catalog and AnalyticsService. Only
+    // its consent-scoped alias delivery helper also needs direct SDK access.
+    sdk_locations.sort();
+    assert_eq!(
+        sdk_locations,
+        ["analytics/aliases.rs", "analytics/service.rs"]
+    );
     assert_eq!(claw_server_rust::analytics::events::ALL.len(), 8);
     Ok(())
 }

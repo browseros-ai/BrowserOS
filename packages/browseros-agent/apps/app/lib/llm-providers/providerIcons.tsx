@@ -12,7 +12,6 @@ import {
 } from '@lobehub/icons'
 import { Bot, Github } from 'lucide-react'
 import type { FC, SVGProps } from 'react'
-import ProductLogoSvg from '@/assets/product_logo.svg'
 import type { ProviderType } from './types'
 
 interface IconProps extends SVGProps<SVGSVGElement> {
@@ -31,7 +30,6 @@ const providerIconMap: Record<ProviderType, IconComponent | null> = {
   ollama: Ollama,
   lmstudio: LmStudio,
   bedrock: Bedrock,
-  browseros: null,
   moonshot: Kimi,
   'chatgpt-pro': OpenAI,
   'github-copilot': Github,
@@ -60,23 +58,4 @@ export const ProviderIcon: FC<ProviderIconProps> = ({
   }
 
   return <Bot size={size} className={className} />
-}
-
-/**
- * BrowserOS branded icon component
- * @public
- */
-export const BrowserOSIcon: FC<{ size?: number; className?: string }> = ({
-  size = 20,
-  className,
-}) => {
-  return (
-    <img
-      src={ProductLogoSvg}
-      alt="BrowserOS"
-      width={size}
-      height={size}
-      className={className}
-    />
-  )
 }

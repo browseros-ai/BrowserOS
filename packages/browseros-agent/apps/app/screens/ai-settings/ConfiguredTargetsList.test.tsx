@@ -13,7 +13,6 @@ mock.module('@/components/agents/agent-brand-marks', () => ({
   agentBrandKey: () => undefined,
 }))
 mock.module('@/lib/llm-providers/providerIcons', () => ({
-  BrowserOSIcon: () => createElement('span', { 'data-icon': 'browseros' }),
   ProviderIcon: () => createElement('span', { 'data-icon': 'provider' }),
 }))
 
@@ -26,11 +25,11 @@ beforeAll(async () => {
     .ConfiguredTargetsList
 })
 
-const builtIn = {
-  id: 'browseros',
-  name: 'BrowserOS',
-  type: 'browseros',
-  modelId: 'default',
+const anthropic = {
+  id: 'anthropic-1',
+  name: 'Anthropic',
+  type: 'anthropic',
+  modelId: 'claude-sonnet-4-6',
 } as LlmProviderConfig
 
 const custom = {
@@ -66,9 +65,9 @@ function render(
 ) {
   return renderToStaticMarkup(
     createElement(ConfiguredTargetsList, {
-      providers: [builtIn, custom],
+      providers: [anthropic, custom],
       coding,
-      selectedProviderId: 'browseros',
+      selectedProviderId: 'anthropic-1',
       selectedAgentId: null,
       testingProviderId: null,
       onSelectProvider: () => {},
@@ -84,14 +83,13 @@ function render(
 describe('ConfiguredTargetsList', () => {
   it('renders providers and agents in one list', () => {
     const html = render()
-    expect(html).toContain('BrowserOS')
+    expect(html).toContain('Anthropic')
     expect(html).toContain('My OpenAI')
     expect(html).toContain('Review agent')
   })
 
   it('keeps the brand icons for each kind of target', () => {
     const html = render()
-    expect(html).toContain('data-icon="browseros"')
     expect(html).toContain('data-icon="provider"')
     expect(html).toContain('data-icon="adapter"')
   })
@@ -124,12 +122,11 @@ describe('ConfiguredTargetsList', () => {
     expect(defaultRow).toContain('Default<')
   })
 
-  it('offers an actions menu for user-owned targets only', () => {
+  it('offers an actions menu for every target', () => {
     const html = render()
+    expect(html).toContain('aria-label="Actions for Anthropic"')
     expect(html).toContain('aria-label="Actions for My OpenAI"')
     expect(html).toContain('aria-label="Actions for Review agent"')
-    // The built-in provider cannot be tested, edited or deleted.
-    expect(html).not.toContain('aria-label="Actions for BrowserOS"')
   })
 
   // Asserting utility classes rather than layout because the reserved width

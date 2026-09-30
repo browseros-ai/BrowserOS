@@ -30,7 +30,6 @@ import { StepWrap } from '../components/StepWrap'
 
 interface SetupAgentStepProps {
   onSetup: () => void
-  onLater: () => void
 }
 
 type MonoIcon = ComponentType<{ size?: number }>
@@ -85,13 +84,15 @@ function IconChip({ label, Icon }: IconEntry) {
 }
 
 /**
- * Final step. The actual provider / agent setup lives in the full BrowserOS app
- * at #/settings/ai; this screen shows the breadth of what is supported and hands
- * off. `bridge.complete()` lets the native first-run finish and open the app on
- * that screen. The two exits differ only in intent today; the landing route is
- * decided natively (see the onboarding plan).
+ * Final step. The actual provider / agent setup lives in the full BrowserOS app;
+ * this screen shows the breadth of what is supported and hands off.
+ * `bridge.complete()` lets the native first-run finish and open the app on the
+ * first-run setup screen, which is where connecting actually happens.
+ *
+ * One exit, deliberately. A "later" button here read as though BrowserOS would
+ * work without a provider, and it no longer does.
  */
-export function SetupAgentStep({ onSetup, onLater }: SetupAgentStepProps) {
+export function SetupAgentStep({ onSetup }: SetupAgentStepProps) {
   return (
     <TooltipProvider>
       <StepWrap>
@@ -99,8 +100,9 @@ export function SetupAgentStep({ onSetup, onLater }: SetupAgentStepProps) {
           Set up your <Em>agent</Em>
         </DisplayHeading>
         <StepCopy>
-          Connect an LLM provider or a coding agent harness you already use. We
-          will open BrowserOS so you can finish.
+          BrowserOS runs on the provider you bring. Connect an LLM provider or a
+          coding agent harness you already use, and we will open BrowserOS so
+          you can finish.
         </StepCopy>
         <div className="mb-6 flex max-w-[480px] flex-col gap-[18px]">
           <div>
@@ -134,9 +136,6 @@ export function SetupAgentStep({ onSetup, onLater }: SetupAgentStepProps) {
           <Button type="button" size="lg" onClick={onSetup}>
             Set up my agent
             <ArrowRight className="size-4" />
-          </Button>
-          <Button type="button" size="lg" variant="ghost" onClick={onLater}>
-            I'll do this later
           </Button>
         </div>
       </StepWrap>

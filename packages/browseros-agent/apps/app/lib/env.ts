@@ -1,5 +1,4 @@
 import { ZodError, z } from 'zod'
-import { parseBrowserOSApiUrl } from './browseros-api-url'
 
 export function parseAlphaFeaturesFlag(value: string | undefined): boolean {
   return value === 'true'
@@ -10,10 +9,6 @@ const EnvSchema = z.object({
   VITE_PUBLIC_POSTHOG_KEY: z.string().optional(),
   VITE_PUBLIC_POSTHOG_HOST: z.string().optional(),
   VITE_PUBLIC_SENTRY_DSN: z.string().optional(),
-  VITE_PUBLIC_BROWSEROS_API: z
-    .string()
-    .optional()
-    .transform(parseBrowserOSApiUrl),
   PROD: z.boolean().optional().default(false),
 })
 

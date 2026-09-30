@@ -1,5 +1,6 @@
 import { CockpitHero } from '@/components/cockpit/CockpitHero'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
+import { FeedbackInviteCard } from '@/components/cockpit/FeedbackInviteCard'
 import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
@@ -18,7 +19,7 @@ export function Cockpit() {
 
   // When no live session is connected, these probes decide which onboarding
   // shell to show. Their stable keys are shared with RecentActivity and MCP.
-  const connections = useConnections()
+  const connections = useConnections({ refetchInterval: 5000 })
   const taskProbe = useSessions({
     variables: { limit: ONBOARDING_PROBE_LIMIT },
     // Scoped to the onboarding shells: poll every 4s while the
@@ -68,12 +69,14 @@ export function Cockpit() {
     probesResolved && state === 'ready' && !hasLiveSessions
   const stats = useCockpitStats({
     enabled: shouldLoadStats,
+    refetchInterval: 3000,
   })
 
   const content =
     state !== 'ready' ? (
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
         <ProductHuntBanner />
+        <FeedbackInviteCard />
         <CockpitOnboarding
           state={state}
           connectedHarnesses={connectedHarnesses}
@@ -88,6 +91,7 @@ export function Cockpit() {
           <RunningGrid sessions={sessions} />
         )}
         <ProductHuntBanner />
+        <FeedbackInviteCard />
         <RecentActivity />
       </div>
     )

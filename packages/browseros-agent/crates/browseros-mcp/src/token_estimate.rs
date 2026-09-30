@@ -55,19 +55,19 @@ pub fn slice_text_by_estimated_tokens(text: &str, max_tokens: usize) -> String {
         return text.to_string();
     }
 
-    let mut low = 0;
-    let mut high = text.len();
-    while low < high {
-        let mid = (low + high).div_ceil(2);
-        let candidate = floor_char_boundary(text, mid);
-        if estimate_text_tokens(&text[..candidate]) <= max_tokens {
-            low = candidate;
-        } else {
-            high = candidate.saturating_sub(1);
-        }
-    }
-    let end = floor_char_boundary(text, low);
-    text[..end].to_string()
+    // estimate_text_tokens is ceil(bytes / APPROX_CHARS_PER_TOKEN), so the largest
+    // prefix within budget is APPROX_CHARS_PER_TOKEN * max_tokens bytes. Computing
+    // it directly avoids a binary search whose midpoint could floor back onto an
+    // earlier UTF-8 boundary and never make progress, spinning a worker forever
+    // (#2707). Keep this in lockstep with estimate_text_tokens; the debug_assert
+    // guards the coupling.
+    let max_bytes = max_tokens
+        .saturating_mul(APPROX_CHARS_PER_TOKEN)
+        .min(text.len());
+    let end = floor_char_boundary(text, max_bytes);
+    let sliced = text[..end].to_string();
+    debug_assert!(estimate_text_tokens(&sliced) <= max_tokens);
+    sliced
 }
 
 fn floor_char_boundary(text: &str, index: usize) -> usize {
@@ -122,6 +122,7 @@ mod tests {
     use super::{
         estimate_image_tokens_from_dimensions, estimate_json_output_tokens, estimate_text_tokens,
         estimate_tool_input_tokens, estimate_tool_output_tokens, saturating_token_sum,
+        slice_text_by_estimated_tokens,
     };
 
     fn png_header(width: u32, height: u32) -> String {
@@ -227,5 +228,64 @@ mod tests {
             estimate_json_output_tokens(&json!(null)),
             estimate_text_tokens("null") as i64
         );
+    }
+
+    #[test]
+    fn slicing_multibyte_text_terminates_on_a_utf8_boundary() {
+        // Reporter's #2707 case: a midpoint inside a 3-byte character used to
+        // floor back onto an earlier boundary and loop forever.
+        let text = "汉".repeat(5001);
+        let sliced = slice_text_by_estimated_tokens(&text, 5000);
+
+        assert_eq!(estimate_text_tokens(&sliced), 5000);
+        assert_eq!(sliced, "汉".repeat(5000));
+    }
+
+    #[test]
+    fn slicing_two_byte_text_terminates_within_budget() {
+        let text = "é".repeat(3001);
+        let sliced = slice_text_by_estimated_tokens(&text, 2000);
+
+        assert_eq!(sliced, "é".repeat(3000));
+        assert!(estimate_text_tokens(&sliced) <= 2000);
+    }
+
+    #[test]
+    fn slicing_with_zero_budget_returns_empty() {
+        assert_eq!(slice_text_by_estimated_tokens("abc", 0), "");
+    }
+
+    #[test]
+    fn slicing_within_budget_returns_input_unchanged() {
+        assert_eq!(slice_text_by_estimated_tokens("hello", 100), "hello");
+    }
+
+    #[test]
+    fn slicing_ascii_truncates_at_the_byte_budget() {
+        assert_eq!(slice_text_by_estimated_tokens("abcdefghij", 2), "abcdef");
+    }
+
+    #[test]
+    fn slicing_yields_the_maximal_in_budget_char_boundary_prefix() {
+        let cases = [
+            ("汉字漢字".repeat(50), 7usize),
+            ("café ☕ déjà vu ".repeat(40), 11usize),
+            ("emoji 😀😀😀 test ".repeat(30), 9usize),
+            ("plain ascii text here".to_string(), 3usize),
+        ];
+
+        for (text, max_tokens) in cases {
+            let sliced = slice_text_by_estimated_tokens(&text, max_tokens);
+
+            assert!(estimate_text_tokens(&sliced) <= max_tokens);
+            assert!(text.starts_with(&sliced));
+            assert!(text.is_char_boundary(sliced.len()));
+
+            // Maximal: taking one more character would exceed the budget.
+            if let Some(next_char) = text[sliced.len()..].chars().next() {
+                let next = sliced.len() + next_char.len_utf8();
+                assert!(estimate_text_tokens(&text[..next]) > max_tokens);
+            }
+        }
     }
 }

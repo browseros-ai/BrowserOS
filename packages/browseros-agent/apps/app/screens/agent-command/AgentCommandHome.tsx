@@ -1,5 +1,6 @@
-import type { FC } from 'react'
+import { type FC, useState } from 'react'
 import { useNavigate } from 'react-router'
+import { NoProviderNotice } from '@/components/chat/NoProviderNotice'
 import { BrowserClawPromoBanner } from '@/components/promo/BrowserClawPromoBanner'
 import { ProductHuntBanner } from '@/components/promo/ProductHuntBanner'
 import { Feature } from '@/lib/browseros/capabilities'
@@ -36,12 +37,24 @@ export const AgentCommandHome: FC = () => {
     selectedProvider,
     selectProvider,
     selectChatTarget,
+    hasAnyTarget,
+    isSettled,
   } = useChatTargetSelection()
   const waitingForLlmCapabilities =
     selectedProvider?.kind === 'llm' && llmRoutingMode === 'wait'
+  const noTarget = isSettled && !hasAnyTarget
+  // This composer does not run through the chat session hook, so it carries its
+  // own copy of the refused-send state.
+  const [sendAttemptBlocked, setSendAttemptBlocked] = useState(false)
+  const sendBlocked = sendAttemptBlocked && noTarget
 
   const handleSend = async (input: ConversationInputSendInput) => {
-    if (!selectedProvider) return
+    if (!selectedProvider) {
+      // Answer the send rather than dropping it. This used to return silently,
+      // which was invisible only because a provider was always present.
+      setSendAttemptBlocked(true)
+      return
+    }
     if (selectedProvider.kind === 'llm' && llmRoutingMode === 'wait') return
     const target = chatTargets.find(
       (entry) =>
@@ -93,12 +106,12 @@ export const AgentCommandHome: FC = () => {
               next?
             </h1>
             <p className="mx-auto max-w-2xl text-muted-foreground text-sm leading-6 [text-wrap:pretty]">
-              Pick BrowserOS AI or any agent, then start a task — all without
-              leaving this tab.
+              Pick any provider or agent you have connected, then start a task,
+              all without leaving this tab.
             </p>
           </div>
 
-          <div className="w-full max-w-3xl">
+          <div className="w-full max-w-3xl space-y-3">
             <ConversationInput
               variant="home"
               providers={providerOptions}
@@ -106,14 +119,28 @@ export const AgentCommandHome: FC = () => {
               onSelectProvider={selectProvider}
               onSend={handleSend}
               streaming={false}
-              disabled={!selectedProvider || waitingForLlmCapabilities}
+              // Stays usable with nothing connected so the task someone came to
+              // write survives the trip to provider setup. Only a genuinely
+              // pending load disables it.
+              disabled={
+                waitingForLlmCapabilities || (!selectedProvider && !noTarget)
+              }
               attachmentsEnabled={selectedProvider?.kind === 'acp'}
               placeholder={
                 selectedProvider
                   ? `Ask ${selectedProvider.name} to handle a task...`
-                  : 'Loading providers...'
+                  : noTarget
+                    ? 'Describe a task...'
+                    : 'Loading providers...'
               }
             />
+            {noTarget && (
+              <NoProviderNotice
+                blocked={sendBlocked}
+                variant="inline"
+                className="text-left"
+              />
+            )}
           </div>
         </div>
 

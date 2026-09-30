@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UIMessage } from 'ai'
 import { hc } from 'hono/client'
 import { removeConversationExecutionHistory } from '@/lib/execution-history/storage'
-import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
+import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 
 export const SERVER_CONVERSATIONS_QUERY_KEY = 'server-conversations'
@@ -22,7 +22,7 @@ export interface ServerConversation {
 }
 
 async function conversationsClient() {
-  const baseUrl = await resolveAgentServerUrlWithRetry()
+  const baseUrl = await resolveAgentServerUrl()
   return hc<ConversationRoutes>(`${baseUrl}/conversations`)
 }
 

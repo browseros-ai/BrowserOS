@@ -9,49 +9,14 @@ function apiCallError(
 ): APICallError {
   return new APICallError({
     message: 'upstream failed',
-    url: 'https://llm.browseros.com/v1/chat/completions',
+    url: 'https://openrouter.ai/api/v1/chat/completions',
     requestBodyValues: {},
     ...overrides,
   })
 }
 
 describe('toChatError', () => {
-  it('classifies gateway credit exhaustion from the structured code', () => {
-    const error = toChatError(
-      apiCallError({
-        message: 'Daily credits exhausted',
-        statusCode: 429,
-        isRetryable: false,
-        data: { code: 'CREDITS_EXHAUSTED' },
-      }),
-      { provider: 'browseros' },
-    )
-
-    expect(error.code).toBe('credits_exhausted')
-    expect(error.title).toBe('Daily limit reached')
-    expect(error.message).toBe('Daily credits exhausted')
-    expect(error.retryable).toBe(false)
-    expect(error.statusCode).toBe(429)
-    expect(error.provider).toBe('browseros')
-  })
-
-  it('recovers the gateway code from responseBody when data is absent', () => {
-    const error = toChatError(
-      apiCallError({
-        message: 'quota gone',
-        statusCode: 429,
-        responseBody: JSON.stringify({
-          error: { code: 'CREDITS_EXHAUSTED', message: 'quota gone' },
-        }),
-      }),
-      { provider: 'browseros' },
-    )
-
-    expect(error.code).toBe('credits_exhausted')
-    expect(error.retryable).toBe(false)
-  })
-
-  it('treats a plain 429 as retryable rate limiting, not credit exhaustion', () => {
+  it('treats a 429 as retryable rate limiting', () => {
     const error = toChatError(
       apiCallError({ message: 'slow down', statusCode: 429 }),
       { provider: 'anthropic' },
@@ -98,7 +63,7 @@ describe('toChatError', () => {
         reason: 'maxRetriesExceeded',
         errors: [last, last],
       }),
-      { provider: 'browseros' },
+      { provider: 'openrouter' },
     )
 
     expect(error.code).toBe('rate_limited')
@@ -167,16 +132,15 @@ describe('toChatError', () => {
       apiCallError({
         message: 'Provider returned error',
         statusCode: 429,
-        data: { code: 'CREDITS_EXHAUSTED' },
         responseBody: JSON.stringify({
           error: {
-            code: 'CREDITS_EXHAUSTED',
+            code: 'RATE_LIMITED',
             message: 'Provider returned error',
             metadata: { raw: 'quota 0 of 100 for today' },
           },
         }),
       }),
-      { provider: 'browseros' },
+      { provider: 'openrouter' },
     )
 
     // The real reason the generic message hid is preserved in details...
@@ -190,9 +154,9 @@ describe('toChatError', () => {
       apiCallError({
         message: 'Provider returned error',
         statusCode: 429,
-        data: { code: 'CREDITS_EXHAUSTED', raw: { remaining: 0 } },
+        data: { code: 'RATE_LIMITED', raw: { remaining: 0 } },
       }),
-      { provider: 'browseros' },
+      { provider: 'openrouter' },
     )
 
     expect(error.details).toContain('remaining')
@@ -297,20 +261,18 @@ describe('toChatErrorText', () => {
   it('round-trips through the shared envelope parser', () => {
     const text = toChatErrorText(
       apiCallError({
-        message: 'Daily credits exhausted',
-        statusCode: 429,
-        isRetryable: false,
-        data: { code: 'CREDITS_EXHAUSTED' },
+        message: 'The provider rejected your credentials',
+        statusCode: 401,
       }),
-      { provider: 'browseros' },
+      { provider: 'openrouter' },
     )
 
     const parsed = parseChatErrorEnvelope(text)
 
     expect(parsed).not.toBeNull()
-    expect(parsed?.code).toBe('credits_exhausted')
+    expect(parsed?.code).toBe('auth_failed')
     expect(parsed?.retryable).toBe(false)
-    expect(parsed?.provider).toBe('browseros')
+    expect(parsed?.provider).toBe('openrouter')
   })
 
   it('produces a string that is safe to put in errorText', () => {

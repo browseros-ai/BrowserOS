@@ -45,6 +45,9 @@ pub struct AppState {
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
     pub analytics: Arc<AnalyticsService>,
+    pub run_failures: Arc<crate::services::run_failures::RunFailureReporter>,
+    pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
+    pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
     pub session_efficiency: Arc<SessionEfficiencyService>,
@@ -85,6 +88,17 @@ impl AppState {
         ));
         let analytics = Arc::new(AnalyticsService::new(&config.browserclaw_dir).await?);
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
+        // Shares the analytics install id, so a failure report and a product event are
+        // the same anonymous install and neither adds a new identifier.
+        let run_failures = Arc::new(crate::services::run_failures::RunFailureReporter::from_env(
+            crate::db::run_error_budget::RunErrorBudgetRepository::new(database.clone()),
+            analytics.get_state().await.distinct_id,
+            &config.browserclaw_dir.join("logs"),
+        ));
+        let feedback_cohort = Arc::new(crate::services::feedback_cohort::FeedbackCohort::new());
+        let feedback_invites = Arc::new(crate::db::feedback_invite::FeedbackInviteRepository::new(
+            database.clone(),
+        ));
         let skill = load_browserclaw_skill(&config.resources_dir)?;
         let harness = Arc::new(HarnessService::new_with_managed_skill(
             config.browserclaw_dir.join("mcp-manager"),
@@ -180,6 +194,9 @@ impl AppState {
             skills,
             skill_runs,
             analytics,
+            run_failures,
+            feedback_cohort,
+            feedback_invites,
             profiles,
             sessions,
             session_efficiency,
@@ -241,7 +258,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
 
         let _state = AppState::new_with_home(config, dir.path().join("home")).await?;

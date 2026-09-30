@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 
 mock.module('@/modules/browseros/agent-server-url.helpers', () => ({
-  resolveAgentServerUrlWithRetry: mock(async () => 'http://127.0.0.1:9999'),
+  resolveAgentServerUrl: mock(async () => 'http://127.0.0.1:9999'),
 }))
 
 const removeExecutionHistory = mock(async () => {})

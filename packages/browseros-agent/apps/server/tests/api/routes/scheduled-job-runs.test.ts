@@ -11,7 +11,6 @@ const RUN_ID = 'run-1'
 function row(overrides: Partial<ScheduledJobRunRow> = {}): ScheduledJobRunRow {
   return {
     id: RUN_ID,
-    profileId: null,
     jobId: 'job-1',
     status: 'completed',
     startedAt: 1000,
@@ -42,10 +41,6 @@ function memoryStore(initial: ScheduledJobRunRow[] = []) {
       } as ScheduledJobRunRow
       rows.set(saved.id, saved)
       return saved
-    },
-    insertIfAbsent: async (input: ScheduledJobRunUpsert) => {
-      if (rows.has(input.id)) return null
-      return store.upsert(input)
     },
     remove: async (id) => rows.delete(id),
     prune: async (jobId, keep = 15) => {
@@ -150,53 +145,5 @@ describe('scheduled job run routes', () => {
       (await routes.request(`/${RUN_ID}`, { method: 'DELETE' })).status,
     ).toBe(200)
     expect(rows.size).toBe(0)
-  })
-
-  describe('import', () => {
-    async function importRuns(
-      routes: ReturnType<typeof createScheduledJobRunRoutes>,
-      runs: unknown[],
-    ) {
-      return routes.request('/import', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ runs }),
-      })
-    }
-
-    it('inserts a run that is not there yet', async () => {
-      const { store, rows } = memoryStore()
-      const response = await importRuns(
-        createScheduledJobRunRoutes({ store }),
-        [{ ...body, id: RUN_ID }],
-      )
-
-      expect(await response.json()).toEqual({ imported: [RUN_ID], skipped: [] })
-      expect(rows.size).toBe(1)
-    })
-
-    it('leaves an existing run untouched and reports it skipped', async () => {
-      const { store, rows } = memoryStore([row({ result: 'original' })])
-      const response = await importRuns(
-        createScheduledJobRunRoutes({ store }),
-        [{ ...body, id: RUN_ID, result: 'stale import' }],
-      )
-
-      expect(await response.json()).toEqual({ imported: [], skipped: [RUN_ID] })
-      expect(rows.get(RUN_ID)?.result).toBe('original')
-    })
-
-    // The list route is /, so a run whose id is "import" would otherwise be
-    // reachable at the same path as the import endpoint.
-    it('does not treat the import path as a run id', async () => {
-      const { store } = memoryStore()
-      const response = await importRuns(
-        createScheduledJobRunRoutes({ store }),
-        [],
-      )
-
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ imported: [], skipped: [] })
-    })
   })
 })

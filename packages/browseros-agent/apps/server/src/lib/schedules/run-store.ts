@@ -38,9 +38,6 @@ export interface ScheduledJobRunStore {
   /** Insert or replace by id. A run is written once when it starts and again
    * when it finishes, so this is the ordinary write path. */
   upsert(row: ScheduledJobRunUpsert): Promise<ScheduledJobRunRow>
-  /** Insert only when the id is absent; returns null when a row already
-   * exists. Used by the one-time import for the reason on the provider store. */
-  insertIfAbsent(row: ScheduledJobRunUpsert): Promise<ScheduledJobRunRow | null>
   remove(id: string): Promise<boolean>
   /** Drops all but the newest `keep` runs of a job. Returns how many went. */
   prune(jobId: string, keep?: number): Promise<number>
@@ -76,18 +73,6 @@ async function upsert(row: ScheduledJobRunUpsert): Promise<ScheduledJobRunRow> {
   return saved
 }
 
-async function insertIfAbsent(
-  row: ScheduledJobRunUpsert,
-): Promise<ScheduledJobRunRow | null> {
-  const now = Date.now()
-  const [saved] = await getDb()
-    .insert(scheduledJobRuns)
-    .values({ ...row, createdAt: row.createdAt ?? now, updatedAt: now })
-    .onConflictDoNothing({ target: scheduledJobRuns.id })
-    .returning()
-  return saved ?? null
-}
-
 async function prune(
   jobId: string,
   keep: number = MAX_RUNS_PER_JOB,
@@ -120,7 +105,6 @@ export const dbScheduledJobRunStore: ScheduledJobRunStore = {
   list,
   get,
   upsert,
-  insertIfAbsent,
   remove,
   prune,
 }

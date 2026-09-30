@@ -97,11 +97,10 @@ async fn roundtrip_case(root: &Path) -> anyhow::Result<()> {
     let raw = std::fs::read_to_string(&analytics_path)?;
     assert!(raw.ends_with('\n'));
     let persisted: Value = serde_json::from_str(&raw)?;
-    assert_eq!(persisted.as_object().map(serde_json::Map::len), Some(1));
+    assert_eq!(persisted.as_object().map(serde_json::Map::len), Some(2));
     assert_eq!(persisted["enabled"], false);
-    let installation: Value =
-        serde_json::from_str(&std::fs::read_to_string(root.join("installation.json"))?)?;
-    assert_eq!(installation["install_id"], distinct_id);
+    assert_eq!(persisted["distinctId"], distinct_id);
+    assert!(!root.join("installation.json").exists());
 
     let restarted = test_router(root).await?;
     let (status, after_restart) =
@@ -129,10 +128,12 @@ async fn gate_off_case(root: &Path) -> anyhow::Result<()> {
     assert_eq!(state["consent"], true);
     let persisted: Value =
         serde_json::from_str(&std::fs::read_to_string(root.join("analytics.json"))?)?;
-    let installation: Value =
-        serde_json::from_str(&std::fs::read_to_string(root.join("installation.json"))?)?;
-    assert_eq!(state["distinctId"], installation["install_id"]);
-    assert_eq!(persisted, json!({ "enabled": true }));
+    assert_eq!(state["distinctId"], persisted["distinctId"]);
+    assert_eq!(
+        persisted,
+        json!({ "enabled": true, "distinctId": state["distinctId"] })
+    );
+    assert!(!root.join("installation.json").exists());
     Ok(())
 }
 
@@ -148,7 +149,6 @@ async fn test_router(root: &Path) -> anyhow::Result<Router> {
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
-        auth_token: None,
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
     Ok(build_router(state))

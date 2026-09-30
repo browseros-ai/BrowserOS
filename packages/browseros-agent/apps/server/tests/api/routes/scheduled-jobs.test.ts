@@ -11,7 +11,6 @@ const JOB_ID = 'job-1'
 function row(overrides: Partial<ScheduledJobRow> = {}): ScheduledJobRow {
   return {
     id: JOB_ID,
-    profileId: null,
     name: 'Morning digest',
     query: 'summarise my inbox',
     scheduleType: 'daily',
@@ -41,10 +40,6 @@ function memoryStore(initial: ScheduledJobRow[] = []) {
       } as ScheduledJobRow
       rows.set(saved.id, saved)
       return saved
-    },
-    insertIfAbsent: async (input: ScheduledJobUpsert) => {
-      if (rows.has(input.id)) return null
-      return store.upsert(input)
     },
     remove: async (id) => rows.delete(id),
   }
@@ -130,6 +125,115 @@ describe('scheduled job routes', () => {
     expect(response.status).toBe(400)
   })
 
+  it('rejects a daily job with no time', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    const response = await put(routes, {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('rejects a daily job with a malformed time', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    for (const scheduleTime of ['9am', '24:00', '09:60', '9:5', '']) {
+      const response = await put(routes, { ...body, scheduleTime })
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('accepts daily edge times', async () => {
+    for (const scheduleTime of ['00:00', '23:59']) {
+      const response = await put(createScheduledJobRoutes(memoryStore()), {
+        ...body,
+        scheduleTime,
+      })
+      expect(response.status).toBe(200)
+    }
+  })
+
+  it('rejects an interval job with no interval', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    for (const scheduleType of ['hourly', 'minutes'] as const) {
+      const response = await put(routes, {
+        ...body,
+        scheduleType,
+        scheduleTime: null,
+        scheduleInterval: null,
+      })
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('rejects an out-of-range or non-integer interval', async () => {
+    const routes = createScheduledJobRoutes(memoryStore())
+    for (const scheduleInterval of [0, -1, 61, 1.5]) {
+      const response = await put(routes, {
+        ...body,
+        scheduleType: 'minutes',
+        scheduleTime: null,
+        scheduleInterval,
+      })
+      expect(response.status).toBe(400)
+    }
+  })
+
+  it('accepts a valid interval job and persists the interval', async () => {
+    for (const [scheduleType, scheduleInterval] of [
+      ['hourly', 6],
+      ['minutes', 30],
+    ] as const) {
+      const { store, rows } = memoryStore()
+      const response = await put(createScheduledJobRoutes({ store }), {
+        ...body,
+        scheduleType,
+        scheduleTime: null,
+        scheduleInterval,
+      })
+      expect(response.status).toBe(200)
+      expect(rows.get(JOB_ID)?.scheduleInterval).toBe(scheduleInterval)
+    }
+  })
+
+  it('allows maintenance writes on a job with a legacy-invalid cadence', async () => {
+    // A job stored before this validation can have a missing time. Recording
+    // lastRunAt after a run, or toggling enabled, keeps the same (invalid)
+    // cadence, so those writes must still succeed, otherwise run reporting and
+    // missed-run processing break and the job cannot be toggled to fix it.
+    const { store, rows } = memoryStore([
+      row({ scheduleType: 'daily', scheduleTime: null }),
+    ])
+    const routes = createScheduledJobRoutes({ store })
+
+    const runWriteBack = await put(routes, {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+      lastRunAt: 1234,
+    })
+    expect(runWriteBack.status).toBe(200)
+    expect(rows.get(JOB_ID)?.lastRunAt).toBe(1234)
+
+    const toggle = await put(routes, {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+      enabled: false,
+    })
+    expect(toggle.status).toBe(200)
+  })
+
+  it('rejects changing an existing job to an invalid cadence', async () => {
+    const { store } = memoryStore([row()]) // stored as a valid daily 09:00 job
+    const response = await put(createScheduledJobRoutes({ store }), {
+      ...body,
+      scheduleType: 'daily',
+      scheduleTime: null,
+    })
+    expect(response.status).toBe(400)
+  })
+
   it('deletes a job', async () => {
     const { store, rows } = memoryStore([row()])
     const routes = createScheduledJobRoutes({ store })
@@ -144,44 +248,5 @@ describe('scheduled job routes', () => {
     expect(
       (await routes.request(`/${JOB_ID}`, { method: 'DELETE' })).status,
     ).toBe(404)
-  })
-
-  describe('import', () => {
-    async function importJobs(
-      routes: ReturnType<typeof createScheduledJobRoutes>,
-      jobs: unknown[],
-    ) {
-      return routes.request('/import', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ jobs }),
-      })
-    }
-
-    it('inserts a job that is not there yet', async () => {
-      const { store, rows } = memoryStore()
-      const routes = createScheduledJobRoutes({ store })
-      const response = await importJobs(routes, [{ ...body, id: JOB_ID }])
-
-      expect(response.status).toBe(200)
-      expect(await response.json()).toEqual({ imported: [JOB_ID], skipped: [] })
-      expect(rows.get(JOB_ID)).toMatchObject({ name: 'Morning digest' })
-    })
-
-    it('leaves an existing job untouched and reports it skipped', async () => {
-      const { store, rows } = memoryStore([row({ name: 'Edited since' })])
-      const routes = createScheduledJobRoutes({ store })
-      const response = await importJobs(routes, [
-        { ...body, id: JOB_ID, name: 'Stale copy' },
-      ])
-
-      expect(await response.json()).toEqual({ imported: [], skipped: [JOB_ID] })
-      expect(rows.get(JOB_ID)?.name).toBe('Edited since')
-    })
-
-    it('rejects a job with no id', async () => {
-      const routes = createScheduledJobRoutes(memoryStore())
-      expect((await importJobs(routes, [body])).status).toBe(400)
-    })
   })
 })

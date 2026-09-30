@@ -216,6 +216,37 @@ pub async fn focus_element(
     Ok(())
 }
 
+// `DOM.focus` needs `DOM.getDocument` to have run for the session first, which
+// fresh MCP sessions have not done, so it fails with "Document needs to be
+// requested first" (#2640). `HTMLElement.focus()` over `Runtime.callFunctionOn`
+// has no such dependency, the same runtime path `js_click` already uses.
+//
+// Success is confirmed against the resulting active element, not merely that a
+// `focus` method exists: every HTMLElement exposes `focus()`, but disabled or
+// otherwise unfocusable targets stay unfocused, and reporting those as success
+// would let `act focus` claim it moved focus when it did not. `getRootNode()`
+// resolves the active element inside the element's own root so shadow-DOM
+// targets are not mistaken for failures.
+pub async fn focus_element_js(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+) -> Result<(), CoreError> {
+    let focused = call_on_element(
+        session,
+        backend_node_id,
+        "function(){if(typeof this.focus!=='function'){return false}this.focus();return this.getRootNode().activeElement===this}",
+        None,
+    )
+    .await?;
+    if focused.as_bool().unwrap_or(false) {
+        Ok(())
+    } else {
+        Err(CoreError::Message(
+            "Element cannot receive focus.".to_string(),
+        ))
+    }
+}
+
 pub async fn js_click(session: &ProtocolSession, backend_node_id: i64) -> Result<(), CoreError> {
     let object_id = resolve_object_id(session, backend_node_id, None).await?;
     let _: Value = session
@@ -227,18 +258,29 @@ pub async fn js_click(session: &ProtocolSession, backend_node_id: i64) -> Result
     Ok(())
 }
 
-pub async fn get_input_value(session: &ProtocolSession, backend_node_id: i64) -> String {
-    call_on_element(
-        session,
-        backend_node_id,
-        "function(){return this.value??this.textContent??\"\"}",
-        None,
-    )
-    .await
-    .ok()
-    .and_then(|value| value.as_str().map(ToString::to_string))
-    .unwrap_or_default()
+/// Read the connected field, preserving the distinction between empty and unreadable.
+pub async fn get_input_value(
+    session: &ProtocolSession,
+    backend_node_id: i64,
+) -> Result<String, CoreError> {
+    let value = call_on_element(session, backend_node_id, READ_INPUT_VALUE_JS, None).await?;
+    value.as_str().map(ToString::to_string).ok_or_else(|| {
+        CoreError::Message("Could not read the field value. Take a new snapshot.".to_string())
+    })
 }
+
+// Blink keeps a lone <br> as the caret placeholder in an emptied editing host.
+// Its innerText is a newline, but it represents no user text. Do not trim actual
+// whitespace or multiple line breaks from a nonempty editor.
+const READ_INPUT_VALUE_JS: &str = r#"
+function() {
+    if (!this.isConnected) return null;
+    if (typeof this.value === 'string') return this.value;
+    if (!this.isContentEditable) return null;
+    if (this.childNodes.length === 1 && this.firstChild.nodeName === 'BR') return '';
+    return this.innerText;
+}
+"#;
 
 pub async fn call_on_element(
     session: &ProtocolSession,
@@ -314,7 +356,7 @@ fn quad_center(quad: &[f64]) -> Point {
 
 #[cfg(test)]
 mod tests {
-    use super::{call_function_params, click_blocker_at_point};
+    use super::{call_function_params, click_blocker_at_point, focus_element_js};
     use crate::{CoreError, ProtocolSession, connection::CdpConnection, input::Point};
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
@@ -327,6 +369,7 @@ mod tests {
         Blocked(&'static str),
         Clear,
         Error,
+        Bool(bool),
     }
 
     struct MockConnection {
@@ -357,6 +400,9 @@ mod tests {
                                 code: -32000,
                                 message: "execution context unavailable".to_string(),
                             }),
+                            HitTestResponse::Bool(value) => {
+                                Ok(json!({ "result": { "value": value } }))
+                            }
                         }
                     }
                     _ => Ok(json!({})),
@@ -461,6 +507,40 @@ mod tests {
         let (_connection, session) = session_with(HitTestResponse::Error);
 
         let result = click_blocker_at_point(&session, 10, Point { x: 50.0, y: 25.0 }).await;
+
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn focus_element_js_focuses_through_runtime() -> Result<(), CoreError> {
+        let (connection, session) = session_with(HitTestResponse::Bool(true));
+
+        focus_element_js(&session, 10).await?;
+
+        let calls = match connection.calls.lock() {
+            Ok(calls) => calls.clone(),
+            Err(_err) => Vec::new(),
+        };
+        // Focus must go through Runtime.callFunctionOn (this.focus()), never the
+        // DOM domain that needs a prior DOM.getDocument (#2640), and it must
+        // confirm the element actually became active rather than trusting that a
+        // focus method exists.
+        assert_eq!(calls.len(), 1);
+        let function = calls
+            .first()
+            .and_then(|call| call.get("functionDeclaration"))
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        assert!(function.contains("this.focus()"));
+        assert!(function.contains("activeElement===this"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn focus_element_js_reports_unfocusable_element() {
+        let (_connection, session) = session_with(HitTestResponse::Bool(false));
+
+        let result = focus_element_js(&session, 10).await;
 
         assert!(result.is_err());
     }

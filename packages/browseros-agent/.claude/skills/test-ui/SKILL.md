@@ -33,7 +33,6 @@ This single command handles everything:
 - Picks random available ports (avoids conflicts)
 - Creates a fresh browser profile
 - Builds controller-ext
-- Runs GraphQL codegen if `apps/app/generated/graphql/` doesn't exist
 - Starts the agent extension with WXT HMR (hot module replacement)
 - Waits for CDP to be ready
 - Starts the MCP server

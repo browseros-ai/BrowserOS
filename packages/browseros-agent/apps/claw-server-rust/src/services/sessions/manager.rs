@@ -48,6 +48,31 @@ struct RetainedSession {
     ended_at: Instant,
 }
 
+/// Why a session handle stopped resolving.
+///
+/// The distinction is the whole point of the tombstone: an agent that presents a handle
+/// the user deliberately stopped deserves a different answer from one whose session was
+/// reaped out from under it.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum RetirementCause {
+    /// The user pressed Stop in the cockpit. A deliberate instruction, so it refuses.
+    Cancelled,
+    /// Idle sweep, transport close or shutdown. Nobody asked for it, so it redirects.
+    Closed,
+}
+
+/// A handle that no longer resolves, kept just long enough to explain itself.
+struct Retired {
+    at: Instant,
+    cause: RetirementCause,
+    /// The successor minted for an agent that kept presenting this handle.
+    ///
+    /// Recorded once and then reused. The server already returns a fresh handle on every
+    /// call and agents have been observed resending the dead one regardless, so a stubborn
+    /// agent must land in one session rather than minting one per call.
+    replacement: Option<SessionId>,
+}
+
 /**
  * Tracks sessions removed from the live map whose asynchronous teardown is still running. A
  * removal registers while holding the sessions write lock, so shutdown cannot observe an empty
@@ -93,6 +118,9 @@ impl Drop for TeardownPermit<'_> {
 /// later reap succeeds.
 pub struct Sessions {
     sessions: RwLock<HashMap<SessionId, Arc<Session>>>,
+    /// Handles that stopped resolving, and what to tell an agent still presenting one.
+    /// Bounded by the same retention window as `retained` and reaped by the same sweep.
+    retired: RwLock<HashMap<SessionId, Retired>>,
     ownership: Arc<PageOwnership>,
     audit_log: Arc<AuditLog>,
     session_tabs: Arc<SessionTabLedger>,
@@ -143,6 +171,7 @@ impl Sessions {
     ) -> Arc<Self> {
         Arc::new(Self {
             sessions: RwLock::new(HashMap::new()),
+            retired: RwLock::new(HashMap::new()),
             ownership: Arc::new(PageOwnership::new()),
             audit_log,
             session_tabs,
@@ -263,6 +292,66 @@ impl Sessions {
         self.sessions.read().await.contains_key(id)
     }
 
+    /// Why a handle stopped resolving, for a caller deciding what to tell the agent.
+    ///
+    /// `None` means the server genuinely has no memory of it: never minted, or retired
+    /// long enough ago to have been reaped.
+    pub async fn retirement_of(&self, id: &SessionId) -> Option<RetirementCause> {
+        self.retired.read().await.get(id).map(|entry| entry.cause)
+    }
+
+    /// The successor already bound to a retired handle, if one is.
+    ///
+    /// Lets a caller take the settled answer without minting a session it would only have
+    /// to discard, which is the common case: the race happens once, the resends follow.
+    pub async fn replacement_of(&self, retired: &SessionId) -> Option<SessionId> {
+        self.retired.read().await.get(retired)?.replacement.clone()
+    }
+
+    /// Binds one substitute to a handle that does not resolve live, and returns the
+    /// substitute that won.
+    ///
+    /// Records the handle if it was not recorded already, because the case that matters
+    /// most is a handle this server has no memory of at all. Both maps live in memory, so
+    /// a restart makes every handle its agents are holding unrecognised at once. Without a
+    /// binding those mint per call, and an agent faithfully resending one handle collects a
+    /// session and a tab for every call it makes. Observed in the wild: one handle, seven
+    /// calls, seven sessions.
+    ///
+    /// Compare-and-set under a single write lock, so concurrent calls presenting the same
+    /// handle converge on one session instead of racing to two. A caller whose `candidate`
+    /// loses is responsible for discarding it.
+    ///
+    /// The bound session is always server-minted; a presented handle is only ever a map
+    /// key, so a caller still cannot choose or seed a session id.
+    pub async fn adopt_replacement(&self, handle: &SessionId, candidate: SessionId) -> SessionId {
+        let mut entries = self.retired.write().await;
+        let entry = entries.entry(handle.clone()).or_insert_with(|| Retired {
+            at: Instant::now(),
+            cause: RetirementCause::Closed,
+            replacement: None,
+        });
+        entry.replacement.get_or_insert(candidate).clone()
+    }
+
+    async fn retire(&self, id: &SessionId, cause: RetirementCause) {
+        self.retired.write().await.insert(
+            id.clone(),
+            Retired {
+                at: Instant::now(),
+                cause,
+                replacement: None,
+            },
+        );
+    }
+
+    async fn reap_retired(&self, now: Instant) -> usize {
+        let mut entries = self.retired.write().await;
+        let before = entries.len();
+        entries.retain(|_, entry| now.duration_since(entry.at) < self.retention);
+        before - entries.len()
+    }
+
     /// Returns the current live sessions in stable id order for read-side joins.
     pub async fn snapshot(&self) -> Vec<Arc<Session>> {
         let mut sessions: Vec<_> = self.sessions.read().await.values().cloned().collect();
@@ -307,11 +396,19 @@ impl Sessions {
         &self,
         session_id: &SessionId,
     ) -> AppResult<Option<usize>> {
+        // The tombstone is written in the same critical section as the removal, not after
+        // teardown. Teardown waits on in-flight dispatches and can take seconds, and that
+        // gap is exactly the window in which an agent's next call would mint a session.
+        // The moment a handle stops resolving is the moment it must start explaining itself.
         let session = {
             let mut sessions = self.sessions.write().await;
-            sessions
+            let removed = sessions
                 .remove(session_id)
-                .map(|session| (session, self.teardowns.begin()))
+                .map(|session| (session, self.teardowns.begin()));
+            if removed.is_some() {
+                self.retire(session_id, RetirementCause::Cancelled).await;
+            }
+            removed
         };
         let Some((session, _teardown)) = session else {
             return Ok(None);
@@ -370,9 +467,13 @@ impl Sessions {
     ) -> AppResult<bool> {
         let session = {
             let mut sessions = self.sessions.write().await;
-            sessions
+            let removed = sessions
                 .remove(id)
-                .map(|session| (session, self.teardowns.begin()))
+                .map(|session| (session, self.teardowns.begin()));
+            if removed.is_some() {
+                self.retire(id, RetirementCause::Closed).await;
+            }
+            removed
         };
         if let Some((session, _teardown)) = session {
             return match self.teardown(session.clone(), kind, reason).await {
@@ -393,6 +494,9 @@ impl Sessions {
                 .await
                 .entry(id.clone())
                 .or_insert(session);
+            // The handle resolves again, so the tombstone would be answering for a live
+            // session.
+            self.retired.write().await.remove(id);
         }
     }
 
@@ -418,6 +522,7 @@ impl Sessions {
             }
         }
         self.reap_retained(now).await;
+        self.reap_retired(now).await;
         Ok(removed)
     }
 
@@ -614,7 +719,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{RetainedGroupAction, Session, Sessions, teardown_all};
+    use super::{RetainedGroupAction, RetirementCause, Session, Sessions, teardown_all};
     use crate::{
         analytics::{AnalyticsSink, events},
         db::{AuditLog, DATABASE_FILENAME, Database, SessionTabLedger, audit_log::TaskStatus},
@@ -696,6 +801,137 @@ mod tests {
         assert_eq!(registry.count().await, 0);
         let detail = audit_log.get_task("s1").await?;
         assert!(detail.is_none());
+        Ok(())
+    }
+
+    fn test_session(id: &str) -> Arc<Session> {
+        Session::new(
+            SessionId::new(id),
+            ClientIdentity::Ephemeral {
+                slug: "a1".to_string(),
+                label: "A1".to_string(),
+            },
+            ConversationIdentity::new("a1", format!("tombstone-{id}")),
+            "Codex".to_string(),
+            Instant::now(),
+        )
+    }
+
+    /// A tombstone is a hint for an agent still holding a dead handle, not a permanent
+    /// record. Once it expires the handle is genuinely unknown and mints as any other
+    /// stranger would, so an agent that ignores the refusal is never locked out for good.
+    #[tokio::test]
+    async fn a_retirement_expires_with_the_retention_window() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(600),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let id = SessionId::new("retiring");
+        registry.insert_for_testing(test_session("retiring")).await;
+        registry.cancel_by_session(&id).await?;
+        assert_eq!(
+            registry.retirement_of(&id).await,
+            Some(RetirementCause::Cancelled)
+        );
+
+        let now = Instant::now();
+        assert_eq!(
+            registry.reap_retired(now + Duration::from_secs(59)).await,
+            0
+        );
+        assert_eq!(
+            registry.retirement_of(&id).await,
+            Some(RetirementCause::Cancelled),
+            "reaped before its retention elapsed"
+        );
+        assert_eq!(
+            registry.reap_retired(now + Duration::from_secs(60)).await,
+            1
+        );
+        assert_eq!(registry.retirement_of(&id).await, None);
+        Ok(())
+    }
+
+    /// An idle sweep or a transport close is nobody's decision, so it retires as `Closed`
+    /// and redirects. Only the cockpit Stop refuses.
+    #[tokio::test]
+    async fn an_unrequested_end_retires_as_closed_not_cancelled() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(600),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let id = SessionId::new("swept");
+        registry.insert_for_testing(test_session("swept")).await;
+        registry.remove(&id, "closed", Some("idle timeout")).await?;
+        assert_eq!(
+            registry.retirement_of(&id).await,
+            Some(RetirementCause::Closed)
+        );
+        Ok(())
+    }
+
+    /// One successor per dead handle, decided under a single lock. Without this, two calls
+    /// arriving together would each mint, and the burst would simply move from sequential
+    /// to concurrent.
+    #[tokio::test]
+    async fn a_replacement_is_bound_once_and_then_reused() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (audit_log, session_tabs) = repositories(&dir).await?;
+        let registry = Sessions::new(
+            audit_log,
+            session_tabs,
+            Duration::from_secs(600),
+            Duration::from_secs(60),
+            Duration::from_secs(1),
+        );
+        let id = SessionId::new("closing");
+        registry.insert_for_testing(test_session("closing")).await;
+        registry
+            .remove(&id, "closed", Some("transport closed"))
+            .await?;
+
+        let first = registry
+            .adopt_replacement(&id, SessionId::new("first"))
+            .await;
+        let second = registry
+            .adopt_replacement(&id, SessionId::new("second"))
+            .await;
+        assert_eq!(first.to_string(), "first");
+        assert_eq!(
+            second.to_string(),
+            "first",
+            "the second caller must adopt the first substitute, not its own"
+        );
+
+        // A handle the server has no record of binds just the same. This is the case a
+        // restart creates for every handle at once, and leaving it unbound is what handed
+        // one agent seven sessions for one handle.
+        let stranger = SessionId::new("stranger");
+        assert_eq!(
+            registry
+                .adopt_replacement(&stranger, SessionId::new("third"))
+                .await
+                .to_string(),
+            "third"
+        );
+        assert_eq!(
+            registry
+                .adopt_replacement(&stranger, SessionId::new("fourth"))
+                .await
+                .to_string(),
+            "third",
+            "an unknown handle must bind once and then stay bound"
+        );
         Ok(())
     }
 
@@ -956,6 +1192,9 @@ mod tests {
             Instant::now(),
         );
         session.request_operator_stop();
+        registry
+            .retire(session.id(), RetirementCause::Cancelled)
+            .await;
 
         registry
             .restore_pending_operator_stop(session.id(), session.clone())
@@ -966,6 +1205,9 @@ mod tests {
             .await
             .ok_or_else(|| anyhow::anyhow!("pending operator stop was not restored"))?;
         assert!(Arc::ptr_eq(&restored, &session));
+        // The handle resolves again, so a tombstone left behind would refuse calls to a
+        // session that is demonstrably alive.
+        assert_eq!(registry.retirement_of(session.id()).await, None);
         Ok(())
     }
 

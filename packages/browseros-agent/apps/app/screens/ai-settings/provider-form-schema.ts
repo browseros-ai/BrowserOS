@@ -15,7 +15,6 @@ const providerTypeEnum = z.enum([
   'ollama',
   'lmstudio',
   'bedrock',
-  'browseros',
   'chatgpt-pro',
   'github-copilot',
   'qwen-code',

@@ -26,7 +26,6 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
-        auth_token: None,
     });
     let state = AppState::new_with_home(config, home).await?;
     let session = Session::new(

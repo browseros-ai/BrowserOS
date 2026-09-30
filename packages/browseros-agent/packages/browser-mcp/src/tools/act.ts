@@ -1,5 +1,6 @@
 import type { BrowserSession } from '@browseros/browser-core/core/session'
 import { z } from 'zod/v4'
+import type { DiffDetail } from './diff-format'
 import {
   defineTool,
   errorResult,
@@ -14,7 +15,7 @@ type InputApi = ReturnType<BrowserSession['input']>
 export const act = defineTool({
   name: 'act',
   description:
-    'Act on the page using refs from the last snapshot. kinds: click, type (into focused element), fill (one field via ref+value, or many via fields[]), press (a key/combo), hover, focus, check, uncheck, select (an option value), scroll, drag. Prefer the ref-based kinds; use the coordinate kinds (click_at/type_at/hover_at/drag_at) only when the target is not in the snapshot. Reads back a diff of what changed - re-snapshot if you need fresh refs. If a click or fill fails, scroll the target into view and retry once. Never type credentials into a page you navigated to yourself; only into pages the user already opened or explicitly directed you to.',
+    'Act on the page using refs from the last snapshot. kinds: click, type (into focused element), fill (one field via ref+value, or many via fields[]), press (a key/combo), hover, focus, check, uncheck, select (an option value), scroll, drag. Prefer the ref-based kinds; use the coordinate kinds (click_at/type_at/hover_at/drag_at) only when the target is not in the snapshot. Reads back a diff of what changed (control its size with the diff param) - re-snapshot if you need fresh refs. If a click or fill fails, scroll the target into view and retry once. Never type credentials into a page you navigated to yourself; only into pages the user already opened or explicitly directed you to.',
   input: z
     .object({
       page: z.number().int(),
@@ -67,6 +68,12 @@ export const act = defineTool({
       button: z.enum(['left', 'middle', 'right']).optional(),
       clickCount: z.number().int().optional(),
       clear: z.boolean().optional(),
+      diff: z
+        .union([z.enum(['none', 'summary', 'full']), z.number()])
+        .optional()
+        .describe(
+          'Post-action diff detail. "full" (default) returns the whole change diff; "summary" returns only change counts; "none" skips it; a number caps the inline diff to that many characters (overflow spilled to a local file). Use "none"/"summary"/a small number on large pages where a full diff floods context.',
+        ),
     })
     .strict(),
   annotations: {
@@ -80,10 +87,22 @@ export const act = defineTool({
     if (err) return err
 
     response.data({ kind: args.kind })
-    response.includeDiff(args.page, { includeStructured: true })
+    const detail = resolveDiffDetail(args.diff)
+    if (detail !== 'none') {
+      response.includeDiff(args.page, { includeStructured: true, detail })
+    }
     return textResult(`ok (${args.kind})`)
   },
 })
+
+/** Maps the act `diff` arg to a diff detail, or 'none' to skip the readback entirely (#2700). */
+function resolveDiffDetail(
+  diff: 'none' | 'summary' | 'full' | number | undefined,
+): DiffDetail | 'none' {
+  if (diff === undefined || diff === 'full') return 'full'
+  if (diff === 'none' || diff === 'summary') return diff
+  return { maxChars: Math.max(0, Math.floor(diff)) }
+}
 
 type ActArgs = {
   kind: string

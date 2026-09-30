@@ -4,19 +4,8 @@ import {
 } from '@browseros/shared/schemas/chat-error'
 import { AlertCircle, RefreshCw } from 'lucide-react'
 import type { FC } from 'react'
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
 import { Button } from '@/components/ui/button'
-
-const SURVEY_DIRECTIONS = [
-  'competitor',
-  'switching',
-  'workflow',
-  'activation',
-] as const
-
-function pickRandomDirection(): string {
-  return SURVEY_DIRECTIONS[Math.floor(Math.random() * SURVEY_DIRECTIONS.length)]
-}
 
 export interface ChatErrorProps {
   error: Error
@@ -31,7 +20,6 @@ interface ChatErrorView {
   linkLabel?: string
   details?: string
   canRetry: boolean
-  showSurvey: boolean
 }
 
 /**
@@ -41,11 +29,7 @@ interface ChatErrorView {
 const CODE_COPY: Partial<
   Record<ChatErrorEnvelope['code'], { title: string; linkLabel: string }>
 > = {
-  credits_exhausted: {
-    title: 'Daily limit reached',
-    linkLabel: 'View Usage & Billing',
-  },
-  rate_limited: { title: 'Rate limited', linkLabel: 'About daily limits' },
+  rate_limited: { title: 'Rate limited', linkLabel: 'Learn more' },
   auth_failed: {
     title: 'Authentication failed',
     linkLabel: 'Open AI settings',
@@ -83,10 +67,6 @@ function fromEnvelope(envelope: ChatErrorEnvelope): ChatErrorView {
     linkLabel: known?.linkLabel,
     details: envelope.details,
     canRetry: envelope.retryable,
-    // The survey belongs to the BrowserOS daily-limit prompt ("add your own
-    // key"), not to plain credit exhaustion, which links to billing instead.
-    showSurvey:
-      envelope.code === 'rate_limited' && envelope.provider === 'browseros',
   }
 }
 
@@ -94,9 +74,7 @@ function fromEnvelope(envelope: ChatErrorEnvelope): ChatErrorView {
  * Fallback for bare strings: client-side fetch failures, an older agent server,
  * or an error raised outside the classifier.
  */
-function fromMessage(message: string, providerType?: string): ChatErrorView {
-  const isBrowserosProvider = providerType === 'browseros'
-
+function fromMessage(message: string): ChatErrorView {
   // All chat requests go through the local BrowserOS agent server, so any
   // fetch failure is always a local connection issue.
   if (message.includes('Failed to fetch') || message.includes('fetch failed')) {
@@ -106,37 +84,6 @@ function fromMessage(message: string, providerType?: string): ChatErrorView {
       url: 'https://docs.browseros.com/troubleshooting/connection-issues',
       linkLabel: 'View troubleshooting guide',
       canRetry: true,
-      showSurvey: false,
-    }
-  }
-
-  if (
-    isBrowserosProvider &&
-    (message.includes('CREDITS_EXHAUSTED') ||
-      message.includes('Credits exhausted') ||
-      message.includes('Daily credits exhausted'))
-  ) {
-    return {
-      title: 'Daily limit reached',
-      text: 'Daily credits exhausted. Credits reset at midnight UTC.',
-      url: '/app.html#/settings/usage',
-      linkLabel: 'View Usage & Billing',
-      canRetry: false,
-      showSurvey: false,
-    }
-  }
-
-  if (
-    isBrowserosProvider &&
-    message.includes('BrowserOS LLM daily limit reached')
-  ) {
-    return {
-      title: 'Daily limit reached',
-      text: 'Add your own API key for unlimited usage.',
-      url: 'https://dub.sh/browseros-usage-limit',
-      linkLabel: 'About daily limits',
-      canRetry: false,
-      showSurvey: true,
     }
   }
 
@@ -158,13 +105,12 @@ function fromMessage(message: string, providerType?: string): ChatErrorView {
     text: text || 'An unexpected error occurred',
     url,
     canRetry: true,
-    showSurvey: false,
   }
 }
 
-function buildView(message: string, providerType?: string): ChatErrorView {
+function buildView(message: string): ChatErrorView {
   const envelope = parseChatErrorEnvelope(message)
-  return envelope ? fromEnvelope(envelope) : fromMessage(message, providerType)
+  return envelope ? fromEnvelope(envelope) : fromMessage(message)
 }
 
 /** Pretty-print JSON details; leave already-formatted or non-JSON text as-is. */
@@ -176,19 +122,9 @@ function formatErrorDetails(details: string): string {
   }
 }
 
-export const ChatError: FC<ChatErrorProps> = ({
-  error,
-  onRetry,
-  providerType,
-}) => {
+export const ChatError: FC<ChatErrorProps> = ({ error, onRetry }) => {
   const [copiedDetails, setCopiedDetails] = useState(false)
-  const view = buildView(error.message, providerType)
-
-  const surveyUrl = useMemo(
-    () =>
-      `/app.html?page=survey&maxTurns=20&experimentId=daily_limit_${pickRandomDirection()}#/settings/survey`,
-    [],
-  )
+  const view = buildView(error.message)
 
   const canRetry = !!onRetry && view.canRetry
 
@@ -214,7 +150,7 @@ export const ChatError: FC<ChatErrorProps> = ({
         <span className="font-medium text-sm">{view.title}</span>
       </div>
       <p className="text-center text-destructive text-xs">{view.text}</p>
-      {view.url && view.linkLabel && !view.showSurvey && (
+      {view.url && view.linkLabel && (
         <a
           href={view.url}
           target="_blank"
@@ -223,31 +159,6 @@ export const ChatError: FC<ChatErrorProps> = ({
         >
           {view.linkLabel}
         </a>
-      )}
-      {view.showSurvey && (
-        <p className="text-muted-foreground text-xs">
-          {view.url && (
-            <>
-              <a
-                href={view.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="underline hover:text-foreground"
-              >
-                {view.linkLabel ?? 'About daily limits'}
-              </a>
-              {' or '}
-            </>
-          )}
-          <a
-            href={surveyUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="underline hover:text-foreground"
-          >
-            take a quick survey
-          </a>
-        </p>
       )}
       {detailsText && detailsText !== view.text && (
         <div className="w-full">

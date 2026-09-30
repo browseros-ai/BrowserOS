@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fill contract fixture</title>
+    <style>
+      label { display: block; margin: 8px; }
+      #covered-wrap { position: relative; width: 240px; }
+      #cover { position: absolute; inset: 0; background: white; }
+    </style>
+  </head>
+  <body>
+    <label>Text field <input id="text" value="original"></label>
+    <label>Multiline <textarea id="multiline">first
+second</textarea></label>
+    <label>Email field <input id="email" type="email" value="old@example.com"></label>
+    <label>Number field <input id="number" type="number" value="42"></label>
+    <label>Password field <input id="password" type="password" value="original"></label>
+    <div id="rich" contenteditable="true" role="textbox" aria-label="Rich editor">old <b>content</b></div>
+    <label>Read only <input id="readonly" readonly value="original"></label>
+    <fieldset disabled><label>Disabled field <input id="disabled" value="original"></label></fieldset>
+    <div id="covered-wrap">
+      <label>Covered field <input id="covered" value="original"></label>
+      <div id="cover"></div>
+    </div>
+    <label>Rejecting field <input id="reject" value="original"></label>
+    <label>Reverting field <input id="revert" value="original"></label>
+    <label>Detached field <input id="detach" value="original"></label>
+    <label>Focus redirect <input id="redirect" value="original"></label>
+    <label>Other field <input id="other" value="untouched"></label>
+    <div id="shadow-host"></div>
+    <script>
+      // Browser editing must fire trusted events, and handlers must run before
+      // the tool claims success. Microtask rollback models controlled inputs.
+      window.fillEvents = []
+      document.addEventListener('input', event => {
+        window.fillEvents.push({id: event.target.id, trusted: event.isTrusted})
+      })
+      document.getElementById('reject').addEventListener('beforeinput', event => event.preventDefault())
+      document.getElementById('revert').addEventListener('input', event => {
+        queueMicrotask(() => { event.target.value = 'original' })
+      })
+      document.getElementById('detach').addEventListener('input', event => {
+        event.target.remove()
+      })
+      document.getElementById('redirect').addEventListener('focus', () => {
+        document.getElementById('other').focus()
+      })
+      const shadow = document.getElementById('shadow-host').attachShadow({mode: 'open'})
+      shadow.innerHTML = '<label>Shadow field <input value="original"></label>'
+    </script>
+  </body>
+</html>

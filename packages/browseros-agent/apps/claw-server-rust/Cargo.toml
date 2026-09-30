@@ -1,6 +1,6 @@
 [package]
 name = "claw-server-rust"
-version = "0.0.53"
+version = "0.0.59"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -27,8 +27,11 @@ base64.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 posthog-rs.workspace = true
+ress.workspace = true
+sentry.workspace = true
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
+reqwest.workspace = true
 rmcp.workspace = true
 rand.workspace = true
 serde.workspace = true

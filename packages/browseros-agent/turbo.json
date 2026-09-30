@@ -10,26 +10,17 @@
     "turbo.json"
   ],
   "globalEnv": ["CI"],
-  "globalPassThroughEnv": [
-    "VITE_PUBLIC_BROWSEROS_API",
-    "BROWSEROS_*",
-    "NODE_ENV"
-  ],
+  "globalPassThroughEnv": ["BROWSEROS_*", "NODE_ENV"],
   "tasks": {
-    "codegen": {
-      "outputs": ["generated/**", "src/**/*.gen.ts"]
-    },
     "build": {
-      "dependsOn": ["^build", "codegen"],
+      "dependsOn": ["^build"],
       "inputs": ["$TURBO_DEFAULT$", ".env*"],
       "outputs": ["dist/**", ".output/**", ".wxt/**", "build/**"]
     },
     "typecheck": {
-      "dependsOn": ["codegen"],
       "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
     },
     "test": {
-      "dependsOn": ["codegen"],
       "outputs": ["test-results/**", "coverage/**"]
     },
     "lint:rust": {

@@ -55,6 +55,7 @@ import type {
   HydratedChatRequest,
 } from '../types'
 import { resolveBrowserContextPageIds } from '../utils/resolve-browser-context-page-ids'
+import { shouldPersist } from './chat-persistence-mode'
 import {
   describeMcpChange,
   describeModeChange,
@@ -358,7 +359,7 @@ export class ChatService {
     }
 
     if (isNewSession) {
-      if (request.historyMode === 'local') {
+      if (shouldPersist(request)) {
         const stored = await this.getConversationStore().get(
           request.conversationId,
         )
@@ -487,7 +488,7 @@ export class ChatService {
             turnCompleted,
           })
 
-          if (request.historyMode === 'local' && turnCompleted) {
+          if (shouldPersist(request) && turnCompleted) {
             await this.persistConversation({
               id: request.conversationId,
               messages: session.agent.messages,

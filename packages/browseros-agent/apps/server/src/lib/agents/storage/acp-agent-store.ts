@@ -83,7 +83,6 @@ export class DbAcpAgentStore implements AcpAgentStore {
       const row = {
         id: randomUUID(),
         kind: 'acp' as const,
-        profileId: null,
         name: input.name.trim(),
         type: input.type,
         modelId: optionalText(input.modelId),

@@ -1,5 +1,9 @@
+mod aliases;
+pub mod drift_guards;
+pub mod error_allowlist;
 pub mod events;
 mod installation;
+pub mod script_fingerprint;
 mod service;
 mod state;
 

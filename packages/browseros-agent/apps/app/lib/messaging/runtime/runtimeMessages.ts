@@ -2,7 +2,6 @@ import { defineExtensionMessaging } from '@webext-core/messaging'
 
 export const RuntimeMessageType = {
   getTabId: 'runtime.getTabId',
-  authSuccess: 'runtime.authSuccess',
   stopAgent: 'runtime.stopAgent',
 } as const
 
@@ -16,7 +15,6 @@ export interface RuntimeStopAgentData {
 
 type RuntimeMessagesProtocol = {
   [RuntimeMessageType.getTabId](): RuntimeTabIdResponse
-  [RuntimeMessageType.authSuccess](): void
   [RuntimeMessageType.stopAgent](data: RuntimeStopAgentData): void
 }
 

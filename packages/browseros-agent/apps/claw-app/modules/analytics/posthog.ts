@@ -12,11 +12,12 @@
  *
  * posthog-js defaults are aggressively disabled: no autocapture (would
  * read DOM text), no automatic pageviews, no feature-flag polling, no
- * console recording, and no person profiles. A 20% sample of consenting
+ * console recording, and no client-created person profiles. The server may
+ * link historical UUIDs through an alias with no profile properties. A 20% sample of consenting
  * cockpit sessions may be recorded with inputs masked, task-bearing DOM
  * blocked, and replay URLs replaced by a fixed token. Auto-captured location properties
  * (`$current_url` etc.) are stripped so even the cockpit's own extension
- * URL never leaves. Identity is the server's anonymous install UUID, set
+ * URL never leaves. Identity is the server's canonical analytics.json UUID, set
  * via `bootstrap.distinctID` (no `identify`, no PII).
  *
  * Gated on a build-time project write key (`VITE_CLAW_POSTHOG_KEY`) and
@@ -24,12 +25,14 @@
  * initialised and every capture no-ops.
  */
 
-import posthog, { type PostHogConfig } from 'posthog-js'
+import posthog, { type PostHog, type PostHogConfig } from 'posthog-js'
 import 'posthog-js/dist/posthog-recorder'
 
 const KEY = import.meta.env.VITE_CLAW_POSTHOG_KEY as string | undefined
+// Optional release secrets arrive as empty strings. Passing one to PostHog
+// overrides its default host and resolves requests against chrome-extension://.
 const HOST =
-  (import.meta.env.VITE_CLAW_POSTHOG_HOST as string | undefined) ??
+  (import.meta.env.VITE_CLAW_POSTHOG_HOST as string | undefined)?.trim() ||
   'https://us.i.posthog.com'
 const REDACTED_REPLAY_URL = 'browserclaw://redacted'
 
@@ -47,12 +50,27 @@ const STRIPPED_PROPS = [
 ]
 
 let initialised = false
+const captureStateListeners = new Set<() => void>()
+let lastCaptureState = false
+
+function notifyCaptureStateListeners(): void {
+  const nextCaptureState = isCapturing()
+  if (nextCaptureState === lastCaptureState) return
+  lastCaptureState = nextCaptureState
+  for (const listener of captureStateListeners) listener()
+}
 
 export function sanitizeProperties(
   properties: Record<string, unknown>,
 ): Record<string, unknown> {
   const cleaned = { ...properties }
   for (const key of STRIPPED_PROPS) delete cleaned[key]
+  // Read the installed package at capture time: persisted super-properties can
+  // outlive an extension update, while identity reset clears registered ones.
+  // Web development has no extension manifest, so omit its version.
+  const appVersion = globalThis.chrome?.runtime?.getManifest?.().version
+  if (appVersion) cleaned.app_version = appVersion
+  else delete cleaned.app_version
   return cleaned
 }
 
@@ -84,11 +102,12 @@ export function createPostHogConfig(
     // Do not persist browser location metadata outside the event sanitizer.
     save_campaign_params: false,
     save_referrer: false,
-    // We never call identify(), so never create a person profile.
+    // The UI never creates profiles. Server-side migration aliases can associate
+    // this UUID with an existing profile containing only the linked UUIDs.
     person_profiles: 'never',
     persistence: 'localStorage',
-    // Share the server's anonymous install id so both surfaces map to
-    // one install, without identify().
+    // Bootstrap the server's analytics.json UUID so both surfaces use the same
+    // identity, including when Chromium still reports an older installation ID.
     bootstrap: { distinctID: distinctId },
     sanitize_properties: sanitizeProperties,
     session_recording: {
@@ -137,29 +156,53 @@ function init(distinctId: string): void {
 }
 
 /**
+ * A sidecar update can restore the legacy UUID while this tab stays open.
+ * Stop the old replay before resetting to the server's anonymous identity;
+ * the caller reapplies effective consent because reset clears SDK consent.
+ * Historical A/B linking belongs to the Rust alias worker, never identify().
+ */
+export function reconcileTelemetryIdentity(
+  client: Pick<PostHog, 'get_distinct_id' | 'stopSessionRecording' | 'reset'>,
+  distinctId: string,
+): void {
+  if (client.get_distinct_id() === distinctId) return
+  client.stopSessionRecording()
+  client.reset({ bootstrap: { distinctID: distinctId, isIdentifiedID: false } })
+}
+
+/**
  * Reconciles the posthog client with the server's EFFECTIVE telemetry
  * state. `enabled` already folds in the user's consent, the operator
  * kill-switch, and the server key, so the cockpit respects all three by
  * gating on it. Initialises on first enable, opts in/out on later
- * changes, no-ops without a Vite key. Safe to call repeatedly.
+ * changes, resets a changed identity before resuming capture, and no-ops
+ * without a Vite key. Safe to call repeatedly.
  */
 export function applyTelemetry(input: {
   distinctId: string
   enabled: boolean
 }): void {
-  if (!KEY || !input.distinctId) return
-  if (input.enabled) {
+  if (!KEY) return
+  if (input.enabled && input.distinctId) {
     const wasInitialised = initialised
     if (!wasInitialised) init(input.distinctId)
+    else reconcileTelemetryIdentity(posthog, input.distinctId)
     reconcileSessionRecording(posthog, true, wasInitialised)
   } else {
     reconcileSessionRecording(posthog, false, initialised)
   }
+  notifyCaptureStateListeners()
 }
 
 /** Whether posthog is initialised AND currently opted in to capturing. */
 export function isCapturing(): boolean {
   return initialised && !posthog.has_opted_out_capturing()
+}
+
+/** Subscribes React consumers to changes in effective capture readiness. */
+export function subscribeToCaptureState(listener: () => void): () => void {
+  captureStateListeners.add(listener)
+  return () => captureStateListeners.delete(listener)
 }
 
 /** Fire-and-forget event. No-ops until capturing. */

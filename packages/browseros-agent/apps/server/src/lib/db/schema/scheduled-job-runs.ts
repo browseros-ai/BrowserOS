@@ -40,7 +40,6 @@ export const scheduledJobRuns = sqliteTable(
   'scheduled_job_runs',
   {
     id: text('id').primaryKey(),
-    profileId: text('profile_id'),
     jobId: text('job_id')
       .notNull()
       .references(() => scheduledJobs.id, { onDelete: 'cascade' }),

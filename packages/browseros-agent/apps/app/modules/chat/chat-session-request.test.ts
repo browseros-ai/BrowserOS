@@ -20,7 +20,7 @@ describe('chat request preparation', () => {
 
     expect(request.api).toBe('http://127.0.0.1:5151/chat')
     expect(request.body).toMatchObject({
-      target: { type: 'browseros', providerId: 'browseros' },
+      target: { type: 'browseros', providerId: 'openai-1' },
       message: 'Summarize this page',
     })
     // The provider is named, not described: its configuration is resolved
@@ -65,6 +65,23 @@ describe('chat request preparation', () => {
       ],
     })
     expect('provider' in request.body).toBe(false)
+  })
+
+  it('names no provider when nothing is connected', () => {
+    // Undefined rather than a fabricated built-in provider. Naming one the
+    // user never configured would run the turn on credentials they did not
+    // choose; naming none lets the server answer that none is selected.
+    const request = buildSidepanelPreparedSendMessagesRequest({
+      agentServerUrl: 'http://127.0.0.1:5151',
+      target: undefined,
+      fallbackProvider: undefined,
+      message: 'Summarize this page',
+      ...commonRequestInput(),
+    })
+
+    expect(request.body).toMatchObject({
+      target: { type: 'browseros', providerId: undefined },
+    })
   })
 
   it('resolves the server URL for every send', async () => {
@@ -112,10 +129,10 @@ function commonRequestInput() {
 }
 
 const fallbackProvider: LlmProviderConfig = {
-  id: 'browseros',
-  type: 'browseros',
-  name: 'BrowserOS',
-  modelId: 'browseros-auto',
+  id: 'openai-1',
+  type: 'openai',
+  name: 'OpenAI',
+  modelId: 'gpt-5',
   supportsImages: true,
   contextWindow: 200000,
   temperature: 0.2,

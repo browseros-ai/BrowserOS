@@ -94,3 +94,61 @@ export const INSTALL_STEPS: readonly InstallStep[] = [
     },
   },
 ]
+
+/**
+ * Manual setup, for agents that are not in the Connected agents list.
+ *
+ * Connecting a supported harness does two things: it writes the MCP entry
+ * and it installs the skill. Someone wiring an agent up by hand has to do
+ * both, and doing only the first is the failure this copy exists to stop.
+ */
+
+/** The skills.sh pack this repository publishes. */
+export const SKILLS_PACK = 'browseros-ai/browseros'
+
+/** The one skill in that pack meant for users, rather than for working on this repo. */
+export const SKILL_NAME = 'browseros-neo'
+
+/**
+ * Scoped to the single skill on purpose. `npx skills add <pack>` with no
+ * flag installs five skills, four of them ours for working on this codebase:
+ * ask-internal, write-internal-docs, sup-writing-plans and write-docs. One of
+ * those points an agent at a private repo, so none of them belong in a user's
+ * agent. Verified by running both forms.
+ */
+export const SKILL_INSTALL_COMMAND = `npx skills add ${SKILLS_PACK} --skill ${SKILL_NAME}`
+
+/** The name the MCP server should be given, matching what the skill looks for. */
+export const MCP_SERVER_NAME = 'browseros-neo'
+
+export const MANUAL_SETUP_DOCS_URL = 'https://docs.browseros.com/neo/mcp/manual'
+
+export const MANUAL_SETUP_CARD_LINE =
+  'Connect it by hand: add the endpoint, then install the skill.'
+
+export interface ManualSetupStep {
+  id: string
+  /** Short label for the numbered heading. */
+  title: string
+  body: string
+  /** Rendered as a copyable code block when present. */
+  command?: string
+  /** Shown under the command in smaller type. */
+  note?: string
+}
+
+export const MANUAL_SETUP_STEPS: readonly ManualSetupStep[] = [
+  {
+    id: 'add-mcp',
+    title: 'Add the MCP server',
+    body: `Point your agent at the endpoint URL from this page and add it as a streamable HTTP MCP server named ${MCP_SERVER_NAME}. Where that setting lives depends on the agent, so check its own MCP documentation.`,
+    note: 'Read the URL from the top of this page rather than assuming a port. It is a loopback address and the port is not the same across builds.',
+  },
+  {
+    id: 'install-skill',
+    title: 'Install the skill',
+    body: 'The MCP server gives your agent the tools. The skill tells it how to use them: to work in its own tabs instead of yours, to name its session so you can find it in the cockpit, and to reach for this browser rather than its own fetcher.',
+    command: SKILL_INSTALL_COMMAND,
+    note: 'Run this in your project, or add -g to install it for every project.',
+  },
+]

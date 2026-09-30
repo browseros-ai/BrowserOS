@@ -1,16 +1,19 @@
-import { useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  type QueryClient,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { useEffect } from 'react'
 import { createQuery } from 'react-query-kit'
 import {
   resolveDefaultProviderId,
   resolveSelectedProvider,
 } from '@/lib/llm-providers/provider-selection'
-import { DEFAULT_PROVIDER_ID } from '@/lib/llm-providers/storage'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import {
   deleteProvider as deleteProviderRow,
   fetchDefaultProviderId,
-  fetchProviders,
+  listProviders,
   putDefaultProvider,
   putProvider,
 } from './llm-providers.api'
@@ -19,7 +22,14 @@ import { watchProviderRevision } from './llm-providers.revision'
 
 export interface UseLlmProvidersReturn {
   providers: LlmProviderConfig[]
-  defaultProviderId: string
+  /** Null when nothing is configured, so callers cannot point at a phantom id. */
+  defaultProviderId: string | null
+  /**
+   * The selected id exactly as the server holds it, which may name a coding
+   * agent. `defaultProviderId` resolves against the LLM-only list and so
+   * cannot represent one; a caller that works in both kinds needs this.
+   */
+  storedDefaultTargetId: string | null
   selectedProvider: LlmProviderConfig | null
   isLoading: boolean
   /**
@@ -40,7 +50,7 @@ export interface UseLlmProvidersReturn {
 
 export const useProvidersQuery = createQuery<LlmProviderConfig[]>({
   queryKey: ['llm-providers'],
-  fetcher: fetchProviders,
+  fetcher: listProviders,
 })
 
 /**
@@ -54,6 +64,37 @@ export const useDefaultProviderIdQuery = createQuery<string | null>({
   queryKey: ['provider-default'],
   fetcher: fetchDefaultProviderId,
 })
+
+let latestSelectionWrite = 0
+
+/** Claims the next place in the order of selection writes. */
+export function nextSelectionWrite(): number {
+  latestSelectionWrite += 1
+  return latestSelectionWrite
+}
+
+/**
+ * Puts back the selection a failed write replaced, unless a newer one landed.
+ *
+ * The cache is the only record of the selected target, and the send path reads
+ * the target derived from it, so restoring blindly can hand a message to a
+ * provider nobody chose: someone who picks twice quickly, whose first write
+ * fails after the second has already succeeded, would be moved back to
+ * whatever was selected before either.
+ *
+ * Ordered rather than compared by value. Asking whether the cache still holds
+ * the id this write put there cannot tell that id apart from the same id put
+ * there by a later write, so picking A, then B, then A again would let the
+ * first write undo the third.
+ */
+export function rollBackDefaultProvider(
+  queryClient: QueryClient,
+  write: number,
+  previous: string | null | undefined,
+): void {
+  if (write !== latestSelectionWrite) return
+  queryClient.setQueryData(useDefaultProviderIdQuery.getKey(), previous ?? null)
+}
 
 /** Persists the configured default provider id used by provider selection. */
 export async function persistDefaultProviderId(
@@ -92,7 +133,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
   const providersQuery = useProvidersQuery()
   const defaultQuery = useDefaultProviderIdQuery()
   useProviderRevision()
-  const storedDefaultId = defaultQuery.data ?? DEFAULT_PROVIDER_ID
+  const storedDefaultId = defaultQuery.data ?? null
 
   const providers = providersQuery.data ?? []
   const invalidate = () =>
@@ -117,10 +158,6 @@ export function useLlmProviders(): UseLlmProvidersReturn {
 
   const deleteMutation = useMutation({
     mutationFn: async (providerId: string) => {
-      // The built-in provider is what the app falls back to, so removing it
-      // would leave nothing to chat with.
-      if (providerId === DEFAULT_PROVIDER_ID) return
-
       // Delete first. Moving the default before the row is gone leaves the
       // provider configured but no longer default when the delete fails, with
       // nothing to tell the user it happened. The reverse is harmless: a
@@ -138,7 +175,24 @@ export function useLlmProviders(): UseLlmProvidersReturn {
 
   const setDefaultMutation = useMutation({
     mutationFn: persistDefaultProviderId,
-    onSuccess: invalidateDefault,
+    // Write the choice into the cache before the round trip. This is the value
+    // every surface renders the selected target from, and waiting for the
+    // server would leave the row the user just clicked unselected until it
+    // answered. onSettled re-reads either way, so a failed write corrects
+    // itself rather than sticking.
+    onMutate: (providerId: string) => {
+      const previous = queryClient.getQueryData<string | null>(
+        useDefaultProviderIdQuery.getKey(),
+      )
+      queryClient.setQueryData(useDefaultProviderIdQuery.getKey(), providerId)
+      return { previous, write: nextSelectionWrite() }
+    },
+    onError: (_error, _providerId, context) => {
+      if (context) {
+        rollBackDefaultProvider(queryClient, context.write, context.previous)
+      }
+    },
+    onSettled: invalidateDefault,
   })
 
   const setDefaultProvider = async (providerId: string) => {
@@ -152,6 +206,7 @@ export function useLlmProviders(): UseLlmProvidersReturn {
   return {
     providers,
     defaultProviderId,
+    storedDefaultTargetId: storedDefaultId,
     selectedProvider: resolveSelectedProvider(providers, defaultProviderId),
     isLoading: providersQuery.isPending || defaultQuery.isPending,
     isUnavailable: providersQuery.isError || defaultQuery.isError,

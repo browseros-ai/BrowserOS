@@ -57,7 +57,8 @@ export interface ChatRequestBodyParams {
   userWorkingDir?: string
   supportsImages?: boolean
   previousConversation?: ChatHistoryEntry[] | string
-  historyMode?: 'local' | 'cloud'
+  /** Whether the conversation is written to the local database. */
+  persist?: boolean
   declinedApps?: string[]
   selectedText?: string
   selectedTextSource?: {
@@ -78,7 +79,7 @@ export const buildChatRequestBody = ({
   userWorkingDir,
   supportsImages,
   previousConversation,
-  historyMode,
+  persist,
   declinedApps,
   selectedText,
   selectedTextSource,
@@ -105,7 +106,7 @@ export const buildChatRequestBody = ({
   supportsImages: supportsImages ?? provider?.supportsImages,
   supportsReasoning: provider ? resolvesSupportsReasoning(provider) : undefined,
   previousConversation,
-  historyMode,
+  persist,
   declinedApps: declinedApps?.length ? declinedApps : undefined,
   selectedText,
   selectedTextSource,

@@ -176,12 +176,7 @@ export function Onboarding() {
                   onContinue={() => goTo(2)}
                 />
               )}
-              {step === 2 && (
-                <SetupAgentStep
-                  onSetup={finishOnboarding}
-                  onLater={finishOnboarding}
-                />
-              )}
+              {step === 2 && <SetupAgentStep onSetup={finishOnboarding} />}
             </motion.div>
           </>
         )}

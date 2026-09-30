@@ -14,10 +14,11 @@ import { apiClient } from './client'
 
 export type ConnectionState = Connection
 
+// Polling is opt-in at the call sites (MCP page, Cockpit) so state changed
+// outside the app shows up without a refresh only where that matters.
 export const useConnections = createQuery<ConnectionList>({
   queryKey: ['api', 'connections'],
   fetcher: async () => (await apiClient()).listConnections(),
-  refetchInterval: 5000,
 })
 
 interface ConnectionVariables {

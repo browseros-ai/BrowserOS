@@ -3,10 +3,10 @@ import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import { buildChatRequestBody } from './buildChatRequestBody'
 
 const provider: LlmProviderConfig = {
-  id: 'browseros',
-  type: 'browseros',
-  name: 'BrowserOS',
-  modelId: 'browseros-auto',
+  id: 'openai-1',
+  type: 'openai',
+  name: 'OpenAI',
+  modelId: 'gpt-5',
   supportsImages: true,
   contextWindow: 200000,
   temperature: 0,

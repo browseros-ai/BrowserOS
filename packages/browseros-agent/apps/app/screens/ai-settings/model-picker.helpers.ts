@@ -18,6 +18,25 @@ export function servesUserLoadedModels(providerType: ProviderType): boolean {
 }
 
 /**
+ * Providers whose catalogue is inferred rather than published.
+ *
+ * A ChatGPT subscription reaches the Codex backend, which publishes no model
+ * list, so ours is derived from the platform API's catalogue and corrected by
+ * hand. Qwen Code's is typed out in full. Both are close enough to be useful
+ * and neither can be vouched for, which is the distinction that matters here:
+ * a short list with no caveat reads as the complete set, and that is how
+ * subscription users concluded a newer model was unsupported.
+ */
+const INFERRED_CATALOG_PROVIDERS: ReadonlySet<ProviderType> = new Set([
+  'chatgpt-pro',
+  'qwen-code',
+])
+
+export function hasInferredCatalog(providerType: ProviderType): boolean {
+  return INFERRED_CATALOG_PROVIDERS.has(providerType)
+}
+
+/**
  * Model IDs are usually pasted out of a provider's UI or docs and arrive with
  * surrounding whitespace, which the provider's API then rejects as unknown.
  */
@@ -76,9 +95,10 @@ export function getModelPickerRows(
 /**
  * Guidance rendered under the Model field. Scoped to providers that show a
  * catalog they cannot actually vouch for: a short list reads as authoritative,
- * which is how LM Studio users concluded their loaded models were unsupported.
- * A provider with no catalog already renders a free-form input, and a cloud
- * catalog is authoritative, so both get null and stay uncluttered.
+ * which is how LM Studio users concluded their loaded models were unsupported,
+ * and how subscription users concluded a newer model was unsupported. A
+ * provider with no catalog already renders a free-form input, and a published
+ * cloud catalog is authoritative, so both get null and stay uncluttered.
  */
 export function getIncompleteCatalogHint(
   providerType: ProviderType,
@@ -86,6 +106,12 @@ export function getIncompleteCatalogHint(
   providerName?: string,
 ): string | null {
   if (catalogSize === 0) return null
-  if (!servesUserLoadedModels(providerType)) return null
-  return `${providerName ?? 'This provider'} lists only common models — paste the exact ID of any model you have loaded.`
+  const name = providerName ?? 'This provider'
+  if (servesUserLoadedModels(providerType)) {
+    return `${name} lists only common models — paste the exact ID of any model you have loaded.`
+  }
+  if (hasInferredCatalog(providerType)) {
+    return `This list is a snapshot, not ${name}'s own. Paste the exact ID of any model your plan offers.`
+  }
+  return null
 }

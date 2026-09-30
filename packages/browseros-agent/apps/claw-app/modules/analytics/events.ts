@@ -25,8 +25,13 @@ export const AnalyticsEvent = {
   ProductHuntBannerShown: 'product_hunt_banner_shown',
   ProductHuntBannerClicked: 'product_hunt_banner_clicked',
   ProductHuntBannerDismissed: 'product_hunt_banner_dismissed',
+  FeedbackInviteShown: 'feedback_invite_shown',
+  FeedbackInviteClicked: 'feedback_invite_clicked',
+  FeedbackInviteDismissed: 'feedback_invite_dismissed',
   InstallGuideOpened: 'install_guide_opened',
   InstallGuideDownloadClicked: 'install_guide_download_clicked',
+  ManualSetupOpened: 'manual_setup_opened',
+  ManualSetupCommandCopied: 'manual_setup_command_copied',
 } as const
 
 export type AnalyticsEventName =

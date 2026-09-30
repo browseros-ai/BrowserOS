@@ -4,7 +4,10 @@
 
 use crate::{
     constants::TOOL_POST_ACTION_CAPTURE_TIMEOUT,
-    format::{diff::format_diff_result, snapshot::format_snapshot_result},
+    format::{
+        diff::{DiffDetail, format_diff_result},
+        snapshot::format_snapshot_result,
+    },
     framework::{ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
 };
 use browseros_core::{ConsoleEntry, PageId, settle::SettleOutcome};
@@ -13,10 +16,18 @@ use serde_json::{Value, json};
 
 #[derive(Debug, Clone)]
 enum PostAction {
-    Snapshot { page: u32 },
-    Diff { page: u32, include_structured: bool },
+    Snapshot {
+        page: u32,
+    },
+    Diff {
+        page: u32,
+        include_structured: bool,
+        detail: DiffDetail,
+    },
     Pages,
-    Screenshot { page: u32 },
+    Screenshot {
+        page: u32,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -79,10 +90,11 @@ impl ToolResponse {
         self.post_actions.push(PostAction::Snapshot { page });
     }
 
-    pub fn include_diff(&mut self, page: u32, include_structured: bool) {
+    pub fn include_diff(&mut self, page: u32, include_structured: bool, detail: DiffDetail) {
         self.post_actions.push(PostAction::Diff {
             page,
             include_structured,
+            detail,
         });
     }
 
@@ -167,6 +179,7 @@ impl ToolResponse {
             PostAction::Diff {
                 page,
                 include_structured,
+                detail,
             } => {
                 self.throw_if_dialog_open(ctx, page)?;
                 let diff = ctx
@@ -186,7 +199,7 @@ impl ToolResponse {
                         .map(|info| info.url)
                         .unwrap_or_else(|| "unknown".to_string()),
                 };
-                let formatted = format_diff_result(&diff, &origin, ctx).await;
+                let formatted = format_diff_result(&diff, &origin, ctx, detail).await;
                 self.text(format!("[Page {page} diff]\n{}", formatted.text));
                 if include_structured {
                     let mut structured = json!({ "changed": diff.changed });

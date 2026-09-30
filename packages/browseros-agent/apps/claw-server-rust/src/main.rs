@@ -132,6 +132,23 @@ async fn serve_with_boot_task(
         }
         Err(err) => return Err(err).context("failed to bind claw-server listener"),
     };
+    // Deliberately after the bind and before serving, and only on this path. Closing the
+    // sessions of a process that is gone means closing every session with no end row, and
+    // that query cannot tell one of those from a session running right now. It is only
+    // unambiguous while this process holds the port and has not yet served a request, so
+    // nothing can have minted a session. Run any earlier and a second instance, including
+    // one about to fail with "singleton is already running", would close the live sessions
+    // of the instance that owns the port. The stdio transport deliberately does not do this:
+    // it has no port, so it has no claim to exclusivity.
+    if let Err(error) = runtime
+        .state()
+        .audit_log
+        .close_sessions_open_from_previous_run()
+        .await
+    {
+        // Tidying past runs must never stop this one from serving.
+        warn!(error = %error, "closing sessions from a previous run failed");
+    }
     analytics.capture(events::SERVER_STARTED, json!({}));
     // Use the ACTUAL bound address, not the requested port, so an OS-assigned
     // or dev port (config port 0) is still published correctly.
@@ -364,7 +381,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let shutdown = state.shutdown.clone();
@@ -414,7 +430,6 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
-            auth_token: None,
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let mut runtime = AppRuntime::start(state);

@@ -8,8 +8,11 @@ import * as Sentry from '@sentry/bun'
 
 import { INLINED_ENV } from '../env'
 import { VERSION } from '../version'
+import { createEventBudget } from './sentry-throttle'
 
 const SENTRY_ENVIRONMENT = process.env.NODE_ENV || 'development'
+
+const eventBudget = createEventBudget()
 
 // Ensure to call this before importing any other modules!
 Sentry.init({
@@ -28,6 +31,14 @@ Sentry.init({
       if (toolName) {
         event.fingerprint = ['tool-execution', toolName]
       }
+    }
+
+    // Cap each issue so one looping error cannot drain the Sentry quota. Runs
+    // after fingerprinting so the budget groups events the way Sentry will.
+    const suppressed = eventBudget.admit(event)
+    if (suppressed === null) return null
+    if (suppressed > 0) {
+      event.tags = { ...event.tags, throttled_suppressed: suppressed }
     }
 
     return sanitizeEvent(event)

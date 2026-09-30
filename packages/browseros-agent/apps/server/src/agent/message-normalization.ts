@@ -39,11 +39,6 @@ function supportsToolResultMediaTransport(
       const modelId = config.model.toLowerCase()
       return modelId.includes('gemini-3') && !modelId.includes('gemini-2')
     }
-    case LLM_PROVIDERS.BROWSEROS:
-      return (
-        config.upstreamProvider === LLM_PROVIDERS.ANTHROPIC ||
-        config.upstreamProvider === LLM_PROVIDERS.AZURE
-      )
     default:
       return false
   }
@@ -80,6 +75,29 @@ function toolResultContentPartToUserMedia(
   part: ToolResultContentPart,
 ): UserMediaPart | null {
   switch (part.type) {
+    // The canonical AI SDK v7 file part is what the MCP client actually emits
+    // for an image tool result (image-data/file-data are its deprecated
+    // predecessors). Its data is a tagged union; only the inline `data` variant
+    // carries bytes we can re-attach. Without this case a screenshot is dropped
+    // for every provider that cannot carry media inside a tool result (#2722).
+    case 'file': {
+      if (part.data.type !== 'data') {
+        return null
+      }
+      if (part.mediaType.startsWith('image/')) {
+        return {
+          type: 'image',
+          image: part.data.data,
+          mediaType: part.mediaType,
+        }
+      }
+      return {
+        type: 'file',
+        data: part.data.data,
+        mediaType: part.mediaType,
+        filename: part.filename,
+      }
+    }
     case 'image-data':
       if (part.mediaType.startsWith('image/')) {
         return {

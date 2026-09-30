@@ -29,7 +29,7 @@ import { McpServerIcon } from '@/components/mcp/McpServerIcon'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { type StagedAttachment, stageAttachments } from '@/lib/attachments'
-import { BrowserOSIcon, ProviderIcon } from '@/lib/llm-providers/providerIcons'
+import { ProviderIcon } from '@/lib/llm-providers/providerIcons'
 import type { ProviderType } from '@/lib/llm-providers/types'
 import { useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { cn } from '@/lib/utils'
@@ -626,8 +626,6 @@ function BotInputIcon({ provider }: { provider?: Provider | null }) {
     <div className="flex h-8 w-8 items-center justify-center overflow-hidden rounded-lg bg-[var(--accent-orange)]/10 text-[var(--accent-orange)]">
       {AcpMark ? (
         <AcpMark className="h-5 w-5" />
-      ) : provider?.type === 'browseros' ? (
-        <BrowserOSIcon size={18} />
       ) : provider && provider.kind === 'llm' ? (
         <ProviderIcon type={provider.type as ProviderType} size={18} />
       ) : (
@@ -642,6 +640,5 @@ function TargetPillIcon({ provider }: { provider: Provider }) {
     const Mark = BRAND_MARKS[provider.brandKey ?? '']
     return Mark ? <Mark className="size-3" /> : <Bot className="size-3" />
   }
-  if (provider.type === 'browseros') return <BrowserOSIcon size={12} />
   return <ProviderIcon type={provider.type as ProviderType} size={12} />
 }

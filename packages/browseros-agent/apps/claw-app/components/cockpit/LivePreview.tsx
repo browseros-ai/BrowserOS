@@ -1,5 +1,5 @@
 import { Globe } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { Replayer } from 'rrweb'
 import { cn } from '@/lib/utils'
 import { useApiBaseUrl } from '@/modules/api/audit.hooks'
@@ -10,6 +10,13 @@ import 'rrweb-player/dist/style.css'
 const FULL_SNAPSHOT = 2
 const META = 4
 const DEFAULT_SIZE = { width: 1280, height: 720 }
+
+function subscribeToVisibility(onChange: () => void): () => void {
+  document.addEventListener('visibilitychange', onChange)
+  return () => document.removeEventListener('visibilitychange', onChange)
+}
+
+const isDocumentVisible = () => document.visibilityState === 'visible'
 
 interface LivePreviewProps {
   site: string
@@ -57,10 +64,19 @@ function SessionLivePreview({
   const baseUrl = useApiBaseUrl()
   const mountRef = useRef<HTMLDivElement>(null)
   const [rendering, setRendering] = useState(false)
+  // SSE shares the browser's HTTP/1 connection pool with diagnostics and other
+  // API reads. Hidden cockpits must release their streams or a few open tabs
+  // exhaust that pool. Only preview playback pauses: recording continues in the
+  // background, and reopening the stream obtains a fresh server bootstrap.
+  const visible = useSyncExternalStore(
+    subscribeToVisibility,
+    isDocumentVisible,
+    () => false,
+  )
 
   useEffect(() => {
     const mount = mountRef.current
-    if (!mount || baseUrl === null) return
+    if (!mount || baseUrl === null || !visible) return
 
     const query =
       browserTabId === undefined ? '' : `?browserTabId=${browserTabId}`
@@ -158,7 +174,7 @@ function SessionLivePreview({
       source.close()
       teardown()
     }
-  }, [baseUrl, sessionId, browserTabId])
+  }, [baseUrl, sessionId, browserTabId, visible])
 
   return (
     <div

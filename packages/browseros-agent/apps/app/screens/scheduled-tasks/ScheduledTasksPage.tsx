@@ -1,6 +1,7 @@
 import { type FC, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { RunResultDialog } from '@/components/ai-elements/run-result-dialog'
+import { NoProviderNotice } from '@/components/chat/NoProviderNotice'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,6 +25,8 @@ import {
 } from '@/lib/constants/analyticsEvents'
 import { track } from '@/lib/metrics/track'
 import type { ScheduledJobRun } from '@/lib/schedules/scheduleTypes'
+import { useAcpAgents } from '@/modules/agents/agents.hooks'
+import { useLlmProviders } from '@/modules/llm-providers/llm-providers.hooks'
 import {
   useScheduledJobRuns,
   useScheduledJobs,
@@ -42,6 +45,15 @@ export const ScheduledTasksPage: FC = () => {
   const { jobs, addJob, editJob, toggleJob, removeJob, runJob } =
     useScheduledJobs()
   const { jobRuns, cancelJobRun } = useScheduledJobRuns()
+  // Read directly rather than through useChatTargetSelection: this page only
+  // needs to know whether anything is connected, not which one is selected.
+  const { providers, isLoading: isLoadingProviders } = useLlmProviders()
+  const { agents, settled: agentsSettled } = useAcpAgents()
+  const noTarget =
+    !isLoadingProviders &&
+    agentsSettled &&
+    providers.length === 0 &&
+    agents.length === 0
 
   const [selectedTab, setSelectedTab] = useState<string | null>(null)
   // Derived rather than set from an effect, so it settles when the history
@@ -158,6 +170,10 @@ export const ScheduledTasksPage: FC = () => {
   return (
     <div className="fade-in slide-in-from-bottom-5 animate-in space-y-6 duration-500">
       <ScheduledTasksHeader onAddClick={handleAdd} />
+
+      {/* Every run resolves a provider server side, so with nothing connected
+          each one fails rather than falling back to anything. */}
+      {noTarget && <NoProviderNotice variant="inline" />}
 
       <Tabs value={activeTab} onValueChange={setSelectedTab}>
         <TabsList>

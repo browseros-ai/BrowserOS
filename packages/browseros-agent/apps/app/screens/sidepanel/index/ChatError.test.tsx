@@ -31,7 +31,7 @@ beforeAll(async () => {
   ChatError = (await import('./ChatError')).ChatError
 })
 
-function renderError(error: Error, providerType = 'browseros') {
+function renderError(error: Error, providerType = 'openai') {
   return renderToStaticMarkup(
     createElement(ChatError, {
       error,
@@ -60,39 +60,31 @@ describe('ChatError legacy string handling', () => {
     expect(html).toContain('Try again')
   })
 
-  it('hides retry for credits-exhausted errors', () => {
-    const html = renderError(new Error('CREDITS_EXHAUSTED'))
+  it('surfaces an unrecognised message as-is and still offers retry', () => {
+    const html = renderError(new Error('The model request failed.'))
 
-    expect(html).toContain('Daily credits exhausted')
-    expect(html).not.toContain('Try again')
-  })
-
-  it('hides retry for BrowserOS daily-limit errors', () => {
-    const html = renderError(
-      new Error('BrowserOS LLM daily limit reached for today'),
-    )
-
-    expect(html).toContain('Add your own API key')
-    expect(html).not.toContain('Try again')
+    expect(html).toContain('The model request failed.')
+    expect(html).toContain('Try again')
   })
 })
 
 describe('ChatError envelope handling', () => {
-  it('renders the real reason for credit exhaustion and hides retry', () => {
+  it('renders the real reason for a provider refusal and hides retry', () => {
     const html = renderError(
       envelopeError({
-        code: 'credits_exhausted',
-        title: 'Daily limit reached',
-        message: 'You have used all your BrowserOS credits.',
+        code: 'provider_config',
+        title: 'Provider not configured',
+        message: 'The model you selected is not available on this key.',
         retryable: false,
-        provider: 'browseros',
-        docsUrl: '/app.html#/settings/usage',
+        provider: 'openai',
       }),
     )
 
-    expect(html).toContain('Daily limit reached')
-    expect(html).toContain('You have used all your BrowserOS credits.')
-    expect(html).toContain('View Usage &amp; Billing')
+    expect(html).toContain('Provider not configured')
+    expect(html).toContain(
+      'The model you selected is not available on this key.',
+    )
+    expect(html).toContain('Open AI settings')
     expect(html).not.toContain('Try again')
   })
 
@@ -166,14 +158,14 @@ describe('ChatError envelope handling', () => {
   it('keeps the classified message and shows the full server JSON pretty-printed', () => {
     const html = renderError(
       envelopeError({
-        code: 'credits_exhausted',
-        title: 'Daily limit reached',
-        message: 'You have used all your BrowserOS credits.',
+        code: 'rate_limited',
+        title: 'Rate limited',
+        message: 'The provider is rate limiting requests.',
         retryable: false,
-        provider: 'browseros',
+        provider: 'openrouter',
         details: JSON.stringify({
           error: {
-            code: 'CREDITS_EXHAUSTED',
+            code: 'RATE_LIMITED',
             metadata: { raw: 'quota 0 of 100' },
           },
         }),
@@ -181,12 +173,12 @@ describe('ChatError envelope handling', () => {
     )
 
     // Classified message stays on top...
-    expect(html).toContain('You have used all your BrowserOS credits.')
+    expect(html).toContain('The provider is rate limiting requests.')
     // ...and the raw specifics the generic message hid are visible with copy.
     expect(html).not.toContain('Show details')
     expect(html).toContain('Full error')
     expect(html).toContain('Copy')
-    expect(html).toContain('CREDITS_EXHAUSTED')
+    expect(html).toContain('RATE_LIMITED')
     expect(html).toContain('quota 0 of 100')
   })
 

@@ -7,7 +7,7 @@ import type {
   ScheduledJob,
   ScheduledJobRun,
 } from '@/lib/schedules/scheduleTypes'
-import { resolveAgentServerUrlWithRetry } from '@/modules/browseros/agent-server-url.helpers'
+import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import {
   type ScheduledJobRow,
   type ScheduledJobRunRow,
@@ -19,12 +19,12 @@ import {
 import { bumpScheduleRevision } from './schedules.revision'
 
 async function jobsClient() {
-  const baseUrl = await resolveAgentServerUrlWithRetry()
+  const baseUrl = await resolveAgentServerUrl()
   return hc<ScheduledJobRoutes>(`${baseUrl}/scheduled-jobs`)
 }
 
 async function runsClient() {
-  const baseUrl = await resolveAgentServerUrlWithRetry()
+  const baseUrl = await resolveAgentServerUrl()
   return hc<ScheduledJobRunRoutes>(`${baseUrl}/scheduled-job-runs`)
 }
 
@@ -104,23 +104,5 @@ export async function listScheduledJobRunsOrNull(): Promise<
     return await listScheduledJobRuns()
   } catch {
     return null
-  }
-}
-
-/** One-time import of run history from extension storage. */
-export async function importScheduledJobRuns(
-  runs: ScheduledJobRun[],
-): Promise<void> {
-  const client = await runsClient()
-  const response = await client.import.$post({
-    json: {
-      runs: runs.map((run) => ({
-        ...toScheduledJobRunPayload(run),
-        id: run.id,
-      })),
-    },
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to import run history (${response.status})`)
   }
 }

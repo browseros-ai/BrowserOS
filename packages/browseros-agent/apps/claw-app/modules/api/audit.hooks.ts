@@ -74,12 +74,12 @@ export const useSessions = createInfiniteQuery<
   placeholderData: (previous) => previous,
 })
 
+// Polling is opt-in at the call site (see cockpit.data.ts), never a factory
+// default, so consumers that only need a one-off snapshot do not poll.
 export const useLiveSessions = createQuery<SessionList>({
   queryKey: ['api', 'sessions', 'live'],
   fetcher: async () =>
     (await apiClient()).listSessions({ status: SessionStatus.Live }),
-  refetchInterval: 1500,
-  refetchIntervalInBackground: true,
 })
 
 export const useSessionDetail = createQuery<
@@ -94,6 +94,8 @@ export const useSessionDetail = createQuery<
     query.state.data?.session.status === 'live' ? 3000 : false,
 })
 
+// No factory refetchInterval: the audit detail screen opts in only while the
+// session is live (see task-detail.data.ts) so a finished session stops polling.
 export const useSessionScreenshots = createQuery<
   SessionScreenshotList,
   { sessionId: string },
@@ -102,7 +104,6 @@ export const useSessionScreenshots = createQuery<
   queryKey: ['api', 'session', 'screenshots'],
   fetcher: async ({ sessionId }) =>
     (await apiClient()).listSessionScreenshots({ sessionId }),
-  refetchInterval: 3000,
 })
 
 /** Absolute URL for one immutable session-owned screenshot. */
@@ -166,10 +167,11 @@ export function useSessionPreviewUrl(
  * Audit storage usage + the active retention policy for the "Manage audit
  * files" dialog. Polled so the numbers stay fresh while the dialog is open.
  */
+// Polling is opt-in at the call site (the Manage audit files dialog) so the
+// numbers stay fresh only while that dialog is open.
 export const useAuditStorage = createQuery<AuditStorageState>({
   queryKey: ['api', 'audit', 'storage'],
   fetcher: async () => (await apiClient()).getAuditStorage(),
-  refetchInterval: 30000,
 })
 
 /** Persist the retention policy. Callers invalidate `useAuditStorage`. */

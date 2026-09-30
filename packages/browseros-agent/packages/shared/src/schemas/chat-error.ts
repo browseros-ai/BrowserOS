@@ -19,8 +19,7 @@
 
 /** Categories the UI can render a tailored action for. */
 export const CHAT_ERROR_CODES = [
-  'credits_exhausted', // BrowserOS quota spent
-  'rate_limited', // provider 429 that is not credit exhaustion
+  'rate_limited', // provider 429
   'auth_failed', // 401/403 - key or token rejected
   'provider_config', // missing/invalid provider setup, caught before streaming
   'context_length', // prompt exceeded the model's window

@@ -3,11 +3,7 @@ import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { AcpAgent } from '@/modules/agents/acp-agent-types'
 import type { TargetRowAction } from './ConfiguredTargetRow'
 
-export function providerDescription(
-  provider: LlmProviderConfig,
-  isBuiltIn: boolean,
-): string {
-  if (isBuiltIn) return 'BrowserOS-hosted model with strict rate limits'
+export function providerDescription(provider: LlmProviderConfig): string {
   return provider.baseUrl
     ? `${provider.modelId} · ${provider.baseUrl}`
     : provider.modelId
@@ -31,28 +27,24 @@ export function agentDescription(agent: AcpAgent): string {
 }
 
 /**
- * The first action is always "set as default": the row's radio and its
- * hover button both invoke it, and everything after it lands in the overflow
- * menu. The built-in BrowserOS provider cannot be tested, edited or deleted,
- * so it gets that one action and no menu.
+ * The first action is always "set as default": the row's radio and its hover
+ * button both invoke it, and everything after it lands in the overflow menu.
  */
 export function buildProviderActions(input: {
   provider: LlmProviderConfig
-  isBuiltIn: boolean
   isTesting: boolean
   onSelectProvider: (providerId: string) => void
   onTestProvider: (provider: LlmProviderConfig) => void
   onEditProvider: (provider: LlmProviderConfig) => void
   onDeleteProvider: (provider: LlmProviderConfig) => void
 }): TargetRowAction[] {
-  const { provider, isBuiltIn, isTesting } = input
+  const { provider, isTesting } = input
   const actions: TargetRowAction[] = [
     {
       label: 'Set as default',
       onSelect: () => input.onSelectProvider(provider.id),
     },
   ]
-  if (isBuiltIn) return actions
 
   actions.push(
     {

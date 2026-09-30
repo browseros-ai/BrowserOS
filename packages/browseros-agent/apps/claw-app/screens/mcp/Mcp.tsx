@@ -14,10 +14,11 @@ import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
 import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
 import { HeroCard } from './HeroCard'
+import { ManualSetupCard } from './ManualSetupCard'
 
 export function Mcp() {
   const [url, setUrl] = useState<string | null>(null)
-  const connections = useConnections()
+  const connections = useConnections({ refetchInterval: 5000 })
   const connect = useConnectHarness()
   const disconnect = useDisconnectHarness()
   const queryClient = useQueryClient()
@@ -122,6 +123,7 @@ export function Mcp() {
         )}
       </section>
       <ClaudeDesktopCard />
+      <ManualSetupCard endpointUrl={url} />
     </div>
   )
 }

@@ -6,7 +6,7 @@
  */
 
 import type { CaseContext, ContractCase } from './cases'
-import { expectOk, waitUntil } from './helpers'
+import { expectError, expectOk, waitUntil } from './helpers'
 import { textOf } from './mcp-client'
 
 const UNTRUSTED = /\[(END_)?UNTRUSTED_PAGE_CONTENT[^\]]*\]/g
@@ -348,7 +348,60 @@ export const readEvalCases: ContractCase[] = [
 
   // run --------------------------------------------------------------------
   {
-    name: 'run: SDK end-to-end pages.list -> snapshot -> click -> return',
+    name: 'run: page handle end-to-end open -> snapshot -> click -> return',
+    smoke: true,
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/form.html'))
+      const text = payload(
+        expectOk(
+          await ctx.mcp.callTool('run', {
+            code: `
+              const p = browser.page(${page})
+              const snap = await p.snapshot()
+              const applyRef = snap.text.split('\\n').find(l => l.includes('Apply')).match(/\\[ref=(e\\d+)\\]/)[1]
+              await p.click(applyRef)
+              const md = await p.read()
+              return { applied: true, read: md.length > 0 }
+            `,
+          }),
+          'run handle end-to-end',
+        ),
+      )
+      if (!text.includes('applied')) {
+        throw new Error(
+          `run handle end-to-end did not return the expected value:\n${text.slice(0, 300)}`,
+        )
+      }
+      await waitUntil(
+        async () =>
+          (
+            await evalIn(
+              ctx,
+              page,
+              'return document.getElementById("result").textContent',
+            )
+          ).includes('applied'),
+        'the run script click to update #result',
+      )
+    },
+  },
+  {
+    name: 'run: a selector where a ref belongs is refused before the wire',
+    async run(ctx) {
+      const page = await ctx.openPage(ctx.fixture('/form.html'))
+      const message = expectError(
+        await ctx.mcp.callTool('run', {
+          code: `await browser.page(${page}).click('.apply')`,
+        }),
+        'selector rejected',
+      )
+      if (!message.includes('snapshot ref')) {
+        throw new Error(`expected a ref-domain error, got:\n${message}`)
+      }
+    },
+  },
+  {
+    name: 'run: legacy SDK end-to-end pages.list -> snapshot -> click -> return',
     smoke: true,
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))

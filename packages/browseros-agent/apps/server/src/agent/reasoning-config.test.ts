@@ -145,17 +145,6 @@ describe('buildAgentReasoningConfig', () => {
     ).toEqual({})
   })
 
-  test('BROWSEROS resolves via upstreamProvider', () => {
-    const out = buildAgentReasoningConfig(
-      cfg({
-        provider: LLM_PROVIDERS.BROWSEROS,
-        upstreamProvider: LLM_PROVIDERS.ANTHROPIC,
-        reasoningEffort: 'high',
-      }),
-    )
-    expect(out).toEqual({ reasoning: 'high' })
-  })
-
   test('a non-reasoning model is skipped for every provider', () => {
     for (const provider of [
       LLM_PROVIDERS.OPENAI,
