@@ -176,7 +176,7 @@ jobs:
           fi
 
           if [ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-            gh release edit "$TAG" --draft=false
+            gh release edit "$TAG" --draft=false --latest=false
           fi
         working-directory: ${{ github.workspace }}
 
