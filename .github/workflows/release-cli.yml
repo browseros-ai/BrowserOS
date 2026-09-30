@@ -170,6 +170,7 @@ jobs:
           else
             gh release create "$TAG" \
               --verify-tag \
+              --latest=false \
               --title "BrowserOS CLI - v${VERSION}" \
               --notes-file /tmp/release-notes.md \
               ${CLI_DIST}/*
