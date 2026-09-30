@@ -232,6 +232,8 @@ BrowserOS neo and BrowserOS are open source under the [AGPL-3.0 license](LICENSE
 
 Copyright &copy; 2026 Felafax, Inc.
 
+Watch the repo if you want to hear when agents can do something new.
+
 ## Stargazers
 
 Thank you to all our supporters.
