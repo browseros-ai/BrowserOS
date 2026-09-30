@@ -27,6 +27,38 @@ function yaml(name: string): Record<string, unknown> {
   >
 }
 
+describe('feedback invitation rounds', () => {
+  test('keeps bounded rounds optional for old clients and servers', () => {
+    const schemas = yaml('schemas/feedback.yaml') as Record<
+      string,
+      { required: string[]; properties: Record<string, unknown> }
+    >
+    for (const name of ['FeedbackInvitation', 'RecordFeedbackInviteRequest']) {
+      expect(schemas[name]?.required).not.toContain('round')
+      expect(schemas[name]?.properties.round).toMatchObject({
+        type: 'integer',
+        format: 'int32',
+        minimum: 1,
+        maximum: 3,
+      })
+    }
+  })
+
+  test('requires clients to opt into rounds with a default-false query flag', () => {
+    const paths = yaml('paths/feedback.yaml') as {
+      invitation: { get: { parameters: unknown[] } }
+    }
+    expect(paths.invitation.get.parameters).toContainEqual(
+      expect.objectContaining({
+        name: 'supportsRounds',
+        in: 'query',
+        required: false,
+        schema: { type: 'boolean', default: false },
+      }),
+    )
+  })
+})
+
 describe('session visual API schema', () => {
   test('owns preview and screenshot routes beneath sessions', () => {
     const openapi = yaml('openapi.yaml') as {

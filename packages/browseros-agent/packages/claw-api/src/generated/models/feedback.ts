@@ -30,10 +30,16 @@ export interface FeedbackInvitation {
      * @memberof FeedbackInvitation
      */
     bookUrl?: string;
+    /**
+     * The offered invitation round. Older servers may omit it.
+     * @type {number}
+     * @memberof FeedbackInvitation
+     */
+    round?: number;
 }
 
 /**
- * shown is recorded when the card first reaches the screen, which is also what spends the installation's single invitation; clicked and dismissed record what the reader did with it afterwards.
+ * shown records an invitation round reaching the screen; clicked records booking interest without closing the round; dismissed closes the round. Reloading the card does not start another round.
  * @export
  */
 export const FeedbackInviteOutcome = {
@@ -55,4 +61,10 @@ export interface RecordFeedbackInviteRequest {
      * @memberof RecordFeedbackInviteRequest
      */
     outcome: FeedbackInviteOutcome;
+    /**
+     * The round shown to the reader. Omission targets round 1 only.
+     * @type {number}
+     * @memberof RecordFeedbackInviteRequest
+     */
+    round?: number;
 }

@@ -10,7 +10,7 @@
 
 import type {
   FeedbackInvitation,
-  FeedbackInviteOutcome,
+  RecordFeedbackInviteRequest,
 } from '@browseros/claw-api'
 import { createMutation, createQuery } from 'react-query-kit'
 import { apiClient } from './client'
@@ -30,9 +30,9 @@ export const useFeedbackInvitation = createQuery<FeedbackInvitation>({
 // never heard. Every outcome write is idempotent, so retrying is safe.
 export const useRecordFeedbackInvite = createMutation<
   FeedbackInvitation,
-  { outcome: FeedbackInviteOutcome }
+  RecordFeedbackInviteRequest
 >({
-  mutationFn: async ({ outcome }) =>
-    (await apiClient()).recordFeedbackInvite({ outcome }),
+  mutationFn: async (request) =>
+    (await apiClient()).recordFeedbackInvite(request),
   retry: 2,
 })

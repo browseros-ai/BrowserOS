@@ -25,7 +25,7 @@ import {
 
 /**
  * Remembers that the impression has already been counted for this browser
- * profile. Only the analytics event is deduplicated here; whether the card
+ * profile and round. Only the analytics event is deduplicated here; whether the card
  * appears at all stays the server's answer, so losing this key costs at most a
  * repeated impression and never a missed invitation.
  */
@@ -63,17 +63,21 @@ function subscribeToDismissals(listener: () => void): () => void {
   return () => window.removeEventListener('storage', onStorage)
 }
 
-function impressionAlreadyCounted(): boolean {
+function impressionKey(round = 1): string {
+  return round === 1 ? SHOWN_TRACKED_KEY : `${SHOWN_TRACKED_KEY}:${round}`
+}
+
+function impressionAlreadyCounted(round?: number): boolean {
   try {
-    return localStorage.getItem(SHOWN_TRACKED_KEY) === 'true'
+    return localStorage.getItem(impressionKey(round)) === 'true'
   } catch {
     return false
   }
 }
 
-function rememberImpression(): void {
+function rememberImpression(round?: number): void {
   try {
-    localStorage.setItem(SHOWN_TRACKED_KEY, 'true')
+    localStorage.setItem(impressionKey(round), 'true')
   } catch {
     // A new tab without storage access simply counts the impression again.
   }
@@ -86,7 +90,7 @@ function rememberImpression(): void {
  */
 type InviteState =
   | { phase: 'waiting' }
-  | { phase: 'showing'; bookUrl: string }
+  | { phase: 'showing'; bookUrl: string; round?: number }
   | { phase: 'dismissed' }
 
 export function FeedbackInviteCard() {
@@ -114,6 +118,7 @@ export function FeedbackInviteCard() {
       ? invitation.data.bookUrl
       : undefined
   const report = record.mutate
+  const offeredRound = invitation.data?.round
 
   // The impression belongs to the card appearing, and there is no user action
   // to hang that on. The ref keeps it to the first appearance in this page.
@@ -121,42 +126,48 @@ export function FeedbackInviteCard() {
   // The card now returns on every cockpit load until it is dismissed, and the
   // cockpit is the new tab page, so tracking every appearance would report
   // thousands of impressions for one reader and make the funnel's denominator
-  // meaningless. The analytics event is counted once per profile; the server is
+  // meaningless. The analytics event is counted once per profile and round; the server is
   // told every time, because it is what holds the first-seen timestamp.
   useEffect(() => {
     if (!offered || appeared.current) return
     appeared.current = true
-    setState({ phase: 'showing', bookUrl: offered })
-    report({ outcome: 'shown' })
-  }, [offered, report])
+    setState({ phase: 'showing', bookUrl: offered, round: offeredRound })
+    report({
+      outcome: 'shown',
+      ...(offeredRound === undefined ? {} : { round: offeredRound }),
+    })
+  }, [offered, offeredRound, report])
 
   // PostHog readiness changes independently of invitation eligibility. A
   // subscribed snapshot lets the same mounted card count its impression when
   // capture comes online, without polling or waiting for another page load.
   useEffect(() => {
-    if (state.phase !== 'showing' || !capturing || impressionAlreadyCounted()) {
+    if (
+      state.phase !== 'showing' ||
+      !capturing ||
+      impressionAlreadyCounted(state.round)
+    ) {
       return
     }
-    rememberImpression()
+    rememberImpression(state.round)
     track(AnalyticsEvent.FeedbackInviteShown)
-  }, [capturing, state.phase])
+  }, [capturing, state])
 
   if (state.phase !== 'showing' || fencedByNewerDismissal) return null
-  const { bookUrl } = state
+  const { bookUrl, round } = state
 
   // The reply to a recorded outcome is the invitation's new state, so it is
   // written straight into the cache rather than invalidated for a refetch that
   // would ask the same question again.
-  const recordOutcome = (
-    outcome: 'clicked' | 'dismissed',
-    onSuccess?: () => void,
-  ) => {
+  const recordOutcome = (outcome: 'clicked' | 'dismissed') => {
     report(
-      { outcome },
+      { outcome, ...(round === undefined ? {} : { round }) },
       {
         onSuccess: (settled) => {
           queryClient.setQueryData(useFeedbackInvitation.getKey(), settled)
-          onSuccess?.()
+          if (outcome === 'dismissed' && settled.eligible === false) {
+            rememberDismissal()
+          }
         },
         onError: () => {
           if (outcome === 'clicked') booked.current = false
@@ -186,7 +197,7 @@ export function FeedbackInviteCard() {
   const handleDecline = () => {
     track(AnalyticsEvent.FeedbackInviteDismissed)
     setState({ phase: 'dismissed' })
-    recordOutcome('dismissed', rememberDismissal)
+    recordOutcome('dismissed')
   }
 
   return (

@@ -84,6 +84,35 @@ function responseFor(request: Request): Response {
 }
 
 describe('ClawApiClient', () => {
+  it('opts into feedback rounds and preserves round-aware and legacy outcomes', async () => {
+    const requests: Request[] = []
+    const invitation = {
+      eligible: true,
+      bookUrl: 'https://cal.test/book',
+      round: 2,
+    }
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        requests.push(
+          input instanceof Request ? input : new Request(input, init),
+        )
+        return Response.json(invitation)
+      },
+    })
+
+    await expect(client.getFeedbackInvitation()).resolves.toEqual(invitation)
+    await client.recordFeedbackInvite({ outcome: 'clicked', round: 2 })
+    await client.recordFeedbackInvite({ outcome: 'dismissed' })
+
+    expect(requests[0]?.method).toBe('GET')
+    expect(requests[0]?.url).toBe(
+      `${baseUrl}/api/v1/feedback/invitation?supportsRounds=true`,
+    )
+    expect(requests[1]?.method).toBe('POST')
+    expect(await requests[1]?.json()).toEqual({ outcome: 'clicked', round: 2 })
+    expect(await requests[2]?.json()).toEqual({ outcome: 'dismissed' })
+  })
+
   it('gets and unwraps cockpit stats from the exact route', async () => {
     const requests: Request[] = []
     const client = new ClawApiClient(`${baseUrl}/`, {

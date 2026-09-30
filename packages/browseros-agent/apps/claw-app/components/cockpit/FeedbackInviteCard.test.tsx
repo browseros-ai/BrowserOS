@@ -4,9 +4,11 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 
 interface HookState {
-  invitation: { eligible: boolean; bookUrl?: string }
+  invitation: { eligible: boolean; bookUrl?: string; round?: number }
   invitationUpdatedAt: number
   recorded: string[]
+  requests: Array<{ outcome: string; round?: number }>
+  settled: { eligible: boolean; bookUrl?: string; round?: number }
   recordSucceeds: boolean
   cached: unknown[]
   tracked: string[]
@@ -19,6 +21,8 @@ const state: HookState = {
   invitation: { eligible: false },
   invitationUpdatedAt: 1_000,
   recorded: [],
+  requests: [],
+  settled: { eligible: false },
   recordSucceeds: true,
   cached: [],
   tracked: [],
@@ -41,14 +45,15 @@ mock.module('@/modules/api/feedback.hooks', () => ({
   ),
   useRecordFeedbackInvite: () => ({
     mutate: (
-      { outcome }: { outcome: string },
+      request: { outcome: string; round?: number },
       options?: {
         onSuccess?: (settled: unknown) => void
         onError?: (error: Error) => void
       },
     ) => {
-      state.recorded.push(outcome)
-      if (state.recordSucceeds) options?.onSuccess?.({ eligible: false })
+      state.recorded.push(request.outcome)
+      state.requests.push(request)
+      if (state.recordSucceeds) options?.onSuccess?.(state.settled)
       else options?.onError?.(new Error('sidecar unavailable'))
     },
   }),
@@ -118,6 +123,8 @@ beforeEach(async () => {
   state.invitation = { eligible: false }
   state.invitationUpdatedAt = 1_000
   state.recorded = []
+  state.requests = []
+  state.settled = { eligible: false }
   state.recordSucceeds = true
   state.cached = []
   state.tracked = []
@@ -246,8 +253,6 @@ describe('FeedbackInviteCard', () => {
     expect(state.recorded).toEqual(['shown'])
   })
 
-  /// Recording the impression is what makes the server answer 'not eligible', so a card
-  /// that followed the query would erase itself the moment it appeared.
   it('stays on screen after the impression makes the query ineligible', async () => {
     state.invitation = eligible
     await render()
@@ -451,5 +456,109 @@ describe('FeedbackInviteCard', () => {
 
     expect(state.recorded).toEqual(['shown', 'dismissed'])
     expect(container.innerHTML).toBe('')
+  })
+
+  it('reports the second round on shown, clicked, and dismissed outcomes', async () => {
+    state.invitation = { ...eligible, round: 2 }
+    await render()
+    await click(buttonWithText('Book a 15 minute chat'))
+    expect(buttonWithText('No thanks')).toBeDefined()
+    await click(buttonWithText('No thanks'))
+
+    expect(state.requests).toEqual([
+      { outcome: 'shown', round: 2 },
+      { outcome: 'clicked', round: 2 },
+      { outcome: 'dismissed', round: 2 },
+    ])
+  })
+
+  it('pins the shown round and booking URL when the query changes', async () => {
+    state.invitation = { ...eligible, round: 1 }
+    state.capturing = false
+    await render()
+    state.invitation = {
+      eligible: true,
+      bookUrl: 'https://cal.test/new-booking',
+      round: 2,
+    }
+    await render()
+    await setCapturing(true)
+    await click(buttonWithText('Book a 15 minute chat'))
+    await click(buttonWithText('No thanks'))
+
+    expect(state.opened).toEqual([eligible.bookUrl])
+    expect(state.requests).toEqual([
+      { outcome: 'shown', round: 1 },
+      { outcome: 'clicked', round: 1 },
+      { outcome: 'dismissed', round: 1 },
+    ])
+    expect(storage.feedbackInviteShownTracked).toBe('true')
+    expect(storage['feedbackInviteShownTracked:2']).toBeUndefined()
+  })
+
+  it('omits the round on every outcome for an older server', async () => {
+    state.invitation = eligible
+    await render()
+    await click(buttonWithText('Book a 15 minute chat'))
+    await click(buttonWithText('No thanks'))
+
+    expect(state.requests).toEqual([
+      { outcome: 'shown' },
+      { outcome: 'clicked' },
+      { outcome: 'dismissed' },
+    ])
+  })
+
+  it('does not fence another tab when a stale dismissal returns a newer round', async () => {
+    state.invitation = { ...eligible, round: 1 }
+    state.settled = { ...eligible, round: 2 }
+    await render()
+    await click(buttonWithText('No thanks'))
+
+    expect(container.innerHTML).toBe('')
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeUndefined()
+    expect(state.cached).toEqual([{ key: invitationKey, value: state.settled }])
+
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    state.invitation = state.settled
+    await render()
+
+    expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+    expect(state.requests.at(-1)).toEqual({ outcome: 'shown', round: 2 })
+  })
+
+  it('honors the legacy impression key for round one without hiding the card', async () => {
+    storage.feedbackInviteShownTracked = 'true'
+    state.invitation = { ...eligible, round: 1 }
+    await render()
+
+    expect(state.tracked).toEqual([])
+    expect(state.requests).toEqual([{ outcome: 'shown', round: 1 }])
+    expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+  })
+
+  it('deduplicates impressions per round without spending rounds on reload', async () => {
+    storage.feedbackInviteShownTracked = 'true'
+    for (const round of [2, 2, 3, 3]) {
+      state.invitation = { ...eligible, round }
+      await render()
+      expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+      await act(async () => root.unmount())
+      const { createRoot } = await import('react-dom/client')
+      root = createRoot(container)
+    }
+
+    expect(state.tracked).toEqual([
+      'feedback_invite_shown',
+      'feedback_invite_shown',
+    ])
+    expect(state.requests).toEqual([
+      { outcome: 'shown', round: 2 },
+      { outcome: 'shown', round: 2 },
+      { outcome: 'shown', round: 3 },
+      { outcome: 'shown', round: 3 },
+    ])
   })
 })

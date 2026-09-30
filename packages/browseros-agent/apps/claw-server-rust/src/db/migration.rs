@@ -26,7 +26,50 @@ impl MigratorTrait for Migrator {
             Box::new(m0017_add_run_error_budget::Migration),
             Box::new(m0018_add_feedback_invite::Migration),
             Box::new(m0019_add_feedback_invite_dismissal::Migration),
+            Box::new(m0020_add_feedback_invite_round::Migration),
         ]
+    }
+}
+
+mod m0020_add_feedback_invite_round {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0020_add_feedback_invite_round"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(Alias::new("feedback_invite"))
+                        .add_column(
+                            ColumnDef::new(Alias::new("round"))
+                                .integer()
+                                .not_null()
+                                .default(1),
+                        )
+                        .to_owned(),
+                )
+                .await
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(Alias::new("feedback_invite"))
+                        .drop_column(Alias::new("round"))
+                        .to_owned(),
+                )
+                .await
+        }
     }
 }
 

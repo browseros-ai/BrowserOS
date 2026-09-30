@@ -17,22 +17,42 @@
 use super::{error, internal};
 use crate::{
     AppState,
-    db::feedback_invite::InviteOutcome,
+    db::feedback_invite::{InviteOutcome, MAX_INVITATION_ROUNDS},
     error::{AppResult, CanonicalError, RequestId},
     services::feedback_cohort::now_ms,
 };
 use axum::{
     Extension, Json,
-    extract::{State, rejection::JsonRejection},
+    extract::{
+        Query, State,
+        rejection::{JsonRejection, QueryRejection},
+    },
     http::StatusCode,
 };
 use claw_api::models::{FeedbackInvitation, FeedbackInviteOutcome, RecordFeedbackInviteRequest};
+use serde::Deserialize;
+
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct InvitationQuery {
+    #[serde(default)]
+    supports_rounds: bool,
+}
 
 pub(super) async fn invitation(
     Extension(request_id): Extension<RequestId>,
     State(state): State<AppState>,
+    query: Result<Query<InvitationQuery>, QueryRejection>,
 ) -> Result<Json<FeedbackInvitation>, CanonicalError> {
-    decide(&state)
+    let Query(query) = query.map_err(|_| {
+        error(
+            &request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "supportsRounds must be a boolean",
+        )
+    })?;
+    decide(&state, query.supports_rounds)
         .await
         .map(Json)
         .map_err(|source| internal(&request_id, source))
@@ -51,19 +71,25 @@ pub(super) async fn respond(
             "outcome must be one of shown, clicked or dismissed",
         )
     })?;
-    record(&state, to_outcome(payload.outcome))
+    let round = payload.round.unwrap_or(1);
+    if !(1..=MAX_INVITATION_ROUNDS).contains(&round) {
+        return Err(error(
+            &request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "round must be between 1 and 3",
+        ));
+    }
+    record(&state, to_outcome(payload.outcome), round)
         .await
         .map_err(|source| internal(&request_id, source))?;
-    // The answer a fresh page load would now get, which is still eligible for an impression
-    // or a click and only refused once dismissed. Returning a blanket refusal here would
-    // make the caller's cache disagree with the next load.
-    decide(&state)
+    decide(&state, payload.round.is_some())
         .await
         .map(Json)
         .map_err(|source| internal(&request_id, source))
 }
 
-async fn decide(state: &AppState) -> AppResult<FeedbackInvitation> {
+async fn decide(state: &AppState, supports_rounds: bool) -> AppResult<FeedbackInvitation> {
     let Some(install_id) = invitable_install(state).await else {
         return Ok(not_eligible());
     };
@@ -74,44 +100,37 @@ async fn decide(state: &AppState) -> AppResult<FeedbackInvitation> {
     else {
         return Ok(not_eligible());
     };
-    // The card stays available until the reader dismisses it. An impression used to spend
-    // the invitation, which meant one appearance per installation ever, whether or not
-    // anyone read it: the overwhelming majority of a new tab's openings are incidental, so
-    // spending the offer on the first paint threw away nearly all of its reach. Booking is
-    // not an answer either, since opening the booking page is not the same as booking.
-    if state.feedback_invites.has_dismissed(&install_id).await? {
+    let Some(round) = state
+        .feedback_invites
+        .offered_round(&install_id, now_ms())
+        .await?
+    else {
+        return Ok(not_eligible());
+    };
+    if !supports_rounds && round != 1 {
         return Ok(not_eligible());
     }
     let mut invitation = FeedbackInvitation::new(true);
     invitation.book_url = Some(book_url);
+    invitation.round = supports_rounds.then_some(round);
     Ok(invitation)
 }
 
-async fn record(state: &AppState, outcome: InviteOutcome) -> AppResult<()> {
+async fn record(state: &AppState, outcome: InviteOutcome, round: i32) -> AppResult<()> {
     let Some(install_id) = invitable_install(state).await else {
         return Ok(());
     };
-    if !may_record(state, &install_id).await? {
+    if !may_record(state, &install_id, round).await? {
         return Ok(());
     }
     state
         .feedback_invites
-        .record(&install_id, outcome, now_ms())
+        .record(&install_id, outcome, now_ms(), round)
         .await
 }
 
-/// Whether this installation may have an outcome written for it.
-///
-/// An outcome must only ever spend an invitation the installation was actually offered.
-/// Anything able to reach the loopback server can POST here, so without this an unrelated
-/// page or local process could burn an installation's single invitation before it had ever
-/// been shown one, and the row is permanent.
-///
-/// A row that already exists is updated without consulting the cohort, on purpose: that
-/// invitation was granted by an earlier decision, and a refresh between the card appearing
-/// and the reader answering must not discard what they did.
-async fn may_record(state: &AppState, install_id: &str) -> AppResult<bool> {
-    if state.feedback_invites.already_invited(install_id).await? {
+async fn may_record(state: &AppState, install_id: &str, round: i32) -> AppResult<bool> {
+    if state.feedback_invites.recorded_round(install_id).await? == Some(round) {
         return Ok(true);
     }
     Ok(state

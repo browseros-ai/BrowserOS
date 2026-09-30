@@ -124,7 +124,11 @@ export class ClawApiClient {
   }
 
   async getFeedbackInvitation(): Promise<FeedbackInvitation> {
-    return this.unwrap(await this.client.GET('/api/v1/feedback/invitation'))
+    return this.unwrap(
+      await this.client.GET('/api/v1/feedback/invitation', {
+        params: { query: { supportsRounds: true } },
+      }),
+    )
   }
 
   async recordFeedbackInvite(

@@ -331,7 +331,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -408,10 +408,70 @@ mod tests {
             migrations[18].try_get::<String>("", "version")?,
             "m0019_add_feedback_invite_dismissal"
         );
+        assert_eq!(
+            migrations[19].try_get::<String>("", "version")?,
+            "m0020_add_feedback_invite_round"
+        );
         Ok(())
     }
 
     struct MigratorThrough18;
+
+    struct MigratorThrough19;
+
+    #[async_trait::async_trait]
+    impl MigratorTrait for MigratorThrough19 {
+        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+            Migrator::migrations().into_iter().take(19).collect()
+        }
+    }
+
+    #[tokio::test]
+    async fn existing_invitations_migrate_to_round_one_without_resetting_dismissal()
+    -> anyhow::Result<()> {
+        use crate::db::entities::prelude::FeedbackInvite;
+        use crate::db::feedback_invite::{FeedbackInviteRepository, INVITATION_COOLDOWN_MS};
+        use sea_orm::EntityTrait;
+
+        let dir = tempdir()?;
+        let path = dir.path().join(DATABASE_FILENAME);
+        let through_19 = open_and_migrate::<MigratorThrough19>(&path).await?;
+        through_19.execute_unprepared(
+            "INSERT INTO feedback_invite (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms) \
+             VALUES ('dismissed', 1000, 'dismissed', 2000, 2000), \
+                    ('clicked', 1000, 'clicked', 1500, 2000), \
+                    ('shown', 1000, 'shown', NULL, NULL)",
+        ).await?;
+        through_19.close().await?;
+        let db = Database::open(&path).await?;
+        let repo = FeedbackInviteRepository::new(db.clone());
+        for install in ["dismissed", "clicked", "shown"] {
+            let row = FeedbackInvite::find_by_id(install.to_owned())
+                .one(db.connection())
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("missing migrated invitation"))?;
+            assert_eq!(row.round, 1);
+            assert_eq!(row.shown_at_ms, 1000);
+            assert_eq!(row.outcome, install);
+            if install == "shown" {
+                assert_eq!(row.dismissed_at_ms, None);
+                assert_eq!(repo.offered_round(install, 2000).await?, Some(1));
+            } else {
+                assert_eq!(row.dismissed_at_ms, Some(2000));
+                assert_eq!(
+                    repo.offered_round(install, 2000 + INVITATION_COOLDOWN_MS - 1)
+                        .await?,
+                    None
+                );
+                assert_eq!(
+                    repo.offered_round(install, 2000 + INVITATION_COOLDOWN_MS)
+                        .await?,
+                    Some(2)
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[async_trait::async_trait]
     impl MigratorTrait for MigratorThrough18 {
@@ -498,7 +558,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
         conn.close().await?;
         Ok(())
     }
@@ -562,7 +622,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations
                 .iter()
@@ -585,7 +645,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
         Ok(())
     }
 
@@ -721,7 +781,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         Ok(())
     }
 

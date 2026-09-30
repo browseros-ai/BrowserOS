@@ -3,6 +3,15 @@ invitation:
     operationId: getFeedbackInvitation
     description: >-
       Whether this installation should be shown a feedback call invitation.
+      At most three rounds are offered, with a 72-hour wait after each dismissal.
+    parameters:
+      - name: supportsRounds
+        in: query
+        required: false
+        schema:
+          type: boolean
+          default: false
+        description: Opts into repeat invitation rounds. Otherwise only round 1 is offered.
     responses:
       '200':
         description: The invitation decision for this installation.
@@ -10,14 +19,16 @@ invitation:
           application/json:
             schema:
               $ref: ../schemas/feedback.yaml#/FeedbackInvitation
+      '400':
+        $ref: ../responses.yaml#/BadRequest
       '500':
         $ref: ../responses.yaml#/InternalError
   post:
     operationId: recordFeedbackInvite
     description: >-
-      Records what happened to the invitation. The first outcome spends this
-      installation's single invitation, so later calls change the recorded
-      outcome without ever granting another.
+      Records what happened to the offered round. Showing or clicking keeps
+      the round open; dismissing starts the wait before the next round.
+      Outcomes for older rounds do not change a newer round.
     requestBody:
       required: true
       content:

@@ -1,9 +1,5 @@
 use sea_orm::entity::prelude::*;
 
-/// One row per installation that has been offered a feedback call, ever.
-///
-/// The install id is the primary key, which is the whole frequency rule: a second
-/// invitation cannot be recorded, so it cannot be offered.
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "feedback_invite")]
 pub struct Model {
@@ -12,8 +8,8 @@ pub struct Model {
     pub shown_at_ms: i64,
     pub outcome: String,
     pub settled_at_ms: Option<i64>,
-    /// Set once the reader asks to stop seeing the card. Never cleared.
     pub dismissed_at_ms: Option<i64>,
+    pub round: i32,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

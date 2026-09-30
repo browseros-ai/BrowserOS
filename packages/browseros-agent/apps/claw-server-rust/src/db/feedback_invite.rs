@@ -1,16 +1,8 @@
-//! At most one feedback invitation per installation, ever.
-//!
-//! The frequency rule lives in the schema rather than in code: `install_id` is the primary
-//! key of `feedback_invite`, so a second invitation cannot be recorded and therefore cannot
-//! be offered. Two cockpit tabs opening at once, a retried request and a restart mid-flight
-//! all converge on one row without anyone reasoning about a race.
-//!
-//! This is deliberately weaker machinery than [`crate::db::run_error_budget`], which caps a
-//! rolling daily count and earns its conditional claim. Here the rule is simpler, so the
-//! mechanism is too.
-
 use crate::{db::Database, error::AppResult};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
+
+pub const INVITATION_COOLDOWN_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
+pub const MAX_INVITATION_ROUNDS: i32 = 3;
 
 #[derive(Clone)]
 pub struct FeedbackInviteRepository {
@@ -20,7 +12,7 @@ pub struct FeedbackInviteRepository {
 /// What the reader did with the invitation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InviteOutcome {
-    /// The card reached the screen. This is what spends the installation's invitation.
+    /// The card reached the screen.
     Shown,
     /// The booking link was opened.
     Clicked,
@@ -67,20 +59,16 @@ impl FeedbackInviteRepository {
         Self { db }
     }
 
-    /// Records `outcome` for this installation, spending its single invitation if it has
-    /// not been spent already.
-    ///
-    /// A recorded outcome is only ever raised, never lowered, because arrival order says
-    /// nothing about what the reader did. A second tab reporting `shown` after a click, a
-    /// dismissal that follows a booking, and a retried `clicked` that lands after a later
-    /// dismissal all arrive out of order and must not undo the stronger claim. See
-    /// [`InviteOutcome::rank`].
     pub async fn record(
         &self,
         install_id: &str,
         outcome: InviteOutcome,
         now_ms: i64,
+        round: i32,
     ) -> AppResult<()> {
+        if !(1..=MAX_INVITATION_ROUNDS).contains(&round) {
+            return Ok(());
+        }
         let connection = self.db.connection();
         let dismissed_at = (outcome == InviteOutcome::Dismissed).then_some(now_ms);
         connection
@@ -88,25 +76,18 @@ impl FeedbackInviteRepository {
                 DatabaseBackend::Sqlite,
                 "INSERT INTO feedback_invite \
                  (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms) \
-                 VALUES (?, ?, ?, ?, ?) ON CONFLICT(install_id) DO NOTHING",
+                 SELECT ?, ?, ?, ?, ? WHERE ? = 1 ON CONFLICT(install_id) DO NOTHING",
                 [
                     Value::from(install_id.to_owned()),
                     Value::from(now_ms),
                     Value::from(outcome.as_str().to_owned()),
                     Value::from(outcome.is_response().then_some(now_ms)),
                     Value::from(dismissed_at),
+                    Value::from(round),
                 ],
             ))
             .await?;
 
-        // One statement, so the funnel outcome and the dismissal gate cannot end up
-        // disagreeing. Written as two, a crash in between could leave `outcome` saying
-        // dismissed while the gate stayed null, and the card would come back after a
-        // restart with no migration left to repair it.
-        //
-        // Each column carries its own guard. The outcome only ever rises, by rank. The gate
-        // is only ever set, never moved or cleared, so the first dismissal is the one that
-        // stands and a later click cannot reopen it.
         connection
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
@@ -117,31 +98,66 @@ impl FeedbackInviteRepository {
                    settled_at_ms = CASE WHEN ? > (CASE outcome \
                      WHEN 'clicked' THEN 2 WHEN 'dismissed' THEN 1 ELSE 0 END) \
                      THEN ? ELSE settled_at_ms END, \
-                   dismissed_at_ms = COALESCE(dismissed_at_ms, ?) \
-                 WHERE install_id = ?",
+                   dismissed_at_ms = CASE WHEN round < ? THEN ? \
+                     ELSE COALESCE(dismissed_at_ms, ?) END, \
+                   round = ? \
+                 WHERE install_id = ? AND (round = ? OR \
+                   (round + 1 = ? AND dismissed_at_ms <= ?))",
                 [
                     Value::from(outcome.rank()),
                     Value::from(outcome.as_str().to_owned()),
                     Value::from(outcome.rank()),
                     Value::from(outcome.is_response().then_some(now_ms)),
+                    Value::from(round),
                     Value::from(dismissed_at),
+                    Value::from(dismissed_at),
+                    Value::from(round),
                     Value::from(install_id.to_owned()),
+                    Value::from(round),
+                    Value::from(round),
+                    Value::from(now_ms.saturating_sub(INVITATION_COOLDOWN_MS)),
                 ],
             ))
             .await?;
         Ok(())
     }
 
+    pub async fn offered_round(&self, install_id: &str, now_ms: i64) -> AppResult<Option<i32>> {
+        use crate::db::entities::prelude::FeedbackInvite;
+        use sea_orm::EntityTrait;
+
+        let Some(row) = FeedbackInvite::find_by_id(install_id.to_owned())
+            .one(self.db.connection())
+            .await?
+        else {
+            return Ok(Some(1));
+        };
+        let Some(dismissed_at_ms) = row.dismissed_at_ms else {
+            return Ok(Some(row.round));
+        };
+        Ok((row.round < MAX_INVITATION_ROUNDS
+            && dismissed_at_ms <= now_ms.saturating_sub(INVITATION_COOLDOWN_MS))
+        .then_some(row.round + 1))
+    }
+
+    pub async fn recorded_round(&self, install_id: &str) -> AppResult<Option<i32>> {
+        use crate::db::entities::prelude::FeedbackInvite;
+        use sea_orm::EntityTrait;
+
+        Ok(FeedbackInvite::find_by_id(install_id.to_owned())
+            .one(self.db.connection())
+            .await?
+            .map(|row| row.round))
+    }
+
     /// Whether this installation has already been offered an invitation.
     ///
-    /// Only says the card has been on screen before. It does not gate anything: the card
-    /// keeps appearing until the reader dismisses it, so use [`Self::has_dismissed`] for
-    /// that question.
+    /// Only says the card has been on screen before, not whether another round is due.
     pub async fn already_invited(&self, install_id: &str) -> AppResult<bool> {
         Ok(self.outcome_of(install_id).await?.is_some())
     }
 
-    /// Whether the reader has asked to stop seeing the card. Final once true.
+    /// Whether the reader has dismissed the recorded round.
     pub async fn has_dismissed(&self, install_id: &str) -> AppResult<bool> {
         use crate::db::entities::prelude::FeedbackInvite;
         use sea_orm::EntityTrait;
@@ -177,12 +193,180 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn three_rounds_wait_for_each_dismissal_cooldown_then_stop() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+        let mut now = 1_000;
+
+        for round in 1..=MAX_INVITATION_ROUNDS {
+            assert_eq!(repo.offered_round("install-a", now).await?, Some(round));
+            repo.record("install-a", InviteOutcome::Shown, now, round)
+                .await?;
+            repo.record("install-a", InviteOutcome::Clicked, now + 1, round)
+                .await?;
+            assert_eq!(
+                repo.offered_round("install-a", now + INVITATION_COOLDOWN_MS)
+                    .await?,
+                Some(round)
+            );
+            assert_eq!(repo.recorded_round("install-a").await?, Some(round));
+            repo.record("install-a", InviteOutcome::Dismissed, now + 2, round)
+                .await?;
+            repo.record("install-a", InviteOutcome::Dismissed, now + 3, round)
+                .await?;
+            assert_eq!(repo.offered_round("install-a", now + 2).await?, None);
+            assert_eq!(
+                repo.offered_round("install-a", now + 1 + INVITATION_COOLDOWN_MS)
+                    .await?,
+                None
+            );
+            now += 2 + INVITATION_COOLDOWN_MS;
+        }
+
+        assert_eq!(repo.offered_round("install-a", now).await?, None);
+        repo.record("install-a", InviteOutcome::Shown, now, 4)
+            .await?;
+        assert_eq!(repo.recorded_round("install-a").await?, Some(3));
+        assert_eq!(repo.offered_round("install-a", i64::MAX).await?, None);
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("clicked")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn repeated_reads_do_not_start_or_consume_a_round() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+        assert_eq!(repo.offered_round("install-a", 1_000).await?, Some(1));
+        assert_eq!(repo.recorded_round("install-a").await?, None);
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000, 1)
+            .await?;
+        for _ in 0..5 {
+            assert_eq!(
+                repo.offered_round("install-a", 1_000 + INVITATION_COOLDOWN_MS)
+                    .await?,
+                Some(2)
+            );
+        }
+        assert_eq!(repo.recorded_round("install-a").await?, Some(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn early_skipped_and_stale_round_writes_are_ignored() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000, 2)
+            .await?;
+        assert_eq!(repo.recorded_round("install-a").await?, None);
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
+            .await?;
+        repo.record(
+            "install-a",
+            InviteOutcome::Shown,
+            1_000 + INVITATION_COOLDOWN_MS,
+            2,
+        )
+        .await?;
+        assert_eq!(repo.recorded_round("install-a").await?, Some(1));
+        repo.record("install-a", InviteOutcome::Dismissed, 2_000, 1)
+            .await?;
+        let due = 2_000 + INVITATION_COOLDOWN_MS;
+        repo.record("install-a", InviteOutcome::Shown, due - 1, 2)
+            .await?;
+        repo.record("install-a", InviteOutcome::Shown, due, 3)
+            .await?;
+        assert_eq!(repo.recorded_round("install-a").await?, Some(1));
+        repo.record("install-a", InviteOutcome::Shown, due, 2)
+            .await?;
+        for outcome in [
+            InviteOutcome::Shown,
+            InviteOutcome::Dismissed,
+            InviteOutcome::Clicked,
+        ] {
+            repo.record("install-a", outcome, due + 1, 1).await?;
+        }
+        assert_eq!(repo.recorded_round("install-a").await?, Some(2));
+        assert_eq!(repo.offered_round("install-a", due + 1).await?, Some(2));
+        assert!(!repo.has_dismissed("install-a").await?);
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("dismissed")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_next_round_reports_advance_once_without_losing_dismissal()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000, 1)
+            .await?;
+        let due = 1_000 + INVITATION_COOLDOWN_MS;
+        let racers = (0..12).map(|index| {
+            let repo = repo.clone();
+            tokio::spawn(async move {
+                let outcome = match index % 3 {
+                    0 => InviteOutcome::Shown,
+                    1 => InviteOutcome::Dismissed,
+                    _ => InviteOutcome::Clicked,
+                };
+                repo.record("install-a", outcome, due, 2).await
+            })
+        });
+        for racer in racers.collect::<Vec<_>>() {
+            racer.await??;
+        }
+        assert_eq!(repo.recorded_round("install-a").await?, Some(2));
+        assert_eq!(repo.offered_round("install-a", due).await?, None);
+        assert_eq!(
+            repo.offered_round("install-a", due + INVITATION_COOLDOWN_MS)
+                .await?,
+            Some(3)
+        );
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("clicked")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn round_and_cooldown_survive_reopening_the_database() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let due = 1_000 + INVITATION_COOLDOWN_MS;
+        {
+            let repo = repository(&dir).await?;
+            repo.record("install-a", InviteOutcome::Dismissed, 1_000, 1)
+                .await?;
+            repo.record("install-a", InviteOutcome::Dismissed, due, 2)
+                .await?;
+        }
+        let repo = repository(&dir).await?;
+        assert_eq!(repo.recorded_round("install-a").await?, Some(2));
+        assert_eq!(
+            repo.offered_round("install-a", due + INVITATION_COOLDOWN_MS - 1)
+                .await?,
+            None
+        );
+        assert_eq!(
+            repo.offered_round("install-a", due + INVITATION_COOLDOWN_MS)
+                .await?,
+            Some(3)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn an_impression_is_recorded_without_ending_the_offer() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
         assert!(!repo.already_invited("install-a").await?);
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
             .await?;
         assert!(repo.already_invited("install-a").await?);
         assert_eq!(
@@ -204,17 +388,17 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Clicked, 2_000)
+        repo.record("install-a", InviteOutcome::Clicked, 2_000, 1)
             .await?;
         assert!(!repo.has_dismissed("install-a").await?);
 
-        repo.record("install-a", InviteOutcome::Dismissed, 3_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 3_000, 1)
             .await?;
         assert!(repo.has_dismissed("install-a").await?);
 
-        repo.record("install-a", InviteOutcome::Clicked, 4_000)
+        repo.record("install-a", InviteOutcome::Clicked, 4_000, 1)
             .await?;
         assert!(
             repo.has_dismissed("install-a").await?,
@@ -236,9 +420,9 @@ mod tests {
 
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
-        repo.record("install-a", InviteOutcome::Dismissed, 1_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Dismissed, 9_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 9_000, 1)
             .await?;
 
         let Some(row) = FeedbackInvite::find_by_id("install-a".to_owned())
@@ -256,7 +440,7 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1).await?;
+        repo.record("install-a", InviteOutcome::Shown, 1, 1).await?;
         assert!(repo.already_invited("install-a").await?);
         assert!(!repo.already_invited("install-b").await?);
         Ok(())
@@ -267,9 +451,9 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Clicked, 2_000)
+        repo.record("install-a", InviteOutcome::Clicked, 2_000, 1)
             .await?;
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
@@ -286,11 +470,11 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Clicked, 2_000)
+        repo.record("install-a", InviteOutcome::Clicked, 2_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Dismissed, 3_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 3_000, 1)
             .await?;
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
@@ -306,11 +490,11 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Dismissed, 2_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 2_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Clicked, 1_500)
+        repo.record("install-a", InviteOutcome::Clicked, 1_500, 1)
             .await?;
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
@@ -325,9 +509,9 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Dismissed, 2_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 2_000, 1)
             .await?;
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
@@ -343,11 +527,11 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
+        repo.record("install-a", InviteOutcome::Shown, 1_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Clicked, 2_000)
+        repo.record("install-a", InviteOutcome::Clicked, 2_000, 1)
             .await?;
-        repo.record("install-a", InviteOutcome::Shown, 3_000)
+        repo.record("install-a", InviteOutcome::Shown, 3_000, 1)
             .await?;
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
@@ -363,7 +547,7 @@ mod tests {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Dismissed, 1_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000, 1)
             .await?;
         assert!(repo.already_invited("install-a").await?);
         assert_eq!(
@@ -380,7 +564,7 @@ mod tests {
         let dir = tempdir()?;
         {
             let repo = repository(&dir).await?;
-            repo.record("install-a", InviteOutcome::Dismissed, 1)
+            repo.record("install-a", InviteOutcome::Dismissed, 1, 1)
                 .await?;
         }
         let reopened = repository(&dir).await?;
@@ -396,7 +580,7 @@ mod tests {
         let racers = (0..8).map(|index| {
             let repo = repo.clone();
             tokio::spawn(async move {
-                repo.record("install-a", InviteOutcome::Shown, 1_000 + index)
+                repo.record("install-a", InviteOutcome::Shown, 1_000 + index, 1)
                     .await
             })
         });

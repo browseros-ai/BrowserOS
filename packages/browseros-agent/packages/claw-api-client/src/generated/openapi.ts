@@ -92,10 +92,10 @@ export interface paths {
       path?: never
       cookie?: never
     }
-    /** @description Whether this installation should be shown a feedback call invitation. */
+    /** @description Whether this installation should be shown a feedback call invitation. At most three rounds are offered, with a 72-hour wait after each dismissal. */
     get: operations['getFeedbackInvitation']
     put?: never
-    /** @description Records what happened to the invitation. The first outcome spends this installation's single invitation, so later calls change the recorded outcome without ever granting another. */
+    /** @description Records what happened to the offered round. Showing or clicking keeps the round open; dismissing starts the wait before the next round. Outcomes for older rounds do not change a newer round. */
     post: operations['recordFeedbackInvite']
     delete?: never
     options?: never
@@ -514,7 +514,7 @@ export interface components {
       toolCallCount: number
     }
     /**
-     * @description shown is recorded when the card first reaches the screen, which is also what spends the installation's single invitation; clicked and dismissed record what the reader did with it afterwards.
+     * @description shown records an invitation round reaching the screen; clicked records booking interest without closing the round; dismissed closes the round. Reloading the card does not start another round.
      * @enum {string}
      */
     FeedbackInviteOutcome: 'shown' | 'clicked' | 'dismissed'
@@ -526,9 +526,19 @@ export interface components {
        * @description Where the invitation points. Present only when eligible.
        */
       bookUrl?: string
+      /**
+       * Format: int32
+       * @description The offered invitation round. Older servers may omit it.
+       */
+      round?: number
     }
     RecordFeedbackInviteRequest: {
       outcome: components['schemas']['FeedbackInviteOutcome']
+      /**
+       * Format: int32
+       * @description The round shown to the reader. Omission targets round 1 only.
+       */
+      round?: number
     }
     TelemetryState: {
       distinctId: string
@@ -1127,7 +1137,10 @@ export interface operations {
   }
   getFeedbackInvitation: {
     parameters: {
-      query?: never
+      query?: {
+        /** @description Opts into repeat invitation rounds. Otherwise only round 1 is offered. */
+        supportsRounds?: boolean
+      }
       header?: never
       path?: never
       cookie?: never
@@ -1143,6 +1156,7 @@ export interface operations {
           'application/json': components['schemas']['FeedbackInvitation']
         }
       }
+      400: components['responses']['BadRequest']
       500: components['responses']['InternalError']
     }
   }

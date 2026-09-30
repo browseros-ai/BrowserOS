@@ -19,6 +19,9 @@ pub struct FeedbackInvitation {
     /// Where the invitation points. Present only when eligible.
     #[serde(rename = "bookUrl", skip_serializing_if = "Option::is_none")]
     pub book_url: Option<String>,
+    /// The offered invitation round. Older servers may omit it.
+    #[serde(rename = "round", skip_serializing_if = "Option::is_none")]
+    pub round: Option<i32>,
 }
 
 impl FeedbackInvitation {
@@ -26,12 +29,13 @@ impl FeedbackInvitation {
         FeedbackInvitation {
             eligible,
             book_url: None,
+            round: None,
         }
     }
 }
 
-/// FeedbackInviteOutcome : shown is recorded when the card first reaches the screen, which is also what spends the installation's single invitation; clicked and dismissed record what the reader did with it afterwards.
-/// shown is recorded when the card first reaches the screen, which is also what spends the installation's single invitation; clicked and dismissed record what the reader did with it afterwards.
+/// FeedbackInviteOutcome : shown records an invitation round reaching the screen; clicked records booking interest without closing the round; dismissed closes the round. Reloading the card does not start another round.
+/// shown records an invitation round reaching the screen; clicked records booking interest without closing the round; dismissed closes the round. Reloading the card does not start another round.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum FeedbackInviteOutcome {
     #[serde(rename = "shown")]
@@ -62,10 +66,16 @@ impl Default for FeedbackInviteOutcome {
 pub struct RecordFeedbackInviteRequest {
     #[serde(rename = "outcome")]
     pub outcome: models::FeedbackInviteOutcome,
+    /// The round shown to the reader. Omission targets round 1 only.
+    #[serde(rename = "round", skip_serializing_if = "Option::is_none")]
+    pub round: Option<i32>,
 }
 
 impl RecordFeedbackInviteRequest {
     pub fn new(outcome: models::FeedbackInviteOutcome) -> RecordFeedbackInviteRequest {
-        RecordFeedbackInviteRequest { outcome }
+        RecordFeedbackInviteRequest {
+            outcome,
+            round: None,
+        }
     }
 }
