@@ -170,13 +170,14 @@ jobs:
           else
             gh release create "$TAG" \
               --verify-tag \
+              --latest=false \
               --title "BrowserOS CLI - v${VERSION}" \
               --notes-file /tmp/release-notes.md \
               ${CLI_DIST}/*
           fi
 
           if [ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-            gh release edit "$TAG" --draft=false
+            gh release edit "$TAG" --draft=false --latest=false
           fi
         working-directory: ${{ github.workspace }}
 

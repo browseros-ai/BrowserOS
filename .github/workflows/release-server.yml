@@ -523,7 +523,7 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$(gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-            gh release edit "$RELEASE_TAG" --draft=false
+            gh release edit "$RELEASE_TAG" --draft=false --latest=false
           fi
 
   publish-ota:

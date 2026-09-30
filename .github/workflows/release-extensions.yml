@@ -647,7 +647,7 @@ jobs:
           for NAME in $NAMES; do
             TAG="ext-${NAME}/v${VERSION}"
             if [ "$(gh release view "$TAG" --json isDraft --jq '.isDraft')" = "true" ]; then
-              gh release edit "$TAG" --draft=false
+              gh release edit "$TAG" --draft=false --latest=false
             else
               echo "Release $TAG is already published"
             fi
