@@ -20,6 +20,8 @@
 
 Free · Open source · Everything runs on your machine
 
+Star the repo if it is useful. Watch it to hear when agents can do something new.
+
 </div>
 
 A second browser, just for your AI agents. Import your logins from Chrome in one click, connect Claude Code, Codex, or any MCP agent, and hand off your web tasks. Agents run in parallel in their own tabs. You watch live, or replay any session like a video.
@@ -231,6 +233,15 @@ If you use BrowserOS or BrowserOS neo in your research or project, please cite:
 BrowserOS neo and BrowserOS are open source under the [AGPL-3.0 license](LICENSE).
 
 Copyright &copy; 2026 Felafax, Inc.
+
+## Keep up with it
+
+Star the repo if this is useful to you. It is the clearest signal we get that
+the work is worth continuing.
+
+Watching is the more useful one though, and almost nobody does it. Agents get
+new abilities here regularly, and watching is the only way to hear about them
+without coming back to check.
 
 ## Stargazers
 
