@@ -13,6 +13,6 @@
 
 ## Before you request review
 
-- [ ] Ran the checks for the path you touched (see [CONTRIBUTING.md](../CONTRIBUTING.md))
+- [ ] Ran the checks for the path you touched (see [CONTRIBUTING.md](https://github.com/browseros-ai/BrowserOS/blob/main/CONTRIBUTING.md))
 - [ ] Added or updated tests where the behaviour changed
 - [ ] Checked this on the platforms it affects
