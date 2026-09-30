@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Invites the most active installations to a feedback call. The server decides
- * who is eligible and keeps the invitation open until dismissal; the card
+ * who is eligible and keeps the invitation open until a click or dismissal; the card
  * asks, shows, and reports back what happened.
  */
 
@@ -32,7 +32,7 @@ import {
 const SHOWN_TRACKED_KEY = 'feedbackInviteShownTracked'
 
 /**
- * Fences stale eligible query results after a server-confirmed dismissal. The
+ * Fences stale eligible query results after a server-confirmed click or dismissal. The
  * timestamp is compared with React Query's dataUpdatedAt, so a newer server
  * answer always wins and browser storage never becomes an eligibility source.
  */
@@ -86,7 +86,7 @@ function rememberImpression(round?: number): void {
 /**
  * What this page load has decided to show. The card is copied here once so it
  * cannot be pulled out from under the reader by the query answering again
- * mid-view; it lives on that until they dismiss it.
+ * mid-view; it lives on that until a confirmed click or dismissal.
  */
 type InviteState =
   | { phase: 'waiting' }
@@ -123,7 +123,7 @@ export function FeedbackInviteCard() {
   // The impression belongs to the card appearing, and there is no user action
   // to hang that on. The ref keeps it to the first appearance in this page.
   //
-  // The card now returns on every cockpit load until it is dismissed, and the
+  // The card now returns on every cockpit load until clicked or dismissed, and the
   // cockpit is the new tab page, so tracking every appearance would report
   // thousands of impressions for one reader and make the funnel's denominator
   // meaningless. The analytics event is counted once per profile and round; the server is
@@ -165,7 +165,8 @@ export function FeedbackInviteCard() {
       {
         onSuccess: (settled) => {
           queryClient.setQueryData(useFeedbackInvitation.getKey(), settled)
-          if (outcome === 'dismissed' && settled.eligible === false) {
+          if (settled.eligible === false) {
+            setState({ phase: 'dismissed' })
             rememberDismissal()
           }
         },
@@ -181,10 +182,6 @@ export function FeedbackInviteCard() {
     )
   }
 
-  // Booking opens a tab and leaves the card alone. Taking it away here would
-  // punish the reader for accepting: they land on a booking page, and if they
-  // come back to finish later the invitation they agreed to has vanished.
-  // Only declining removes it.
   const handleBook = () => {
     if (!booked.current) {
       booked.current = true

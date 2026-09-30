@@ -4,7 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * The feedback call invitation shown to the most active installations. The
- * server decides who is eligible and keeps an invitation open until dismissal;
+ * server decides who is eligible and keeps an invitation open until a click or dismissal;
  * this only asks and reports back.
  */
 

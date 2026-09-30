@@ -281,11 +281,9 @@ describe('FeedbackInviteCard', () => {
     ])
   })
 
-  /// Taking the card away on booking would punish the reader for accepting: they
-  /// land on a booking page, and if they come back to finish later the invitation
-  /// they agreed to has gone. Only declining removes it.
   it('stays on screen after booking', async () => {
     state.invitation = eligible
+    state.settled = eligible
     await render()
 
     await click(buttonWithText('Book a 15 minute chat'))
@@ -294,6 +292,7 @@ describe('FeedbackInviteCard', () => {
       "You're one of our most active users",
     )
     expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeUndefined()
   })
 
   /// The card returns on every cockpit load until it is dismissed, and the cockpit is the
@@ -410,6 +409,7 @@ describe('FeedbackInviteCard', () => {
 
   it('reopens the link on a second click without reporting it twice', async () => {
     state.invitation = eligible
+    state.settled = eligible
     await render()
 
     await click(buttonWithText('Book a 15 minute chat'))
@@ -427,6 +427,7 @@ describe('FeedbackInviteCard', () => {
 
   it('can still be dismissed after booking', async () => {
     state.invitation = eligible
+    state.settled = eligible
     await render()
 
     await click(buttonWithText('Book a 15 minute chat'))
@@ -460,6 +461,7 @@ describe('FeedbackInviteCard', () => {
 
   it('reports the second round on shown, clicked, and dismissed outcomes', async () => {
     state.invitation = { ...eligible, round: 2 }
+    state.settled = eligible
     await render()
     await click(buttonWithText('Book a 15 minute chat'))
     expect(buttonWithText('No thanks')).toBeDefined()
@@ -474,6 +476,7 @@ describe('FeedbackInviteCard', () => {
 
   it('pins the shown round and booking URL when the query changes', async () => {
     state.invitation = { ...eligible, round: 1 }
+    state.settled = eligible
     state.capturing = false
     await render()
     state.invitation = {
@@ -498,6 +501,7 @@ describe('FeedbackInviteCard', () => {
 
   it('omits the round on every outcome for an older server', async () => {
     state.invitation = eligible
+    state.settled = eligible
     await render()
     await click(buttonWithText('Book a 15 minute chat'))
     await click(buttonWithText('No thanks'))
@@ -507,6 +511,70 @@ describe('FeedbackInviteCard', () => {
       { outcome: 'clicked' },
       { outcome: 'dismissed' },
     ])
+  })
+
+  it('hides a modern invitation and fences other cached tabs after a confirmed click', async () => {
+    state.invitation = { ...eligible, round: 2 }
+    await render()
+    await click(buttonWithText('Book a 15 minute chat'))
+
+    expect(container.innerHTML).toBe('')
+    expect(state.opened).toEqual([eligible.bookUrl])
+    expect(state.requests).toEqual([
+      { outcome: 'shown', round: 2 },
+      { outcome: 'clicked', round: 2 },
+    ])
+    expect(Number(storage['feedbackInviteDismissedAt:v1'])).toBeGreaterThan(0)
+
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.innerHTML).toBe('')
+    expect(state.recorded).toEqual([])
+  })
+
+  it('hides a visible modern invitation when another tab confirms a click', async () => {
+    state.invitation = { ...eligible, round: 2 }
+    await render()
+
+    await publishDismissal(2_000)
+
+    expect(container.innerHTML).toBe('')
+  })
+
+  it('keeps a failed booking click available to retry without fencing other tabs', async () => {
+    state.invitation = { ...eligible, round: 2 }
+    state.recordSucceeds = false
+    await render()
+    await click(buttonWithText('Book a 15 minute chat'))
+
+    expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeUndefined()
+    expect(state.errors).toEqual([
+      'Could not record your response. Please try again.',
+    ])
+
+    state.recordSucceeds = true
+    await click(buttonWithText('Book a 15 minute chat'))
+
+    expect(state.recorded).toEqual(['shown', 'clicked', 'clicked'])
+    expect(state.opened).toEqual([eligible.bookUrl, eligible.bookUrl])
+    expect(container.innerHTML).toBe('')
+    expect(Number(storage['feedbackInviteDismissedAt:v1'])).toBeGreaterThan(0)
+  })
+
+  it('does not hide or fence the card when a click reply remains eligible', async () => {
+    state.invitation = { ...eligible, round: 1 }
+    state.settled = { ...eligible, round: 2 }
+    await render()
+    await click(buttonWithText('Book a 15 minute chat'))
+
+    expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeUndefined()
+    expect(state.cached).toEqual([{ key: invitationKey, value: state.settled }])
   })
 
   it('does not fence another tab when a stale dismissal returns a newer round', async () => {

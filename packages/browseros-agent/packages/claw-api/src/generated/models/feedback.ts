@@ -39,7 +39,7 @@ export interface FeedbackInvitation {
 }
 
 /**
- * shown records an invitation round reaching the screen; clicked records booking interest without closing the round; dismissed closes the round. Reloading the card does not start another round.
+ * shown records an invitation round reaching the screen; clicked permanently stops invitations for the installation; dismissed closes the round and allows another after 72 hours, up to three rounds. Reloading the card does not start another round. The booking-link click is the terminal proxy; there is no booking confirmation integration.
  * @export
  */
 export const FeedbackInviteOutcome = {

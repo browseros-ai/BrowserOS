@@ -111,10 +111,8 @@ async fn an_impression_does_not_stop_the_card_coming_back() -> anyhow::Result<()
     Ok(())
 }
 
-/// Opening the booking page is not the same as booking, so it does not take the card away
-/// either. The reader may well come back to finish later.
 #[tokio::test]
-async fn booking_does_not_stop_the_card_coming_back() -> anyhow::Result<()> {
+async fn booking_stops_the_card_coming_back() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let app = test_app(dir.path()).await?;
     let install_id = install_id_of(&app).await;
@@ -131,12 +129,10 @@ async fn booking_does_not_stop_the_card_coming_back() -> anyhow::Result<()> {
     }
 
     let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
-    assert_eq!(after["eligible"], true);
+    assert_eq!(after["eligible"], false);
     Ok(())
 }
 
-/// Dismissal is the only answer that ends it, and it has to outlive the process that
-/// recorded it or a restart starts nagging again.
 #[tokio::test]
 async fn a_dismissal_ends_it_and_survives_a_restart() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
@@ -477,7 +473,7 @@ async fn every_offered_round_remains_answerable_after_cohort_removal_before_its_
                 None,
             )
             .await?;
-            assert_eq!(after["eligible"], outcome != "dismissed");
+            assert_eq!(after["eligible"], outcome == "shown");
         }
     }
     Ok(())
@@ -536,6 +532,67 @@ async fn an_unanswered_offer_survives_a_restart_and_cohort_removal() -> anyhow::
 }
 
 #[tokio::test]
+async fn a_late_legacy_booking_click_stops_later_rounds_even_outside_the_cohort()
+-> anyhow::Result<()> {
+    use claw_server_rust::db::feedback_invite::{INVITATION_COOLDOWN_MS, InviteOutcome};
+
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+    app.state
+        .feedback_invites
+        .record(
+            &install_id,
+            InviteOutcome::Dismissed,
+            now_ms() - INVITATION_COOLDOWN_MS,
+            1,
+        )
+        .await?;
+    request(
+        &app.router,
+        "POST",
+        INVITATION,
+        Some(json!({"outcome": "shown", "round": 2})),
+    )
+    .await?;
+    join_cohort(&app, &["someone-else"]).await?;
+    let (_, clicked) = request(
+        &app.router,
+        "POST",
+        INVITATION,
+        Some(json!({"outcome": "clicked"})),
+    )
+    .await?;
+    assert_eq!(clicked, json!({"eligible": false}));
+    assert_eq!(
+        app.state
+            .feedback_invites
+            .recorded_round(&install_id)
+            .await?,
+        Some(2)
+    );
+    assert_eq!(
+        app.state
+            .feedback_invites
+            .outcome_of(&install_id)
+            .await?
+            .as_deref(),
+        Some("clicked")
+    );
+    join_cohort(&app, &[install_id.as_str()]).await?;
+    let (_, after) = request(
+        &app.router,
+        "GET",
+        "/api/v1/feedback/invitation?supportsRounds=true",
+        None,
+    )
+    .await?;
+    assert_eq!(after, json!({"eligible": false}));
+    Ok(())
+}
+
+#[tokio::test]
 async fn round_aware_clients_receive_and_report_the_first_round() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let app = test_app(dir.path()).await?;
@@ -559,8 +616,12 @@ async fn round_aware_clients_receive_and_report_the_first_round() -> anyhow::Res
             Some(json!({"outcome": outcome, "round": 1})),
         )
         .await?;
-        assert_eq!(reply["eligible"], true);
-        assert_eq!(reply["round"], 1);
+        assert_eq!(reply["eligible"], outcome == "shown");
+        if outcome == "shown" {
+            assert_eq!(reply["round"], 1);
+        } else {
+            assert_eq!(reply, json!({"eligible": false}));
+        }
     }
     let (_, reply) = request(
         &app.router,

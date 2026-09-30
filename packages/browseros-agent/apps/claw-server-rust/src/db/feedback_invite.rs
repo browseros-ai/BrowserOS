@@ -100,9 +100,10 @@ impl FeedbackInviteRepository {
                      THEN ? ELSE settled_at_ms END, \
                    dismissed_at_ms = CASE WHEN round < ? THEN ? \
                      ELSE COALESCE(dismissed_at_ms, ?) END, \
-                   round = ? \
+                   round = MAX(round, ?) \
                  WHERE install_id = ? AND (round = ? OR \
-                   (round + 1 = ? AND dismissed_at_ms <= ?))",
+                   (round + 1 = ? AND dismissed_at_ms <= ? AND outcome != 'clicked') OR \
+                   (? AND round > ?))",
                 [
                     Value::from(outcome.rank()),
                     Value::from(outcome.as_str().to_owned()),
@@ -116,6 +117,8 @@ impl FeedbackInviteRepository {
                     Value::from(round),
                     Value::from(round),
                     Value::from(now_ms.saturating_sub(INVITATION_COOLDOWN_MS)),
+                    Value::from(outcome == InviteOutcome::Clicked),
+                    Value::from(round),
                 ],
             ))
             .await?;
@@ -132,6 +135,9 @@ impl FeedbackInviteRepository {
         else {
             return Ok(Some(1));
         };
+        if row.outcome == InviteOutcome::Clicked.as_str() {
+            return Ok(None);
+        }
         let Some(dismissed_at_ms) = row.dismissed_at_ms else {
             return Ok(Some(row.round));
         };
@@ -220,6 +226,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn clicking_any_round_permanently_ends_invitations_even_after_dismissal_and_restart()
+    -> anyhow::Result<()> {
+        for clicked_round in 1..=MAX_INVITATION_ROUNDS {
+            let dir = tempdir()?;
+            let repo = repository(&dir).await?;
+            for round in 1..clicked_round {
+                repo.record(
+                    "install-a",
+                    InviteOutcome::Dismissed,
+                    i64::from(round) * INVITATION_COOLDOWN_MS,
+                    round,
+                )
+                .await?;
+            }
+            let now = i64::from(clicked_round) * INVITATION_COOLDOWN_MS;
+            repo.record("install-a", InviteOutcome::Clicked, now, clicked_round)
+                .await?;
+            assert_eq!(repo.offered_round("install-a", now).await?, None);
+            repo.record(
+                "install-a",
+                InviteOutcome::Dismissed,
+                now + 1,
+                clicked_round,
+            )
+            .await?;
+            repo.record(
+                "install-a",
+                InviteOutcome::Shown,
+                now + 1 + INVITATION_COOLDOWN_MS,
+                clicked_round + 1,
+            )
+            .await?;
+            assert_eq!(repo.recorded_round("install-a").await?, Some(clicked_round));
+            assert_eq!(repo.offered_round("install-a", i64::MAX).await?, None);
+            drop(repo);
+            let reopened = repository(&dir).await?;
+            assert_eq!(reopened.offered_round("install-a", i64::MAX).await?, None);
+            assert_eq!(
+                reopened.outcome_of("install-a").await?.as_deref(),
+                Some("clicked")
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_late_click_from_an_older_round_also_stops_the_current_round() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000, 1)
+            .await?;
+        let now = 1_000 + INVITATION_COOLDOWN_MS;
+        repo.record("install-a", InviteOutcome::Shown, now, 2)
+            .await?;
+        repo.record("install-a", InviteOutcome::Clicked, now + 1, 1)
+            .await?;
+        assert_eq!(repo.recorded_round("install-a").await?, Some(2));
+        assert_eq!(
+            repo.outcome_of("install-a").await?.as_deref(),
+            Some("clicked")
+        );
+        assert_eq!(repo.offered_round("install-a", now + 1).await?, None);
+        assert_eq!(repo.offered_round("install-a", i64::MAX).await?, None);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn three_rounds_wait_for_each_dismissal_cooldown_then_stop() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
@@ -229,7 +302,7 @@ mod tests {
             assert_eq!(repo.offered_round("install-a", now).await?, Some(round));
             repo.record("install-a", InviteOutcome::Shown, now, round)
                 .await?;
-            repo.record("install-a", InviteOutcome::Clicked, now + 1, round)
+            repo.record("install-a", InviteOutcome::Shown, now + 1, round)
                 .await?;
             assert_eq!(
                 repo.offered_round("install-a", now + INVITATION_COOLDOWN_MS)
@@ -257,7 +330,7 @@ mod tests {
         assert_eq!(repo.offered_round("install-a", i64::MAX).await?, None);
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
-            Some("clicked")
+            Some("dismissed")
         );
         Ok(())
     }
@@ -326,11 +399,7 @@ mod tests {
         assert_eq!(repo.recorded_round("install-a").await?, Some(1));
         repo.record("install-a", InviteOutcome::Shown, due, 2)
             .await?;
-        for outcome in [
-            InviteOutcome::Shown,
-            InviteOutcome::Dismissed,
-            InviteOutcome::Clicked,
-        ] {
+        for outcome in [InviteOutcome::Shown, InviteOutcome::Dismissed] {
             repo.record("install-a", outcome, due + 1, 1).await?;
         }
         assert_eq!(repo.recorded_round("install-a").await?, Some(2));
@@ -370,8 +439,9 @@ mod tests {
         assert_eq!(
             repo.offered_round("install-a", due + INVITATION_COOLDOWN_MS)
                 .await?,
-            Some(3)
+            None
         );
+        assert!(repo.has_dismissed("install-a").await?);
         assert_eq!(
             repo.outcome_of("install-a").await?.as_deref(),
             Some("clicked")

@@ -134,7 +134,11 @@ async fn record(state: &AppState, outcome: InviteOutcome, round: i32) -> AppResu
 }
 
 async fn may_record(state: &AppState, install_id: &str, round: i32) -> AppResult<bool> {
-    if state.feedback_invites.recorded_round(install_id).await? == Some(round)
+    if state
+        .feedback_invites
+        .recorded_round(install_id)
+        .await?
+        .is_some_and(|recorded| round <= recorded)
         || state
             .feedback_invites
             .was_offered(install_id, round)

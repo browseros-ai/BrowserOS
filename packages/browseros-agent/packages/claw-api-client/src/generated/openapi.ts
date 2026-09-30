@@ -92,10 +92,10 @@ export interface paths {
       path?: never
       cookie?: never
     }
-    /** @description Whether this installation should be shown a feedback call invitation. At most three rounds are offered, with a 72-hour wait after each dismissal. */
+    /** @description Whether this installation should be shown a feedback call invitation. At most three rounds are offered, with a 72-hour wait after each dismissal. A booking-link click permanently stops invitations. */
     get: operations['getFeedbackInvitation']
     put?: never
-    /** @description Records what happened to the offered round. Showing or clicking keeps the round open; dismissing starts the wait before the next round. Outcomes for older rounds do not change a newer round. */
+    /** @description Records what happened to the offered round. Showing keeps the round open; dismissing starts the wait before the next round. Clicking permanently stops invitations, including when reported for an older round. Older-round shown and dismissed outcomes do not change a newer round. The booking-link click is the terminal proxy; there is no booking confirmation integration. */
     post: operations['recordFeedbackInvite']
     delete?: never
     options?: never
@@ -514,7 +514,7 @@ export interface components {
       toolCallCount: number
     }
     /**
-     * @description shown records an invitation round reaching the screen; clicked records booking interest without closing the round; dismissed closes the round. Reloading the card does not start another round.
+     * @description shown records an invitation round reaching the screen; clicked permanently stops invitations for the installation; dismissed closes the round and allows another after 72 hours, up to three rounds. Reloading the card does not start another round. The booking-link click is the terminal proxy; there is no booking confirmation integration.
      * @enum {string}
      */
     FeedbackInviteOutcome: 'shown' | 'clicked' | 'dismissed'

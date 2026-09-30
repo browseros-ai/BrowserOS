@@ -466,7 +466,7 @@ mod tests {
                 assert_eq!(
                     repo.offered_round(install, 2000 + INVITATION_COOLDOWN_MS)
                         .await?,
-                    Some(2)
+                    (install == "dismissed").then_some(2)
                 );
             }
         }
