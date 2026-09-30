@@ -22,6 +22,7 @@ use std::{
 use tokio::{sync::Mutex, time::timeout};
 
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(2);
+const AUDIT_CAPTURE_TIMEOUT: Duration = Duration::from_millis(500);
 const CAPTURE_TASK_CONCURRENCY_LIMIT: usize = 2;
 
 #[derive(Clone)]
@@ -80,22 +81,39 @@ impl SessionVisualService {
     }
 
     pub async fn capture(&self, session_id: &str) -> AppResult<Option<Vec<u8>>> {
+        self.capture_live_session(session_id, CAPTURE_TIMEOUT).await
+    }
+
+    /// Optional per-step audit previews must not hold up successful browser actions.
+    pub(crate) async fn capture_for_audit(&self, session_id: &str) -> AppResult<Option<Vec<u8>>> {
+        self.capture_live_session(session_id, AUDIT_CAPTURE_TIMEOUT)
+            .await
+    }
+
+    async fn capture_live_session(
+        &self,
+        session_id: &str,
+        capture_timeout: Duration,
+    ) -> AppResult<Option<Vec<u8>>> {
         let session_key = SessionId::new(session_id);
         let Some(session) = self.sessions.lookup(&session_key).await else {
             return Ok(None);
         };
-        self.capture_with_session(&session, true).await
+        self.capture_with_session(&session, true, capture_timeout)
+            .await
     }
 
     /// Captures through a teardown-owned session lease after live request resolution has stopped.
     pub async fn capture_for_session(&self, session: &Arc<Session>) -> AppResult<Option<Vec<u8>>> {
-        self.capture_with_session(session, false).await
+        self.capture_with_session(session, false, CAPTURE_TIMEOUT)
+            .await
     }
 
     async fn capture_with_session(
         &self,
         session: &Arc<Session>,
         require_live_at_end: bool,
+        capture_timeout: Duration,
     ) -> AppResult<Option<Vec<u8>>> {
         let session_id = session.id().as_str();
         self.session_tabs.drain_writes().await;
@@ -129,7 +147,7 @@ impl SessionVisualService {
                 .screenshot_for_target(page_id, &target_id, options)
                 .await
         });
-        let result = match timeout(CAPTURE_TIMEOUT, &mut capture).await {
+        let result = match timeout(capture_timeout, &mut capture).await {
             Ok(result) => {
                 self.in_flight.finish(candidate.page_id).await;
                 result.map_err(AppError::from)?
@@ -230,7 +248,111 @@ fn capture_options() -> ScreenshotCaptureOptions {
 #[cfg(test)]
 mod tests {
     use super::{InFlightCaptures, capture_options};
+    use browseros_cdp::{CdpError, CdpEvent, SessionId};
     use browseros_core::screenshot::ScreenshotFormat;
+    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
+    use futures_util::future::BoxFuture;
+    use serde_json::{Value, json};
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::broadcast;
+
+    struct SlowScreenshotConnection {
+        events: broadcast::Sender<CdpEvent>,
+    }
+
+    fn preview_test_tab() -> Value {
+        json!({
+            "tabId": 7, "targetId": "target-7", "url": "https://example.com",
+            "title": "Preview timeout test", "isActive": true,
+            "isLoading": false, "loadProgress": 1.0, "isPinned": false,
+            "isHidden": false, "windowId": 1, "index": 0
+        })
+    }
+
+    impl CdpConnection for SlowScreenshotConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                match method {
+                    "Browser.getTabs" => Ok(json!({ "tabs": [preview_test_tab()] })),
+                    "Browser.getTabInfo" => Ok(json!({ "tab": preview_test_tab() })),
+                    "Target.attachToTarget" => Ok(json!({ "sessionId": "session-7" })),
+                    "Page.captureScreenshot" => {
+                        tokio::time::sleep(Duration::from_millis(750)).await;
+                        Ok(json!({ "data": "anBlZw==" }))
+                    }
+                    _ => Ok(json!({})),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn audit_timeout_preserves_capture_slot_until_worker_finishes() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let (events, _) = broadcast::channel(8);
+        let browser = BrowserSession::new(
+            Arc::new(SlowScreenshotConnection { events }),
+            BrowserSessionHooks::default(),
+        );
+        call.state.browser.set_session_for_testing(browser).await;
+        call.state.session_tabs.enqueue_claim_tab_for_session(
+            7,
+            Some("target-7".to_string()),
+            call.session_id.as_str().to_string(),
+            "test-conversation".to_string(),
+            0,
+        );
+
+        let started = tokio::time::Instant::now();
+        let result = call
+            .state
+            .visuals
+            .capture_for_audit(call.session_id.as_str())
+            .await;
+        assert!(
+            result.is_err(),
+            "a slow optional audit preview should time out"
+        );
+        assert!(started.elapsed() < Duration::from_millis(700));
+        assert!(
+            call.state
+                .visuals
+                .capture(call.session_id.as_str())
+                .await?
+                .is_none()
+        );
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let screenshot = call.state.visuals.capture(call.session_id.as_str()).await?;
+        assert_eq!(screenshot, Some(b"jpeg".to_vec()));
+        Ok(())
+    }
 
     #[test]
     fn preview_capture_is_viewport_jpeg_without_annotations() {

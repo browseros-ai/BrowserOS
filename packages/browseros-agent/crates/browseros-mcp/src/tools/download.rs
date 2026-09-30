@@ -11,7 +11,7 @@ use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const DESCRIPTION: &str = "\
 Click an element (by ref from the last snapshot) to trigger a file download, \
@@ -47,7 +47,7 @@ fn handler<'a>(
             .session
             .send_value(
                 "Page.setDownloadBehavior",
-                json!({ "behavior": "allow", "downloadPath": download_dir }),
+                json!({ "behavior": "allow", "downloadPath": chromium_download_path(&download_dir) }),
             )
             .await?;
         let capture = capture_download(
@@ -75,6 +75,87 @@ fn handler<'a>(
             })),
         )))
     })
+}
+
+fn chromium_download_path(download_dir: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        use std::path::{Component, Prefix};
+
+        let mut components = download_dir.components();
+        let Some(Component::Prefix(prefix)) = components.next() else {
+            return download_dir.to_path_buf();
+        };
+        // Chromium rejects the verbatim prefix added by Windows canonicalize.
+        // Keep the original canonical path for filesystem access and tracking.
+        let mut chromium_path = match prefix.kind() {
+            Prefix::VerbatimDisk(drive) => PathBuf::from(format!("{}:\\", char::from(drive))),
+            Prefix::VerbatimUNC(server, share) => PathBuf::from(r"\\").join(server).join(share),
+            _ => return download_dir.to_path_buf(),
+        };
+        for component in components {
+            if component == Component::RootDir {
+                continue;
+            }
+            chromium_path.push(component.as_os_str());
+        }
+        return chromium_path;
+    }
+    #[cfg(not(windows))]
+    download_dir.to_path_buf()
+}
+
+#[cfg(test)]
+mod download_path_tests {
+    use super::chromium_download_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn ordinary_paths_are_unchanged() {
+        for path in ["/tmp/browseros/download", "relative/download", ""] {
+            assert_eq!(chromium_download_path(Path::new(path)), PathBuf::from(path));
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_drive_path_becomes_chromium_compatible() {
+        for (canonical_path, chromium_path) in [
+            (r"\\?\C:\", r"C:\"),
+            (
+                r"\\?\C:\Users\Test User\写真\download",
+                r"C:\Users\Test User\写真\download",
+            ),
+            (r"\\?\d:\tool-output\download", r"D:\tool-output\download"),
+        ] {
+            assert_eq!(
+                chromium_download_path(Path::new(canonical_path)),
+                PathBuf::from(chromium_path),
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn verbatim_unc_path_preserves_server_and_share() {
+        assert_eq!(
+            chromium_download_path(Path::new(r"\\?\UNC\server\shared photos\写真\download")),
+            PathBuf::from(r"\\server\shared photos\写真\download"),
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn ordinary_windows_and_device_paths_are_unchanged() {
+        for path in [
+            r"C:\Users\Test User\Downloads",
+            r"\\server\shared photos\download",
+            r"\\.\C:\download",
+            r"\\?\Volume{00000000-0000-0000-0000-000000000000}\download",
+        ] {
+            assert_eq!(chromium_download_path(Path::new(path)), PathBuf::from(path));
+        }
+    }
 }
 
 async fn capture_download(
