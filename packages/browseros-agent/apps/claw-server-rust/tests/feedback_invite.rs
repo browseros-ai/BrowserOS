@@ -399,6 +399,143 @@ struct TestApp {
 }
 
 #[tokio::test]
+async fn every_offered_round_remains_answerable_after_cohort_removal_before_its_first_post()
+-> anyhow::Result<()> {
+    use claw_server_rust::db::feedback_invite::{INVITATION_COOLDOWN_MS, InviteOutcome};
+
+    for round in 1..=3 {
+        for outcome in ["shown", "clicked", "dismissed"] {
+            let dir = tempfile::tempdir()?;
+            let app = test_app(dir.path()).await?;
+            let install_id = install_id_of(&app).await;
+            join_cohort(&app, &[install_id.as_str()]).await?;
+            for previous in 1..round {
+                app.state
+                    .feedback_invites
+                    .record(
+                        &install_id,
+                        InviteOutcome::Dismissed,
+                        now_ms() - i64::from(4 - previous) * INVITATION_COOLDOWN_MS,
+                        previous,
+                    )
+                    .await?;
+            }
+            let (_, offered) = request(
+                &app.router,
+                "GET",
+                "/api/v1/feedback/invitation?supportsRounds=true",
+                None,
+            )
+            .await?;
+            assert_eq!(offered["round"], round);
+            assert_eq!(
+                app.state
+                    .feedback_invites
+                    .recorded_round(&install_id)
+                    .await?,
+                (round > 1).then_some(round - 1)
+            );
+
+            join_cohort(&app, &["someone-else"]).await?;
+            let (status, _) = request(
+                &app.router,
+                "POST",
+                INVITATION,
+                Some(json!({"outcome": outcome, "round": round})),
+            )
+            .await?;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                app.state
+                    .feedback_invites
+                    .recorded_round(&install_id)
+                    .await?,
+                Some(round)
+            );
+            assert_eq!(
+                app.state
+                    .feedback_invites
+                    .has_dismissed(&install_id)
+                    .await?,
+                outcome == "dismissed"
+            );
+            if outcome == "clicked" {
+                assert_eq!(
+                    app.state
+                        .feedback_invites
+                        .outcome_of(&install_id)
+                        .await?
+                        .as_deref(),
+                    Some("clicked")
+                );
+            }
+            join_cohort(&app, &[install_id.as_str()]).await?;
+            let (_, after) = request(
+                &app.router,
+                "GET",
+                "/api/v1/feedback/invitation?supportsRounds=true",
+                None,
+            )
+            .await?;
+            assert_eq!(after["eligible"], outcome != "dismissed");
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_unanswered_offer_survives_a_restart_and_cohort_removal() -> anyhow::Result<()> {
+    use claw_server_rust::db::feedback_invite::{INVITATION_COOLDOWN_MS, InviteOutcome};
+
+    let dir = tempfile::tempdir()?;
+    let app = test_app(dir.path()).await?;
+    let install_id = install_id_of(&app).await;
+    join_cohort(&app, &[install_id.as_str()]).await?;
+    app.state
+        .feedback_invites
+        .record(
+            &install_id,
+            InviteOutcome::Dismissed,
+            now_ms() - INVITATION_COOLDOWN_MS,
+            1,
+        )
+        .await?;
+    let (_, offered) = request(
+        &app.router,
+        "GET",
+        "/api/v1/feedback/invitation?supportsRounds=true",
+        None,
+    )
+    .await?;
+    assert_eq!(offered["round"], 2);
+    drop(app);
+
+    let app = test_app(dir.path()).await?;
+    join_cohort(&app, &["someone-else"]).await?;
+    request(
+        &app.router,
+        "POST",
+        INVITATION,
+        Some(json!({"outcome": "dismissed", "round": 2})),
+    )
+    .await?;
+    assert_eq!(
+        app.state
+            .feedback_invites
+            .recorded_round(&install_id)
+            .await?,
+        Some(2)
+    );
+    assert!(
+        app.state
+            .feedback_invites
+            .has_dismissed(&install_id)
+            .await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn round_aware_clients_receive_and_report_the_first_round() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let app = test_app(dir.path()).await?;

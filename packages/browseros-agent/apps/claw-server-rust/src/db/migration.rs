@@ -57,10 +57,23 @@ mod m0020_add_feedback_invite_round {
                         )
                         .to_owned(),
                 )
-                .await
+                .await?;
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    "CREATE TABLE feedback_invite_offer (\
+                    install_id TEXT NOT NULL PRIMARY KEY, \
+                    round INTEGER NOT NULL CHECK (round BETWEEN 1 AND 3))",
+                )
+                .await?;
+            Ok(())
         }
 
         async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .get_connection()
+                .execute_unprepared("DROP TABLE feedback_invite_offer")
+                .await?;
             manager
                 .alter_table(
                     Table::alter()

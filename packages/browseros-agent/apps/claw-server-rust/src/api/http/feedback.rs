@@ -110,6 +110,10 @@ async fn decide(state: &AppState, supports_rounds: bool) -> AppResult<FeedbackIn
     if !supports_rounds && round != 1 {
         return Ok(not_eligible());
     }
+    state
+        .feedback_invites
+        .remember_offer(&install_id, round)
+        .await?;
     let mut invitation = FeedbackInvitation::new(true);
     invitation.book_url = Some(book_url);
     invitation.round = supports_rounds.then_some(round);
@@ -130,7 +134,12 @@ async fn record(state: &AppState, outcome: InviteOutcome, round: i32) -> AppResu
 }
 
 async fn may_record(state: &AppState, install_id: &str, round: i32) -> AppResult<bool> {
-    if state.feedback_invites.recorded_round(install_id).await? == Some(round) {
+    if state.feedback_invites.recorded_round(install_id).await? == Some(round)
+        || state
+            .feedback_invites
+            .was_offered(install_id, round)
+            .await?
+    {
         return Ok(true);
     }
     Ok(state

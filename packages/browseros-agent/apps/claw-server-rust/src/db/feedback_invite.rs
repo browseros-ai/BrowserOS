@@ -150,6 +150,33 @@ impl FeedbackInviteRepository {
             .map(|row| row.round))
     }
 
+    pub async fn remember_offer(&self, install_id: &str, round: i32) -> AppResult<()> {
+        self.db
+            .connection()
+            .execute(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "INSERT INTO feedback_invite_offer (install_id, round) VALUES (?, ?) \
+             ON CONFLICT(install_id) DO UPDATE SET round = excluded.round \
+             WHERE feedback_invite_offer.round < excluded.round",
+                [Value::from(install_id.to_owned()), Value::from(round)],
+            ))
+            .await?;
+        Ok(())
+    }
+
+    pub async fn was_offered(&self, install_id: &str, round: i32) -> AppResult<bool> {
+        Ok(self
+            .db
+            .connection()
+            .query_one(Statement::from_sql_and_values(
+                DatabaseBackend::Sqlite,
+                "SELECT 1 FROM feedback_invite_offer WHERE install_id = ? AND round = ?",
+                [Value::from(install_id.to_owned()), Value::from(round)],
+            ))
+            .await?
+            .is_some())
+    }
+
     /// Whether this installation has already been offered an invitation.
     ///
     /// Only says the card has been on screen before, not whether another round is due.
@@ -251,6 +278,24 @@ mod tests {
             );
         }
         assert_eq!(repo.recorded_round("install-a").await?, Some(1));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn remembering_an_offer_does_not_record_an_impression_or_replace_a_newer_offer()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
+        repo.remember_offer("install-a", 1).await?;
+        assert!(repo.was_offered("install-a", 1).await?);
+        assert!(!repo.was_offered("install-b", 1).await?);
+        assert_eq!(repo.recorded_round("install-a").await?, None);
+        assert_eq!(repo.outcome_of("install-a").await?, None);
+        repo.remember_offer("install-a", 2).await?;
+        repo.remember_offer("install-a", 1).await?;
+        repo.remember_offer("install-a", 2).await?;
+        assert!(repo.was_offered("install-a", 2).await?);
+        assert!(!repo.was_offered("install-a", 1).await?);
         Ok(())
     }
 
