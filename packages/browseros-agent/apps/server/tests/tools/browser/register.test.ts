@@ -517,7 +517,7 @@ describe('registerBrowserTools', () => {
       expect(result?.content).toEqual([
         expect.objectContaining({
           type: 'text',
-          text: 'timed out after 2000ms waiting for text',
+          text: 'timed out after 10000ms waiting for text',
         }),
       ])
     } finally {
@@ -527,7 +527,7 @@ describe('registerBrowserTools', () => {
     const inputSchema = fake.configs.get('wait')?.inputSchema as
       | { shape?: { timeout?: { description?: string } } }
       | undefined
-    expect(inputSchema?.shape?.timeout?.description).toContain('default 2000')
+    expect(inputSchema?.shape?.timeout?.description).toContain('default 10000')
   })
 
   it('runs server-runtime JavaScript against the browser session', async () => {

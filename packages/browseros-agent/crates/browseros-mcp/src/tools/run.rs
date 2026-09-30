@@ -22,7 +22,7 @@ use std::{
     sync::{Arc, Mutex},
     time::Duration,
 };
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep, sleep_until};
 
 const DEFAULT_TIMEOUT_MS: f64 = 30_000.0;
 const MAX_TIMEOUT_MS: u64 = 30_000;
@@ -59,8 +59,8 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.check(ref) / uncheck(ref) / focus(ref) / drag(fromRef,toRef)
   page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
-  page.dialogAccept() / dialogDismiss()
-  page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears. Use waitForTime only for a plain fixed pause; `await sleep(ms)` also works. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
+  page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
+  page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. Use waitForTime only for a plain fixed pause; `await sleep(ms)` also works. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
   page.evaluate(fn, arg?)            - runs INSIDE the page. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
   page.screenshot(opts?) / pdf(opts?)
   page.download(ref) / upload(ref, files)
@@ -836,6 +836,46 @@ impl BrowserBridge {
         outcome
     }
 
+    /// Runs a page input action but stops waiting if a blocking JavaScript dialog
+    /// opens on that page (or is already open). A confirm/prompt/beforeunload freezes
+    /// the renderer main thread, so the action's CDP ack never returns and the run
+    /// would otherwise hang to its 30s cap (#2780). The dialog listener records it
+    /// concurrently, so polling pending_dialog lets us hand control back; the pending
+    /// dialog is left set for page.dialogAccept()/dialogDismiss() to resolve. Returns
+    /// Ok(None) when a dialog interrupted the action, so callers surface the dialog
+    /// rather than reporting the action as done.
+    async fn race_input<F, T>(&self, page_id: &PageId, future: F) -> Result<Option<T>, String>
+    where
+        F: Future<Output = Result<T, browseros_core::CoreError>>,
+    {
+        let signals = self.ctx.session.page_signals.clone();
+        let page = page_id.clone();
+        let dialog = async move {
+            while signals.pending_dialog(&page).is_none() {
+                sleep(Duration::from_millis(25)).await;
+            }
+        };
+        tokio::select! {
+            biased;
+            result = self.control.race(future) => result.map(Some),
+            () = dialog => Ok(None),
+        }
+    }
+
+    /// The value an input action returns when a blocking dialog interrupted it: a
+    /// marker plus the dialog's kind and message, so the script can see that the
+    /// action did not complete and must accept or dismiss the dialog next (#2780).
+    fn dialog_open_value(&self, page_id: &PageId) -> BrowserCallValue {
+        match self.ctx.session.page_signals.pending_dialog(page_id) {
+            Some(dialog) => BrowserCallValue::Json(json!({
+                "dialogOpen": true,
+                "kind": dialog.kind,
+                "message": dialog.message,
+            })),
+            None => BrowserCallValue::Undefined,
+        }
+    }
+
     async fn dispatch(&self, method: &str, args: Vec<Value>) -> Result<BrowserCallValue, String> {
         match method {
             "pages.list" => {
@@ -926,61 +966,78 @@ impl BrowserBridge {
             }
             "input.click" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
-                let input = self.ctx.session.input(page_id).await;
-                self.control
-                    .race(input.click(&Ref(ref_id), Default::default()))
-                    .await?;
-                Ok(BrowserCallValue::Undefined)
+                let input = self.ctx.session.input(page_id.clone()).await;
+                match self
+                    .race_input(&page_id, input.click(&Ref(ref_id), Default::default()))
+                    .await?
+                {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.fill" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
-                let input = self.ctx.session.input(page_id).await;
-                self.control
-                    .race(input.fill(&Ref(ref_id), &value, true))
-                    .await?;
-                Ok(BrowserCallValue::Undefined)
+                let input = self.ctx.session.input(page_id.clone()).await;
+                match self
+                    .race_input(&page_id, input.fill(&Ref(ref_id), &value, true))
+                    .await?
+                {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.type" => {
                 let page_id = page_arg(&args, 0)?;
                 let text = string_arg(&args, 1, "text")?;
-                let input = self.ctx.session.input(page_id).await;
-                self.control.race(input.type_text(&text)).await?;
-                Ok(BrowserCallValue::Undefined)
+                let input = self.ctx.session.input(page_id.clone()).await;
+                match self.race_input(&page_id, input.type_text(&text)).await? {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.press" => {
                 let page_id = page_arg(&args, 0)?;
                 let key = string_arg(&args, 1, "key")?;
-                let input = self.ctx.session.input(page_id).await;
-                self.control.race(input.press(&key)).await?;
-                Ok(BrowserCallValue::Undefined)
+                let input = self.ctx.session.input(page_id.clone()).await;
+                match self.race_input(&page_id, input.press(&key)).await? {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.hover" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
-                let input = self.ctx.session.input(page_id).await;
-                self.control.race(input.hover(&Ref(ref_id))).await?;
-                Ok(BrowserCallValue::Undefined)
+                let input = self.ctx.session.input(page_id.clone()).await;
+                match self.race_input(&page_id, input.hover(&Ref(ref_id))).await? {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.selectOption" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
-                let input = self.ctx.session.input(page_id).await;
-                let selected = self
-                    .control
-                    .race(input.select_option(&Ref(ref_id), &value))
-                    .await?;
-                Ok(BrowserCallValue::Json(json!(selected)))
+                let input = self.ctx.session.input(page_id.clone()).await;
+                match self
+                    .race_input(&page_id, input.select_option(&Ref(ref_id), &value))
+                    .await?
+                {
+                    Some(selected) => Ok(BrowserCallValue::Json(json!(selected))),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "input.scroll" => {
                 let page_id = page_arg(&args, 0)?;
                 let direction = scroll_direction(&string_arg(&args, 1, "dir")?)?;
                 let amount = optional_f64_arg(&args, 2).unwrap_or(3.0).round() as i64;
                 let ref_id = optional_string_arg(&args, 3)?.map(Ref);
-                let input = self.ctx.session.input(page_id).await;
-                self.control
-                    .race(input.scroll(direction, amount, ref_id.as_ref()))
-                    .await?;
-                Ok(BrowserCallValue::Undefined)
+                let input = self.ctx.session.input(page_id.clone()).await;
+                match self
+                    .race_input(&page_id, input.scroll(direction, amount, ref_id.as_ref()))
+                    .await?
+                {
+                    Some(_) => Ok(BrowserCallValue::Undefined),
+                    None => Ok(self.dialog_open_value(&page_id)),
+                }
             }
             "nav.goto" => {
                 let page_id = page_arg(&args, 0)?;
@@ -1555,6 +1612,14 @@ mod tests {
                 .map(|state| state.add_group_params.clone())
                 .unwrap_or_default()
         }
+
+        fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
+            let _ = self.sender.send(CdpEvent {
+                method: method.to_string(),
+                params,
+                session_id: session_id.map(SessionId::from),
+            });
+        }
     }
 
     impl CdpConnection for RunFakeConnection {
@@ -1681,6 +1746,110 @@ mod tests {
             inner_call_hook: None,
             preloaded_helpers: Vec::new(),
         })
+    }
+
+    fn test_bridge(ctx: ToolCtx) -> BrowserBridge {
+        BrowserBridge {
+            ctx,
+            control: RunControl {
+                cancel: CancellationToken::new(),
+                deadline: Instant::now() + Duration::from_secs(30),
+                timeout_message: Arc::from("run: timed out"),
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn race_input_returns_the_value_when_no_dialog_opens() -> anyhow::Result<()> {
+        let bridge = test_bridge(test_ctx());
+        let outcome = bridge
+            .race_input(&PageId(1), async {
+                Ok::<_, browseros_core::CoreError>(7u32)
+            })
+            .await
+            .map_err(|message| anyhow::anyhow!(message))?;
+        assert_eq!(outcome, Some(7));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn race_input_yields_when_a_dialog_blocks_the_action() -> anyhow::Result<()> {
+        let connection = Arc::new(RunFakeConnection::new());
+        let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
+        ctx.session
+            .page_signals
+            .attach_page(PageId(1), SessionId::from("session-1"));
+        connection.emit(
+            "Page.javascriptDialogOpening",
+            json!({ "type": "confirm", "message": "sure?" }),
+            Some("session-1"),
+        );
+        for _ in 0..100 {
+            if ctx
+                .session
+                .page_signals
+                .pending_dialog(&PageId(1))
+                .is_some()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+        assert!(
+            ctx.session
+                .page_signals
+                .pending_dialog(&PageId(1))
+                .is_some()
+        );
+
+        // The action future never resolves, standing in for a click whose CDP ack
+        // never returns while the renderer is frozen by the dialog.
+        let bridge = test_bridge(ctx);
+        let outcome = bridge
+            .race_input(
+                &PageId(1),
+                futures_util::future::pending::<Result<(), browseros_core::CoreError>>(),
+            )
+            .await
+            .map_err(|message| anyhow::anyhow!(message))?;
+        assert!(outcome.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dialog_open_value_describes_the_pending_dialog() -> anyhow::Result<()> {
+        let connection = Arc::new(RunFakeConnection::new());
+        let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
+        ctx.session
+            .page_signals
+            .attach_page(PageId(1), SessionId::from("session-1"));
+        connection.emit(
+            "Page.javascriptDialogOpening",
+            json!({ "type": "confirm", "message": "sure?" }),
+            Some("session-1"),
+        );
+        for _ in 0..100 {
+            if ctx
+                .session
+                .page_signals
+                .pending_dialog(&PageId(1))
+                .is_some()
+            {
+                break;
+            }
+            sleep(Duration::from_millis(5)).await;
+        }
+
+        let bridge = test_bridge(ctx);
+        match bridge.dialog_open_value(&PageId(1)) {
+            BrowserCallValue::Json(value) => {
+                assert_eq!(value["dialogOpen"], json!(true));
+                assert_eq!(value["kind"], json!("confirm"));
+                assert_eq!(value["message"], json!("sure?"));
+            }
+            BrowserCallValue::Undefined => anyhow::bail!("expected a dialog value"),
+        }
+        Ok(())
     }
 
     async fn run_tool(code: &str, timeout: Option<f64>) -> anyhow::Result<ToolResult> {

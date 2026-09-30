@@ -6,7 +6,10 @@ use crate::{
 use browseros_cdp::{browser, target};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::{sync::Mutex, time::sleep};
 use tracing::warn;
 
@@ -51,6 +54,10 @@ pub struct PageSession {
 struct PageState {
     pages: HashMap<PageId, PageInfo>,
     sessions: HashMap<TargetId, SessionId>,
+    // Pages the agent opened (via new_page), as opposed to tabs it adopted from a
+    // list. Only these get focus emulation on attach, so an adopted user tab keeps
+    // its real focus state (#2778).
+    agent_created: HashSet<PageId>,
     connection_epoch: u64,
     next_page_id: u32,
 }
@@ -127,6 +134,7 @@ impl PageManager {
                 let info = state.pages.remove(&page_id);
                 if let Some(info) = info {
                     state.sessions.remove(&info.target_id);
+                    state.agent_created.remove(&page_id);
                     detached.push(page_id);
                 }
             }
@@ -348,6 +356,7 @@ impl PageManager {
             page_id.clone(),
             page_info_from_tab(page_id.clone(), tab, None),
         );
+        state.agent_created.insert(page_id.clone());
         Ok(page_id)
     }
 
@@ -367,6 +376,7 @@ impl PageManager {
         let mut state = self.state.lock().await;
         state.pages.remove(&page_id);
         state.sessions.remove(&info.target_id);
+        state.agent_created.remove(&page_id);
         drop(state);
         if let Some(callback) = &self.hooks.on_page_detached {
             callback(page_id);
@@ -431,6 +441,22 @@ impl PageManager {
         let _ = session
             .send::<_, Value>("Runtime.runIfWaitingForDebugger", json!({}))
             .await;
+        // Agent tabs open in the background, where Chromium throttles layout,
+        // hit-testing and the compositor, so click/fill wait seconds for a CDP
+        // ack. Emulating focus keeps a tab the agent opened rendering at full
+        // speed. Scoped to agent-created tabs so an adopted user tab keeps its
+        // real focus state; best-effort, so it never fails attach (#2778).
+        let is_agent_created = self.state.lock().await.agent_created.contains(&page_id);
+        if is_agent_created
+            && let Err(err) = session
+                .send::<_, Value>(
+                    "Emulation.setFocusEmulationEnabled",
+                    json!({ "enabled": true }),
+                )
+                .await
+        {
+            warn!("failed to enable focus emulation for agent page {page_id:?}: {err}");
+        }
         self.state
             .lock()
             .await
@@ -551,29 +577,42 @@ fn find_by_tab(pages: &HashMap<PageId, PageInfo>, tab_id: TabId) -> Option<PageI
 
 #[cfg(test)]
 mod tests {
-    use super::{PageManager, PageManagerHooks};
+    use super::{NewPageOptions, PageManager, PageManagerHooks};
     use crate::test_support::TestConnection;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use std::error::Error;
+
+    fn tab_json(tab_id: u64, target_id: &str) -> Value {
+        json!({
+            "tabId": tab_id,
+            "targetId": target_id,
+            "url": "https://example.com",
+            "title": "Example",
+            "isActive": true,
+            "isLoading": false,
+            "loadProgress": 1.0,
+            "isPinned": false,
+            "isHidden": false,
+            "windowId": 3
+        })
+    }
+
+    fn attach_responses() -> Vec<(&'static str, Value)> {
+        vec![
+            ("Target.attachToTarget", json!({ "sessionId": "session-7" })),
+            ("Page.enable", json!({})),
+            ("DOM.enable", json!({})),
+            ("Runtime.enable", json!({})),
+            ("Accessibility.enable", json!({})),
+            ("Runtime.runIfWaitingForDebugger", json!({})),
+        ]
+    }
 
     #[tokio::test]
     async fn list_omits_hidden_tab_enumeration_option() -> Result<(), Box<dyn Error>> {
         let connection = TestConnection::new([(
             "Browser.getTabs",
-            json!({
-                "tabs": [{
-                    "tabId": 7,
-                    "targetId": "target-7",
-                    "url": "https://example.com",
-                    "title": "Example",
-                    "isActive": true,
-                    "isLoading": false,
-                    "loadProgress": 1.0,
-                    "isPinned": false,
-                    "isHidden": false,
-                    "windowId": 3
-                }]
-            }),
+            json!({ "tabs": [tab_json(7, "target-7")] }),
         )]);
         let pages = PageManager::new(connection.clone(), PageManagerHooks::default())
             .list()
@@ -581,6 +620,63 @@ mod tests {
 
         assert_eq!(pages.len(), 1);
         assert_eq!(connection.calls()?[0].params, json!({}));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn agent_created_tab_gets_focus_emulation_on_attach() -> Result<(), Box<dyn Error>> {
+        let mut responses = vec![
+            (
+                "Browser.createTab",
+                json!({ "tab": tab_json(7, "target-7") }),
+            ),
+            (
+                "Browser.getTabInfo",
+                json!({ "tab": tab_json(7, "target-7") }),
+            ),
+        ];
+        responses.extend(attach_responses());
+        responses.push(("Emulation.setFocusEmulationEnabled", json!({})));
+        let connection = TestConnection::new(responses);
+        let manager = PageManager::new(connection.clone(), PageManagerHooks::default());
+
+        let page_id = manager
+            .new_page("https://example.com", NewPageOptions::default())
+            .await?;
+        manager.get_session(page_id).await?;
+
+        let calls = connection.calls()?;
+        let focus = calls
+            .iter()
+            .find(|call| call.method == "Emulation.setFocusEmulationEnabled");
+        assert_eq!(
+            focus.map(|call| &call.params),
+            Some(&json!({ "enabled": true }))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn adopted_tab_keeps_real_focus_state() -> Result<(), Box<dyn Error>> {
+        let mut responses = vec![(
+            "Browser.getTabs",
+            json!({ "tabs": [tab_json(7, "target-7")] }),
+        )];
+        responses.extend(attach_responses());
+        let connection = TestConnection::new(responses);
+        let manager = PageManager::new(connection.clone(), PageManagerHooks::default());
+
+        let pages = manager.list().await?;
+        let page_id = pages.first().ok_or("adopted page missing")?.page_id.clone();
+        manager.get_session(page_id).await?;
+
+        let calls = connection.calls()?;
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.method == "Emulation.setFocusEmulationEnabled"),
+            "adopted tab must not get focus emulation"
+        );
         Ok(())
     }
 }

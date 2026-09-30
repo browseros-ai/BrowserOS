@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 pub const DEFAULT_PAUSE_MS: u64 = 2_000;
-const DEFAULT_WAIT_TIMEOUT_MS: u64 = 2_000;
+const DEFAULT_WAIT_TIMEOUT_MS: u64 = 10_000;
 const MAX_WAIT_TIMEOUT_MS: u64 = 30_000;
 // A for="time" pause does no page work (it is an abortable sleep), so it is not
 // bound by the 30s page-work polling cap that text/selector waits use. An explicit
@@ -21,9 +21,11 @@ const MAX_WAIT_TIMEOUT_MS: u64 = 30_000;
 const MAX_TIME_WAIT_MS: u64 = 90_000;
 const DESCRIPTION: &str = "\
 Wait on a signal: for=\"text\" (substring appears) or for=\"selector\" (CSS selector matches) \
-beat a blind pause. for=\"time\" (default) pauses value ms (default 2000, honored up to 90000; \
-an explicit timeout caps it lower, and a larger value is rejected, not silently shortened) - last resort. \
-Best of all: act and read the diff instead of waiting.";
+beat a blind pause. They poll until the page matches or the timeout elapses (default 10000, \
+capped at 30000), then return { matched: true } or, on timeout, { matched: false } - they do NOT \
+throw, so check matched before trusting the page is ready. for=\"time\" (default) pauses value ms \
+(default 2000, honored up to 90000; an explicit timeout caps it lower, and a larger value is \
+rejected, not silently shortened) - last resort. Best of all: act and read the diff instead of waiting.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -51,7 +53,7 @@ struct WaitArgs {
     wait_for: WaitFor,
     /// Optional. For for="time", ms to pause (default 2000, honored up to 90000). For "text"/"selector", the substring or CSS selector to wait for.
     value: Option<WaitValue>,
-    /// Max wait in ms. For "text"/"selector" it caps polling before giving up (default 2000, capped at 30000). For "time" it optionally caps the pause from above (default: pause for value).
+    /// Max wait in ms. For "text"/"selector" it caps polling before giving up (default 10000, capped at 30000). For "time" it optionally caps the pause from above (default: pause for value).
     timeout: Option<f64>,
 }
 
