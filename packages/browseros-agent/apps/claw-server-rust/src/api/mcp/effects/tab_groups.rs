@@ -96,6 +96,20 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     let Some(page_id) = page_id else {
         return;
     };
+    // A caller that names a group is continuing work in it, so adopt it as this
+    // session's group. Without this the page lands in the named group but every
+    // later page goes back to the session's own, splitting one task across two.
+    if let Some(requested) = call
+        .raw_args
+        .get("groupId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+    {
+        ownership
+            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested.to_string()))
+            .await;
+    }
     if let Some(default_group_id) = &call.default_tab_group_id {
         let page_group_id = browser
             .pages
@@ -1121,6 +1135,83 @@ mod tests {
         assert!(
             applied.is_ok(),
             "tab-group effect blocked the tool response"
+        );
+        Ok(())
+    }
+
+    /// The reclaim path. A reconnected agent names the group it was working in,
+    /// and that group becomes this session's group so the page lands there and
+    /// every later page follows it, rather than one task splitting across two.
+    #[tokio::test]
+    async fn a_named_group_is_adopted_by_the_session_that_named_it() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-earlier", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        assert_eq!(
+            ownership.tab_group_ref(&key).await,
+            None,
+            "starts with none"
+        );
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-earlier"),
+            "the named group becomes this session's group"
+        );
+        assert!(
+            recorder.group_members("group-earlier").contains(&102),
+            "the page joins the named group: {:?}",
+            recorder.group_members("group-earlier")
+        );
+        assert_eq!(
+            recorder.create_count(),
+            0,
+            "an existing group is joined, never recreated"
+        );
+        Ok(())
+    }
+
+    /// Omitting it must not disturb anything, since every call that is not a
+    /// reclaim omits it.
+    #[tokio::test]
+    async fn omitting_the_group_id_leaves_the_existing_group_alone() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-1", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .set_tab_group_ref(key.clone(), Some("group-1".to_string()))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-1")
         );
         Ok(())
     }

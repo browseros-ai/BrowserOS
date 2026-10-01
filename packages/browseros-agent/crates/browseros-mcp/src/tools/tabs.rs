@@ -10,7 +10,11 @@ use serde_json::json;
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
 open a new page in the background (snapshot attached), or close one. \
-Use the returned page id with snapshot/act/navigate.";
+Use the returned page id with snapshot/act/navigate. \
+action=\"list\" also reports the tab group id of each of your own tabs. Remember it: \
+if a later call lands in a new session, which happens whenever the connection is \
+remade, pass it as groupId on action=\"new\" to carry on in the same group instead of \
+starting a second one for the same task.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +41,10 @@ struct TabsArgs {
     _background: Option<bool>,
     /// Page id for action="close".
     page: Option<u32>,
+    /// Tab group id for action="new". Pass the group id a previous call reported
+    /// to keep continuing work in the same group; omit it to use your own group.
+    #[serde(default, rename = "groupId")]
+    group_id: Option<String>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -94,7 +102,10 @@ fn handler<'a>(
                             // (cockpit Watch), not to the agent.
                             background: Some(true),
                             window_id: ctx.defaults.default_window_id.clone(),
-                            tab_group_id: ctx.defaults.default_tab_group_id.clone(),
+                            tab_group_id: args
+                                .group_id
+                                .clone()
+                                .or_else(|| ctx.defaults.default_tab_group_id.clone()),
                         },
                     )
                     .await?;
@@ -137,6 +148,16 @@ mod tests {
             serde_json::from_value(json!({ "action": "new", "background": false }))?;
         assert!(matches!(args.action, TabsAction::New));
         assert_eq!(args._background, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn a_group_id_is_accepted_on_new_and_defaults_to_none() -> anyhow::Result<()> {
+        let named: TabsArgs =
+            serde_json::from_value(json!({ "action": "new", "groupId": "ABC123" }))?;
+        assert_eq!(named.group_id.as_deref(), Some("ABC123"));
+        let plain: TabsArgs = serde_json::from_value(json!({ "action": "new" }))?;
+        assert_eq!(plain.group_id, None);
         Ok(())
     }
 
