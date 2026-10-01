@@ -1,7 +1,10 @@
 use crate::{CoreError, FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection};
 use browseros_cdp::{CdpEvent, target};
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 use tokio::sync::{Mutex, broadcast};
 use tracing::warn;
 
@@ -158,10 +161,13 @@ impl FrameRegistry {
                 match events.recv().await {
                     Ok(event) => registry.handle_event(event).await,
                     // A frame-heavy page can attach many targets at once and overflow the CDP
-                    // event buffer. Keep listening (a missed attach is recovered on demand when a
-                    // frame is resolved) instead of dying for the rest of the session.
+                    // event buffer. Keep listening instead of dying for the rest of the session: a
+                    // missed attach is recovered on demand when a frame is resolved, and a missed
+                    // detach is reconciled against the live target list so a stale session cannot
+                    // shadow that recovery.
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
                         warn!("browser frame listener lagged by {skipped} CDP event(s)");
+                        registry.reconcile_oopifs_after_lag().await;
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -268,6 +274,36 @@ impl FrameRegistry {
             .lock()
             .await
             .retain(|_, existing| existing != session_id);
+    }
+
+    /// A lagged event stream may have dropped a `detachedFromTarget`, leaving an OOPIF session that
+    /// is cached but dead. That cached entry is checked before the on-demand attach path, so it
+    /// would shadow recovery and keep the frame unreadable. For an OOPIF the frame id is its target
+    /// id, so drop every cached OOPIF whose target no longer exists; the next capture re-attaches
+    /// the live one on demand.
+    async fn reconcile_oopifs_after_lag(&self) {
+        let root = ProtocolSession::root(self.cdp.clone());
+        let Ok(result) = root.send::<_, Value>("Target.getTargets", json!({})).await else {
+            return;
+        };
+        let live: HashSet<String> = result
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .map(|infos| {
+                infos
+                    .iter()
+                    .filter_map(|info| {
+                        info.get("targetId")
+                            .and_then(Value::as_str)
+                            .map(String::from)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.oopif_sessions
+            .lock()
+            .await
+            .retain(|frame_id, _| live.contains(&frame_id.0));
     }
 }
 
@@ -551,5 +587,78 @@ mod tests {
         assert!(reconnected_child.session.same_session(&second_page_session));
         assert!(!reconnected_child.session.same_session(&first_parent));
         Ok(())
+    }
+
+    /// Reports a fixed set of live targets so reconcile can tell a dropped detach from a live frame.
+    struct GetTargetsConnection {
+        live_targets: Vec<&'static str>,
+    }
+
+    impl CdpConnection for GetTargetsConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                if method == "Target.getTargets" {
+                    let infos: Vec<Value> = self
+                        .live_targets
+                        .iter()
+                        .map(|id| json!({ "targetId": id, "type": "iframe" }))
+                        .collect();
+                    return Ok(json!({ "targetInfos": infos }));
+                }
+                Ok(json!({}))
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn lag_reconcile_drops_oopifs_whose_target_is_gone() {
+        let cdp = Arc::new(GetTargetsConnection {
+            live_targets: vec!["live-oopif"],
+        });
+        let registry = FrameRegistry::new(cdp);
+        {
+            let mut sessions = registry.oopif_sessions.lock().await;
+            sessions.insert(
+                FrameId("live-oopif".to_string()),
+                SessionId::from("live-session".to_string()),
+            );
+            sessions.insert(
+                FrameId("dead-oopif".to_string()),
+                SessionId::from("dead-session".to_string()),
+            );
+        }
+
+        registry.reconcile_oopifs_after_lag().await;
+
+        let sessions = registry.oopif_sessions.lock().await;
+        assert!(sessions.contains_key(&FrameId("live-oopif".to_string())));
+        assert!(!sessions.contains_key(&FrameId("dead-oopif".to_string())));
     }
 }
