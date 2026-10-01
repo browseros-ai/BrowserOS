@@ -161,17 +161,18 @@ fn format_tab_line(page: &Value) -> Option<String> {
     } else {
         String::new()
     };
-    // Shown only for the caller's own tabs, and only in the text, because the
-    // text is what the model reads. Without it an agent cannot name the group it
-    // is working in, so it cannot ask to rejoin that group after a reconnect.
-    let group = if page.get("ownership").and_then(Value::as_str) == Some("mine") {
-        page.get("groupId")
-            .and_then(Value::as_str)
-            .map(|group| format!(" [group {group}]"))
-            .unwrap_or_default()
-    } else {
-        String::new()
-    };
+    // Shown for every tab, not only the caller's own, and in the text rather
+    // than only the structured content because the text is what the model
+    // reads. Restricting it to the caller's own tabs made it unavailable in the
+    // one situation it exists for: after a reconnect the agent's tabs are
+    // listed as another agent's, which is exactly when it needs the id to ask
+    // to rejoin. Withholding it was never a boundary either, since
+    // `tab_groups action="list"` already enumerates every group id.
+    let group = page
+        .get("groupId")
+        .and_then(Value::as_str)
+        .map(|group| format!(" [group {group}]"))
+        .unwrap_or_default();
     Some(format!("[{page_id}] {url}{title}{owner}{group}"))
 }
 
@@ -222,9 +223,10 @@ mod tests {
             .map(|text| text.text.clone())
             .unwrap_or_default();
         assert!(rendered.contains("[group G1]"), "{rendered}");
-        // Only the caller's own tabs, so another group's id is not advertised as
-        // something this caller could reclaim.
-        assert!(!rendered.contains("[group G9]"), "{rendered}");
+        // Every section, not only the caller's own tabs. After a reconnect an
+        // agent's tabs read as another agent's, and that is precisely when it
+        // needs the id in order to ask to rejoin the group.
+        assert!(rendered.contains("[group G9]"), "{rendered}");
         Ok(())
     }
 
