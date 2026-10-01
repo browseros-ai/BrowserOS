@@ -168,6 +168,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/sessions/{sessionId}/help/resolve': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Hand control back to a waiting agent after a human has taken over its page. */
+    post: operations['resolveHelp']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/sessions/{sessionId}/recording': {
     parameters: {
       query?: never
@@ -545,6 +562,8 @@ export interface components {
     LiveSessionState: {
       state: components['schemas']['LiveSessionActivityState']
       browserTabs: components['schemas']['SessionBrowserTab'][]
+      /** @description Present only while the agent is waiting for human help on this session. */
+      helpRequest?: components['schemas']['HelpRequest']
     }
     SessionBrowserTab: {
       /** Format: int64 */
@@ -662,6 +681,33 @@ export interface components {
       status: components['schemas']['SessionStatus']
       /** Format: int64 */
       cancelledDispatches: number
+    }
+    /** @enum {string} */
+    HelpRequestKind: 'login' | 'captcha' | 'approval' | 'other'
+    /** @description A pending request for human help from a blocked agent (sign-in, captcha, an approval it should not make). The agent waits until a human takes over the page and hands control back. */
+    HelpRequest: {
+      requestId: string
+      reason: string
+      details?: string
+      resumeHint?: string
+      kind?: components['schemas']['HelpRequestKind']
+      /**
+       * Format: int64
+       * @description The browser tab the human should take over.
+       */
+      browserTabId: number
+      url?: string
+      title?: string
+      /** Format: int64 */
+      requestedAt: number
+    }
+    /** @description Hand control back to the waiting agent, optionally with a note for it. */
+    ResolveHelpRequest: {
+      note?: string
+    }
+    ResolveHelpResponse: {
+      /** @description True when a pending request was found and signalled to resume. */
+      resolved: boolean
     }
     RecordingMetadata: {
       hasData: boolean
@@ -1299,6 +1345,34 @@ export interface operations {
       }
       404: components['responses']['NotFound']
       409: components['responses']['Conflict']
+      500: components['responses']['InternalError']
+    }
+  }
+  resolveHelp: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        sessionId: components['parameters']['SessionId']
+      }
+      cookie?: never
+    }
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['ResolveHelpRequest']
+      }
+    }
+    responses: {
+      /** @description The waiting agent was signalled to resume, or no pending request was found. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ResolveHelpResponse']
+        }
+      }
+      400: components['responses']['BadRequest']
       500: components['responses']['InternalError']
     }
   }

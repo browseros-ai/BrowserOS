@@ -26,6 +26,8 @@ paths:
     $ref: ./paths/sessions.yaml#/detail
   /api/v1/sessions/{sessionId}/cancel:
     $ref: ./paths/sessions.yaml#/cancel
+  /api/v1/sessions/{sessionId}/help/resolve:
+    $ref: ./paths/sessions.yaml#/resolveHelp
   /api/v1/sessions/{sessionId}/recording:
     $ref: ./paths/recordings.yaml#/metadata
   /api/v1/sessions/{sessionId}/recording/events:
@@ -142,6 +144,14 @@ components:
       $ref: ./schemas/dispatches.yaml#/Dispatch
     CancelSessionResponse:
       $ref: ./schemas/sessions.yaml#/CancelSessionResponse
+    HelpRequestKind:
+      $ref: ./schemas/sessions.yaml#/HelpRequestKind
+    HelpRequest:
+      $ref: ./schemas/sessions.yaml#/HelpRequest
+    ResolveHelpRequest:
+      $ref: ./schemas/sessions.yaml#/ResolveHelpRequest
+    ResolveHelpResponse:
+      $ref: ./schemas/sessions.yaml#/ResolveHelpResponse
     RecordingMetadata:
       $ref: ./schemas/recordings.yaml#/RecordingMetadata
     RecordingTabMetadata:

@@ -91,6 +91,29 @@ cancel:
         $ref: ../responses.yaml#/Conflict
       '500':
         $ref: ../responses.yaml#/InternalError
+resolveHelp:
+  post:
+    operationId: resolveHelp
+    description: Hand control back to a waiting agent after a human has taken over its page.
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/sessions.yaml#/ResolveHelpRequest
+    responses:
+      '200':
+        description: The waiting agent was signalled to resume, or no pending request was found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/ResolveHelpResponse
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
 preview:
   get:
     operationId: getSessionPreview

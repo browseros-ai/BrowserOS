@@ -35,6 +35,80 @@ export interface CancelSessionResponse {
 }
 
 /**
+ * A pending request for human help from a blocked agent (sign-in, captcha, an approval it should not make). The agent waits until a human takes over the page and hands control back.
+ * @export
+ * @interface HelpRequest
+ */
+export interface HelpRequest {
+    /**
+     *
+     * @type {string}
+     * @memberof HelpRequest
+     */
+    requestId: string;
+    /**
+     *
+     * @type {string}
+     * @memberof HelpRequest
+     */
+    reason: string;
+    /**
+     *
+     * @type {string}
+     * @memberof HelpRequest
+     */
+    details?: string;
+    /**
+     *
+     * @type {string}
+     * @memberof HelpRequest
+     */
+    resumeHint?: string;
+    /**
+     *
+     * @type {HelpRequestKind}
+     * @memberof HelpRequest
+     */
+    kind?: HelpRequestKind;
+    /**
+     * The browser tab the human should take over.
+     * @type {number}
+     * @memberof HelpRequest
+     */
+    browserTabId: number;
+    /**
+     *
+     * @type {string}
+     * @memberof HelpRequest
+     */
+    url?: string;
+    /**
+     *
+     * @type {string}
+     * @memberof HelpRequest
+     */
+    title?: string;
+    /**
+     *
+     * @type {number}
+     * @memberof HelpRequest
+     */
+    requestedAt: number;
+}
+
+/**
+ *
+ * @export
+ */
+export const HelpRequestKind = {
+    Login: 'login',
+    Captcha: 'captcha',
+    Approval: 'approval',
+    Other: 'other'
+} as const;
+export type HelpRequestKind = typeof HelpRequestKind[keyof typeof HelpRequestKind];
+
+/**
  *
  * @export
  */
@@ -62,6 +136,40 @@ export interface LiveSessionState {
      * @memberof LiveSessionState
      */
     browserTabs: Array<SessionBrowserTab>;
+    /**
+     * Present only while the agent is waiting for human help on this session.
+     * @type {HelpRequest}
+     * @memberof LiveSessionState
+     */
+    helpRequest?: HelpRequest;
+}
+
+/**
+ * Hand control back to the waiting agent, optionally with a note for it.
+ * @export
+ * @interface ResolveHelpRequest
+ */
+export interface ResolveHelpRequest {
+    /**
+     *
+     * @type {string}
+     * @memberof ResolveHelpRequest
+     */
+    note?: string;
+}
+
+/**
+ *
+ * @export
+ * @interface ResolveHelpResponse
+ */
+export interface ResolveHelpResponse {
+    /**
+     * True when a pending request was found and signalled to resume.
+     * @type {boolean}
+     * @memberof ResolveHelpResponse
+     */
+    resolved: boolean;
 }
 
 /**
