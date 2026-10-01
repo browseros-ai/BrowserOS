@@ -54,8 +54,13 @@ pub struct AppState {
     pub browser: Arc<BrowserService>,
     pub visuals: Arc<SessionVisualService>,
     pub cockpit: Arc<CockpitQuery>,
+    pub help: Arc<crate::services::help::HelpRegistry>,
     pub shutdown: ShutdownHandle,
 }
+
+/// Overall cap on how long a human-help request stays open before it is reaped, so a crashed or
+/// non-looping agent never leaves a stale "needs you" request behind.
+const HELP_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(20 * 60);
 
 impl AppState {
     pub async fn new(config: Arc<Config>) -> AppResult<Self> {
@@ -203,6 +208,7 @@ impl AppState {
             browser,
             visuals,
             cockpit,
+            help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
             shutdown: ShutdownHandle::new(),
         })
     }
