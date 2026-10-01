@@ -221,11 +221,16 @@ impl BrowserSession {
         let mut events = session.connection.events();
         tokio::spawn(async move {
             loop {
-                let Ok(event) = events.recv().await else {
-                    break;
-                };
-                if event.method == "Target.detachedFromTarget" {
-                    handle_detached_event(&session, event).await;
+                match events.recv().await {
+                    Ok(event) => {
+                        if event.method == "Target.detachedFromTarget" {
+                            handle_detached_event(&session, event).await;
+                        }
+                    }
+                    // Survive a CDP event-buffer overflow on a frame-heavy page instead of
+                    // leaving detached sessions uncleaned for the rest of the session.
+                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
             }
         });
