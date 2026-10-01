@@ -44,9 +44,13 @@
         document.getElementById('parent-action').textContent =
           'Parent action clicked'
       })
-      const childOrigin = new URLSearchParams(location.search).get('childOrigin')
-      document.getElementById('frame-b').src =
-        `${childOrigin ?? location.origin}/snapshot-frame-b.html`
+      const params = new URLSearchParams(location.search)
+      const childOrigin = params.get('childOrigin')
+      const deepOrigin = params.get('deepOrigin')
+      const frameBBase = `${childOrigin ?? location.origin}/snapshot-frame-b.html`
+      document.getElementById('frame-b').src = deepOrigin
+        ? `${frameBBase}?deepOrigin=${encodeURIComponent(deepOrigin)}`
+        : frameBBase
     </script>
   </body>
 </html>

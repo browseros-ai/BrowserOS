@@ -25,6 +25,24 @@
           document.getElementById('frame-b-action').textContent =
             'Frame B action clicked'
         })
+      const deepOrigin = new URLSearchParams(location.search).get('deepOrigin')
+      if (deepOrigin) {
+        window.addEventListener('message', (event) => {
+          if (
+            event.data?.fixture === 'snapshot-frame-tree' &&
+            event.data.ready === 'deep'
+          ) {
+            parent.postMessage(event.data, '*')
+          }
+        })
+        const frame = document.createElement('iframe')
+        frame.id = 'frame-deep'
+        frame.title = 'Snapshot frame deep'
+        frame.width = '360'
+        frame.height = '160'
+        frame.src = `${deepOrigin}/snapshot-frame-deep.html`
+        document.body.appendChild(frame)
+      }
       parent.postMessage(
         { fixture: 'snapshot-frame-tree', ready: 'frame-b' },
         '*',

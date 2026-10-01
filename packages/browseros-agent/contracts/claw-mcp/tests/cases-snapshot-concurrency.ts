@@ -147,6 +147,15 @@ function mixedFrameUrl(ctx: CaseContext): string {
   return url.toString()
 }
 
+// Frame B (the cross-origin OOPIF) embeds a deep frame loaded from the primary origin, which is
+// cross-origin to Frame B, so the deep frame is an OOPIF nested inside an OOPIF: an app embedded
+// through two cross-origin iframe levels. Exercises frame discovery two cross-origin levels deep.
+function nestedOopifUrl(ctx: CaseContext): string {
+  const url = new URL(mixedFrameUrl(ctx))
+  url.searchParams.set('deepOrigin', new URL(ctx.fixture('/')).origin)
+  return url.toString()
+}
+
 async function frameProbeState(
   ctx: CaseContext,
   page: number,
@@ -442,6 +451,28 @@ export const snapshotConcurrencyCases: ContractCase[] = [
         'Frame A cursor ready',
         'Frame B cursor ready',
       ])
+    },
+  },
+  {
+    name: 'snapshot concurrency: discovers and acts on a frame nested in a cross-origin frame',
+    async run(ctx) {
+      const page = await ctx.openPage(nestedOopifUrl(ctx))
+      // The deep frame is cross-origin inside the cross-origin Frame B, so it attaches as an OOPIF
+      // nested inside an OOPIF. Its content and ref must appear without a screenshot fallback.
+      const snapshot = await waitForSnapshotLabels(ctx, page, [
+        'Frame B action ready',
+        'Deep frame action ready',
+      ])
+
+      expectOk(
+        await ctx.mcp.callTool('act', {
+          page,
+          kind: 'click',
+          ref: refFor(snapshot, 'Deep frame action ready'),
+        }),
+        'click a ref inside a frame nested in a cross-origin frame',
+      )
+      await waitForSnapshotLabels(ctx, page, ['Deep frame action clicked'])
     },
   },
   {

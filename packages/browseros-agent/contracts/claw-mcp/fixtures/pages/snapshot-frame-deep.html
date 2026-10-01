@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Snapshot frame deep</title>
+  </head>
+  <body>
+    <button id="deep-action" type="button">Deep frame action ready</button>
+    <script>
+      document.getElementById('deep-action').addEventListener('click', () => {
+        document.getElementById('deep-action').textContent =
+          'Deep frame action clicked'
+      })
+      parent.postMessage({ fixture: 'snapshot-frame-tree', ready: 'deep' }, '*')
+    </script>
+  </body>
+</html>
