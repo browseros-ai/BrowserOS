@@ -117,22 +117,45 @@ pub async fn prepare_download_dir(dir: PathBuf) -> std::io::Result<PathBuf> {
     fs::canonicalize(dir).await
 }
 
+/// The destination with its existing ancestors resolved.
+///
+/// A destination that does not exist yet cannot be canonicalised, so the deepest
+/// ancestor that does exist is resolved and the remainder reattached. That is
+/// enough to see through a symlink before anything is created.
+async fn resolve_existing_prefix(dir: &Path) -> PathBuf {
+    let mut existing = dir;
+    loop {
+        if let Ok(real) = fs::canonicalize(existing).await {
+            return match dir.strip_prefix(existing) {
+                Ok(remainder) => real.join(remainder),
+                Err(_) => real,
+            };
+        }
+        match existing.parent() {
+            Some(parent) => existing = parent,
+            None => return dir.to_path_buf(),
+        }
+    }
+}
+
 /// Re-checks a resolved destination against the home directory.
 ///
 /// `validate_download_dir` reads the path as text and so cannot see a symlink
-/// inside home that points out of it. This runs on the canonical path, after the
-/// directory exists, which is the only form that answers where writes land.
+/// inside home that points out of it. This resolves the path first, which is the
+/// only form that answers where writes land, and runs before the destination is
+/// created so a refused request leaves no directories behind.
 pub async fn ensure_download_dir_inside_home(dir: &Path) -> Result<(), String> {
     let Some(home) = user_home() else {
         return Err("download dir cannot be checked: no home directory is set".to_string());
     };
     let home = fs::canonicalize(&home).await.unwrap_or(home);
-    if dir.starts_with(&home) {
+    let resolved = resolve_existing_prefix(dir).await;
+    if resolved.starts_with(&home) {
         return Ok(());
     }
     Err(format!(
         "download dir resolves to {}, which is outside {}",
-        dir.display(),
+        resolved.display(),
         home.display()
     ))
 }
@@ -246,6 +269,7 @@ async fn write_tool_output_file(path: &Path, content: &[u8]) -> std::io::Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use uuid::Uuid;
 
     fn test_home() -> PathBuf {
         user_home().unwrap_or_else(|| panic!("these tests need a home directory"))
@@ -299,6 +323,42 @@ mod tests {
         };
 
         assert!(error.contains("outside"));
+    }
+
+    #[tokio::test]
+    async fn sees_through_a_symlink_before_the_destination_exists() {
+        // A path under home whose parent is a symlink out of it. The text check
+        // passes, so this is the one that has to catch it, and it has to catch it
+        // without creating anything.
+        let Some(home) = user_home() else {
+            panic!("these tests need a home directory");
+        };
+        let link = home.join(format!("browseros-escape-{}", Uuid::new_v4()));
+        let outside = std::env::temp_dir().join(format!("browseros-out-{}", Uuid::new_v4()));
+        if let Err(err) = fs::create_dir_all(&outside).await {
+            panic!("test target directory should be creatable: {err}");
+        }
+        #[cfg(unix)]
+        if let Err(err) = tokio::fs::symlink(&outside, &link).await {
+            panic!("test symlink should be creatable: {err}");
+        }
+        let through_link = link.join("nested").join("deeper");
+
+        let verdict = ensure_download_dir_inside_home(&through_link).await;
+
+        let _ = fs::remove_file(&link).await;
+        let _ = fs::remove_dir_all(&outside).await;
+        #[cfg(unix)]
+        {
+            let Err(error) = verdict else {
+                panic!("a destination reached through a symlink out of home must be refused");
+            };
+            assert!(error.contains("outside"));
+            assert!(
+                !through_link.exists(),
+                "a refused destination must not have been created"
+            );
+        }
     }
 
     #[test]

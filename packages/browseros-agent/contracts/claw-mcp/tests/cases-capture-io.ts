@@ -351,13 +351,23 @@ export const captureIoCases: ContractCase[] = [
         await ctx.mcp.callTool('download', { page, ref }),
         'download',
       )
-      const path = text.match(/to: (\S+)/)?.[1]
+      // Anchored on the trailing path rather than a whitespace run: a download
+      // keeps the name the site chose, which can contain spaces.
+      const path = text.match(/to: (.+)$/)?.[1]
       if (!path || !(await Bun.file(path).exists())) {
         throw new Error(`download did not land a readable file: ${path}`)
+      }
+      if (!path.includes('/Downloads/')) {
+        throw new Error(`download did not land in the download folder: ${path}`)
       }
       const contents = await Bun.file(path).text()
       if (!contents.includes('fixture report')) {
         throw new Error(`downloaded file had unexpected contents: ${contents}`)
+      }
+      const reported = Number(text.match(/\((\d+) bytes\)/)?.[1])
+      const size = Bun.file(path).size
+      if (reported !== size) {
+        throw new Error(`reported ${reported} bytes for a ${size} byte file`)
       }
     },
   },

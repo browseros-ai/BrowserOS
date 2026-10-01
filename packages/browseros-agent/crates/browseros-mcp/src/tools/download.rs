@@ -75,7 +75,15 @@ fn handler<'a>(
             Some(dir) => validate_download_dir(dir).map_err(ToolError::message)?,
             None => get_user_download_dir().await?,
         };
+        // Before creating anything, so a refused destination leaves no
+        // directories behind.
+        if args.dir.is_some() {
+            ensure_download_dir_inside_home(&requested)
+                .await
+                .map_err(ToolError::message)?;
+        }
         let download_dir = prepare_download_dir(requested).await?;
+        // Again on the created path: a symlink could have appeared in between.
         if args.dir.is_some() {
             ensure_download_dir_inside_home(&download_dir)
                 .await
@@ -111,7 +119,7 @@ fn handler<'a>(
         record_browser_output_file(&ctx.output_files, path.clone()).await;
         Ok(Some(text_result(
             format!(
-                "Downloaded \"{filename}\" ({bytes} bytes) to {} on the machine running this browser",
+                "Downloaded \"{filename}\" ({bytes} bytes) on the machine running this browser, to: {}",
                 path.display()
             ),
             Some(json!({
