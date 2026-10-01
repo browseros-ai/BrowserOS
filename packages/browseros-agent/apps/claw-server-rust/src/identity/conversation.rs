@@ -55,6 +55,23 @@ fn pick<'a>(words: &'a [&str], draw: f64) -> &'a str {
     words.get(index).copied().unwrap_or(words[0])
 }
 
+/// Best-effort check that a conversation id was minted for this client slug.
+///
+/// The id is `{client_slug}-{generated_label}` and both halves may contain
+/// hyphens, so the split is not recoverable in general: a slug that is a
+/// hyphen-prefix of another client's slug matches that client's conversations
+/// too. Reading the slug back off the id is still the only attribution left once
+/// a session has gone from the live snapshot, which is what a reconnect leaves
+/// behind, so callers use it to choose wording that holds either way. Never use
+/// it to decide access.
+#[must_use]
+pub fn convo_id_belongs_to_slug(convo_id: &ConvoId, client_slug: &str) -> bool {
+    convo_id
+        .as_str()
+        .strip_prefix(client_slug)
+        .is_some_and(|rest| rest.starts_with('-'))
+}
+
 /// Per-conversation ownership and naming identity.
 /// The conversation id stays fixed when `rename` changes only the
 /// operator-facing label.
@@ -118,7 +135,9 @@ impl ConversationIdentity {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConversationIdentity, GenerateFunNameError, generate_fun_name};
+    use super::{
+        ConversationIdentity, GenerateFunNameError, convo_id_belongs_to_slug, generate_fun_name,
+    };
     use std::{
         collections::VecDeque,
         sync::{Arc, Mutex},
@@ -203,5 +222,31 @@ mod tests {
         );
         assert_eq!(identity.label().await, "invoice-processing");
         assert_eq!(identity.take_rename_nudge().await, None);
+    }
+
+    /// The match has to end on the separator, so a slug that is a plain
+    /// character prefix of another is rejected.
+    #[test]
+    fn a_conversation_id_matches_its_own_slug_on_a_separator() {
+        let mine = ConversationIdentity::new("codex", "agile-alpaca".to_string());
+        assert!(convo_id_belongs_to_slug(mine.convo_id(), "codex"));
+        assert!(!convo_id_belongs_to_slug(mine.convo_id(), "code"));
+        assert!(!convo_id_belongs_to_slug(mine.convo_id(), "claude-code"));
+
+        let hyphenated = ConversationIdentity::new("claude-code", "brave-badger".to_string());
+        assert!(convo_id_belongs_to_slug(
+            hyphenated.convo_id(),
+            "claude-code"
+        ));
+    }
+
+    /// The documented limit, pinned so nobody reads more into the helper than
+    /// it gives. A hyphen-prefix of another client's slug lands on a separator
+    /// too, and the id carries nothing that separates the two, which is why the
+    /// notice wording has to hold whether or not the guess is right.
+    #[test]
+    fn a_hyphen_prefix_of_another_slug_is_indistinguishable() {
+        let other = ConversationIdentity::new("claude-code", "brave-badger".to_string());
+        assert!(convo_id_belongs_to_slug(other.convo_id(), "claude"));
     }
 }
