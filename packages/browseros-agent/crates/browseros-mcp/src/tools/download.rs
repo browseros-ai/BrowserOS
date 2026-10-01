@@ -5,8 +5,8 @@ use crate::{
         text_result,
     },
     output_file::{
-        get_user_download_dir, prepare_download_dir, read_download_dir_names,
-        record_browser_output_file, validate_download_dir,
+        ensure_download_dir_inside_home, get_user_download_dir, prepare_download_dir,
+        read_download_dir_names, record_browser_output_file, validate_download_dir,
     },
 };
 use browseros_core::{PageId, Ref, SessionId};
@@ -14,7 +14,11 @@ use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{collections::HashSet, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    path::Path,
+    sync::{Arc, LazyLock, Mutex},
+};
 
 const DESCRIPTION: &str = "\
 Click an element (by ref from the last snapshot) to trigger a file download. \
@@ -38,6 +42,24 @@ pub fn definition() -> crate::framework::ToolDef {
     super::def::<DownloadArgs>("download", DESCRIPTION, None, handler)
 }
 
+/// One lock per page, so two downloads on a page cannot cross.
+///
+/// `Page.setDownloadBehavior` is page-wide state that a call sets, clicks on,
+/// waits for, then restores. Two overlapping calls on one page would otherwise
+/// interfere both ways: the second's override redirects the first's download,
+/// and the second's restore drops the override while the first is still waiting.
+/// Keyed by page because the override is per page, and held here rather than on
+/// the session because the page ids come from the one browser a server drives.
+static PAGE_DOWNLOAD_LOCKS: LazyLock<Mutex<HashMap<PageId, Arc<tokio::sync::Mutex<()>>>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+fn page_download_lock(page: &PageId) -> Arc<tokio::sync::Mutex<()>> {
+    let mut locks = PAGE_DOWNLOAD_LOCKS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    Arc::clone(locks.entry(page.clone()).or_default())
+}
+
 fn handler<'a>(
     raw: Value,
     ctx: &'a ToolCtx,
@@ -51,11 +73,19 @@ fn handler<'a>(
         }
         let requested = match args.dir.as_deref() {
             Some(dir) => validate_download_dir(dir).map_err(ToolError::message)?,
-            None => get_user_download_dir(),
+            None => get_user_download_dir().await?,
         };
         let download_dir = prepare_download_dir(requested).await?;
-        // Taken before the click so the entry the download adds can be told apart
-        // from what was already there.
+        if args.dir.is_some() {
+            ensure_download_dir_inside_home(&download_dir)
+                .await
+                .map_err(ToolError::message)?;
+        }
+        // Held across the whole override, click and restore.
+        let page_lock = page_download_lock(&page_id);
+        let _page_guard = page_lock.lock().await;
+        // Taken before the click, and inside the lock, so the entry the download
+        // adds can be told apart from what was already there.
         let before = read_download_dir_names(&download_dir).await?;
         let page_session = ctx.session.pages.get_session(page_id.clone()).await?;
         // Still managed rather than left to the browser's own behaviour: with
@@ -112,26 +142,31 @@ async fn resolve_downloaded_name(
         .difference(before)
         .map(String::as_str)
         .collect::<Vec<_>>();
-    if added.contains(&suggested) {
-        return Ok(suggested.to_string());
-    }
-    let uniquified = added
+    // Every new name this download could plausibly have taken. The suggested
+    // name is not treated as proof on its own: an earlier download of the same
+    // name finishing during this call also appears as new, because a partial
+    // file is skipped by the scan above, and it would have taken the plain name
+    // while this one took the rename.
+    let candidates = added
         .iter()
-        .filter(|name| is_uniquified(name, suggested))
+        .filter(|name| **name == suggested || is_uniquified(name, suggested))
         .collect::<Vec<_>>();
-    if let [name] = uniquified.as_slice() {
+    if let [name] = candidates.as_slice() {
         return Ok((**name).to_string());
     }
-    if let [name] = added.as_slice() {
+    if candidates.is_empty()
+        && let [name] = added.as_slice()
+    {
         return Ok((*name).to_string());
     }
     // Deliberately an error rather than a guess. Several candidates means
     // something else wrote here in the same window, and naming the wrong file is
     // worse than saying the name could not be established.
     Err(ToolError::message(format!(
-        "Download of \"{suggested}\" completed, but its name in {} could not be established ({} new files)",
+        "Download of \"{suggested}\" completed, but its name in {} could not be established ({} new files, {} of them possible matches)",
         dir.display(),
-        added.len()
+        added.len(),
+        candidates.len()
     )))
 }
 
@@ -320,6 +355,36 @@ mod tests {
         let before = names_on_disk(&dir).await;
         write_file(&dir, "report.pdf.crdownload").await;
         write_file(&dir, "report.pdf").await;
+
+        assert_eq!(resolve(&dir, &before, "report.pdf").await, "report.pdf");
+    }
+
+    #[tokio::test]
+    async fn refuses_when_an_earlier_download_of_the_same_name_also_finished() {
+        // A partial file is skipped by the scan, so when it completes during this
+        // call its finished name also looks new. If it took the plain name and
+        // this download took the rename, trusting the suggested name would return
+        // the other download's file.
+        let dir = scratch_dir();
+        write_file(&dir, "report.pdf.crdownload").await;
+        let before = names_on_disk(&dir).await;
+        write_file(&dir, "report.pdf").await;
+        write_file(&dir, "report (1).pdf").await;
+
+        let Err(error) = resolve_downloaded_name(&dir, &before, "report.pdf").await else {
+            panic!("two plausible names cannot identify which file this download wrote");
+        };
+
+        assert!(error.to_string().contains("could not be established"));
+    }
+
+    #[tokio::test]
+    async fn still_resolves_when_an_unrelated_download_lands_alongside() {
+        // Only one new name could be this download, so the other is irrelevant.
+        let dir = scratch_dir();
+        let before = names_on_disk(&dir).await;
+        write_file(&dir, "report.pdf").await;
+        write_file(&dir, "something-else.zip").await;
 
         assert_eq!(resolve(&dir, &before, "report.pdf").await, "report.pdf");
     }

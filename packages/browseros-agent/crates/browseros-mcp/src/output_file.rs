@@ -20,6 +20,19 @@ pub fn create_browser_output_file_access() -> OutputFileAccess {
     Arc::new(Mutex::new(HashSet::new()))
 }
 
+/// The user's home directory, or `None` when the environment does not say.
+///
+/// `USERPROFILE` as well as `HOME`, so Windows resolves somewhere real instead
+/// of falling through to a path relative to the process.
+fn user_home() -> Option<PathBuf> {
+    for key in ["HOME", "USERPROFILE"] {
+        if let Some(value) = env::var_os(key).filter(|value| !value.is_empty()) {
+            return Some(PathBuf::from(value));
+        }
+    }
+    None
+}
+
 fn home_dir() -> PathBuf {
     env::var_os("HOME")
         .map(PathBuf::from)
@@ -48,14 +61,19 @@ pub fn get_browseros_dir() -> PathBuf {
 /// browser's profile path, so a relocated download folder still resolves to the
 /// platform default. `BROWSEROS_DOWNLOAD_DIR` is the override until the browser
 /// passes its profile through.
-#[must_use]
-pub fn get_user_download_dir() -> PathBuf {
+/// Falls back to the tool output directory rather than to a relative path. A
+/// download has to land somewhere the user can find, and "./Downloads" would be
+/// wherever the server process happened to start.
+pub async fn get_user_download_dir() -> std::io::Result<PathBuf> {
     for key in ["BROWSEROS_DOWNLOAD_DIR", "XDG_DOWNLOAD_DIR"] {
         if let Some(dir) = env::var_os(key).filter(|value| !value.is_empty()) {
-            return PathBuf::from(dir);
+            return Ok(PathBuf::from(dir));
         }
     }
-    home_dir().join("Downloads")
+    match user_home() {
+        Some(home) => Ok(home.join("Downloads")),
+        None => get_tool_output_dir().await,
+    }
 }
 
 /// Checks a caller-supplied download directory before anything is written to it.
@@ -65,6 +83,9 @@ pub fn get_user_download_dir() -> PathBuf {
 /// caller cannot aim a download at a system location if that ever changes. It
 /// still admits an agent's own working directory, which is the case this
 /// argument exists for.
+///
+/// Text only. A symlink pointing out of home passes here and is caught by
+/// `ensure_download_dir_inside_home` once the path can be canonicalised.
 pub fn validate_download_dir(requested: &str) -> Result<PathBuf, String> {
     let path = Path::new(requested);
     if !path.is_absolute() {
@@ -78,7 +99,9 @@ pub fn validate_download_dir(requested: &str) -> Result<PathBuf, String> {
     {
         return Err("download dir must not contain \"..\"".to_string());
     }
-    let home = home_dir();
+    let Some(home) = user_home() else {
+        return Err("download dir cannot be checked: no home directory is set".to_string());
+    };
     if !path.starts_with(&home) {
         return Err(format!(
             "download dir must be inside {}, got \"{requested}\"",
@@ -92,6 +115,26 @@ pub fn validate_download_dir(requested: &str) -> Result<PathBuf, String> {
 pub async fn prepare_download_dir(dir: PathBuf) -> std::io::Result<PathBuf> {
     fs::create_dir_all(&dir).await?;
     fs::canonicalize(dir).await
+}
+
+/// Re-checks a resolved destination against the home directory.
+///
+/// `validate_download_dir` reads the path as text and so cannot see a symlink
+/// inside home that points out of it. This runs on the canonical path, after the
+/// directory exists, which is the only form that answers where writes land.
+pub async fn ensure_download_dir_inside_home(dir: &Path) -> Result<(), String> {
+    let Some(home) = user_home() else {
+        return Err("download dir cannot be checked: no home directory is set".to_string());
+    };
+    let home = fs::canonicalize(&home).await.unwrap_or(home);
+    if dir.starts_with(&home) {
+        return Ok(());
+    }
+    Err(format!(
+        "download dir resolves to {}, which is outside {}",
+        dir.display(),
+        home.display()
+    ))
 }
 
 /// The file names directly inside a directory, for spotting what a download added.
@@ -204,9 +247,13 @@ async fn write_tool_output_file(path: &Path, content: &[u8]) -> std::io::Result<
 mod tests {
     use super::*;
 
+    fn test_home() -> PathBuf {
+        user_home().unwrap_or_else(|| panic!("these tests need a home directory"))
+    }
+
     #[test]
     fn accepts_a_directory_inside_the_users_home() {
-        let project = home_dir().join("projects").join("my-app");
+        let project = test_home().join("projects").join("my-app");
 
         let resolved = validate_download_dir(&project.to_string_lossy())
             .unwrap_or_else(|err| panic!("a directory under home should be accepted: {err}"));
@@ -225,13 +272,33 @@ mod tests {
 
     #[test]
     fn rejects_traversal_even_when_it_lands_inside_home() {
-        let traversal = home_dir().join("..").join("elsewhere");
+        let traversal = test_home().join("..").join("elsewhere");
 
         let Err(error) = validate_download_dir(&traversal.to_string_lossy()) else {
             panic!("traversal hides the real destination and must be refused");
         };
 
         assert!(error.contains(".."));
+    }
+
+    #[tokio::test]
+    async fn accepts_a_resolved_directory_inside_home() {
+        let inside = test_home();
+
+        if let Err(err) = ensure_download_dir_inside_home(&inside).await {
+            panic!("the home directory itself should be accepted: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn rejects_a_resolved_directory_that_escaped_home() {
+        // What the text check cannot see: a symlink under home whose target is
+        // outside it. Only the canonical path answers where writes land.
+        let Err(error) = ensure_download_dir_inside_home(Path::new("/tmp")).await else {
+            panic!("a destination resolving outside home must be refused");
+        };
+
+        assert!(error.contains("outside"));
     }
 
     #[test]
