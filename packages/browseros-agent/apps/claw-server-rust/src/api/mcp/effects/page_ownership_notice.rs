@@ -75,11 +75,44 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
                         || owner.as_str().to_string(),
                         |session| session.agent().label().to_string(),
                     );
-                format!(
-                    "Note: page {} belongs to another agent ({label}). You are allowed to use it; \
-                     leave it as you found it unless the user asked you to change it.",
-                    page_id.0
-                )
+                // A reconnect gives one client a new conversation, so an agent
+                // reading its own earlier tab lands here with its own name in
+                // `label`. Saying only "another agent" told it to abandon its
+                // own work, so the note names the group to pass back when the
+                // owner is in fact itself.
+                //
+                // A live session answers this exactly. A retired one is gone
+                // from the snapshot while its claims survive until reaping, so
+                // that case falls back to reading the slug off the conversation
+                // id, which is the only attribution left.
+                let same_client = context
+                    .call
+                    .state
+                    .sessions
+                    .snapshot()
+                    .await
+                    .into_iter()
+                    .find(|session| session.convo_id() == &owner)
+                    .map_or_else(
+                        || crate::identity::convo_id_belongs_to_slug(&owner, identity.agent.slug()),
+                        |session| session.agent().slug() == identity.agent.slug(),
+                    );
+                if same_client {
+                    format!(
+                        "Note: page {} was opened by {label} in an earlier session. If that was \
+                         you and you are continuing that work, pass its tab group id as groupId \
+                         on tabs action=\"new\" to take it back; tabs action=\"list\" reports \
+                         the id. Otherwise you are still allowed to use it: leave it as you found \
+                         it unless the user asked you to change it.",
+                        page_id.0
+                    )
+                } else {
+                    format!(
+                        "Note: page {} belongs to another agent ({label}). You are allowed to use it; \
+                         leave it as you found it unless the user asked you to change it.",
+                        page_id.0
+                    )
+                }
             }
             // No claim at all means the user opened it themselves.
             None => format!(
@@ -154,6 +187,94 @@ mod tests {
         })
         .await
         .unwrap_or(None)
+    }
+
+    /// A reconnect gives one client a new conversation, so an agent reading its
+    /// own earlier tab sees its own name as the owner. Telling it only that the
+    /// page is another agent's made a careful agent abandon its own work, so the
+    /// note has to say it can take it back.
+    #[tokio::test]
+    async fn an_own_earlier_session_is_named_as_reclaimable() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call(
+            "evaluate",
+            serde_json::json!({ "page": 7, "code": "return 1" }),
+        )
+        .await?;
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        // Same client, earlier conversation: what a reconnect leaves behind.
+        let earlier = crate::services::sessions::Session::new(
+            crate::ids::SessionId::new("earlier"),
+            identity.agent.clone(),
+            crate::identity::ConversationIdentity::new(identity.agent.slug(), "prior".to_string()),
+            identity.agent_label.clone(),
+            tokio::time::Instant::now(),
+        );
+        call.state
+            .sessions
+            .insert_for_testing(earlier.clone())
+            .await;
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(earlier.convo_id().clone(), PageId(7))
+            .await;
+        let result = ToolResult::text("script returned 1", None);
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+        .unwrap_or_else(|| panic!("expected a notice"));
+        let text = text_of(&annotated);
+        assert!(text.contains("earlier session"), "{text}");
+        assert!(text.contains("groupId"), "names the way back: {text}");
+        assert!(
+            !text.contains("belongs to another agent"),
+            "must not tell an agent its own work is someone else's: {text}"
+        );
+        Ok(())
+    }
+
+    /// The retired case, which is the common one: the earlier session has left
+    /// the live snapshot but its claims survive until reaping, so the only
+    /// attribution left is the slug on the conversation id.
+    #[tokio::test]
+    async fn an_own_retired_session_is_still_named_as_reclaimable() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call(
+            "evaluate",
+            serde_json::json!({ "page": 7, "code": "return 1" }),
+        )
+        .await?;
+        let slug = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .agent
+            .slug()
+            .to_string();
+        // No session inserted: the conversation is gone, the claim is not.
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(ConvoId::new(format!("{slug}-prior")), PageId(7))
+            .await;
+        let result = ToolResult::text("script returned 1", None);
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+        .unwrap_or_else(|| panic!("expected a notice"));
+        let text = text_of(&annotated);
+        assert!(text.contains("earlier session"), "{text}");
+        assert!(text.contains("groupId"), "names the way back: {text}");
+        Ok(())
     }
 
     /// The incident that started this, replayed. A page claimed by a different

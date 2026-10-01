@@ -57,7 +57,13 @@ const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 /// as the `session` argument on subsequent calls.
 const SESSION_META_KEY: &str = "com.browseros.neo/session";
 const AGENT_NAME_ARG: &str = "agentName";
-const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it on your first call, and again if the server tells you this session was stopped or is no longer active; resending a dead handle will not revive it.";
+// Scoped to the path that actually emits it. The handle rides only on connections
+// without a transport session id; the other path withholds it and ignores one that
+// is presented, so promising it to every client pointed those agents at a control
+// they do not have and away from the tab group id, which is the signal that works
+// for them. Naming the alternative here matters because this text is read at the
+// moment an agent is deciding how to keep continuity.
+pub const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browser session. You receive one only if your client connects without its own transport session id: then the server returns it in every tool result's `_meta` under the key `com.browseros.neo/session` and as a line in the result text, and you pass it back as this `session` argument on every later call to stay in the same browser session. If you never see one, this argument does nothing for you, and your continuity across a remade connection is your tab group id instead: read it from tabs action=\"list\" and pass it as groupId on tabs action=\"new\". Omit this argument on your first call, and again if the server tells you this session was stopped or is no longer active; resending a dead handle will not revive it.";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Your own agent name, e.g. \"claude-code\", \"codex\", \"cursor\". Send it on every call. It names this browser session, titles and colours the tab group your tabs live in, and is how the operator filters your runs in the audit log. 2026-07-28 removed the initialize handshake, so this argument is the only way the server can learn who you are.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
@@ -1335,6 +1341,21 @@ mod tests {
             !schema["required"]
                 .as_array()
                 .is_some_and(|required| required.contains(&json!("session")))
+        );
+        // The promise has to stay conditional and has to keep naming the fallback:
+        // an unconditional version of this text is what sent a legacy client after
+        // a handle it never receives.
+        assert!(
+            SESSION_ARG_DESCRIPTION.contains("only if your client connects without"),
+            "the handle must not be promised unconditionally"
+        );
+        assert!(
+            SESSION_ARG_DESCRIPTION.contains("your tab group id instead"),
+            "a client that gets no handle must be told what to use"
+        );
+        assert!(
+            !SESSION_ARG_DESCRIPTION.contains("and its tab ownership"),
+            "tab ownership continuity comes from the group id, not this handle"
         );
 
         for tool in service.listed_tools(false) {

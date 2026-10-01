@@ -1,7 +1,7 @@
 use crate::{
     api::mcp::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, result_page_id},
-        naming::desired_group_title,
+        naming::{client_prefix_from_slug, desired_group_title},
         timeouts::TAB_GROUP_OPERATION,
     },
     ids::ConvoId,
@@ -37,11 +37,114 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         } else {
             None
         };
+        // Computed before the group work is spawned, because that work creates this
+        // session's own group and the listing would then report it as a candidate
+        // the agent should consider reusing.
+        let notice = own_group_candidates_notice(&context).await;
         // Detach browser-group synchronization so cosmetic/durable grouping cannot
         // delay the tool response.
         drop(spawn_tab_group_work(context.call.clone(), page_id));
-        Ok(None)
+        Ok(notice.map(|notice| append_notice(context.result, notice)))
     })
+}
+
+/// Names the open groups already titled for this client, on the one call that is
+/// about to start another one.
+///
+/// The instructions and the tool descriptions both tell an agent to reuse its
+/// group, and a live client skipped them anyway and opened a duplicate for a task
+/// it already had a group for. Those texts are read before the work starts and
+/// ask the agent to carry an id across the interruption that just made it forget;
+/// this arrives in the result of the call that makes the mistake, with the ids in
+/// hand, so recovering needs no memory of the earlier session at all.
+///
+/// Only a note. Nothing is refused and nothing is reassigned: the agent asked for
+/// a new page and gets one, in a new group, exactly as before.
+async fn own_group_candidates_notice(context: &ToolEffectContext<'_>) -> Option<String> {
+    if !context.call.flags.new_page {
+        return None;
+    }
+    // A session that already has a group is mid-task, not reconnecting, and one
+    // that named a group is already doing the thing this note would ask for.
+    if context.call.default_tab_group_id.is_some() {
+        return None;
+    }
+    if context
+        .call
+        .raw_args
+        .get("groupId")
+        .and_then(Value::as_str)
+        .is_some_and(|group| !group.trim().is_empty())
+    {
+        return None;
+    }
+    let identity = context.call.identity.as_ref()?;
+    let browser = context.call.browser_session.as_ref()?;
+    // The title is `{prefix}/{label}`, so the separator terminates the prefix and
+    // this match cannot run into a longer client name the way a bare prefix would.
+    let prefix = format!("{}/", client_prefix_from_slug(identity.agent.slug()));
+    let candidates = open_groups(browser, context.call.output_files.clone())
+        .await?
+        .into_iter()
+        .filter(|(_, title)| title.starts_with(&prefix))
+        .map(|(group_id, title)| format!("{title} (id {group_id})"))
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "note: a new tab group is being started for this session. These open groups are already \
+         named for you, so they are tasks of yours from an earlier connection: {}. If you are \
+         continuing one of them, pass its id as groupId on tabs action=\"new\" and your pages go \
+         there instead, with the tabs already in it reading as yours again.",
+        candidates.join("; ")
+    ))
+}
+
+/// Every open group as `(id, title)`, or `None` when the listing cannot be read.
+///
+/// Silent on failure on purpose: a note that names no groups, or invents the
+/// absence of them, is worse than no note.
+async fn open_groups(
+    browser: &Arc<BrowserSession>,
+    output_files: OutputFileAccess,
+) -> Option<Vec<(String, String)>> {
+    let result = dispatch_tab_groups(
+        cached_tab_groups_tool(),
+        browser,
+        CancellationToken::new(),
+        output_files,
+        json!({ "action": "list" }),
+    )
+    .await
+    .ok()?;
+    Some(
+        result
+            .structured_content
+            .as_ref()?
+            .get("groups")?
+            .as_array()?
+            .iter()
+            .filter_map(|group| {
+                Some((
+                    group.get("groupId").and_then(Value::as_str)?.to_string(),
+                    group
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                ))
+            })
+            .collect(),
+    )
+}
+
+/// Adds the note as an extra text block, leaving the original content untouched so
+/// a caller parsing the first block is unaffected.
+fn append_notice(result: &ToolResult, notice: String) -> ToolResult {
+    let mut annotated = result.clone();
+    annotated.content.push(ContentBlock::text(notice));
+    annotated
 }
 
 fn spawn_tab_group_work(call: ToolCall, page_id: Option<u32>) -> JoinHandle<()> {
@@ -96,6 +199,97 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     let Some(page_id) = page_id else {
         return;
     };
+    // A caller that names a group is continuing work in it, so that group
+    // becomes this session's and later pages follow it. This has to happen
+    // before the default-group reconciliation below, which would otherwise see
+    // the page in a group that is not the session's and clear the reference it
+    // was just given.
+    //
+    // The unclaimed pages already in that group become this session's too, so
+    // the reconnected agent picks up the work rather than treating its own tabs
+    // as someone else's. Claims are written rather than inferred at read time
+    // because `tabs list`, the ownership notice and code-mode helper discovery
+    // all read the claim; inferring it in one makes the three disagree.
+    //
+    // Nothing is authorized and nothing is refused. Ownership is a label, never
+    // a permission, asserted in guards/mod.rs and enforced nowhere, so there is
+    // no privilege here to gate. An earlier revision checked the group title
+    // against the client's slug; that was removed because it gated nothing real
+    // while breaking the honest case, since `tab_groups update` renames any
+    // group for anyone and a user renaming a group would have locked its own
+    // agent out of it.
+    //
+    // A page held by another session of the same client is taken over, because
+    // that session is the caller's own earlier self: a reconnect mints a new
+    // conversation while the old one stays in the ownership map holding the
+    // tabs, which is the whole reason the agent sees its own work as foreign.
+    // Only taking unclaimed pages made this do nothing at all in the case it
+    // exists for, since the pages are claimed, just by the previous session.
+    //
+    // A page held by a session of a DIFFERENT client is left alone. Not a
+    // refusal of this caller, just not relabelling someone else's work.
+    //
+    // A group that is no longer open is not adopted either. A remembered id goes
+    // stale as soon as the group is closed, and adopting one would replace a
+    // reference that works with one that cannot: the add then fails, the failure
+    // path clears the reference and returns without creating a replacement, and
+    // the page ends up in no group at all. One listing answers both questions,
+    // so this costs nothing extra.
+    let named_group = call
+        .raw_args
+        .get("groupId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+        .map(str::to_string);
+    let named_requested = named_group.is_some();
+    if let Some(requested) = named_group
+        && let Some(pages) =
+            group_pages_if_open(browser, &requested, call.output_files.clone()).await
+    {
+        ownership
+            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested))
+            .await;
+        let held_by_others = live_convos_of_other_clients(&call.state, identity).await;
+        for page in pages {
+            let claimable = match ownership.owner_of_page(&PageId(page)).await {
+                None => true,
+                Some(owner) => !held_by_others.contains(&owner),
+            };
+            if claimable {
+                ownership
+                    .claim_page(identity.ownership_key.clone(), PageId(page))
+                    .await;
+            }
+        }
+        ensure_agent_tab_group_unlocked(
+            &call,
+            tab_groups,
+            browser,
+            &ownership,
+            &operation_cancel,
+            page_id,
+        )
+        .await;
+        return;
+    }
+    // A named group that is not open falls through as though none had been
+    // named, straight to the session's own group. Letting it reach the
+    // reconciliation below cleared the session's working reference, because the
+    // page had landed outside it, and a second group with the same title was
+    // then minted for one task.
+    if named_requested {
+        ensure_agent_tab_group_unlocked(
+            &call,
+            tab_groups,
+            browser,
+            &ownership,
+            &operation_cancel,
+            page_id,
+        )
+        .await;
+        return;
+    }
     if let Some(default_group_id) = &call.default_tab_group_id {
         let page_group_id = browser
             .pages
@@ -118,6 +312,80 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         page_id,
     )
     .await;
+}
+
+/// Conversations of OTHER clients that are currently live. The only claims a
+/// reclaim leaves alone.
+///
+/// Stated as the exclusion rather than as "my own conversations" on purpose. A
+/// session that disconnects or idles out is removed from the live set while its
+/// claims survive until the retained window is reaped, so listing the caller's
+/// own conversations would miss exactly the case a reconnect is: the previous
+/// session is gone from the snapshot but still holds the tabs. Inverting it also
+/// covers an orphaned claim from any dead session, which no live caller is using
+/// and which would otherwise sit unreclaimable until reaping.
+async fn live_convos_of_other_clients(
+    state: &crate::AppState,
+    identity: &crate::api::mcp::dispatch::ToolIdentity,
+) -> std::collections::BTreeSet<ConvoId> {
+    let slug = identity.agent.slug();
+    state
+        .sessions
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|session| session.agent().slug() != slug)
+        .map(|session| session.convo_id().clone())
+        .collect()
+}
+
+/// The pages in a named tab group, or `None` only when the listing says that
+/// group is not there.
+///
+/// A listing that fails or cannot be parsed answers with an empty page list
+/// rather than `None`, so the named group is still adopted and nothing is
+/// claimed. Collapsing those two cases would let a timeout look exactly like a
+/// closed group and silently route the page somewhere else, splitting one task
+/// across two groups because of a transient error.
+async fn group_pages_if_open(
+    browser: &Arc<BrowserSession>,
+    group_id: &str,
+    output_files: OutputFileAccess,
+) -> Option<Vec<u32>> {
+    let Ok(result) = dispatch_tab_groups(
+        cached_tab_groups_tool(),
+        browser,
+        CancellationToken::new(),
+        output_files,
+        json!({ "action": "list" }),
+    )
+    .await
+    else {
+        return Some(Vec::new());
+    };
+    let Some(groups) = result
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("groups"))
+        .and_then(Value::as_array)
+    else {
+        return Some(Vec::new());
+    };
+    let group = groups
+        .iter()
+        .find(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))?
+        .clone();
+    Some(
+        group
+            .get("pageIds")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Value::as_u64)
+            .filter_map(|page| u32::try_from(page).ok())
+            .collect(),
+    )
 }
 
 async fn ensure_agent_tab_group_unlocked(
@@ -523,6 +791,7 @@ mod tests {
         sender: broadcast::Sender<CdpEvent>,
         calls: StdMutex<Vec<(String, Value)>>,
         members: StdMutex<HashMap<String, BTreeSet<i64>>>,
+        titles: StdMutex<HashMap<String, String>>,
         block_create: AtomicBool,
         fail_group_add: AtomicBool,
         fail_title_updates: AtomicBool,
@@ -543,6 +812,7 @@ mod tests {
                 sender,
                 calls: StdMutex::new(Vec::new()),
                 members: StdMutex::new(HashMap::new()),
+                titles: StdMutex::new(HashMap::new()),
                 block_create: AtomicBool::new(false),
                 fail_group_add: AtomicBool::new(false),
                 fail_title_updates: AtomicBool::new(false),
@@ -576,7 +846,18 @@ mod tests {
                 "group": {
                     "groupId": group_id,
                     "windowId": 1,
-                    "title": params.get("title").and_then(Value::as_str).unwrap_or("codex"),
+                    "title": params
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            self.titles
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .get(group_id)
+                                .cloned()
+                        })
+                        .unwrap_or_else(|| "codex".to_string()),
                     "color": params.get("color").and_then(Value::as_str).unwrap_or("blue"),
                     "collapsed": params.get("collapsed").and_then(Value::as_bool).unwrap_or(false),
                     "tabIds": tab_ids
@@ -655,6 +936,19 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(group_id.to_string(), tab_ids.into_iter().collect());
+        }
+
+        fn seed_group_titled(
+            &self,
+            group_id: &str,
+            title: &str,
+            tab_ids: impl IntoIterator<Item = i64>,
+        ) {
+            self.seed_group(group_id, tab_ids);
+            self.titles
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(group_id.to_string(), title.to_string());
         }
 
         fn fail_close(&self, fail: bool) {
@@ -1121,6 +1415,424 @@ mod tests {
         assert!(
             applied.is_ok(),
             "tab-group effect blocked the tool response"
+        );
+        Ok(())
+    }
+
+    /// A reconnected agent names the group it was working in, and later pages
+    /// follow it instead of a second group being created for one task.
+    ///
+    /// Adoption deliberately changes no page's owner. It grants nothing a
+    /// caller did not already have, because `tab_groups action="create"` with
+    /// an existing groupId already moved pages into any group.
+    #[tokio::test]
+    async fn naming_a_group_makes_it_this_sessions_group() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-earlier", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-earlier"),
+            "the named group survives the default-group reconciliation"
+        );
+        assert!(
+            recorder.group_members("group-earlier").contains(&102),
+            "the page joins it: {:?}",
+            recorder.group_members("group-earlier")
+        );
+        assert_eq!(
+            recorder.create_count(),
+            0,
+            "an existing group is joined, never recreated"
+        );
+        assert_eq!(
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&key),
+            "the unclaimed page already in the group becomes this session's, so \
+             tabs list, the ownership notice and helper discovery agree"
+        );
+        Ok(())
+    }
+
+    /// A remembered id goes stale the moment its group is closed. Adopting one
+    /// would swap a working reference for one that cannot be added to, and the
+    /// add-failure path clears the reference and returns without creating a
+    /// replacement, so the page would end up in no group at all.
+    #[tokio::test]
+    async fn naming_a_closed_group_keeps_the_session_grouped() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-live", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-closed" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        // The live server sets this from the session's group on every call. A
+        // fixture that leaves it None cannot reach the reconciliation that this
+        // guards, which is why an earlier version of this test passed with the
+        // guard removed.
+        call.default_tab_group_id = Some("group-live".to_string());
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .set_tab_group_ref(key.clone(), Some("group-live".to_string()))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-live"),
+            "the working reference survives a stale id being named"
+        );
+        assert!(
+            recorder.group_members("group-live").contains(&102),
+            "and the page joins the session's own group rather than a second one: {:?}",
+            recorder.group_members("group-live")
+        );
+        assert_eq!(
+            recorder.create_count(),
+            0,
+            "no second group is minted for a task that already has one"
+        );
+        Ok(())
+    }
+
+    /// The case the live run exposed. A reconnect leaves the previous session in
+    /// the ownership map still holding the tabs, so the page is claimed, not
+    /// unclaimed. Taking over a page held by an earlier session of the same
+    /// client is what makes the reclaim actually reclaim.
+    #[tokio::test]
+    async fn a_page_an_earlier_session_of_this_client_holds_is_taken_over() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-earlier", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        let key = identity.ownership_key.clone();
+        // The same client reconnecting: a second session with the caller's slug.
+        let earlier = crate::services::sessions::Session::new(
+            crate::ids::SessionId::new("earlier"),
+            identity.agent.clone(),
+            crate::identity::ConversationIdentity::new(identity.agent.slug(), "prior".to_string()),
+            identity.agent_label.clone(),
+            tokio::time::Instant::now(),
+        );
+        call.state
+            .sessions
+            .insert_for_testing(earlier.clone())
+            .await;
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .claim_page(earlier.convo_id().clone(), PageId(1))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&key),
+            "the earlier session of this client held it, so the reconnect takes it over"
+        );
+        Ok(())
+    }
+
+    fn note_text(result: &ToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    async fn apply_tabs_new(call: &ToolCall) -> Option<ToolResult> {
+        let result = ToolResult::text("opened", Some(json!({ "page": 1 })));
+        apply(ToolEffectContext {
+            call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+    }
+
+    /// The nudge that needs no memory. Both texts already tell an agent to reuse
+    /// its group and a live client skipped them, so the one call that starts a
+    /// second group names the candidates with their ids.
+    #[tokio::test]
+    async fn starting_a_group_names_the_groups_already_titled_for_this_client() -> anyhow::Result<()>
+    {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
+        recorder.seed_group_titled("group-theirs", "cowork/research", [102]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        // The first tabs new of a fresh connection: no group for this session yet.
+        call.default_tab_group_id = None;
+
+        let annotated = apply_tabs_new(&call)
+            .await
+            .unwrap_or_else(|| panic!("expected a note naming the earlier group"));
+        let text = note_text(&annotated);
+
+        assert!(text.contains("codex/invoice-run"), "{text}");
+        assert!(
+            text.contains("group-earlier"),
+            "names the id to pass: {text}"
+        );
+        assert!(text.contains("groupId"), "names the argument: {text}");
+        assert!(
+            !text.contains("cowork/research"),
+            "another client's group is not a candidate of mine: {text}"
+        );
+        assert!(
+            text.contains("opened"),
+            "the original result survives: {text}"
+        );
+        Ok(())
+    }
+
+    /// An agent that named a group is already doing what the note would ask for.
+    #[tokio::test]
+    async fn naming_a_group_suppresses_the_nudge() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        call.default_tab_group_id = None;
+
+        assert!(
+            apply_tabs_new(&call).await.is_none(),
+            "an agent already passing a groupId needs no nudge"
+        );
+        Ok(())
+    }
+
+    /// Mid-task, not reconnecting. The session has its group and every later tab
+    /// would otherwise carry the note.
+    #[tokio::test]
+    async fn a_session_that_already_has_a_group_gets_no_nudge() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        call.default_tab_group_id = Some("group-mine".to_string());
+
+        assert!(
+            apply_tabs_new(&call).await.is_none(),
+            "a session mid-task must not be told to reuse something"
+        );
+        Ok(())
+    }
+
+    /// A client's genuine first task. Nothing is its own, so there is nothing to
+    /// suggest and the note would be noise.
+    #[tokio::test]
+    async fn no_group_of_this_clients_own_means_no_nudge() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-theirs", "cowork/research", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        call.default_tab_group_id = None;
+
+        assert!(
+            apply_tabs_new(&call).await.is_none(),
+            "only this client's own groups are candidates"
+        );
+        Ok(())
+    }
+
+    /// A listing that fails must not look like a closed group. The named group
+    /// is still adopted, so a timeout cannot silently split one task across two
+    /// groups. Nothing is claimed, because without a listing there is no page
+    /// list to claim from.
+    #[tokio::test]
+    async fn a_failed_group_listing_still_adopts_the_named_group() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-earlier", [101]);
+        recorder.fail_list(true);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        // Set the same way the live server sets it, so the reconciliation this
+        // has to beat is actually reachable.
+        call.default_tab_group_id = Some("group-fallback".to_string());
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-earlier"),
+            "a transient listing failure must not be read as the group being closed"
+        );
+        assert_eq!(
+            recorder.create_count(),
+            0,
+            "and no second group is minted for the task"
+        );
+        Ok(())
+    }
+
+    /// Claiming skips a page a LIVE session of a different client holds. Not a
+    /// refusal of this caller, just not relabelling someone else's work while
+    /// they are still using it. The other session has to be live in the
+    /// snapshot for this to mean anything, since a bare claim with no session
+    /// behind it is the orphan case below.
+    #[tokio::test]
+    async fn a_page_another_client_holds_is_left_alone() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-shared", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-shared" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let other_client = Session::new(
+            AppSessionId::new("other-client"),
+            ClientIdentity::Ephemeral {
+                slug: "cowork".to_string(),
+                label: "Cowork".to_string(),
+            },
+            ConversationIdentity::new("cowork", "busy-badger".to_string()),
+            "Cowork".to_string(),
+            tokio::time::Instant::now(),
+        );
+        call.state
+            .sessions
+            .insert_for_testing(other_client.clone())
+            .await;
+        let ownership = call.state.sessions.ownership();
+        let other = other_client.convo_id().clone();
+        ownership.claim_page(other.clone(), PageId(1)).await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&other),
+            "the live session of the other client keeps its page"
+        );
+        Ok(())
+    }
+
+    /// A claim whose session is gone belongs to nobody. Leaving it in place
+    /// would make the page unreclaimable by anyone until reaping runs, so the
+    /// reclaim takes it.
+    #[tokio::test]
+    async fn a_page_held_by_a_claim_with_no_live_session_is_reclaimed() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-orphan", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-orphan" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .claim_page(ConvoId::new("cowork-long-gone"), PageId(1))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&key),
+            "nobody live holds it, so the reclaim takes it"
+        );
+        Ok(())
+    }
+
+    /// Omitting it must not disturb anything, since every call that is not a
+    /// reclaim omits it.
+    #[tokio::test]
+    async fn omitting_the_group_id_leaves_the_existing_group_alone() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-1", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .set_tab_group_ref(key.clone(), Some("group-1".to_string()))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-1")
         );
         Ok(())
     }

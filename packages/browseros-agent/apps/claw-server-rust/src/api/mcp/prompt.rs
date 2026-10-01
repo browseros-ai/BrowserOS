@@ -21,6 +21,17 @@ Shared with other agents:
   user's, and a result tells you when the page is not yours.
 - A tab that is not yours is still someone's. Leave it as you found it unless the
   user asked you to change it, and prefer your own tab for anything exploratory.
+- Continuing a task after a remade connection: list before you open. Every
+  remade connection starts a new session and loses your tab ownership, so on
+  the FIRST tabs call of a connection, run tabs action="list" before opening
+  anything. It reports the tab group id of every grouped page, in every
+  section, including the tabs that now read as another agent's: after a
+  reconnect, yours are among those. Your own group is titled with your own
+  name, as <yourName>/<task>. Pass its id as groupId on tabs action="new" and
+  your pages keep going to that group while the tabs already in it read as
+  yours again, instead of being left behind while a second group starts. Record
+  the id when you first see it so you can skip the lookup later. Only you know
+  which task you are continuing, so only you can say.
 - Preserve useful pages: leave anything the user may want to inspect open
   instead of closing it when the task ends.
 - Say who you are (e.g. "claude-code", "codex"): send it as the agentName
@@ -103,6 +114,24 @@ mod tests {
         assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("independent subtasks get their own tabs"));
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("hidden window"));
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("separate window"));
+    }
+
+    /// The reclaim flow is the only continuity a client on the transport-session
+    /// path has, and a passive mention of it was not enough: a live client skipped
+    /// it entirely and opened a second group. These lock the three properties that
+    /// made the old wording unusable.
+    #[test]
+    fn prompt_orders_the_reclaim_flow_and_points_it_at_the_right_place() {
+        // Ordered, not just mentioned: the lookup has to happen before the open.
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("list before you open"));
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("FIRST tabs call of a connection"));
+        // After a reconnect an agent's own tabs read as another agent's, so sending
+        // it to its own section sends it to the one place the id will not be.
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("in every\n  section"));
+        assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("next to each of your\n  own tabs"));
+        // The title convention is the only way back for an agent whose own history
+        // of the id is gone.
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("<yourName>/<task>"));
     }
 
     #[test]

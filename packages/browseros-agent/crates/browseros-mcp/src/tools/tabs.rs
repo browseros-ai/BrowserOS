@@ -5,12 +5,21 @@ use browseros_core::{PageId, pages::NewPageOptions};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
 open a new page in the background (snapshot attached), or close one. \
-Use the returned page id with snapshot/act/navigate.";
+Use the returned page id with snapshot/act/navigate. \
+action=\"list\" reports the tab group id of every grouped page. Record yours on \
+your first list of a task, before you need it. Ownership is per connection: every \
+remade connection starts a new session and loses it, so list before you open \
+anything on a new connection and pass that id as groupId on action=\"new\". Your \
+pages then keep going to that group instead of a second one being started for the \
+same task, and the tabs already in it read as yours again. If you no longer have \
+the id, find it in the listing: after a reconnect your tabs read as another \
+agent's, and your group is titled with your own name as <yourName>/<task>. Only \
+action=\"new\" reclaims; groupId is ignored on the other actions.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +46,10 @@ struct TabsArgs {
     _background: Option<bool>,
     /// Page id for action="close".
     page: Option<u32>,
+    /// Tab group id for action="new". Pass the group id a previous call reported
+    /// to keep continuing work in the same group; omit it to use your own group.
+    #[serde(default, rename = "groupId")]
+    group_id: Option<String>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -46,6 +59,27 @@ pub fn definition() -> crate::framework::ToolDef {
         Some(super::open_world_annotations()),
         handler,
     )
+}
+
+/// Whether a tab group is currently open. A listing failure answers `true` so
+/// a transient CDP problem never produces a misleading note.
+async fn group_is_open(ctx: &ToolCtx, group_id: &str) -> bool {
+    let Ok(result) = ctx
+        .session
+        .cdp("Browser.getTabGroups", json!({}), None)
+        .await
+    else {
+        return true;
+    };
+    result
+        .get("groups")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .any(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))
+        })
+        .unwrap_or(true)
 }
 
 fn handler<'a>(
@@ -70,6 +104,9 @@ fn handler<'a>(
                             "page": page.page_id.0,
                             "url": page.url,
                             "title": page.title,
+                            // The group is how an agent names the work it is
+                            // continuing, so it has to survive into the result.
+                            "groupId": page.group_id,
                         })).collect::<Vec<_>>()
                     })),
                 )
@@ -94,10 +131,29 @@ fn handler<'a>(
                             // (cockpit Watch), not to the agent.
                             background: Some(true),
                             window_id: ctx.defaults.default_window_id.clone(),
-                            tab_group_id: ctx.defaults.default_tab_group_id.clone(),
+                            tab_group_id: args
+                                .group_id
+                                .clone()
+                                .or_else(|| ctx.defaults.default_tab_group_id.clone()),
                         },
                     )
                     .await?;
+                // A mistyped or half-remembered group id used to be silently
+                // ignored, which produced the very outcome the group argument
+                // exists to avoid: the page continues in the session's own
+                // group while the agent believes it rejoined an earlier one.
+                // Said rather than refused, so a wrong id still opens a page.
+                if let Some(requested) = args.group_id.as_deref()
+                    && !group_is_open(ctx, requested).await
+                {
+                    // Grouping runs detached so it cannot delay this response,
+                    // so the note says what was NOT done rather than asserting
+                    // a placement that has not happened yet.
+                    response.text(format!(
+                        "note: tab group {requested} is not open, so page {} was not added to it and will go to your own group. List tab groups to find the id you meant.",
+                        page.0
+                    ));
+                }
                 response.text(format!("opened page {}", page.0));
                 // Claw-server hooks key ownership/grouping off this "page" field.
                 response.data(json!({ "page": page.0 }));
@@ -126,8 +182,18 @@ fn format_page_line(page: &browseros_core::pages::PageInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TabsAction, TabsArgs};
+    use super::{DESCRIPTION, TabsAction, TabsArgs};
     use serde_json::json;
+
+    /// An agent that no longer holds the id has only the listing to find it in,
+    /// and after a reconnect its own tabs read as another agent's. Both halves
+    /// have to be stated or the reclaim is undiscoverable from this tool alone.
+    #[test]
+    fn the_description_says_how_to_find_a_group_id_you_no_longer_have() {
+        assert!(DESCRIPTION.contains("list before you open"));
+        assert!(DESCRIPTION.contains("<yourName>/<task>"));
+        assert!(DESCRIPTION.contains("read as another"));
+    }
 
     #[test]
     fn retired_background_field_is_accepted_and_ignored() -> anyhow::Result<()> {
@@ -137,6 +203,16 @@ mod tests {
             serde_json::from_value(json!({ "action": "new", "background": false }))?;
         assert!(matches!(args.action, TabsAction::New));
         assert_eq!(args._background, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn a_group_id_is_accepted_on_new_and_defaults_to_none() -> anyhow::Result<()> {
+        let named: TabsArgs =
+            serde_json::from_value(json!({ "action": "new", "groupId": "ABC123" }))?;
+        assert_eq!(named.group_id.as_deref(), Some("ABC123"));
+        let plain: TabsArgs = serde_json::from_value(json!({ "action": "new" }))?;
+        assert_eq!(plain.group_id, None);
         Ok(())
     }
 

@@ -161,7 +161,19 @@ fn format_tab_line(page: &Value) -> Option<String> {
     } else {
         String::new()
     };
-    Some(format!("[{page_id}] {url}{title}{owner}"))
+    // Shown for every tab, not only the caller's own, and in the text rather
+    // than only the structured content because the text is what the model
+    // reads. Restricting it to the caller's own tabs made it unavailable in the
+    // one situation it exists for: after a reconnect the agent's tabs are
+    // listed as another agent's, which is exactly when it needs the id to ask
+    // to rejoin. Withholding it was never a boundary either, since
+    // `tab_groups action="list"` already enumerates every group id.
+    let group = page
+        .get("groupId")
+        .and_then(Value::as_str)
+        .map(|group| format!(" [group {group}]"))
+        .unwrap_or_default();
+    Some(format!("[{page_id}] {url}{title}{owner}{group}"))
 }
 
 const _: ToolEffect = apply;
@@ -170,6 +182,53 @@ const _: ToolEffect = apply;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The group id has to reach the rendered text, because the text is what the
+    /// model reads. Without it an agent cannot name the group it is working in,
+    /// so it cannot ask to rejoin that group after a reconnect. The list result
+    /// carried only page, url and title until this was wired through.
+    #[tokio::test]
+    async fn the_group_id_reaches_the_rendered_text_for_the_callers_own_tabs() -> anyhow::Result<()>
+    {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(identity.ownership_key.clone(), PageId(9))
+            .await;
+        let result = ToolResult::text(
+            "all tabs",
+            Some(json!({
+                "pages": [
+                    { "page": 9, "url": "https://mine.test", "groupId": "G1" },
+                    { "page": 4, "url": "https://user.test", "groupId": "G9" }
+                ]
+            })),
+        );
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+        .unwrap_or(result);
+        let rendered = annotated
+            .content
+            .first()
+            .and_then(|block| block.as_text())
+            .map(|text| text.text.clone())
+            .unwrap_or_default();
+        assert!(rendered.contains("[group G1]"), "{rendered}");
+        // Every section, not only the caller's own tabs. After a reconnect an
+        // agent's tabs read as another agent's, and that is precisely when it
+        // needs the id in order to ask to rejoin the group.
+        assert!(rendered.contains("[group G9]"), "{rendered}");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn annotates_all_tabs_in_three_ownership_buckets_and_prunes_stale_claims()
