@@ -1,4 +1,5 @@
 import type {
+  HelpRequest,
   LiveSessionActivityState,
   SessionBrowserTab,
   SessionSummary,
@@ -74,6 +75,8 @@ export interface LiveSessionCardRecord {
   browserTabs: SessionBrowserTab[]
   toolCount: number
   recentTools: ToolEvent[]
+  /** Present only while the agent is parked waiting for a human on this session. */
+  helpRequest?: HelpRequest
 }
 
 export interface LiveSessionCardOptions {
@@ -136,6 +139,7 @@ export function sessionsToLiveCards(
       browserTabs,
       toolCount: browserTabs.reduce((sum, tab) => sum + tab.toolCount, 0),
       recentTools,
+      helpRequest: session.live?.helpRequest,
     }
   })
 
