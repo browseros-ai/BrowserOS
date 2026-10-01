@@ -1,8 +1,12 @@
 use crate::{CoreError, FrameId, PageId, ProtocolSession, SessionId, connection::CdpConnection};
 use browseros_cdp::{CdpEvent, target};
 use serde_json::{Value, json};
-use std::{collections::HashMap, sync::Arc};
-use tokio::sync::Mutex;
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
+use tokio::sync::{Mutex, broadcast};
+use tracing::warn;
 
 #[derive(Debug, Clone)]
 pub struct FrameTarget {
@@ -63,6 +67,7 @@ impl FrameRegistry {
         page_id: PageId,
         frame_id: Option<FrameId>,
         same_process_parent: Option<&ProtocolSession>,
+        cross_process: bool,
     ) -> Result<FrameTarget, CoreError> {
         self.clear_sessions_from_prior_connection().await;
         let page_session_id = self
@@ -85,6 +90,28 @@ impl FrameRegistry {
                 ax_params: json!({}),
                 cursor_uses_session_default: true,
             });
+        }
+        // A cross-process child (no contentDocument on the parent) that is not in the cache yet may
+        // be an OOPIF whose attach event has not landed; nested cross-origin frames attach through
+        // an async cascade a capture can outrun. Attach it by its target id so it is driven on its
+        // own session rather than mis-queried on the parent's. A same-process child never reaches
+        // this, so it keeps inheriting its parent session. A concurrent event may register it in
+        // the meantime, so re-check the cache after attaching.
+        if cross_process {
+            if let Some(session_id) = self.attach_oopif_on_demand(&frame_id).await {
+                return Ok(FrameTarget {
+                    session: ProtocolSession::for_session(self.cdp.clone(), session_id),
+                    ax_params: json!({}),
+                    cursor_uses_session_default: true,
+                });
+            }
+            if let Some(oopif) = self.oopif_sessions.lock().await.get(&frame_id).cloned() {
+                return Ok(FrameTarget {
+                    session: ProtocolSession::for_session(self.cdp.clone(), oopif),
+                    ax_params: json!({}),
+                    cursor_uses_session_default: true,
+                });
+            }
         }
         // A non-target frame shares its nearest parent target's CDP session, which may itself be
         // an OOPIF. Cache that inheritance because later ref resolution knows the frame id but no
@@ -131,10 +158,19 @@ impl FrameRegistry {
         let mut events = registry.cdp.events();
         tokio::spawn(async move {
             loop {
-                let Ok(event) = events.recv().await else {
-                    break;
-                };
-                registry.handle_event(event).await;
+                match events.recv().await {
+                    Ok(event) => registry.handle_event(event).await,
+                    // A frame-heavy page can attach many targets at once and overflow the CDP
+                    // event buffer. Keep listening instead of dying for the rest of the session: a
+                    // missed attach is recovered on demand when a frame is resolved, and a missed
+                    // detach is reconciled against the live target list so a stale session cannot
+                    // shadow that recovery.
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        warn!("browser frame listener lagged by {skipped} CDP event(s)");
+                        registry.reconcile_oopifs_after_lag().await;
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
             }
         });
     }
@@ -163,14 +199,29 @@ impl FrameRegistry {
             return;
         }
         self.clear_sessions_from_prior_connection().await;
-        let frame_id = FrameId(params.target_info.target_id);
-        let session_id = SessionId::from(params.session_id);
+        self.register_oopif_session(
+            FrameId(params.target_info.target_id),
+            SessionId::from(params.session_id),
+            params.waiting_for_debugger,
+        )
+        .await;
+    }
+
+    /// Record an OOPIF's session and prepare it for capture: enable the domains the snapshot
+    /// uses and re-arm auto-attach so this OOPIF's own cross-origin children attach too. Shared
+    /// by the attach event and the on-demand attach below.
+    async fn register_oopif_session(
+        &self,
+        frame_id: FrameId,
+        session_id: SessionId,
+        waiting_for_debugger: bool,
+    ) {
         self.oopif_sessions
             .lock()
             .await
             .insert(frame_id, session_id.clone());
         let session = ProtocolSession::for_session(self.cdp.clone(), session_id);
-        if params.waiting_for_debugger {
+        if waiting_for_debugger {
             let _ = session
                 .send::<_, Value>("Runtime.runIfWaitingForDebugger", json!({}))
                 .await;
@@ -191,6 +242,28 @@ impl FrameRegistry {
             .await;
     }
 
+    /// A frame missing from `oopif_sessions` may still be an OOPIF whose `attachedToTarget` event
+    /// has not arrived yet: nested cross-origin frames attach through an async cascade that a
+    /// synchronous capture can outrun. For an OOPIF the frame id equals its target id, so attaching
+    /// by that id both proves it is a separate target and yields its session. A same-process frame
+    /// has no such target and the attach fails, so the caller falls back to the parent session.
+    /// Without this a not-yet-attached OOPIF is queried on its parent's session, which cannot
+    /// resolve a cross-process frame id and returns an empty subtree.
+    async fn attach_oopif_on_demand(&self, frame_id: &FrameId) -> Option<SessionId> {
+        let root = ProtocolSession::root(self.cdp.clone());
+        let attached = root
+            .send::<_, target::AttachToTargetResult>(
+                "Target.attachToTarget",
+                json!({ "targetId": frame_id.0, "flatten": true }),
+            )
+            .await
+            .ok()?;
+        let session_id = SessionId::from(attached.session_id);
+        self.register_oopif_session(frame_id.clone(), session_id.clone(), false)
+            .await;
+        Some(session_id)
+    }
+
     async fn on_detached(&self, session_id: &SessionId) {
         self.clear_sessions_from_prior_connection().await;
         self.oopif_sessions
@@ -201,6 +274,36 @@ impl FrameRegistry {
             .lock()
             .await
             .retain(|_, existing| existing != session_id);
+    }
+
+    /// A lagged event stream may have dropped a `detachedFromTarget`, leaving an OOPIF session that
+    /// is cached but dead. That cached entry is checked before the on-demand attach path, so it
+    /// would shadow recovery and keep the frame unreadable. For an OOPIF the frame id is its target
+    /// id, so drop every cached OOPIF whose target no longer exists; the next capture re-attaches
+    /// the live one on demand.
+    async fn reconcile_oopifs_after_lag(&self) {
+        let root = ProtocolSession::root(self.cdp.clone());
+        let Ok(result) = root.send::<_, Value>("Target.getTargets", json!({})).await else {
+            return;
+        };
+        let live: HashSet<String> = result
+            .get("targetInfos")
+            .and_then(Value::as_array)
+            .map(|infos| {
+                infos
+                    .iter()
+                    .filter_map(|info| {
+                        info.get("targetId")
+                            .and_then(Value::as_str)
+                            .map(String::from)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        self.oopif_sessions
+            .lock()
+            .await
+            .retain(|frame_id, _| live.contains(&frame_id.0));
     }
 }
 
@@ -262,6 +365,129 @@ mod tests {
         }
     }
 
+    /// Attaches to exactly one target id (standing in for an OOPIF whose attach event has not
+    /// arrived); any other attachToTarget fails, standing in for a same-process frame with no
+    /// separate target.
+    struct AttachConnection {
+        oopif_target: &'static str,
+        attach_session: &'static str,
+    }
+
+    impl CdpConnection for AttachConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                if method == "Target.attachToTarget" {
+                    let target_id = params
+                        .get("targetId")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default();
+                    if target_id == self.oopif_target {
+                        return Ok(json!({ "sessionId": self.attach_session }));
+                    }
+                    return Err(CdpError::Protocol {
+                        code: -32000,
+                        message: format!("No target with given id: {target_id}"),
+                    });
+                }
+                Ok(json!({}))
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_attaches_an_unregistered_oopif_on_demand() -> Result<(), crate::CoreError> {
+        let cdp = Arc::new(AttachConnection {
+            oopif_target: "deep-oopif",
+            attach_session: "deep-oopif-session",
+        });
+        let registry = FrameRegistry::new(cdp.clone());
+        let page_id = PageId(1);
+        registry
+            .page_sessions
+            .lock()
+            .await
+            .insert(page_id.clone(), SessionId::from("page-session".to_string()));
+        let shell =
+            ProtocolSession::for_session(cdp.clone(), SessionId::from("shell-session".to_string()));
+
+        let resolved = registry
+            .resolve_frame_target(
+                page_id,
+                Some(FrameId("deep-oopif".to_string())),
+                Some(&shell),
+                true,
+            )
+            .await?;
+
+        assert!(resolved.session.same_session(&ProtocolSession::for_session(
+            cdp,
+            SessionId::from("deep-oopif-session".to_string())
+        )));
+        assert!(!resolved.session.same_session(&shell));
+        assert_eq!(resolved.ax_params, json!({}));
+        assert!(resolved.cursor_uses_session_default);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn resolve_falls_back_to_same_process_when_no_target_exists()
+    -> Result<(), crate::CoreError> {
+        let cdp = Arc::new(AttachConnection {
+            oopif_target: "unused",
+            attach_session: "unused",
+        });
+        let registry = FrameRegistry::new(cdp.clone());
+        let page_id = PageId(1);
+        registry
+            .page_sessions
+            .lock()
+            .await
+            .insert(page_id.clone(), SessionId::from("page-session".to_string()));
+        let parent =
+            ProtocolSession::for_session(cdp.clone(), SessionId::from("shell-session".to_string()));
+
+        let resolved = registry
+            .resolve_frame_target(
+                page_id,
+                Some(FrameId("plain-child".to_string())),
+                Some(&parent),
+                true,
+            )
+            .await?;
+
+        assert!(resolved.session.same_session(&parent));
+        assert_eq!(resolved.ax_params, json!({ "frameId": "plain-child" }));
+        assert!(!resolved.cursor_uses_session_default);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn same_process_child_inherits_and_caches_its_oopif_parent_session()
     -> Result<(), crate::CoreError> {
@@ -278,7 +504,12 @@ mod tests {
             SessionId::from("oopif-session".to_string()),
         );
         let oopif = registry
-            .resolve_frame_target(page_id.clone(), Some(FrameId("oopif".to_string())), None)
+            .resolve_frame_target(
+                page_id.clone(),
+                Some(FrameId("oopif".to_string())),
+                None,
+                false,
+            )
             .await?;
         let nested_id = FrameId("nested".to_string());
 
@@ -287,6 +518,7 @@ mod tests {
                 page_id.clone(),
                 Some(nested_id.clone()),
                 Some(&oopif.session),
+                false,
             )
             .await?;
         assert!(nested.session.same_session(&oopif.session));
@@ -294,7 +526,7 @@ mod tests {
         assert!(!nested.cursor_uses_session_default);
 
         let cached = registry
-            .resolve_frame_target(page_id, Some(nested_id), None)
+            .resolve_frame_target(page_id, Some(nested_id), None, false)
             .await?;
         assert!(cached.session.same_session(&oopif.session));
         assert!(!cached.session.same_session(&ProtocolSession::for_session(
@@ -327,7 +559,12 @@ mod tests {
             SessionId::from("oopif-session-1".to_string()),
         );
         let first_child = registry
-            .resolve_frame_target(page_id.clone(), Some(child_id.clone()), Some(&first_parent))
+            .resolve_frame_target(
+                page_id.clone(),
+                Some(child_id.clone()),
+                Some(&first_parent),
+                false,
+            )
             .await?;
         assert!(first_child.session.same_session(&first_parent));
 
@@ -345,10 +582,83 @@ mod tests {
             .await?;
 
         let reconnected_child = registry
-            .resolve_frame_target(page_id, Some(child_id), None)
+            .resolve_frame_target(page_id, Some(child_id), None, false)
             .await?;
         assert!(reconnected_child.session.same_session(&second_page_session));
         assert!(!reconnected_child.session.same_session(&first_parent));
         Ok(())
+    }
+
+    /// Reports a fixed set of live targets so reconcile can tell a dropped detach from a live frame.
+    struct GetTargetsConnection {
+        live_targets: Vec<&'static str>,
+    }
+
+    impl CdpConnection for GetTargetsConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                if method == "Target.getTargets" {
+                    let infos: Vec<Value> = self
+                        .live_targets
+                        .iter()
+                        .map(|id| json!({ "targetId": id, "type": "iframe" }))
+                        .collect();
+                    return Ok(json!({ "targetInfos": infos }));
+                }
+                Ok(json!({}))
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            let (_tx, rx) = broadcast::channel(1);
+            rx
+        }
+
+        fn is_connected(&self) -> bool {
+            true
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    #[tokio::test]
+    async fn lag_reconcile_drops_oopifs_whose_target_is_gone() {
+        let cdp = Arc::new(GetTargetsConnection {
+            live_targets: vec!["live-oopif"],
+        });
+        let registry = FrameRegistry::new(cdp);
+        {
+            let mut sessions = registry.oopif_sessions.lock().await;
+            sessions.insert(
+                FrameId("live-oopif".to_string()),
+                SessionId::from("live-session".to_string()),
+            );
+            sessions.insert(
+                FrameId("dead-oopif".to_string()),
+                SessionId::from("dead-session".to_string()),
+            );
+        }
+
+        registry.reconcile_oopifs_after_lag().await;
+
+        let sessions = registry.oopif_sessions.lock().await;
+        assert!(sessions.contains_key(&FrameId("live-oopif".to_string())));
+        assert!(!sessions.contains_key(&FrameId("dead-oopif".to_string())));
     }
 }

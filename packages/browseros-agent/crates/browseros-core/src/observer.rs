@@ -138,7 +138,7 @@ impl Observer {
         let _page_session = self.pages.get_session(self.page_id.clone()).await?;
         let target = self
             .frames
-            .resolve_frame_target(self.page_id.clone(), entry.frame_id.clone(), None)
+            .resolve_frame_target(self.page_id.clone(), entry.frame_id.clone(), None, false)
             .await?;
         let mut entry_for_resolution = entry.clone();
         let resolved =
@@ -248,7 +248,9 @@ impl Observer {
                 visited.push(frame_id.clone());
             }
 
-            let acquired = self.acquire_frame(frame_id, None, None, &context).await?;
+            let acquired = self
+                .acquire_frame(frame_id, None, None, false, &context)
+                .await?;
             self.assemble_acquired_frame(acquired, refs, base_depth, visited, context)
                 .await
         })
