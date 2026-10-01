@@ -239,14 +239,14 @@ describe('cockpit human-help takeover', () => {
     const card = container.querySelector(
       '[data-session-card="session-blocked"]',
     )
-    expect(card?.querySelector('[data-caption-tone="needs-you"]')).not.toBeNull()
+    expect(
+      card?.querySelector('[data-caption-tone="needs-you"]'),
+    ).not.toBeNull()
     expect(card?.querySelector('[data-caption-tone="blue"]')).toBeNull()
     expect(card?.textContent).toContain('Enter the LinkedIn verification code')
     expect(card?.textContent).toContain('Needs you')
     // The prominent banner also surfaces the request.
-    expect(
-      container.querySelector('[data-needs-you-banner]'),
-    ).not.toBeNull()
+    expect(container.querySelector('[data-needs-you-banner]')).not.toBeNull()
   })
 
   it('foregrounds the blocked tab and opens the in-control bar on Take over', async () => {
@@ -285,8 +285,6 @@ describe('cockpit human-help takeover', () => {
     expect(
       container.querySelector('[data-caption-tone="needs-you"]'),
     ).toBeNull()
-    expect(
-      container.querySelector('[data-caption-tone="blue"]'),
-    ).not.toBeNull()
+    expect(container.querySelector('[data-caption-tone="blue"]')).not.toBeNull()
   })
 })
