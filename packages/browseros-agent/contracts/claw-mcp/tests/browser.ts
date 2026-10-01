@@ -8,7 +8,7 @@
  */
 
 import { rmSync } from 'node:fs'
-import { mkdtemp } from 'node:fs/promises'
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -71,7 +71,8 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
     '--no-default-browser-check',
     '--use-mock-keychain',
     '--show-component-extension-options',
-    '--disable-browseros-extensions',
+    // The cockpit extension stays enabled: the download tool reads where the
+    // browser saved a file from chrome.downloads, which only it can reach.
     '--browseros-dock-icon=dev',
     '--enable-logging=stderr',
   ]
@@ -95,11 +96,35 @@ function launchArgs(cdpPort: number, userDataDir: string): string[] {
  * Every call is a cold start on purpose: each server pass in the
  * conformance suite gets a browser no other server has touched.
  */
+/**
+ * Points the profile's download folder inside itself.
+ *
+ * The download tool leaves the browser's download behaviour alone, so the
+ * browser picks the destination. Without this the suite's downloads land in the
+ * real one belonging to whoever is running it, because the browser does not take
+ * that folder from HOME. Setting the preference keeps a run hermetic and also
+ * exercises a relocated download folder, which the tool handles by asking the
+ * browser where it saved rather than guessing.
+ */
+async function seedDownloadDirectory(userDataDir: string): Promise<void> {
+  const downloadDir = join(userDataDir, 'Downloads')
+  await mkdir(downloadDir, { recursive: true })
+  const profile = join(userDataDir, 'Default')
+  await mkdir(profile, { recursive: true })
+  await writeFile(
+    join(profile, 'Preferences'),
+    JSON.stringify({
+      download: { default_directory: downloadDir, prompt_for_download: false },
+    }),
+  )
+}
+
 export async function launchBrowser(): Promise<BrowserHandle> {
   const binary = browserBinary()
   const userDataDir = await mkdtemp(
     join(tmpdir(), 'browseros-contract-browser-'),
   )
+  await seedDownloadDirectory(userDataDir)
   const cdpPort = await findFreePort()
   const child = Bun.spawn({
     cmd: [binary, ...launchArgs(cdpPort, userDataDir)],

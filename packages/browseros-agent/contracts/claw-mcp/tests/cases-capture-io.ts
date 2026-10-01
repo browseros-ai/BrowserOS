@@ -351,13 +351,118 @@ export const captureIoCases: ContractCase[] = [
         await ctx.mcp.callTool('download', { page, ref }),
         'download',
       )
-      const path = text.match(/to: (\S+)/)?.[1]
+      // Anchored on the trailing path rather than a whitespace run: a download
+      // keeps the name the site chose, which can contain spaces.
+      const path = text.match(/to: (.+)$/m)?.[1]
       if (!path || !(await Bun.file(path).exists())) {
         throw new Error(`download did not land a readable file: ${path}`)
+      }
+      if (!path.includes('/Downloads/')) {
+        throw new Error(`download did not land in the download folder: ${path}`)
       }
       const contents = await Bun.file(path).text()
       if (!contents.includes('fixture report')) {
         throw new Error(`downloaded file had unexpected contents: ${contents}`)
+      }
+      const reported = Number(text.match(/\((\d+) bytes\)/)?.[1])
+      const size = Bun.file(path).size
+      if (reported !== size) {
+        throw new Error(`reported ${reported} bytes for a ${size} byte file`)
+      }
+    },
+  },
+  {
+    name: 'download: a second download renames around the first',
+    async run(ctx) {
+      // A managed download writes straight to the path it is given and replaces
+      // what is there, so the file goes through a staging directory and is moved
+      // under a free name. Without that, this second download would destroy the
+      // first file and report a path whose contents are not what it fetched.
+      const page = await ctx.openPage(ctx.fixture('/links.html'))
+      const paths: string[] = []
+      for (const attempt of ['first', 'second']) {
+        const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+        const ref = snap
+          .split('\n')
+          .find((line) => line.includes('Download report'))
+          ?.match(/\[ref=(e\d+)\]/)?.[1]
+        if (!ref) throw new Error(`no download ref on the ${attempt} attempt`)
+        const text = expectOk(
+          await ctx.mcp.callTool('download', { page, ref }),
+          `download ${attempt}`,
+        )
+        const path = text.match(/to: (.+)$/m)?.[1]
+        if (!path) throw new Error(`no path on the ${attempt} attempt: ${text}`)
+        paths.push(path)
+      }
+      const [first, second] = paths
+      if (first === second) {
+        throw new Error(`both downloads reported the same path: ${first}`)
+      }
+      // A counted name, not a specific counter: an earlier case in this suite
+      // has already taken "report.txt", so the pair here starts further along.
+      if (!/report \(\d+\)\.txt$/.test(second)) {
+        throw new Error(
+          `second download was not renamed around the first: ${second}`,
+        )
+      }
+      for (const path of paths) {
+        if (!(await Bun.file(path).exists())) {
+          throw new Error(
+            `${path} is missing, so one download replaced the other`,
+          )
+        }
+        const contents = await Bun.file(path).text()
+        if (!contents.includes('fixture report')) {
+          throw new Error(`${path} had unexpected contents: ${contents}`)
+        }
+      }
+    },
+  },
+  {
+    name: "download: the browser's own list reports it accurately",
+    async run(ctx) {
+      // The point of letting the browser choose the destination. When the file
+      // was staged elsewhere and moved, the browser kept recording the staging
+      // path, so every row read "Deleted" with no reveal action while the file
+      // sat in the download folder.
+      const page = await ctx.openPage(ctx.fixture('/links.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Download report'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no download ref')
+      const text = expectOk(
+        await ctx.mcp.callTool('download', { page, ref }),
+        'download',
+      )
+      const path = text.match(/to: (.+)$/m)?.[1]
+      if (!path) throw new Error(`no path reported: ${text}`)
+      const name = path.split('/').pop() ?? ''
+
+      expectOk(
+        await ctx.mcp.callTool('navigate', {
+          page,
+          action: 'url',
+          url: 'chrome://downloads',
+        }),
+        'open the download list',
+      )
+      const list = expectOk(
+        await ctx.mcp.callTool('snapshot', { page, mode: 'interactive' }),
+      )
+      const row = list.split('\n').find((line) => line.includes(name))
+      if (!row) {
+        throw new Error(`no list row for ${name} in:\n${list.slice(0, 600)}`)
+      }
+      if (row.includes('Deleted')) {
+        throw new Error(`the list says the file is gone: ${row.trim()}`)
+      }
+      // The reveal action is labelled per platform: "Show in Finder" on macOS,
+      // "Show in folder" elsewhere. Its presence is the point, not its wording.
+      if (!/Show in (Finder|folder)/.test(row)) {
+        throw new Error(`the list cannot reveal the file: ${row.trim()}`)
       }
     },
   },

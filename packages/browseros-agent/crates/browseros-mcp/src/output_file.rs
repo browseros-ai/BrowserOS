@@ -20,6 +20,12 @@ pub fn create_browser_output_file_access() -> OutputFileAccess {
     Arc::new(Mutex::new(HashSet::new()))
 }
 
+fn home_dir() -> PathBuf {
+    env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
 #[must_use]
 pub fn get_browseros_dir() -> PathBuf {
     if let Some(override_dir) = env::var_os("BROWSEROS_DIR")
@@ -32,10 +38,7 @@ pub fn get_browseros_dir() -> PathBuf {
     } else {
         ".browseros"
     };
-    env::var_os("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(dir_name)
+    home_dir().join(dir_name)
 }
 
 pub async fn get_tool_output_dir() -> std::io::Result<PathBuf> {
@@ -51,27 +54,6 @@ pub async fn get_tool_output_dir() -> std::io::Result<PathBuf> {
     #[cfg(unix)]
     fs::set_permissions(&real, std::fs::Permissions::from_mode(TOOL_OUTPUT_DIR_MODE)).await?;
     Ok(real)
-}
-
-pub async fn create_download_output_dir() -> std::io::Result<PathBuf> {
-    let output_dir = get_tool_output_dir().await?;
-    for _attempt in 0..10 {
-        let path = output_dir.join(format!("download-{}", Uuid::new_v4()));
-        match fs::create_dir(&path).await {
-            Ok(()) => {
-                #[cfg(unix)]
-                fs::set_permissions(&path, std::fs::Permissions::from_mode(TOOL_OUTPUT_DIR_MODE))
-                    .await?;
-                return Ok(path);
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(err) => return Err(err),
-        }
-    }
-    Err(std::io::Error::new(
-        std::io::ErrorKind::AlreadyExists,
-        "could not create unique download output directory",
-    ))
 }
 
 pub async fn write_temp_tool_output_file(

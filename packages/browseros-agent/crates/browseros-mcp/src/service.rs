@@ -42,7 +42,7 @@ Core loop: snapshot -> act -> verify.
 
 Reading and output:
 - read extracts the page as markdown; grep searches it without a full dump (over="ax" keeps refs on matches).
-- screenshot is for visual checks only; pdf saves the page as a document; download clicks a ref and saves the file; upload sets local file paths on a file input.
+- screenshot is for visual checks only; pdf saves the page as a document; download clicks a ref and saves to the browser's download folder, returning the file's path on this machine; upload sets local file paths on a file input.
 
 Reach for run first; the granular tools are the fallback. run (browser SDK script) composes the whole snapshot -> act -> verify loop, bulk extraction, and helper reuse in one call. Use a single granular tool (act, snapshot, navigate, evaluate) directly only for a one-off step or when a run script cannot express it.
 

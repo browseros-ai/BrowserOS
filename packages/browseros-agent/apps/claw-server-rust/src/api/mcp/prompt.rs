@@ -52,7 +52,8 @@ Reading and output:
 - Large results are saved to a file and the path returned — read that file
   instead of re-fetching.
 - screenshot is for visual checks only; pdf archives the page; download
-  clicks a ref and saves the file; upload sets local paths on a file input.
+  clicks a ref and saves to the browser's download folder, returning the file's
+  path on this machine; upload sets local paths on a file input.
 
 run first, granular tools as the fallback. Compose anything multi-step inside one
 run script rather than chaining granular calls. Inside run, everything that needs
