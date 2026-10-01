@@ -118,6 +118,13 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     //
     // A page another session already holds is skipped. That is not a refusal of
     // this caller, it is leaving another session's label alone.
+    //
+    // A group that is no longer open is not adopted either. A remembered id goes
+    // stale as soon as the group is closed, and adopting one would replace a
+    // reference that works with one that cannot: the add then fails, the failure
+    // path clears the reference and returns without creating a replacement, and
+    // the page ends up in no group at all. One listing answers both questions,
+    // so this costs nothing extra.
     let named_group = call
         .raw_args
         .get("groupId")
@@ -125,11 +132,14 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         .map(str::trim)
         .filter(|group| !group.is_empty())
         .map(str::to_string);
-    if let Some(requested) = named_group {
+    if let Some(requested) = named_group
+        && let Some(pages) =
+            group_pages_if_open(browser, &requested, call.output_files.clone()).await
+    {
         ownership
-            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested.clone()))
+            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested))
             .await;
-        for page in group_page_ids_unlocked(browser, &requested, call.output_files.clone()).await {
+        for page in pages {
             if ownership.owner_of_page(&PageId(page)).await.is_none() {
                 ownership
                     .claim_page(identity.ownership_key.clone(), PageId(page))
@@ -171,14 +181,15 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     .await;
 }
 
-/// Page ids currently in a browser tab group. Empty when the group is gone or
-/// the listing fails, which simply means nothing is claimed.
-async fn group_page_ids_unlocked(
+/// The pages in an open browser tab group, or `None` when that group is not
+/// open or the listing fails. The distinction matters: a caller naming a group
+/// that has since been closed must not have it adopted.
+async fn group_pages_if_open(
     browser: &Arc<BrowserSession>,
     group_id: &str,
     output_files: OutputFileAccess,
-) -> Vec<u32> {
-    let Ok(result) = dispatch_tab_groups(
+) -> Option<Vec<u32>> {
+    let result = dispatch_tab_groups(
         cached_tab_groups_tool(),
         browser,
         CancellationToken::new(),
@@ -186,26 +197,26 @@ async fn group_page_ids_unlocked(
         json!({ "action": "list" }),
     )
     .await
-    else {
-        return Vec::new();
-    };
-    result
+    .ok()?;
+    let group = result
         .structured_content
-        .as_ref()
-        .and_then(|value| value.get("groups"))
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
+        .as_ref()?
+        .get("groups")?
+        .as_array()?
         .iter()
-        .find(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))
-        .and_then(|group| group.get("pageIds"))
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(Value::as_u64)
-        .filter_map(|page| u32::try_from(page).ok())
-        .collect()
+        .find(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))?
+        .clone();
+    Some(
+        group
+            .get("pageIds")
+            .and_then(Value::as_array)
+            .map(Vec::as_slice)
+            .unwrap_or_default()
+            .iter()
+            .filter_map(Value::as_u64)
+            .filter_map(|page| u32::try_from(page).ok())
+            .collect(),
+    )
 }
 
 async fn ensure_agent_tab_group_unlocked(
@@ -1260,6 +1271,47 @@ mod tests {
             Some(&key),
             "the unclaimed page already in the group becomes this session's, so \
              tabs list, the ownership notice and helper discovery agree"
+        );
+        Ok(())
+    }
+
+    /// A remembered id goes stale the moment its group is closed. Adopting one
+    /// would swap a working reference for one that cannot be added to, and the
+    /// add-failure path clears the reference and returns without creating a
+    /// replacement, so the page would end up in no group at all.
+    #[tokio::test]
+    async fn naming_a_closed_group_keeps_the_session_grouped() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-live", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-closed" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .set_tab_group_ref(key.clone(), Some("group-live".to_string()))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-live"),
+            "the working reference survives a stale id being named"
+        );
+        assert!(
+            recorder.group_members("group-live").contains(&102),
+            "and the page is grouped: {:?}",
+            recorder.group_members("group-live")
         );
         Ok(())
     }
