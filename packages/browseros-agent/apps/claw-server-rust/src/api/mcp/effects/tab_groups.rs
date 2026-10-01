@@ -231,15 +231,20 @@ async fn same_client_convos(
         .collect()
 }
 
-/// The pages in an open browser tab group, or `None` when that group is not
-/// open or the listing fails. The distinction matters: a caller naming a group
-/// that has since been closed must not have it adopted.
+/// The pages in a named tab group, or `None` only when the listing says that
+/// group is not there.
+///
+/// A listing that fails or cannot be parsed answers with an empty page list
+/// rather than `None`, so the named group is still adopted and nothing is
+/// claimed. Collapsing those two cases would let a timeout look exactly like a
+/// closed group and silently route the page somewhere else, splitting one task
+/// across two groups because of a transient error.
 async fn group_pages_if_open(
     browser: &Arc<BrowserSession>,
     group_id: &str,
     output_files: OutputFileAccess,
 ) -> Option<Vec<u32>> {
-    let result = dispatch_tab_groups(
+    let Ok(result) = dispatch_tab_groups(
         cached_tab_groups_tool(),
         browser,
         CancellationToken::new(),
@@ -247,12 +252,18 @@ async fn group_pages_if_open(
         json!({ "action": "list" }),
     )
     .await
-    .ok()?;
-    let group = result
+    else {
+        return Some(Vec::new());
+    };
+    let Some(groups) = result
         .structured_content
-        .as_ref()?
-        .get("groups")?
-        .as_array()?
+        .as_ref()
+        .and_then(|value| value.get("groups"))
+        .and_then(Value::as_array)
+    else {
+        return Some(Vec::new());
+    };
+    let group = groups
         .iter()
         .find(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))?
         .clone();
@@ -1416,6 +1427,48 @@ mod tests {
             ownership.owner_of_page(&PageId(1)).await.as_ref(),
             Some(&key),
             "the earlier session of this client held it, so the reconnect takes it over"
+        );
+        Ok(())
+    }
+
+    /// A listing that fails must not look like a closed group. The named group
+    /// is still adopted, so a timeout cannot silently split one task across two
+    /// groups. Nothing is claimed, because without a listing there is no page
+    /// list to claim from.
+    #[tokio::test]
+    async fn a_failed_group_listing_still_adopts_the_named_group() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-earlier", [101]);
+        recorder.fail_list(true);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        // Set the same way the live server sets it, so the reconciliation this
+        // has to beat is actually reachable.
+        call.default_tab_group_id = Some("group-fallback".to_string());
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.tab_group_ref(&key).await.as_deref(),
+            Some("group-earlier"),
+            "a transient listing failure must not be read as the group being closed"
+        );
+        assert_eq!(
+            recorder.create_count(),
+            0,
+            "and no second group is minted for the task"
         );
         Ok(())
     }
