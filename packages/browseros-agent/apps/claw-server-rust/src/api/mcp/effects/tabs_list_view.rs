@@ -47,6 +47,7 @@ pub(crate) async fn annotate_pages_with_ownership(
     pages: &[Value],
     id_field: &str,
 ) -> Vec<Value> {
+    let caller_group = state.sessions.ownership().tab_group_ref(caller).await;
     let live_page_ids = pages
         .iter()
         .filter_map(|page| page_id(page, id_field))
@@ -72,7 +73,13 @@ pub(crate) async fn annotate_pages_with_ownership(
             Some(page_id) => ownership.owner_of_page(&PageId(page_id)).await,
             None => None,
         };
-        annotated.push(annotate_page(page, owner.as_ref(), caller, &labels));
+        annotated.push(annotate_page(
+            page,
+            owner.as_ref(),
+            caller,
+            &labels,
+            caller_group.as_deref(),
+        ));
     }
     annotated
 }
@@ -88,12 +95,31 @@ fn annotate_page(
     owner: Option<&crate::ids::ConvoId>,
     caller: &crate::ids::ConvoId,
     labels: &HashMap<crate::ids::ConvoId, String>,
+    caller_group: Option<&str>,
 ) -> Value {
     let mut annotated = page.clone();
     let Value::Object(fields) = &mut annotated else {
         return annotated;
     };
+    // A claim is pruned when its page stops being live, and it disappears with
+    // the session that made it, so an agent's own tab reads as unclaimed after a
+    // reconnect. A tab sitting in the group this caller holds is that caller's
+    // tab, which is what lets a reconnected agent pick its work back up instead
+    // of treating it as someone else's and opening a duplicate.
+    //
+    // Deliberately narrow: only an unclaimed page is reassigned this way. A page
+    // another live agent holds stays theirs, so this cannot be used to take a
+    // tab over, and the user's own tabs are untouched unless the user moved one
+    // into the agent's group by hand.
+    let in_caller_group = || {
+        caller_group.is_some_and(|group| page.get("groupId").and_then(Value::as_str) == Some(group))
+    };
     let (ownership, owner_agent_id, owner_label) = match owner {
+        None if in_caller_group() => (
+            "mine",
+            Value::String(caller.as_str().to_string()),
+            Value::Null,
+        ),
         None => ("user", Value::Null, Value::Null),
         Some(owner) if owner == caller => (
             "mine",
@@ -161,7 +187,18 @@ fn format_tab_line(page: &Value) -> Option<String> {
     } else {
         String::new()
     };
-    Some(format!("[{page_id}] {url}{title}{owner}"))
+    // Shown only for the caller's own tabs, and only in the text, because the
+    // text is what the model reads. Without it an agent cannot name the group it
+    // is working in, so it cannot ask to rejoin that group after a reconnect.
+    let group = if page.get("ownership").and_then(Value::as_str) == Some("mine") {
+        page.get("groupId")
+            .and_then(Value::as_str)
+            .map(|group| format!(" [group {group}]"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    Some(format!("[{page_id}] {url}{title}{owner}{group}"))
 }
 
 const _: ToolEffect = apply;
@@ -170,6 +207,125 @@ const _: ToolEffect = apply;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The reported bug in miniature. A claim disappears with the session that
+    /// made it, so after a reconnect the agent's own tab reads as unclaimed. If
+    /// that tab is still in the group the agent holds, it is the agent's, and
+    /// saying so is what stops it opening a duplicate in a second group.
+    #[tokio::test]
+    async fn an_unclaimed_tab_in_the_callers_group_reads_as_the_callers() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        call.state
+            .sessions
+            .ownership()
+            .set_tab_group_ref(identity.ownership_key.clone(), Some("G1".to_string()))
+            .await;
+        let result = ToolResult::text(
+            "all tabs",
+            Some(json!({
+                "pages": [
+                    { "page": 9, "url": "https://mine.test", "groupId": "G1" },
+                    { "page": 4, "url": "https://user.test" },
+                    { "page": 7, "url": "https://elsewhere.test", "groupId": "G2" }
+                ]
+            })),
+        );
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+        .unwrap_or(result);
+        let pages = annotated
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.get("pages"))
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default();
+        let bucket = |page_id: u64| {
+            pages
+                .iter()
+                .find(|page| page.get("page").and_then(Value::as_u64) == Some(page_id))
+                .and_then(|page| page.get("ownership"))
+                .and_then(Value::as_str)
+                .unwrap_or("missing")
+                .to_string()
+        };
+        assert_eq!(bucket(9), "mine", "a tab in the caller's group is theirs");
+        assert_eq!(bucket(4), "user", "a tab in no group is untouched");
+        assert_eq!(bucket(7), "user", "another group is not the caller's");
+        // The id has to reach the text, because the text is what the model reads
+        // and it cannot ask to rejoin a group it was never told the id of.
+        let rendered = annotated
+            .content
+            .first()
+            .and_then(|block| block.as_text())
+            .map(|text| text.text.clone())
+            .unwrap_or_default();
+        assert!(rendered.contains("[group G1]"), "{rendered}");
+        Ok(())
+    }
+
+    /// Narrow on purpose. Reassigning by group must not be a way to take a tab
+    /// another agent is actively holding.
+    #[tokio::test]
+    async fn a_tab_another_agent_holds_stays_theirs_even_in_the_callers_group() -> anyhow::Result<()>
+    {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        let other = crate::services::sessions::Session::new(
+            crate::ids::SessionId::new("s2"),
+            crate::identity::ClientIdentity::Ephemeral {
+                slug: "other".to_string(),
+                label: "Cowork".to_string(),
+            },
+            crate::identity::ConversationIdentity::new("other", "bright-beaver".to_string()),
+            "Codex".to_string(),
+            tokio::time::Instant::now(),
+        );
+        call.state.sessions.insert_for_testing(other.clone()).await;
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(other.convo_id().clone(), PageId(9))
+            .await;
+        call.state
+            .sessions
+            .ownership()
+            .set_tab_group_ref(identity.ownership_key.clone(), Some("G1".to_string()))
+            .await;
+        let result = ToolResult::text(
+            "all tabs",
+            Some(json!({
+                "pages": [{ "page": 9, "url": "https://theirs.test", "groupId": "G1" }]
+            })),
+        );
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+        .unwrap_or(result);
+        let ownership = annotated
+            .structured_content
+            .as_ref()
+            .and_then(|value| value.pointer("/pages/0/ownership"))
+            .and_then(Value::as_str)
+            .unwrap_or("missing")
+            .to_string();
+        assert_eq!(ownership, "other-agent");
+        Ok(())
+    }
 
     #[tokio::test]
     async fn annotates_all_tabs_in_three_ownership_buckets_and_prunes_stale_claims()
