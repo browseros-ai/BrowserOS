@@ -5,7 +5,7 @@ use browseros_core::{PageId, pages::NewPageOptions};
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{Value, json};
 
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
@@ -55,6 +55,27 @@ pub fn definition() -> crate::framework::ToolDef {
         Some(super::open_world_annotations()),
         handler,
     )
+}
+
+/// Whether a tab group is currently open. A listing failure answers `true` so
+/// a transient CDP problem never produces a misleading note.
+async fn group_is_open(ctx: &ToolCtx, group_id: &str) -> bool {
+    let Ok(result) = ctx
+        .session
+        .cdp("Browser.getTabGroups", json!({}), None)
+        .await
+    else {
+        return true;
+    };
+    result
+        .get("groups")
+        .and_then(Value::as_array)
+        .map(|groups| {
+            groups
+                .iter()
+                .any(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))
+        })
+        .unwrap_or(true)
 }
 
 fn handler<'a>(
@@ -113,6 +134,19 @@ fn handler<'a>(
                         },
                     )
                     .await?;
+                // A mistyped or half-remembered group id used to be silently
+                // ignored, which produced the very outcome the group argument
+                // exists to avoid: the page continues in the session's own
+                // group while the agent believes it rejoined an earlier one.
+                // Said rather than refused, so a wrong id still opens a page.
+                if let Some(requested) = args.group_id.as_deref()
+                    && !group_is_open(ctx, requested).await
+                {
+                    response.text(format!(
+                        "note: tab group {requested} is not open, so page {} went to your own group instead. List tab groups to find the id you meant.",
+                        page.0
+                    ));
+                }
                 response.text(format!("opened page {}", page.0));
                 // Claw-server hooks key ownership/grouping off this "page" field.
                 response.data(json!({ "page": page.0 }));
