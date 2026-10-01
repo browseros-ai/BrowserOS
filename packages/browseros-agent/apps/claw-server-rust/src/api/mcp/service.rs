@@ -445,15 +445,25 @@ impl ClawMcpService {
                 "BrowserOS neo session is no longer live",
             )]);
         }
-        let cancel = linked_cancel_token(
+        // A terminal cancel (cockpit Stop via the dispatch token, or session teardown via the
+        // child token) discards the request; the per-call request token only ends this wait, so a
+        // client that times out one chunk and re-calls keeps its request. The never-cancelled
+        // placeholder keeps the request token out of the terminal path.
+        let terminal = linked_cancel_token(
             started.session.child_token(),
-            request_ct,
+            CancellationToken::new(),
             dispatch_cancel.clone(),
         );
         let outcome = self
             .state
             .help
-            .wait_chunk(started.session.id(), entry, &cancel, HELP_WAIT_CHUNK)
+            .wait_chunk(
+                started.session.id(),
+                entry,
+                HELP_WAIT_CHUNK,
+                &terminal,
+                &request_ct,
+            )
             .await;
         let result = help_wait_result(entry.request_id(), outcome);
         finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
@@ -1250,6 +1260,12 @@ fn help_wait_result(request_id: &str, outcome: HelpWaitOutcome) -> ToolResult {
         HelpWaitOutcome::Cancelled => ToolResult::text(
             "The human-help wait was stopped. Do not continue this task.",
             Some(json!({ "status": "cancelled", "requestId": request_id })),
+        ),
+        // This wait call was interrupted but the request is still open; if the agent sees this, it
+        // should reattach with await_human_help rather than act on the page.
+        HelpWaitOutcome::Interrupted => ToolResult::text(
+            "The wait call ended before a human responded. Call await_human_help to keep waiting; do nothing else on the page.",
+            Some(json!({ "status": "waiting", "requestId": request_id })),
         ),
         HelpWaitOutcome::TimedOut => ToolResult::text(
             "No human responded in time. Decide whether to ask again with request_human_help or stop.",

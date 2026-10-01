@@ -14,6 +14,7 @@ import type { LiveSessionCardRecord } from './cockpit.helpers'
 const focusCalls: Array<{ browserTabId: number }> = []
 const resolveCalls: Array<{ sessionId: string; note?: string }> = []
 let resolveResult = { resolved: true }
+let focusShouldFail = false
 
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
@@ -41,9 +42,10 @@ mock.module('@/modules/api/focus.hooks', () => ({
     variables: undefined,
     mutate: (
       variables: { browserTabId: number },
-      options?: { onSettled?: () => void },
+      options?: { onSettled?: () => void; onError?: (err: Error) => void },
     ) => {
       focusCalls.push(variables)
+      if (focusShouldFail) options?.onError?.(new Error('tab gone'))
       options?.onSettled?.()
     },
   }),
@@ -176,6 +178,7 @@ beforeEach(async () => {
   focusCalls.length = 0
   resolveCalls.length = 0
   resolveResult = { resolved: true }
+  focusShouldFail = false
   const dom = parseHTML(
     '<!doctype html><html><body><div id="root"></div></body></html>',
   )
@@ -275,6 +278,16 @@ describe('cockpit human-help takeover', () => {
 
     expect(resolveCalls).toHaveLength(1)
     expect(resolveCalls[0]?.sessionId).toBe('session-blocked')
+    expect(container.querySelector('[data-hand-back]')).toBeNull()
+  })
+
+  it('does not open the in-control bar when focusing the tab fails', async () => {
+    focusShouldFail = true
+    await render([session()])
+
+    await click('[data-session-card="session-blocked"] [data-take-over]')
+
+    // The tab is gone, so there is nothing to take over and no Hand back.
     expect(container.querySelector('[data-hand-back]')).toBeNull()
   })
 

@@ -1,8 +1,13 @@
 //! In-memory registry of pending human-help requests, one per session. A blocked agent opens a
 //! request and waits (re-calling the wait tool in bounded chunks); the cockpit surfaces it and a
-//! human hands control back, which resolves the request. Entries are ephemeral: resolved ones are
-//! hidden from the cockpit and reaped, and any entry older than `max_wait` is reaped so a crashed
-//! or non-looping agent cannot leave a stale request behind.
+//! human hands control back, which resolves the request.
+//!
+//! Lifecycle: an entry is removed only when the agent's own wait call consumes a terminal outcome
+//! (resolved, timed out) or a hard cancel (cockpit Stop, session teardown) fires. The cockpit
+//! snapshot is a pure read that hides a resolved or expired entry without removing it, so a poll
+//! between the agent's bounded wait calls can never drop a hand-back note or turn a timeout into a
+//! false resume. Orphans left by a crashed or disconnected agent are swept the next time any
+//! session opens a request, bounding stale memory without a background task.
 
 use crate::ids::SessionId;
 use claw_api::models::{HelpRequest, HelpRequestKind};
@@ -28,9 +33,17 @@ pub struct HelpOpenParams {
 /// The outcome the agent observes after waiting a chunk.
 #[derive(Debug, PartialEq, Eq)]
 pub enum HelpWaitOutcome {
-    Resolved { note: Option<String> },
-    Waiting { elapsed_seconds: i64 },
+    Resolved {
+        note: Option<String>,
+    },
+    Waiting {
+        elapsed_seconds: i64,
+    },
+    /// A hard cancel (cockpit Stop or session teardown): the request is discarded.
     Cancelled,
+    /// This wait call was cancelled by the client (its own timeout or a disconnect). The request
+    /// is preserved so the agent's next wait call reattaches instead of losing the request.
+    Interrupted,
     TimedOut,
 }
 
@@ -85,9 +98,12 @@ impl HelpRegistry {
     }
 
     /// Open a request, or return the existing one for this session so a re-call reattaches without
-    /// resetting the waiting timer.
+    /// resetting the waiting timer. Also sweeps orphaned entries (past the cap, left by a crashed
+    /// or disconnected agent) so stale memory cannot accumulate.
     pub async fn open(&self, session: &SessionId, params: HelpOpenParams) -> Arc<HelpEntry> {
         let mut entries = self.entries.lock().await;
+        let max_wait = self.max_wait;
+        entries.retain(|_, entry| entry.created.elapsed() < max_wait);
         if let Some(existing) = entries.get(session)
             && !existing.resolved.load(Ordering::Acquire)
         {
@@ -125,51 +141,72 @@ impl HelpRegistry {
         }
     }
 
-    async fn remove(&self, session: &SessionId) {
-        self.entries.lock().await.remove(session);
+    /// Remove the entry only if it is still the one this waiter owns, so a stale waiter from an
+    /// already-resolved request cannot delete a newer request opened for the same session.
+    async fn remove_if_current(&self, session: &SessionId, entry: &Arc<HelpEntry>) {
+        let mut entries = self.entries.lock().await;
+        if entries
+            .get(session)
+            .is_some_and(|current| Arc::ptr_eq(current, entry))
+        {
+            entries.remove(session);
+        }
     }
 
-    /// Wait up to `chunk` for this session's request to resolve. Honors cancellation and the
-    /// overall `max_wait` cap, and removes the entry on any terminal outcome.
+    /// The terminal outcome to hand the waiting agent if the request has resolved or outlived the
+    /// cap, removing the entry as it is consumed. None while the request is still live.
+    async fn terminal_state(
+        &self,
+        session: &SessionId,
+        entry: &Arc<HelpEntry>,
+    ) -> Option<HelpWaitOutcome> {
+        if entry.resolved.load(Ordering::Acquire) {
+            let note = entry.take_note();
+            self.remove_if_current(session, entry).await;
+            return Some(HelpWaitOutcome::Resolved { note });
+        }
+        if entry.created.elapsed() >= self.max_wait {
+            self.remove_if_current(session, entry).await;
+            return Some(HelpWaitOutcome::TimedOut);
+        }
+        None
+    }
+
+    /// Wait up to `chunk` for this session's request to resolve. `terminal_cancel` (cockpit Stop or
+    /// session teardown) discards the request; `call_cancel` (this wait call's own cancellation)
+    /// leaves it in place so the agent's next call reattaches.
     pub async fn wait_chunk(
         &self,
         session: &SessionId,
         entry: &Arc<HelpEntry>,
-        cancel: &tokio_util::sync::CancellationToken,
         chunk: Duration,
+        terminal_cancel: &tokio_util::sync::CancellationToken,
+        call_cancel: &tokio_util::sync::CancellationToken,
     ) -> HelpWaitOutcome {
-        if entry.resolved.load(Ordering::Acquire) {
-            let note = entry.take_note();
-            self.remove(session).await;
-            return HelpWaitOutcome::Resolved { note };
+        if let Some(outcome) = self.terminal_state(session, entry).await {
+            return outcome;
         }
+        let waiting = || HelpWaitOutcome::Waiting {
+            elapsed_seconds: entry.created.elapsed().as_secs() as i64,
+        };
         tokio::select! {
             () = entry.notify.notified() => {
-                if entry.resolved.load(Ordering::Acquire) {
-                    let note = entry.take_note();
-                    self.remove(session).await;
-                    HelpWaitOutcome::Resolved { note }
-                } else {
-                    HelpWaitOutcome::Waiting { elapsed_seconds: entry.created.elapsed().as_secs() as i64 }
-                }
+                self.terminal_state(session, entry).await.unwrap_or_else(waiting)
             }
-            () = cancel.cancelled() => {
-                self.remove(session).await;
+            () = terminal_cancel.cancelled() => {
+                self.remove_if_current(session, entry).await;
                 HelpWaitOutcome::Cancelled
             }
+            () = call_cancel.cancelled() => HelpWaitOutcome::Interrupted,
             () = tokio::time::sleep(chunk) => {
-                if entry.created.elapsed() >= self.max_wait {
-                    self.remove(session).await;
-                    HelpWaitOutcome::TimedOut
-                } else {
-                    HelpWaitOutcome::Waiting { elapsed_seconds: entry.created.elapsed().as_secs() as i64 }
-                }
+                self.terminal_state(session, entry).await.unwrap_or_else(waiting)
             }
         }
     }
 
-    /// Build the cockpit wire view for a session, or None when there is nothing to show. Reaps a
-    /// resolved or expired entry so a stale request never lingers in the snapshot.
+    /// Build the cockpit wire view for a session, or None when there is nothing to show. A pure
+    /// read: a resolved or expired entry is hidden but left in place for the agent's own wait call
+    /// to consume, so a poll between wait calls cannot drop a hand-back note or mask a timeout.
     pub async fn snapshot(
         &self,
         session: &SessionId,
@@ -177,10 +214,9 @@ impl HelpRegistry {
         url: Option<String>,
         title: Option<String>,
     ) -> Option<HelpRequest> {
-        let mut entries = self.entries.lock().await;
+        let entries = self.entries.lock().await;
         let entry = entries.get(session)?.clone();
         if entry.resolved.load(Ordering::Acquire) || entry.created.elapsed() >= self.max_wait {
-            entries.remove(session);
             return None;
         }
         let tab = browser_tab_id?;
@@ -221,6 +257,24 @@ mod tests {
         }
     }
 
+    /// Wait a chunk with neither cancel token armed, the common case in tests.
+    async fn wait(
+        registry: &HelpRegistry,
+        session: &SessionId,
+        entry: &Arc<HelpEntry>,
+        chunk: Duration,
+    ) -> HelpWaitOutcome {
+        registry
+            .wait_chunk(
+                session,
+                entry,
+                chunk,
+                &CancellationToken::new(),
+                &CancellationToken::new(),
+            )
+            .await
+    }
+
     #[tokio::test]
     async fn open_reattaches_without_resetting_the_request() {
         let registry = HelpRegistry::new(Duration::from_secs(60));
@@ -241,14 +295,7 @@ mod tests {
                 .resolve(&session, Some("2fa done".to_string()))
                 .await
         );
-        let outcome = registry
-            .wait_chunk(
-                &session,
-                &entry,
-                &CancellationToken::new(),
-                Duration::from_secs(1),
-            )
-            .await;
+        let outcome = wait(&registry, &session, &entry, Duration::from_secs(1)).await;
         assert_eq!(
             outcome,
             HelpWaitOutcome::Resolved {
@@ -263,30 +310,50 @@ mod tests {
         let registry = HelpRegistry::new(Duration::from_secs(60));
         let session = SessionId::new("s1");
         let entry = registry.open(&session, params("req-1")).await;
-        let outcome = registry
-            .wait_chunk(
-                &session,
-                &entry,
-                &CancellationToken::new(),
-                Duration::from_millis(20),
-            )
-            .await;
+        let outcome = wait(&registry, &session, &entry, Duration::from_millis(20)).await;
         assert!(matches!(outcome, HelpWaitOutcome::Waiting { .. }));
         assert!(registry.get(&session).await.is_some());
     }
 
     #[tokio::test]
-    async fn cancel_returns_cancelled_and_clears_the_entry() {
+    async fn terminal_cancel_returns_cancelled_and_clears_the_entry() {
         let registry = HelpRegistry::new(Duration::from_secs(60));
         let session = SessionId::new("s1");
         let entry = registry.open(&session, params("req-1")).await;
-        let cancel = CancellationToken::new();
-        cancel.cancel();
+        let terminal = CancellationToken::new();
+        terminal.cancel();
         let outcome = registry
-            .wait_chunk(&session, &entry, &cancel, Duration::from_secs(1))
+            .wait_chunk(
+                &session,
+                &entry,
+                Duration::from_secs(1),
+                &terminal,
+                &CancellationToken::new(),
+            )
             .await;
         assert_eq!(outcome, HelpWaitOutcome::Cancelled);
         assert!(registry.get(&session).await.is_none());
+    }
+
+    #[tokio::test]
+    async fn per_call_cancel_interrupts_but_keeps_the_request() {
+        let registry = HelpRegistry::new(Duration::from_secs(60));
+        let session = SessionId::new("s1");
+        let entry = registry.open(&session, params("req-1")).await;
+        let call = CancellationToken::new();
+        call.cancel();
+        let outcome = registry
+            .wait_chunk(
+                &session,
+                &entry,
+                Duration::from_secs(1),
+                &CancellationToken::new(),
+                &call,
+            )
+            .await;
+        assert_eq!(outcome, HelpWaitOutcome::Interrupted);
+        // The request survives so the agent's next call reattaches.
+        assert!(registry.get(&session).await.is_some());
     }
 
     #[tokio::test]
@@ -295,20 +362,32 @@ mod tests {
         let session = SessionId::new("s1");
         let entry = registry.open(&session, params("req-1")).await;
         tokio::time::sleep(Duration::from_millis(5)).await;
-        let outcome = registry
-            .wait_chunk(
-                &session,
-                &entry,
-                &CancellationToken::new(),
-                Duration::from_millis(5),
-            )
-            .await;
+        let outcome = wait(&registry, &session, &entry, Duration::from_millis(5)).await;
         assert_eq!(outcome, HelpWaitOutcome::TimedOut);
         assert!(registry.get(&session).await.is_none());
     }
 
     #[tokio::test]
-    async fn snapshot_shows_the_request_and_reaps_when_resolved_or_tabless() {
+    async fn a_stale_waiter_does_not_delete_a_newer_request() {
+        let registry = HelpRegistry::new(Duration::from_secs(60));
+        let session = SessionId::new("s1");
+        let first = registry.open(&session, params("req-1")).await;
+        // First request is resolved and consumed by its waiter, which removes it.
+        registry.resolve(&session, None).await;
+        wait(&registry, &session, &first, Duration::from_secs(1)).await;
+        // A new request opens for the same session.
+        let second = registry.open(&session, params("req-2")).await;
+        assert_eq!(second.request_id(), "req-2");
+        // A late cleanup from the first waiter must not delete the second.
+        registry.remove_if_current(&session, &first).await;
+        let Some(current) = registry.get(&session).await else {
+            panic!("the newer request must survive");
+        };
+        assert_eq!(current.request_id(), "req-2");
+    }
+
+    #[tokio::test]
+    async fn snapshot_shows_then_hides_without_removing_for_the_agent() {
         let registry = HelpRegistry::new(Duration::from_secs(60));
         let session = SessionId::new("s1");
         registry.open(&session, params("req-1")).await;
@@ -320,37 +399,36 @@ mod tests {
         };
         assert_eq!(wire.browser_tab_id, 42);
         assert_eq!(wire.resume_hint.as_deref(), Some("resume at 15"));
-        // No owned tab to take over -> nothing to show.
+        // No owned tab to take over -> nothing to show, entry untouched.
         assert!(
             registry
                 .snapshot(&session, None, None, None)
                 .await
                 .is_none()
         );
-        // Resolved -> hidden and reaped.
-        registry.resolve(&session, None).await;
+        // Resolved -> hidden from the cockpit but kept so the agent's wait consumes the note.
+        registry
+            .resolve(&session, Some("2fa done".to_string()))
+            .await;
         assert!(
             registry
                 .snapshot(&session, Some(42), None, None)
                 .await
                 .is_none()
         );
-        assert!(registry.get(&session).await.is_none());
+        assert!(registry.get(&session).await.is_some());
     }
 
     #[tokio::test]
-    async fn snapshot_reaps_an_entry_past_the_cap_without_any_wait_call() {
+    async fn open_sweeps_orphaned_entries_past_the_cap() {
         let registry = HelpRegistry::new(Duration::from_millis(1));
-        let session = SessionId::new("s1");
-        registry.open(&session, params("req-1")).await;
+        let orphan = SessionId::new("ended");
+        registry.open(&orphan, params("req-1")).await;
         tokio::time::sleep(Duration::from_millis(5)).await;
-        // A crashed or non-looping agent never re-waits; the snapshot still reaps it.
-        assert!(
-            registry
-                .snapshot(&session, Some(42), None, None)
-                .await
-                .is_none()
-        );
-        assert!(registry.get(&session).await.is_none());
+        // A later request from any session is the independent expiry path that clears the orphan.
+        registry
+            .open(&SessionId::new("fresh"), params("req-2"))
+            .await;
+        assert!(registry.get(&orphan).await.is_none());
     }
 }

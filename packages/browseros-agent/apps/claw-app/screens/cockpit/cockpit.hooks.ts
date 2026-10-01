@@ -64,6 +64,12 @@ export function useHelpTakeover(
       {
         onSettled: () => setPendingTakeOverSessionId(undefined),
         onError: (err) => {
+          // The tab is gone (closed between the poll and the click), so there is
+          // nothing to take over: back out of the in-control state rather than
+          // leave a Hand back that could resume an agent nobody reached.
+          setInControlSessionId((current) =>
+            current === sessionId ? null : current,
+          )
           toast.error('Could not bring the agent tab forward')
           // eslint-disable-next-line no-console
           console.warn('focus browser tab failed', { browserTabId, err })
