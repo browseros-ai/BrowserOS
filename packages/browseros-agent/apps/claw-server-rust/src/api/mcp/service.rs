@@ -420,9 +420,13 @@ impl ClawMcpService {
     ) -> CallToolResult {
         match self.state.help.get(started.session.id()).await {
             Some(entry) => self.run_help_wait(started, &entry, request_ct).await,
+            // No entry is the safe-terminal case, not a resume: the request may have
+            // expired and been reaped before this reattach, so reporting "resolved"
+            // could tell the agent a human helped when none did. "timed_out" never
+            // falsely clears a block; the agent decides whether to ask again or stop.
             None => ToolResult::text(
-                "No open human-help request for this session; nothing to wait for. You can continue.",
-                Some(json!({ "status": "resolved" })),
+                "No open human-help request is waiting (it was never opened or has already ended). A human did not hand control back here, so do not assume the block is cleared: decide whether to ask again with request_human_help or stop.",
+                Some(json!({ "status": "timed_out" })),
             )
             .into_call_tool_result(),
         }
@@ -2292,7 +2296,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn await_human_help_without_an_open_request_reports_resolved() -> anyhow::Result<()> {
+    async fn await_human_help_without_an_open_request_reports_timed_out() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
         let started = service
@@ -2304,12 +2308,14 @@ mod tests {
             .call_await_human_help(&started, CancellationToken::new())
             .await;
 
+        // A reaped-then-reattached request must never read as a resume; timed_out is the
+        // safe terminal so the agent does not assume a human cleared the block.
         let Some(structured) = result.structured_content.clone() else {
             panic!("structured content");
         };
         assert_eq!(
             structured.get("status").and_then(Value::as_str),
-            Some("resolved")
+            Some("timed_out")
         );
         Ok(())
     }
