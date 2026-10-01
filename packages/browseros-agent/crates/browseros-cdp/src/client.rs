@@ -164,9 +164,12 @@ impl CdpClient {
         if let Some(handle) = self.inner.keepalive_task.lock().await.take() {
             handle.abort();
         }
-        if let Some(handle) = self.inner.link_task.lock().await.take() {
-            handle.abort();
-        }
+        // The supervisor is asked to stop rather than aborted. Aborting it can land
+        // between a reopen installing its sink and registering its reader, which
+        // leaves a live socket and reader behind with the client marked connected,
+        // and skips the teardown below. It exits cooperatively instead, closing any
+        // socket it opened, so teardown finishes a moment after this returns.
+        self.inner.link_wake.notify_one();
         reject_all_pending(&self.inner, CdpError::NotConnected).await;
     }
 

@@ -265,11 +265,14 @@ impl BrowserService {
                     // retried for as long as it is incomplete. Reseeding only on a
                     // transition left tabs unmapped for the life of a stable link,
                     // and a popup from one of those cannot resolve its opener.
+                    //
+                    // Seed only. The event listener belongs to the epoch and is
+                    // started once by the attach, so retrying through the attaching
+                    // path would subscribe another listener on every pass.
                     if connected
                         && !self.tab_registry.is_ready(epoch)
                         && let Some(session) = self.session().await
-                        && let Err(error) =
-                            self.tab_registry.observe_session(session, epoch).await
+                        && let Err(error) = self.tab_registry.reseed(&session, epoch).await
                     {
                         warn!(epoch, error = %error, "failed to seed tab target map; retrying");
                     }

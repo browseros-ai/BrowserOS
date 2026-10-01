@@ -141,6 +141,16 @@ impl TabRegistry {
         seed_result
     }
 
+    /// Seeds the map without subscribing to events.
+    ///
+    /// [`Self::observe_session`] both subscribes and seeds, and its listener lives
+    /// until the epoch changes, so calling it to retry a failed seed on the same
+    /// epoch leaves one listener per attempt subscribed to the same events. A retry
+    /// wants only the seeding half.
+    pub async fn reseed(&self, session: &BrowserSession, epoch: u64) -> anyhow::Result<()> {
+        self.rebuild_from_session(session, epoch, false).await
+    }
+
     #[must_use]
     pub fn is_ready(&self, epoch: u64) -> bool {
         self.ready_epoch.load(Ordering::SeqCst) == epoch
@@ -673,6 +683,35 @@ mod tests {
         assert_eq!(during_grace.as_deref(), Some("target-e"));
         assert_eq!(after_grace, None);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// The link monitor retries seeding every second while the map is incomplete,
+    /// so the retry has to be free once the map is ready, and must not go through
+    /// `observe_session`: that subscribes an event listener which lives until the
+    /// epoch changes, so one attempt per second would leave one listener per second.
+    #[tokio::test]
+    async fn reseed_repeats_for_free_and_leaves_the_epoch_alone() -> anyhow::Result<()> {
+        let connection = TabListConnection::new();
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let map = map_with_releases(Arc::default());
+
+        // The attach happens once, on the link transition, and owns the listener.
+        map.observe_session(session.clone(), 1).await?;
+        assert!(map.is_ready(1));
+        assert_eq!(connection.list_calls.load(Ordering::SeqCst), 1);
+
+        // Then the timer retries through the seeding half alone.
+        for _ in 0..5 {
+            map.reseed(&session, 1).await?;
+        }
+
+        assert!(map.is_ready(1));
+        assert_eq!(
+            connection.list_calls.load(Ordering::SeqCst),
+            1,
+            "a ready epoch must cost nothing to retry, because this runs on a timer"
+        );
+        Ok(())
     }
 
     #[tokio::test]

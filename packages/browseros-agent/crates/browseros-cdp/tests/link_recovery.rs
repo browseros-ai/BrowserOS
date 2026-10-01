@@ -26,6 +26,11 @@ use tokio::{
 
 /// Serves `/json/version`, pointing the debugger URL at `ws_port`.
 async fn spawn_discovery(ws_port: u16) -> u16 {
+    spawn_discovery_after(ws_port, Duration::ZERO).await
+}
+
+/// Same, but holds each response back, so a reopen can be caught mid-flight.
+async fn spawn_discovery_after(ws_port: u16, delay: Duration) -> u16 {
     let listener = TcpListener::bind("127.0.0.1:0")
         .await
         .unwrap_or_else(|err| panic!("bind discovery: {err}"));
@@ -41,6 +46,9 @@ async fn spawn_discovery(ws_port: u16) -> u16 {
             tokio::spawn(async move {
                 let mut scratch = [0_u8; 1024];
                 let _ = stream.read(&mut scratch).await;
+                if !delay.is_zero() {
+                    sleep(delay).await;
+                }
                 let body = format!(
                     "{{\"webSocketDebuggerUrl\":\"ws://127.0.0.1:{ws_port}/devtools/browser/test\"}}"
                 );
@@ -194,6 +202,50 @@ async fn a_stop_during_a_reopen_stays_stopped() {
             "a stopped client must stay stopped, even if a reopen was in flight"
         );
     }
+}
+
+/// A stop landing while a reopen is genuinely in flight must still leave nothing
+/// running.
+///
+/// Slow discovery puts the supervisor inside `open_socket` when the stop arrives.
+/// The interleaving that actually leaked, a stop landing between the socket being
+/// marked connected and the reopen returning, spans a few instructions and is not
+/// forceable from outside the client, so what this pins is the invariant: after a
+/// stop the client is not connected and nothing reopens. The supervisor exits
+/// cooperatively rather than being aborted, which is what makes that hold for any
+/// interleaving.
+#[tokio::test]
+async fn a_stop_while_a_reopen_is_in_flight_leaves_nothing_connected() {
+    let (ws_port, upgrades) = spawn_websocket(1).await;
+    let discovery_port = spawn_discovery_after(ws_port, Duration::from_millis(150)).await;
+
+    let client = CdpClient::connect(options(discovery_port))
+        .await
+        .unwrap_or_else(|err| panic!("the handshake should succeed: {err}"));
+
+    // The first socket collapses, so the supervisor is inside a slow reopen here.
+    sleep(Duration::from_millis(60)).await;
+    client.disconnect().await;
+
+    // Teardown completes just after disconnect returns, so allow the reopen to
+    // finish and the supervisor to close it.
+    sleep(Duration::from_millis(400)).await;
+    assert!(
+        !client.is_connected(),
+        "a stop must win over a reopen that was already in flight"
+    );
+
+    let settled = upgrades.load(Ordering::SeqCst);
+    sleep(Duration::from_millis(300)).await;
+    assert!(
+        !client.is_connected(),
+        "and it must stay stopped afterwards"
+    );
+    assert_eq!(
+        upgrades.load(Ordering::SeqCst),
+        settled,
+        "no further reopen should be attempted after a stop"
+    );
 }
 
 #[tokio::test]
