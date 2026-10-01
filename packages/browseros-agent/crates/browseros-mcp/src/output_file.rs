@@ -160,6 +160,74 @@ pub async fn ensure_download_dir_inside_home(dir: &Path) -> Result<(), String> {
     ))
 }
 
+/// A fresh empty directory inside `parent`, for a download to land in alone.
+///
+/// A managed download writes straight to the path it is given and replaces
+/// whatever is there, because overriding the behaviour is what skips the
+/// browser's own target determination, and that is the part that renames around
+/// a collision. Giving it an empty directory of its own is what makes the write
+/// safe; the file is moved to its final name afterwards. Inside the destination
+/// so that move is a rename on the same filesystem rather than a copy.
+pub async fn create_download_staging_dir(parent: &Path) -> std::io::Result<PathBuf> {
+    for _attempt in 0..10 {
+        let path = parent.join(format!(".browseros-download-{}", Uuid::new_v4()));
+        match fs::create_dir(&path).await {
+            Ok(()) => {
+                #[cfg(unix)]
+                fs::set_permissions(&path, std::fs::Permissions::from_mode(TOOL_OUTPUT_DIR_MODE))
+                    .await?;
+                return Ok(path);
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(err) => return Err(err),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not create a unique download staging directory",
+    ))
+}
+
+/// A name in `dir` that is free, renaming around a collision the way the browser
+/// would: "report.pdf", then "report (1).pdf", and so on.
+///
+/// The counter goes before the whole extension, so "archive.tar.gz" becomes
+/// "archive (1).tar.gz". That matches what the browser does, which was checked
+/// against it rather than assumed.
+pub async fn free_name_in(dir: &Path, name: &str) -> std::io::Result<String> {
+    if !fs::try_exists(dir.join(name)).await? {
+        return Ok(name.to_string());
+    }
+    let (stem, extension) = split_download_name(name);
+    for counter in 1..10_000 {
+        let candidate = format!("{stem} ({counter}){extension}");
+        if !fs::try_exists(dir.join(&candidate)).await? {
+            return Ok(candidate);
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        format!("no free name for \"{name}\" in {}", dir.display()),
+    ))
+}
+
+/// Splits a download name so a counter can go between the halves.
+///
+/// The extension starts at the first dot of the trailing run of extensions, so
+/// "archive.tar.gz" splits into "archive" and ".tar.gz" and a leading dot stays
+/// part of the stem.
+fn split_download_name(name: &str) -> (String, String) {
+    let trimmed = name.trim_start_matches('.');
+    let leading_dots = name.len() - trimmed.len();
+    match trimmed.find('.') {
+        Some(index) if index > 0 => {
+            let split = leading_dots + index;
+            (name[..split].to_string(), name[split..].to_string())
+        }
+        _ => (name.to_string(), String::new()),
+    }
+}
+
 /// The file names directly inside a directory, for spotting what a download added.
 ///
 /// Partial downloads are skipped so a `.crdownload` seen mid-write is never
@@ -359,6 +427,54 @@ mod tests {
                 "a refused destination must not have been created"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn picks_a_free_name_the_way_the_browser_would() {
+        let dir = std::env::temp_dir().join(format!("free-{}", Uuid::new_v4()));
+        if let Err(err) = fs::create_dir_all(&dir).await {
+            panic!("scratch directory should be creatable: {err}");
+        }
+
+        let first = free_name_in(&dir, "report.pdf").await;
+        assert_eq!(first.unwrap_or_default(), "report.pdf");
+
+        if let Err(err) = fs::write(dir.join("report.pdf"), b"taken").await {
+            panic!("scratch file should be writable: {err}");
+        }
+        let second = free_name_in(&dir, "report.pdf").await;
+        assert_eq!(second.unwrap_or_default(), "report (1).pdf");
+
+        if let Err(err) = fs::write(dir.join("report (1).pdf"), b"taken").await {
+            panic!("scratch file should be writable: {err}");
+        }
+        let third = free_name_in(&dir, "report.pdf").await;
+        assert_eq!(third.unwrap_or_default(), "report (2).pdf");
+
+        let _ = fs::remove_dir_all(&dir).await;
+    }
+
+    #[test]
+    fn keeps_a_compound_extension_whole() {
+        // Checked against the browser: "archive.tar.gz" becomes
+        // "archive (1).tar.gz", not "archive.tar (1).gz".
+        assert_eq!(
+            split_download_name("archive.tar.gz"),
+            ("archive".to_string(), ".tar.gz".to_string())
+        );
+        assert_eq!(
+            split_download_name("report.pdf"),
+            ("report".to_string(), ".pdf".to_string())
+        );
+        assert_eq!(
+            split_download_name("no-extension"),
+            ("no-extension".to_string(), String::new())
+        );
+        // A leading dot belongs to the name, not to an extension.
+        assert_eq!(
+            split_download_name(".bashrc"),
+            (".bashrc".to_string(), String::new())
+        );
     }
 
     #[test]

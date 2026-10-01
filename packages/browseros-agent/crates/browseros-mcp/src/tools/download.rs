@@ -5,8 +5,9 @@ use crate::{
         text_result,
     },
     output_file::{
-        ensure_download_dir_inside_home, get_user_download_dir, prepare_download_dir,
-        read_download_dir_names, record_browser_output_file, validate_download_dir,
+        create_download_staging_dir, ensure_download_dir_inside_home, free_name_in,
+        get_user_download_dir, prepare_download_dir, read_download_dir_names,
+        record_browser_output_file, validate_download_dir,
     },
 };
 use browseros_core::{PageId, Ref, SessionId};
@@ -15,15 +16,16 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
-    path::Path,
+    collections::HashMap,
+    path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
 };
 
 const DESCRIPTION: &str = "\
 Click an element (by ref from the last snapshot) to trigger a file download. \
 Saves to the browser's download folder, so it also appears in the browser's \
-downloads list. Returns the completed file's path on the machine running this \
+downloads list, and an existing file of the same name is renamed around rather \
+than replaced. Returns the completed file's path on the machine running this \
 browser, its name on disk, and its size.";
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -34,7 +36,8 @@ struct DownloadArgs {
     /// Ref of the element that triggers the download, e.g. "e12".
     r#ref: String,
     /// Absolute directory to save into, for an agent that needs the file inside
-    /// its own working directory. Defaults to the browser's download folder.
+    /// its own working directory. Must be inside your home directory.
+    /// Defaults to the browser's download folder.
     dir: Option<String>,
 }
 
@@ -89,21 +92,16 @@ fn handler<'a>(
                 .await
                 .map_err(ToolError::message)?;
         }
-        // Held across the whole override, click and restore.
+        // Held across the override, the click and the restore.
         let page_lock = page_download_lock(&page_id);
         let _page_guard = page_lock.lock().await;
-        // Taken before the click, and inside the lock, so the entry the download
-        // adds can be told apart from what was already there.
-        let before = read_download_dir_names(&download_dir).await?;
+        let staging = create_download_staging_dir(&download_dir).await?;
         let page_session = ctx.session.pages.get_session(page_id.clone()).await?;
-        // Still managed rather than left to the browser's own behaviour: with
-        // "ask where to save each file" turned on, an unmanaged download opens a
-        // save dialog and blocks behind a modal nobody is there to answer.
         page_session
             .session
             .send_value(
                 "Page.setDownloadBehavior",
-                json!({ "behavior": "allow", "downloadPath": download_dir }),
+                json!({ "behavior": "allow", "downloadPath": staging }),
             )
             .await?;
         let capture =
@@ -112,10 +110,13 @@ fn handler<'a>(
             .session
             .send_value("Page.setDownloadBehavior", json!({ "behavior": "default" }))
             .await;
-        let suggested = capture?;
-        let filename = resolve_downloaded_name(&download_dir, &before, &suggested).await?;
-        let path = download_dir.join(&filename);
-        let bytes = tokio::fs::metadata(&path).await?.len();
+        let settled = match capture {
+            Ok(suggested) => settle_download(&staging, &download_dir, &suggested).await,
+            Err(err) => Err(err),
+        };
+        // The staging directory goes either way, so a failure leaves nothing behind.
+        let _ = tokio::fs::remove_dir_all(&staging).await;
+        let (filename, path, bytes) = settled?;
         record_browser_output_file(&ctx.output_files, path.clone()).await;
         Ok(Some(text_result(
             format!(
@@ -134,72 +135,42 @@ fn handler<'a>(
     })
 }
 
-/// The name the download actually landed under.
+/// Moves the staged download into its destination and reports what landed.
 ///
-/// Not the suggested name: sharing a directory with the user's own files means
-/// Chromium's uniquifier is routinely in play, so the file on disk is `name.ext`
-/// or `name (1).ext` and reconstructing the path from the suggestion names
-/// whichever file was already there.
-async fn resolve_downloaded_name(
-    dir: &Path,
-    before: &HashSet<String>,
+/// The staging directory holds exactly one file, so the name is observed rather
+/// than reconstructed from the suggestion, and the destination name is chosen to
+/// be free so an existing file is never replaced.
+async fn settle_download(
+    staging: &Path,
+    destination: &Path,
     suggested: &str,
-) -> ToolExecResult<String> {
-    let after = read_download_dir_names(dir).await?;
-    let added = after
-        .difference(before)
-        .map(String::as_str)
-        .collect::<Vec<_>>();
-    // Every new name this download could plausibly have taken. The suggested
-    // name is not treated as proof on its own: an earlier download of the same
-    // name finishing during this call also appears as new, because a partial
-    // file is skipped by the scan above, and it would have taken the plain name
-    // while this one took the rename.
-    let candidates = added
-        .iter()
-        .filter(|name| **name == suggested || is_uniquified(name, suggested))
-        .collect::<Vec<_>>();
-    if let [name] = candidates.as_slice() {
-        return Ok((**name).to_string());
-    }
-    if candidates.is_empty()
-        && let [name] = added.as_slice()
-    {
-        return Ok((*name).to_string());
-    }
-    // Deliberately an error rather than a guess. Several candidates means
-    // something else wrote here in the same window, and naming the wrong file is
-    // worse than saying the name could not be established.
-    Err(ToolError::message(format!(
-        "Download of \"{suggested}\" completed, but its name in {} could not be established ({} new files, {} of them possible matches)",
-        dir.display(),
-        added.len(),
-        candidates.len()
-    )))
+) -> ToolExecResult<(String, PathBuf, u64)> {
+    let staged = staged_file(staging, suggested).await?;
+    let filename = free_name_in(destination, &staged).await?;
+    let path = destination.join(&filename);
+    tokio::fs::rename(staging.join(&staged), &path).await?;
+    let bytes = tokio::fs::metadata(&path).await?.len();
+    Ok((filename, path, bytes))
 }
 
-/// Whether `name` is Chromium's collision rename of `suggested`, e.g. "a (1).pdf".
+/// The single file the download wrote into its own directory.
 ///
-/// Chromium inserts " (N)" before the extension, and what counts as the
-/// extension is its own rule: "archive.tar.gz" becomes "archive (1).tar.gz", not
-/// "archive.tar (1).gz". Rather than model that, take the counter back out and
-/// see whether the suggested name is what remains.
-fn is_uniquified(name: &str, suggested: &str) -> bool {
-    let Some(open) = name.rfind(" (") else {
-        return false;
-    };
-    let after_open = &name[open + 2..];
-    let Some(close) = after_open.find(')') else {
-        return false;
-    };
-    let counter = &after_open[..close];
-    if counter.is_empty() || !counter.chars().all(|char| char.is_ascii_digit()) {
-        return false;
+/// Partial downloads are skipped so a `.crdownload` seen mid-write is never
+/// mistaken for the finished file.
+async fn staged_file(staging: &Path, suggested: &str) -> ToolExecResult<String> {
+    let names = read_download_dir_names(staging).await?;
+    let mut names = names.into_iter().collect::<Vec<_>>();
+    names.sort_unstable();
+    match names.as_slice() {
+        [only] => Ok(only.clone()),
+        // Nothing, or a click that started more than one download. Either way the
+        // file this call should report cannot be named, and naming the wrong one
+        // is worse than saying so.
+        _ => Err(ToolError::message(format!(
+            "Download of \"{suggested}\" completed, but {} files landed instead of one",
+            names.len()
+        ))),
     }
-    let mut without_counter = String::with_capacity(name.len());
-    without_counter.push_str(&name[..open]);
-    without_counter.push_str(&after_open[close + 1..]);
-    without_counter == suggested
 }
 
 async fn capture_download(
@@ -272,12 +243,6 @@ async fn capture_download(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
-    use std::path::PathBuf;
-
-    fn names(values: &[&str]) -> HashSet<String> {
-        values.iter().map(|value| (*value).to_string()).collect()
-    }
 
     fn scratch_dir() -> PathBuf {
         let dir = std::env::temp_dir().join(format!("browseros-download-{}", uuid::Uuid::new_v4()));
@@ -287,129 +252,110 @@ mod tests {
         dir
     }
 
-    async fn write_file(dir: &Path, name: &str) {
-        if let Err(err) = tokio::fs::write(dir.join(name), b"body").await {
+    async fn write_file(dir: &Path, name: &str, body: &str) {
+        if let Err(err) = tokio::fs::write(dir.join(name), body).await {
             panic!("test file {name} should be writable: {err}");
         }
     }
 
-    async fn names_on_disk(dir: &Path) -> HashSet<String> {
-        read_download_dir_names(dir)
-            .await
-            .unwrap_or_else(|err| panic!("scratch directory should be readable: {err}"))
-    }
-
-    async fn resolve(dir: &Path, before: &HashSet<String>, suggested: &str) -> String {
-        resolve_downloaded_name(dir, before, suggested)
-            .await
-            .unwrap_or_else(|err| panic!("download name should resolve: {err}"))
-    }
-
-    #[test]
-    fn recognises_chromiums_collision_rename() {
-        assert!(is_uniquified("proposal (1).pdf", "proposal.pdf"));
-        assert!(is_uniquified("proposal (12).pdf", "proposal.pdf"));
-        // Verified against the browser: a compound extension stays whole, so the
-        // counter goes before ".tar.gz" rather than before ".gz".
-        assert!(is_uniquified("archive (3).tar.gz", "archive.tar.gz"));
-        assert!(is_uniquified("notes (1)", "notes"));
-        // A suggested name that already contains a parenthesised group.
-        assert!(is_uniquified(
-            "report (final) (1).pdf",
-            "report (final).pdf"
-        ));
-    }
-
-    #[test]
-    fn does_not_mistake_a_different_file_for_a_rename() {
-        assert!(!is_uniquified("proposal.pdf", "proposal.pdf"));
-        assert!(!is_uniquified("other.pdf", "proposal.pdf"));
-        assert!(!is_uniquified("proposal ().pdf", "proposal.pdf"));
-        assert!(!is_uniquified("proposal (x).pdf", "proposal.pdf"));
-        // A real file someone could plausibly have downloaded themselves.
-        assert!(!is_uniquified("proposal v2.pdf", "proposal.pdf"));
-        // Same counter, different extension: not this download.
-        assert!(!is_uniquified("proposal (1).pdf", "proposal.txt"));
+    async fn read_file(path: &Path) -> String {
+        match tokio::fs::read_to_string(path).await {
+            Ok(body) => body,
+            Err(err) => panic!("{} should be readable: {err}", path.display()),
+        }
     }
 
     #[tokio::test]
-    async fn names_the_file_the_download_actually_added() {
-        let dir = scratch_dir();
-        write_file(&dir, "already-here.pdf").await;
-        let before = names(&["already-here.pdf"]);
-        write_file(&dir, "proposal.pdf").await;
+    async fn moves_the_staged_download_into_place() {
+        let destination = scratch_dir();
+        let staging = destination.join("staging");
+        if let Err(err) = tokio::fs::create_dir(&staging).await {
+            panic!("staging directory should be creatable: {err}");
+        }
+        write_file(&staging, "report.pdf", "the download").await;
 
-        assert_eq!(resolve(&dir, &before, "proposal.pdf").await, "proposal.pdf");
+        let (filename, path, bytes) = settle_download(&staging, &destination, "report.pdf")
+            .await
+            .unwrap_or_else(|err| panic!("the staged file should settle: {err}"));
+
+        assert_eq!(filename, "report.pdf");
+        assert_eq!(path, destination.join("report.pdf"));
+        assert_eq!(bytes, "the download".len() as u64);
+        assert_eq!(read_file(&path).await, "the download");
     }
 
     #[tokio::test]
-    async fn follows_the_rename_when_the_name_was_already_taken() {
-        // The case the reconstructed path got wrong: it named the file that was
-        // already there instead of the one just downloaded.
-        let dir = scratch_dir();
-        write_file(&dir, "proposal.pdf").await;
-        let before = names_on_disk(&dir).await;
-        write_file(&dir, "proposal (1).pdf").await;
+    async fn renames_around_an_existing_file_instead_of_replacing_it() {
+        // The whole reason the download goes through a staging directory: writing
+        // straight into the destination replaces what is already there.
+        let destination = scratch_dir();
+        write_file(&destination, "report.pdf", "the user's own file").await;
+        let staging = destination.join("staging");
+        if let Err(err) = tokio::fs::create_dir(&staging).await {
+            panic!("staging directory should be creatable: {err}");
+        }
+        write_file(&staging, "report.pdf", "the download").await;
 
+        let (filename, path, _) = settle_download(&staging, &destination, "report.pdf")
+            .await
+            .unwrap_or_else(|err| panic!("the staged file should settle: {err}"));
+
+        assert_eq!(filename, "report (1).pdf");
+        assert_eq!(read_file(&path).await, "the download");
         assert_eq!(
-            resolve(&dir, &before, "proposal.pdf").await,
-            "proposal (1).pdf"
+            read_file(&destination.join("report.pdf")).await,
+            "the user's own file",
+            "the file that was already there must survive"
         );
     }
 
     #[tokio::test]
+    async fn names_the_single_staged_file() {
+        let staging = scratch_dir();
+        write_file(&staging, "report.pdf", "body").await;
+
+        let name = staged_file(&staging, "report.pdf")
+            .await
+            .unwrap_or_else(|err| panic!("the one staged file should be named: {err}"));
+
+        assert_eq!(name, "report.pdf");
+    }
+
+    #[tokio::test]
     async fn ignores_a_partial_download_still_being_written() {
-        let dir = scratch_dir();
-        let before = names_on_disk(&dir).await;
-        write_file(&dir, "report.pdf.crdownload").await;
-        write_file(&dir, "report.pdf").await;
+        let staging = scratch_dir();
+        write_file(&staging, "report.pdf.crdownload", "partial").await;
+        write_file(&staging, "report.pdf", "done").await;
 
-        assert_eq!(resolve(&dir, &before, "report.pdf").await, "report.pdf");
+        let name = staged_file(&staging, "report.pdf")
+            .await
+            .unwrap_or_else(|err| panic!("the finished file should be named: {err}"));
+
+        assert_eq!(name, "report.pdf");
     }
 
     #[tokio::test]
-    async fn refuses_when_an_earlier_download_of_the_same_name_also_finished() {
-        // A partial file is skipped by the scan, so when it completes during this
-        // call its finished name also looks new. If it took the plain name and
-        // this download took the rename, trusting the suggested name would return
-        // the other download's file.
-        let dir = scratch_dir();
-        write_file(&dir, "report.pdf.crdownload").await;
-        let before = names_on_disk(&dir).await;
-        write_file(&dir, "report.pdf").await;
-        write_file(&dir, "report (1).pdf").await;
+    async fn refuses_when_nothing_was_staged() {
+        let staging = scratch_dir();
 
-        let Err(error) = resolve_downloaded_name(&dir, &before, "report.pdf").await else {
-            panic!("two plausible names cannot identify which file this download wrote");
+        let Err(error) = staged_file(&staging, "report.pdf").await else {
+            panic!("an empty staging directory cannot name a download");
         };
 
-        assert!(error.to_string().contains("could not be established"));
+        assert!(error.to_string().contains("0 files landed"));
     }
 
     #[tokio::test]
-    async fn still_resolves_when_an_unrelated_download_lands_alongside() {
-        // Only one new name could be this download, so the other is irrelevant.
-        let dir = scratch_dir();
-        let before = names_on_disk(&dir).await;
-        write_file(&dir, "report.pdf").await;
-        write_file(&dir, "something-else.zip").await;
+    async fn refuses_when_one_click_staged_several_files() {
+        // Naming one of them would report an artifact the caller did not ask for.
+        let staging = scratch_dir();
+        write_file(&staging, "one.pdf", "a").await;
+        write_file(&staging, "two.pdf", "b").await;
 
-        assert_eq!(resolve(&dir, &before, "report.pdf").await, "report.pdf");
-    }
-
-    #[tokio::test]
-    async fn refuses_to_guess_between_several_new_files() {
-        // Someone downloaded something else in the same window. Naming the wrong
-        // artifact is worse than saying the name could not be established.
-        let dir = scratch_dir();
-        let before = names_on_disk(&dir).await;
-        write_file(&dir, "unrelated-a.pdf").await;
-        write_file(&dir, "unrelated-b.pdf").await;
-
-        let Err(error) = resolve_downloaded_name(&dir, &before, "proposal.pdf").await else {
-            panic!("two unrelated new files cannot identify the download");
+        let Err(error) = staged_file(&staging, "one.pdf").await else {
+            panic!("two staged files cannot identify the download");
         };
 
-        assert!(error.to_string().contains("could not be established"));
+        assert!(error.to_string().contains("2 files landed"));
     }
 }
