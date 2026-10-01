@@ -329,7 +329,6 @@ fn open_socket(inner: Arc<Inner>) -> BoxFuture<'static, Result<(), CdpError>> {
         let (sink, reader) = ws.split();
         *inner.sink.lock().await = Some(sink);
         inner.connected.store(true, Ordering::SeqCst);
-        inner.disconnecting.store(false, Ordering::SeqCst);
         let epoch = inner.epoch.fetch_add(1, Ordering::SeqCst) + 1;
         // Logged at info, and with the outage, because "did it come back" is the
         // only question a disconnect report actually asks.
@@ -544,6 +543,16 @@ async fn mark_connection_lost(inner: Arc<Inner>) {
     inner.link_wake.notify_one();
 }
 
+/// Drops a socket this client should no longer be holding.
+async fn close_socket(inner: &Arc<Inner>) {
+    inner.connected.store(false, Ordering::SeqCst);
+    *inner.sink.lock().await = None;
+    if let Some(handle) = inner.reader_task.lock().await.take() {
+        handle.abort();
+    }
+    reject_all_pending(inner, CdpError::NotConnected).await;
+}
+
 async fn start_link_supervisor(inner: Arc<Inner>) {
     let mut guard = inner.link_task.lock().await;
     if guard.is_some() {
@@ -584,7 +593,13 @@ async fn link_supervisor(inner: Arc<Inner>) {
             continue;
         }
         match open_socket(inner.clone()).await {
-            Ok(()) => consecutive_failures = 0,
+            Ok(()) => {
+                consecutive_failures = 0;
+                if inner.disconnecting.load(Ordering::SeqCst) {
+                    close_socket(&inner).await;
+                    return;
+                }
+            }
             Err(err) => {
                 consecutive_failures = consecutive_failures.saturating_add(1);
                 warn!(

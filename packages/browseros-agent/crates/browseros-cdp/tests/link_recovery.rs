@@ -170,6 +170,32 @@ async fn keeps_retrying_and_reports_the_outage_while_the_link_stays_down() {
     client.disconnect().await;
 }
 
+/// A stop that lands while the supervisor is reopening has to win.
+///
+/// Reopening used to clear the stop flag as part of installing the socket, so a
+/// disconnect arriving in that window was overwritten and the client quietly came
+/// back up. The ticket is explicit that recovery must not undo an intentional stop.
+#[tokio::test]
+async fn a_stop_during_a_reopen_stays_stopped() {
+    // The first socket collapses, so a reopen is in flight around the disconnect.
+    let (ws_port, _upgrades) = spawn_websocket(1).await;
+    let discovery_port = spawn_discovery(ws_port).await;
+
+    let client = CdpClient::connect(options(discovery_port))
+        .await
+        .unwrap_or_else(|err| panic!("the handshake should succeed: {err}"));
+    client.disconnect().await;
+
+    // Long enough for several reopen passes at a 20ms delay.
+    for _ in 0..30 {
+        sleep(Duration::from_millis(20)).await;
+        assert!(
+            !client.is_connected(),
+            "a stopped client must stay stopped, even if a reopen was in flight"
+        );
+    }
+}
+
 #[tokio::test]
 async fn stops_retrying_once_disconnected_on_purpose() {
     let (ws_port, upgrades) = spawn_websocket(usize::MAX).await;
