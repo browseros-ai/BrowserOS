@@ -11,7 +11,7 @@ const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
 open a new page in the background (snapshot attached), or close one. \
 Use the returned page id with snapshot/act/navigate. \
-action=\"list\" also reports the tab group id of each of your own tabs. Remember it: \
+action=\"list\" reports the tab group id of every page. Remember yours: \
 if a later call lands in a new session, which happens whenever the connection is \
 remade, pass it as groupId on action=\"new\" to carry on in the same group instead of \
 starting a second one for the same task.";
@@ -78,6 +78,9 @@ fn handler<'a>(
                             "page": page.page_id.0,
                             "url": page.url,
                             "title": page.title,
+                            // The group is how an agent names the work it is
+                            // continuing, so it has to survive into the result.
+                            "groupId": page.group_id,
                         })).collect::<Vec<_>>()
                     })),
                 )

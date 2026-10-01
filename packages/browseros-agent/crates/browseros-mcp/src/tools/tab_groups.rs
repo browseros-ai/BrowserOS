@@ -11,9 +11,10 @@ use serde_json::{Value, json};
 const DESCRIPTION: &str = "\
 Manage tab groups: list groups, group pages, update a group (title/color/collapsed), \
 ungroup pages, or close a group. Page ids come from the tabs tool. \
-To resume earlier work after a reconnect, pass the remembered groupId with \
-action=\"create\" to put pages back into that group; the pages already in it \
-then read as yours again.";
+Passing an existing groupId with action=\"create\" moves those pages into that \
+group, nothing more. To resume earlier work after a reconnect, pass the \
+remembered group id as groupId on tabs action=\"new\" instead: that reclaims the \
+group and its tabs.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
