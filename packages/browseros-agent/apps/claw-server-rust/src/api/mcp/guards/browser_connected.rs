@@ -12,7 +12,7 @@ pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {
         if call.browser_session.is_some() {
             return None;
         }
-        let down_for = call.state.browser.link_down_for().await;
+        let down_for = call.state.browser.link_status().await.down_for;
         warn!(
             tool = call.tool().name,
             session_id = %call.session_id,
@@ -45,19 +45,23 @@ mod tests {
             .unwrap_or_default()
     }
 
-    /// With no link ever established there is nothing to reconnect, so the advice
-    /// to start the browser is correct. The reconnecting wording is what must not
-    /// appear here.
+    /// Nothing has connected yet, so the browser may genuinely not be running and
+    /// mentioning that is fair. The server is still retrying either way, so the
+    /// advice has to lead with retrying rather than with relaunching.
     #[tokio::test]
-    async fn a_browser_that_was_never_there_is_told_to_start() -> anyhow::Result<()> {
+    async fn a_link_that_never_connected_says_retry_and_may_mention_starting() -> anyhow::Result<()>
+    {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let result = guard(&call)
             .await
             .unwrap_or_else(|| ToolResult::error("the guard must reject without a session"));
 
         let text = text_of(&result);
-        assert!(text.contains("not running or paired"), "{text}");
-        assert!(!text.contains("reconnecting"), "{text}");
+        assert!(text.contains("still retrying"), "{text}");
+        assert!(text.contains("retry this tool"), "{text}");
+        // The old wording asserted the browser was not running as a statement of
+        // fact. The server cannot know that, so it must stay conditional.
+        assert!(!text.contains("is not running or paired"), "{text}");
         Ok(())
     }
 }

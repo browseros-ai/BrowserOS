@@ -69,7 +69,7 @@ const ERROR_CLASSES: Array<[string, RegExp]> = [
     // Two wordings on purpose: a link the server is reconnecting and a browser
     // that is not running need different advice, and both land in this class.
     'browser-down',
-    /(browser session not connected.*start BrowserClaw|cdp not connected|not running or paired|browser link lost .* reconnecting)/is,
+    /(browser session not connected.*start BrowserClaw|cdp not connected|not running or paired|browser link (lost .* |is down and ).*reconnecting|no link to the browser yet)/is,
   ],
   ['scheme-refused', /navigate refuses .* URLs; only http\(s\) is allowed/i],
 ]

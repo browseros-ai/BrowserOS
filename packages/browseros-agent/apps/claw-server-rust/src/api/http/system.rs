@@ -36,15 +36,16 @@ pub(super) async fn ready(State(state): State<AppState>) -> (StatusCode, Json<He
 }
 
 async fn health_report(state: &AppState) -> HealthResponse {
-    let link = state.browser.state();
+    // `connected` and `downForMs` must come from the same read. The published
+    // connection state is refreshed by a one second poll, so pairing it with the
+    // client's own answer could report a connected link alongside an outage.
+    let link = state.browser.link_status().await;
     let browser = BrowserLink {
         connected: link.connected,
-        down_for_ms: state
-            .browser
-            .link_down_for()
-            .await
+        down_for_ms: link
+            .down_for
             .map(|down| i64::try_from(down.as_millis()).unwrap_or(i64::MAX)),
-        last_error: link.last_error,
+        last_error: state.browser.state().last_error,
     };
     HealthResponse {
         browser: Some(Box::new(browser)),

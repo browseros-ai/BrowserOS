@@ -491,19 +491,25 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
 
 /// Why the browser is unreachable, in terms the caller can act on.
 ///
-/// A link the server is already reconnecting and a browser that was never there
-/// need opposite advice, and only the second one is a reason to launch anything.
+/// The server is always retrying, so every case advises retrying rather than
+/// relaunching. Only the case where no link was ever established mentions starting
+/// the browser, because that is the only one where it might not be running.
 /// Telling an agent to start a browser that is already running is what turns a
 /// transient loss into the user quitting the app.
 pub(super) async fn browser_unavailable_message(state: &AppState) -> String {
-    match state.browser.link_down_for().await {
-        Some(down_for) => format!(
+    let link = state.browser.link_status().await;
+    if let Some(down_for) = link.down_for {
+        return format!(
             "browser link lost {}s ago and the server is reconnecting; BrowserOS neo is running, so wait a moment and retry this tool. Do not relaunch it and do not fall back to another browser tool.",
             down_for.as_secs()
-        ),
-        None => "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserOS neo and check the cockpit connection status; do not fall back to another browser tool."
-            .to_string(),
+        );
     }
+    if link.ever_connected {
+        return "browser link is down and the server is reconnecting; BrowserOS neo was reachable a moment ago, so wait and retry this tool. Do not relaunch it and do not fall back to another browser tool."
+            .to_string();
+    }
+    "no link to the browser yet and the server is still retrying; wait a few seconds and retry this tool. If BrowserOS neo is not running, tell the user to start it. Do not fall back to another browser tool."
+        .to_string()
 }
 
 pub(super) fn operator_cancellation_result() -> ToolResult {

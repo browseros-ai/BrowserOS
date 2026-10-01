@@ -22,6 +22,22 @@ pub struct BrowserConnectionState {
     pub last_error: Option<String>,
 }
 
+/// The link as the client sees it right now.
+///
+/// Separate from [`BrowserConnectionState`], which is refreshed by a one second
+/// poll. Mixing the two lets a caller report a connected link whose socket is
+/// already down, so anything deciding whether tools will work reads this instead.
+#[derive(Debug, Clone, Copy)]
+pub struct BrowserLinkStatus {
+    pub connected: bool,
+    /// How long the link has been down. `None` when up, and also before the first
+    /// connection ever succeeds.
+    pub down_for: Option<Duration>,
+    /// Whether a link was ever established in this process. Distinguishes "lost a
+    /// working link" from "never reached the browser", which need different advice.
+    pub ever_connected: bool,
+}
+
 pub struct BrowserService {
     cdp_port: u16,
     ownership: Arc<PageOwnership>,
@@ -80,17 +96,27 @@ impl BrowserService {
             .filter(|session| session.is_connected())
     }
 
-    /// How long the link to the browser has been down, or `None` while it is up.
+    /// The link as the client sees it right now, not as the one second poll last
+    /// published it.
     ///
-    /// Published so callers can distinguish a link the server is already
-    /// reconnecting from a browser that is not running. Those need different
-    /// advice, and conflating them is what sends users to relaunch the app.
-    pub async fn link_down_for(&self) -> Option<Duration> {
-        self.client
-            .read()
-            .await
-            .as_ref()
-            .and_then(CdpClient::down_for)
+    /// Callers deciding whether browser tools will work, or what to tell an agent
+    /// that cannot run one, need every field to come from the same read.
+    pub async fn link_status(&self) -> BrowserLinkStatus {
+        let epoch = self.state_tx.borrow().epoch;
+        match self.client.read().await.as_ref() {
+            Some(client) => BrowserLinkStatus {
+                connected: client.is_connected(),
+                down_for: client.down_for(),
+                ever_connected: epoch > 0,
+            },
+            // No client at all: either the first connection has not succeeded yet,
+            // or the service was stopped. The reattach loop is still retrying.
+            None => BrowserLinkStatus {
+                connected: false,
+                down_for: None,
+                ever_connected: epoch > 0,
+            },
+        }
     }
 
     pub async fn wait_for_initial_attempt(&self) {
@@ -107,6 +133,7 @@ impl BrowserService {
         let opts = self.connect_options();
         let client = CdpClient::connect(opts).await?;
         *self.session.write().await = Some(self.browser_session(client.clone()).await);
+        *self.client.write().await = Some(client.clone());
         self.state_tx.send_replace(BrowserConnectionState {
             connected: true,
             epoch: client.epoch(),
@@ -118,6 +145,13 @@ impl BrowserService {
     #[doc(hidden)]
     pub async fn set_session_for_testing(&self, session: Arc<BrowserSession>) {
         *self.session.write().await = Some(session);
+    }
+
+    /// Publishes a connection snapshot the way the one second poll does, so the
+    /// gap between the snapshot and the live link can be exercised.
+    #[doc(hidden)]
+    pub fn publish_state_for_testing(&self, state: BrowserConnectionState) {
+        self.state_tx.send_replace(state);
     }
 
     pub fn stop(&self) {
@@ -227,13 +261,19 @@ impl BrowserService {
                 () = tokio::time::sleep(Duration::from_secs(1)) => {
                     let connected = client.is_connected();
                     let epoch = client.epoch();
+                    // Level driven, like the link itself: an incomplete tab map is
+                    // retried for as long as it is incomplete. Reseeding only on a
+                    // transition left tabs unmapped for the life of a stable link,
+                    // and a popup from one of those cannot resolve its opener.
+                    if connected
+                        && !self.tab_registry.is_ready(epoch)
+                        && let Some(session) = self.session().await
+                        && let Err(error) =
+                            self.tab_registry.observe_session(session, epoch).await
+                    {
+                        warn!(epoch, error = %error, "failed to seed tab target map; retrying");
+                    }
                     if connected != last_connected || epoch != last_epoch {
-                        if connected
-                            && let Some(session) = self.session().await
-                            && let Err(error) = self.tab_registry.observe_session(session, epoch).await
-                        {
-                            warn!(epoch, error = %error, "failed to seed tab target map after reconnect");
-                        }
                         match (connected, client.down_for()) {
                             (true, _) => info!(epoch, "browser link is up"),
                             (false, Some(down_for)) => warn!(
@@ -341,6 +381,46 @@ mod tests {
             BrowserService::new(0, sessions.ownership(), TabRegistry::new(session_tabs)),
             root,
         ))
+    }
+
+    /// The published snapshot is refreshed by a one second poll, so between a link
+    /// dropping and the next poll it still claims the link is up. Readiness and the
+    /// tool error read the live link instead, and this pins that they do.
+    #[tokio::test]
+    async fn link_status_ignores_a_stale_connected_snapshot() -> anyhow::Result<()> {
+        let (service, _root) = service().await?;
+        service.publish_state_for_testing(BrowserConnectionState {
+            connected: true,
+            epoch: 7,
+            last_error: None,
+        });
+
+        let link = service.link_status().await;
+
+        assert!(
+            !link.connected,
+            "a snapshot cannot make a link with no client look connected"
+        );
+        assert!(service.state().connected, "the snapshot is still stale");
+        assert!(
+            link.ever_connected,
+            "a non-zero epoch means a link existed once, so the advice is reconnect"
+        );
+        Ok(())
+    }
+
+    /// Before anything has ever connected the epoch is zero, which is the one case
+    /// where the browser might genuinely not be running.
+    #[tokio::test]
+    async fn link_status_reports_never_connected_before_the_first_link() -> anyhow::Result<()> {
+        let (service, _root) = service().await?;
+
+        let link = service.link_status().await;
+
+        assert!(!link.connected);
+        assert!(!link.ever_connected);
+        assert!(link.down_for.is_none());
+        Ok(())
     }
 
     #[tokio::test]
