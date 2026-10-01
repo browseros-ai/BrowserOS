@@ -11,11 +11,13 @@ const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
 open a new page in the background (snapshot attached), or close one. \
 Use the returned page id with snapshot/act/navigate. \
-action=\"list\" reports the tab group id of every page. Remember yours: \
-if a later call lands in a new session, which happens whenever the connection is \
-remade, pass it as groupId on action=\"new\": your pages keep going to that group \
-instead of a second one being started for the same task, and the tabs already in \
-it read as yours again.";
+action=\"list\" reports the tab group id of every grouped page. Record yours on \
+your first list of a task, before you need it. Ownership is per connection: every \
+remade connection starts a new session and loses it, so on the first \
+action=\"new\" after each one, pass the recorded id as groupId. Your pages then \
+keep going to that group instead of a second one being started for the same task, \
+and the tabs already in it read as yours again. Only action=\"new\" reclaims; \
+groupId is ignored on the other actions.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -142,8 +144,11 @@ fn handler<'a>(
                 if let Some(requested) = args.group_id.as_deref()
                     && !group_is_open(ctx, requested).await
                 {
+                    // Grouping runs detached so it cannot delay this response,
+                    // so the note says what was NOT done rather than asserting
+                    // a placement that has not happened yet.
                     response.text(format!(
-                        "note: tab group {requested} is not open, so page {} went to your own group instead. List tab groups to find the id you meant.",
+                        "note: tab group {requested} is not open, so page {} was not added to it and will go to your own group. List tab groups to find the id you meant.",
                         page.0
                     ));
                 }
