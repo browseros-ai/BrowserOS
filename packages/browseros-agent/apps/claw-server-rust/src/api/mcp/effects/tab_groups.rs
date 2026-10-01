@@ -139,6 +139,7 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         .map(str::trim)
         .filter(|group| !group.is_empty())
         .map(str::to_string);
+    let named_requested = named_group.is_some();
     if let Some(requested) = named_group
         && let Some(pages) =
             group_pages_if_open(browser, &requested, call.output_files.clone()).await
@@ -158,6 +159,23 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
                     .await;
             }
         }
+        ensure_agent_tab_group_unlocked(
+            &call,
+            tab_groups,
+            browser,
+            &ownership,
+            &operation_cancel,
+            page_id,
+        )
+        .await;
+        return;
+    }
+    // A named group that is not open falls through as though none had been
+    // named, straight to the session's own group. Letting it reach the
+    // reconciliation below cleared the session's working reference, because the
+    // page had landed outside it, and a second group with the same title was
+    // then minted for one task.
+    if named_requested {
         ensure_agent_tab_group_unlocked(
             &call,
             tab_groups,
@@ -1322,6 +1340,11 @@ mod tests {
         )
         .await?;
         call.browser_session = Some(browser);
+        // The live server sets this from the session's group on every call. A
+        // fixture that leaves it None cannot reach the reconciliation that this
+        // guards, which is why an earlier version of this test passed with the
+        // guard removed.
+        call.default_tab_group_id = Some("group-live".to_string());
         let key = call
             .identity
             .as_ref()
@@ -1342,8 +1365,13 @@ mod tests {
         );
         assert!(
             recorder.group_members("group-live").contains(&102),
-            "and the page is grouped: {:?}",
+            "and the page joins the session's own group rather than a second one: {:?}",
             recorder.group_members("group-live")
+        );
+        assert_eq!(
+            recorder.create_count(),
+            0,
+            "no second group is minted for a task that already has one"
         );
         Ok(())
     }
