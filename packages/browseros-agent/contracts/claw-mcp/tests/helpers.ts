@@ -66,8 +66,10 @@ const ERROR_CLASSES: Array<[string, RegExp]> = [
   ['gone-element', /not found in dom.*take a new snapshot/i],
   ['not-owned', /is (not )?owned by .*tabs new/i],
   [
+    // Two wordings on purpose: a link the server is reconnecting and a browser
+    // that is not running need different advice, and both land in this class.
     'browser-down',
-    /(browser session not connected.*start BrowserClaw|cdp not connected|not running or paired)/is,
+    /(browser session not connected.*start BrowserClaw|cdp not connected|not running or paired|browser link lost .* reconnecting)/is,
   ],
   ['scheme-refused', /navigate refuses .* URLs; only http\(s\) is allowed/i],
 ]

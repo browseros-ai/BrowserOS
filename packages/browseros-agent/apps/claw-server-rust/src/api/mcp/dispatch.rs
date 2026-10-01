@@ -469,9 +469,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 Err(error) => ToolResult::error(format!("{} failed: {error}", call.tool().name)),
             }
         }
-        None => ToolResult::error(
-            "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserOS neo and check the cockpit connection status; do not fall back to another browser tool.",
-        ),
+        None => ToolResult::error(browser_unavailable_message(&call.state).await),
     };
     let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
     if call.dispatch_cancel.is_cancelled() {
@@ -489,6 +487,23 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
         cancelled: false,
         duration_ms,
     })
+}
+
+/// Why the browser is unreachable, in terms the caller can act on.
+///
+/// A link the server is already reconnecting and a browser that was never there
+/// need opposite advice, and only the second one is a reason to launch anything.
+/// Telling an agent to start a browser that is already running is what turns a
+/// transient loss into the user quitting the app.
+pub(super) async fn browser_unavailable_message(state: &AppState) -> String {
+    match state.browser.link_down_for().await {
+        Some(down_for) => format!(
+            "browser link lost {}s ago and the server is reconnecting; BrowserOS neo is running, so wait a moment and retry this tool. Do not relaunch it and do not fall back to another browser tool.",
+            down_for.as_secs()
+        ),
+        None => "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserOS neo and check the cockpit connection status; do not fall back to another browser tool."
+            .to_string(),
+    }
 }
 
 pub(super) fn operator_cancellation_result() -> ToolResult {
