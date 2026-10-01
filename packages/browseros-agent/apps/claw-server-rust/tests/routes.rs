@@ -528,7 +528,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
                 },
                 "session": {
                     "type": "string",
-                    "description": "Opaque session handle for this browser session. The server returns it in every tool result's `_meta` under the key `com.browseros.neo/session`; read it from there and pass it back as this `session` argument on every later call to keep the same browser session and its tab ownership. Omit it on your first call, and again if the server tells you this session was stopped or is no longer active; resending a dead handle will not revive it."
+                    "description": claw_server_rust::api::mcp::SESSION_ARG_DESCRIPTION
                 }
             },
             "required": ["name"]
