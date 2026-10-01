@@ -147,11 +147,11 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         ownership
             .set_tab_group_ref(identity.ownership_key.clone(), Some(requested))
             .await;
-        let mine = same_client_convos(&call.state, identity).await;
+        let held_by_others = live_convos_of_other_clients(&call.state, identity).await;
         for page in pages {
             let claimable = match ownership.owner_of_page(&PageId(page)).await {
                 None => true,
-                Some(owner) => mine.contains(&owner),
+                Some(owner) => !held_by_others.contains(&owner),
             };
             if claimable {
                 ownership
@@ -211,11 +211,17 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     .await;
 }
 
-/// Conversations belonging to the same client as the caller, the caller
-/// included. A reconnect gives one client several conversations over time, and
-/// the earlier ones keep holding the tabs, so this is how a session recognises
-/// its own previous self.
-async fn same_client_convos(
+/// Conversations of OTHER clients that are currently live. The only claims a
+/// reclaim leaves alone.
+///
+/// Stated as the exclusion rather than as "my own conversations" on purpose. A
+/// session that disconnects or idles out is removed from the live set while its
+/// claims survive until the retained window is reaped, so listing the caller's
+/// own conversations would miss exactly the case a reconnect is: the previous
+/// session is gone from the snapshot but still holds the tabs. Inverting it also
+/// covers an orphaned claim from any dead session, which no live caller is using
+/// and which would otherwise sit unreclaimable until reaping.
+async fn live_convos_of_other_clients(
     state: &crate::AppState,
     identity: &crate::api::mcp::dispatch::ToolIdentity,
 ) -> std::collections::BTreeSet<ConvoId> {
@@ -225,9 +231,8 @@ async fn same_client_convos(
         .snapshot()
         .await
         .into_iter()
-        .filter(|session| session.agent().slug() == slug)
+        .filter(|session| session.agent().slug() != slug)
         .map(|session| session.convo_id().clone())
-        .chain(std::iter::once(identity.ownership_key.clone()))
         .collect()
 }
 
@@ -1473,8 +1478,11 @@ mod tests {
         Ok(())
     }
 
-    /// Claiming skips a page a session of a DIFFERENT client holds. Not a
-    /// refusal of this caller, just not relabelling someone else's work.
+    /// Claiming skips a page a LIVE session of a different client holds. Not a
+    /// refusal of this caller, just not relabelling someone else's work while
+    /// they are still using it. The other session has to be live in the
+    /// snapshot for this to mean anything, since a bare claim with no session
+    /// behind it is the orphan case below.
     #[tokio::test]
     async fn a_page_another_client_holds_is_left_alone() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
@@ -1486,8 +1494,22 @@ mod tests {
         )
         .await?;
         call.browser_session = Some(browser);
+        let other_client = Session::new(
+            AppSessionId::new("other-client"),
+            ClientIdentity::Ephemeral {
+                slug: "cowork".to_string(),
+                label: "Cowork".to_string(),
+            },
+            ConversationIdentity::new("cowork", "busy-badger".to_string()),
+            "Cowork".to_string(),
+            tokio::time::Instant::now(),
+        );
+        call.state
+            .sessions
+            .insert_for_testing(other_client.clone())
+            .await;
         let ownership = call.state.sessions.ownership();
-        let other = ConvoId::new("codex-other-session");
+        let other = other_client.convo_id().clone();
         ownership.claim_page(other.clone(), PageId(1)).await;
 
         run_tab_group_work(call.clone(), Some(2)).await;
@@ -1495,7 +1517,42 @@ mod tests {
         assert_eq!(
             ownership.owner_of_page(&PageId(1)).await.as_ref(),
             Some(&other),
-            "the other session keeps its page"
+            "the live session of the other client keeps its page"
+        );
+        Ok(())
+    }
+
+    /// A claim whose session is gone belongs to nobody. Leaving it in place
+    /// would make the page unreclaimable by anyone until reaping runs, so the
+    /// reclaim takes it.
+    #[tokio::test]
+    async fn a_page_held_by_a_claim_with_no_live_session_is_reclaimed() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-orphan", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-orphan" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let key = call
+            .identity
+            .as_ref()
+            .unwrap_or_else(|| unreachable!())
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .claim_page(ConvoId::new("cowork-long-gone"), PageId(1))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&key),
+            "nobody live holds it, so the reclaim takes it"
         );
         Ok(())
     }
