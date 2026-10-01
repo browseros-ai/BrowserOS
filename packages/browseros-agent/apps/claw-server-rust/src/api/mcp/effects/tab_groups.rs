@@ -1,7 +1,7 @@
 use crate::{
     api::mcp::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, result_page_id},
-        naming::desired_group_title,
+        naming::{client_prefix_from_slug, desired_group_title},
         timeouts::TAB_GROUP_OPERATION,
     },
     ids::ConvoId,
@@ -37,11 +37,114 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         } else {
             None
         };
+        // Computed before the group work is spawned, because that work creates this
+        // session's own group and the listing would then report it as a candidate
+        // the agent should consider reusing.
+        let notice = own_group_candidates_notice(&context).await;
         // Detach browser-group synchronization so cosmetic/durable grouping cannot
         // delay the tool response.
         drop(spawn_tab_group_work(context.call.clone(), page_id));
-        Ok(None)
+        Ok(notice.map(|notice| append_notice(context.result, notice)))
     })
+}
+
+/// Names the open groups already titled for this client, on the one call that is
+/// about to start another one.
+///
+/// The instructions and the tool descriptions both tell an agent to reuse its
+/// group, and a live client skipped them anyway and opened a duplicate for a task
+/// it already had a group for. Those texts are read before the work starts and
+/// ask the agent to carry an id across the interruption that just made it forget;
+/// this arrives in the result of the call that makes the mistake, with the ids in
+/// hand, so recovering needs no memory of the earlier session at all.
+///
+/// Only a note. Nothing is refused and nothing is reassigned: the agent asked for
+/// a new page and gets one, in a new group, exactly as before.
+async fn own_group_candidates_notice(context: &ToolEffectContext<'_>) -> Option<String> {
+    if !context.call.flags.new_page {
+        return None;
+    }
+    // A session that already has a group is mid-task, not reconnecting, and one
+    // that named a group is already doing the thing this note would ask for.
+    if context.call.default_tab_group_id.is_some() {
+        return None;
+    }
+    if context
+        .call
+        .raw_args
+        .get("groupId")
+        .and_then(Value::as_str)
+        .is_some_and(|group| !group.trim().is_empty())
+    {
+        return None;
+    }
+    let identity = context.call.identity.as_ref()?;
+    let browser = context.call.browser_session.as_ref()?;
+    // The title is `{prefix}/{label}`, so the separator terminates the prefix and
+    // this match cannot run into a longer client name the way a bare prefix would.
+    let prefix = format!("{}/", client_prefix_from_slug(identity.agent.slug()));
+    let candidates = open_groups(browser, context.call.output_files.clone())
+        .await?
+        .into_iter()
+        .filter(|(_, title)| title.starts_with(&prefix))
+        .map(|(group_id, title)| format!("{title} (id {group_id})"))
+        .collect::<Vec<_>>();
+    if candidates.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "note: a new tab group is being started for this session. These open groups are already \
+         named for you, so they are tasks of yours from an earlier connection: {}. If you are \
+         continuing one of them, pass its id as groupId on tabs action=\"new\" and your pages go \
+         there instead, with the tabs already in it reading as yours again.",
+        candidates.join("; ")
+    ))
+}
+
+/// Every open group as `(id, title)`, or `None` when the listing cannot be read.
+///
+/// Silent on failure on purpose: a note that names no groups, or invents the
+/// absence of them, is worse than no note.
+async fn open_groups(
+    browser: &Arc<BrowserSession>,
+    output_files: OutputFileAccess,
+) -> Option<Vec<(String, String)>> {
+    let result = dispatch_tab_groups(
+        cached_tab_groups_tool(),
+        browser,
+        CancellationToken::new(),
+        output_files,
+        json!({ "action": "list" }),
+    )
+    .await
+    .ok()?;
+    Some(
+        result
+            .structured_content
+            .as_ref()?
+            .get("groups")?
+            .as_array()?
+            .iter()
+            .filter_map(|group| {
+                Some((
+                    group.get("groupId").and_then(Value::as_str)?.to_string(),
+                    group
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                ))
+            })
+            .collect(),
+    )
+}
+
+/// Adds the note as an extra text block, leaving the original content untouched so
+/// a caller parsing the first block is unaffected.
+fn append_notice(result: &ToolResult, notice: String) -> ToolResult {
+    let mut annotated = result.clone();
+    annotated.content.push(ContentBlock::text(notice));
+    annotated
 }
 
 fn spawn_tab_group_work(call: ToolCall, page_id: Option<u32>) -> JoinHandle<()> {
@@ -688,6 +791,7 @@ mod tests {
         sender: broadcast::Sender<CdpEvent>,
         calls: StdMutex<Vec<(String, Value)>>,
         members: StdMutex<HashMap<String, BTreeSet<i64>>>,
+        titles: StdMutex<HashMap<String, String>>,
         block_create: AtomicBool,
         fail_group_add: AtomicBool,
         fail_title_updates: AtomicBool,
@@ -708,6 +812,7 @@ mod tests {
                 sender,
                 calls: StdMutex::new(Vec::new()),
                 members: StdMutex::new(HashMap::new()),
+                titles: StdMutex::new(HashMap::new()),
                 block_create: AtomicBool::new(false),
                 fail_group_add: AtomicBool::new(false),
                 fail_title_updates: AtomicBool::new(false),
@@ -741,7 +846,18 @@ mod tests {
                 "group": {
                     "groupId": group_id,
                     "windowId": 1,
-                    "title": params.get("title").and_then(Value::as_str).unwrap_or("codex"),
+                    "title": params
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .map(str::to_string)
+                        .or_else(|| {
+                            self.titles
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .get(group_id)
+                                .cloned()
+                        })
+                        .unwrap_or_else(|| "codex".to_string()),
                     "color": params.get("color").and_then(Value::as_str).unwrap_or("blue"),
                     "collapsed": params.get("collapsed").and_then(Value::as_bool).unwrap_or(false),
                     "tabIds": tab_ids
@@ -820,6 +936,19 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(group_id.to_string(), tab_ids.into_iter().collect());
+        }
+
+        fn seed_group_titled(
+            &self,
+            group_id: &str,
+            title: &str,
+            tab_ids: impl IntoIterator<Item = i64>,
+        ) {
+            self.seed_group(group_id, tab_ids);
+            self.titles
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .insert(group_id.to_string(), title.to_string());
         }
 
         fn fail_close(&self, fail: bool) {
@@ -1432,6 +1561,127 @@ mod tests {
             ownership.owner_of_page(&PageId(1)).await.as_ref(),
             Some(&key),
             "the earlier session of this client held it, so the reconnect takes it over"
+        );
+        Ok(())
+    }
+
+    fn note_text(result: &ToolResult) -> String {
+        result
+            .content
+            .iter()
+            .filter_map(|block| match block {
+                ContentBlock::Text(text) => Some(text.text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    async fn apply_tabs_new(call: &ToolCall) -> Option<ToolResult> {
+        let result = ToolResult::text("opened", Some(json!({ "page": 1 })));
+        apply(ToolEffectContext {
+            call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+    }
+
+    /// The nudge that needs no memory. Both texts already tell an agent to reuse
+    /// its group and a live client skipped them, so the one call that starts a
+    /// second group names the candidates with their ids.
+    #[tokio::test]
+    async fn starting_a_group_names_the_groups_already_titled_for_this_client() -> anyhow::Result<()>
+    {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
+        recorder.seed_group_titled("group-theirs", "cowork/research", [102]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        // The first tabs new of a fresh connection: no group for this session yet.
+        call.default_tab_group_id = None;
+
+        let annotated = apply_tabs_new(&call)
+            .await
+            .unwrap_or_else(|| panic!("expected a note naming the earlier group"));
+        let text = note_text(&annotated);
+
+        assert!(text.contains("codex/invoice-run"), "{text}");
+        assert!(
+            text.contains("group-earlier"),
+            "names the id to pass: {text}"
+        );
+        assert!(text.contains("groupId"), "names the argument: {text}");
+        assert!(
+            !text.contains("cowork/research"),
+            "another client's group is not a candidate of mine: {text}"
+        );
+        assert!(
+            text.contains("opened"),
+            "the original result survives: {text}"
+        );
+        Ok(())
+    }
+
+    /// An agent that named a group is already doing what the note would ask for.
+    #[tokio::test]
+    async fn naming_a_group_suppresses_the_nudge() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        call.default_tab_group_id = None;
+
+        assert!(
+            apply_tabs_new(&call).await.is_none(),
+            "an agent already passing a groupId needs no nudge"
+        );
+        Ok(())
+    }
+
+    /// Mid-task, not reconnecting. The session has its group and every later tab
+    /// would otherwise carry the note.
+    #[tokio::test]
+    async fn a_session_that_already_has_a_group_gets_no_nudge() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        call.default_tab_group_id = Some("group-mine".to_string());
+
+        assert!(
+            apply_tabs_new(&call).await.is_none(),
+            "a session mid-task must not be told to reuse something"
+        );
+        Ok(())
+    }
+
+    /// A client's genuine first task. Nothing is its own, so there is nothing to
+    /// suggest and the note would be noise.
+    #[tokio::test]
+    async fn no_group_of_this_clients_own_means_no_nudge() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group_titled("group-theirs", "cowork/research", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.browser_session = Some(browser);
+        call.default_tab_group_id = None;
+
+        assert!(
+            apply_tabs_new(&call).await.is_none(),
+            "only this client's own groups are candidates"
         );
         Ok(())
     }
