@@ -13,11 +13,13 @@ open a new page in the background (snapshot attached), or close one. \
 Use the returned page id with snapshot/act/navigate. \
 action=\"list\" reports the tab group id of every grouped page. Record yours on \
 your first list of a task, before you need it. Ownership is per connection: every \
-remade connection starts a new session and loses it, so on the first \
-action=\"new\" after each one, pass the recorded id as groupId. Your pages then \
-keep going to that group instead of a second one being started for the same task, \
-and the tabs already in it read as yours again. Only action=\"new\" reclaims; \
-groupId is ignored on the other actions.";
+remade connection starts a new session and loses it, so list before you open \
+anything on a new connection and pass that id as groupId on action=\"new\". Your \
+pages then keep going to that group instead of a second one being started for the \
+same task, and the tabs already in it read as yours again. If you no longer have \
+the id, find it in the listing: after a reconnect your tabs read as another \
+agent's, and your group is titled with your own name as <yourName>/<task>. Only \
+action=\"new\" reclaims; groupId is ignored on the other actions.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -180,8 +182,18 @@ fn format_page_line(page: &browseros_core::pages::PageInfo) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{TabsAction, TabsArgs};
+    use super::{DESCRIPTION, TabsAction, TabsArgs};
     use serde_json::json;
+
+    /// An agent that no longer holds the id has only the listing to find it in,
+    /// and after a reconnect its own tabs read as another agent's. Both halves
+    /// have to be stated or the reclaim is undiscoverable from this tool alone.
+    #[test]
+    fn the_description_says_how_to_find_a_group_id_you_no_longer_have() {
+        assert!(DESCRIPTION.contains("list before you open"));
+        assert!(DESCRIPTION.contains("<yourName>/<task>"));
+        assert!(DESCRIPTION.contains("read as another"));
+    }
 
     #[test]
     fn retired_background_field_is_accepted_and_ignored() -> anyhow::Result<()> {
