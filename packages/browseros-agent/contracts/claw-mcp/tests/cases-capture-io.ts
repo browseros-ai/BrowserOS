@@ -459,7 +459,9 @@ export const captureIoCases: ContractCase[] = [
       if (row.includes('Deleted')) {
         throw new Error(`the list says the file is gone: ${row.trim()}`)
       }
-      if (!row.includes('Show in Finder')) {
+      // The reveal action is labelled per platform: "Show in Finder" on macOS,
+      // "Show in folder" elsewhere. Its presence is the point, not its wording.
+      if (!/Show in (Finder|folder)/.test(row)) {
         throw new Error(`the list cannot reveal the file: ${row.trim()}`)
       }
     },
