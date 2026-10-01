@@ -420,6 +420,51 @@ export const captureIoCases: ContractCase[] = [
     },
   },
   {
+    name: "download: the browser's own list reports it accurately",
+    async run(ctx) {
+      // The point of letting the browser choose the destination. When the file
+      // was staged elsewhere and moved, the browser kept recording the staging
+      // path, so every row read "Deleted" with no reveal action while the file
+      // sat in the download folder.
+      const page = await ctx.openPage(ctx.fixture('/links.html'))
+      const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+      const ref = snap
+        .split('\n')
+        .find((line) => line.includes('Download report'))
+        ?.match(/\[ref=(e\d+)\]/)?.[1]
+      if (!ref) throw new Error('no download ref')
+      const text = expectOk(
+        await ctx.mcp.callTool('download', { page, ref }),
+        'download',
+      )
+      const path = text.match(/to: (.+)$/m)?.[1]
+      if (!path) throw new Error(`no path reported: ${text}`)
+      const name = path.split('/').pop() ?? ''
+
+      expectOk(
+        await ctx.mcp.callTool('navigate', {
+          page,
+          action: 'url',
+          url: 'chrome://downloads',
+        }),
+        'open the download list',
+      )
+      const list = expectOk(
+        await ctx.mcp.callTool('snapshot', { page, mode: 'interactive' }),
+      )
+      const row = list.split('\n').find((line) => line.includes(name))
+      if (!row) {
+        throw new Error(`no list row for ${name} in:\n${list.slice(0, 600)}`)
+      }
+      if (row.includes('Deleted')) {
+        throw new Error(`the list says the file is gone: ${row.trim()}`)
+      }
+      if (!row.includes('Show in Finder')) {
+        throw new Error(`the list cannot reveal the file: ${row.trim()}`)
+      }
+    },
+  },
+  {
     name: 'download: a bad ref errors',
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/links.html'))

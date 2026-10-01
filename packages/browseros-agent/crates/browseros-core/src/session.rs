@@ -200,6 +200,12 @@ impl BrowserSession {
     }
 
     #[must_use]
+    /// The raw protocol connection, for work that addresses a target directly
+    /// rather than a page.
+    pub fn connection(&self) -> Arc<dyn CdpConnection> {
+        self.connection.clone()
+    }
+
     pub fn cdp_events(&self) -> broadcast::Receiver<CdpEvent> {
         self.connection.events()
     }
