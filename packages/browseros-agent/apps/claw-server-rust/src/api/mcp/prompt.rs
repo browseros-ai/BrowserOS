@@ -21,6 +21,11 @@ Shared with other agents:
   user's, and a result tells you when the page is not yours.
 - A tab that is not yours is still someone's. Leave it as you found it unless the
   user asked you to change it, and prefer your own tab for anything exploratory.
+- Remember your tab group id. tabs action="list" reports it next to each of your
+  own tabs. A remade connection starts a new session, so on a later prompt pass
+  that id as groupId on tabs action="new" and you carry on in the same group with
+  the same tabs, instead of leaving them behind and starting a second group for
+  one task. Only you know which task you are continuing, so only you can say.
 - Preserve useful pages: leave anything the user may want to inspect open
   instead of closing it when the task ends.
 - Say who you are (e.g. "claude-code", "codex"): send it as the agentName
