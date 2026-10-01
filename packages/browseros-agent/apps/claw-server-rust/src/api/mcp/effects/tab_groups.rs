@@ -102,12 +102,22 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     // the page in a group that is not the session's and clear the reference it
     // was just given.
     //
-    // Deliberately grants nothing. It moves where this session's own new pages
-    // land, which `tab_groups action="create"` with an existing groupId already
-    // allowed, and it changes no page's owner. Making a reconnected agent's
-    // earlier tabs read as its own needs a record of who opened them that a
-    // caller cannot edit; the group title is not that, because `tab_groups
-    // update` will rename any group for anyone.
+    // The unclaimed pages already in that group become this session's too, so
+    // the reconnected agent picks up the work rather than treating its own tabs
+    // as someone else's. Claims are written rather than inferred at read time
+    // because `tabs list`, the ownership notice and code-mode helper discovery
+    // all read the claim; inferring it in one makes the three disagree.
+    //
+    // Nothing is authorized and nothing is refused. Ownership is a label, never
+    // a permission, asserted in guards/mod.rs and enforced nowhere, so there is
+    // no privilege here to gate. An earlier revision checked the group title
+    // against the client's slug; that was removed because it gated nothing real
+    // while breaking the honest case, since `tab_groups update` renames any
+    // group for anyone and a user renaming a group would have locked its own
+    // agent out of it.
+    //
+    // A page another session already holds is skipped. That is not a refusal of
+    // this caller, it is leaving another session's label alone.
     let named_group = call
         .raw_args
         .get("groupId")
@@ -117,8 +127,15 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         .map(str::to_string);
     if let Some(requested) = named_group {
         ownership
-            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested))
+            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested.clone()))
             .await;
+        for page in group_page_ids_unlocked(browser, &requested, call.output_files.clone()).await {
+            if ownership.owner_of_page(&PageId(page)).await.is_none() {
+                ownership
+                    .claim_page(identity.ownership_key.clone(), PageId(page))
+                    .await;
+            }
+        }
         ensure_agent_tab_group_unlocked(
             &call,
             tab_groups,
@@ -152,6 +169,43 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         page_id,
     )
     .await;
+}
+
+/// Page ids currently in a browser tab group. Empty when the group is gone or
+/// the listing fails, which simply means nothing is claimed.
+async fn group_page_ids_unlocked(
+    browser: &Arc<BrowserSession>,
+    group_id: &str,
+    output_files: OutputFileAccess,
+) -> Vec<u32> {
+    let Ok(result) = dispatch_tab_groups(
+        cached_tab_groups_tool(),
+        browser,
+        CancellationToken::new(),
+        output_files,
+        json!({ "action": "list" }),
+    )
+    .await
+    else {
+        return Vec::new();
+    };
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("groups"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .find(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))
+        .and_then(|group| group.get("pageIds"))
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter_map(Value::as_u64)
+        .filter_map(|page| u32::try_from(page).ok())
+        .collect()
 }
 
 async fn ensure_agent_tab_group_unlocked(
@@ -1202,9 +1256,37 @@ mod tests {
             "an existing group is joined, never recreated"
         );
         assert_eq!(
-            ownership.owner_of_page(&PageId(1)).await,
-            None,
-            "naming a group claims nothing; ownership is granted, never asserted"
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&key),
+            "the unclaimed page already in the group becomes this session's, so \
+             tabs list, the ownership notice and helper discovery agree"
+        );
+        Ok(())
+    }
+
+    /// Claiming skips a page another session holds. Not a refusal of this
+    /// caller, just not overwriting someone else's label.
+    #[tokio::test]
+    async fn a_page_another_session_holds_is_left_alone() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-shared", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-shared" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let ownership = call.state.sessions.ownership();
+        let other = ConvoId::new("codex-other-session");
+        ownership.claim_page(other.clone(), PageId(1)).await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&other),
+            "the other session keeps its page"
         );
         Ok(())
     }

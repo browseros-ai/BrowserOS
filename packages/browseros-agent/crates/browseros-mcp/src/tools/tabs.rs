@@ -13,8 +13,9 @@ open a new page in the background (snapshot attached), or close one. \
 Use the returned page id with snapshot/act/navigate. \
 action=\"list\" reports the tab group id of every page. Remember yours: \
 if a later call lands in a new session, which happens whenever the connection is \
-remade, pass it as groupId on action=\"new\" so your pages keep going to the same \
-group instead of a second one being started for the same task.";
+remade, pass it as groupId on action=\"new\": your pages keep going to that group \
+instead of a second one being started for the same task, and the tabs already in \
+it read as yours again.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
