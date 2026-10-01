@@ -96,12 +96,29 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     let Some(page_id) = page_id else {
         return;
     };
-    // A caller that names a group is continuing work in it. Adopting it has to
-    // happen before the default-group reconciliation below, which would
-    // otherwise see the page sitting in a group that is not the session's and
-    // clear the reference it was just given.
-    let reclaimed = reclaim_named_group_unlocked(&call, browser, &ownership, identity).await;
-    if reclaimed {
+    // A caller that names a group is continuing work in it, so that group
+    // becomes this session's and later pages follow it. This has to happen
+    // before the default-group reconciliation below, which would otherwise see
+    // the page in a group that is not the session's and clear the reference it
+    // was just given.
+    //
+    // Deliberately grants nothing. It moves where this session's own new pages
+    // land, which `tab_groups action="create"` with an existing groupId already
+    // allowed, and it changes no page's owner. Making a reconnected agent's
+    // earlier tabs read as its own needs a record of who opened them that a
+    // caller cannot edit; the group title is not that, because `tab_groups
+    // update` will rename any group for anyone.
+    let named_group = call
+        .raw_args
+        .get("groupId")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
+        .map(str::to_string);
+    if let Some(requested) = named_group {
+        ownership
+            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested))
+            .await;
         ensure_agent_tab_group_unlocked(
             &call,
             tab_groups,
@@ -135,95 +152,6 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         page_id,
     )
     .await;
-}
-
-/// Adopts a group the caller named on `tabs action="new"`, and claims the
-/// unclaimed pages already in it, so the reconnected session owns the work it is
-/// continuing. Returns whether a group was adopted.
-///
-/// Restricted to this client's own agent groups, identified by the `<prefix>/`
-/// title the server gives them. Without that check an agent could read any id
-/// out of `tab_groups list`, including a group the user made by hand, and claim
-/// the untracked tabs inside it. Ownership has to stay something the server
-/// granted, never something a caller can assert.
-///
-/// Claims are written rather than inferred at render time: the ownership notice,
-/// code-mode helper discovery and `tabs list` all read the claim, so inferring it
-/// in one of them makes the three disagree.
-async fn reclaim_named_group_unlocked(
-    call: &ToolCall,
-    browser: &Arc<BrowserSession>,
-    ownership: &Arc<PageOwnership>,
-    identity: &crate::api::mcp::dispatch::ToolIdentity,
-) -> bool {
-    let Some(requested) = call
-        .raw_args
-        .get("groupId")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|group| !group.is_empty())
-    else {
-        return false;
-    };
-    let prefix = crate::api::mcp::naming::client_prefix_from_slug(identity.agent.slug());
-    let Some(groups) = list_groups_unlocked(browser, call.output_files.clone()).await else {
-        return false;
-    };
-    let Some(group) = groups
-        .iter()
-        .find(|group| group.get("groupId").and_then(Value::as_str) == Some(requested))
-    else {
-        return false;
-    };
-    let owned_by_this_client = group
-        .get("title")
-        .and_then(Value::as_str)
-        .is_some_and(|title| title.starts_with(&format!("{prefix}/")));
-    if !owned_by_this_client {
-        return false;
-    }
-    ownership
-        .set_tab_group_ref(identity.ownership_key.clone(), Some(requested.to_string()))
-        .await;
-    for page in group
-        .get("pageIds")
-        .and_then(Value::as_array)
-        .map(Vec::as_slice)
-        .unwrap_or_default()
-        .iter()
-        .filter_map(Value::as_u64)
-        .filter_map(|page| u32::try_from(page).ok())
-    {
-        if ownership.owner_of_page(&PageId(page)).await.is_none() {
-            ownership
-                .claim_page(identity.ownership_key.clone(), PageId(page))
-                .await;
-        }
-    }
-    true
-}
-
-async fn list_groups_unlocked(
-    browser: &Arc<BrowserSession>,
-    output_files: OutputFileAccess,
-) -> Option<Vec<Value>> {
-    let result = dispatch_tab_groups(
-        cached_tab_groups_tool(),
-        browser,
-        CancellationToken::new(),
-        output_files,
-        json!({ "action": "list" }),
-    )
-    .await
-    .ok()?;
-    Some(
-        result
-            .structured_content
-            .as_ref()?
-            .get("groups")?
-            .as_array()?
-            .clone(),
-    )
 }
 
 async fn ensure_agent_tab_group_unlocked(
@@ -629,7 +557,6 @@ mod tests {
         sender: broadcast::Sender<CdpEvent>,
         calls: StdMutex<Vec<(String, Value)>>,
         members: StdMutex<HashMap<String, BTreeSet<i64>>>,
-        titles: StdMutex<HashMap<String, String>>,
         block_create: AtomicBool,
         fail_group_add: AtomicBool,
         fail_title_updates: AtomicBool,
@@ -650,7 +577,6 @@ mod tests {
                 sender,
                 calls: StdMutex::new(Vec::new()),
                 members: StdMutex::new(HashMap::new()),
-                titles: StdMutex::new(HashMap::new()),
                 block_create: AtomicBool::new(false),
                 fail_group_add: AtomicBool::new(false),
                 fail_title_updates: AtomicBool::new(false),
@@ -684,18 +610,7 @@ mod tests {
                 "group": {
                     "groupId": group_id,
                     "windowId": 1,
-                    "title": params
-                        .get("title")
-                        .and_then(Value::as_str)
-                        .map(str::to_string)
-                        .or_else(|| {
-                            self.titles
-                                .lock()
-                                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                                .get(group_id)
-                                .cloned()
-                        })
-                        .unwrap_or_else(|| "codex".to_string()),
+                    "title": params.get("title").and_then(Value::as_str).unwrap_or("codex"),
                     "color": params.get("color").and_then(Value::as_str).unwrap_or("blue"),
                     "collapsed": params.get("collapsed").and_then(Value::as_bool).unwrap_or(false),
                     "tabIds": tab_ids
@@ -774,20 +689,6 @@ mod tests {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                 .insert(group_id.to_string(), tab_ids.into_iter().collect());
-        }
-
-        /// Seeds a group with a title, so adoption's title check can be exercised.
-        fn seed_group_titled(
-            &self,
-            group_id: &str,
-            title: &str,
-            tab_ids: impl IntoIterator<Item = i64>,
-        ) {
-            self.seed_group(group_id, tab_ids);
-            self.titles
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .insert(group_id.to_string(), title.to_string());
         }
 
         fn fail_close(&self, fail: bool) {
@@ -1258,14 +1159,16 @@ mod tests {
         Ok(())
     }
 
-    /// The reclaim path. A reconnected agent names the group it was working in.
-    /// The group becomes this session's group, and the unclaimed pages already
-    /// in it become this session's pages, so the ownership notice, helper
-    /// discovery and `tabs list` all agree.
+    /// A reconnected agent names the group it was working in, and later pages
+    /// follow it instead of a second group being created for one task.
+    ///
+    /// Adoption deliberately changes no page's owner. It grants nothing a
+    /// caller did not already have, because `tab_groups action="create"` with
+    /// an existing groupId already moved pages into any group.
     #[tokio::test]
-    async fn naming_an_own_group_adopts_it_and_claims_its_unclaimed_pages() -> anyhow::Result<()> {
+    async fn naming_a_group_makes_it_this_sessions_group() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
-        recorder.seed_group_titled("group-earlier", "codex/earlier-task", [101]);
+        recorder.seed_group("group-earlier", [101]);
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
@@ -1286,54 +1189,22 @@ mod tests {
         assert_eq!(
             ownership.tab_group_ref(&key).await.as_deref(),
             Some("group-earlier"),
-            "the named group becomes this session's group"
+            "the named group survives the default-group reconciliation"
         );
-        assert_eq!(
-            ownership.owner_of_page(&PageId(1)).await.as_ref(),
-            Some(&key),
-            "the page already in the group is claimed, not merely relabelled"
+        assert!(
+            recorder.group_members("group-earlier").contains(&102),
+            "the page joins it: {:?}",
+            recorder.group_members("group-earlier")
         );
         assert_eq!(
             recorder.create_count(),
             0,
             "an existing group is joined, never recreated"
         );
-        Ok(())
-    }
-
-    /// The escalation this has to refuse. Any id is readable from
-    /// `tab_groups list`, including a group the user made by hand, so adoption
-    /// is restricted to groups whose title the server gave this client.
-    #[tokio::test]
-    async fn naming_a_group_that_is_not_this_clients_claims_nothing() -> anyhow::Result<()> {
-        let recorder = Arc::new(GroupDispatchRecorder::new());
-        recorder.seed_group_titled("group-user", "Holiday research", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
-        let mut call = crate::api::mcp::test_support::tool_call(
-            "tabs",
-            json!({ "action": "new", "groupId": "group-user" }),
-        )
-        .await?;
-        call.browser_session = Some(browser);
-        let key = call
-            .identity
-            .as_ref()
-            .unwrap_or_else(|| unreachable!())
-            .ownership_key
-            .clone();
-        let ownership = call.state.sessions.ownership();
-
-        run_tab_group_work(call.clone(), Some(2)).await;
-
-        assert_ne!(
-            ownership.tab_group_ref(&key).await.as_deref(),
-            Some("group-user"),
-            "a group the server did not name for this client is never adopted"
-        );
         assert_eq!(
             ownership.owner_of_page(&PageId(1)).await,
             None,
-            "and the user's tab inside it stays unclaimed"
+            "naming a group claims nothing; ownership is granted, never asserted"
         );
         Ok(())
     }

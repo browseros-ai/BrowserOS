@@ -13,8 +13,8 @@ Manage tab groups: list groups, group pages, update a group (title/color/collaps
 ungroup pages, or close a group. Page ids come from the tabs tool. \
 Passing an existing groupId with action=\"create\" moves those pages into that \
 group, nothing more. To resume earlier work after a reconnect, pass the \
-remembered group id as groupId on tabs action=\"new\" instead: that reclaims the \
-group and its tabs.";
+remembered group id as groupId on tabs action=\"new\" instead, which makes that \
+group the one your later pages go to.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
