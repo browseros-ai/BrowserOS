@@ -116,8 +116,15 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     // group for anyone and a user renaming a group would have locked its own
     // agent out of it.
     //
-    // A page another session already holds is skipped. That is not a refusal of
-    // this caller, it is leaving another session's label alone.
+    // A page held by another session of the same client is taken over, because
+    // that session is the caller's own earlier self: a reconnect mints a new
+    // conversation while the old one stays in the ownership map holding the
+    // tabs, which is the whole reason the agent sees its own work as foreign.
+    // Only taking unclaimed pages made this do nothing at all in the case it
+    // exists for, since the pages are claimed, just by the previous session.
+    //
+    // A page held by a session of a DIFFERENT client is left alone. Not a
+    // refusal of this caller, just not relabelling someone else's work.
     //
     // A group that is no longer open is not adopted either. A remembered id goes
     // stale as soon as the group is closed, and adopting one would replace a
@@ -139,8 +146,13 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         ownership
             .set_tab_group_ref(identity.ownership_key.clone(), Some(requested))
             .await;
+        let mine = same_client_convos(&call.state, identity).await;
         for page in pages {
-            if ownership.owner_of_page(&PageId(page)).await.is_none() {
+            let claimable = match ownership.owner_of_page(&PageId(page)).await {
+                None => true,
+                Some(owner) => mine.contains(&owner),
+            };
+            if claimable {
                 ownership
                     .claim_page(identity.ownership_key.clone(), PageId(page))
                     .await;
@@ -179,6 +191,26 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         page_id,
     )
     .await;
+}
+
+/// Conversations belonging to the same client as the caller, the caller
+/// included. A reconnect gives one client several conversations over time, and
+/// the earlier ones keep holding the tabs, so this is how a session recognises
+/// its own previous self.
+async fn same_client_convos(
+    state: &crate::AppState,
+    identity: &crate::api::mcp::dispatch::ToolIdentity,
+) -> std::collections::BTreeSet<ConvoId> {
+    let slug = identity.agent.slug();
+    state
+        .sessions
+        .snapshot()
+        .await
+        .into_iter()
+        .filter(|session| session.agent().slug() == slug)
+        .map(|session| session.convo_id().clone())
+        .chain(std::iter::once(identity.ownership_key.clone()))
+        .collect()
 }
 
 /// The pages in an open browser tab group, or `None` when that group is not
@@ -1316,10 +1348,54 @@ mod tests {
         Ok(())
     }
 
-    /// Claiming skips a page another session holds. Not a refusal of this
-    /// caller, just not overwriting someone else's label.
+    /// The case the live run exposed. A reconnect leaves the previous session in
+    /// the ownership map still holding the tabs, so the page is claimed, not
+    /// unclaimed. Taking over a page held by an earlier session of the same
+    /// client is what makes the reclaim actually reclaim.
     #[tokio::test]
-    async fn a_page_another_session_holds_is_left_alone() -> anyhow::Result<()> {
+    async fn a_page_an_earlier_session_of_this_client_holds_is_taken_over() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("group-earlier", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let mut call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "new", "groupId": "group-earlier" }),
+        )
+        .await?;
+        call.browser_session = Some(browser);
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        let key = identity.ownership_key.clone();
+        // The same client reconnecting: a second session with the caller's slug.
+        let earlier = crate::services::sessions::Session::new(
+            crate::ids::SessionId::new("earlier"),
+            identity.agent.clone(),
+            crate::identity::ConversationIdentity::new(identity.agent.slug(), "prior".to_string()),
+            identity.agent_label.clone(),
+            tokio::time::Instant::now(),
+        );
+        call.state
+            .sessions
+            .insert_for_testing(earlier.clone())
+            .await;
+        let ownership = call.state.sessions.ownership();
+        ownership
+            .claim_page(earlier.convo_id().clone(), PageId(1))
+            .await;
+
+        run_tab_group_work(call.clone(), Some(2)).await;
+
+        assert_eq!(
+            ownership.owner_of_page(&PageId(1)).await.as_ref(),
+            Some(&key),
+            "the earlier session of this client held it, so the reconnect takes it over"
+        );
+        Ok(())
+    }
+
+    /// Claiming skips a page a session of a DIFFERENT client holds. Not a
+    /// refusal of this caller, just not relabelling someone else's work.
+    #[tokio::test]
+    async fn a_page_another_client_holds_is_left_alone() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-shared", [101]);
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
