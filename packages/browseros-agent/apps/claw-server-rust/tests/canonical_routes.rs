@@ -614,7 +614,13 @@ async fn canonical_control_settings_and_empty_lists() -> anyhow::Result<()> {
     let (status, _, bytes) =
         request(&app.router, "GET", "/system/health", None, Body::empty()).await?;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(json_body(&bytes)?, json!({ "status": "ok" }));
+    assert_eq!(
+        json_body(&bytes)?,
+        json!({
+            "status": "ok",
+            "browser": { "connected": false, "downForMs": null, "lastError": null }
+        })
+    );
 
     for (path, key) in [
         ("/api/v1/system", "product"),

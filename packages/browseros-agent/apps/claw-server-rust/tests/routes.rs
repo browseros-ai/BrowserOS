@@ -237,11 +237,26 @@ fn take_sse_event(pending: &mut Vec<u8>) -> Option<Vec<u8>> {
 }
 
 #[tokio::test]
-async fn health_survives_cdp_down() -> anyhow::Result<()> {
+async fn health_survives_cdp_down_and_says_the_link_is_down() -> anyhow::Result<()> {
     let app = test_app().await?;
     let (status, body) = request_json(&app.router, "GET", "/system/health", None).await?;
+
+    // 200 is load bearing: the supervising browser restarts this process after two
+    // non-200 replies here, and a restart cannot restore a link the OS tore down.
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, json!({ "status": "ok" }));
+    assert_eq!(body["status"], json!("ok"));
+    // The body is what makes the 200 honest rather than blind.
+    assert_eq!(body["browser"]["connected"], json!(false));
+    Ok(())
+}
+
+#[tokio::test]
+async fn readiness_refuses_while_the_browser_link_is_down() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, body) = request_json(&app.router, "GET", "/system/ready", None).await?;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(body["browser"]["connected"], json!(false));
     Ok(())
 }
 

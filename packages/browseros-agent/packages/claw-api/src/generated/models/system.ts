@@ -13,17 +13,49 @@
  */
 
 /**
+ * The server's live connection to the browser it drives.
+ * @export
+ * @interface BrowserLink
+ */
+export interface BrowserLink {
+    /**
+     *
+     * @type {boolean}
+     * @memberof BrowserLink
+     */
+    connected: boolean;
+    /**
+     * Milliseconds since the link was lost, while the server reconnects. Absent when connected.
+     * @type {number}
+     * @memberof BrowserLink
+     */
+    downForMs: number | null;
+    /**
+     * Why the link was last lost, when known.
+     * @type {string}
+     * @memberof BrowserLink
+     */
+    lastError: string | null;
+}
+
+/**
  *
  * @export
  * @interface HealthResponse
  */
 export interface HealthResponse {
     /**
-     *
+     * Reports only that this process is serving. It stays `ok` while the browser link is down, because the supervisor restarts the server on a non-200 and a restart cannot restore a link the operating system tore down. Read `browser` for whether agent tools can actually run.
      * @type {HealthResponseStatusEnum}
      * @memberof HealthResponse
      */
     status: HealthResponseStatusEnum;
+    /**
+     *
+     * @type {BrowserLink}
+     * @memberof HealthResponse
+     */
+    browser?: BrowserLink;
 }
 
 

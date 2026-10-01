@@ -12,7 +12,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +28,9 @@ pub struct BrowserService {
     state_tx: watch::Sender<BrowserConnectionState>,
     initial_attempt_tx: watch::Sender<bool>,
     session: Arc<RwLock<Option<Arc<browseros_core::BrowserSession>>>>,
+    /// Kept so callers can ask the client how long the link has been down rather
+    /// than this service keeping a second copy of that answer.
+    client: Arc<RwLock<Option<CdpClient>>>,
     tab_registry: Arc<TabRegistry>,
     cancel: CancellationToken,
 }
@@ -51,6 +54,7 @@ impl BrowserService {
             state_tx,
             initial_attempt_tx,
             session: Arc::new(RwLock::new(None)),
+            client: Arc::new(RwLock::new(None)),
             tab_registry,
             cancel: CancellationToken::new(),
         })
@@ -74,6 +78,19 @@ impl BrowserService {
             .await
             .clone()
             .filter(|session| session.is_connected())
+    }
+
+    /// How long the link to the browser has been down, or `None` while it is up.
+    ///
+    /// Published so callers can distinguish a link the server is already
+    /// reconnecting from a browser that is not running. Those need different
+    /// advice, and conflating them is what sends users to relaunch the app.
+    pub async fn link_down_for(&self) -> Option<Duration> {
+        self.client
+            .read()
+            .await
+            .as_ref()
+            .and_then(CdpClient::down_for)
     }
 
     pub async fn wait_for_initial_attempt(&self) {
@@ -159,6 +176,7 @@ impl BrowserService {
                 Ok(client) => {
                     let session = self.browser_session(client.clone()).await;
                     *self.session.write().await = Some(session);
+                    *self.client.write().await = Some(client.clone());
                     let epoch = client.epoch();
                     self.state_tx.send_replace(BrowserConnectionState {
                         connected: true,
@@ -169,9 +187,10 @@ impl BrowserService {
                         self.initial_attempt_tx.send_replace(true);
                         initial_attempt_pending = false;
                     }
-                    debug!(epoch, "connected to BrowserOS CDP");
+                    info!(epoch, "connected to BrowserOS CDP");
                     self.monitor_client(client).await;
                     *self.session.write().await = None;
+                    *self.client.write().await = None;
                     backoff = Duration::from_secs(1);
                 }
                 Err(err) => {
@@ -215,10 +234,25 @@ impl BrowserService {
                         {
                             warn!(epoch, error = %error, "failed to seed tab target map after reconnect");
                         }
+                        match (connected, client.down_for()) {
+                            (true, _) => info!(epoch, "browser link is up"),
+                            (false, Some(down_for)) => warn!(
+                                epoch,
+                                down_ms = down_for.as_millis(),
+                                "browser link is down; reconnecting"
+                            ),
+                            (false, None) => {
+                                warn!(epoch, "browser link is down; reconnecting");
+                            }
+                        }
                         self.state_tx.send_replace(BrowserConnectionState {
                             connected,
                             epoch,
-                            last_error: if connected { None } else { Some("CDP disconnected; reconnecting".to_string()) },
+                            last_error: if connected {
+                                None
+                            } else {
+                                Some("browser link lost, reconnecting".to_string())
+                            },
                         });
                         last_connected = connected;
                         last_epoch = epoch;
