@@ -261,22 +261,34 @@ impl BrowserService {
                 () = tokio::time::sleep(Duration::from_secs(1)) => {
                     let connected = client.is_connected();
                     let epoch = client.epoch();
-                    // Level driven, like the link itself: an incomplete tab map is
-                    // retried for as long as it is incomplete. Reseeding only on a
-                    // transition left tabs unmapped for the life of a stable link,
-                    // and a popup from one of those cannot resolve its opener.
+                    let transitioned = connected != last_connected || epoch != last_epoch;
+                    // Two different jobs, and conflating them breaks one or the other.
                     //
-                    // Seed only. The event listener belongs to the epoch and is
-                    // started once by the attach, so retrying through the attaching
-                    // path would subscribe another listener on every pass.
-                    if connected
-                        && !self.tab_registry.is_ready(epoch)
-                        && let Some(session) = self.session().await
-                        && let Err(error) = self.tab_registry.reseed(&session, epoch).await
-                    {
-                        warn!(epoch, error = %error, "failed to seed tab target map; retrying");
+                    // A new epoch needs its own event listener, exactly once: the
+                    // listener is bound to an epoch and exits when that changes, and
+                    // the attach that starts one happens per client, not per socket,
+                    // so an in-client reconnect has to attach again here or tab
+                    // events stop being processed.
+                    //
+                    // A map that is merely incomplete on the epoch it already has
+                    // needs seeding alone, retried until it succeeds. Routing that
+                    // through the attach would subscribe another listener every pass.
+                    if connected && let Some(session) = self.session().await {
+                        if transitioned {
+                            if let Err(error) = self
+                                .tab_registry
+                                .observe_session(session, epoch)
+                                .await
+                            {
+                                warn!(epoch, error = %error, "failed to seed tab target map after reconnect");
+                            }
+                        } else if !self.tab_registry.is_ready(epoch)
+                            && let Err(error) = self.tab_registry.reseed(&session, epoch).await
+                        {
+                            warn!(epoch, error = %error, "failed to seed tab target map; retrying");
+                        }
                     }
-                    if connected != last_connected || epoch != last_epoch {
+                    if transitioned {
                         match (connected, client.down_for()) {
                             (true, _) => info!(epoch, "browser link is up"),
                             (false, Some(down_for)) => warn!(

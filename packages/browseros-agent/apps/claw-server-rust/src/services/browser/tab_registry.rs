@@ -549,6 +549,77 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
+    /// Seeding alone cannot adopt a new epoch, which is why the link monitor must
+    /// attach on a transition rather than only retrying the seed.
+    ///
+    /// The rebuild refuses an epoch that differs from the one it holds, so a
+    /// seed-only call after a reconnect is a silent no-op: readiness never arrives,
+    /// the retry spins, and the listener stays bound to the previous epoch. This is
+    /// the half that a seed-only retry path got wrong.
+    #[tokio::test]
+    async fn seeding_alone_cannot_adopt_a_new_epoch() -> anyhow::Result<()> {
+        let connection = TabListConnection::new();
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let map = map_with_releases(Arc::default());
+
+        map.observe_session(session.clone(), 1).await?;
+        assert!(map.is_ready(1));
+
+        // What a reconnect looks like if only the seeding half is called.
+        map.reseed(&session, 2).await?;
+
+        assert!(
+            !map.is_ready(2),
+            "seeding alone must not be mistaken for adopting the new epoch"
+        );
+        // And the attach does adopt it, which is the fix.
+        map.observe_session(session.clone(), 2).await?;
+        assert!(map.is_ready(2));
+        Ok(())
+    }
+
+    /// A socket reconnect inside one client bumps the epoch, and the listener is
+    /// bound to an epoch, so it exits. Something has to subscribe again or tab
+    /// events stop being processed: popups lose opener inheritance and closed tabs
+    /// are never cleaned up. The attach is what subscribes, and it happens per
+    /// client, not per socket, so the link monitor has to call it on every epoch.
+    #[tokio::test]
+    async fn an_epoch_change_gets_a_listener_that_still_processes_events() -> anyhow::Result<()> {
+        let connection = TabListConnection::new();
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let map = map_with_releases(Arc::default());
+
+        map.observe_session(session.clone(), 1).await?;
+        // The reconnect: same client and session, a new epoch.
+        map.observe_session(session.clone(), 2).await?;
+
+        let sent = connection.events.send(CdpEvent {
+            method: "Target.targetInfoChanged".to_string(),
+            params: json!({"targetInfo": {"targetId": "target-after-reconnect", "type": "page", "tabId": 77}}),
+            session_id: None,
+        });
+        assert!(
+            sent.is_ok(),
+            "a listener must be subscribed to receive this"
+        );
+
+        let mut mapped = None;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            mapped = map.target_for_tab_cached(77).await;
+            if mapped.is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            mapped.as_deref(),
+            Some("target-after-reconnect"),
+            "the new epoch must have a listener processing events"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn target_events_upsert_only_page_targets_with_tab_ids() {
         let map = map_with_releases(Arc::default());
