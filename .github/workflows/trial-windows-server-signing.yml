@@ -78,10 +78,11 @@ jobs:
           AZURE_SIGNING_PROFILE_OID: ${{ vars.AZURE_SIGNING_PROFILE_OID }}
           AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
-          ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
-          ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
-          ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
-          ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
+          # An Azure trial must work without the retained SSL.com credentials.
+          ESIGNER_USERNAME: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_USERNAME || '' }}
+          ESIGNER_PASSWORD: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_PASSWORD || '' }}
+          ESIGNER_TOTP_SECRET: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_TOTP_SECRET || '' }}
+          ESIGNER_CREDENTIAL_ID: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_CREDENTIAL_ID || '' }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
