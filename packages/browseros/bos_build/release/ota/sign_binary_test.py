@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
 """Tests for OTA binary signing."""
 
+import json
+import os
 import tempfile
 import subprocess
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from types import SimpleNamespace
-from typing import cast
 from unittest import mock
 
 from ...lib.env import EnvConfig
 from ...products.browserclaw.product import BROWSERCLAW_SERVER_BUNDLE
 from ...products.browseros.product import BROWSEROS_SERVER_BUNDLE
-from ...steps.sign import windows as windows_signing
+from ...lib import windows_signing
+from ...lib.windows_signing import sslcom as ssl_signing
 from . import sign_binary
 
 
@@ -111,35 +112,59 @@ class SignWindowsBinaryTest(unittest.TestCase):
         ):
             _write_exe(path)
         self.password = FAKE_PASSWORD + ' ^%!"'
-        self.env = cast(
-            EnvConfig,
-            SimpleNamespace(
-                code_sign_tool_exe=None,
-                code_sign_tool_path=str(self.tool_dir),
-                esigner_username="build@example.test",
-                esigner_password=self.password,
-                esigner_totp_secret=FAKE_TOTP,
-                esigner_credential_id="fake-credential-id",
-            ),
+        environment = mock.patch.dict(
+            os.environ,
+            {
+                "CODE_SIGN_TOOL_PATH": str(self.tool_dir),
+                "ESIGNER_USERNAME": "build@example.test",
+                "ESIGNER_PASSWORD": self.password,
+                "ESIGNER_TOTP_SECRET": FAKE_TOTP,
+                "ESIGNER_CREDENTIAL_ID": "fake-credential-id",
+                "WINDOWS_SIGNING_PROVIDER": "sslcom",
+                "WINDOWS_SIGNING_REPORT_DIR": str(root / "reports"),
+            },
+            clear=True,
         )
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.env = EnvConfig()
+        # OTA now crosses the shared facade before the SSL adapter. Keep the
+        # existing subprocess fixtures at that boundary, with Windows policy.
+        for module in (windows_signing, ssl_signing):
+            platform = mock.patch.object(module, "IS_WINDOWS", return_value=True)
+            platform.start()
+            self.addCleanup(platform.stop)
         self.logs = []
-        for module in (sign_binary, windows_signing):
-            for name in ("log_info", "log_error", "log_success"):
+        for module, names in (
+            (sign_binary, ("log_info", "log_error", "log_success")),
+            (ssl_signing, ("log_info", "log_error", "log_success")),
+            (windows_signing, ("log_info", "log_error")),
+        ):
+            for name in names:
                 patcher = mock.patch.object(module, name, side_effect=self.logs.append)
                 patcher.start()
                 self.addCleanup(patcher.stop)
 
     def test_bundle_signing_preserves_arguments_and_installs_verified_output(self):
-        signed = self.binary.parent / "signed_temp" / self.binary.name
-        signed.parent.mkdir()
-        signed.write_bytes(b"signed executable")
+        def fake_process(command, **kwargs):
+            if command[0] == str(self.java):
+                output = Path(command[command.index("-output_dir_path") + 1])
+                (output / self.binary.name).write_bytes(b"signed executable")
+                return subprocess.CompletedProcess(command, 0, "Signed successfully", "")
+            if "-NonInteractive" in command:
+                evidence = {
+                    "status": "Valid",
+                    "publisher": "Felafax, Inc.",
+                    "issuer": "SSL.com EV Code Signing Intermediate CA RSA R3",
+                    "timestamp_subject": "SSL.com Timestamping",
+                }
+                return subprocess.CompletedProcess(command, 0, json.dumps(evidence), "")
+            return subprocess.CompletedProcess(command, 0, "Valid\n", "")
+
         with mock.patch.object(
             subprocess,
             "run",
-            side_effect=[
-                subprocess.CompletedProcess([], 0, "Signed successfully", ""),
-                subprocess.CompletedProcess([], 0, "Valid\n", ""),
-            ],
+            side_effect=fake_process,
         ) as run:
             self.assertTrue(
                 sign_binary.sign_server_bundle_windows(
@@ -152,10 +177,12 @@ class SignWindowsBinaryTest(unittest.TestCase):
         self.assertEqual(command[:4], [str(self.java), "-jar", str(self.jar), "sign"])
         self.assertFalse(run.call_args_list[0].kwargs["shell"])
         self.assertEqual(command[command.index("-password") + 1], self.password)
-        self.assertEqual(command[command.index("-input_file_path") + 1], str(self.binary))
-        self.assertEqual(run.call_count, 2)
+        staged = Path(command[command.index("-input_file_path") + 1])
+        self.assertEqual(staged.name, self.binary.name)
+        self.assertNotEqual(staged, self.binary)
+        self.assertEqual(run.call_count, 3)
         self.assertEqual(self.binary.read_bytes(), b"signed executable")
-        self.assertFalse(signed.parent.exists())
+        self.assertFalse(staged.parent.exists())
 
     def test_signer_errors_are_reported_and_redacted_before_verification(self):
         for returncode, stdout, stderr in (
@@ -204,7 +231,7 @@ class SignWindowsBinaryTest(unittest.TestCase):
                 output = {"stdout": "", "stderr": ""}
                 output[stream] = f"Error: Provider rejected {password}\n"
                 with (
-                    mock.patch.object(self.env, "esigner_password", password),
+                    mock.patch.dict(os.environ, {"ESIGNER_PASSWORD": password}),
                     mock.patch.object(
                         subprocess,
                         "run",

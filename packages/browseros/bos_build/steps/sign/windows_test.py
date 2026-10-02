@@ -121,7 +121,7 @@ class WindowsSignPathsTest(unittest.TestCase):
                     self._write_binary(binary)
 
                 with mock.patch(
-                    "bos_build.steps.sign.windows.sign_with_codesigntool"
+                    "bos_build.steps.sign.windows.sign_windows_files"
                 ) as sign:
                     with self.assertRaisesRegex(
                         RuntimeError, "Missing primary browser executable:.*chrome.exe"
