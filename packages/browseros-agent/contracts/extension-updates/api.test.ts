@@ -15,6 +15,7 @@ function fixture(factory = createExtensionUpdateApi) {
   const scheduled: Array<() => void> = []
   let flush: () => Promise<unknown> = async () => ({ persisted: true })
   let injectionFails = false
+  let attemptSaveFails = false
   let legacyDrain: () => Promise<{ persisted?: boolean }> = async () => ({
     persisted: true,
   })
@@ -38,6 +39,11 @@ function fixture(factory = createExtensionUpdateApi) {
       local: {
         get: async (key: string) => ({ [key]: stored[key] }),
         set: async (items: Record<string, unknown>) => {
+          const record = items['browseros.extensionUpdate'] as {
+            attemptedVersion?: string
+          }
+          if (attemptSaveFails && record?.attemptedVersion)
+            throw new Error('Attempt storage unavailable')
           Object.assign(stored, items)
         },
         remove: async (key: string) => {
@@ -97,6 +103,9 @@ function fixture(factory = createExtensionUpdateApi) {
     },
     failInjection: (fails: boolean) => {
       injectionFails = fails
+    },
+    failAttemptSave: (fails: boolean) => {
+      attemptSaveFails = fails
     },
     setLegacyDrain: (callback: () => Promise<{ persisted?: boolean }>) => {
       legacyDrain = callback
@@ -233,6 +242,19 @@ describe('extension update API', () => {
     f.failInjection(false)
     expect((await replacement.getStatus()).pendingVersion).toBeNull()
     expect(f.restoredFiles).toEqual([['recorder.js']])
+  })
+
+  it('resumes stopped recorders if the durable reload guard cannot be saved', async () => {
+    const f = fixture()
+    f.stage()
+    f.failAttemptSave(true)
+    const api = f.api()
+    await expect(api.applyPendingUpdate('0.2.29.0')).rejects.toThrow(
+      'Attempt storage unavailable',
+    )
+    expect(f.scheduled).toHaveLength(0)
+    expect(f.restoredFiles).toEqual([['recorder.js']])
+    expect((await api.getStatus()).attemptedVersion).toBeNull()
   })
 
   it('clears pending state after activation and permits a later update', async () => {

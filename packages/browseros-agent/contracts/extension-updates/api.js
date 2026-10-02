@@ -260,13 +260,22 @@ export default function createExtensionUpdateApi(chrome, options = {}) {
             throw error
           }
         }
-        await chrome.storage.local.set({
-          [key]: {
-            version: expectedVersion,
-            detectedAt: current.detectedAt,
-            attemptedVersion: expectedVersion,
-          },
-        })
+        try {
+          await chrome.storage.local.set({
+            [key]: {
+              version: expectedVersion,
+              detectedAt: current.detectedAt,
+              attemptedVersion: expectedVersion,
+            },
+          })
+        } catch (error) {
+          // Storage failure must not leave healthy tabs stopped when no reload
+          // was scheduled. The durable attempt guard remains a prerequisite.
+          restoration = null
+          restored.clear()
+          await restoreContentScripts()
+          throw error
+        }
         // Acknowledge through CDP/runtime messaging before destroying this context.
         schedule(() => chrome.runtime.reload())
         return { scheduled: true }
