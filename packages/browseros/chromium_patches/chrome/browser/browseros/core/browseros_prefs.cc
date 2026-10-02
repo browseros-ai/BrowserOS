@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.cc b/chrome/browser/browseros/core/browseros_prefs.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..68597d68ae413015f8783404d822d8a3f7dacb44
+index 0000000000000000000000000000000000000000..f09b13c6c45676dc7ed83f51ff28aaa8bd202b50
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.cc
-@@ -0,0 +1,133 @@
+@@ -0,0 +1,134 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -39,6 +39,7 @@ index 0000000000000000000000000000000000000000..68597d68ae413015f8783404d822d8a3
 +
 +  registry->RegisterBooleanPref(prefs::kNtpFocusContent, false);
 +  registry->RegisterBooleanPref(prefs::kOnboardingCompleted, false);
++  registry->RegisterDictionaryPref(prefs::kExtensionInstallGrace);
 +  // BrowserClaw is a browser for agents: they work in the background by
 +  // default. BrowserOS keeps stock focus behaviour.
 +  registry->RegisterBooleanPref(prefs::kAutomationNeverStealsFocus,

@@ -227,6 +227,7 @@ features:
       - chrome/browser/extensions/updater/extension_updater.h
       - chrome/browser/ui/extensions/settings_overridden_params_providers.cc
 
+      - "chrome/browser/extensions/chrome_extension_system.cc"
   chrome-importer:
     description: "feat: chrome importer"
     files:
