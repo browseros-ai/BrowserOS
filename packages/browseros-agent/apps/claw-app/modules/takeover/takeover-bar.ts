@@ -27,6 +27,9 @@ export interface TakeoverBar {
 // shadow root resets inherited styles, so fonts and colors are set explicitly.
 export const TAKEOVER_BAR_CSS = `
 :host { all: initial; }
+/* The all:initial reset plus explicit display rules below outrank the UA
+   [hidden] default, so force it or minimize leaves both states on screen. */
+[hidden] { display: none !important; }
 .nt-root { position: fixed; left: 16px; right: 16px; bottom: 16px; z-index: 2147483000;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; color: #0b1b33; }
 .nt-bar { background: #fff; border: 1px solid rgba(2,84,236,0.18); border-top: 3px solid #0254ec;

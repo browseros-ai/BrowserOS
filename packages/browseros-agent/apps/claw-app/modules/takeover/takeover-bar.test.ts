@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { parseHTML } from 'linkedom'
 import type { TakeoverContext } from './takeover.types'
-import { createTakeoverBar, type TakeoverBar } from './takeover-bar'
+import {
+  createTakeoverBar,
+  TAKEOVER_BAR_CSS,
+  type TakeoverBar,
+} from './takeover-bar'
 
 let window: ReturnType<typeof parseHTML>['window']
 let root: HTMLElement
@@ -91,6 +95,12 @@ describe('takeover bar', () => {
     expect((root.querySelector('.nt-pill-btn') as HTMLElement).hidden).toBe(
       true,
     )
+  })
+
+  it('forces [hidden] so the reset display rules cannot show both states', () => {
+    // all:initial plus explicit display rules outrank the UA [hidden] default,
+    // so the shadow CSS must force it or minimize leaves both states visible.
+    expect(TAKEOVER_BAR_CSS).toContain('[hidden] { display: none !important; }')
   })
 
   it('hides again when the request clears', () => {
