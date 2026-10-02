@@ -16,8 +16,7 @@ const invalidatedQueryKeys: unknown[] = []
 
 mock.module('@/modules/api/audit.hooks', () => ({
   ..._auditHooks,
-  useSessionPreviewUrl: () => null,
-  // Null base keeps LivePreview from opening a real EventSource under linkedom.
+  // Null base keeps screenshot cards from making real requests under linkedom.
   useApiBaseUrl: () => null,
 }))
 

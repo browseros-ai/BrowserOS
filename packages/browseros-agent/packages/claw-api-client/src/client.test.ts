@@ -178,6 +178,7 @@ describe('ClawApiClient', () => {
     const preview = await client.getSessionPreview({
       sessionId: 'session / one',
       refresh: 456,
+      browserTabId: 102,
     })
     await expect(preview.arrayBuffer()).resolves.toHaveProperty('byteLength', 2)
     await expect(
@@ -222,6 +223,9 @@ describe('ClawApiClient', () => {
     expect(new URL(requests[5]?.url ?? '').searchParams.get('refresh')).toBe(
       '456',
     )
+    expect(
+      new URL(requests[5]?.url ?? '').searchParams.get('browserTabId'),
+    ).toBe('102')
     expect(requests.at(-2)?.method).toBe('PUT')
     expect(requests.at(-1)?.method).toBe('DELETE')
     expect(requests.every((request) => request.credentials === 'omit')).toBe(
@@ -322,6 +326,14 @@ describe('binary URL builders', () => {
         refresh: 0,
       }),
     ).toBe(`${baseUrl}/api/v1/sessions/session%20%2F%20one/preview?refresh=0`)
+    expect(
+      buildSessionPreviewUrl(baseUrl, {
+        sessionId: 'session / one',
+        browserTabId: 102,
+      }),
+    ).toBe(
+      `${baseUrl}/api/v1/sessions/session%20%2F%20one/preview?browserTabId=102`,
+    )
     expect(
       buildSessionScreenshotUrl(baseUrl, {
         sessionId: 'session / one',

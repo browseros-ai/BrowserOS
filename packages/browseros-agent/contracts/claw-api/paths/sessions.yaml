@@ -119,6 +119,13 @@ preview:
     operationId: getSessionPreview
     parameters:
       - $ref: ../parameters.yaml#/SessionId
+      - name: browserTabId
+        in: query
+        description: Capture this currently session-owned browser tab. Omitted follows the most recently active owned tab; an unavailable or unowned tab returns 404.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
       - name: refresh
         in: query
         description: Ignored client cache-busting token for preview URLs.
@@ -128,7 +135,7 @@ preview:
           minimum: 0
     responses:
       '200':
-        description: Fresh viewport JPEG from the session's most recently active currently owned browser tab.
+        description: Fresh viewport JPEG from the selected currently owned browser tab, or the most recently active owned tab when no selection is supplied.
         content:
           image/jpeg:
             schema:

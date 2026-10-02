@@ -243,8 +243,10 @@ export class ClawApiClient {
       await this.client.GET('/api/v1/sessions/{sessionId}/preview', {
         params: {
           path: { sessionId: request.sessionId },
-          query:
-            request.refresh === undefined ? {} : { refresh: request.refresh },
+          query: {
+            refresh: request.refresh,
+            browserTabId: request.browserTabId,
+          },
         },
         parseAs: 'blob',
       }),

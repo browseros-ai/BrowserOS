@@ -4,7 +4,7 @@ import { cn } from '@/lib/utils'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
 import { formatToolTrail, siteOf } from '@/screens/cockpit/cockpit.helpers'
 import { activityCardCaptionTones } from './activityCardTone'
-import { LivePreview } from './LivePreview'
+import { MiniScreencast } from './MiniScreencast'
 import { needsYouTone } from './needsYouTone'
 import { TabCountChip } from './TabCountChip'
 
@@ -35,10 +35,10 @@ interface SessionRunningCardProps {
 
 /**
  * One card per connected session in the Running now strip. The shown browser
- * tab's live rrweb preview dominates the top; the caption carries parent session
+ * tab's latest screenshot dominates the top; the caption carries parent session
  * identity, recent tools, and Watch / Stop actions. The tab chip switches which
- * owned tab the card previews. A pinned tab that is no longer the agent's live
- * target shows its last frame rather than a false live view.
+ * owned tab the card previews. A pinned tab keeps its own screenshot while the
+ * LIVE marker follows the agent's current target.
  *
  * The LIVE indicator uses light blue rather than the vivid brand accent, which
  * is near-invisible on the saturated blue caption block.
@@ -77,7 +77,6 @@ export function AgentRunningCard({
         shownTab={shownTab}
         site={site}
         liveBrowserTabId={liveBrowserTabId}
-        pinned={pinned}
         onSelectTab={onSelectTab}
         onTakeOver={onTakeOver}
         onStop={onStop}
@@ -93,11 +92,14 @@ export function AgentRunningCard({
       className="group relative flex h-[300px] flex-col overflow-hidden rounded-2xl border border-border-2 bg-bg-sunken transition-[border-color] duration-150 hover:border-accent/40"
     >
       <div className="relative flex-1 overflow-hidden">
-        <LivePreview
+        {/* rrweb players retained played events until card teardown, causing
+            unbounded heap growth and reproduced renderer OOM crashes. Cards
+            only need the latest image; keep rrweb on the dedicated Replay view. */}
+        <MiniScreencast
           site={site}
           live={showingLive}
           sessionId={session.sessionId}
-          browserTabId={pinned ? shownTab?.browserTabId : undefined}
+          browserTabId={shownTab?.browserTabId}
           className="h-full w-full"
         />
         {shownTab && onSelectTab && (
@@ -208,7 +210,6 @@ interface AgentNeedsYouCardProps {
   shownTab?: BrowserTabRecord
   site: string
   liveBrowserTabId?: number
-  pinned?: boolean
   onSelectTab?: (browserTabId: number) => void
   onTakeOver?: () => void
   onStop: () => void
@@ -229,7 +230,6 @@ function AgentNeedsYouCard({
   shownTab,
   site,
   liveBrowserTabId,
-  pinned,
   onSelectTab,
   onTakeOver,
   onStop,
@@ -246,11 +246,11 @@ function AgentNeedsYouCard({
       className="group relative flex h-[300px] flex-col overflow-hidden rounded-2xl border-2 border-[#b85c10] bg-bg-sunken shadow-[0_0_0_1px_rgba(184,92,16,0.25)]"
     >
       <div className="relative flex-1 overflow-hidden">
-        <LivePreview
+        <MiniScreencast
           site={context}
           live
           sessionId={session.sessionId}
-          browserTabId={pinned ? shownTab?.browserTabId : undefined}
+          browserTabId={shownTab?.browserTabId}
           className="h-full w-full"
         />
         <div className="absolute top-3 left-3">
