@@ -21,13 +21,17 @@ use std::{
 };
 use tokio::sync::{Mutex, Notify};
 
-/// What the agent said when it opened the request.
+/// What the agent said when it opened the request, plus the tab it was blocked on, captured at
+/// request time so takeover targets the exact page even if the agent has several tabs open.
 pub struct HelpOpenParams {
     pub request_id: String,
     pub reason: String,
     pub details: Option<String>,
     pub resume_hint: Option<String>,
     pub kind: Option<HelpRequestKind>,
+    pub browser_tab_id: Option<i64>,
+    pub url: Option<String>,
+    pub title: Option<String>,
 }
 
 /// The outcome the agent observes after waiting a chunk.
@@ -53,6 +57,9 @@ pub struct HelpEntry {
     details: Option<String>,
     resume_hint: Option<String>,
     kind: Option<HelpRequestKind>,
+    browser_tab_id: Option<i64>,
+    url: Option<String>,
+    title: Option<String>,
     requested_at_ms: i64,
     created: Instant,
     resolved: AtomicBool,
@@ -115,6 +122,9 @@ impl HelpRegistry {
             details: params.details,
             resume_hint: params.resume_hint,
             kind: params.kind,
+            browser_tab_id: params.browser_tab_id,
+            url: params.url,
+            title: params.title,
             requested_at_ms: now_ms(),
             created: Instant::now(),
             resolved: AtomicBool::new(false),
@@ -207,19 +217,23 @@ impl HelpRegistry {
     /// Build the cockpit wire view for a session, or None when there is nothing to show. A pure
     /// read: a resolved or expired entry is hidden but left in place for the agent's own wait call
     /// to consume, so a poll between wait calls cannot drop a hand-back note or mask a timeout.
+    ///
+    /// The tab pinned at request time wins; the `fallback_*` values (the poll-time most-active owned
+    /// tab) only fill in when nothing was captured then, so takeover targets the blocked page even
+    /// when the agent has several tabs open.
     pub async fn snapshot(
         &self,
         session: &SessionId,
-        browser_tab_id: Option<i64>,
-        url: Option<String>,
-        title: Option<String>,
+        fallback_tab_id: Option<i64>,
+        fallback_url: Option<String>,
+        fallback_title: Option<String>,
     ) -> Option<HelpRequest> {
         let entries = self.entries.lock().await;
         let entry = entries.get(session)?.clone();
         if entry.resolved.load(Ordering::Acquire) || entry.created.elapsed() >= self.max_wait {
             return None;
         }
-        let tab = browser_tab_id?;
+        let tab = entry.browser_tab_id.or(fallback_tab_id)?;
         let mut wire = HelpRequest::new(
             entry.request_id.clone(),
             entry.reason.clone(),
@@ -229,8 +243,8 @@ impl HelpRegistry {
         wire.details = entry.details.clone();
         wire.resume_hint = entry.resume_hint.clone();
         wire.kind = entry.kind;
-        wire.url = url;
-        wire.title = title;
+        wire.url = entry.url.clone().or(fallback_url);
+        wire.title = entry.title.clone().or(fallback_title);
         Some(wire)
     }
 }
@@ -254,6 +268,9 @@ mod tests {
             details: None,
             resume_hint: Some("resume at 15".to_string()),
             kind: Some(HelpRequestKind::Login),
+            browser_tab_id: None,
+            url: None,
+            title: None,
         }
     }
 
@@ -417,6 +434,25 @@ mod tests {
                 .is_none()
         );
         assert!(registry.get(&session).await.is_some());
+    }
+
+    #[tokio::test]
+    async fn snapshot_prefers_the_tab_pinned_at_request_time() {
+        let registry = HelpRegistry::new(Duration::from_secs(60));
+        let session = SessionId::new("s1");
+        let mut pinned = params("req-1");
+        pinned.browser_tab_id = Some(7);
+        pinned.url = Some("https://blocked".to_string());
+        registry.open(&session, pinned).await;
+        // The poll-time fallback points at a different, more-active tab; the pinned tab wins.
+        let Some(wire) = registry
+            .snapshot(&session, Some(42), Some("https://other".to_string()), None)
+            .await
+        else {
+            panic!("a pending request");
+        };
+        assert_eq!(wire.browser_tab_id, 7);
+        assert_eq!(wire.url.as_deref(), Some("https://blocked"));
     }
 
     #[tokio::test]

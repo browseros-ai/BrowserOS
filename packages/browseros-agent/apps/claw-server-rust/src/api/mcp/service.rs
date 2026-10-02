@@ -13,6 +13,7 @@ use crate::{
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
     services::{
+        cockpit::LiveSessionFilters,
         help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
         sessions::{RetirementCause, Session},
         skills::{CreateSkill, SkillOrigin},
@@ -399,6 +400,9 @@ impl ClawMcpService {
                 .filter(|value| !value.is_empty())
                 .map(str::to_string)
         };
+        // Pin the tab the agent is on right now, so takeover targets the blocked page even when the
+        // agent has several tabs open and the poll-time attribution later drifts or empties.
+        let (browser_tab_id, url, title) = self.resolve_active_tab(started.session.id()).await;
         let params = HelpOpenParams {
             request_id: format!("help-{}", Ulid::new()),
             reason: reason.to_string(),
@@ -408,9 +412,45 @@ impl ClawMcpService {
                 .get("kind")
                 .and_then(Value::as_str)
                 .and_then(help_kind_from_str),
+            browser_tab_id,
+            url,
+            title,
         };
         let entry = self.state.help.open(started.session.id(), params).await;
         self.run_help_wait(started, &entry, request_ct).await
+    }
+
+    /// The session's most-recently-active owned tab, as the live projection sees it now. Captured at
+    /// request time so a help request pins the exact blocked tab. Returns all-None when the session
+    /// has no attributed tab, in which case the snapshot falls back to the poll-time pick.
+    async fn resolve_active_tab(
+        &self,
+        session_id: &SessionId,
+    ) -> (Option<i64>, Option<String>, Option<String>) {
+        let filters = LiveSessionFilters {
+            profile_id: None,
+            slug: None,
+            site: None,
+            search: None,
+            since: None,
+        };
+        let Ok(sessions) = self.state.cockpit.list(&filters).await else {
+            return (None, None, None);
+        };
+        let tab = sessions
+            .into_iter()
+            .find(|projection| projection.task.session_id == session_id.as_str())
+            .and_then(|projection| {
+                projection
+                    .live
+                    .browser_tabs
+                    .into_iter()
+                    .max_by_key(|tab| tab.last_activity_at.unwrap_or(0))
+            });
+        match tab {
+            Some(tab) => (Some(tab.browser_tab_id), Some(tab.url), Some(tab.title)),
+            None => (None, None, None),
+        }
     }
 
     async fn call_await_human_help(
@@ -2343,6 +2383,9 @@ mod tests {
                     details: None,
                     resume_hint: None,
                     kind: None,
+                    browser_tab_id: None,
+                    url: None,
+                    title: None,
                 },
             )
             .await;
