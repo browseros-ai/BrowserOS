@@ -10,9 +10,11 @@ import { resolveBrowserOSServerBaseUrl } from '@/modules/api/browseros-ports'
 import { createRecordingsRelay } from '@/modules/recorder'
 import type { TakeoverResolveMessage } from '@/modules/takeover/takeover.types'
 import { createTakeoverBridge } from '@/modules/takeover/takeover-bridge'
+import { registerExtensionUpdates } from '@/modules/updates/register'
 
 /** Supplies Chrome's trusted tab/document identity to the durable recorder relay. */
 export default defineBackground(() => {
+  registerExtensionUpdates()
   registerDiagnostics('browseros-neo', resolveBrowserOSServerBaseUrl)
   const relay = createRecordingsRelay({
     resolveServerBaseUrl: resolveBrowserOSServerBaseUrl,

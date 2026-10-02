@@ -42,6 +42,10 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/system/diagnostics", get(system::diagnostics))
         .route("/system/shutdown", post(system::shutdown))
         .route("/api/v1/system", get(system::info))
+        .route(
+            "/api/v1/extension/update-ready",
+            post(extension_update_ready),
+        )
         .route("/api/v1/cockpit/stats", get(cockpit::stats))
         .route(
             "/api/v1/feedback/invitation",
@@ -176,16 +180,17 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     req.extensions_mut().insert(request_id.clone());
     let method = req.method().clone();
     let path = req.uri().path().to_string();
-    let reject_recording_origin =
-        path == "/api/v1/recordings/events" && !trusted_recording_origin(req.headers());
+    let reject_origin = (path == "/api/v1/recordings/events"
+        && !trusted_recording_origin(req.headers()))
+        || (path == "/api/v1/extension/update-ready" && !trusted_update_origin(req.headers()));
     let span = info_span!("http_request", request_id = %request_id.0, %method, %path);
     async move {
         let start = Instant::now();
-        let mut response = if reject_recording_origin {
+        let mut response = if reject_origin {
             CanonicalError::new(
                 StatusCode::FORBIDDEN,
                 "forbidden",
-                "recording ingest is restricted to BrowserOS neo",
+                "this endpoint is restricted to BrowserOS neo",
                 Some(&request_id),
             )
             .into_response()
@@ -204,7 +209,7 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
             }
         }
         let headers = response.headers_mut();
-        if !reject_recording_origin {
+        if !reject_origin {
             headers.insert(
                 header::ACCESS_CONTROL_ALLOW_ORIGIN,
                 HeaderValue::from_static("*"),
@@ -256,5 +261,25 @@ async fn route_fallback(request: Request) -> StatusCode {
         StatusCode::NO_CONTENT
     } else {
         StatusCode::NOT_FOUND
+    }
+}
+
+/// Notifications carry no authority or version: wake the coordinator, which
+/// independently reads the extension's native staged state over CDP.
+async fn extension_update_ready(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> StatusCode {
+    state.extension_updates.notify();
+    StatusCode::NO_CONTENT
+}
+
+fn trusted_update_origin(headers: &axum::http::HeaderMap) -> bool {
+    match headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        Some(BROWSERCLAW_EXTENSION_ORIGIN) => true,
+        None => !headers.contains_key("sec-fetch-site"),
+        Some(_) => false,
     }
 }

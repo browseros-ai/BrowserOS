@@ -6,38 +6,39 @@
 
 import * as rrweb from 'rrweb'
 import { defineContentScript } from 'wxt/utils/define-content-script'
-import {
-  createRecorderBuffer,
-  installRecorderFlushListeners,
-  type RecorderMessage,
-} from '@/modules/recorder'
+import { createRecorderBuffer, type RecorderMessage } from '@/modules/recorder'
+import { createRecorderPersistence } from '@/modules/recorder/recorder-persistence'
 
 /** Records each eligible main-frame document from load and relays rrweb batches. */
 export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_start',
   allFrames: false,
-  main() {
-    type Marked = typeof window & { __browserosClawReplayInstalled?: boolean }
-    if ((window as Marked).__browserosClawReplayInstalled) return
-    ;(window as Marked).__browserosClawReplayInstalled = true
-
+  main(ctx) {
+    // A stop acknowledgment must follow the worker's durable-outbox commits,
+    // including the last batch emitted by buffer.close().
+    const persistence = createRecorderPersistence()
     const buffer = createRecorderBuffer({
       send(ndjson, hasGap) {
+        if (ctx.isInvalid) return
         try {
-          void chrome.runtime
+          const post = chrome.runtime
             .sendMessage({
               type: 'recorder-events',
               ndjson,
               hasGap,
             } satisfies RecorderMessage)
+            .then((response) => response?.persisted === true)
             .catch((error) => {
               console.warn(
                 '[browseros-claw replay] sendMessage to background failed',
                 error,
               )
+              return false
             })
+          persistence.track(post)
         } catch (error) {
+          persistence.track(Promise.resolve(false))
           console.warn('[browseros-claw replay] send threw', error)
         }
       },
@@ -50,15 +51,32 @@ export default defineContentScript({
       },
     })
 
-    installRecorderFlushListeners({
-      page: window,
-      document,
-      flush: buffer.flushNow,
+    ctx.addEventListener(window, 'pagehide', buffer.flushNow)
+    ctx.addEventListener(document, 'visibilitychange', () => {
+      if (document.visibilityState === 'hidden') buffer.flushNow()
     })
 
     let recorderActive = false
     let stopRecording: (() => void) | null = null
-    chrome.runtime.onMessage.addListener((message) => {
+    // WXT invalidates the previous instance when the updated script is injected.
+    // Release rrweb observers so existing tabs recover
+    // without navigation or a second recorder living alongside the old one.
+    const stopRecorder = () => {
+      recorderActive = false
+      try {
+        stopRecording?.()
+      } catch (error) {
+        console.warn('[browseros-claw replay] stop failed', error)
+      } finally {
+        stopRecording = null
+        buffer.close()
+      }
+    }
+    const onMessage = (
+      message: unknown,
+      _sender: chrome.runtime.MessageSender,
+      sendResponse: (response: unknown) => void,
+    ) => {
       const recorderMessage = message as { type?: unknown }
       if (recorderMessage.type === 'recorder-resnapshot') {
         if (recorderActive) {
@@ -74,19 +92,18 @@ export default defineContentScript({
       // not recorded through the cleanup grace. Events after release never enter
       // any replay window, so nothing worth keeping is lost.
       if (recorderMessage.type === 'recorder-stop') {
-        recorderActive = false
-        if (stopRecording) {
-          try {
-            stopRecording()
-          } catch (error) {
-            console.warn('[browseros-claw replay] stop failed', error)
-          }
-          stopRecording = null
-        }
-        buffer.close()
-        return false
+        stopRecorder()
+        void persistence
+          .confirmed()
+          .then((persisted) => sendResponse({ persisted }))
+        return true
       }
       return false
+    }
+    chrome.runtime.onMessage.addListener(onMessage)
+    ctx.onInvalidated(() => {
+      stopRecorder()
+      chrome.runtime.onMessage.removeListener(onMessage)
     })
 
     try {

@@ -55,6 +55,7 @@ pub struct AppState {
     pub visuals: Arc<SessionVisualService>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
+    pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     pub shutdown: ShutdownHandle,
 }
 
@@ -209,6 +210,7 @@ impl AppState {
             visuals,
             cockpit,
             help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
+            extension_updates: Arc::default(),
             shutdown: ShutdownHandle::new(),
         })
     }

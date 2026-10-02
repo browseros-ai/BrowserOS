@@ -2006,3 +2006,27 @@ async fn audit_cleanup_runs_and_returns_usage() -> anyhow::Result<()> {
     assert!(body["usage"]["totalBytes"].is_number());
     Ok(())
 }
+
+#[tokio::test]
+async fn extension_update_notification_is_an_origin_restricted_wakeup() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    for (origin, expected) in [
+        (BROWSERCLAW_EXTENSION_ORIGIN, StatusCode::NO_CONTENT),
+        ("https://example.com", StatusCode::FORBIDDEN),
+        ("null", StatusCode::FORBIDDEN),
+    ] {
+        let response = app
+            .router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/api/v1/extension/update-ready")
+                    .header(header::ORIGIN, origin)
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), expected);
+    }
+    Ok(())
+}

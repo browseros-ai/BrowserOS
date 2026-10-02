@@ -71,3 +71,20 @@ diagnostics:
               $ref: ../schemas/system.yaml#/SystemDiagnostics
       '500':
         $ref: ../responses.yaml#/InternalError
+
+extensionUpdateReady:
+  post:
+    operationId: notifyExtensionUpdateReady
+    description: >-
+      Wake the sidecar to independently inspect the BrowserOS extension's staged
+      update through CDP. The request carries no version and does not itself
+      authorize a reload. Browser origins other than the Neo extension are denied.
+    responses:
+      '204':
+        description: Notification accepted; activation is asynchronous.
+      '403':
+        description: Untrusted browser origin.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError

@@ -14,6 +14,8 @@ paths:
     $ref: ./paths/system.yaml#/ready
   /system/shutdown:
     $ref: ./paths/system.yaml#/shutdown
+  /api/v1/extension/update-ready:
+    $ref: ./paths/system.yaml#/extensionUpdateReady
   /api/v1/system:
     $ref: ./paths/system.yaml#/info
   /api/v1/cockpit/stats:
