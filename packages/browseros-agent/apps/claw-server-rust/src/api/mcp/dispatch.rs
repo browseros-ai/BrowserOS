@@ -499,9 +499,14 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
 pub(super) async fn browser_unavailable_message(state: &AppState) -> String {
     let link = state.browser.link_status().await;
     if let Some(down_for) = link.down_for {
+        // Whole seconds truncate a sub-second outage to "0s ago", which reads as a
+        // bug in the very message meant to explain one.
+        let ago = match down_for.as_secs() {
+            0 => "under a second".to_string(),
+            seconds => format!("{seconds}s"),
+        };
         return format!(
-            "browser link lost {}s ago and the server is reconnecting; BrowserOS neo is running, so wait a moment and retry this tool. Do not relaunch it and do not fall back to another browser tool.",
-            down_for.as_secs()
+            "browser link lost {ago} ago and the server is reconnecting; BrowserOS neo is running, so wait a moment and retry this tool. Do not relaunch it and do not fall back to another browser tool."
         );
     }
     if link.ever_connected {
