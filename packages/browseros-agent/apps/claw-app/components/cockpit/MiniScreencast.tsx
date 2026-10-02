@@ -1,83 +1,142 @@
 import { Globe } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
-import { useSessionPreviewUrl } from '@/modules/api/audit.hooks'
+import { sessionPreviewUrl, useApiBaseUrl } from '@/modules/api/audit.hooks'
 
-const PREVIEW_REFRESH_MS = 1500
+const PREVIEW_REFRESH_MS = 3000
+const PREVIEW_TIMEOUT_MS = 10_000
+
+function subscribeToVisibility(onChange: () => void): () => void {
+  document.addEventListener('visibilitychange', onChange)
+  return () => document.removeEventListener('visibilitychange', onChange)
+}
+
+const isDocumentVisible = () => document.visibilityState === 'visible'
 
 interface MiniScreencastProps {
   site: string
   sessionId: string
+  /** Omitted follows the session; a supplied tab must still belong to it. */
+  browserTabId?: number
   live?: boolean
-  /** AgentRunningCard overrides the compact default to fill its preview zone. */
   className?: string
 }
 
-interface DecodedPreviewFrame {
-  sessionId: string
-  src: string
-}
-
 /**
- * Renders a live session's latest JPEG from the canonical binary route,
- * with a host placeholder when there is no captured frame.
- *
- * An off-screen Image decodes each refreshed response before the visible frame
- * advances. Previous pixels remain while a newer frame for the same session
- * loads; identity changes render the placeholder immediately so one session
- * can never be shown as another.
+ * A card owns only its displayed JPEG and one pending replacement. rrweb live
+ * players retained every played event and reproduced renderer OOM crashes;
+ * these small previews need current pixels, not a growing replay history.
  */
-export function MiniScreencast({ sessionId, ...props }: MiniScreencastProps) {
+export function MiniScreencast({
+  sessionId,
+  browserTabId,
+  ...props
+}: MiniScreencastProps) {
   return (
-    <SessionMiniScreencast key={sessionId} sessionId={sessionId} {...props} />
+    <SessionMiniScreencast
+      key={`${sessionId}:${browserTabId ?? 'follow'}`}
+      sessionId={sessionId}
+      browserTabId={browserTabId}
+      {...props}
+    />
   )
 }
 
 function SessionMiniScreencast({
   site,
   sessionId,
+  browserTabId,
   live,
   className,
 }: MiniScreencastProps) {
-  const [refresh, setRefresh] = useState(Date.now)
-  const incomingSrc = useSessionPreviewUrl(sessionId, refresh)
-  const [decodedFrame, setDecodedFrame] = useState<DecodedPreviewFrame | null>(
-    null,
+  const baseUrl = useApiBaseUrl()
+  const [src, setSrc] = useState<string | null>(null)
+  const visible = useSyncExternalStore(
+    subscribeToVisibility,
+    isDocumentVisible,
+    () => false,
   )
-  const [failedSrc, setFailedSrc] = useState<string | null>(null)
-  const displayedSrc =
-    decodedFrame !== null && decodedFrame.sessionId === sessionId
-      ? decodedFrame.src
-      : null
 
   useEffect(() => {
-    const timer = window.setInterval(
-      () => setRefresh(Date.now()),
-      PREVIEW_REFRESH_MS,
-    )
-    return () => window.clearInterval(timer)
-  }, [])
+    if (baseUrl === null || !visible) return
+    let disposed = false
+    let timer: number | undefined
+    let deadline: number | undefined
+    let request: AbortController | null = null
+    let currentUrl: string | null = null
+    let pendingUrl: string | null = null
+    let image: HTMLImageElement | null = null
+    let cancelDecode: (() => void) | null = null
 
-  useEffect(() => {
-    if (incomingSrc === null) return
-    if (failedSrc === incomingSrc) return
-    if (decodedFrame?.src === incomingSrc) return
-    let cancelled = false
-    const image = new Image()
-    image.onload = () => {
-      if (cancelled) return
-      setDecodedFrame({ sessionId, src: incomingSrc })
-      setFailedSrc(null)
+    const clearPendingImage = (): void => {
+      if (image) {
+        image.onload = null
+        image.onerror = null
+        image.src = ''
+        image = null
+      }
+      cancelDecode = null
+      if (pendingUrl) URL.revokeObjectURL(pendingUrl)
+      pendingUrl = null
     }
-    image.onerror = () => {
-      if (cancelled) return
-      setFailedSrc(incomingSrc)
+
+    const refresh = async (): Promise<void> => {
+      request = new AbortController()
+      const { signal } = request
+      // Bound both network and decoding time. Cleanup also settles the decode
+      // promise so an unmounted card cannot remain reachable through its await.
+      deadline = window.setTimeout(() => {
+        request?.abort()
+        cancelDecode?.()
+      }, PREVIEW_TIMEOUT_MS)
+      try {
+        const response = await fetch(
+          sessionPreviewUrl(sessionId, Date.now(), baseUrl, browserTabId),
+          { signal, cache: 'no-store' },
+        )
+        if (!response.ok) throw new Error('Preview unavailable')
+        const blob = await response.blob()
+        if (disposed || signal.aborted) return
+        pendingUrl = URL.createObjectURL(blob)
+        // Fetch once: decoding and displaying the blob URL avoids two captures
+        // of the no-store JPEG endpoint for the same refresh.
+        await new Promise<void>((resolve, reject) => {
+          cancelDecode = () => reject(new Error('Preview decode cancelled'))
+          image = new Image()
+          image.onload = () => resolve()
+          image.onerror = () => reject(new Error('Preview decode failed'))
+          image.src = pendingUrl ?? ''
+        })
+        if (disposed || signal.aborted) return
+        const previous = currentUrl
+        currentUrl = pendingUrl
+        pendingUrl = null
+        setSrc(currentUrl)
+        if (previous) URL.revokeObjectURL(previous)
+      } catch {
+        // A busy capture slot or transient failure keeps the last good frame.
+      } finally {
+        window.clearTimeout(deadline)
+        clearPendingImage()
+        // Schedule only after completion; a slow request must never create a
+        // queue of screenshots, decoded images or outstanding HTTP requests.
+        if (!disposed) timer = window.setTimeout(refresh, PREVIEW_REFRESH_MS)
+      }
     }
-    image.src = incomingSrc
+
+    void refresh()
     return () => {
-      cancelled = true
+      disposed = true
+      window.clearTimeout(timer)
+      window.clearTimeout(deadline)
+      request?.abort()
+      cancelDecode?.()
+      clearPendingImage()
+      if (currentUrl) URL.revokeObjectURL(currentUrl)
+      currentUrl = null
+      setSrc(null)
     }
-  }, [decodedFrame?.src, failedSrc, incomingSrc, sessionId])
+  }, [baseUrl, sessionId, browserTabId, visible])
 
   return (
     <div
@@ -86,17 +145,13 @@ function SessionMiniScreencast({
         className ?? 'h-[132px] w-full',
       )}
     >
-      {displayedSrc ? (
+      {src ? (
         <img
-          data-preview-url={displayedSrc}
-          src={displayedSrc}
+          data-preview-url={src}
+          src={src}
           alt={`Live view of ${site}`}
           className="h-full w-full object-cover"
-          // Bad visible bytes fall back to the placeholder without retrying the same URL.
-          onError={() => {
-            setDecodedFrame(null)
-            setFailedSrc(displayedSrc)
-          }}
+          onError={() => setSrc(null)}
         />
       ) : (
         <div className="flex flex-col items-center gap-1.5 text-ink-3">
@@ -104,12 +159,11 @@ function SessionMiniScreencast({
           <code className="font-mono text-[11px] text-ink-2">{site}</code>
         </div>
       )}
-      {live && (
+      {live && src && (
         <span
           aria-hidden
           className={cn(
             'absolute top-2.5 right-2.5 size-2 animate-pulse-dot rounded-full bg-green',
-            // The translucent ring keeps the dot readable over busy previews.
             'ring-2 ring-bg-canvas/70',
           )}
         />

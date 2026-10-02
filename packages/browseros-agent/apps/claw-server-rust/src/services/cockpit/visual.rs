@@ -79,23 +79,29 @@ impl SessionVisualService {
         })
     }
 
-    pub async fn capture(&self, session_id: &str) -> AppResult<Option<Vec<u8>>> {
+    pub async fn capture(
+        &self,
+        session_id: &str,
+        browser_tab_id: Option<i64>,
+    ) -> AppResult<Option<Vec<u8>>> {
         let session_key = SessionId::new(session_id);
         let Some(session) = self.sessions.lookup(&session_key).await else {
             return Ok(None);
         };
-        self.capture_with_session(&session, true).await
+        self.capture_with_session(&session, true, browser_tab_id)
+            .await
     }
 
     /// Captures through a teardown-owned session lease after live request resolution has stopped.
     pub async fn capture_for_session(&self, session: &Arc<Session>) -> AppResult<Option<Vec<u8>>> {
-        self.capture_with_session(session, false).await
+        self.capture_with_session(session, false, None).await
     }
 
     async fn capture_with_session(
         &self,
         session: &Arc<Session>,
         require_live_at_end: bool,
+        browser_tab_id: Option<i64>,
     ) -> AppResult<Option<Vec<u8>>> {
         let session_id = session.id().as_str();
         self.session_tabs.drain_writes().await;
@@ -113,7 +119,9 @@ impl SessionVisualService {
             .list_open_session_tabs(&[session_id.to_string()])
             .await?;
         let activity = self.tab_activity.reconcile_pages(&pages).await;
-        let Some(candidate) = select_candidate(session_id, &ownership, &pages, &activity) else {
+        let Some(candidate) =
+            select_candidate(session_id, &ownership, &pages, &activity, browser_tab_id)
+        else {
             return Ok(None);
         };
         if !self.in_flight.begin(candidate.page_id).await {
@@ -124,23 +132,23 @@ impl SessionVisualService {
         let target_id = TargetId::from(candidate.target_id);
         let options = capture_options();
         let capture_browser = browser.clone();
-        let mut capture = tokio::spawn(async move {
+        let worker = tokio::spawn(async move {
             capture_browser
                 .screenshot_for_target(page_id, &target_id, options)
                 .await
         });
+        // The HTTP handler can disappear when a card hides or changes tabs.
+        // A detached supervisor owns cleanup: keep the slot until CDP finishes,
+        // then release it even if the requester is gone or the worker panics.
+        let in_flight = self.in_flight.clone();
+        let mut capture = tokio::spawn(async move {
+            let result = worker.await;
+            in_flight.finish(candidate.page_id).await;
+            result
+        });
         let result = match timeout(CAPTURE_TIMEOUT, &mut capture).await {
-            Ok(result) => {
-                self.in_flight.finish(candidate.page_id).await;
-                result.map_err(AppError::from)?
-            }
+            Ok(result) => result.map_err(AppError::from)?.map_err(AppError::from)?,
             Err(_) => {
-                let in_flight = self.in_flight.clone();
-                let page_id = candidate.page_id;
-                tokio::spawn(async move {
-                    let _ = capture.await;
-                    in_flight.finish(page_id).await;
-                });
                 return Err(AppError::Internal(
                     "session preview capture timed out".to_string(),
                 ));
@@ -177,6 +185,7 @@ fn select_candidate(
     ownership: &[crate::db::entities::session_tabs::Model],
     pages: &[PageInfo],
     activity: &[TabActivityRecord],
+    browser_tab_id: Option<i64>,
 ) -> Option<CaptureCandidate> {
     let pages_by_tab = pages
         .iter()
@@ -195,6 +204,9 @@ fn select_candidate(
     let mut candidates = ownership
         .iter()
         .filter(|row| row.session_id == session_id)
+        // Selection narrows session ownership; it never bypasses it or falls
+        // back to a different tab under the pinned card's address/caption.
+        .filter(|row| browser_tab_id.is_none_or(|tab_id| row.tab_id == tab_id))
         .filter_map(|row| {
             let page = pages_by_tab.get(&row.tab_id)?;
             Some(CaptureCandidate {
