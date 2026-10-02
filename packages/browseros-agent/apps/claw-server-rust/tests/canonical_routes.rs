@@ -50,6 +50,7 @@ struct FixtureConnection {
     get_tabs_calls: AtomicUsize,
     fail_next_get_tabs: AtomicBool,
     next_get_tabs_gate: tokio::sync::Mutex<Option<Arc<GetTabsGate>>>,
+    next_capture_gate: tokio::sync::Mutex<Option<Arc<GetTabsGate>>>,
     capture_calls: AtomicUsize,
 }
 
@@ -77,6 +78,7 @@ impl FixtureConnection {
             get_tabs_calls: AtomicUsize::new(0),
             fail_next_get_tabs: AtomicBool::new(false),
             next_get_tabs_gate: tokio::sync::Mutex::new(None),
+            next_capture_gate: tokio::sync::Mutex::new(None),
             capture_calls: AtomicUsize::new(0),
         })
     }
@@ -161,6 +163,10 @@ impl CdpConnection for FixtureConnection {
                 })),
                 "Page.captureScreenshot" => {
                     let call = self.capture_calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    if let Some(gate) = self.next_capture_gate.lock().await.take() {
+                        gate.entered.notify_one();
+                        gate.release.notified().await;
+                    }
                     let target = session.map(CdpSessionId::as_str).unwrap_or("missing");
                     let marker = if target == "session-target-7" { 7 } else { 8 };
                     Ok(json!({ "data": BASE64_STANDARD.encode([0xff, 0xd8, marker, call as u8]) }))
@@ -1497,6 +1503,99 @@ async fn session_preview_is_owned_fresh_and_no_store() -> anyhow::Result<()> {
     }
 
     assert_eq!(app.connection.capture_calls(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_preview_releases_capture_slot_after_request_cancellation() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let gate = Arc::new(GetTabsGate {
+        entered: Notify::new(),
+        release: Notify::new(),
+    });
+    *app.connection.next_capture_gate.lock().await = Some(gate.clone());
+    let path = format!(
+        "/api/v1/sessions/{}/preview?browserTabId=101",
+        fixture.primary.id().as_str()
+    );
+    let router = app.router.clone();
+    let capture_path = path.clone();
+    let request_task =
+        tokio::spawn(
+            async move { request(&router, "GET", &capture_path, None, Body::empty()).await },
+        );
+    tokio::time::timeout(Duration::from_secs(2), gate.wait_until_entered()).await?;
+    request_task.abort();
+    assert!(matches!(request_task.await, Err(error) if error.is_cancelled()));
+
+    // Cancellation must neither free a still-running CDP capture's slot nor
+    // strand it after the independent worker finishes.
+    let (status, _, _) = request(&app.router, "GET", &path, None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    gate.release();
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let (status, _, _) = request(&app.router, "GET", &path, None, Body::empty()).await?;
+            if status == StatusCode::OK {
+                return Ok::<_, anyhow::Error>(());
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert_eq!(app.connection.capture_calls(), 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_preview_rejects_malformed_tab_ids_with_canonical_errors() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    for tab_id in ["abc", "", "9223372036854775808"] {
+        let path = format!(
+            "/api/v1/sessions/{}/preview?browserTabId={tab_id}",
+            fixture.primary.id().as_str()
+        );
+        let (status, headers, bytes) =
+            request(&app.router, "GET", &path, None, Body::empty()).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(headers[header::CONTENT_TYPE], "application/json");
+        assert_eq!(json_body(&bytes)?["code"], "invalid_request");
+    }
+    assert_eq!(app.connection.capture_calls(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn session_preview_honors_owned_tab_selection_without_falling_back() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let fixture = seed_live_fixture(&app).await?;
+    let path = format!(
+        "/api/v1/sessions/{}/preview?browserTabId=102",
+        fixture.primary.id().as_str()
+    );
+    let (status, _, bytes) = request(&app.router, "GET", &path, None, Body::empty()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bytes, vec![0xff, 0xd8, 8, 1]);
+
+    for tab_id in [103, 999] {
+        let path = format!(
+            "/api/v1/sessions/{}/preview?browserTabId={tab_id}",
+            fixture.primary.id().as_str()
+        );
+        let (status, _, _) = request(&app.router, "GET", &path, None, Body::empty()).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND);
+    }
+    for tab_id in [0, -1] {
+        let path = format!(
+            "/api/v1/sessions/{}/preview?browserTabId={tab_id}",
+            fixture.primary.id().as_str()
+        );
+        let (status, _, _) = request(&app.router, "GET", &path, None, Body::empty()).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(app.connection.capture_calls(), 1);
     Ok(())
 }
 

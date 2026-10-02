@@ -120,8 +120,9 @@ export function sessionPreviewUrl(
   sessionId: string,
   refresh: number,
   baseUrl = apiBaseUrl(),
+  browserTabId?: number,
 ): string {
-  return buildSessionPreviewUrl(baseUrl, { sessionId, refresh })
+  return buildSessionPreviewUrl(baseUrl, { sessionId, refresh, browserTabId })
 }
 
 /**
@@ -151,16 +152,6 @@ export function useTaskScreenshotBaseUrl(): string | null {
 /** The resolved claw-server API base, or null until the server-port pref loads. */
 export function useApiBaseUrl(): string | null {
   return useResolvedApiBaseUrl()
-}
-
-export function useSessionPreviewUrl(
-  sessionId: string,
-  refresh: number,
-): string | null {
-  const baseUrl = useResolvedApiBaseUrl()
-  return baseUrl === null
-    ? null
-    : sessionPreviewUrl(sessionId, refresh, baseUrl)
 }
 
 /**

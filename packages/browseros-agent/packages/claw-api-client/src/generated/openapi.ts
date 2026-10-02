@@ -1569,6 +1569,8 @@ export interface operations {
   getSessionPreview: {
     parameters: {
       query?: {
+        /** @description Capture this currently session-owned browser tab. Omitted follows the most recently active owned tab; an unavailable or unowned tab returns 404. */
+        browserTabId?: number
         /** @description Ignored client cache-busting token for preview URLs. */
         refresh?: number
       }
@@ -1580,7 +1582,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description Fresh viewport JPEG from the session's most recently active currently owned browser tab. */
+      /** @description Fresh viewport JPEG from the selected currently owned browser tab, or the most recently active owned tab when no selection is supplied. */
       200: {
         headers: {
           [name: string]: unknown
