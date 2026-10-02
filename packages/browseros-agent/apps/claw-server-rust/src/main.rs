@@ -26,6 +26,18 @@ const VERSION_MARKER: &str = concat!(
     ";"
 );
 const POSTHOG_KEY_MARKER: Option<&str> = option_env!("CLAW_POSTHOG_KEY_MARKER");
+/// Signals "the port is taken" to the supervising browser, which responds by
+/// relaunching on another port. Any other non-zero exit is read as a failed
+/// launch, so this must not be folded into the generic error path.
+const EXIT_PORT_CONFLICT: i32 = 2;
+
+/// Carried as an error rather than exiting where it is detected, so the runtime
+/// still tears down and the exit code is decided in one place.
+#[derive(Debug, thiserror::Error)]
+#[error("claw-server singleton is already running on 127.0.0.1:{port}")]
+struct PortConflict {
+    port: u16,
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -44,7 +56,7 @@ async fn main() -> anyhow::Result<()> {
     let mut runtime = AppRuntime::start(state);
     let run_result = run(&mut runtime, config, stdio_mode).await;
     let shutdown_result = runtime.shutdown().await;
-    match (run_result, shutdown_result) {
+    let outcome = match (run_result, shutdown_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(error)) => Err(error.into()),
@@ -52,7 +64,17 @@ async fn main() -> anyhow::Result<()> {
             error!(error = %shutdown_error, "application teardown failed after server error");
             Err(run_error)
         }
+    };
+    // Decided here, after teardown, and only for this one cause: the supervising
+    // browser relaunches on another port for this code and stops supervising for
+    // the rest of its session for any other non-zero exit.
+    if let Err(error) = &outcome
+        && let Some(conflict) = error.downcast_ref::<PortConflict>()
+    {
+        error!(port = conflict.port, "{conflict}");
+        std::process::exit(EXIT_PORT_CONFLICT);
     }
+    outcome
 }
 
 async fn run(
@@ -64,7 +86,13 @@ async fn run(
     state.browser.wait_for_initial_attempt().await;
     let initial_browser = state.browser.state();
     if initial_browser.connected && !state.tab_registry.is_ready(initial_browser.epoch) {
-        anyhow::bail!("failed to seed tab target identities before server startup");
+        // Deliberately not fatal. Exiting here reads to the supervisor as a failed
+        // launch, which stops the sidecar for the rest of the browser session over
+        // what the reattach loop reseeds on its next epoch.
+        warn!(
+            epoch = initial_browser.epoch,
+            "tab target identities were not seeded before startup; continuing and reseeding on reconnect"
+        );
     }
     if stdio_mode {
         return serve_stdio(state).await;
@@ -125,10 +153,10 @@ async fn serve_with_boot_task(
     let listener = match TcpListener::bind(addr).await {
         Ok(listener) => listener,
         Err(err) if err.kind() == io::ErrorKind::AddrInUse => {
-            anyhow::bail!(
-                "claw-server singleton is already running on 127.0.0.1:{}",
-                config.server_port
-            );
+            return Err(PortConflict {
+                port: config.server_port,
+            }
+            .into());
         }
         Err(err) => return Err(err).context("failed to bind claw-server listener"),
     };
@@ -326,7 +354,7 @@ async fn wait_for_shutdown_signal() {
 
 #[cfg(test)]
 mod tests {
-    use super::{ready_after, serve_with_boot_task};
+    use super::{PortConflict, ready_after, serve_with_boot_task};
     use axum::Router;
     use claw_server_rust::{
         AppRuntime, AppState,
@@ -443,7 +471,16 @@ mod tests {
             async {},
         )
         .await;
-        assert!(result.is_err());
+        let Err(error) = result else {
+            panic!("binding an occupied port cannot succeed");
+        };
+        // The supervising browser only relaunches on another port for the
+        // port-conflict exit code, so the cause has to stay distinguishable here
+        // rather than collapsing into a generic startup failure.
+        assert!(
+            error.downcast_ref::<PortConflict>().is_some(),
+            "a taken port must surface as a port conflict, got: {error}"
+        );
         assert!(analytics.snapshot().is_empty());
         runtime.shutdown().await?;
         Ok(())

@@ -6,6 +6,31 @@ HealthResponse:
     status:
       type: string
       enum: [ok]
+      description: >-
+        Reports only that this process is serving. It stays `ok` while the browser
+        link is down, because the supervisor restarts the server on a non-200 and a
+        restart cannot restore a link the operating system tore down. Read `browser`
+        for whether agent tools can actually run.
+    browser:
+      $ref: '#/BrowserLink'
+BrowserLink:
+  type: object
+  additionalProperties: false
+  required: [connected, downForMs, lastError]
+  description: The server's live connection to the browser it drives.
+  properties:
+    connected:
+      type: boolean
+    downForMs:
+      type: integer
+      format: int64
+      minimum: 0
+      nullable: true
+      description: Milliseconds since the link was lost, while the server reconnects. Absent when connected.
+    lastError:
+      type: string
+      nullable: true
+      description: Why the link was last lost, when known.
 ShutdownResponse:
   type: object
   additionalProperties: false

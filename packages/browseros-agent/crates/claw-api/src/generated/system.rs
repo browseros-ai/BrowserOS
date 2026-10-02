@@ -12,18 +12,52 @@ use crate::models;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
+/// BrowserLink : The server's live connection to the browser it drives.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrowserLink {
+    #[serde(rename = "connected")]
+    pub connected: bool,
+    /// Milliseconds since the link was lost, while the server reconnects. Absent when connected.
+    #[serde(rename = "downForMs", deserialize_with = "Option::deserialize")]
+    pub down_for_ms: Option<i64>,
+    /// Why the link was last lost, when known.
+    #[serde(rename = "lastError", deserialize_with = "Option::deserialize")]
+    pub last_error: Option<String>,
+}
+
+impl BrowserLink {
+    /// The server's live connection to the browser it drives.
+    pub fn new(
+        connected: bool,
+        down_for_ms: Option<i64>,
+        last_error: Option<String>,
+    ) -> BrowserLink {
+        BrowserLink {
+            connected,
+            down_for_ms,
+            last_error,
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HealthResponse {
+    /// Reports only that this process is serving. It stays `ok` while the browser link is down, because the supervisor restarts the server on a non-200 and a restart cannot restore a link the operating system tore down. Read `browser` for whether agent tools can actually run.
     #[serde(rename = "status")]
     pub status: HealthResponseStatus,
+    #[serde(rename = "browser", skip_serializing_if = "Option::is_none")]
+    pub browser: Option<Box<models::BrowserLink>>,
 }
 
 impl HealthResponse {
     pub fn new(status: HealthResponseStatus) -> HealthResponse {
-        HealthResponse { status }
+        HealthResponse {
+            status,
+            browser: None,
+        }
     }
 }
-///
+/// Reports only that this process is serving. It stays `ok` while the browser link is down, because the supervisor restarts the server on a non-200 and a restart cannot restore a link the operating system tore down. Read `browser` for whether agent tools can actually run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum HealthResponseStatus {
     #[serde(rename = "ok")]

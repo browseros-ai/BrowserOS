@@ -1,14 +1,56 @@
 use crate::{AppState, VERSION};
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, http::StatusCode};
 use claw_api::models::{
-    HealthResponse, ShutdownResponse, SystemCapabilities, SystemDiagnostics, SystemInfo,
-    system_capabilities::RecordingIngestVersion,
+    BrowserLink, HealthResponse, ShutdownResponse, SystemCapabilities, SystemDiagnostics,
+    SystemInfo, system_capabilities::RecordingIngestVersion,
 };
 
-// The contract's health is pure liveness: `status` is a single-variant
-// enum, so a reachable server can only answer "ok".
-pub(super) async fn health() -> Json<HealthResponse> {
-    Json(HealthResponse::default())
+/// Liveness, plus the state of the link this server exists to provide.
+///
+/// `status` stays `ok` whenever this process can answer, including while the
+/// browser link is down. The browser's supervisor restarts the server after two
+/// non-200 replies here, and a restart cannot restore a link the operating system
+/// tore down; it would turn a transient loss into a process restart. The link
+/// state therefore travels in the body, and `ready` is the strict gate.
+pub(super) async fn health(State(state): State<AppState>) -> Json<HealthResponse> {
+    Json(health_report(&state).await)
+}
+
+/// Readiness: whether agent tools can actually run right now.
+///
+/// Separate from `health` on purpose, so the one caller that must not restart the
+/// server over a transient link loss and the callers that need a real gate can ask
+/// different questions.
+pub(super) async fn ready(State(state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let report = health_report(&state).await;
+    let connected = report
+        .browser
+        .as_ref()
+        .is_some_and(|browser| browser.connected);
+    let status = if connected {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
+    (status, Json(report))
+}
+
+async fn health_report(state: &AppState) -> HealthResponse {
+    // `connected` and `downForMs` must come from the same read. The published
+    // connection state is refreshed by a one second poll, so pairing it with the
+    // client's own answer could report a connected link alongside an outage.
+    let link = state.browser.link_status().await;
+    let browser = BrowserLink {
+        connected: link.connected,
+        down_for_ms: link
+            .down_for
+            .map(|down| i64::try_from(down.as_millis()).unwrap_or(i64::MAX)),
+        last_error: state.browser.state().last_error,
+    };
+    HealthResponse {
+        browser: Some(Box::new(browser)),
+        ..HealthResponse::default()
+    }
 }
 
 // Only signals; the runtime's shutdown owner drains sessions and stops

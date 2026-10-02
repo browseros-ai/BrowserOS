@@ -469,9 +469,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 Err(error) => ToolResult::error(format!("{} failed: {error}", call.tool().name)),
             }
         }
-        None => ToolResult::error(
-            "browser session not connected; the agent browser is not running or paired. Tell the user to start BrowserOS neo and check the cockpit connection status; do not fall back to another browser tool.",
-        ),
+        None => ToolResult::error(browser_unavailable_message(&call.state).await),
     };
     let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
     if call.dispatch_cancel.is_cancelled() {
@@ -489,6 +487,34 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
         cancelled: false,
         duration_ms,
     })
+}
+
+/// Why the browser is unreachable, in terms the caller can act on.
+///
+/// The server is always retrying, so every case advises retrying rather than
+/// relaunching. Only the case where no link was ever established mentions starting
+/// the browser, because that is the only one where it might not be running.
+/// Telling an agent to start a browser that is already running is what turns a
+/// transient loss into the user quitting the app.
+pub(super) async fn browser_unavailable_message(state: &AppState) -> String {
+    let link = state.browser.link_status().await;
+    if let Some(down_for) = link.down_for {
+        // Whole seconds truncate a sub-second outage to "0s ago", which reads as a
+        // bug in the very message meant to explain one.
+        let ago = match down_for.as_secs() {
+            0 => "under a second".to_string(),
+            seconds => format!("{seconds}s"),
+        };
+        return format!(
+            "browser link lost {ago} ago and the server is reconnecting; BrowserOS neo is running, so wait a moment and retry this tool. Do not relaunch it and do not fall back to another browser tool."
+        );
+    }
+    if link.ever_connected {
+        return "browser link is down and the server is reconnecting; BrowserOS neo was reachable a moment ago, so wait and retry this tool. Do not relaunch it and do not fall back to another browser tool."
+            .to_string();
+    }
+    "no link to the browser yet and the server is still retrying; wait a few seconds and retry this tool. If BrowserOS neo is not running, tell the user to start it. Do not fall back to another browser tool."
+        .to_string()
 }
 
 pub(super) fn operator_cancellation_result() -> ToolResult {

@@ -38,6 +38,7 @@ pub(super) const RECORDING_INGEST_MAX_BYTES: usize = 16 * 1024 * 1024;
 pub fn router(state: AppState) -> Router<AppState> {
     Router::new()
         .route("/system/health", get(system::health))
+        .route("/system/ready", get(system::ready))
         .route("/system/diagnostics", get(system::diagnostics))
         .route("/system/shutdown", post(system::shutdown))
         .route("/api/v1/system", get(system::info))

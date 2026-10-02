@@ -141,6 +141,16 @@ impl TabRegistry {
         seed_result
     }
 
+    /// Seeds the map without subscribing to events.
+    ///
+    /// [`Self::observe_session`] both subscribes and seeds, and its listener lives
+    /// until the epoch changes, so calling it to retry a failed seed on the same
+    /// epoch leaves one listener per attempt subscribed to the same events. A retry
+    /// wants only the seeding half.
+    pub async fn reseed(&self, session: &BrowserSession, epoch: u64) -> anyhow::Result<()> {
+        self.rebuild_from_session(session, epoch, false).await
+    }
+
     #[must_use]
     pub fn is_ready(&self, epoch: u64) -> bool {
         self.ready_epoch.load(Ordering::SeqCst) == epoch
@@ -539,6 +549,77 @@ mod tests {
         assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
+    /// Seeding alone cannot adopt a new epoch, which is why the link monitor must
+    /// attach on a transition rather than only retrying the seed.
+    ///
+    /// The rebuild refuses an epoch that differs from the one it holds, so a
+    /// seed-only call after a reconnect is a silent no-op: readiness never arrives,
+    /// the retry spins, and the listener stays bound to the previous epoch. This is
+    /// the half that a seed-only retry path got wrong.
+    #[tokio::test]
+    async fn seeding_alone_cannot_adopt_a_new_epoch() -> anyhow::Result<()> {
+        let connection = TabListConnection::new();
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let map = map_with_releases(Arc::default());
+
+        map.observe_session(session.clone(), 1).await?;
+        assert!(map.is_ready(1));
+
+        // What a reconnect looks like if only the seeding half is called.
+        map.reseed(&session, 2).await?;
+
+        assert!(
+            !map.is_ready(2),
+            "seeding alone must not be mistaken for adopting the new epoch"
+        );
+        // And the attach does adopt it, which is the fix.
+        map.observe_session(session.clone(), 2).await?;
+        assert!(map.is_ready(2));
+        Ok(())
+    }
+
+    /// A socket reconnect inside one client bumps the epoch, and the listener is
+    /// bound to an epoch, so it exits. Something has to subscribe again or tab
+    /// events stop being processed: popups lose opener inheritance and closed tabs
+    /// are never cleaned up. The attach is what subscribes, and it happens per
+    /// client, not per socket, so the link monitor has to call it on every epoch.
+    #[tokio::test]
+    async fn an_epoch_change_gets_a_listener_that_still_processes_events() -> anyhow::Result<()> {
+        let connection = TabListConnection::new();
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let map = map_with_releases(Arc::default());
+
+        map.observe_session(session.clone(), 1).await?;
+        // The reconnect: same client and session, a new epoch.
+        map.observe_session(session.clone(), 2).await?;
+
+        let sent = connection.events.send(CdpEvent {
+            method: "Target.targetInfoChanged".to_string(),
+            params: json!({"targetInfo": {"targetId": "target-after-reconnect", "type": "page", "tabId": 77}}),
+            session_id: None,
+        });
+        assert!(
+            sent.is_ok(),
+            "a listener must be subscribed to receive this"
+        );
+
+        let mut mapped = None;
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            mapped = map.target_for_tab_cached(77).await;
+            if mapped.is_some() {
+                break;
+            }
+        }
+
+        assert_eq!(
+            mapped.as_deref(),
+            Some("target-after-reconnect"),
+            "the new epoch must have a listener processing events"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn target_events_upsert_only_page_targets_with_tab_ids() {
         let map = map_with_releases(Arc::default());
@@ -673,6 +754,35 @@ mod tests {
         assert_eq!(during_grace.as_deref(), Some("target-e"));
         assert_eq!(after_grace, None);
         assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    /// The link monitor retries seeding every second while the map is incomplete,
+    /// so the retry has to be free once the map is ready, and must not go through
+    /// `observe_session`: that subscribes an event listener which lives until the
+    /// epoch changes, so one attempt per second would leave one listener per second.
+    #[tokio::test]
+    async fn reseed_repeats_for_free_and_leaves_the_epoch_alone() -> anyhow::Result<()> {
+        let connection = TabListConnection::new();
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let map = map_with_releases(Arc::default());
+
+        // The attach happens once, on the link transition, and owns the listener.
+        map.observe_session(session.clone(), 1).await?;
+        assert!(map.is_ready(1));
+        assert_eq!(connection.list_calls.load(Ordering::SeqCst), 1);
+
+        // Then the timer retries through the seeding half alone.
+        for _ in 0..5 {
+            map.reseed(&session, 1).await?;
+        }
+
+        assert!(map.is_ready(1));
+        assert_eq!(
+            connection.list_calls.load(Ordering::SeqCst),
+            1,
+            "a ready epoch must cost nothing to retry, because this runs on a timer"
+        );
+        Ok(())
     }
 
     #[tokio::test]

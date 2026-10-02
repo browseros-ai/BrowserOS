@@ -37,6 +37,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/system/ready': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Strict gate for callers that need agent tools to work, rather than only needing the process to answer. Deliberately separate from health so a transient link loss cannot be read as a reason to restart this process. */
+    get: operations['getReadiness']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/system/shutdown': {
     parameters: {
       query?: never
@@ -477,8 +494,23 @@ export interface components {
       requestId?: string
     }
     HealthResponse: {
-      /** @enum {string} */
+      /**
+       * @description Reports only that this process is serving. It stays `ok` while the browser link is down, because the supervisor restarts the server on a non-200 and a restart cannot restore a link the operating system tore down. Read `browser` for whether agent tools can actually run.
+       * @enum {string}
+       */
       status: 'ok'
+      browser?: components['schemas']['BrowserLink']
+    }
+    /** @description The server's live connection to the browser it drives. */
+    BrowserLink: {
+      connected: boolean
+      /**
+       * Format: int64
+       * @description Milliseconds since the link was lost, while the server reconnects. Absent when connected.
+       */
+      downForMs: number | null
+      /** @description Why the link was last lost, when known. */
+      lastError: string | null
     }
     ShutdownResponse: {
       /** @enum {string} */
@@ -1096,7 +1128,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description The server is ready. */
+      /** @description This process is serving. Always 200 while it can answer, including while the browser link is down; inspect `browser` to tell those apart. */
       200: {
         headers: {
           [name: string]: unknown
@@ -1106,6 +1138,36 @@ export interface operations {
         }
       }
       500: components['responses']['InternalError']
+    }
+  }
+  getReadiness: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The server holds a live link to the browser. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HealthResponse']
+        }
+      }
+      500: components['responses']['InternalError']
+      /** @description The server is serving but has no live link to the browser. */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HealthResponse']
+        }
+      }
     }
   }
   shutdown: {

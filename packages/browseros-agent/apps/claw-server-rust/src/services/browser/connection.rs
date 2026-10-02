@@ -12,7 +12,7 @@ use tokio::{
     task::JoinHandle,
 };
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{info, warn};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,12 +22,31 @@ pub struct BrowserConnectionState {
     pub last_error: Option<String>,
 }
 
+/// The link as the client sees it right now.
+///
+/// Separate from [`BrowserConnectionState`], which is refreshed by a one second
+/// poll. Mixing the two lets a caller report a connected link whose socket is
+/// already down, so anything deciding whether tools will work reads this instead.
+#[derive(Debug, Clone, Copy)]
+pub struct BrowserLinkStatus {
+    pub connected: bool,
+    /// How long the link has been down. `None` when up, and also before the first
+    /// connection ever succeeds.
+    pub down_for: Option<Duration>,
+    /// Whether a link was ever established in this process. Distinguishes "lost a
+    /// working link" from "never reached the browser", which need different advice.
+    pub ever_connected: bool,
+}
+
 pub struct BrowserService {
     cdp_port: u16,
     ownership: Arc<PageOwnership>,
     state_tx: watch::Sender<BrowserConnectionState>,
     initial_attempt_tx: watch::Sender<bool>,
     session: Arc<RwLock<Option<Arc<browseros_core::BrowserSession>>>>,
+    /// Kept so callers can ask the client how long the link has been down rather
+    /// than this service keeping a second copy of that answer.
+    client: Arc<RwLock<Option<CdpClient>>>,
     tab_registry: Arc<TabRegistry>,
     cancel: CancellationToken,
 }
@@ -51,6 +70,7 @@ impl BrowserService {
             state_tx,
             initial_attempt_tx,
             session: Arc::new(RwLock::new(None)),
+            client: Arc::new(RwLock::new(None)),
             tab_registry,
             cancel: CancellationToken::new(),
         })
@@ -76,6 +96,29 @@ impl BrowserService {
             .filter(|session| session.is_connected())
     }
 
+    /// The link as the client sees it right now, not as the one second poll last
+    /// published it.
+    ///
+    /// Callers deciding whether browser tools will work, or what to tell an agent
+    /// that cannot run one, need every field to come from the same read.
+    pub async fn link_status(&self) -> BrowserLinkStatus {
+        let epoch = self.state_tx.borrow().epoch;
+        match self.client.read().await.as_ref() {
+            Some(client) => BrowserLinkStatus {
+                connected: client.is_connected(),
+                down_for: client.down_for(),
+                ever_connected: epoch > 0,
+            },
+            // No client at all: either the first connection has not succeeded yet,
+            // or the service was stopped. The reattach loop is still retrying.
+            None => BrowserLinkStatus {
+                connected: false,
+                down_for: None,
+                ever_connected: epoch > 0,
+            },
+        }
+    }
+
     pub async fn wait_for_initial_attempt(&self) {
         let mut receiver = self.initial_attempt_tx.subscribe();
         while !*receiver.borrow() {
@@ -90,6 +133,7 @@ impl BrowserService {
         let opts = self.connect_options();
         let client = CdpClient::connect(opts).await?;
         *self.session.write().await = Some(self.browser_session(client.clone()).await);
+        *self.client.write().await = Some(client.clone());
         self.state_tx.send_replace(BrowserConnectionState {
             connected: true,
             epoch: client.epoch(),
@@ -101,6 +145,13 @@ impl BrowserService {
     #[doc(hidden)]
     pub async fn set_session_for_testing(&self, session: Arc<BrowserSession>) {
         *self.session.write().await = Some(session);
+    }
+
+    /// Publishes a connection snapshot the way the one second poll does, so the
+    /// gap between the snapshot and the live link can be exercised.
+    #[doc(hidden)]
+    pub fn publish_state_for_testing(&self, state: BrowserConnectionState) {
+        self.state_tx.send_replace(state);
     }
 
     pub fn stop(&self) {
@@ -159,6 +210,7 @@ impl BrowserService {
                 Ok(client) => {
                     let session = self.browser_session(client.clone()).await;
                     *self.session.write().await = Some(session);
+                    *self.client.write().await = Some(client.clone());
                     let epoch = client.epoch();
                     self.state_tx.send_replace(BrowserConnectionState {
                         connected: true,
@@ -169,9 +221,10 @@ impl BrowserService {
                         self.initial_attempt_tx.send_replace(true);
                         initial_attempt_pending = false;
                     }
-                    debug!(epoch, "connected to BrowserOS CDP");
+                    info!(epoch, "connected to BrowserOS CDP");
                     self.monitor_client(client).await;
                     *self.session.write().await = None;
+                    *self.client.write().await = None;
                     backoff = Duration::from_secs(1);
                 }
                 Err(err) => {
@@ -208,17 +261,53 @@ impl BrowserService {
                 () = tokio::time::sleep(Duration::from_secs(1)) => {
                     let connected = client.is_connected();
                     let epoch = client.epoch();
-                    if connected != last_connected || epoch != last_epoch {
-                        if connected
-                            && let Some(session) = self.session().await
-                            && let Err(error) = self.tab_registry.observe_session(session, epoch).await
+                    let transitioned = connected != last_connected || epoch != last_epoch;
+                    // Two different jobs, and conflating them breaks one or the other.
+                    //
+                    // A new epoch needs its own event listener, exactly once: the
+                    // listener is bound to an epoch and exits when that changes, and
+                    // the attach that starts one happens per client, not per socket,
+                    // so an in-client reconnect has to attach again here or tab
+                    // events stop being processed.
+                    //
+                    // A map that is merely incomplete on the epoch it already has
+                    // needs seeding alone, retried until it succeeds. Routing that
+                    // through the attach would subscribe another listener every pass.
+                    if connected && let Some(session) = self.session().await {
+                        if transitioned {
+                            if let Err(error) = self
+                                .tab_registry
+                                .observe_session(session, epoch)
+                                .await
+                            {
+                                warn!(epoch, error = %error, "failed to seed tab target map after reconnect");
+                            }
+                        } else if !self.tab_registry.is_ready(epoch)
+                            && let Err(error) = self.tab_registry.reseed(&session, epoch).await
                         {
-                            warn!(epoch, error = %error, "failed to seed tab target map after reconnect");
+                            warn!(epoch, error = %error, "failed to seed tab target map; retrying");
+                        }
+                    }
+                    if transitioned {
+                        match (connected, client.down_for()) {
+                            (true, _) => info!(epoch, "browser link is up"),
+                            (false, Some(down_for)) => warn!(
+                                epoch,
+                                down_ms = down_for.as_millis(),
+                                "browser link is down; reconnecting"
+                            ),
+                            (false, None) => {
+                                warn!(epoch, "browser link is down; reconnecting");
+                            }
                         }
                         self.state_tx.send_replace(BrowserConnectionState {
                             connected,
                             epoch,
-                            last_error: if connected { None } else { Some("CDP disconnected; reconnecting".to_string()) },
+                            last_error: if connected {
+                                None
+                            } else {
+                                Some("browser link lost, reconnecting".to_string())
+                            },
                         });
                         last_connected = connected;
                         last_epoch = epoch;
@@ -307,6 +396,46 @@ mod tests {
             BrowserService::new(0, sessions.ownership(), TabRegistry::new(session_tabs)),
             root,
         ))
+    }
+
+    /// The published snapshot is refreshed by a one second poll, so between a link
+    /// dropping and the next poll it still claims the link is up. Readiness and the
+    /// tool error read the live link instead, and this pins that they do.
+    #[tokio::test]
+    async fn link_status_ignores_a_stale_connected_snapshot() -> anyhow::Result<()> {
+        let (service, _root) = service().await?;
+        service.publish_state_for_testing(BrowserConnectionState {
+            connected: true,
+            epoch: 7,
+            last_error: None,
+        });
+
+        let link = service.link_status().await;
+
+        assert!(
+            !link.connected,
+            "a snapshot cannot make a link with no client look connected"
+        );
+        assert!(service.state().connected, "the snapshot is still stale");
+        assert!(
+            link.ever_connected,
+            "a non-zero epoch means a link existed once, so the advice is reconnect"
+        );
+        Ok(())
+    }
+
+    /// Before anything has ever connected the epoch is zero, which is the one case
+    /// where the browser might genuinely not be running.
+    #[tokio::test]
+    async fn link_status_reports_never_connected_before_the_first_link() -> anyhow::Result<()> {
+        let (service, _root) = service().await?;
+
+        let link = service.link_status().await;
+
+        assert!(!link.connected);
+        assert!(!link.ever_connected);
+        assert!(link.down_for.is_none());
+        Ok(())
     }
 
     #[tokio::test]

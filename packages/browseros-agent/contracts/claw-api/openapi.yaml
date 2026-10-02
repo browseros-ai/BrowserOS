@@ -10,6 +10,8 @@ paths:
     $ref: ./paths/system.yaml#/diagnostics
   /system/health:
     $ref: ./paths/system.yaml#/health
+  /system/ready:
+    $ref: ./paths/system.yaml#/ready
   /system/shutdown:
     $ref: ./paths/system.yaml#/shutdown
   /api/v1/system:
@@ -98,6 +100,8 @@ components:
       $ref: ./schemas/common.yaml#/ApiError
     HealthResponse:
       $ref: ./schemas/system.yaml#/HealthResponse
+    BrowserLink:
+      $ref: ./schemas/system.yaml#/BrowserLink
     ShutdownResponse:
       $ref: ./schemas/system.yaml#/ShutdownResponse
     SystemDiagnostics:
