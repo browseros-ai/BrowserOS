@@ -52,6 +52,14 @@ impl AppRuntime {
         let shutdown = state.shutdown.clone();
         let mut tasks = vec![
             BackgroundTask {
+                name: "extension update coordinator",
+                handle: state.extension_updates.start(
+                    state.browser.clone(),
+                    state.sessions.clone(),
+                    shutdown.child_token(),
+                ),
+            },
+            BackgroundTask {
                 name: "browser reconnect loop",
                 handle: state.browser.start(),
             },

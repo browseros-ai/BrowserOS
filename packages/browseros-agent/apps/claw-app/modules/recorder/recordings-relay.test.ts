@@ -109,6 +109,51 @@ function systemResponse(version: number | null = 2, maxBytes = 4_194_304) {
 }
 
 describe('createRecordingsRelay', () => {
+  it('an empty batch acknowledges only after earlier document batches are durable', async () => {
+    const outbox = createMemoryOutbox()
+    const add = outbox.add
+    let release: () => void = () => {}
+    const persistence = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let started: () => void = () => {}
+    const writing = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    outbox.add = async (batch) => {
+      if (batch.ndjson) {
+        started()
+        await persistence
+      }
+      await add(batch)
+    }
+    const delivered: string[] = []
+    const relay = createRecordingsRelay({
+      outbox,
+      resolveServerBaseUrl: async () => serverBaseUrl,
+      fetch: async (input, init) => {
+        const request = asRequest(input, init)
+        if (request.url.endsWith('/api/v1/system')) return systemResponse()
+        delivered.push(await request.text())
+        return Response.json({ accepted: 0, stop: false })
+      },
+    })
+    const tail = '{"ts":100,"type":3,"data":{}}'
+    const posting = relay.post(7, documentIds.restart, tail)
+    await writing
+    let acknowledged = false
+    const barrier = relay.post(7, documentIds.restart, '').then(() => {
+      acknowledged = true
+    })
+    await Promise.resolve()
+    expect(acknowledged).toBe(false)
+    release()
+    await Promise.all([posting, barrier])
+    expect(delivered).toEqual([tail, ''])
+    expect(outbox.batches).toEqual([])
+    expect(outbox.gaps.size).toBe(0)
+  })
+
   it('invokes fetch without a receiver so a queued batch reaches ingest', async () => {
     const outbox = createMemoryOutbox()
     const requests: Array<{
