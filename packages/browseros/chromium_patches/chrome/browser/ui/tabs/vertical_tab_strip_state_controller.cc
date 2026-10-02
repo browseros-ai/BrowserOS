@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc b/chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc
-index d1ae4d7cc261240933cb6fa1edeb59e26a4ed8b5..3551b7069df395dafe60b9b8fb4d8d1b02ec68bf 100644
+index 22ece00a8c729ef5ada1d20afa2e289b8fd95d16..6b57459d409edde59b652e8af8944e3b2c9a3e05 100644
 --- a/chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc
 +++ b/chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc
 @@ -12,6 +12,7 @@
@@ -10,7 +10,7 @@ index d1ae4d7cc261240933cb6fa1edeb59e26a4ed8b5..3551b7069df395dafe60b9b8fb4d8d1b
  #include "chrome/app/vector_icons/vector_icons.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/sessions/session_service.h"
-@@ -57,6 +58,8 @@ VerticalTabStripStateController::VerticalTabStripStateController(
+@@ -58,6 +59,8 @@ VerticalTabStripStateController::VerticalTabStripStateController(
        browser_window_(browser_window),
        scoped_unowned_user_data_(browser_window->GetUnownedUserDataHost(),
                                  *this) {
@@ -19,7 +19,7 @@ index d1ae4d7cc261240933cb6fa1edeb59e26a4ed8b5..3551b7069df395dafe60b9b8fb4d8d1b
    pref_change_registrar_.Init(pref_service_);
  
    is_vertical_tabs_enabled_ =
-@@ -78,6 +81,16 @@ VerticalTabStripStateController::VerticalTabStripStateController(
+@@ -79,6 +82,16 @@ VerticalTabStripStateController::VerticalTabStripStateController(
              base::Unretained(this)));
    }
  

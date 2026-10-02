@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel_helper.cc b/chrome/browser/ui/views/side_panel/side_panel_helper.cc
-index 414f120c64b5143b2dd9ee85d09be4012622715d..abaae1f7c5a2a3d7610b0e2f38262c96c63fbb0a 100644
+index e1e7ccb48cdf3e0baaee33fad31ebcb669110435..1cae6c2ed8d5f97614189d5e9446c38d8729a36b 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel_helper.cc
 +++ b/chrome/browser/ui/views/side_panel/side_panel_helper.cc
 @@ -18,6 +18,7 @@
@@ -10,7 +10,7 @@ index 414f120c64b5143b2dd9ee85d09be4012622715d..abaae1f7c5a2a3d7610b0e2f38262c96
  #include "chrome/browser/ui/webui_browser/webui_browser.h"
  #include "components/history_clusters/core/features.h"
  #include "components/history_clusters/core/history_clusters_service.h"
-@@ -49,6 +50,13 @@ void SidePanelHelper::PopulateGlobalEntries(
+@@ -48,6 +49,13 @@ void SidePanelHelper::PopulateGlobalEntries(
          ->CreateAndRegisterEntry(window_registry);
    }
  

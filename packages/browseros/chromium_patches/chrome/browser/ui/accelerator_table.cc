@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/accelerator_table.cc b/chrome/browser/ui/accelerator_table.cc
-index 847093f9bb5d68bc8b06512a22e883280c992583..257e3d88ae8217a606c9052edd5c4ac91af2a277 100644
+index 1a68ca92321945aa8e3f61755351f455f27cca73..c1141cd4b70b6feb363f78d9d62351bb8b8aaa66 100644
 --- a/chrome/browser/ui/accelerator_table.cc
 +++ b/chrome/browser/ui/accelerator_table.cc
 @@ -15,6 +15,7 @@
@@ -10,7 +10,7 @@ index 847093f9bb5d68bc8b06512a22e883280c992583..257e3d88ae8217a606c9052edd5c4ac9
  #include "chrome/browser/ui/tabs/features.h"
  #include "chrome/browser/ui/ui_features.h"
  #include "components/lens/buildflags.h"
-@@ -339,6 +340,17 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
+@@ -346,6 +347,17 @@ std::vector<AcceleratorMapping> GetAcceleratorList() {
      }
  #endif
  

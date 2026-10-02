@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/side_panel/BUILD.gn b/chrome/browser/ui/views/side_panel/BUILD.gn
-index 7fcad1f0628fc181d7fe9320ab98a06880734989..a57b2ec737c87dd34333446d2f132bc5f21d35eb 100644
+index f51ca03ca233cd31098de9cd2bf80cd9e129b28e..190eaa45a91253db924d82a3a6bbc5596b46f552 100644
 --- a/chrome/browser/ui/views/side_panel/BUILD.gn
 +++ b/chrome/browser/ui/views/side_panel/BUILD.gn
 @@ -11,6 +11,8 @@ source_set("side_panel") {
@@ -10,8 +10,8 @@ index 7fcad1f0628fc181d7fe9320ab98a06880734989..a57b2ec737c87dd34333446d2f132bc5
 +    "browseros_simple_page_extractor.h",
      "comments/comments_side_panel_coordinator.cc",
      "comments/comments_side_panel_coordinator.h",
-     "customize_chrome/customize_chrome_utils.cc",
-@@ -58,11 +60,17 @@ source_set("side_panel") {
+     "extensions/extension_side_panel_action_item_util.cc",
+@@ -53,11 +55,17 @@ source_set("side_panel") {
      "tabs_from_other_devices/tabs_from_other_devices_side_panel_coordinator.h",
      "tabs_from_other_devices/tabs_from_other_devices_side_panel_metrics.cc",
      "tabs_from_other_devices/tabs_from_other_devices_side_panel_metrics.h",

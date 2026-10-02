@@ -1,0 +1,16 @@
+diff --git a/chrome/browser/ui/views/profiles/BUILD.gn b/chrome/browser/ui/views/profiles/BUILD.gn
+index 65a890b86c0c0369943c3db3748311d0fc160b36..fd6a2ce08823194e1244d9bb305a5922dc36cb6f 100644
+--- a/chrome/browser/ui/views/profiles/BUILD.gn
++++ b/chrome/browser/ui/views/profiles/BUILD.gn
+@@ -927,7 +927,11 @@ if (enable_dice_support) {
+       "//chrome/app:generated_resources",
+       "//chrome/browser:browser_process",
+       "//chrome/browser:global_features",
++      # The split controller owns the WebUI and waits for the browsing profile's
++      # extension loader; dependencies on the parent UI target cannot supply it.
++      "//chrome/browser/browseros/onboarding",
+       "//chrome/browser/enterprise",
++      "//chrome/browser/extensions",
+       "//chrome/browser/policy",
+       "//chrome/browser/prefs",
+       "//chrome/browser/profiles:profile",

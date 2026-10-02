@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc b/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc
-index 8b730307fe49f7c2ae7cdebc7cb5abfd9233ea1d..41c48012b1146413c1f8dfdacb518f5bbac41b7e 100644
+index 6a2b16400ffe1358bd790f1b8b8082d0a2a21ab0..d99305cf7fd5ba9337805342690a503e6a277e9c 100644
 --- a/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc
 +++ b/chrome/browser/ui/pdf/infobar/pdf_infobar_delegate.cc
-@@ -15,10 +15,9 @@
+@@ -12,10 +12,9 @@
  #include "chrome/common/buildflags.h"
  #include "chrome/grit/branded_strings.h"
  #include "chrome/grit/generated_resources.h"
@@ -14,7 +14,7 @@ index 8b730307fe49f7c2ae7cdebc7cb5abfd9233ea1d..41c48012b1146413c1f8dfdacb518f5b
  #include "content/public/browser/web_contents.h"
  #include "ui/base/l10n/l10n_util.h"
  #include "ui/base/ui_base_features.h"
-@@ -131,11 +130,8 @@ infobars::InfoBarDelegate::InfoBarIdentifier PdfInfoBarDelegate::GetIdentifier()
+@@ -45,11 +44,8 @@ infobars::InfoBarDelegate::InfoBarIdentifier PdfInfoBarDelegate::GetIdentifier()
    return PDF_INFOBAR_DELEGATE;
  }
  

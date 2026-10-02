@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/extensions/external_provider_manager.cc b/chrome/browser/extensions/external_provider_manager.cc
-index 02b5f23cb062594d555990a29fc81b51ef6170bc..505b4eb29d9adce6dada808be288e4aedd03d70a 100644
+index 80ac525552c03f173ae13812bce4dc57222dec53..104131b75e62952b1ca0434d943990495455f5b3 100644
 --- a/chrome/browser/extensions/external_provider_manager.cc
 +++ b/chrome/browser/extensions/external_provider_manager.cc
 @@ -291,6 +291,7 @@ bool ExternalProviderManager::OnExternalExtensionFileFound(

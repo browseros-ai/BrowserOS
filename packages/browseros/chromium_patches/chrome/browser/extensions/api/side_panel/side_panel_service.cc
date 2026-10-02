@@ -1,20 +1,16 @@
 diff --git a/chrome/browser/extensions/api/side_panel/side_panel_service.cc b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
-index 5474809d1dcd7..7e8967854ac29 100644
+index 5f43bf1b2af2f8abe271fac57e68654e6c0d8305..91fa00be473e46b700067bcc15940b3dc3515cab 100644
 --- a/chrome/browser/extensions/api/side_panel/side_panel_service.cc
 +++ b/chrome/browser/extensions/api/side_panel/side_panel_service.cc
-@@ -8,9 +8,11 @@
- #include <memory>
+@@ -9,6 +9,7 @@
  #include <optional>
+ #include <string_view>
  
 +#include "base/logging.h"
  #include "base/no_destructor.h"
  #include "base/strings/stringprintf.h"
  #include "base/strings/to_string.h"
-+#include "chrome/browser/browseros/core/browseros_constants.h"
- #include "chrome/browser/extensions/extension_tab_util.h"
- #include "chrome/browser/profiles/profile.h"
- #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-@@ -473,6 +475,139 @@ void SidePanelService::OnExtensionUninstalled(
+@@ -479,6 +480,140 @@ void SidePanelService::OnExtensionUninstalled(
    RemoveExtensionOptions(extension->id());
  }
  
@@ -78,7 +74,8 @@ index 5474809d1dcd7..7e8967854ac29 100644
 +    LOG(INFO) << "browseros: Auto-registering contextual panel for tab_id="
 +              << tab_id << " with path=" << *default_options.path;
 +
-+    // Create contextual options for this tab.
++    // SetOptions synchronously notifies the tab coordinator, registering its
++    // contextual entry before toggle below looks it up in the tab registry.
 +    api::side_panel::PanelOptions contextual_options;
 +    contextual_options.tab_id = tab_id;
 +    contextual_options.path = std::move(default_options.path);

@@ -1,8 +1,8 @@
 diff --git a/tools/gritsettings/resource_ids.spec b/tools/gritsettings/resource_ids.spec
-index e1f3030f0c0cc1b870cbe75395539d37ca1451dd..6d6b14c4fcc6260dc94898e09f4f2d3aca5055c0 100644
+index c90c7c5e5521e0355bc2df9c3435b500a6613118..8b58fe420a4c1327cc603b43a10e4ed246ea573f 100644
 --- a/tools/gritsettings/resource_ids.spec
 +++ b/tools/gritsettings/resource_ids.spec
-@@ -189,6 +189,10 @@
+@@ -192,6 +192,10 @@
    "chrome/browser/indigo/resources/browser_resources.grd": {
      "includes": [2640],
    },

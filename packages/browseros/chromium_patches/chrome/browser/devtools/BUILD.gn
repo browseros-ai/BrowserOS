@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/BUILD.gn b/chrome/browser/devtools/BUILD.gn
-index 265dba91f9c7963b45158b37d0f1ccc8a39bd6d0..bf734690fbfcc94415e0ae22b9b66ac6816efbdc 100644
+index 2e694986c7617565320e7259f4548ba6e75561b4..34eaeedaa4997dcc9f6e907a6c36f7b32e631131 100644
 --- a/chrome/browser/devtools/BUILD.gn
 +++ b/chrome/browser/devtools/BUILD.gn
 @@ -37,6 +37,10 @@ if (enable_devtools_frontend) {
@@ -13,21 +13,35 @@ index 265dba91f9c7963b45158b37d0f1ccc8a39bd6d0..bf734690fbfcc94415e0ae22b9b66ac6
      "protocol/pwa.cc",
      "protocol/pwa.h",
      "protocol/security.cc",
-@@ -399,7 +403,10 @@ static_library("devtools") {
-       "//components/media_router/browser",
+@@ -410,8 +414,12 @@ static_library("devtools") {
+     deps += [
+       "//chrome/app:command_ids",
+       "//chrome/browser/badging",
++      "//chrome/browser/bookmarks",
++      # Keep BrowserOS CDP prefs independent of the browser aggregator.
++      "//chrome/browser/browseros/core:prefs",
+       "//chrome/browser/custom_handlers",
+       "//chrome/browser/first_party_sets",
++      "//chrome/browser/history",
+       "//chrome/browser/ui/media_router",
+       "//chrome/browser/ui/startup",
+       "//chrome/browser/ui/views/frame:contents_web_view",
+@@ -422,7 +430,11 @@ static_library("devtools") {
        "//components/media_router/common/mojom:media_router",
+       "//components/origin_gating/core",
        "//components/payments/content",
 +      "//components/bookmarks/browser",
 +      "//components/history/core/browser",
        "//components/privacy_sandbox/privacy_sandbox_attestations",
++      "//components/query_parser",
 +      "//components/tab_groups",
        "//components/security_state/content",
        "//components/subresource_filter/content/browser",
        "//components/web_package",
-@@ -419,8 +426,12 @@ static_library("devtools") {
+@@ -439,8 +451,12 @@ static_library("devtools") {
+       "devtools_navigation_throttle.h",
+       "protocol/ads_handler.cc",
        "protocol/ads_handler.h",
-       "protocol/autofill_handler.cc",
-       "protocol/autofill_handler.h",
 +      "protocol/bookmarks_handler.cc",
 +      "protocol/bookmarks_handler.h",
        "protocol/browser_handler.cc",

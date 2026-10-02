@@ -1,12 +1,15 @@
 diff --git a/chrome/browser/ui/startup/BUILD.gn b/chrome/browser/ui/startup/BUILD.gn
-index 8ad9e15ad170bfea11eb1bc6dbf1119f7fbe3328..58731ce79d6d279aaff377ba8862369b0375b2c4 100644
+index 8b593031e4160c7c8a26943abe46b7f442b6d263..11d5ff3d07cbf918a3d46c766534fcfd5f6ff955 100644
 --- a/chrome/browser/ui/startup/BUILD.gn
 +++ b/chrome/browser/ui/startup/BUILD.gn
-@@ -141,6 +141,7 @@ source_set("impl") {
+@@ -139,6 +139,10 @@ source_set("impl") {
      "//chrome/browser:browser_process",
      "//chrome/browser:defaults",
      "//chrome/browser/actor",
++    # startup_browser_creator.cc owns the BrowserOS first-run decisions here.
++    "//chrome/browser/browseros/core",
 +    "//chrome/browser/browseros/core:product",
++    "//chrome/browser/browseros/onboarding",
      "//chrome/browser/devtools",
      "//chrome/browser/first_run",
      "//chrome/browser/headless",

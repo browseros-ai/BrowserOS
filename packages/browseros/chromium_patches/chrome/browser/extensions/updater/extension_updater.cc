@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/updater/extension_updater.cc b/chrome/browser/extensions/updater/extension_updater.cc
-index bd09a39459441..8860719396ce8 100644
+index b538f65c4a375b267e73948bf6cb228f84bf83c5..388e9d86574c833951206e71946a0a94ff881b4d 100644
 --- a/chrome/browser/extensions/updater/extension_updater.cc
 +++ b/chrome/browser/extensions/updater/extension_updater.cc
-@@ -562,6 +562,100 @@ void ExtensionUpdater::CheckNow(CheckParams params) {
+@@ -574,6 +574,100 @@ void ExtensionUpdater::CheckNow(CheckParams params) {
    }
  }
  

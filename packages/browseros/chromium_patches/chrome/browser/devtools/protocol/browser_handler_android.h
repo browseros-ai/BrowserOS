@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.h b/chrome/browser/devtools/protocol/browser_handler_android.h
-index a80686d439110..b35c043695542 100644
+index 83bec7125e1fb966a61450bf93fc3aca6f46d438..377fb3a47e68c92df229fff142054217e94fea5c 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.h
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.h
-@@ -22,6 +22,14 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
+@@ -58,6 +58,14 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
        std::optional<std::string> target_id,
        int* out_window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
@@ -17,7 +17,7 @@ index a80686d439110..b35c043695542 100644
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -40,6 +48,108 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
+@@ -76,6 +84,108 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
@@ -124,5 +124,5 @@ index a80686d439110..b35c043695542 100644
 +      std::unique_ptr<protocol::Browser::TabGroupInfo>* out_group) override;
 +
   private:
-   const std::string target_id_;
- };
+   struct WindowLookupResult {
+     raw_ptr<ui::BaseWindow> window;

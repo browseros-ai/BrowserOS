@@ -1,46 +1,49 @@
 diff --git a/chrome/browser/ui/browser_actions.cc b/chrome/browser/ui/browser_actions.cc
-index 30a45e07a5e9d7c986923b3254f01e0da6aa20cb..4b342702574ce41bd1e47eeeb65c1ce9411e5766 100644
+index 83b50c9d0440e75e275d5a09aca78a0af8dd850b..6762a8d686fbbd10aaf496480272ffc2c8b611f8 100644
 --- a/chrome/browser/ui/browser_actions.cc
 +++ b/chrome/browser/ui/browser_actions.cc
-@@ -21,17 +21,21 @@
+@@ -21,6 +21,7 @@
  #include "build/branding_buildflags.h"
  #include "chrome/app/chrome_command_ids.h"
  #include "chrome/app/vector_icons/vector_icons.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
+ #include "chrome/browser/browsing_data/browsing_data_important_sites_util.h"
+ #include "chrome/browser/contextual_cueing/contextual_cueing_controller.h"
  #include "chrome/browser/contextual_cueing/features.h"
- #include "chrome/browser/contextual_tasks/contextual_tasks_side_panel_coordinator.h"
- #include "chrome/browser/contextual_tasks/contextual_tasks_utils.h"
+@@ -29,6 +30,8 @@
  #include "chrome/browser/contextual_tasks/entry_point_eligibility_manager.h"
  #include "chrome/browser/devtools/devtools_window.h"
+ #include "chrome/browser/enterprise/isolated_mode/isolated_mode_settings_service_factory.h"
 +#include "chrome/browser/extensions/api/side_panel/side_panel_service.h"
 +#include "chrome/browser/extensions/extension_tab_util.h"
  #include "chrome/browser/glic/browser_ui/glic_vector_icon_manager.h"
+ #include "chrome/browser/glic/glic_pref_names.h"
  #include "chrome/browser/glic/host/glic.mojom.h"
- #include "chrome/browser/glic/public/glic_enabling.h"
+@@ -36,6 +39,7 @@
  #include "chrome/browser/glic/public/glic_keyed_service.h"
  #include "chrome/browser/glic/resources/grit/glic_browser_resources.h"
  #include "chrome/browser/indigo/indigo_page_action_controller.h"
 +#include "chrome/browser/infobars/simple_alert_infobar_creator.h"
  #include "chrome/browser/lifetime/application_lifetime.h"
+ #include "chrome/browser/media/router/media_router_feature.h"
  #include "chrome/browser/prefs/incognito_mode_prefs.h"
- #include "chrome/browser/profiles/profile.h"
-@@ -95,6 +99,7 @@
+@@ -115,6 +119,7 @@
+ #include "chrome/browser/ui/commerce/commerce_ui_tab_helper.h"
  #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
  #include "chrome/browser/ui/dialogs/browser_dialogs.h"
- #include "chrome/browser/ui/exclusive_access/exclusive_access_manager.h"
 +#include "chrome/browser/ui/extensions/extension_side_panel_utils.h"
  #include "chrome/browser/ui/intent_picker_tab_helper.h"
  #include "chrome/browser/ui/lens/lens_overlay_controller.h"
  #include "chrome/browser/ui/lens/lens_overlay_entry_point_controller.h"
-@@ -167,6 +172,7 @@
+@@ -189,6 +194,7 @@
  #include "chrome/common/url_constants.h"
  #include "chrome/grit/branded_strings.h"
  #include "chrome/grit/generated_resources.h"
 +#include "chrome/grit/theme_resources.h"
+ #include "components/autofill/core/common/autofill_features.h"
  #include "components/autofill/core/common/autofill_payments_features.h"
- #include "components/bookmarks/common/bookmark_pref_names.h"
- #include "components/collaboration/public/messaging/activity_log.h"
-@@ -174,6 +180,7 @@
+ #include "components/bookmarks/common/bookmark_bar_visibility_state.h"
+@@ -198,6 +204,7 @@
  #include "components/content_settings/core/common/features.h"
  #include "components/contextual_tasks/public/features.h"
  #include "components/feature_engagement/public/feature_constants.h"
@@ -48,19 +51,20 @@ index 30a45e07a5e9d7c986923b3254f01e0da6aa20cb..4b342702574ce41bd1e47eeeb65c1ce9
  #include "components/lens/lens_features.h"
  #include "components/lens/lens_overlay_invocation_source.h"
  #include "components/media_router/browser/media_router_dialog_controller.h"
-@@ -208,6 +215,7 @@
- #include "components/translate/core/browser/translate_manager.h"
+@@ -231,6 +238,7 @@
+ #include "components/lens/lens_overlay_invocation_source.h"
  #include "components/user_prefs/user_prefs.h"
  #include "components/vector_icons/vector_icons.h"
 +#include "extensions/browser/extension_registry.h"
  #include "printing/buildflags/buildflags.h"
  #include "ui/accessibility/accessibility_features.h"
  #include "ui/actions/actions.h"
-@@ -407,6 +415,92 @@ void BrowserActions::InitializeSidePanelActions() {
+@@ -459,6 +467,93 @@ void BrowserActions::InitializeSidePanelActions() {
              .Build());
    }
  
-+  // Add third-party LLM panel if feature is enabled
++  // The window coordinator registers the matching entry; the action keeps
++  // the same feature gate so a disabled panel cannot be opened or pinned.
 +  if (base::FeatureList::IsEnabled(features::kThirdPartyLlmPanel)) {
 +    root_action_item_->AddChild(
 +        SidePanelAction(SidePanelEntryId::kThirdPartyLlm,
@@ -149,15 +153,3 @@ index 30a45e07a5e9d7c986923b3254f01e0da6aa20cb..4b342702574ce41bd1e47eeeb65c1ce9
    if (HistorySidePanelCoordinator::IsSupported()) {
      root_action_item_->AddChild(
          SidePanelAction(SidePanelEntryId::kHistory, IDS_HISTORY_TITLE,
-@@ -3540,9 +3634,8 @@ void BrowserActions::InitializeToolbarAndMiscActions() {
-               [](BrowserWindowInterface* bwi, actions::ActionItem* item,
-                  actions::ActionInvocationContext context) {
-                 PrefService* pref_service = bwi->GetProfile()->GetPrefs();
--                const char* pref_name =
--                    media_router::prefs::
--                        kMediaRouterShowCastSessionsStartedByOtherDevices;
-+                const char* pref_name = media_router::prefs::
-+                    kMediaRouterShowCastSessionsStartedByOtherDevices;
-                 pref_service->SetBoolean(pref_name,
-                                          !pref_service->GetBoolean(pref_name));
-               },

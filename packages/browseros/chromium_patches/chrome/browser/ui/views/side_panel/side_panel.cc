@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/side_panel/side_panel.cc b/chrome/browser/ui/views/side_panel/side_panel.cc
-index 90f261de2344dd9674f6b10599b80ffd6a0eb951..1c0d86d2631e4750eed6da85c8058d3363ffebe6 100644
+index ab8999f84de6992bbf403b92ef5c3a5ad0386390..434d766c2caf635b0bd0acb38533496cb963b048 100644
 --- a/chrome/browser/ui/views/side_panel/side_panel.cc
 +++ b/chrome/browser/ui/views/side_panel/side_panel.cc
-@@ -129,7 +129,7 @@ class ContentParentBackground : public views::Background {
+@@ -131,7 +131,7 @@ class ContentParentBackground : public views::Background {
      SkPath path = SkPath::RRect(rrect);
      canvas->ClipPath(path, /*do_anti_alias=*/true);
  
@@ -11,7 +11,7 @@ index 90f261de2344dd9674f6b10599b80ffd6a0eb951..1c0d86d2631e4750eed6da85c8058d33
    }
  
   private:
-@@ -716,8 +716,10 @@ double SidePanel::GetAnimationValueFor(BrowserAnimationSequence which) const {
+@@ -665,8 +665,10 @@ double SidePanel::GetAnimationValueFor(BrowserAnimationSequence which) const {
  }
  
  bool SidePanel::ShouldShowAnimation() const {

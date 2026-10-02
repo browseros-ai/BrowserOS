@@ -1,5 +1,5 @@
 diff --git a/content/browser/devtools/protocol/target_handler.cc b/content/browser/devtools/protocol/target_handler.cc
-index f051aaf1c55ed686d6652c4b32622532f0692487..6ae6a672b7e121ee82b949b4bf9abeec061bfd92 100644
+index e77c87427f88569d10830c31e665cf93f6e8dce3..a9a3db3622d24a4c3e2f711db05badf54b3cdd7a 100644
 --- a/content/browser/devtools/protocol/target_handler.cc
 +++ b/content/browser/devtools/protocol/target_handler.cc
 @@ -135,6 +135,19 @@ std::unique_ptr<Target::TargetInfo> BuildTargetInfo(
@@ -22,7 +22,7 @@ index f051aaf1c55ed686d6652c4b32622532f0692487..6ae6a672b7e121ee82b949b4bf9abeec
    return target_info;
  }
  
-@@ -461,10 +474,11 @@ class TargetHandler::RequestThrottle : public TargetHandler::Throttle {
+@@ -459,10 +472,11 @@ class TargetHandler::RequestThrottle : public TargetHandler::Throttle {
  
  class TargetHandler::Session : public DevToolsAgentHostClient {
   public:
@@ -38,7 +38,7 @@ index f051aaf1c55ed686d6652c4b32622532f0692487..6ae6a672b7e121ee82b949b4bf9abeec
      std::string id = base::UnguessableToken::Create().ToString();
      // We don't support or allow the non-flattened protocol when in binary mode.
      // So, we coerce the setting to true, as the non-flattened mode is
-@@ -1494,11 +1508,11 @@ void TargetHandler::DevToolsAgentHostDestroyed(DevToolsAgentHost* host) {
+@@ -1507,11 +1521,11 @@ void TargetHandler::DevToolsAgentHostDestroyed(DevToolsAgentHost* host) {
  }
  
  void TargetHandler::DevToolsAgentHostAttached(DevToolsAgentHost* host) {

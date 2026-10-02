@@ -1,5 +1,5 @@
 diff --git a/chrome/common/webui_url_constants.h b/chrome/common/webui_url_constants.h
-index 497865b22520bbe16bd6cc68b73ba90e25f70065..ec36673180644ff3cc74864a435164a13df6b357 100644
+index 47c543c844b3348c0360fb2a38c214aeab41944f..e29e526938cdfb2d280dc7c23beb0e7ab715729d 100644
 --- a/chrome/common/webui_url_constants.h
 +++ b/chrome/common/webui_url_constants.h
 @@ -34,6 +34,10 @@ namespace chrome {

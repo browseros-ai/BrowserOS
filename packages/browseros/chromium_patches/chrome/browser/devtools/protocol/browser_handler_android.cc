@@ -1,17 +1,17 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.cc b/chrome/browser/devtools/protocol/browser_handler_android.cc
-index 82199c6e2e93b..7978474dda89b 100644
+index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..b922032ae70de5a1c6c2b1a64df4c8b35b60574d 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.cc
-@@ -11,6 +11,7 @@
- #include "chrome/browser/android/tab_android.h"
- #include "chrome/browser/ui/android/tab_model/tab_model.h"
- #include "chrome/browser/ui/android/tab_model/tab_model_list.h"
+@@ -15,6 +15,7 @@
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
+ #include "components/sessions/core/session_id.h"
 +#include "content/public/browser/devtools_agent_host.h"
+ #include "ui/base/base_window.h"
+ #include "ui/gfx/geometry/rect.h"
  
- using protocol::Response;
- 
-@@ -55,6 +56,59 @@ Response BrowserHandlerAndroid::GetWindowForTarget(
-   return Response::ServerError("Browser window not found");
+@@ -233,6 +234,59 @@ Response BrowserHandlerAndroid::GetWindowForTarget(
+   return BuildBoundsForWindowId(window_id.value(), out_bounds);
  }
  
 +Response BrowserHandlerAndroid::GetTabForTarget(
@@ -70,7 +70,7 @@ index 82199c6e2e93b..7978474dda89b 100644
  Response BrowserHandlerAndroid::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -92,3 +146,178 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
+@@ -355,3 +409,178 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
      const std::string& in_url) {
    return Response::MethodNotFound(kNotImplemented);
  }

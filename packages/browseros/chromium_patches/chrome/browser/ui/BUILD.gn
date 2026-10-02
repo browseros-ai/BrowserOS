@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/BUILD.gn b/chrome/browser/ui/BUILD.gn
-index 017a8c3ff755f6e4142567d04740f682c2800b2b..aae7e378e8e003a2c371317a3a72b06d3101ca18 100644
+index 82f397571fefaff0096247d0e98c28c20db709bd..fc55717cabc492b8d64d6e8ee27d58ea2b3c543a 100644
 --- a/chrome/browser/ui/BUILD.gn
 +++ b/chrome/browser/ui/BUILD.gn
-@@ -8,6 +8,7 @@ import("//build/config/features.gni")
+@@ -9,6 +9,7 @@ import("//build/config/features.gni")
  import("//build/config/ozone.gni")
  import("//build/config/ui.gni")
  import("//chrome/browser/buildflags.gni")
@@ -10,7 +10,43 @@ index 017a8c3ff755f6e4142567d04740f682c2800b2b..aae7e378e8e003a2c371317a3a72b06d
  import("//chrome/common/features.gni")
  import("//components/captive_portal/core/features.gni")
  import("//components/compose/features.gni")
-@@ -492,6 +493,7 @@ static_library("ui") {
+@@ -212,6 +213,8 @@ if (!is_android) {
+       "//build:branding_buildflags",
+       "//chrome/app:command_ids",
+       "//chrome/app/vector_icons",
++      "//chrome/browser/browseros/core",
++      "//chrome/browser/browseros/core:product",
+       "//chrome/browser/browsing_data",
+       "//chrome/browser/contextual_cueing",
+       "//chrome/browser/contextual_tasks:ui",
+@@ -223,6 +226,7 @@ if (!is_android) {
+       "//chrome/browser/glic/browser_ui",
+       "//chrome/browser/indigo",
+       "//chrome/browser/indigo/resources:indigo_strings",
++      "//chrome/browser/infobars",
+       "//chrome/browser/media/router:media_router_feature",
+       "//chrome/browser/multistep_filter/ui",
+       "//chrome/browser/prefs",
+@@ -242,6 +246,7 @@ if (!is_android) {
+       "//chrome/browser/ui/bookmarks",
+       "//chrome/browser/ui/commerce",
+       "//chrome/browser/ui/customize_chrome",
++      "//chrome/browser/ui/extensions",
+       "//chrome/browser/ui/fuzzy_search",
+       "//chrome/browser/ui/interaction",
+       "//chrome/browser/ui/lens",
+@@ -288,6 +293,10 @@ if (!is_android) {
+       "//components/spellcheck/browser",
+       "//components/undo",
+     ]
++    if (enable_extensions_core) {
++      # BrowserOS Assistant actions call SidePanelService and ExtensionTabUtil.
++      deps += [ "//chrome/browser/extensions" ]
++    }
+     if (is_mac) {
+       deps += [
+         ":browser_commands_mac",
+@@ -859,6 +868,7 @@ static_library("ui") {
      "//chrome/browser/bookmarks",
      "//chrome/browser/bookmarks:impl",
      "//chrome/browser/breadcrumbs",
@@ -18,12 +54,17 @@ index 017a8c3ff755f6e4142567d04740f682c2800b2b..aae7e378e8e003a2c371317a3a72b06d
      "//chrome/browser/commerce",
      "//chrome/browser/complex_tasks",
      "//chrome/browser/component_updater",
-@@ -1476,6 +1478,8 @@ static_library("ui") {
-       "webui/settings/appearance_handler.h",
-       "webui/settings/browser_lifetime_handler.cc",
-       "webui/settings/browser_lifetime_handler.h",
-+      "webui/settings/browseros_metrics_handler.cc",
-+      "webui/settings/browseros_metrics_handler.h",
-       "webui/settings/captions_handler.cc",
-       "webui/settings/captions_handler.h",
-       "webui/settings/custom_home_pages_table_model.cc",
+@@ -1788,6 +1798,13 @@ static_library("ui") {
+       ]
+     }
+ 
++    # BrowserOS commands use product routing and the shared infobar creator.
++    deps += [
++      "//chrome/browser/browseros/core",
++      "//chrome/browser/browseros/core:product",
++      "//chrome/browser/infobars",
++    ]
++
+     # Non-android public_deps for "ui" target.
+     public_deps += [
+       "//chrome/browser/contextual_cueing/internals",

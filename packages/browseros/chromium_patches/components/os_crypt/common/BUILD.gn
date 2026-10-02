@@ -1,18 +1,23 @@
 diff --git a/components/os_crypt/common/BUILD.gn b/components/os_crypt/common/BUILD.gn
-index 3128f3ac6df25aa259f6f854a0ca48c017097dcc..b1de4450f3619e8d549251b8ff32150068fb3b29 100644
+index 10db0687101b69542f9dd33592d0655c7343e3c8..cd8867bee10c5ac1e8ea2e56e9543de79667d18e 100644
 --- a/components/os_crypt/common/BUILD.gn
 +++ b/components/os_crypt/common/BUILD.gn
-@@ -2,10 +2,18 @@
+@@ -2,6 +2,9 @@
  # Use of this source code is governed by a BSD-style license that can be
  # found in the LICENSE file.
  
 +import("//build/buildflag_header.gni")
 +import("//chrome/browser/browseros/buildflags.gni")
 +
- source_set("switches") {
-   sources = [ "os_crypt_switches.h" ]
+ group("common") {
+   # TODO(crbug.com/547814493): Move to this file.
+   public_deps = [ "//components/os_crypt/async/common" ]
+@@ -16,6 +19,13 @@ group("crypto_lib") {
+   public_deps = [ "//components/os_crypt/async/common:crypto_lib" ]
  }
  
++# The shared keychain implementation must select the same product identity as
++# the browser, without depending on the browser implementation target.
 +buildflag_header("browseros_product_buildflags") {
 +  header = "browseros_product_buildflags.h"
 +  flags = [ "BROWSEROS_PRODUCT_BROWSERCLAW=$browseros_product_browserclaw" ]
@@ -21,7 +26,7 @@ index 3128f3ac6df25aa259f6f854a0ca48c017097dcc..b1de4450f3619e8d549251b8ff321500
  if (is_apple) {
    source_set("keychain_password_mac") {
      sources = [
-@@ -13,6 +21,7 @@ if (is_apple) {
+@@ -23,6 +33,7 @@ if (is_apple) {
        "keychain_password_mac.mm",
      ]
      deps = [
@@ -29,11 +34,11 @@ index 3128f3ac6df25aa259f6f854a0ca48c017097dcc..b1de4450f3619e8d549251b8ff321500
        "//base",
        "//build:branding_buildflags",
        "//crypto",
-@@ -26,6 +35,7 @@ source_set("unit_tests") {
+@@ -38,6 +49,7 @@ source_set("unit_tests") {
+   if (is_apple) {
      sources = [ "keychain_password_mac_unittest.mm" ]
      deps = [
-       ":keychain_password_mac",
 +      ":browseros_product_buildflags",
+       ":keychain_password_mac",
        "//base",
        "//crypto:mock_apple_keychain",
-       "//testing/gmock",

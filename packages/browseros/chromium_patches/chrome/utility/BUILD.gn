@@ -1,8 +1,8 @@
 diff --git a/chrome/utility/BUILD.gn b/chrome/utility/BUILD.gn
-index 65a2d58f58109ed77b0fa9a41b63f660168b4a38..05d5cb863f7e52be149d232b9665cc35d67b42a2 100644
+index b3fa5a032cee9bf422f56a058b53046189c28a25..eed0f2ac9dec01447fcfee7076544fe647947956 100644
 --- a/chrome/utility/BUILD.gn
 +++ b/chrome/utility/BUILD.gn
-@@ -108,6 +108,7 @@ static_library("utility") {
+@@ -111,6 +111,7 @@ static_library("utility") {
          "importer/firefox_importer.cc",
          "importer/firefox_importer.h",
        ]

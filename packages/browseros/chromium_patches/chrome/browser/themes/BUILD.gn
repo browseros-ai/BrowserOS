@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/themes/BUILD.gn b/chrome/browser/themes/BUILD.gn
-index 90e94b3731e4555fbec5b58fa34b820b1cb3cc31..32581dfadfba82cacece758d5267289e2f085d15 100644
+index 68bb9154f567fcb4802a407957271cc2e1727c26..3ccb8d58b28541380b34bf98b817cf3586cb27e2 100644
 --- a/chrome/browser/themes/BUILD.gn
 +++ b/chrome/browser/themes/BUILD.gn
-@@ -33,6 +33,7 @@ source_set("themes") {
-   ]
+@@ -34,6 +34,7 @@ source_set("themes") {
    deps = [
      "//chrome/app/theme:theme_resources",
+     "//chrome/browser:browser_process",
 +    "//chrome/browser/browseros/core:prefs",
+     "//chrome/browser/infobars",
      "//chrome/browser/search/background",
-     "//chrome/browser/ui/color:color_headers",
-     "//chrome/browser/ui/frame",
+     "//chrome/browser/ui/browser_window",

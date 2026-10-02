@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.cc b/chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.cc
-index 35e2b16b88a58..ddcfc5176d0cf 100644
+index dc6c2295919b7ec8eb78d84345827cd5846a542c..6ca47f9dc25ece8b303588e3648f98821faddceb 100644
 --- a/chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.cc
 +++ b/chrome/browser/ui/views/relaunch_notification/relaunch_notification_controller.cc
-@@ -115,11 +115,9 @@ void RelaunchNotificationController::OnUpgradeRecommended() {
+@@ -114,11 +114,9 @@ void RelaunchNotificationController::OnUpgradeRecommended() {
  
    switch (current_level) {
      case UpgradeDetector::UPGRADE_ANNOYANCE_NONE:

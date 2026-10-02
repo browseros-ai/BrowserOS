@@ -1,8 +1,8 @@
 diff --git a/components/search/ntp_features.cc b/components/search/ntp_features.cc
-index f5dba9a1dbb984282c53ceb05d75347a2efe5273..b4993a5e5877248d2999cc4a6f3d33c599d8a716 100644
+index 0f87f2cc8845c3b428f65545f4efe1bfeb524471..2f0d9531070ba2308c299832b4e7edf09154002a 100644
 --- a/components/search/ntp_features.cc
 +++ b/components/search/ntp_features.cc
-@@ -255,7 +255,7 @@ BASE_FEATURE(kNtpStarterChip, base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -270,7 +270,7 @@ BASE_FEATURE(kNtpStarterChip, base::FEATURE_ENABLED_BY_DEFAULT);
  BASE_FEATURE(kNtpOneGoogleBarAsyncBarParts, base::FEATURE_DISABLED_BY_DEFAULT);
  
  // If enabled, a footer will show on the NTP.

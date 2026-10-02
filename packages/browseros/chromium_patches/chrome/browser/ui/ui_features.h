@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/ui_features.h b/chrome/browser/ui/ui_features.h
-index 5588ad208df61dfca91caef030c2cee96fc1d818..4f539a50a548d721b7550a78ede4750713af6fe9 100644
+index 5de002c32e2fc902ccf37d4251fb479bc3b6b579..5bfd297d71c43b4cdbc0913a2093a4e2c3d735fc 100644
 --- a/chrome/browser/ui/ui_features.h
 +++ b/chrome/browser/ui/ui_features.h
-@@ -187,6 +187,9 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kSplitViewDragAndDropMaxDelay);
+@@ -202,6 +202,9 @@ BASE_DECLARE_FEATURE_PARAM(base::TimeDelta, kSplitViewDragAndDropMaxDelay);
  BASE_DECLARE_FEATURE_PARAM(int, kSplitViewDragAndDropMinDistanceThreshold);
  BASE_DECLARE_FEATURE_PARAM(int, kSplitViewDragAndDropMaxDistanceThreshold);
  
@@ -11,4 +11,4 @@ index 5588ad208df61dfca91caef030c2cee96fc1d818..4f539a50a548d721b7550a78ede47507
 +
  BASE_DECLARE_FEATURE(kTabDuplicateMetrics);
  
- BASE_DECLARE_FEATURE(kTabGroupsCollapseFreezing);
+ BASE_DECLARE_FEATURE(kCollapseTabGroupDuringDrag);

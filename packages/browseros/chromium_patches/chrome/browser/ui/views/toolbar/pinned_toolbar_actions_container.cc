@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc b/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
-index 18f3e41abcb7ad379240a6213c201f1dea7f52be..38688a08c79291541fe9933122ccfe972775caee 100644
+index 9f47ccc8056035587393766d4032746f0bf1e4f8..b963e60930b5375b2e89abfdcc78b8372f76e1f7 100644
 --- a/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
 +++ b/chrome/browser/ui/views/toolbar/pinned_toolbar_actions_container.cc
 @@ -18,6 +18,7 @@
@@ -10,7 +10,7 @@ index 18f3e41abcb7ad379240a6213c201f1dea7f52be..38688a08c79291541fe9933122ccfe97
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/ui/actions/chrome_action_id.h"
  #include "chrome/browser/ui/browser_actions.h"
-@@ -173,6 +174,9 @@ PinnedToolbarActionsContainer::PinnedToolbarActionsContainer(
+@@ -174,6 +175,9 @@ PinnedToolbarActionsContainer::PinnedToolbarActionsContainer(
    // Initialize the pinned action buttons.
    action_view_controller_ = std::make_unique<views::ActionViewController>();
    model_->MaybeMigrateExistingPinnedStates();
@@ -20,7 +20,7 @@ index 18f3e41abcb7ad379240a6213c201f1dea7f52be..38688a08c79291541fe9933122ccfe97
    UpdateViews();
  }
  
-@@ -296,6 +300,16 @@ void PinnedToolbarActionsContainer::UpdateAllIcons() {
+@@ -303,6 +307,16 @@ void PinnedToolbarActionsContainer::UpdateAllIcons() {
    }
  }
  
@@ -37,7 +37,7 @@ index 18f3e41abcb7ad379240a6213c201f1dea7f52be..38688a08c79291541fe9933122ccfe97
  void PinnedToolbarActionsContainer::AddedToWidget() {
    OnThemeChanged();
  }
-@@ -411,6 +425,10 @@ void PinnedToolbarActionsContainer::OnActionsChanged() {
+@@ -418,6 +432,10 @@ void PinnedToolbarActionsContainer::OnActionsChanged() {
    drop_weak_ptr_factory_.InvalidateWeakPtrs();
  }
  
@@ -48,7 +48,7 @@ index 18f3e41abcb7ad379240a6213c201f1dea7f52be..38688a08c79291541fe9933122ccfe97
  void PinnedToolbarActionsContainer::WriteDragDataForView(
      View* sender,
      const gfx::Point& press_pt,
-@@ -868,6 +886,14 @@ PinnedToolbarActionsContainer::CreateOrGetButtonForAction(
+@@ -876,6 +894,14 @@ PinnedToolbarActionsContainer::CreateOrGetButtonForAction(
    action_view_controller_->CreateActionViewRelationship(
        button.get(), action_item->GetAsWeakPtr());
  
