@@ -22,7 +22,7 @@ export function RunSkillButton({ name, size = 'sm' }: RunSkillButtonProps) {
     }
     void navigator.clipboard.writeText(skillCommand(name)).then(() => {
       toast.success(`Copied ${skillCommand(name)}`, {
-        description: 'Paste it into your coding agent to run this task.',
+        description: 'Paste it into your coding agent to run this skill.',
       })
     })
   }

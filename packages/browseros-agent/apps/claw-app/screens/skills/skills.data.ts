@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Single data-aggregation hook for the Tasks list screen. The screen calls only
+ * Single data-aggregation hook for the Skills list screen. The screen calls only
  * this hook and renders what it returns.
  */
 

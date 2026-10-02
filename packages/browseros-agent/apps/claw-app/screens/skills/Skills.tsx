@@ -27,7 +27,7 @@ import { formatTokens, skillCommand } from './skills.helpers'
 const CELL_PADDING = 'px-2 py-3 first:pl-4 last:pr-4'
 
 /**
- * Tasks list. A task is a skill BrowserOS neo linked into the connected coding
+ * Skills list. A skill is one BrowserOS neo linked into the connected coding
  * agents; each row shows its run count and token savings. Row click opens
  * the SKILL.md and run history.
  */
@@ -46,7 +46,7 @@ export function Skills() {
       <header className="flex items-start justify-between gap-4">
         <div className="flex flex-col gap-1">
           <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
-            Tasks
+            Skills
           </h1>
           <p className="text-ink-2 text-sm">
             Skills BrowserOS neo linked into your coding agents. Re-run one by
@@ -58,7 +58,7 @@ export function Skills() {
           trigger={
             <Button size="sm" className="rounded-9">
               <Plus />
-              New task
+              New skill
             </Button>
           }
         />
@@ -66,8 +66,8 @@ export function Skills() {
 
       {isError ? (
         <SkillsNotice>
-          Could not load your tasks. Check that BrowserOS neo is running and try
-          again.
+          Could not load your skills. Check that BrowserOS neo is running and
+          try again.
         </SkillsNotice>
       ) : isLoading ? (
         <SkillsSkeleton />
@@ -84,7 +84,7 @@ export function Skills() {
                     'h-auto font-medium text-[12px] text-ledger-head-ink',
                   )}
                 >
-                  Task
+                  Skill
                 </TableHead>
                 <TableHead
                   className={cn(
@@ -210,7 +210,7 @@ function SkillsEmpty() {
   return (
     <div className="flex flex-col items-center gap-4 rounded-9 border border-ledger-border border-dashed bg-card px-6 py-16 text-center">
       <div className="flex flex-col gap-1">
-        <p className="font-semibold text-base text-ink">No tasks yet</p>
+        <p className="font-semibold text-base text-ink">No skills yet</p>
         <p className="mx-auto max-w-md text-ink-2 text-sm">
           When your coding agent saves a repeatable browser task with BrowserOS
           neo, it shows up here, linked into your agents and re-runnable by
@@ -222,7 +222,7 @@ function SkillsEmpty() {
         trigger={
           <Button size="sm" className="rounded-9">
             <Plus />
-            New task
+            New skill
           </Button>
         }
       />

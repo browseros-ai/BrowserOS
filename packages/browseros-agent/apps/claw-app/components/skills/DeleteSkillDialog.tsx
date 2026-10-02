@@ -44,7 +44,7 @@ export function DeleteSkillDialog({
       {
         loading: `Deleting ${name}…`,
         success: `Deleted ${name}`,
-        error: 'Could not delete the task',
+        error: 'Could not delete the skill',
       },
     )
   }
@@ -62,7 +62,7 @@ export function DeleteSkillDialog({
       />
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Delete this task?</AlertDialogTitle>
+          <AlertDialogTitle>Delete this skill?</AlertDialogTitle>
           <AlertDialogDescription>
             This removes {name} and unlinks its skill from your coding agents.
             Its run history is discarded.
@@ -70,7 +70,9 @@ export function DeleteSkillDialog({
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>
-          <AlertDialogAction onClick={onConfirm}>Delete task</AlertDialogAction>
+          <AlertDialogAction onClick={onConfirm}>
+            Delete skill
+          </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>

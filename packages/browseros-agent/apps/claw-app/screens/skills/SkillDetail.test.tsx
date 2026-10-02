@@ -1,5 +1,5 @@
 /**
- * Static-markup checks for the task detail stat cards.
+ * Static-markup checks for the skill detail stat cards.
  * Stubs the data hook so no backend is needed.
  */
 
@@ -63,7 +63,7 @@ function renderApp(): string {
   )
 }
 
-describe('Task detail stat cards', () => {
+describe('Skill detail stat cards', () => {
   it('shows Tokens saved with the saved total and the other-browsers comparison', () => {
     dataOverride = { ...dataOverride, detail: detail() }
     const html = renderApp()

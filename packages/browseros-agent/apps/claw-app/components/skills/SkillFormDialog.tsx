@@ -131,9 +131,9 @@ function CreateForm({ onClose }: { onClose: () => void }) {
           onClose()
         }),
       {
-        loading: 'Saving the task…',
+        loading: 'Saving the skill…',
         success: `Saved /${name}`,
-        error: 'Could not save the task',
+        error: 'Could not save the skill',
       },
     )
   })
@@ -142,10 +142,9 @@ function CreateForm({ onClose }: { onClose: () => void }) {
     <Form {...form}>
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <DialogHeader>
-          <DialogTitle>New task</DialogTitle>
+          <DialogTitle>New skill</DialogTitle>
           <DialogDescription>
-            A task is a skill BrowserOS neo links into your agents and you
-            re-run by name.
+            A skill BrowserOS neo links into your agents and you re-run by name.
           </DialogDescription>
         </DialogHeader>
         <FormField
@@ -239,7 +238,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
             }
           />
           <Button type="submit" disabled={create.isPending}>
-            Save task
+            Save skill
           </Button>
         </DialogFooter>
       </form>
@@ -290,7 +289,7 @@ function EditForm({
       {
         loading: 'Saving…',
         success: `Saved /${name}`,
-        error: 'Could not save the task',
+        error: 'Could not save the skill',
       },
     )
   })
