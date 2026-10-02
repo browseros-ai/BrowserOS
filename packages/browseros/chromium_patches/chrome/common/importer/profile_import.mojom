@@ -1,8 +1,8 @@
 diff --git a/chrome/common/importer/profile_import.mojom b/chrome/common/importer/profile_import.mojom
-index b28b7324629ae..f93563fe6c863 100644
+index 815b91161f772d93e6114b0843895cfd020275fb..64a8666d6951c015c1acd7988d872759d70cecb4 100644
 --- a/chrome/common/importer/profile_import.mojom
 +++ b/chrome/common/importer/profile_import.mojom
-@@ -32,6 +32,49 @@ struct ImporterIE7PasswordInfo;
+@@ -33,6 +33,49 @@ struct ImporterIE7PasswordInfo;
  [Native]
  enum ImportItem;
  
@@ -52,7 +52,7 @@ index b28b7324629ae..f93563fe6c863 100644
  // Represents information about an imported password form. Typemapped to
  // importer::ImportedPasswordForm.
  struct ImportedPasswordForm {
-@@ -76,12 +119,14 @@ interface ProfileImportObserver {
+@@ -77,12 +120,14 @@ interface ProfileImportObserver {
    OnFaviconsImportStart(uint32 total_favicons_count);
    OnFaviconsImportGroup(FaviconUsageDataList favicons_group);
    OnPasswordFormImportReady(ImportedPasswordForm form);

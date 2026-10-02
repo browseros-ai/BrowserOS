@@ -1,8 +1,8 @@
 diff --git a/chrome/common/pref_names.h b/chrome/common/pref_names.h
-index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe69d287e8 100644
+index a4b175a64f5a58eec344df0b38c49df459f16ba7..6c0ed877f379d0190bdf2d0f62d9efd703e4a704 100644
 --- a/chrome/common/pref_names.h
 +++ b/chrome/common/pref_names.h
-@@ -482,13 +482,11 @@ inline constexpr char kDeskAPIThirdPartyAllowlist[] =
+@@ -485,13 +485,11 @@ inline constexpr char kDeskAPIThirdPartyAllowlist[] =
  inline constexpr char kPrintingAPIExtensionsAllowlist[] =
      "printing.printing_api_extensions_whitelist";
  
@@ -16,7 +16,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  // A boolean pref which turns on the mediaplayer.
  inline constexpr char kLabsMediaplayerEnabled[] = "settings.labs.mediaplayer";
  
-@@ -496,8 +494,6 @@ inline constexpr char kLabsMediaplayerEnabled[] = "settings.labs.mediaplayer";
+@@ -499,8 +497,6 @@ inline constexpr char kLabsMediaplayerEnabled[] = "settings.labs.mediaplayer";
  inline constexpr char kChromeOSReleaseNotesVersion[] =
      "settings.release_notes.version";
  
@@ -25,7 +25,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  // A boolean pref. If set to true, the Unified Desktop feature is made
  // available and turned on by default, which allows applications to span
  // multiple screens. Users may turn the feature off and on in the settings
-@@ -534,7 +530,6 @@ inline constexpr char kMinimumAllowedChromeVersion[] = "minimum_req.version";
+@@ -537,7 +533,6 @@ inline constexpr char kMinimumAllowedChromeVersion[] = "minimum_req.version";
  inline constexpr char kShowArcSettingsOnSessionStart[] =
      "start_arc_settings_on_session_start";
  
@@ -33,7 +33,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  // Dictionary preference that maps language to default voice name preferences
  // for the users's text-to-speech settings. For example, this might map
  // 'en-US' to 'Chrome OS US English'.
-@@ -556,7 +551,6 @@ inline constexpr char kTextToSpeechPitch[] = "settings.tts.speech_pitch";
+@@ -559,7 +554,6 @@ inline constexpr char kTextToSpeechPitch[] = "settings.tts.speech_pitch";
  // system volume, and higher than 1.0 is louder.
  inline constexpr char kTextToSpeechVolume[] = "settings.tts.speech_volume";
  
@@ -41,7 +41,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  // A string pref storing the path of device wallpaper image file.
  inline constexpr char kDeviceWallpaperImageFilePath[] =
      "policy.device_wallpaper_image_file_path";
-@@ -928,6 +922,8 @@ inline constexpr char kImportDialogSavedPasswords[] =
+@@ -940,6 +934,8 @@ inline constexpr char kImportDialogSavedPasswords[] =
      "import_dialog_saved_passwords";
  inline constexpr char kImportDialogSearchEngine[] =
      "import_dialog_search_engine";
@@ -50,7 +50,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  
  // Profile avatar and name
  inline constexpr char kProfileAvatarIndex[] = "profile.avatar_index";
-@@ -2274,12 +2270,6 @@ inline constexpr char kDeviceRobotAnyApiRefreshTokenV2[] =
+@@ -2298,12 +2294,6 @@ inline constexpr char kDeviceRobotAnyApiRefreshTokenV2[] =
  inline constexpr char kDeviceRefreshTokenAnyApiIsV3Used[] =
      "device_refresh_token_is_v3_used.any-api";
  
@@ -63,7 +63,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  #endif  // BUILDFLAG(IS_CHROMEOS)
  
  // String which specifies where to store the disk cache.
-@@ -2287,7 +2277,6 @@ inline constexpr char kDiskCacheDir[] = "browser.disk_cache_dir";
+@@ -2311,7 +2301,6 @@ inline constexpr char kDiskCacheDir[] = "browser.disk_cache_dir";
  // Pref name for the policy specifying the maximal cache size.
  inline constexpr char kDiskCacheSize[] = "browser.disk_cache_size";
  
@@ -71,7 +71,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  // Pref name for the policy controlling whether to enable Media Router.
  inline constexpr char kEnableMediaRouter[] = "media_router.enable_media_router";
  #if !BUILDFLAG(IS_ANDROID)
-@@ -2423,7 +2412,6 @@ inline constexpr char kPreviousIsolationState[] = "isolation_state.previous";
+@@ -2447,7 +2436,6 @@ inline constexpr char kPreviousIsolationState[] = "isolation_state.previous";
  inline constexpr char kHardwareAccelerationModePrevious[] =
      "hardware_acceleration_mode_previous";
  
@@ -79,7 +79,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  #if !BUILDFLAG(IS_ANDROID)
  // A boolean where true means that the browser has previously attempted to
  // enable autoupdate and failed, so the next out-of-date browser start should
-@@ -2958,7 +2946,6 @@ inline constexpr char kOriginAgentClusterDefaultEnabled[] =
+@@ -2987,7 +2975,6 @@ inline constexpr char kOriginAgentClusterDefaultEnabled[] =
  inline constexpr char kSCTAuditingHashdanceReportCount[] =
      "sct_auditing.hashdance_report_count";
  
@@ -87,7 +87,7 @@ index 7f2ccebd7e50150e350e6a01f7bba9a6796f9286..822d74a5f8fbda8f7cf554883ebd11fe
  #if !BUILDFLAG(IS_ANDROID)
  // An integer count of how many times the user has seen the memory saver mode
  // page action chip in the expanded size. While the feature was renamed to
-@@ -3262,6 +3249,9 @@ inline constexpr char kCpuPerformanceTierOverride[] =
+@@ -3296,6 +3283,9 @@ inline constexpr char kCpuPerformanceTierOverride[] =
  // Value indicating that the CPU performance tier has not been overridden.
  inline constexpr int kCpuPerformanceTierOverrideNone = -1;
  

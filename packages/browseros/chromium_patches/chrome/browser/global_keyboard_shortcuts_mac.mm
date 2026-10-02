@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/global_keyboard_shortcuts_mac.mm b/chrome/browser/global_keyboard_shortcuts_mac.mm
-index bc8c1e5d952c1..5654e5f88c6a3 100644
+index 1bbe4c5fab65668acadce3f60c0e6d181f83036e..5f85229344b0eb26fa2942b8af495cf4187f35d3 100644
 --- a/chrome/browser/global_keyboard_shortcuts_mac.mm
 +++ b/chrome/browser/global_keyboard_shortcuts_mac.mm
 @@ -15,6 +15,7 @@

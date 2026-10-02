@@ -1,5 +1,5 @@
 diff --git a/chrome/common/extensions/api/api_sources.gni b/chrome/common/extensions/api/api_sources.gni
-index 5357482de4a0423ccc0d30ad56cebc4847d6ed5e..4104822c93896e53de7782ddcc7ef2e83dbd66e7 100644
+index 194386bf5e2a788140a888a1dc9f58e4625538d2..c44cf6d6dd8b15ff324fc0b2ebc4ac74eec481bb 100644
 --- a/chrome/common/extensions/api/api_sources.gni
 +++ b/chrome/common/extensions/api/api_sources.gni
 @@ -80,6 +80,7 @@ if (enable_extensions) {

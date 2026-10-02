@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc
-index ebe5ec844282db0637abca8a041ed492cc31832e..1887207346e3a59a009f85dc77dc94a5925d2327 100644
+index b1166e1f74ba7f3fba8415a96ff8959e424daa76..fbbba33dd58f836ad90503057510c9ad434254d9 100644
 --- a/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc
 +++ b/chrome/browser/ui/startup/default_browser_prompt/default_browser_infobar_delegate.cc
 @@ -12,10 +12,9 @@

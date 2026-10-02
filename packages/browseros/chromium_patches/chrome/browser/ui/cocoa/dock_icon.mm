@@ -1,11 +1,13 @@
 diff --git a/chrome/browser/ui/cocoa/dock_icon.mm b/chrome/browser/ui/cocoa/dock_icon.mm
-index f08c2b156c0fd..c61eb7974ea6a 100644
+index 3cb3285ab04fa7042369858ae868adc04db50c25..a87d0941f8f567c945e8aa3ed079f50e3c80592d 100644
 --- a/chrome/browser/ui/cocoa/dock_icon.mm
 +++ b/chrome/browser/ui/cocoa/dock_icon.mm
-@@ -32,6 +32,26 @@
- // The maximum update rate for the dock icon. 200ms = 5fps.
- constexpr int64_t kUpdateFrequencyMs = 200;
+@@ -30,6 +30,28 @@
+     {1, 3, 0.2},
+ };
  
++// Tint the current app icon without changing its alpha mask, so product
++// variants retain custom icons and the download badge remains untinted.
 +NSImage* AppIconWithVariantTint(NSImage* appIcon, NSSize size, NSColor* tint) {
 +  NSImage* tintedIcon = [[NSImage alloc] initWithSize:size];
 +  const NSRect iconRect = NSMakeRect(0, 0, size.width, size.height);
@@ -29,7 +31,7 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
  }  // namespace
  
  // A view that draws our dock tile.
-@@ -47,6 +67,8 @@ @interface DockTileView : NSView
+@@ -45,6 +67,8 @@ @interface DockTileView : NSView
  // Indicates the amount of progress made of the download. Ranges from [0..1].
  @property(nonatomic) float progress;
  
@@ -38,7 +40,7 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
  @end
  
  @implementation DockTileView
-@@ -54,6 +76,7 @@ @implementation DockTileView
+@@ -52,6 +76,7 @@ @implementation DockTileView
  @synthesize downloads = _downloads;
  @synthesize indeterminate = _indeterminate;
  @synthesize progress = _progress;
@@ -46,7 +48,7 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
  
  - (void)drawRect:(NSRect)dirtyRect {
    // This needs to draw the current app icon, whether it's using the default
-@@ -72,6 +95,9 @@ - (void)drawRect:(NSRect)dirtyRect {
+@@ -70,6 +95,9 @@ - (void)drawRect:(NSRect)dirtyRect {
    // Therefore, use [NSImage imageNamed:NSImageNameApplicationIcon].
  
    NSImage* appIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
@@ -56,8 +58,8 @@ index f08c2b156c0fd..c61eb7974ea6a 100644
    [appIcon drawInRect:self.bounds
               fromRect:NSZeroRect
              operation:NSCompositingOperationSourceOver
-@@ -223,6 +249,19 @@ - (void)updateIcon {
-   [dockTile display];
+@@ -215,6 +243,19 @@ - (void)updateIcon {
+   [NSApp.dockTile display];
  }
  
 +- (void)setDockIconVariantColor:(NSColor*)color {

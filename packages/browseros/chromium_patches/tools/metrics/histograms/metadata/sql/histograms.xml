@@ -1,8 +1,8 @@
 diff --git a/tools/metrics/histograms/metadata/sql/histograms.xml b/tools/metrics/histograms/metadata/sql/histograms.xml
-index ace4b6a1ce336d2236b46cf87dd82ff1098eeb08..70bfaf9a0f193fe1db9d1c40a38be2cb0e289a5a 100644
+index 55f07550ca9011f1fd20339b9e7e8d1a7487c368..a26a1105f5e9e96cf907b1798db1e674a8381571 100644
 --- a/tools/metrics/histograms/metadata/sql/histograms.xml
 +++ b/tools/metrics/histograms/metadata/sql/histograms.xml
-@@ -56,6 +56,7 @@ chromium-metrics-reviews@google.com.
+@@ -58,6 +58,7 @@ chromium-metrics-reviews@google.com.
    <variant name="DownloadRecord" summary="DownloadRecord"/>
    <variant name="FileIndexService" summary="FileIndexService"/>
    <variant name="FirefoxImporter" summary="FirefoxImporter"/>

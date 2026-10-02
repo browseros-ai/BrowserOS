@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_config_unittest.cc b/chrome/browser/browseros/server/browseros_server_config_unittest.cc
 new file mode 100644
-index 0000000000000..9a25f32a0da56
+index 0000000000000000000000000000000000000000..3e6c8d9cbb478e9d3dc59fa2e63ba93482b95080
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_config_unittest.cc
 @@ -0,0 +1,228 @@

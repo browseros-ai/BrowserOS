@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/extensions/api/browser_os/browser_os_api.cc b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..99a8b9c8df1bdc73113bc78ecf559c454adfa267
+index 0000000000000000000000000000000000000000..7d0cc0843d1d6e5656836d3e019eb8bff79e1dd7
 --- /dev/null
 +++ b/chrome/browser/extensions/api/browser_os/browser_os_api.cc
-@@ -0,0 +1,349 @@
+@@ -0,0 +1,348 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -27,7 +27,6 @@ index 0000000000000000000000000000000000000000..99a8b9c8df1bdc73113bc78ecf559c45
 +#include "chrome/browser/infobars/confirm_infobar_creator.h"
 +#include "chrome/browser/platform_util.h"
 +#include "chrome/browser/profiles/profile.h"
-+#include "chrome/browser/ui/browser_window/public/browser_window_features.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
 +#include "chrome/browser/ui/select_file_policy/chrome_select_file_policy.h"
@@ -286,7 +285,7 @@ index 0000000000000000000000000000000000000000..99a8b9c8df1bdc73113bc78ecf559c45
 +    return RespondNow(Error("No active browser window"));
 +  }
 +
-+  ToastController* toast_controller = browser->GetFeatures().toast_controller();
++  ToastController* toast_controller = ToastController::From(browser);
 +  if (!toast_controller) {
 +    return RespondNow(Error("Toast controller unavailable"));
 +  }

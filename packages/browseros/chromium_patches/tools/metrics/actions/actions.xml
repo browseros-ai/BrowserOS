@@ -1,0 +1,12 @@
+diff --git a/tools/metrics/actions/actions.xml b/tools/metrics/actions/actions.xml
+index 2be5ed8e7bd2736238a5d8e8dc23bbeeb0398766..51b92e590995a376d0ec6148a3cdfe10d6ba4539 100644
+--- a/tools/metrics/actions/actions.xml
++++ b/tools/metrics/actions/actions.xml
+@@ -1032,6 +1032,7 @@ should be able to be added at any place in this file.
+   <variant name="" summary="aggregated"/>
+   <variant name=".AddedToComparisonTable" summary="Added to comparison table"/>
+   <variant name=".AddedToReadingList" summary="Added to reading list"/>
++  <variant name=".BrowserOSToast" summary="BrowserOS extension toast"/>
+   <variant name=".DiceUserMigrated" summary="DICe user migrated"/>
+   <variant name=".EnhancedBundledSecuritySettings"
+       summary="Enhanced protection user migrated"/>

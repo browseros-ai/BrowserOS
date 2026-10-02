@@ -1,12 +1,12 @@
 diff --git a/tools/metrics/histograms/metadata/sync/enums.xml b/tools/metrics/histograms/metadata/sync/enums.xml
-index 8045b7767020b251b8f2136e2a3d3f44c198b954..dfe18dd6ff5f7c6675b5fe14de796f556f203555 100644
+index 7a8a498db48db021ff99622865c690c373954a54..3149d091d4b9c17e9b7088657aa34058c7836a9c 100644
 --- a/tools/metrics/histograms/metadata/sync/enums.xml
 +++ b/tools/metrics/histograms/metadata/sync/enums.xml
-@@ -819,6 +819,7 @@ chromium-metrics-reviews@google.com.
-   <int value="100383"
-       label="ProfileContentSettingsPartitionedExceptionsInlineCueMenu"/>
+@@ -826,6 +826,7 @@ chromium-metrics-reviews@google.com.
    <int value="100384" label="ProfileDefaultContentSettingValuesInlineCueMenu"/>
-+  <int value="100385" label="PinnedThirdPartyLlmMigrationComplete"/>
+   <int value="100385" label="ExtensionsPinnedByDefault"/>
+   <int value="100386" label="AudioFocusEnforcementEnabled"/>
++  <int value="100387" label="PinnedThirdPartyLlmMigrationComplete"/>
  <!-- LINT.ThenChange(/chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc:ChromeSyncablePref)-->
  
  <!-- LINT.IfChange(IosSyncablePref) -->

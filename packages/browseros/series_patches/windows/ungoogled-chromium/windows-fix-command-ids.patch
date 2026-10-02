@@ -1,38 +1,36 @@
 --- a/chrome/app/chrome_command_ids.h
 +++ b/chrome/app/chrome_command_ids.h
-@@ -74,21 +74,21 @@
+@@ -79,22 +79,22 @@
+ #define IDC_MINIMIZE_WINDOW             34046
  #define IDC_MAXIMIZE_WINDOW             34047
- #define IDC_ALL_WINDOWS_FRONT           34048
  #define IDC_NAME_WINDOW                 34049
 -#if BUILDFLAG(IS_CHROMEOS)
 +#if (0)
  #define IDC_TOGGLE_MULTITASK_MENU       34050
  #endif
--
-+
+ 
 -#if BUILDFLAG(IS_LINUX)
 +#if (0)
  #define IDC_USE_SYSTEM_TITLE_BAR        34051
  #endif
--
-+
+ 
 -#if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
 +#if defined(_WIN32)
  #define IDC_RESTORE_WINDOW              34052
 -#endif // BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_WIN)
-+#endif // defined(_WIN32)
 -
-+
 -#if BUILDFLAG(IS_WIN)
++#endif // defined(_WIN32)
++
 +#if defined(_WIN32)
  #define IDC_MOVE_WINDOW                 34053
  #define IDC_SIZE_WINDOW                 34054
 -#endif // BUILDFLAG(IS_WIN)
 +#endif // defined(_WIN32)
--
-+
+ 
  #define IDC_OPEN_IN_PWA_WINDOW          34055
-@@ -106,7 +106,7 @@
+ #define IDC_MOVE_TAB_TO_NEW_WINDOW      34056
+@@ -111,7 +111,7 @@
  #define IDC_WEB_APP_MENU_APP_INFO       34074
  #define IDC_WEB_APP_UPGRADE_DIALOG      34075
  
@@ -41,7 +39,7 @@
  // Move window to other user commands
  #define IDC_VISIT_DESKTOP_OF_LRU_USER_2 34080
  #define IDC_VISIT_DESKTOP_OF_LRU_USER_3 34081
-@@ -536,7 +536,7 @@
+@@ -461,7 +461,7 @@
  #define IDC_MEDIA_ROUTER_TOGGLE_MEDIA_REMOTING 51208
  
  // Context menu items for media toolbar button
@@ -50,8 +48,8 @@
  #define IDC_MEDIA_TOOLBAR_CONTEXT_REPORT_CAST_ISSUE 51209
  #endif
  #define IDC_MEDIA_TOOLBAR_CONTEXT_SHOW_OTHER_SESSIONS 51210
-@@ -572,7 +572,7 @@
- #define IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS 52411
+@@ -487,7 +487,7 @@
+ #define IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE 52410
  #define IDC_CONTENT_CONTEXT_ACCESSIBILITY_LABELS_TOGGLE_ONCE 52412
  
 -#if BUILDFLAG(IS_CHROMEOS)

@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.h b/chrome/browser/devtools/chrome_devtools_manager_delegate.h
-index a48b3a9ebdf6f323a636dafbaf99532a2f375ce4..8fab05a9d346d1ccd194093c9fac45723ddfb980 100644
+index 5a1fb503d2ce171289b6ac406fdaff303f76a28c..82b7803465f3db5b8226c4b91dcaa651f59543bf 100644
 --- a/chrome/browser/devtools/chrome_devtools_manager_delegate.h
 +++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.h
-@@ -80,6 +80,9 @@ class ChromeDevToolsManagerDelegate : public content::DevToolsManagerDelegate,
+@@ -83,6 +83,9 @@ class ChromeDevToolsManagerDelegate : public content::DevToolsManagerDelegate,
        content::DevToolsAgentHost* agent_host) override;
    std::optional<bool> ShouldReportAsTabTarget(
        content::WebContents* web_contents) override;

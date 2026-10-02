@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
-index c9f49cd198cd29a4f4ad3c2321c9b7a874b5e899..220a88e6f2712ff409340f492920402a986d782c 100644
+index 37a83372cec45117a84b810f9b4667bcc8a26a74..4c9ec490eb03b6403a37c060eaf809f1a9420e49 100644
 --- a/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
 +++ b/chrome/browser/devtools/chrome_devtools_manager_delegate.cc
 @@ -48,6 +48,7 @@
@@ -7,10 +7,10 @@ index c9f49cd198cd29a4f4ad3c2321c9b7a874b5e899..220a88e6f2712ff409340f492920402a
  #include "components/keep_alive_registry/keep_alive_types.h"
  #include "components/keep_alive_registry/scoped_keep_alive.h"
 +#include "components/sessions/content/session_tab_helper.h"
+ #include "components/tab_groups/tab_group_id.h"
  #include "components/tabs/public/tab_interface.h"
  #include "content/public/browser/browser_thread.h"
- #include "content/public/browser/devtools_agent_host.h"
-@@ -343,6 +344,20 @@ std::optional<bool> ChromeDevToolsManagerDelegate::ShouldReportAsTabTarget(
+@@ -346,6 +347,20 @@ std::optional<bool> ChromeDevToolsManagerDelegate::ShouldReportAsTabTarget(
    return std::nullopt;
  }
  

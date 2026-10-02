@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/in_process_importer_bridge.cc b/chrome/browser/importer/in_process_importer_bridge.cc
-index 20e454416b8a9a4147f844d67a10ace8380788c0..466b51209c696481574aae297fb97639f8ff5bf5 100644
+index da614f0e7db5628e258f07fe0d7f2967dc1207f1..0c546a716728802b1cd038539e0f05b423fb1176 100644
 --- a/chrome/browser/importer/in_process_importer_bridge.cc
 +++ b/chrome/browser/importer/in_process_importer_bridge.cc
 @@ -8,6 +8,7 @@
@@ -10,7 +10,7 @@ index 20e454416b8a9a4147f844d67a10ace8380788c0..466b51209c696481574aae297fb97639
  #include "base/strings/string_util.h"
  #include "base/strings/utf_string_conversions.h"
  #include "build/build_config.h"
-@@ -20,11 +21,16 @@
+@@ -21,11 +22,16 @@
  #include "components/search_engines/template_url.h"
  #include "components/search_engines/template_url_parser.h"
  #include "components/search_engines/template_url_prepopulate_data.h"
@@ -27,7 +27,7 @@ index 20e454416b8a9a4147f844d67a10ace8380788c0..466b51209c696481574aae297fb97639
  history::URLRows ConvertImporterURLRowsToHistoryURLRows(
      const std::vector<user_data_importer::ImporterURLRow>& rows) {
    history::URLRows converted;
-@@ -52,6 +58,8 @@ history::VisitSource ConvertImporterVisitSourceToHistoryVisitSource(
+@@ -53,6 +59,8 @@ history::VisitSource ConvertImporterVisitSourceToHistoryVisitSource(
        return history::SOURCE_IE_IMPORTED;
      case user_data_importer::VISIT_SOURCE_SAFARI_IMPORTED:
        return history::SOURCE_SAFARI_IMPORTED;
@@ -36,7 +36,7 @@ index 20e454416b8a9a4147f844d67a10ace8380788c0..466b51209c696481574aae297fb97639
    }
    NOTREACHED();
  }
-@@ -150,6 +158,11 @@ void InProcessImporterBridge::SetPasswordForm(
+@@ -155,6 +163,11 @@ void InProcessImporterBridge::SetPasswordForm(
    writer_->AddPasswordForm(ConvertImportedPasswordForm(form));
  }
  
@@ -48,7 +48,7 @@ index 20e454416b8a9a4147f844d67a10ace8380788c0..466b51209c696481574aae297fb97639
  void InProcessImporterBridge::SetAutofillFormData(
      const std::vector<ImporterAutofillFormDataEntry>& entries) {
    std::vector<autofill::AutocompleteEntry> autocomplete_entries;
-@@ -167,6 +180,15 @@ void InProcessImporterBridge::SetAutofillFormData(
+@@ -172,6 +185,15 @@ void InProcessImporterBridge::SetAutofillFormData(
    writer_->AddAutocompleteFormDataEntries(autocomplete_entries);
  }
  

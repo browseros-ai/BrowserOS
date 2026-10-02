@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/toolbar/app_menu_icon_controller.cc b/chrome/browser/ui/toolbar/app_menu_icon_controller.cc
-index aaa9903f665c3185a2529f43167ccd4f829ca956..765652a6f8a9038fa7fb6b88a186db724da3a7dd 100644
+index c944c21557711e0026b2cfb21f6fa672a4a5cb49..8eeae9182b24510e3832ea092e025d4a47739954 100644
 --- a/chrome/browser/ui/toolbar/app_menu_icon_controller.cc
 +++ b/chrome/browser/ui/toolbar/app_menu_icon_controller.cc
-@@ -50,8 +50,8 @@ AppMenuIconController::Severity SeverityFromUpgradeLevel(
+@@ -57,8 +57,8 @@ AppMenuIconController::Severity SeverityFromUpgradeLevel(
        case UpgradeDetector::UPGRADE_ANNOYANCE_NONE:
          break;
        case UpgradeDetector::UPGRADE_ANNOYANCE_VERY_LOW:

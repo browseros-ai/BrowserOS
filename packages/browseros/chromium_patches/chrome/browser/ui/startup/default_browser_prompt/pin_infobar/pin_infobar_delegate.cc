@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/startup/default_browser_prompt/pin_infobar/pin_infobar_delegate.cc b/chrome/browser/ui/startup/default_browser_prompt/pin_infobar/pin_infobar_delegate.cc
-index 34ee63e9ca0026959f5f16d90b85c82755eef52c..3dd0ee066376136fdc22ceb2f8862b8fc35f337c 100644
+index f658f4cd4a495fce85b24c94c7c99b9c5279a836..0dd1092f7e91fe10de380bd32d2db9734cf32045 100644
 --- a/chrome/browser/ui/startup/default_browser_prompt/pin_infobar/pin_infobar_delegate.cc
 +++ b/chrome/browser/ui/startup/default_browser_prompt/pin_infobar/pin_infobar_delegate.cc
-@@ -13,10 +13,10 @@
+@@ -14,10 +14,10 @@
  #include "chrome/browser/infobars/confirm_infobar_creator.h"
  #include "chrome/browser/ui/ui_features.h"
  #include "chrome/grit/branded_strings.h"
@@ -15,7 +15,7 @@ index 34ee63e9ca0026959f5f16d90b85c82755eef52c..3dd0ee066376136fdc22ceb2f8862b8f
  #include "ui/base/l10n/l10n_util.h"
  #include "ui/base/ui_base_features.h"
  
-@@ -96,11 +96,8 @@ infobars::InfoBarDelegate::InfoBarIdentifier PinInfoBarDelegate::GetIdentifier()
+@@ -53,11 +53,8 @@ infobars::InfoBarDelegate::InfoBarIdentifier PinInfoBarDelegate::GetIdentifier()
    return PIN_INFOBAR_DELEGATE;
  }
  

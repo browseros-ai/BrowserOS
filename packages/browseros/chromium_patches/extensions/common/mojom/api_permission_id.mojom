@@ -1,12 +1,12 @@
 diff --git a/extensions/common/mojom/api_permission_id.mojom b/extensions/common/mojom/api_permission_id.mojom
-index 4e1045188b91e7b7ea4dbdbf5e33059ce83ffdc4..351f82e48f21f3b8b8afcdbbd21d45ec70a6ecf7 100644
+index 8bc0e9b328c3b3be4acf9a3118492f8ff37db926..bf810447c87d2c2666c7d010216fc98de3c55dd3 100644
 --- a/extensions/common/mojom/api_permission_id.mojom
 +++ b/extensions/common/mojom/api_permission_id.mojom
-@@ -294,6 +294,7 @@ enum APIPermissionID {
-   kIndigoPrivate = 267,
-   kContextualTasksPrivate = 268,
-   kDictationPrivate = 269,
-+  kBrowserOS = 270,
+@@ -299,6 +299,7 @@ enum APIPermissionID {
+   kBluetoothPeripheral = 272,
+   kPublicSuffix = 273,
+   kEnterpriseWebrtc = 274,
++  kBrowserOS = 275,
  
    // Add new entries at the end of the enum and be sure to update the
    // "ExtensionPermission3" enum in

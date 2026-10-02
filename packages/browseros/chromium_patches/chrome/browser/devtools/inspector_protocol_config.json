@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/inspector_protocol_config.json b/chrome/browser/devtools/inspector_protocol_config.json
-index a40e58a09294072cfe986950a0676a10ae39b7da..31c62380459bfc174c74f784b5b482fcbbe97f6f 100644
+index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..5df839b629436a524156ad57ff5f867e3fa24b6a 100644
 --- a/chrome/browser/devtools/inspector_protocol_config.json
 +++ b/chrome/browser/devtools/inspector_protocol_config.json
-@@ -17,9 +17,20 @@
+@@ -18,9 +18,20 @@
              },
              {
                  "domain": "Browser",

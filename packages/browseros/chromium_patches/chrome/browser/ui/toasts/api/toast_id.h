@@ -1,13 +1,13 @@
 diff --git a/chrome/browser/ui/toasts/api/toast_id.h b/chrome/browser/ui/toasts/api/toast_id.h
-index 2b96636a36c374db16eb5ad9c6a28eaa3465640c..1ece55b8bee03c348604844e4c0b8f00634d1cbd 100644
+index 25d0875be3732e9d1b02ed73942a3e6cda3e22fd..a953e8e005e034df7c74642c000d0376c20a71e0 100644
 --- a/chrome/browser/ui/toasts/api/toast_id.h
 +++ b/chrome/browser/ui/toasts/api/toast_id.h
-@@ -68,7 +68,8 @@ enum class ToastId {
-   kAutofillAiPreFetchErrorMessage = 45,
-   kDictationError = 48,
-   kDictationStopped = 49,
--  kMaxValue = kDictationStopped,
-+  kBrowserOSToast = 50,
+@@ -79,7 +79,8 @@ enum class ToastId {
+   kDictationNoMicrophoneError = 56,
+   kEmailVerificationLoading = 57,
+   kScheduledRestartOnIdle = 58,
+-  kMaxValue = kScheduledRestartOnIdle,
++  kBrowserOSToast = 59,
 +  kMaxValue = kBrowserOSToast,
  };
  // LINT.ThenChange(/tools/metrics/histograms/metadata/toasts/enums.xml:ToastId)

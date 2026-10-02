@@ -1,20 +1,21 @@
 diff --git a/chrome/browser/importer/external_process_importer_client.cc b/chrome/browser/importer/external_process_importer_client.cc
-index 412452d77ce1d..cbfce38f0ce44 100644
+index cf319714e5c89d052477e42686a5ccdcdfdf9f5f..2442f86a859ff97d149f8ef362ca00702a43a28c 100644
 --- a/chrome/browser/importer/external_process_importer_client.cc
 +++ b/chrome/browser/importer/external_process_importer_client.cc
-@@ -14,9 +14,11 @@
+@@ -14,10 +14,12 @@
  #include "chrome/common/importer/firefox_importer_utils.h"
  #include "chrome/common/importer/profile_import.mojom.h"
  #include "chrome/grit/generated_resources.h"
 +#include "chrome/utility/importer/browseros/chrome_cookie_importer.h"
  #include "components/strings/grit/components_strings.h"
  #include "components/user_data_importer/common/imported_bookmark_entry.h"
+ #include "components/user_data_importer/mojom/bookmark_html_parser.mojom.h"
  #include "content/public/browser/service_process_host.h"
 +#include "net/cookies/cookie_constants.h"
  #include "ui/base/l10n/l10n_util.h"
  
  ExternalProcessImporterClient::ExternalProcessImporterClient(
-@@ -214,6 +216,72 @@ void ExternalProcessImporterClient::OnPasswordFormImportReady(
+@@ -227,6 +229,72 @@ void ExternalProcessImporterClient::OnPasswordFormImportReady(
    bridge_->SetPasswordForm(form);
  }
  
@@ -87,7 +88,7 @@ index 412452d77ce1d..cbfce38f0ce44 100644
  void ExternalProcessImporterClient::OnKeywordsImportReady(
      const std::vector<user_data_importer::SearchEngineInfo>& search_engines,
      bool unique_on_host_and_path) {
-@@ -244,6 +312,14 @@ void ExternalProcessImporterClient::OnAutofillFormDataImportGroup(
+@@ -257,6 +325,14 @@ void ExternalProcessImporterClient::OnAutofillFormDataImportGroup(
      bridge_->SetAutofillFormData(autofill_form_data_);
  }
  

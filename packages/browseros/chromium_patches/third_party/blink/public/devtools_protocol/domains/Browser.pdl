@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/public/devtools_protocol/domains/Browser.pdl b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-index 6015a94554c21ff42cabaadecd3a368c9b5f831d..c5dbcc26202e7097443262534f3f06519cbcfcb3 100644
+index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a43a0198d2 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 @@ -8,6 +8,16 @@
@@ -247,7 +247,7 @@ index 6015a94554c21ff42cabaadecd3a368c9b5f831d..c5dbcc26202e7097443262534f3f0651
    experimental type PermissionType extends string
      enum
        ar
-@@ -294,6 +525,28 @@ domain Browser
+@@ -304,6 +535,28 @@ domain Browser
        # position and size are returned.
        Bounds bounds
  

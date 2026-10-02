@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/cocoa/dock_icon.h b/chrome/browser/ui/cocoa/dock_icon.h
-index 507dcaa601b0f..1f72c0ffc7d54 100644
+index 3d5103dcd291853fe7587676abebf283d7ca1209..61214ea1efea0708a27fdc5b0bd92c9c4fe15a94 100644
 --- a/chrome/browser/ui/cocoa/dock_icon.h
 +++ b/chrome/browser/ui/cocoa/dock_icon.h
 @@ -21,6 +21,10 @@

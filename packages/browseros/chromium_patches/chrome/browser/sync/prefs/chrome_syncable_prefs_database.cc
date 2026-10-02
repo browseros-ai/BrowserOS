@@ -1,18 +1,19 @@
 diff --git a/chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc b/chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc
-index 04c705f5a11d42672ce46ca50673002450053e68..9266dd9a45d4aef6fe8f7a304fe5ae66ad1600d4 100644
+index fb79fc34ddd781e9802524f5b41b5b55514895b2..4c21ff0f83860e744e91fb5be9b9ff7d52c2edc8 100644
 --- a/chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc
 +++ b/chrome/browser/sync/prefs/chrome_syncable_prefs_database.cc
-@@ -445,6 +445,8 @@ enum {
-   kProfileContentSettingsExceptionsInlineCueMenu = 100382,
-   kProfileContentSettingsPartitionedExceptionsInlineCueMenu = 100383,
+@@ -450,6 +450,9 @@ enum {
    kProfileDefaultContentSettingValuesInlineCueMenu = 100384,
-+  // BrowserOS: sync pref IDs
-+  kPinnedThirdPartyLlmMigrationComplete = 100385,
+   kExtensionsPinnedByDefault = 100385,
+   kAudioFocusEnforcementEnabled = 100386,
++  // BrowserOS: keep the telemetry ID in sync with metadata/sync/enums.xml.
++  // The persisted/synced preference remains identified by its string name.
++  kPinnedThirdPartyLlmMigrationComplete = 100387,
    // See components/sync_preferences/README.md about adding new entries here.
    // vvvvv IMPORTANT! vvvvv
    // Note to the reviewer: IT IS YOUR RESPONSIBILITY to ensure that new syncable
-@@ -649,6 +651,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
-      {syncable_prefs_ids::kProjectsPanelEntrypointEnabled, syncer::PREFERENCES,
+@@ -654,6 +657,10 @@ constexpr auto kChromeSyncablePrefsAllowlist = base::MakeFixedFlatMap<
+      {syncable_prefs_ids::kOrganizerPanelEntrypointEnabled, syncer::PREFERENCES,
        sync_preferences::PrefSensitivity::kNone,
        sync_preferences::MergeBehavior::kNone}},
 +    {prefs::kPinnedThirdPartyLlmMigrationComplete,

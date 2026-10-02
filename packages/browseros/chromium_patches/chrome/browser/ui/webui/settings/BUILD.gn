@@ -1,0 +1,30 @@
+diff --git a/chrome/browser/ui/webui/settings/BUILD.gn b/chrome/browser/ui/webui/settings/BUILD.gn
+index 9c9878f6450b4c14b71cdce0c401410fea83c308..793d86b6ac22b5e24e7e74b28a347fc967af2fcd 100644
+--- a/chrome/browser/ui/webui/settings/BUILD.gn
++++ b/chrome/browser/ui/webui/settings/BUILD.gn
+@@ -14,6 +14,7 @@ source_set("settings") {
+     "accessibility_main_handler.h",
+     "appearance_handler.h",
+     "browser_lifetime_handler.h",
++    "browseros_metrics_handler.h",
+     "captions_handler.h",
+     "custom_home_pages_table_model.h",
+     "dictation_handler.h",
+@@ -142,6 +143,7 @@ source_set("impl") {
+     "accessibility_main_handler.cc",
+     "appearance_handler.cc",
+     "browser_lifetime_handler.cc",
++    "browseros_metrics_handler.cc",
+     "captions_handler.cc",
+     "custom_home_pages_table_model.cc",
+     "dictation_handler.cc",
+@@ -199,6 +201,9 @@ source_set("impl") {
+     "//chrome/browser/autofill",
+     "//chrome/browser/background/glic",
+     "//chrome/browser/bluetooth",
++    # The metrics handler moved with settings_ui.cc out of the aggregate UI
++    # library; compile it here and depend on its BrowserOS metrics service.
++    "//chrome/browser/browseros/metrics",
+     "//chrome/browser/browsing_data",
+     "//chrome/browser/browsing_data:constants",
+     "//chrome/browser/compose",

@@ -1,12 +1,14 @@
 diff --git a/chrome/installer/util/util_constants.h b/chrome/installer/util/util_constants.h
-index ce173b497ab460a260ac4717802bf893be932c70..55f88899a3147a23a77827269e1d283bd1e9c468 100644
+index e9c61e09475afa893cdfc9047be01fbf597d61cf..69fddae7387a3c6dfaada018eaf22f5fccace50b 100644
 --- a/chrome/installer/util/util_constants.h
 +++ b/chrome/installer/util/util_constants.h
-@@ -196,6 +196,7 @@ extern const char kRotateDeviceTrustKey[];
- extern const char kRunAsAdmin[];
- extern const char kSelfDestruct[];
- extern const char kShowEula[];
-+extern const char kSilent[];
- extern const char kStoreDMToken[];
- extern const char kSystemLevel[];
- extern const char kTriggerActiveSetup[];
+@@ -338,6 +338,9 @@ inline constexpr char kSelfDestruct[] = "self-destruct";
+ // Show the embedded EULA dialog.
+ inline constexpr char kShowEula[] = "show-eula";
+ 
++// Suppress the interactive install UI and first-install browser launch.
++inline constexpr char kSilent[] = "silent";
++
+ // Saves the specified device management token to the registry.
+ inline constexpr char kStoreDMToken[] = "store-dmtoken";
+ 

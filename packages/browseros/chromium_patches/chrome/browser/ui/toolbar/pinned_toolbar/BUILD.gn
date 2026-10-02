@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn b/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn
-index 449a04e3e9a29f239d9b12dc4d8eb79ffd751be8..07b5d1bac47c4b0949afce148e3849b968171aaf 100644
+index 9c30ac7d1569433cbf3190489cafdc690fae24e8..30637ea109075e74e6baff1ea5f63e6fbac45e11 100644
 --- a/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn
 +++ b/chrome/browser/ui/toolbar/pinned_toolbar/BUILD.gn
 @@ -40,6 +40,8 @@ source_set("impl") {
@@ -18,4 +18,4 @@ index 449a04e3e9a29f239d9b12dc4d8eb79ffd751be8..07b5d1bac47c4b0949afce148e3849b9
 +      "//chrome/browser/browseros/core:prefs",
        "//chrome/browser/ui:ui_features",
        "//chrome/browser/ui/actions:actions_headers",
-       "//chrome/browser/ui/toolbar",
+       "//chrome/browser/ui/browser_window",

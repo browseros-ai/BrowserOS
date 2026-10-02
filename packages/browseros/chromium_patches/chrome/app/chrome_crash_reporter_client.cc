@@ -1,8 +1,8 @@
 diff --git a/chrome/app/chrome_crash_reporter_client.cc b/chrome/app/chrome_crash_reporter_client.cc
-index f0c0ff0871ee9..61e234d740980 100644
+index 64912e538f3b0b4acfbb21e0cd94a27b4329c7a2..fecf93d66ea720a3c4dab020e89037e1b76757fd 100644
 --- a/chrome/app/chrome_crash_reporter_client.cc
 +++ b/chrome/app/chrome_crash_reporter_client.cc
-@@ -16,6 +16,7 @@
+@@ -17,6 +17,7 @@
  #include "base/strings/utf_string_conversions.h"
  #include "build/branding_buildflags.h"
  #include "build/build_config.h"
@@ -10,33 +10,33 @@ index f0c0ff0871ee9..61e234d740980 100644
  #include "chrome/common/channel_info.h"
  #include "chrome/common/chrome_paths.h"
  #include "chrome/common/chrome_paths_internal.h"
-@@ -131,19 +132,19 @@ void ChromeCrashReporterClient::GetProductInfo(ProductInfo* product_info) {
-   CHECK(product_info);
+@@ -134,19 +135,19 @@ void ChromeCrashReporterClient::GetProductInfo(ProductInfo* product_info) {
  
+   const char* product_name = "";
  #if BUILDFLAG(IS_ANDROID)
--  product_info->product_name = "Chrome_Android";
-+  product_info->product_name = "BrowserOS_Android";
+-  product_name = "Chrome_Android";
++  product_name = "BrowserOS_Android";
  #elif BUILDFLAG(IS_CHROMEOS)
--  product_info->product_name = "Chrome_ChromeOS";
-+  product_info->product_name = "BrowserOS_ChromeOS";
+-  product_name = "Chrome_ChromeOS";
++  product_name = "BrowserOS_ChromeOS";
  #elif BUILDFLAG(IS_LINUX)
  #if defined(ADDRESS_SANITIZER)
--  product_info->product_name = "Chrome_Linux_ASan";
-+  product_info->product_name = "BrowserOS_Linux_ASan";
+-  product_name = "Chrome_Linux_ASan";
++  product_name = "BrowserOS_Linux_ASan";
  #else
--  product_info->product_name = "Chrome_Linux";
-+  product_info->product_name = "BrowserOS_Linux";
+-  product_name = "Chrome_Linux";
++  product_name = "BrowserOS_Linux";
  #endif  // defined(ADDRESS_SANITIZER)
  #elif BUILDFLAG(IS_MAC)
--  product_info->product_name = "Chrome_Mac";
-+  product_info->product_name = "BrowserOS_Mac";
+-  product_name = "Chrome_Mac";
++  product_name = "BrowserOS_Mac";
  #elif BUILDFLAG(IS_WIN)
--  product_info->product_name = "Chrome";
-+  product_info->product_name = "BrowserOS";
+-  product_name = "Chrome";
++  product_name = "BrowserOS";
  #else
    NOTREACHED();
  #endif
-@@ -169,42 +170,8 @@ bool ChromeCrashReporterClient::IsRunningUnattended() {
+@@ -172,42 +173,8 @@ bool ChromeCrashReporterClient::IsRunningUnattended() {
  }
  
  bool ChromeCrashReporterClient::GetCollectStatsConsent() {
@@ -81,9 +81,9 @@ index f0c0ff0871ee9..61e234d740980 100644
  }
  
  #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
-@@ -223,3 +190,7 @@ bool ChromeCrashReporterClient::EnableBreakpadForProcess(
-          process_type == switches::kGpuProcess ||
-          process_type == switches::kUtilityProcess;
+@@ -250,3 +217,7 @@ ChromeCrashReporterClient::GetUserStreamSharedMemoryRegions() {
+ 
+   return streams;
  }
 +
 +std::string ChromeCrashReporterClient::GetUploadUrl() {

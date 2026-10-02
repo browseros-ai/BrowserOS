@@ -3,23 +3,25 @@
 
 --- a/build/toolchain/win/tool_wrapper.py
 +++ b/build/toolchain/win/tool_wrapper.py
-@@ -168,10 +168,12 @@ class WinTool(object):
-     """Converts .rc files to .res files."""
-     env = self._GetEnv(arch)
-     args = list(args)
--    rcpy_args = args[:]
--    rcpy_args[0:1] = [sys.executable, os.path.join(BASE_DIR, 'rc', 'rc.py')]
--    rcpy_args.append('/showIncludes')
--    return subprocess.call(rcpy_args, env=env)
+@@ -184,12 +184,14 @@
+     def ExecRcWrapper(self, arch, *args):
+         """Converts .rc files to .res files."""
+         env = self._GetEnv(arch)
+         args = list(args)
+-        rcpy_args = args[:]
+-        rcpy_args[0:1] = [sys.executable, os.path.join(BASE_DIR, 'rc', 'rc.py')]
+-        rcpy_args.append('/showIncludes')
+-        return subprocess.call(rcpy_args, env=env)
 +
-+    if sys.platform == 'win32':
-+      rc_exe_exit_code = subprocess.call(args, shell=True, env=env)
-+      return rc_exe_exit_code
-+    else:
-+      raise RuntimeError('Must run on Windows.')
++        if sys.platform == 'win32':
++            rc_exe_exit_code = subprocess.call(args, shell=True, env=env)
++            return rc_exe_exit_code
++        else:
++            raise RuntimeError('Must run on Windows.')
  
-   def ExecActionWrapper(self, arch, rspfile, *dirname):
-     """Runs an action command line from a response file using the environment
+     def ExecActionWrapper(self, arch, rspfile, *dirname):
+         """Runs an action command line from a response file using the environment
+         for |arch|. If |dirname| is supplied, use that as the working directory."""
 --- a/chrome/app/chrome_dll.rc
 +++ b/chrome/app/chrome_dll.rc
 @@ -37,7 +37,7 @@ IDR_MAINFRAME ACCELERATORS

@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/side_panel/side_panel_prefs.cc b/chrome/browser/ui/side_panel/side_panel_prefs.cc
-index faccbffb9564bad21868de014c166498e6855cfc..5ed6fa7b255ac1c92bc91d4d71379dbec9a33a2e 100644
+index dbb54fb99ff7feb2ed5260bca0b9980f269c16b8..fc1a151431a96fe5cf2e4beec3bf9b5e15c5a6eb 100644
 --- a/chrome/browser/ui/side_panel/side_panel_prefs.cc
 +++ b/chrome/browser/ui/side_panel/side_panel_prefs.cc
 @@ -4,6 +4,7 @@
@@ -9,7 +9,7 @@ index faccbffb9564bad21868de014c166498e6855cfc..5ed6fa7b255ac1c92bc91d4d71379dbe
 +#include "base/feature_list.h"
  #include "base/i18n/rtl.h"
  #include "base/values.h"
- #include "chrome/browser/profiles/profile.h"
+ #include "build/build_config.h"
 @@ -11,6 +12,7 @@
  #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -18,7 +18,7 @@ index faccbffb9564bad21868de014c166498e6855cfc..5ed6fa7b255ac1c92bc91d4d71379dbe
  #include "chrome/common/pref_names.h"
  #include "chrome/grit/generated_resources.h"
  #include "components/pref_registry/pref_registry_syncable.h"
-@@ -21,6 +23,15 @@
+@@ -27,6 +29,15 @@
  
  namespace side_panel_prefs {
  
@@ -34,7 +34,7 @@ index faccbffb9564bad21868de014c166498e6855cfc..5ed6fa7b255ac1c92bc91d4d71379dbe
  void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
  // TODO(crbug.com/489780965): Move policies over as features are implemented.
  #if !BUILDFLAG(IS_ANDROID)
-@@ -41,6 +52,11 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
+@@ -47,6 +58,11 @@ void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry) {
        base::i18n::IsRTL());
    registry->RegisterDictionaryPref(prefs::kSidePanelAlignmentOverrides,
                                     std::move(alignment_overrides));
