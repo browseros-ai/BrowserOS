@@ -147,7 +147,7 @@
     },
     "apps/claw-app": {
       "name": "@browseros/claw-app",
-      "version": "0.2.27",
+      "version": "0.2.28",
       "dependencies": {
         "@base-ui/react": "^1.8.0",
         "@browseros/claw-api": "workspace:*",
