@@ -1,0 +1,103 @@
+name: Trial Windows server signing (private)
+
+on:
+  workflow_call:
+    inputs:
+      product:
+        required: true
+        type: string
+      version:
+        required: false
+        type: string
+        default: ''
+      windows_signing_provider:
+        required: false
+        type: string
+        default: azure
+    secrets:
+      R2_ACCOUNT_ID:
+        required: true
+      R2_ACCESS_KEY_ID:
+        required: true
+      R2_SECRET_ACCESS_KEY:
+        required: true
+      R2_BUCKET:
+        required: true
+      ESIGNER_USERNAME:
+        required: false
+      ESIGNER_PASSWORD:
+        required: false
+      ESIGNER_TOTP_SECRET:
+        required: false
+      ESIGNER_CREDENTIAL_ID:
+        required: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  sign:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+      - uses: astral-sh/setup-uv@v8.3.2
+      - name: Setup Azure signing tools
+        if: inputs.windows_signing_provider == 'azure'
+        uses: ./.github/actions/setup-azure-signing
+      - uses: actions/setup-java@v6
+        if: inputs.windows_signing_provider == 'sslcom'
+        with:
+          distribution: temurin
+          java-version: '11'
+      - name: Install SSL.com rollback signer
+        if: inputs.windows_signing_provider == 'sslcom'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'CodeSignTool.zip'
+          $root = Join-Path $env:RUNNER_TEMP 'CodeSignTool'
+          Invoke-WebRequest 'https://github.com/SSLcom/CodeSignTool/releases/download/v1.3.2/CodeSignTool-v1.3.2.zip' -OutFile $archive
+          Expand-Archive $archive $root -Force
+          $tool = Get-ChildItem $root -Filter CodeSignTool.bat -Recurse | Select-Object -First 1
+          if (-not $tool) { throw 'CodeSignTool missing' }
+          "CODE_SIGN_TOOL_PATH=$($tool.Directory.FullName)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Sign private copies of server resources
+        shell: pwsh
+        env:
+          PYTHONUTF8: '1'
+          PRODUCT: ${{ inputs.product }}
+          VERSION: ${{ inputs.version }}
+          WINDOWS_SIGNING_PROVIDER: ${{ inputs.windows_signing_provider }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PROFILE_OID: ${{ vars.AZURE_SIGNING_PROFILE_OID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          # An Azure trial must work without the retained SSL.com credentials.
+          ESIGNER_USERNAME: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_USERNAME || '' }}
+          ESIGNER_PASSWORD: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_PASSWORD || '' }}
+          ESIGNER_TOTP_SECRET: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_TOTP_SECRET || '' }}
+          ESIGNER_CREDENTIAL_ID: ${{ inputs.windows_signing_provider == 'sslcom' && secrets.ESIGNER_CREDENTIAL_ID || '' }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_BUCKET: ${{ secrets.R2_BUCKET }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $trialArgs = @('--product', $env:PRODUCT, '--output', "$env:RUNNER_TEMP/signing-trial")
+          if ($env:VERSION) { $trialArgs += @('--version', $env:VERSION) }
+          uv run --project packages/browseros python -m bos_build.scripts.trial_windows_signing @trialArgs
+          if ($LASTEXITCODE -ne 0) { throw 'Signing trial failed' }
+      - name: Retain private trial artifacts and evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: signing-trial-${{ inputs.product }}-${{ inputs.windows_signing_provider }}
+          path: ${{ runner.temp }}/signing-trial/
+          if-no-files-found: warn
+          retention-days: 14

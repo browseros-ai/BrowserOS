@@ -912,12 +912,25 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             if step.get("name") == step_name
         )
 
-    def test_full_releases_have_no_optional_dispatch_surface(self):
+    def test_full_releases_only_expose_signing_provider_choices(self):
         for workflow_name in self.RELEASES:
             with self.subTest(workflow=workflow_name):
                 workflow = self.load_workflow(workflow_name)
                 triggers = workflow.get("on", workflow.get(True))
-                self.assertIsNone(triggers["workflow_dispatch"])
+                # Signing may vary for the trial; source/version allocation
+                # and the set of released components remain fixed.
+                inputs = triggers["workflow_dispatch"]["inputs"]
+                self.assertEqual(
+                    set(inputs),
+                    {"windows_signing_provider", "windows_server_signing_provider"},
+                )
+                for name, default, options in (
+                    ("windows_signing_provider", "sslcom", ["sslcom", "azure"]),
+                    ("windows_server_signing_provider", "inherit", ["inherit", "sslcom", "azure"]),
+                ):
+                    self.assertEqual(inputs[name]["type"], "choice")
+                    self.assertEqual(inputs[name]["default"], default)
+                    self.assertEqual(inputs[name]["options"], options)
                 self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
                 self.assertEqual(workflow["concurrency"]["queue"], "max")
                 self.assertEqual(workflow["permissions"], {})
