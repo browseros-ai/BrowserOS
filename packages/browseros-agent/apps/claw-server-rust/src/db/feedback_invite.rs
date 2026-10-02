@@ -12,6 +12,11 @@
 use crate::{db::Database, error::AppResult};
 use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
 
+/// How long the card stays away after the reader books or declines. Neither answer is
+/// final: opening the booking page is not the same as booking, and a decline is a "not
+/// now", so the card comes back once this has passed since the latest answer.
+pub const SNOOZE_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
+
 #[derive(Clone)]
 pub struct FeedbackInviteRepository {
     db: Database,
@@ -83,18 +88,20 @@ impl FeedbackInviteRepository {
     ) -> AppResult<()> {
         let connection = self.db.connection();
         let dismissed_at = (outcome == InviteOutcome::Dismissed).then_some(now_ms);
+        let snoozed_at = outcome.is_response().then_some(now_ms);
         connection
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
                 "INSERT INTO feedback_invite \
-                 (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms) \
-                 VALUES (?, ?, ?, ?, ?) ON CONFLICT(install_id) DO NOTHING",
+                 (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms, snoozed_at_ms) \
+                 VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(install_id) DO NOTHING",
                 [
                     Value::from(install_id.to_owned()),
                     Value::from(now_ms),
                     Value::from(outcome.as_str().to_owned()),
                     Value::from(outcome.is_response().then_some(now_ms)),
                     Value::from(dismissed_at),
+                    Value::from(snoozed_at),
                 ],
             ))
             .await?;
@@ -104,9 +111,9 @@ impl FeedbackInviteRepository {
         // dismissed while the gate stayed null, and the card would come back after a
         // restart with no migration left to repair it.
         //
-        // Each column carries its own guard. The outcome only ever rises, by rank. The gate
-        // is only ever set, never moved or cleared, so the first dismissal is the one that
-        // stands and a later click cannot reopen it.
+        // Each column carries its own guard. The outcome only ever rises, by rank. The first
+        // dismissal's time is kept for the funnel. The snooze only ever moves forward, so
+        // the latest answer starts the wait and a retried older one cannot shorten it.
         connection
             .execute(Statement::from_sql_and_values(
                 DatabaseBackend::Sqlite,
@@ -117,7 +124,8 @@ impl FeedbackInviteRepository {
                    settled_at_ms = CASE WHEN ? > (CASE outcome \
                      WHEN 'clicked' THEN 2 WHEN 'dismissed' THEN 1 ELSE 0 END) \
                      THEN ? ELSE settled_at_ms END, \
-                   dismissed_at_ms = COALESCE(dismissed_at_ms, ?) \
+                   dismissed_at_ms = COALESCE(dismissed_at_ms, ?), \
+                   snoozed_at_ms = COALESCE(MAX(snoozed_at_ms, ?), snoozed_at_ms, ?) \
                  WHERE install_id = ?",
                 [
                     Value::from(outcome.rank()),
@@ -125,6 +133,8 @@ impl FeedbackInviteRepository {
                     Value::from(outcome.rank()),
                     Value::from(outcome.is_response().then_some(now_ms)),
                     Value::from(dismissed_at),
+                    Value::from(snoozed_at),
+                    Value::from(snoozed_at),
                     Value::from(install_id.to_owned()),
                 ],
             ))
@@ -135,21 +145,22 @@ impl FeedbackInviteRepository {
     /// Whether this installation has already been offered an invitation.
     ///
     /// Only says the card has been on screen before. It does not gate anything: the card
-    /// keeps appearing until the reader dismisses it, so use [`Self::has_dismissed`] for
-    /// that question.
+    /// keeps appearing outside a snooze, so use [`Self::is_snoozed`] for that question.
     pub async fn already_invited(&self, install_id: &str) -> AppResult<bool> {
         Ok(self.outcome_of(install_id).await?.is_some())
     }
 
-    /// Whether the reader has asked to stop seeing the card. Final once true.
-    pub async fn has_dismissed(&self, install_id: &str) -> AppResult<bool> {
+    /// Whether the reader booked or declined within the last [`SNOOZE_MS`]. Never final:
+    /// once the snooze runs out the card is offered again.
+    pub async fn is_snoozed(&self, install_id: &str, now_ms: i64) -> AppResult<bool> {
         use crate::db::entities::prelude::FeedbackInvite;
         use sea_orm::EntityTrait;
 
         Ok(FeedbackInvite::find_by_id(install_id.to_owned())
             .one(self.db.connection())
             .await?
-            .is_some_and(|row| row.dismissed_at_ms.is_some()))
+            .and_then(|row| row.snoozed_at_ms)
+            .is_some_and(|snoozed_at| now_ms < snoozed_at.saturating_add(SNOOZE_MS)))
     }
 
     /// The recorded outcome for this installation, if it has one.
@@ -190,41 +201,54 @@ mod tests {
             Some("shown")
         );
         assert!(
-            !repo.has_dismissed("install-a").await?,
-            "an impression is not the reader asking it to stop"
+            !repo.is_snoozed("install-a", 1_000).await?,
+            "an impression is not the reader answering"
         );
         Ok(())
     }
 
-    /// Only a dismissal shuts the gate, and nothing reopens it. A click afterwards raises
-    /// the funnel outcome because it is the stronger claim about what the reader did, and
-    /// must still leave the gate shut.
+    /// Booking and declining both put the card away for [`SNOOZE_MS`], and neither is
+    /// final: once the snooze runs out the card is offered again.
     #[tokio::test]
-    async fn only_a_dismissal_shuts_the_gate_and_nothing_reopens_it() -> anyhow::Result<()> {
+    async fn an_answer_snoozes_the_card_and_it_comes_back() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Shown, 1_000)
-            .await?;
-        repo.record("install-a", InviteOutcome::Clicked, 2_000)
-            .await?;
-        assert!(!repo.has_dismissed("install-a").await?);
+        for (install_id, outcome) in [
+            ("install-a", InviteOutcome::Clicked),
+            ("install-b", InviteOutcome::Dismissed),
+        ] {
+            repo.record(install_id, InviteOutcome::Shown, 1_000).await?;
+            repo.record(install_id, outcome, 2_000).await?;
+            assert!(repo.is_snoozed(install_id, 2_000).await?);
+            assert!(repo.is_snoozed(install_id, 2_000 + SNOOZE_MS - 1).await?);
+            assert!(
+                !repo.is_snoozed(install_id, 2_000 + SNOOZE_MS).await?,
+                "{outcome:?} must not put the card away for good"
+            );
+        }
+        Ok(())
+    }
 
-        repo.record("install-a", InviteOutcome::Dismissed, 3_000)
-            .await?;
-        assert!(repo.has_dismissed("install-a").await?);
+    /// The latest answer starts the wait, so a reader who declines again after the card
+    /// returns gets a fresh snooze, and a retried older answer cannot shorten it.
+    #[tokio::test]
+    async fn the_latest_answer_starts_the_snooze() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let repo = repository(&dir).await?;
 
-        repo.record("install-a", InviteOutcome::Clicked, 4_000)
+        repo.record("install-a", InviteOutcome::Dismissed, 1_000)
             .await?;
-        assert!(
-            repo.has_dismissed("install-a").await?,
-            "a later click must not undo the dismissal"
-        );
-        assert_eq!(
-            repo.outcome_of("install-a").await?.as_deref(),
-            Some("clicked"),
-            "while the funnel still keeps the stronger claim"
-        );
+        let second = 1_000 + SNOOZE_MS;
+        repo.record("install-a", InviteOutcome::Dismissed, second)
+            .await?;
+        repo.record("install-a", InviteOutcome::Clicked, 1_500)
+            .await?;
+        repo.record("install-a", InviteOutcome::Shown, second + 1)
+            .await?;
+
+        assert!(repo.is_snoozed("install-a", second + SNOOZE_MS - 1).await?);
+        assert!(!repo.is_snoozed("install-a", second + SNOOZE_MS).await?);
         Ok(())
     }
 

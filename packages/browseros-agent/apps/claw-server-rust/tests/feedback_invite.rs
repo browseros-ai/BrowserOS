@@ -1,7 +1,7 @@
 //! In-process coverage of the feedback invitation routes.
 //!
 //! These drive the real router over real app state, so the checks under test are the ones a
-//! cockpit would actually hit: consent, cohort membership and the once-ever rule.
+//! cockpit would actually hit: consent, cohort membership and the snooze after an answer.
 
 use axum::{
     Router,
@@ -9,7 +9,10 @@ use axum::{
     http::{Request, StatusCode, header},
 };
 use claw_server_rust::{
-    AppState, build_router, config::Config, services::feedback_cohort::CohortDocument,
+    AppState, build_router,
+    config::Config,
+    db::feedback_invite::{InviteOutcome, SNOOZE_MS},
+    services::feedback_cohort::CohortDocument,
 };
 use serde_json::{Value, json};
 use std::{path::Path, sync::Arc, time::Duration};
@@ -111,10 +114,9 @@ async fn an_impression_does_not_stop_the_card_coming_back() -> anyhow::Result<()
     Ok(())
 }
 
-/// Opening the booking page is not the same as booking, so it does not take the card away
-/// either. The reader may well come back to finish later.
+/// Opening the booking page puts the card away for a few days, the same as declining.
 #[tokio::test]
-async fn booking_does_not_stop_the_card_coming_back() -> anyhow::Result<()> {
+async fn booking_snoozes_the_card() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let app = test_app(dir.path()).await?;
     let install_id = install_id_of(&app).await;
@@ -131,14 +133,14 @@ async fn booking_does_not_stop_the_card_coming_back() -> anyhow::Result<()> {
     }
 
     let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
-    assert_eq!(after["eligible"], true);
+    assert_eq!(after, json!({ "eligible": false }));
     Ok(())
 }
 
-/// Dismissal is the only answer that ends it, and it has to outlive the process that
-/// recorded it or a restart starts nagging again.
+/// The snooze has to outlive the process that recorded it or a restart starts nagging
+/// again.
 #[tokio::test]
-async fn a_dismissal_ends_it_and_survives_a_restart() -> anyhow::Result<()> {
+async fn a_dismissal_snoozes_it_across_a_restart() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let app = test_app(dir.path()).await?;
     let install_id = install_id_of(&app).await;
@@ -164,7 +166,7 @@ async fn a_dismissal_ends_it_and_survives_a_restart() -> anyhow::Result<()> {
 }
 
 /// A click landing after a dismissal raises the funnel outcome, because clicking is the
-/// stronger claim about what the reader did. It must not un-dismiss the card.
+/// stronger claim about what the reader did. The card stays snoozed.
 #[tokio::test]
 async fn a_click_after_a_dismissal_does_not_bring_the_card_back() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
@@ -195,35 +197,29 @@ async fn a_click_after_a_dismissal_does_not_bring_the_card_back() -> anyhow::Res
     assert_eq!(
         after,
         json!({ "eligible": false }),
-        "but the reader asked it to stop"
+        "and the card stays away for now"
     );
     Ok(())
 }
 
+/// No answer is final. Once the snooze from a booking or a decline has passed, the card is
+/// offered again, because some readers open the booking page and never book.
 #[tokio::test]
-async fn a_dismissal_is_final() -> anyhow::Result<()> {
-    let dir = tempfile::tempdir()?;
-    let app = test_app(dir.path()).await?;
-    let install_id = install_id_of(&app).await;
-    join_cohort(&app, &[install_id.as_str()]).await?;
+async fn the_card_comes_back_after_the_snooze() -> anyhow::Result<()> {
+    for outcome in [InviteOutcome::Clicked, InviteOutcome::Dismissed] {
+        let dir = tempfile::tempdir()?;
+        let app = test_app(dir.path()).await?;
+        let install_id = install_id_of(&app).await;
+        join_cohort(&app, &[install_id.as_str()]).await?;
 
-    request(
-        &app.router,
-        "POST",
-        INVITATION,
-        Some(json!({ "outcome": "shown" })),
-    )
-    .await?;
-    request(
-        &app.router,
-        "POST",
-        INVITATION,
-        Some(json!({ "outcome": "dismissed" })),
-    )
-    .await?;
+        app.state
+            .feedback_invites
+            .record(&install_id, outcome, now_ms() - SNOOZE_MS)
+            .await?;
 
-    let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
-    assert_eq!(after, json!({ "eligible": false }));
+        let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
+        assert_eq!(after["eligible"], true, "{outcome:?} must not be final");
+    }
     Ok(())
 }
 
@@ -387,7 +383,7 @@ async fn booking_then_closing_the_card_is_recorded_as_a_click() -> anyhow::Resul
         Some("clicked"),
         "closing the card after booking must not erase the booking"
     );
-    // The invitation is still spent either way.
+    // The card is snoozed either way.
     let (_, after) = request(&app.router, "GET", INVITATION, None).await?;
     assert_eq!(after, json!({ "eligible": false }));
     Ok(())

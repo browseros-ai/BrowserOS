@@ -12,8 +12,11 @@ pub struct Model {
     pub shown_at_ms: i64,
     pub outcome: String,
     pub settled_at_ms: Option<i64>,
-    /// Set once the reader asks to stop seeing the card. Never cleared.
+    /// The first time the reader declined. Never moved or cleared.
     pub dismissed_at_ms: Option<i64>,
+    /// The latest time the reader booked or declined. The card stays away until
+    /// [`crate::db::feedback_invite::SNOOZE_MS`] has passed since then.
+    pub snoozed_at_ms: Option<i64>,
 }
 
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]

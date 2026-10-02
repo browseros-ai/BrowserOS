@@ -276,22 +276,27 @@ describe('FeedbackInviteCard', () => {
     ])
   })
 
-  /// Taking the card away on booking would punish the reader for accepting: they
-  /// land on a booking page, and if they come back to finish later the invitation
-  /// they agreed to has gone. Only declining removes it.
-  it('stays on screen after booking', async () => {
+  /// Booking puts the card away like declining does. The server brings it back
+  /// after its snooze, since opening the booking page is not the same as booking.
+  it('puts the card away after booking, in this tab and others', async () => {
     state.invitation = eligible
     await render()
 
     await click(buttonWithText('Book a 15 minute chat'))
+    expect(container.innerHTML).toBe('')
+    expect(storage['feedbackInviteDismissedAt:v1']).toBeDefined()
 
-    expect(container.textContent).toContain(
-      "You're one of our most active users",
-    )
-    expect(buttonWithText('Book a 15 minute chat')).toBeDefined()
+    state.recorded = []
+    await act(async () => root.unmount())
+    const { createRoot } = await import('react-dom/client')
+    root = createRoot(container)
+    await render()
+
+    expect(container.innerHTML).toBe('')
+    expect(state.recorded).toEqual([])
   })
 
-  /// The card returns on every cockpit load until it is dismissed, and the cockpit is the
+  /// The card returns on every cockpit load outside a snooze, and the cockpit is the
   /// new tab page. Counting every appearance would report thousands of impressions for one
   /// reader and leave the funnel without a usable denominator.
   it('counts the impression once per profile but still shows the card', async () => {
@@ -335,7 +340,7 @@ describe('FeedbackInviteCard', () => {
     expect(storage.feedbackInviteShownTracked).toBe('true')
   })
 
-  /// The card returns on every load until dismissed, so a dismissal in one tab has to reach
+  /// The card returns on every load outside a snooze, so a dismissal in one tab has to reach
   /// the tabs the reader already has open rather than leaving them still offering it.
   it('stays away in another tab once dismissed', async () => {
     state.invitation = eligible
@@ -400,34 +405,6 @@ describe('FeedbackInviteCard', () => {
 
     await publishDismissal(2_000)
 
-    expect(container.innerHTML).toBe('')
-  })
-
-  it('reopens the link on a second click without reporting it twice', async () => {
-    state.invitation = eligible
-    await render()
-
-    await click(buttonWithText('Book a 15 minute chat'))
-    await click(buttonWithText('Book a 15 minute chat'))
-
-    expect(state.opened).toEqual([
-      'https://cal.test/book',
-      'https://cal.test/book',
-    ])
-    expect(state.recorded).toEqual(['shown', 'clicked'])
-    expect(
-      state.tracked.filter((event) => event === 'feedback_invite_clicked'),
-    ).toHaveLength(1)
-  })
-
-  it('can still be dismissed after booking', async () => {
-    state.invitation = eligible
-    await render()
-
-    await click(buttonWithText('Book a 15 minute chat'))
-    await click(buttonWithText('No thanks'))
-
-    expect(state.recorded).toEqual(['shown', 'clicked', 'dismissed'])
     expect(container.innerHTML).toBe('')
   })
 

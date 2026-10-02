@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Invites the most active installations to a feedback call. The server decides
- * who is eligible and keeps the invitation open until dismissal; the card
- * asks, shows, and reports back what happened.
+ * who is eligible and snoozes the invitation for a few days after the reader
+ * books or declines; the card asks, shows, and reports back what happened.
  */
 
 import { useQueryClient } from '@tanstack/react-query'
@@ -32,32 +32,33 @@ import {
 const SHOWN_TRACKED_KEY = 'feedbackInviteShownTracked'
 
 /**
- * Fences stale eligible query results after a server-confirmed dismissal. The
+ * Fences stale eligible query results after a server-confirmed answer. The
  * timestamp is compared with React Query's dataUpdatedAt, so a newer server
  * answer always wins and browser storage never becomes an eligibility source.
+ * That is also what lets the card return once the server's snooze runs out.
  */
-const DISMISSED_AT_KEY = 'feedbackInviteDismissedAt:v1'
+const ANSWERED_AT_KEY = 'feedbackInviteDismissedAt:v1'
 
-function readDismissedAt(): number | null {
+function readAnsweredAt(): number | null {
   try {
-    const value = Number(localStorage.getItem(DISMISSED_AT_KEY))
+    const value = Number(localStorage.getItem(ANSWERED_AT_KEY))
     return Number.isFinite(value) && value > 0 ? value : null
   } catch {
     return null
   }
 }
 
-function rememberDismissal(): void {
+function rememberAnswer(): void {
   try {
-    localStorage.setItem(DISMISSED_AT_KEY, String(Date.now()))
+    localStorage.setItem(ANSWERED_AT_KEY, String(Date.now()))
   } catch {
-    // The server still holds the durable dismissal when storage is unavailable.
+    // The server still holds the snooze when storage is unavailable.
   }
 }
 
-function subscribeToDismissals(listener: () => void): () => void {
+function subscribeToAnswers(listener: () => void): () => void {
   const onStorage = (event: StorageEvent) => {
-    if (event.key === DISMISSED_AT_KEY) listener()
+    if (event.key === ANSWERED_AT_KEY) listener()
   }
   window.addEventListener('storage', onStorage)
   return () => window.removeEventListener('storage', onStorage)
@@ -82,20 +83,20 @@ function rememberImpression(): void {
 /**
  * What this page load has decided to show. The card is copied here once so it
  * cannot be pulled out from under the reader by the query answering again
- * mid-view; it lives on that until they dismiss it.
+ * mid-view; it lives on that until they book or decline.
  */
 type InviteState =
   | { phase: 'waiting' }
   | { phase: 'showing'; bookUrl: string }
-  | { phase: 'dismissed' }
+  | { phase: 'answered' }
 
 export function FeedbackInviteCard() {
   const queryClient = useQueryClient()
   const invitation = useFeedbackInvitation()
   const record = useRecordFeedbackInvite()
-  const dismissedAt = useSyncExternalStore(
-    subscribeToDismissals,
-    readDismissedAt,
+  const answeredAt = useSyncExternalStore(
+    subscribeToAnswers,
+    readAnsweredAt,
     () => null,
   )
   const capturing = useSyncExternalStore(
@@ -105,12 +106,11 @@ export function FeedbackInviteCard() {
   )
   const [state, setState] = useState<InviteState>({ phase: 'waiting' })
   const appeared = useRef(false)
-  const booked = useRef(false)
 
-  const fencedByNewerDismissal =
-    dismissedAt !== null && dismissedAt >= invitation.dataUpdatedAt
+  const fencedByNewerAnswer =
+    answeredAt !== null && answeredAt >= invitation.dataUpdatedAt
   const offered =
-    invitation.data?.eligible === true && !fencedByNewerDismissal
+    invitation.data?.eligible === true && !fencedByNewerAnswer
       ? invitation.data.bookUrl
       : undefined
   const report = record.mutate
@@ -118,8 +118,8 @@ export function FeedbackInviteCard() {
   // The impression belongs to the card appearing, and there is no user action
   // to hang that on. The ref keeps it to the first appearance in this page.
   //
-  // The card now returns on every cockpit load until it is dismissed, and the
-  // cockpit is the new tab page, so tracking every appearance would report
+  // The card returns on every cockpit load outside a snooze, and the cockpit is
+  // the new tab page, so tracking every appearance would report
   // thousands of impressions for one reader and make the funnel's denominator
   // meaningless. The analytics event is counted once per profile; the server is
   // told every time, because it is what holds the first-seen timestamp.
@@ -141,53 +141,43 @@ export function FeedbackInviteCard() {
     track(AnalyticsEvent.FeedbackInviteShown)
   }, [capturing, state.phase])
 
-  if (state.phase !== 'showing' || fencedByNewerDismissal) return null
+  if (state.phase !== 'showing' || fencedByNewerAnswer) return null
   const { bookUrl } = state
 
   // The reply to a recorded outcome is the invitation's new state, so it is
   // written straight into the cache rather than invalidated for a refetch that
-  // would ask the same question again.
-  const recordOutcome = (
-    outcome: 'clicked' | 'dismissed',
-    onSuccess?: () => void,
-  ) => {
+  // would ask the same question again. Booking and declining both put the card
+  // away; the server brings it back after a few days, because opening the
+  // booking page is not the same as booking.
+  const answer = (outcome: 'clicked' | 'dismissed') => {
+    track(
+      outcome === 'clicked'
+        ? AnalyticsEvent.FeedbackInviteClicked
+        : AnalyticsEvent.FeedbackInviteDismissed,
+    )
+    setState({ phase: 'answered' })
     report(
       { outcome },
       {
         onSuccess: (settled) => {
           queryClient.setQueryData(useFeedbackInvitation.getKey(), settled)
-          onSuccess?.()
+          rememberAnswer()
         },
         onError: () => {
-          if (outcome === 'clicked') booked.current = false
           toast.error(
-            outcome === 'dismissed'
-              ? 'Could not save your response. The invitation may appear again.'
-              : 'Could not record your response. Please try again.',
+            'Could not save your response. The invitation may appear again.',
           )
         },
       },
     )
   }
 
-  // Booking opens a tab and leaves the card alone. Taking it away here would
-  // punish the reader for accepting: they land on a booking page, and if they
-  // come back to finish later the invitation they agreed to has vanished.
-  // Only declining removes it.
   const handleBook = () => {
-    if (!booked.current) {
-      booked.current = true
-      track(AnalyticsEvent.FeedbackInviteClicked)
-      recordOutcome('clicked')
-    }
     chrome.tabs.create({ url: bookUrl })
+    answer('clicked')
   }
 
-  const handleDecline = () => {
-    track(AnalyticsEvent.FeedbackInviteDismissed)
-    setState({ phase: 'dismissed' })
-    recordOutcome('dismissed', rememberDismissal)
-  }
+  const handleDecline = () => answer('dismissed')
 
   return (
     <FeedbackInviteCardView onBook={handleBook} onDecline={handleDecline} />
