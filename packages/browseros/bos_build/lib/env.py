@@ -19,6 +19,8 @@ SENSITIVE_ENV_VARS: frozenset[str] = frozenset(
         "ESIGNER_PASSWORD",
         "ESIGNER_TOTP_SECRET",
         "GITHUB_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        "AZURE_CLIENT_SECRET",
         "GH_TOKEN",
         "MACOS_CERTIFICATE_P12",
         "MACOS_CERTIFICATE_PWD",
@@ -57,6 +59,54 @@ _load_dotenv_file()
 
 class EnvConfig:
     """Centralize build environment access and defaults."""
+
+    @property
+    def windows_signing_provider(self):
+        from .windows_signing.config import SigningProvider
+
+        return SigningProvider(os.environ.get("WINDOWS_SIGNING_PROVIDER", "sslcom"))
+
+    @property
+    def windows_server_signing_provider(self):
+        from .windows_signing.config import SigningProvider
+
+        value = os.environ.get("WINDOWS_SERVER_SIGNING_PROVIDER", "inherit")
+        return (
+            self.windows_signing_provider
+            if value == "inherit"
+            else SigningProvider(value)
+        )
+
+    @property
+    def windows_signing_publisher(self) -> str:
+        return os.environ.get("WINDOWS_SIGNING_PUBLISHER", "Felafax, Inc.")
+
+    @property
+    def azure_signing_auth(self) -> str:
+        value = os.environ.get("AZURE_SIGNING_AUTH", "github-oidc")
+        if value not in ("github-oidc", "azure-cli"):
+            raise ValueError("AZURE_SIGNING_AUTH must be github-oidc or azure-cli")
+        if value == "azure-cli" and os.environ.get("GITHUB_ACTIONS") == "true":
+            raise ValueError(
+                "GitHub signing must use OIDC, not a runner's cached Azure CLI identity"
+            )
+        return value
+
+    @property
+    def azure_signing_endpoint(self) -> str:
+        return os.environ.get("AZURE_SIGNING_ENDPOINT", "")
+
+    @property
+    def azure_signing_account(self) -> str:
+        return os.environ.get("AZURE_SIGNING_ACCOUNT", "")
+
+    @property
+    def azure_signing_profile(self) -> str:
+        return os.environ.get("AZURE_SIGNING_PROFILE", "")
+
+    @property
+    def azure_signing_profile_oid(self) -> str:
+        return os.environ.get("AZURE_SIGNING_PROFILE_OID", "")
 
     @property
     def chromium_src(self) -> Optional[str]:

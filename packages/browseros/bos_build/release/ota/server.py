@@ -2,6 +2,7 @@
 """Server OTA module for BrowserOS Server binary updates"""
 
 import hashlib
+import json
 import re
 import shutil
 import tempfile
@@ -10,6 +11,11 @@ from typing import List, Mapping, Optional
 
 from ...core.step import Step, ValidationError
 from ...core.context import Context
+from ...lib.windows_signing.config import (
+    SigningProvider,
+    signing_identity,
+    validate_signing,
+)
 from ...lib.utils import (
     log_info,
     log_success,
@@ -128,8 +134,7 @@ class ServerOTAModule(Step):
             if not context.env.macos_certificate_name:
                 raise ValidationError("MACOS_CERTIFICATE_NAME required for signing")
         elif IS_WINDOWS():
-            if not context.env.code_sign_tool_path:
-                raise ValidationError("CODE_SIGN_TOOL_PATH required for signing")
+            validate_signing(context.env.windows_signing_provider, context.env)
 
         if not context.env.has_r2_config():
             raise ValidationError(
@@ -249,6 +254,31 @@ class ServerOTAModule(Step):
         if existing is None or existing.version != self.version:
             return False
 
+        # Live appcasts predate provider evidence. During the Azure trial a
+        # same-version feed can silently bypass signing entirely. Require a
+        # fresh version, including rollback to SSL from an Azure-bound payload.
+        if any(p["os"] == "windows" for p in self._get_platforms()):
+            client = get_r2_client(ctx.env)
+            if client is None:
+                raise RuntimeError("R2 client is required to verify existing signing identity")
+            key = f"server/{self.zip_filename('windows_x64')}"
+            head = client.head_object(Bucket=ctx.env.r2_bucket, Key=key)
+            metadata = head.get("Metadata", {})
+            binding = self._windows_binding(ctx)
+            if (
+                ctx.env.windows_signing_provider == SigningProvider.AZURE
+                or metadata.get("windows-signing-provider") == "azure"
+            ):
+                raise RuntimeError(
+                    "Provider trials require a fresh server version; the live version would reuse existing signatures"
+                )
+            if metadata.get("windows-signing-provider") and any(
+                metadata.get(k) != v for k, v in binding.items()
+            ):
+                raise RuntimeError(
+                    "Live Windows signing identity differs; release a higher server version"
+                )
+
         requested = {platform["name"] for platform in self._get_platforms()}
         missing = sorted(requested.difference(existing.artifacts))
         if missing:
@@ -365,6 +395,16 @@ class ServerOTAModule(Step):
             f"--channel {self.channel} --publish' to make the release live"
         )
 
+    def _windows_binding(self, ctx: Context) -> dict[str, str]:
+        identity = signing_identity(ctx.env.windows_signing_provider, ctx.env)
+        digest = hashlib.sha256(
+            json.dumps(identity, sort_keys=True).encode()
+        ).hexdigest()
+        return {
+            "windows-signing-provider": str(ctx.env.windows_signing_provider),
+            "windows-signing-identity": digest,
+        }
+
     def _upload_bound_payload(
         self,
         ctx: Context,
@@ -389,6 +429,8 @@ class ServerOTAModule(Step):
         }
         if self.release_sha:
             metadata["release-sha"] = self.release_sha
+        if artifact.os == "windows":
+            metadata.update(self._windows_binding(ctx))
         try:
             r2_client.put_object(
                 Bucket=ctx.env.r2_bucket,
@@ -457,6 +499,14 @@ class ServerOTAModule(Step):
         }
         if self.release_sha:
             expected["release-sha"] = self.release_sha
+        if os_type == "windows":
+            # Only legacy SSL payloads can lack provider evidence. Azure must
+            # never accept another signer's immutable object after a write race.
+            if (
+                ctx.env.windows_signing_provider == SigningProvider.AZURE
+                or metadata.get("windows-signing-provider")
+            ):
+                expected.update(self._windows_binding(ctx))
         mismatches = {
             name: {"expected": value, "actual": metadata.get(name)}
             for name, value in expected.items()

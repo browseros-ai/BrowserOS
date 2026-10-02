@@ -2,6 +2,7 @@
 """Tests for Windows signing path discovery."""
 
 import unittest
+import os
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from types import SimpleNamespace
@@ -11,7 +12,8 @@ from unittest import mock
 from bos_build.core.context import Context
 from bos_build.core.products import get_product_descriptor
 from bos_build.lib.env import EnvConfig
-from . import windows as windows_module
+from ...lib.windows_signing import sslcom as windows_module
+from . import windows as windows_step_module
 from .windows import (
     WindowsSignModule,
     check_signing_environment,
@@ -332,16 +334,19 @@ class SignWithCodeSignToolInvocationTest(unittest.TestCase):
             root = Path(tmp)
             build_output_dir = root / "out" / "Default"
             build_output_dir.mkdir(parents=True)
-            env = SimpleNamespace(
-                code_sign_tool_path="C:/CodeSignTool",
-                esigner_username="signer@example.com ",
-                esigner_password='"password"',
-                esigner_totp_secret=" totp",
-            )
+            env = EnvConfig()
             ctx = SimpleNamespace(chromium_src=root, out_dir="out/Default", env=env)
 
             with (
-                mock.patch.object(windows_module, "IS_WINDOWS", return_value=True),
+                mock.patch.object(windows_step_module, "IS_WINDOWS", return_value=True),
+                mock.patch.dict(os.environ, {
+                    "CODE_SIGN_TOOL_PATH": "C:/CodeSignTool",
+                    "ESIGNER_USERNAME": "signer@example.com ",
+                    "ESIGNER_PASSWORD": '"password"',
+                    "ESIGNER_TOTP_SECRET": " totp",
+                    "WINDOWS_SIGNING_PROVIDER": "sslcom",
+                    "WINDOWS_SERVER_SIGNING_PROVIDER": "inherit",
+                }, clear=True),
                 mock.patch.object(windows_module, "log_warning") as log_warning,
             ):
                 WindowsSignModule().validate(cast(Context, ctx))
