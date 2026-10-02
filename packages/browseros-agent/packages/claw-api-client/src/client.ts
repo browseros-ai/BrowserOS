@@ -11,6 +11,7 @@ import type {
   HealthResponse,
   RecordFeedbackInviteRequest,
   RecordingMetadata,
+  ResolveHelpResponse,
   SessionDetail,
   SessionList,
   SessionScreenshotList,
@@ -185,6 +186,17 @@ export class ClawApiClient {
     return this.unwrap(
       await this.client.POST('/api/v1/sessions/{sessionId}/cancel', {
         params: { path: request },
+      }),
+    )
+  }
+
+  async resolveHelp(
+    request: SessionRequest & { note?: string },
+  ): Promise<ResolveHelpResponse> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/sessions/{sessionId}/help/resolve', {
+        params: { path: { sessionId: request.sessionId } },
+        body: { note: request.note },
       }),
     )
   }

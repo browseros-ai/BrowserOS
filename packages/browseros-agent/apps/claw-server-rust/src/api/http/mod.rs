@@ -64,6 +64,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             post(sessions::cancel),
         )
         .route(
+            "/api/v1/sessions/{session_id}/help/resolve",
+            post(sessions::resolve_help),
+        )
+        .route(
             "/api/v1/sessions/{session_id}/screenshots",
             get(screenshots::list),
         )

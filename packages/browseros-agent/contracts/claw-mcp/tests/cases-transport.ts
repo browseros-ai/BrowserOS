@@ -9,6 +9,7 @@ import { apiGet, waitUntil } from './helpers'
 
 const EXPECTED_TOOLS = [
   'act',
+  'await_human_help',
   'diff',
   'download',
   'evaluate',
@@ -19,6 +20,7 @@ const EXPECTED_TOOLS = [
   'navigate',
   'pdf',
   'read',
+  'request_human_help',
   'run',
   'save_skill',
   'screenshot',

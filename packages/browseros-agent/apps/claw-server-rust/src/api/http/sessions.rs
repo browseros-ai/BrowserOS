@@ -22,8 +22,8 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    CancelSessionResponse, Dispatch, SessionBrowserTab, SessionDetail, SessionList, SessionStatus,
-    SessionSummary, SessionTokenUsage,
+    CancelSessionResponse, Dispatch, ResolveHelpRequest, ResolveHelpResponse, SessionBrowserTab,
+    SessionDetail, SessionList, SessionStatus, SessionSummary, SessionTokenUsage,
 };
 use std::{collections::HashMap, sync::Arc};
 
@@ -46,7 +46,7 @@ pub(super) async fn list(
 ) -> Result<Json<SessionList>, CanonicalError> {
     let query = parse_query(&request_id, &raw)?;
     if query.status == Some(TaskStatus::Live) {
-        let items = state
+        let mut items = state
             .cockpit
             .list(&LiveSessionFilters {
                 profile_id: query.profile_id,
@@ -59,7 +59,30 @@ pub(super) async fn list(
             .map_err(|source| internal(&request_id, source))?
             .into_iter()
             .map(contract_live_projection)
-            .collect();
+            .collect::<Vec<_>>();
+        for item in &mut items {
+            let session_id = SessionId::new(item.session_id.clone());
+            let target = item
+                .live
+                .as_deref()
+                .and_then(|live| {
+                    live.browser_tabs
+                        .iter()
+                        .max_by_key(|tab| tab.last_activity_at.unwrap_or(0))
+                })
+                .map(|tab| (tab.browser_tab_id, tab.url.clone(), tab.title.clone()));
+            let (tab_id, url, title) = match target {
+                Some((tab_id, url, title)) => (Some(tab_id), Some(url), Some(title)),
+                None => (None, None, None),
+            };
+            if let Some(live) = item.live.as_deref_mut() {
+                live.help_request = state
+                    .help
+                    .snapshot(&session_id, tab_id, url, title)
+                    .await
+                    .map(Box::new);
+            }
+        }
         return Ok(Json(SessionList::new(items)));
     }
     let response_status_filter = query.status;
@@ -166,6 +189,20 @@ pub(super) async fn cancel(
         SessionStatus::Cancelled,
         i64::try_from(cancelled_dispatches).unwrap_or(i64::MAX),
     )))
+}
+
+pub(super) async fn resolve_help(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    body: Option<Json<ResolveHelpRequest>>,
+) -> Json<ResolveHelpResponse> {
+    let session_id = SessionId::new(session_id);
+    let note = body
+        .and_then(|Json(req)| req.note)
+        .map(|note| note.trim().to_string())
+        .filter(|note| !note.is_empty());
+    let resolved = state.help.resolve(&session_id, note).await;
+    Json(ResolveHelpResponse::new(resolved))
 }
 
 async fn live_sessions(state: &AppState) -> HashMap<String, Arc<Session>> {

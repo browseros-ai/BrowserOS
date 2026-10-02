@@ -13,11 +13,14 @@ use crate::{
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
     services::{
+        cockpit::LiveSessionFilters,
+        help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
         sessions::{RetirementCause, Session},
         skills::{CreateSkill, SkillOrigin},
     },
 };
 use browseros_mcp::{OutputFileAccess, ToolDef, ToolResult, catalog};
+use claw_api::models::HelpRequestKind;
 use rmcp::{
     ErrorData as McpError, RoleServer,
     handler::server::ServerHandler,
@@ -69,6 +72,13 @@ const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
+const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
+const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
+const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
+const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
+/// How long each wait call blocks before returning a `waiting` status. Short enough to stay under
+/// any reasonable client tool-call timeout so an agent that cannot hold a long call just re-calls.
+const HELP_WAIT_CHUNK: std::time::Duration = std::time::Duration::from_secs(75);
 
 /// Owns one MCP transport lifetime. Drop best-effort schedules removal of a started
 /// server session, which records its end and begins retained-group handling.
@@ -78,6 +88,8 @@ pub struct ClawMcpService {
     name_session_tool: Tool,
     save_skill_tool: Tool,
     mark_skill_run_tool: Tool,
+    request_help_tool: Tool,
+    await_help_tool: Tool,
     output_files: OutputFileAccess,
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
@@ -113,6 +125,8 @@ impl ClawMcpService {
             name_session_tool: name_session_tool(),
             save_skill_tool: save_skill_tool(),
             mark_skill_run_tool: mark_skill_run_tool(),
+            request_help_tool: request_help_tool(),
+            await_help_tool: await_help_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
@@ -145,6 +159,8 @@ impl ClawMcpService {
         tools.push(decorate(self.name_session_tool.clone()));
         tools.push(decorate(self.save_skill_tool.clone()));
         tools.push(decorate(self.mark_skill_run_tool.clone()));
+        tools.push(decorate(self.request_help_tool.clone()));
+        tools.push(decorate(self.await_help_tool.clone()));
         tools
     }
 
@@ -360,6 +376,145 @@ impl ClawMcpService {
     /// Looks up an existing store session for `session_id` or mints one under it.
     /// Does not touch `self.lifecycle`, so a caller that must stay out of the
     /// transport-close cleanup can start a session without arming that teardown.
+    async fn call_request_human_help(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        request_ct: CancellationToken,
+    ) -> CallToolResult {
+        let Some(reason) = raw_args
+            .get("reason")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "request_human_help: \"reason\" is required (a short line saying what you need a human to do).",
+            )]);
+        };
+        let string_arg = |key: &str| {
+            raw_args
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+        };
+        // Pin the tab the agent is on right now, so takeover targets the blocked page even when the
+        // agent has several tabs open and the poll-time attribution later drifts or empties.
+        let (browser_tab_id, url, title) = self.resolve_active_tab(started.session.id()).await;
+        let params = HelpOpenParams {
+            request_id: format!("help-{}", Ulid::new()),
+            reason: reason.to_string(),
+            details: string_arg("details"),
+            resume_hint: string_arg("resumeHint"),
+            kind: raw_args
+                .get("kind")
+                .and_then(Value::as_str)
+                .and_then(help_kind_from_str),
+            browser_tab_id,
+            url,
+            title,
+        };
+        let entry = self.state.help.open(started.session.id(), params).await;
+        self.run_help_wait(started, &entry, request_ct).await
+    }
+
+    /// The session's most-recently-active owned tab, as the live projection sees it now. Captured at
+    /// request time so a help request pins the exact blocked tab. Returns all-None when the session
+    /// has no attributed tab, in which case the snapshot falls back to the poll-time pick.
+    async fn resolve_active_tab(
+        &self,
+        session_id: &SessionId,
+    ) -> (Option<i64>, Option<String>, Option<String>) {
+        let filters = LiveSessionFilters {
+            profile_id: None,
+            slug: None,
+            site: None,
+            search: None,
+            since: None,
+        };
+        let Ok(sessions) = self.state.cockpit.list(&filters).await else {
+            return (None, None, None);
+        };
+        let tab = sessions
+            .into_iter()
+            .find(|projection| projection.task.session_id == session_id.as_str())
+            .and_then(|projection| {
+                projection
+                    .live
+                    .browser_tabs
+                    .into_iter()
+                    .max_by_key(|tab| tab.last_activity_at.unwrap_or(0))
+            });
+        match tab {
+            Some(tab) => (Some(tab.browser_tab_id), Some(tab.url), Some(tab.title)),
+            None => (None, None, None),
+        }
+    }
+
+    async fn call_await_human_help(
+        &self,
+        started: &StartedSession,
+        request_ct: CancellationToken,
+    ) -> CallToolResult {
+        match self.state.help.get(started.session.id()).await {
+            Some(entry) => self.run_help_wait(started, &entry, request_ct).await,
+            // No entry is the safe-terminal case, not a resume: the request may have
+            // expired and been reaped before this reattach, so reporting "resolved"
+            // could tell the agent a human helped when none did. "timed_out" never
+            // falsely clears a block; the agent decides whether to ask again or stop.
+            None => ToolResult::text(
+                "No open human-help request is waiting (it was never opened or has already ended). A human did not hand control back here, so do not assume the block is cleared: decide whether to ask again with request_human_help or stop.",
+                Some(json!({ "status": "timed_out" })),
+            )
+            .into_call_tool_result(),
+        }
+    }
+
+    async fn run_help_wait(
+        &self,
+        started: &StartedSession,
+        entry: &Arc<HelpEntry>,
+        request_ct: CancellationToken,
+    ) -> CallToolResult {
+        let dispatch_id = DispatchId::new();
+        let dispatch_cancel = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_cancel.clone())
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserOS neo session is no longer live",
+            )]);
+        }
+        // A terminal cancel (cockpit Stop via the dispatch token, or session teardown via the
+        // child token) discards the request; the per-call request token only ends this wait, so a
+        // client that times out one chunk and re-calls keeps its request. The never-cancelled
+        // placeholder keeps the request token out of the terminal path.
+        let terminal = linked_cancel_token(
+            started.session.child_token(),
+            CancellationToken::new(),
+            dispatch_cancel.clone(),
+        );
+        let outcome = self
+            .state
+            .help
+            .wait_chunk(
+                started.session.id(),
+                entry,
+                HELP_WAIT_CHUNK,
+                &terminal,
+                &request_ct,
+            )
+            .await;
+        let result = help_wait_result(entry.request_id(), outcome);
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
     async fn start_session_in_store(
         &self,
         session_id: SessionId,
@@ -748,8 +903,16 @@ impl ServerHandler for ClawMcpService {
         let is_name_session = request.name == NAME_SESSION_TOOL_NAME;
         let is_save_skill = request.name == SAVE_SKILL_TOOL_NAME;
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
+        let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
+        let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
         let tool_index = self.find_tool_index(&request.name);
-        if !is_name_session && !is_save_skill && !is_mark_skill_run && tool_index.is_none() {
+        if !is_name_session
+            && !is_save_skill
+            && !is_mark_skill_run
+            && !is_request_help
+            && !is_await_help
+            && tool_index.is_none()
+        {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
         }
         let mut raw_args = request
@@ -807,6 +970,14 @@ impl ServerHandler for ClawMcpService {
             Ok(self.call_save_skill(&started, &raw_args).await)
         } else if is_mark_skill_run {
             Ok(self.call_mark_skill_run(&started, &raw_args).await)
+        } else if is_request_help {
+            Ok(self
+                .call_request_human_help(&started, &raw_args, context.ct.clone())
+                .await)
+        } else if is_await_help {
+            Ok(self
+                .call_await_human_help(&started, context.ct.clone())
+                .await)
         } else {
             let Some(tool_index) = tool_index else {
                 unreachable!("catalog tool was validated before session resolution");
@@ -1037,6 +1208,114 @@ fn mark_skill_run_tool() -> Tool {
             .destructive(false)
             .idempotent(true),
     )
+}
+
+fn request_help_tool() -> Tool {
+    let Value::Object(input_schema) = json!({
+        "type": "object",
+        "properties": {
+            "reason": {
+                "type": "string",
+                "description": "A short line saying what you need a human to do, e.g. \"Enter the LinkedIn verification code\"."
+            },
+            "details": {
+                "type": "string",
+                "description": "What the human should know to help, e.g. where the code was sent."
+            },
+            "resumeHint": {
+                "type": "string",
+                "description": "What you will do after, so the human knows the task continues, e.g. \"I'll pick up at profile 15 of 22\"."
+            },
+            "kind": {
+                "type": "string",
+                "enum": ["login", "captcha", "approval", "other"],
+                "description": "The kind of help, used for the cockpit icon."
+            }
+        },
+        "required": ["reason"]
+    }) else {
+        unreachable!();
+    };
+    Tool::new(
+        REQUEST_HELP_TOOL_NAME,
+        REQUEST_HELP_DESCRIPTION,
+        input_schema,
+    )
+    .with_annotations(
+        ToolAnnotations::with_title("Request human help")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(true),
+    )
+}
+
+fn await_help_tool() -> Tool {
+    let Value::Object(input_schema) = json!({
+        "type": "object",
+        "properties": {
+            "requestId": {
+                "type": "string",
+                "description": "The requestId returned by request_human_help. Optional; the server keys the wait by session."
+            }
+        }
+    }) else {
+        unreachable!();
+    };
+    Tool::new(AWAIT_HELP_TOOL_NAME, AWAIT_HELP_DESCRIPTION, input_schema).with_annotations(
+        ToolAnnotations::with_title("Await human help")
+            .read_only(true)
+            .destructive(false)
+            .idempotent(true),
+    )
+}
+
+fn help_kind_from_str(value: &str) -> Option<HelpRequestKind> {
+    match value {
+        "login" => Some(HelpRequestKind::Login),
+        "captcha" => Some(HelpRequestKind::Captcha),
+        "approval" => Some(HelpRequestKind::Approval),
+        "other" => Some(HelpRequestKind::Other),
+        _ => None,
+    }
+}
+
+fn help_wait_result(request_id: &str, outcome: HelpWaitOutcome) -> ToolResult {
+    match outcome {
+        HelpWaitOutcome::Resolved { note } => {
+            let text = match note.as_deref() {
+                Some(note) if !note.is_empty() => format!(
+                    "A human finished and handed control back. Note: {note}. Continue the task."
+                ),
+                _ => "A human finished and handed control back. Continue the task.".to_string(),
+            };
+            ToolResult::text(
+                text,
+                Some(json!({ "status": "resolved", "requestId": request_id, "note": note })),
+            )
+        }
+        HelpWaitOutcome::Waiting { elapsed_seconds } => ToolResult::text(
+            format!(
+                "Still waiting for a human ({elapsed_seconds}s so far). Call await_human_help to keep waiting; do nothing else on the page."
+            ),
+            Some(
+                json!({ "status": "waiting", "requestId": request_id, "elapsedSeconds": elapsed_seconds }),
+            ),
+        ),
+        HelpWaitOutcome::Cancelled => ToolResult::text(
+            "The human-help wait was stopped. Do not continue this task.",
+            Some(json!({ "status": "cancelled", "requestId": request_id })),
+        ),
+        // This wait call was interrupted but the request is still open; if the agent sees this, it
+        // should reattach with await_human_help rather than act on the page.
+        HelpWaitOutcome::Interrupted => ToolResult::text(
+            "The wait call ended before a human responded. Call await_human_help to keep waiting; do nothing else on the page.",
+            Some(json!({ "status": "waiting", "requestId": request_id })),
+        ),
+        HelpWaitOutcome::TimedOut => ToolResult::text(
+            "No human responded in time. Decide whether to ask again with request_human_help or stop.",
+            Some(json!({ "status": "timed_out", "requestId": request_id })),
+        ),
+    }
 }
 
 fn parse_skill_name(raw_args: &Value) -> Result<String, String> {
@@ -2026,11 +2305,139 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
+        expected.push(REQUEST_HELP_TOOL_NAME.to_string());
+        expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
         assert!(names.contains(&"run".to_string()));
         assert!(names.contains(&"name_session".to_string()));
         assert!(names.contains(&"save_skill".to_string()));
         assert!(names.contains(&"mark_skill_run".to_string()));
+        assert!(names.contains(&"request_human_help".to_string()));
+        assert!(names.contains(&"await_human_help".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn request_human_help_requires_a_reason() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-reason"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        let result = service
+            .call_request_human_help(&started, &json!({}), CancellationToken::new())
+            .await;
+
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("reason"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn await_human_help_without_an_open_request_reports_timed_out() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-none"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+
+        let result = service
+            .call_await_human_help(&started, CancellationToken::new())
+            .await;
+
+        // A reaped-then-reattached request must never read as a resume; timed_out is the
+        // safe terminal so the agent does not assume a human cleared the block.
+        let Some(structured) = result.structured_content.clone() else {
+            panic!("structured content");
+        };
+        assert_eq!(
+            structured.get("status").and_then(Value::as_str),
+            Some("timed_out")
+        );
+        Ok(())
+    }
+
+    /// The hand-back path end to end: an agent opens a request, a human resolves it
+    /// with a note from the cockpit, and the next wait call reports resolved with the
+    /// note and clears the entry so the agent resumes exactly once.
+    #[tokio::test]
+    async fn await_human_help_reports_the_hand_back_note_and_clears_it() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-resolved"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let session_id = started.session.id().clone();
+
+        call.state
+            .help
+            .open(
+                &session_id,
+                HelpOpenParams {
+                    request_id: "help-test".to_string(),
+                    reason: "Enter the code".to_string(),
+                    details: None,
+                    resume_hint: None,
+                    kind: None,
+                    browser_tab_id: None,
+                    url: None,
+                    title: None,
+                },
+            )
+            .await;
+        assert!(
+            call.state
+                .help
+                .resolve(&session_id, Some("2fa done".to_string()))
+                .await
+        );
+
+        let result = service
+            .call_await_human_help(&started, CancellationToken::new())
+            .await;
+
+        let Some(structured) = result.structured_content.clone() else {
+            panic!("structured content");
+        };
+        assert_eq!(
+            structured.get("status").and_then(Value::as_str),
+            Some("resolved")
+        );
+        assert_eq!(
+            structured.get("note").and_then(Value::as_str),
+            Some("2fa done")
+        );
+        assert!(call.state.help.get(&session_id).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn help_tools_are_listed_with_their_descriptions_and_are_safe() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let listed = service.listed_tools(false);
+
+        // request_human_help changes state (it creates a request) so it is not
+        // read-only; await_human_help only waits, so it is. Neither is destructive.
+        for (name, description, read_only) in [
+            (REQUEST_HELP_TOOL_NAME, REQUEST_HELP_DESCRIPTION, false),
+            (AWAIT_HELP_TOOL_NAME, AWAIT_HELP_DESCRIPTION, true),
+        ] {
+            let Some(tool) = listed.iter().find(|tool| tool.name == name) else {
+                panic!("{name} missing from list");
+            };
+            assert_eq!(tool.description.as_deref(), Some(description));
+            let annotations = tool
+                .annotations
+                .as_ref()
+                .unwrap_or_else(|| panic!("{name} annotations"));
+            assert_eq!(annotations.read_only_hint, Some(read_only));
+            assert_eq!(annotations.destructive_hint, Some(false));
+        }
         Ok(())
     }
 

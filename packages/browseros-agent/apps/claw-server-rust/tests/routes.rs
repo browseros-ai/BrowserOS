@@ -399,6 +399,8 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
             "name_session",
             "save_skill",
             "mark_skill_run",
+            "request_human_help",
+            "await_human_help",
         ]
     );
 

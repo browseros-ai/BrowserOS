@@ -4,6 +4,54 @@ SessionStatus:
 LiveSessionActivityState:
   type: string
   enum: [active, idle]
+HelpRequestKind:
+  type: string
+  enum: [login, captcha, approval, other]
+HelpRequest:
+  type: object
+  additionalProperties: false
+  required: [requestId, reason, browserTabId, requestedAt]
+  description: >-
+    A pending request for human help from a blocked agent (sign-in, captcha, an approval it
+    should not make). The agent waits until a human takes over the page and hands control back.
+  properties:
+    requestId:
+      type: string
+    reason:
+      type: string
+    details:
+      type: string
+    resumeHint:
+      type: string
+    kind:
+      $ref: '#/HelpRequestKind'
+    browserTabId:
+      type: integer
+      format: int64
+      minimum: 1
+      description: The browser tab the human should take over.
+    url:
+      type: string
+    title:
+      type: string
+    requestedAt:
+      type: integer
+      format: int64
+ResolveHelpRequest:
+  type: object
+  additionalProperties: false
+  description: Hand control back to the waiting agent, optionally with a note for it.
+  properties:
+    note:
+      type: string
+ResolveHelpResponse:
+  type: object
+  additionalProperties: false
+  required: [resolved]
+  properties:
+    resolved:
+      type: boolean
+      description: True when a pending request was found and signalled to resume.
 ToolEvent:
   type: object
   additionalProperties: false
@@ -54,6 +102,10 @@ LiveSessionState:
       type: array
       items:
         $ref: '#/SessionBrowserTab'
+    helpRequest:
+      allOf:
+        - $ref: '#/HelpRequest'
+      description: Present only while the agent is waiting for human help on this session.
 SessionTokenUsage:
   type: object
   additionalProperties: false
