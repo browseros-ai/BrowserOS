@@ -7,6 +7,16 @@ name: "Reusable: Chromium Browser Build"
 on:
   workflow_call:
     inputs:
+      windows_signing_provider:
+        description: "Windows signing provider (SSL.com is the rollback default)"
+        required: false
+        type: string
+        default: sslcom
+      windows_server_signing_provider:
+        description: "Bundled and standalone server override"
+        required: false
+        type: string
+        default: inherit
       platform:
         description: "Target platform: linux or windows"
         required: true
@@ -119,8 +129,8 @@ on:
       SPARKLE_PRIVATE_KEY:
         required: false
 
-permissions:
-  contents: read
+# Reusable callers own permissions. Windows passes id-token: write through
+# to acquire a fresh Azure assertion after compilation; Linux does not.
 
 jobs:
   build:
@@ -369,7 +379,7 @@ jobs:
           "$CHROMIUM_SRC/build/install-build-deps.sh" --no-prompt
 
       - name: Setup Java for Windows signing
-        if: inputs.sign && inputs.platform == 'windows'
+        if: inputs.sign && inputs.platform == 'windows' && (inputs.windows_signing_provider != 'azure' || inputs.windows_server_signing_provider == 'sslcom')
         uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -377,7 +387,7 @@ jobs:
           check-latest: true
 
       - name: Install SSL.com CodeSignTool
-        if: inputs.sign && inputs.platform == 'windows'
+        if: inputs.sign && inputs.platform == 'windows' && (inputs.windows_signing_provider != 'azure' || inputs.windows_server_signing_provider == 'sslcom')
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -397,9 +407,22 @@ jobs:
           }
           "CODE_SIGN_TOOL_PATH=$($tool.Directory.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Setup Azure signing tools
+        if: inputs.sign && inputs.platform == 'windows' && (inputs.windows_signing_provider == 'azure' || inputs.windows_server_signing_provider == 'azure')
+        uses: ./.github/actions/setup-azure-signing
+
       - name: Build ${{ inputs.product }}
         working-directory: packages/browseros
         env:
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PROFILE_OID: ${{ vars.AZURE_SIGNING_PROFILE_OID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
+          WINDOWS_SIGNING_PROVIDER: ${{ inputs.windows_signing_provider || 'sslcom' }}
+          WINDOWS_SERVER_SIGNING_PROVIDER: ${{ inputs.windows_server_signing_provider || 'inherit' }}
+          WINDOWS_SIGNING_REPORT_DIR: ${{ runner.temp }}/windows-signing-reports
           BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.source.outputs.sha }}
           BROWSEROS_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browseros' && inputs.server-version || '' }}
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ inputs.product == 'browserclaw' && inputs.server-version || '' }}
@@ -508,3 +531,12 @@ jobs:
             packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*.deb
             packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*_installer.exe
             packages/browseros/releases/*/${{ steps.artifact_prefix.outputs.value }}_*_installer.zip
+
+      - name: Upload Windows signing evidence
+        if: always() && inputs.sign && inputs.platform == 'windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-signing-${{ inputs.product }}-${{ inputs.arch }}
+          path: ${{ runner.temp }}/windows-signing-reports/*.json
+          if-no-files-found: warn
+          retention-days: 30

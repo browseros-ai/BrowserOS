@@ -79,6 +79,7 @@ jobs:
     needs: transaction
     uses: ./.github/workflows/release-claw-server.yml
     permissions:
+      id-token: write
       contents: write
       pull-requests: write
     with:
@@ -149,6 +150,7 @@ jobs:
     needs: [transaction, build-browserclaw]
     uses: ./.github/workflows/release-claw-server.yml
     permissions:
+      id-token: write
       contents: write
       pull-requests: write
     with:
