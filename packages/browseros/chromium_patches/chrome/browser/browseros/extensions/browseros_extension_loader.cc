@@ -1,28 +1,34 @@
 diff --git a/chrome/browser/browseros/extensions/browseros_extension_loader.cc b/chrome/browser/browseros/extensions/browseros_extension_loader.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef95c32d6b8
+index 0000000000000000000000000000000000000000..c7fb41d2ca313acc489b49396a4116659ae3eb7e
 --- /dev/null
 +++ b/chrome/browser/browseros/extensions/browseros_extension_loader.cc
-@@ -0,0 +1,456 @@
+@@ -0,0 +1,645 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/browseros/extensions/browseros_extension_loader.h"
 +
++#include <optional>
 +#include <utility>
 +
 +#include "base/feature_list.h"
 +#include "base/functional/bind.h"
++#include "base/json/values_util.h"
 +#include "base/logging.h"
 +#include "base/supports_user_data.h"
 +#include "base/task/single_thread_task_runner.h"
 +#include "base/version.h"
 +#include "chrome/browser/browser_features.h"
 +#include "chrome/browser/browseros/core/browseros_constants.h"
++#include "chrome/browser/browseros/core/browseros_prefs.h"
 +#include "chrome/browser/extensions/external_provider_impl.h"
++#include "chrome/browser/extensions/updater/extension_updater.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "components/prefs/scoped_user_pref_update.h"
 +#include "content/public/browser/browser_thread.h"
++#include "extensions/browser/delayed_install_manager.h"
 +#include "extensions/browser/disable_reason.h"
 +#include "extensions/browser/extension_prefs.h"
 +#include "extensions/browser/extension_registrar.h"
@@ -36,6 +42,10 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +constexpr char kLoaderReferenceKey[] = "browseros.extension_loader";
 +constexpr base::TimeDelta kReadinessTimeout = base::Seconds(45);
 +constexpr base::TimeDelta kMaintenanceInterval = base::Minutes(15);
++constexpr base::TimeDelta kInstallGracePeriod = base::Minutes(30);
++constexpr char kGraceVersion[] = "version";
++constexpr char kGraceDeadline[] = "deadline";
++constexpr char kGraceReleased[] = "released";
 +
 +// The external provider retains ownership. Profile data is only a weak lookup
 +// for native callers, and never extends a provider or profile's lifetime.
@@ -67,6 +77,11 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +      kLoaderReferenceKey,
 +      std::make_unique<LoaderReference>(weak_ptr_factory_.GetWeakPtr()));
 +  profile_observation_.Observe(profile_);
++  // Observe before InstalledLoader runs: READY may precede our asynchronous
++  // bundle discovery, and secondary bundles can become ready after the primary.
++  registry_observation_.Observe(extensions::ExtensionRegistry::Get(profile_));
++  InitializeInstallGrace();
++  ScheduleInstallGraceExpiry();
 +}
 +
 +BrowserOSExtensionLoader::~BrowserOSExtensionLoader() {
@@ -89,6 +104,176 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +
 +void BrowserOSExtensionLoader::SetConfigUrl(const GURL& url) {
 +  config_url_ = url;
++}
++
++// static
++BrowserOSExtensionLoader::UpdateInstallPolicy
++BrowserOSExtensionLoader::GetUpdateInstallPolicy(Profile* profile,
++                                                 const std::string& id) {
++  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
++  if (!IsActiveBrowserOSExtension(id)) {
++    return UpdateInstallPolicy::kNormal;
++  }
++  profile = profile->GetOriginalProfile();
++  const auto* record =
++      profile->GetPrefs()->GetDict(prefs::kExtensionInstallGrace).FindDict(id);
++  const auto* installed =
++      extensions::ExtensionRegistry::Get(profile)->enabled_extensions().GetByID(
++          id);
++  if (!record || !installed) {
++    // Missing, disabled/corrupt, or terminated: allow recovery.
++    return UpdateInstallPolicy::kNormal;
++  }
++  const auto* version = record->FindString(kGraceVersion);
++  const auto deadline = base::ValueToTime(record->Find(kGraceDeadline));
++  if (!version || *version != installed->version().GetString() || !deadline) {
++    return UpdateInstallPolicy::kNormal;
++  }
++  // Release is one-way even if the wall clock is subsequently moved backwards.
++  return record->FindBool(kGraceReleased).value_or(false) ||
++                 *deadline <= base::Time::Now()
++             ? UpdateInstallPolicy::kInstallImmediately
++             : UpdateInstallPolicy::kDefer;
++}
++
++void BrowserOSExtensionLoader::InitializeInstallGrace() {
++  auto* pref_service = profile_->GetPrefs();
++  if (pref_service->GetUserPrefValue(prefs::kExtensionInstallGrace)) {
++    return;
++  }
++  base::DictValue records;
++  // Absence of a new pref is not proof of a new user. Freeze eligibility once,
++  // before discovery/install, so a restart cannot enroll an existing profile
++  // or restart a deadline. An already installed ID is never a fresh bundle.
++  if (profile_->IsNewProfile() &&
++      !pref_service->GetBoolean(prefs::kOnboardingCompleted)) {
++    for (const auto& id : GetActiveBrowserOSExtensionIds()) {
++      if (!extensions::ExtensionPrefs::Get(profile_)->GetInstalledExtensionInfo(
++              id)) {
++        records.Set(id, base::DictValue());
++      }
++    }
++  }
++  pref_service->SetDict(prefs::kExtensionInstallGrace, std::move(records));
++}
++
++void BrowserOSExtensionLoader::RecordBundledVersions() {
++  {
++    ScopedDictPrefUpdate update(profile_->GetPrefs(),
++                                prefs::kExtensionInstallGrace);
++    for (const auto& id : GetActiveBrowserOSExtensionIds()) {
++      auto* record = update->FindDict(id);
++      if (!record || record->contains(kGraceDeadline)) {
++        continue;
++      }
++      const auto* local = bundled_prefs_.FindDict(id);
++      if (!local || failed_bundles_.contains(id)) {
++        update->Remove(id);  // Remote recovery must never start a grace period.
++      } else {
++        record->Set(kGraceVersion,
++                    *local->FindString(
++                        extensions::ExternalProviderImpl::kExternalVersion));
++      }
++    }
++  }
++  for (const auto& id : GetActiveBrowserOSExtensionIds()) {
++    StartInstallGraceIfReady(id);
++  }
++}
++
++void BrowserOSExtensionLoader::StartInstallGraceIfReady(const std::string& id) {
++  const auto* extension =
++      extensions::ExtensionRegistry::Get(profile_)->ready_extensions().GetByID(
++          id);
++  if (!extension) {
++    return;
++  }
++  {
++    ScopedDictPrefUpdate update(profile_->GetPrefs(),
++                                prefs::kExtensionInstallGrace);
++    auto* record = update->FindDict(id);
++    if (!record) {
++      return;
++    }
++    const auto* version = record->FindString(kGraceVersion);
++    if (!version) {
++      return;  // Discovery has not supplied the bundle identity yet.
++    }
++    if (*version != extension->version().GetString()) {
++      update->Remove(id);
++      return;
++    }
++    if (record->contains(kGraceDeadline)) {
++      return;
++    }
++    record->Set(kGraceDeadline,
++                base::TimeToValue(base::Time::Now() + kInstallGracePeriod));
++    LOG(INFO) << "browseros: Started 30-minute bundled extension grace for "
++              << id;
++  }
++  ScheduleInstallGraceExpiry();
++}
++
++void BrowserOSExtensionLoader::ScheduleInstallGraceExpiry() {
++  base::Time next;
++  for (const auto& id : GetActiveBrowserOSExtensionIds()) {
++    const auto* record = profile_->GetPrefs()
++                             ->GetDict(prefs::kExtensionInstallGrace)
++                             .FindDict(id);
++    const auto deadline =
++        record ? base::ValueToTime(record->Find(kGraceDeadline)) : std::nullopt;
++    if (deadline && !record->FindBool(kGraceReleased).value_or(false) &&
++        (next.is_null() || *deadline < next)) {
++      next = *deadline;
++    }
++  }
++  install_grace_timer_.Stop();
++  if (!next.is_null()) {
++    install_grace_timer_.Start(
++        FROM_HERE, next, this,
++        &BrowserOSExtensionLoader::OnInstallGraceExpired);
++  }
++}
++
++void BrowserOSExtensionLoader::OnInstallGraceExpired() {
++  extensions::ExtensionUpdater::CheckParams params;
++  {
++    ScopedDictPrefUpdate update(profile_->GetPrefs(),
++                                prefs::kExtensionInstallGrace);
++    for (const auto& id : GetActiveBrowserOSExtensionIds()) {
++      auto* record = update->FindDict(id);
++      const auto deadline =
++          record ? base::ValueToTime(record->Find(kGraceDeadline))
++                 : std::nullopt;
++      if (deadline && *deadline <= base::Time::Now() &&
++          !record->FindBool(kGraceReleased).value_or(false)) {
++        params.ids.push_back(id);
++        // Keep the release policy until READY reports a different version.
++        // A background installer may still be unpacking and therefore absent
++        // from DelayedInstallManager when this one-time timer fires.
++        record->Set(kGraceReleased, true);
++      }
++    }
++  }
++  // Release downloaded updates through all Chromium gates, even when cockpit
++  // pages keep the extension busy. This does not bypass imports or safety
++  // gates. The persisted deadline, not process uptime, decides when activation
++  // resumes.
++  for (const auto& id : params.ids) {
++    extensions::DelayedInstallManager::Get(profile_)
++        ->FinishDelayedInstallationIfReady(id, /*install_immediately=*/true);
++    LOG(INFO) << "browseros: Bundled extension grace expired for " << id;
++  }
++  if (!params.ids.empty()) {
++    auto* updater = extensions::ExtensionUpdater::Get(profile_);
++    if (updater && updater->enabled()) {
++      params.install_immediately = true;
++      params.fetch_priority = extensions::DownloadFetchPriority::kForeground;
++      updater->CheckNow(std::move(params));
++    }
++    CheckForUpdates();
++  }
++  ScheduleInstallGraceExpiry();
 +}
 +
 +void BrowserOSExtensionLoader::StartLoading() {
@@ -151,6 +336,7 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +  bundled_crx_base_path_ = std::move(result.bundled_path);
 +  bundled_prefs_ = std::move(result.prefs);
 +  local_discovery_complete_ = true;
++  RecordBundledVersions();
 +  LOG(INFO) << "browseros: Local extension discovery complete: "
 +            << bundled_prefs_.size()
 +            << " entries, complete=" << result.complete;
@@ -249,7 +435,6 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +  // Registry access and registration share the UI sequence. Always inspect
 +  // the READY set as well as observing: installed profiles may already be
 +  // ready.
-+  registry_observation_.Observe(extensions::ExtensionRegistry::Get(profile_));
 +  readiness_timer_.Start(
 +      FROM_HERE, kReadinessTimeout,
 +      base::BindOnce(&BrowserOSExtensionLoader::OnReadinessTimeout,
@@ -350,7 +535,6 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +  }
 +  waiting_for_ready_ = false;
 +  readiness_timer_.Stop();
-+  registry_observation_.Reset();
 +  maintainer_->Cancel();
 +  remote_requested_ = false;
 +  LOG(INFO) << "browseros: Primary extension readiness "
@@ -394,6 +578,7 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +void BrowserOSExtensionLoader::OnExtensionReady(
 +    content::BrowserContext* context,
 +    const extensions::Extension* extension) {
++  StartInstallGraceIfReady(extension->id());
 +  if (extension->id() == primary_id_ && IsPrimaryReady()) {
 +    FinishReadiness(true);
 +  }
@@ -413,6 +598,9 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +      source_file.AsUTF8Unsafe() ==
 +          *local->FindString(extensions::ExternalProviderImpl::kExternalCrx)) {
 +    failed_bundles_.insert(extension_id);
++    ScopedDictPrefUpdate update(profile_->GetPrefs(),
++                                prefs::kExtensionInstallGrace);
++    update->Remove(extension_id);
 +  } else if (extension_id == primary_id_) {
 +    FinishReadiness(false);
 +    return;
@@ -450,6 +638,7 @@ index 0000000000000000000000000000000000000000..f687bc2c1a5353117d53dfbd56e85ef9
 +  weak_ptr_factory_.InvalidateWeakPtrs();
 +  FinishReadiness(false);
 +  maintenance_timer_.Stop();
++  install_grace_timer_.Stop();
 +  maintainer_.reset();
 +  installer_.reset();
 +  registry_observation_.Reset();
