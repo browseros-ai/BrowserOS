@@ -36,7 +36,7 @@ export const TAKEOVER_BAR_CSS = `
 .nt-dog svg { width: 22px; height: 22px; border-radius: 6px; display: block; }
 .nt-brand { font-weight: 800; font-size: 12.5px; letter-spacing: -0.01em; color: #0254ec; }
 .nt-spacer { flex: 1 1 auto; }
-.nt-pill { display: inline-flex; align-items: center; gap: 6px; background: #b85c10; color: #fff;
+.nt-pill { display: inline-flex; align-items: center; gap: 6px; background: #b85c10; color: #fff; white-space: nowrap;
   border-radius: 999px; padding: 3px 9px; font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
 .nt-pill .nt-timer { font-weight: 600; letter-spacing: 0; font-variant-numeric: tabular-nums; }
 .nt-min { width: 26px; height: 26px; border: 1px solid rgba(2,84,236,0.18); border-radius: 7px; background: #fff;
@@ -98,7 +98,7 @@ export function createTakeoverBar(
   brand.textContent = 'BrowserOS neo'
   const spacer = el('span', 'nt-spacer')
   const pill = el('span', 'nt-pill')
-  pill.append('Needs you ')
+  pill.append('Awaiting user input ')
   const timer = el('span', 'nt-timer')
   pill.append(timer)
   const minimize = el('button', 'nt-min')
@@ -139,7 +139,7 @@ export function createTakeoverBar(
   const pillTimer = el('span', 'nt-timer')
   const chev = el('span', 'nt-chev')
   chev.textContent = '›'
-  pillBtn.append(chip, pillAgent, ' needs you ', dot, pillTimer, chev)
+  pillBtn.append(chip, pillAgent, ' awaiting input ', dot, pillTimer, chev)
   pillBtn.hidden = true
 
   wrap.append(bar, pillBtn)
