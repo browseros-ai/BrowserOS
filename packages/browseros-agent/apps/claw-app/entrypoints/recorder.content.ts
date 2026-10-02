@@ -7,6 +7,7 @@
 import * as rrweb from 'rrweb'
 import { defineContentScript } from 'wxt/utils/define-content-script'
 import { createRecorderBuffer, type RecorderMessage } from '@/modules/recorder'
+import { createRecorderPersistence } from '@/modules/recorder/recorder-persistence'
 
 /** Records each eligible main-frame document from load and relays rrweb batches. */
 export default defineContentScript({
@@ -16,7 +17,7 @@ export default defineContentScript({
   main(ctx) {
     // A stop acknowledgment must follow the worker's durable-outbox commits,
     // including the last batch emitted by buffer.close().
-    const pendingPosts = new Set<Promise<boolean>>()
+    const persistence = createRecorderPersistence()
     const buffer = createRecorderBuffer({
       send(ndjson, hasGap) {
         if (ctx.isInvalid) return
@@ -35,9 +36,9 @@ export default defineContentScript({
               )
               return false
             })
-          pendingPosts.add(post)
-          void post.finally(() => pendingPosts.delete(post))
+          persistence.track(post)
         } catch (error) {
+          persistence.track(Promise.resolve(false))
           console.warn('[browseros-claw replay] send threw', error)
         }
       },
@@ -92,9 +93,9 @@ export default defineContentScript({
       // any replay window, so nothing worth keeping is lost.
       if (recorderMessage.type === 'recorder-stop') {
         stopRecorder()
-        void Promise.all(pendingPosts).then((results) =>
-          sendResponse({ persisted: results.every(Boolean) }),
-        )
+        void persistence
+          .confirmed()
+          .then((persisted) => sendResponse({ persisted }))
         return true
       }
       return false
