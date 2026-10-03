@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Tests for product user-data directory patches."""
 
+import hashlib
 import re
+import subprocess
+import tempfile
 import unittest
+from pathlib import Path
 
 from ...lib.paths import get_package_root
 
@@ -14,24 +18,44 @@ def _patch(relative_path: str) -> str:
     return (PATCHES / relative_path).read_text()
 
 
-def _patched_source(relative_path: str) -> str:
-    """Reconstruct the changed source regions from a unified diff."""
-    source_lines: list[str] = []
-    in_hunk = False
+def _patched_install_modes() -> str:
+    """Apply the real identity patch to its pinned upstream fixture, offline.
 
-    for line in _patch(relative_path).splitlines():
-        if line.startswith("@@"):
-            in_hunk = True
-            continue
-        if not in_hunk:
-            continue
-        if line.startswith("diff --git "):
-            in_hunk = False
-            continue
-        if line.startswith(("+", " ")):
-            source_lines.append(line[1:])
+    Unified-diff context can truncate unchanged COM initializers. Validate the
+    complete resulting header so shared upstream IIDs remain covered alongside
+    product-specific registrations, regardless of hunk boundaries.
+    """
+    relative_path = "chrome/install_static/chromium_install_modes.h"
+    patch = _patch(relative_path)
+    fixture = Path(__file__).with_name("fixtures") / "chromium_install_modes.h.txt"
+    # Git may check out text with CRLF on Windows; blob IDs describe LF bytes.
+    upstream = fixture.read_text(encoding="utf-8").encode("utf-8")
+    # Bind the fixture to the patch preimage, so an upstream refresh cannot
+    # silently validate against an older header that still happens to apply.
+    blob = hashlib.sha1(
+        b"blob " + str(len(upstream)).encode() + b"\0" + upstream,
+        usedforsecurity=False,
+    ).hexdigest()
+    if f"\nindex {blob}.." not in patch:
+        raise AssertionError("refresh the install modes fixture for this patch base")
 
-    return "\n".join(source_lines)
+    # Only this disposable directory is writable; no Chromium checkout or
+    # network is needed by the existing identity assertions.
+    with tempfile.TemporaryDirectory() as temporary:
+        destination = Path(temporary) / relative_path
+        destination.parent.mkdir(parents=True)
+        destination.write_bytes(upstream)
+        result = subprocess.run(
+            ["git", "apply", "-"],
+            input=patch.encode("utf-8"),
+            cwd=temporary,
+            capture_output=True,
+        )
+        if result.returncode:
+            raise AssertionError(
+                f"install identity patch failed: {result.stderr.decode('utf-8')}"
+            )
+        return destination.read_text()
 
 
 def _product_identity_branches(source: str) -> tuple[str, str]:
@@ -119,9 +143,7 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
         )
 
     def test_windows_profile_roots_are_product_specific(self) -> None:
-        install_modes = _patched_source(
-            "chrome/install_static/chromium_install_modes.h"
-        )
+        install_modes = _patched_install_modes()
         browserclaw, browseros = _product_identity_branches(install_modes)
 
         self.assertEqual(
@@ -139,9 +161,7 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
         self.assertNotIn("browseros_product.h", install_modes)
 
     def test_windows_install_identity_branches_are_complete(self) -> None:
-        install_modes = _patched_source(
-            "chrome/install_static/chromium_install_modes.h"
-        )
+        install_modes = _patched_install_modes()
         browserclaw, browseros = _product_identity_branches(install_modes)
         identity_struct = re.search(
             r"struct ProductInstallIdentity \{(?P<body>.*?)\n\};",
@@ -217,9 +237,7 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
             self.assertIn(f"kProductInstallIdentity.{field}", install_modes)
 
     def test_windows_install_clsids_are_product_specific(self) -> None:
-        install_modes = _patched_source(
-            "chrome/install_static/chromium_install_modes.h"
-        )
+        install_modes = _patched_install_modes()
         browserclaw, browseros = _product_identity_branches(install_modes)
         guid_fields = (
             "active_setup_guid",
@@ -266,9 +284,7 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
     def test_windows_install_shared_identity_matches_implemented_interfaces(
         self,
     ) -> None:
-        install_modes = _patched_source(
-            "chrome/install_static/chromium_install_modes.h"
-        )
+        install_modes = _patched_install_modes()
         browserclaw, browseros = _product_identity_branches(install_modes)
 
         self.assertEqual(install_modes.count('.app_guid = L"",'), 1)
@@ -280,7 +296,9 @@ class ProductUserDataDirPatchTest(unittest.TestCase):
 
         expected_iids = {
             "elevator_iid": "BB19A0E5-00C6-4966-94B2-5AFEC6FED93A",
-            "tracing_service_iid": "A3FD580A-FFD4-4075-9174-75D0B199D3CB",
+            # Chromium 155's ISystemTraceSessionChromium; the previous IID is
+            # retained upstream only for cleanup. See fixtures/README.md.
+            "tracing_service_iid": "E0B03E2D-7682-4D83-B9FF-4574AF720500",
         }
         for field, expected_iid in expected_iids.items():
             with self.subTest(field=field):
