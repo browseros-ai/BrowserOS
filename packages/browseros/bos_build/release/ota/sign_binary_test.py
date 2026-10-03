@@ -220,5 +220,99 @@ class SignWindowsBinaryTest(unittest.TestCase):
                 self.assertIn("Error: Provider rejected ***", logged)
 
 
+class NotarizeMacosZipTest(unittest.TestCase):
+    """Exercise credential storage and submission together at the OTA entrypoint."""
+
+    def setUp(self):
+        self.env = cast(
+            EnvConfig,
+            SimpleNamespace(
+                macos_notarization_apple_id="release@example.test",
+                macos_notarization_team_id="FAKE_TEAM_ID",
+                macos_notarization_password="FAKE_NOTARY_PASSWORD ",
+            ),
+        )
+        self.logs = []
+        patcher = mock.patch.object(sign_binary, "IS_MACOS", return_value=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for name in ("log_info", "log_error", "log_success"):
+            patcher = mock.patch.object(sign_binary, name, side_effect=self.logs.append)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_credential_rejection_reports_original_error_without_submitting(self):
+        # A fresh hosted runner has no old profile to fall back to. Continuing
+        # after this error used to replace Apple's actionable 403 with a
+        # misleading "No Keychain password item found" submission failure.
+        for stream in ("stdout", "stderr"):
+            with self.subTest(stream=stream):
+                self.logs.clear()
+                output = {"stdout": "", "stderr": ""}
+                output[stream] = (
+                    "Error: HTTP status code: 403. "
+                    "A required agreement is missing or has expired. "
+                    f"{self.env.macos_notarization_apple_id} "
+                    f"{self.env.macos_notarization_team_id} "
+                    f"{self.env.macos_notarization_password}\n"
+                )
+                with mock.patch.object(
+                    sign_binary.subprocess,
+                    "run",
+                    side_effect=[
+                        subprocess.CompletedProcess([], 1, **output),
+                        subprocess.CompletedProcess(
+                            [], 1, "", "No Keychain password item found for profile"
+                        ),
+                    ],
+                ) as run:
+                    self.assertFalse(
+                        sign_binary.notarize_macos_zip(Path("payload.zip"), self.env)
+                    )
+
+                run.assert_called_once()
+                logged = "\n".join(self.logs)
+                self.assertIn("403", logged)
+                self.assertIn("required agreement", logged)
+                self.assertNotIn("No Keychain password item", logged)
+                for secret in vars(self.env).values():
+                    self.assertNotIn(secret.strip(), logged)
+
+    def test_failed_storage_cannot_fall_back_to_a_stale_accepted_profile(self):
+        with mock.patch.object(
+            sign_binary.subprocess,
+            "run",
+            side_effect=[
+                subprocess.CompletedProcess([], 1, "", "Credential validation failed"),
+                subprocess.CompletedProcess([], 0, "status: Accepted", ""),
+            ],
+        ) as run:
+            self.assertFalse(
+                sign_binary.notarize_macos_zip(Path("payload.zip"), self.env)
+            )
+        run.assert_called_once()
+
+    def test_successful_storage_submits_the_zip_and_requires_acceptance(self):
+        for status, expected in (("Accepted", True), ("Invalid", False)):
+            with self.subTest(status=status):
+                with mock.patch.object(
+                    sign_binary.subprocess,
+                    "run",
+                    side_effect=[
+                        subprocess.CompletedProcess([], 0, "Credentials saved", ""),
+                        subprocess.CompletedProcess([], 0, f"status: {status}", ""),
+                    ],
+                ) as run:
+                    self.assertEqual(
+                        sign_binary.notarize_macos_zip(Path("payload.zip"), self.env),
+                        expected,
+                    )
+                self.assertEqual(run.call_count, 2)
+                command = run.call_args_list[1].args[0]
+                self.assertEqual(
+                    command[:4], ["xcrun", "notarytool", "submit", "payload.zip"]
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
