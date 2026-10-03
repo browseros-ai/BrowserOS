@@ -26,6 +26,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0017_add_run_error_budget::Migration),
             Box::new(m0018_add_feedback_invite::Migration),
             Box::new(m0019_add_feedback_invite_dismissal::Migration),
+            Box::new(m0020_add_feedback_invite_snooze::Migration),
         ]
     }
 }
@@ -2300,5 +2301,67 @@ mod m0019_add_feedback_invite_dismissal {
     enum FeedbackInvite {
         Table,
         DismissedAtMs,
+    }
+}
+
+mod m0020_add_feedback_invite_snooze {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0020_add_feedback_invite_snooze"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Booking and declining no longer end the invitation; each puts the card away
+            // for a few days from the latest answer. `dismissed_at_ms` keeps the first
+            // decline, so the moving time needs its own column.
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(FeedbackInvite::Table)
+                        .add_column_if_not_exists(
+                            ColumnDef::new(FeedbackInvite::SnoozedAtMs)
+                                .big_integer()
+                                .null(),
+                        )
+                        .to_owned(),
+                )
+                .await?;
+            // Earlier answers start their snooze from when they were given, so a reader
+            // who declined or booked more than a snooze ago sees the card again.
+            manager
+                .get_connection()
+                .execute_unprepared(
+                    "UPDATE feedback_invite SET snoozed_at_ms = \
+                       MAX(COALESCE(dismissed_at_ms, settled_at_ms), COALESCE(settled_at_ms, dismissed_at_ms)) \
+                     WHERE snoozed_at_ms IS NULL",
+                )
+                .await?;
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            manager
+                .alter_table(
+                    Table::alter()
+                        .table(FeedbackInvite::Table)
+                        .drop_column(FeedbackInvite::SnoozedAtMs)
+                        .to_owned(),
+                )
+                .await?;
+            Ok(())
+        }
+    }
+
+    #[derive(DeriveIden)]
+    enum FeedbackInvite {
+        Table,
+        SnoozedAtMs,
     }
 }

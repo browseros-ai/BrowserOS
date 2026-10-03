@@ -54,8 +54,8 @@ pub(super) async fn respond(
     record(&state, to_outcome(payload.outcome))
         .await
         .map_err(|source| internal(&request_id, source))?;
-    // The answer a fresh page load would now get, which is still eligible for an impression
-    // or a click and only refused once dismissed. Returning a blanket refusal here would
+    // The answer a fresh page load would now get, which is still eligible after an
+    // impression and refused while a click or dismissal snoozes the card. Returning a blanket refusal here would
     // make the caller's cache disagree with the next load.
     decide(&state)
         .await
@@ -74,12 +74,17 @@ async fn decide(state: &AppState) -> AppResult<FeedbackInvitation> {
     else {
         return Ok(not_eligible());
     };
-    // The card stays available until the reader dismisses it. An impression used to spend
-    // the invitation, which meant one appearance per installation ever, whether or not
-    // anyone read it: the overwhelming majority of a new tab's openings are incidental, so
-    // spending the offer on the first paint threw away nearly all of its reach. Booking is
-    // not an answer either, since opening the booking page is not the same as booking.
-    if state.feedback_invites.has_dismissed(&install_id).await? {
+    // The card stays available except for a few days after the reader books or declines.
+    // An impression used to spend the invitation, which meant one appearance per
+    // installation ever, whether or not anyone read it: the overwhelming majority of a new
+    // tab's openings are incidental, so spending the offer on the first paint threw away
+    // nearly all of its reach. No answer is final either: opening the booking page is not
+    // the same as booking, and a decline is a "not now".
+    if state
+        .feedback_invites
+        .is_snoozed(&install_id, now_ms())
+        .await?
+    {
         return Ok(not_eligible());
     }
     let mut invitation = FeedbackInvitation::new(true);
@@ -104,8 +109,8 @@ async fn record(state: &AppState, outcome: InviteOutcome) -> AppResult<()> {
 ///
 /// An outcome must only ever spend an invitation the installation was actually offered.
 /// Anything able to reach the loopback server can POST here, so without this an unrelated
-/// page or local process could burn an installation's single invitation before it had ever
-/// been shown one, and the row is permanent.
+/// page or local process could snooze an installation's invitation before it had ever been
+/// shown one.
 ///
 /// A row that already exists is updated without consulting the cohort, on purpose: that
 /// invitation was granted by an earlier decision, and a refresh between the card appearing

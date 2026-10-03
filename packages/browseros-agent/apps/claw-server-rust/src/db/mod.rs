@@ -331,7 +331,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -408,6 +408,10 @@ mod tests {
             migrations[18].try_get::<String>("", "version")?,
             "m0019_add_feedback_invite_dismissal"
         );
+        assert_eq!(
+            migrations[19].try_get::<String>("", "version")?,
+            "m0020_add_feedback_invite_snooze"
+        );
         Ok(())
     }
 
@@ -443,9 +447,14 @@ mod tests {
         let gate = |install_id: &'static str| {
             let db = upgraded.clone();
             async move {
-                crate::db::feedback_invite::FeedbackInviteRepository::new(db)
-                    .has_dismissed(install_id)
-                    .await
+                use crate::db::entities::prelude::FeedbackInvite;
+                use sea_orm::EntityTrait;
+                anyhow::Ok(
+                    FeedbackInvite::find_by_id(install_id.to_owned())
+                        .one(db.connection())
+                        .await?
+                        .is_some_and(|row| row.dismissed_at_ms.is_some()),
+                )
             }
         };
         assert!(
@@ -459,6 +468,50 @@ mod tests {
         // group, so the gap is accepted and costs at most one more appearance.
         assert!(!gate("clicked-before").await?);
         assert!(!gate("shown-before").await?);
+        Ok(())
+    }
+
+    struct MigratorThrough19;
+
+    #[async_trait::async_trait]
+    impl MigratorTrait for MigratorThrough19 {
+        fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+            Migrator::migrations().into_iter().take(19).collect()
+        }
+    }
+
+    /// Answers recorded before the snooze existed start it from when they were given, so a
+    /// reader who booked or declined more than a snooze ago is offered the card again.
+    #[tokio::test]
+    async fn the_snooze_is_backfilled_from_older_answers() -> anyhow::Result<()> {
+        use crate::db::feedback_invite::{FeedbackInviteRepository, SNOOZE_MS};
+
+        let dir = tempdir()?;
+        let path = dir.path().join(DATABASE_FILENAME);
+
+        let through_19 = open_and_migrate::<MigratorThrough19>(&path).await?;
+        through_19
+            .execute_unprepared(
+                "INSERT INTO feedback_invite \
+                 (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms) \
+                 VALUES ('dismissed', 1000, 'dismissed', 2000, 2000), \
+                        ('clicked', 1000, 'clicked', 3000, NULL), \
+                        ('clicked-then-dismissed', 1000, 'clicked', 3000, 5000), \
+                        ('shown', 1000, 'shown', NULL, NULL)",
+            )
+            .await?;
+        through_19.close().await?;
+
+        let repo = FeedbackInviteRepository::new(Database::open(&path).await?);
+        for (install_id, answered_at) in [
+            ("dismissed", 2_000),
+            ("clicked", 3_000),
+            ("clicked-then-dismissed", 5_000),
+        ] {
+            assert!(repo.is_snoozed(install_id, answered_at).await?);
+            assert!(!repo.is_snoozed(install_id, answered_at + SNOOZE_MS).await?);
+        }
+        assert!(!repo.is_snoozed("shown", 1_000).await?);
         Ok(())
     }
 
@@ -498,7 +551,7 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
         conn.close().await?;
         Ok(())
     }
@@ -562,7 +615,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         assert_eq!(
             migrations
                 .iter()
@@ -585,7 +638,7 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 19);
+        assert_eq!(migration_count, 20);
         Ok(())
     }
 
@@ -721,7 +774,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 19);
+        assert_eq!(migrations.len(), 20);
         Ok(())
     }
 
