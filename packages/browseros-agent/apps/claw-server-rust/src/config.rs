@@ -76,10 +76,19 @@ pub struct ConfigEnv {
 impl ConfigEnv {
     #[must_use]
     pub fn from_process() -> Self {
-        Self {
-            vars: env::vars().collect(),
-            home_dir: env::var_os("HOME").map(PathBuf::from),
-        }
+        Self::from_lookup(env::vars().collect(), |key| env::var_os(key))
+    }
+
+    fn from_lookup(
+        vars: BTreeMap<String, String>,
+        mut lookup: impl FnMut(&str) -> Option<std::ffi::OsString>,
+    ) -> Self {
+        let home_dir = ["HOME", "USERPROFILE"].into_iter().find_map(|name| {
+            lookup(name)
+                .filter(|value| !value.is_empty())
+                .map(PathBuf::from)
+        });
+        Self { vars, home_dir }
     }
 
     #[must_use]
@@ -497,6 +506,29 @@ mod tests {
             &ConfigEnv::with_vars(vars, dir.path().join("home")),
         )?;
         assert!(cfg.browserclaw_dir.starts_with(dir.path().join("home")));
+        Ok(())
+    }
+
+    #[test]
+    fn uses_userprofile_when_home_is_missing() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let config_path = dir.path().join("sidecar.json");
+        fs::write(
+            &config_path,
+            r#"{"ports":{},"directories":{},"flags":{"devMode":false}}"#,
+        )?;
+        let env = ConfigEnv::from_lookup(BTreeMap::new(), |name| match name {
+            "HOME" => None,
+            "USERPROFILE" => Some("C:\\Users\\upper".into()),
+            _ => None,
+        });
+
+        let cfg = Config::load_with_env(&config_path, &env)?;
+
+        assert_eq!(
+            cfg.browserclaw_dir,
+            PathBuf::from("C:\\Users\\upper").join(".browserclaw")
+        );
         Ok(())
     }
 
