@@ -578,8 +578,8 @@ class ProfileTest(unittest.TestCase):
         )
         switches = load_profile(profile_path).switches.resolved()
 
-        self.assertTrue(switches.clean)
-        self.assertEqual("full", switches.provision)
+        self.assertFalse(switches.clean)
+        self.assertEqual("none", switches.provision)
         self.assertTrue(switches.download)
         self.assertTrue(switches.sign)
         self.assertTrue(switches.upload)

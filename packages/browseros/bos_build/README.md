@@ -130,12 +130,15 @@ Profiles are saved switch sets in `profiles/`:
 
 | Profile | Used by | What it sets |
 | --- | --- | --- |
-| `release-ci` | `build-browseros.yml`, the reusable Linux/Windows lane | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
+| `release-ci` | `build-browseros.yml` and macOS release lanes | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
 | `nightly-ci` | unsigned cloud nightlies | the same, plus `sign: false`, `upload: false` |
-| `nightly-macos` | both products in the signed family nightly | `preset: release`, `resource_mode: published` |
+| `nightly-macos` | both products in the signed family nightly | `preset: release`, `resource_mode: published`, `clean: false`, `provision: none` |
 
-`release-macos.yml` runs `--preset release` against the persistent checkout on
-the self-hosted Mac and receives source or published mode from its caller.
+`release-macos.yml` refreshes the infrastructure-owned Chromium base to the exact
+pin, then APFS-copies it into independent product workspaces while holding the
+base lock. Builds consume those copies through `release-ci`; a universal build
+keeps one copy across both architectures. The caller selects source or published
+resources. Ordinary local `--preset release` still cleans and provisions source.
 
 Deeper flag semantics — `--skip`, `--from`, `--gn-arg`, `modules:` profiles,
 ephemeral runners — live in [`docs/build-cli.md`](docs/build-cli.md).
