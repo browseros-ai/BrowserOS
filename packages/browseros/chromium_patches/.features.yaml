@@ -39,7 +39,6 @@ features:
       - chrome/app/chrome_command_ids.h
       - chrome/browser/ui/actions/chrome_action_id.h
       - chrome/browser/ui/browser_actions.cc
-      - chrome/browser/ui/browser.cc
       - chrome/browser/ui/browser_command_controller.cc
       # Shared keyboard shortcut infra (llm-chat + keyboard-shortcuts)
       - chrome/browser/global_keyboard_shortcuts_mac.mm
@@ -48,6 +47,7 @@ features:
       # Shared pinned button (pin-chat)
       - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
 
+      # Chromium 155 moved the former browser.cc customizations here.
       - "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc"
       - "chrome/browser/ui/bookmarks/bookmark_bar_controller.cc"
       - "chrome/browser/ui/browser_web_contents_delegate/BUILD.gn"
@@ -347,7 +347,7 @@ features:
     description: "feat: vertical tab strip"
     files:
       - chrome/browser/ui/tabs/BUILD.gn
-      - chrome/browser/ui/tabs/features.cc
+      # Chromium 155 removed the kVerticalTabs feature gate; retain pref sync.
       - chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc
       - chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 
