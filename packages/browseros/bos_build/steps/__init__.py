@@ -8,6 +8,7 @@ these imports reorders the pipeline.
 from .source.provision import SourceCheckoutModule, SourceSyncModule
 from .setup.clean import CleanModule
 from .setup.git import GitSetupModule, SparkleSetupModule, WinSparkleSetupModule
+from .setup.windows_sdk import WindowsSDKModule
 from .storage.download import DownloadResourcesModule
 from .resources.source import PrepareCommonResourcesModule, PrepareServerResourcesModule
 from .resources.resources import ResourcesModule
@@ -35,6 +36,7 @@ __all__ = [
     "GitSetupModule",
     "SparkleSetupModule",
     "WinSparkleSetupModule",
+    "WindowsSDKModule",
     "DownloadResourcesModule",
     "PrepareCommonResourcesModule",
     "PrepareServerResourcesModule",

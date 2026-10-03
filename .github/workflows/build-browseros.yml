@@ -137,6 +137,9 @@ jobs:
       # build CLI with UnicodeEncodeError; force UTF-8 for python and all
       # its subprocesses (gclient, hooks). No-op on Linux/macOS.
       PYTHONUTF8: "1"
+      # This ephemeral CI host may install the SDK required by the selected
+      # Chromium pin. Local builds only validate; the module never elevates.
+      BROWSEROS_INSTALL_WINDOWS_SDK: ${{ inputs.platform == 'windows' && '1' || '0' }}
     steps:
       - name: Validate inputs
         env:
@@ -459,6 +462,17 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 30
+
+      # SDK setup can fail before browser artifacts exist. Preserve the native
+      # installer diagnostics before the ephemeral Windows runner is destroyed.
+      - name: Upload Windows SDK installer logs
+        if: always() && inputs.platform == 'windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-sdk-logs-${{ inputs.product }}-${{ inputs.arch }}
+          path: ${{ runner.temp }}/browseros-windows-sdk-*/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Report disk usage
         if: always()

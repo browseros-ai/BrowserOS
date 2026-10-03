@@ -24,6 +24,7 @@ class RegistryContentTest(unittest.TestCase):
                 "git_setup",
                 "sparkle_setup",
                 "winsparkle_setup",
+                "windows_sdk",
                 "download_resources",
                 "prepare_common_resources",
                 "prepare_server_resources",
@@ -72,7 +73,7 @@ class RegistryContentTest(unittest.TestCase):
     def test_platform_filtering_windows_and_linux(self):
         self.assertEqual(
             phase_steps("setup", "windows"),
-            ["clean", "git_setup", "winsparkle_setup"],
+            ["clean", "git_setup", "winsparkle_setup", "windows_sdk"],
         )
         self.assertEqual(phase_steps("setup", "linux"), ["clean", "git_setup"])
         self.assertEqual(phase_steps("sign", "windows"), ["sign_windows"])
