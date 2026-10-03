@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -468,5 +469,47 @@ func TestDrainAutomaticUpdateCheckWithTimeoutStopsWaiting(t *testing.T) {
 	case <-returned:
 	case <-time.After(100 * time.Millisecond):
 		t.Fatal("drainAutomaticUpdateCheckWithTimeout() did not return after timeout")
+	}
+}
+
+func TestCommandErrorsAreReportedToStderr(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"unknown flag", []string{"snapshot", "--definitely-not-a-flag"}, "unknown flag"},
+		{"unknown shorthand flag", []string{"snapshot", "-Z"}, "unknown shorthand flag"},
+		{"unknown command", []string{"definitely-not-a-command"}, "unknown command"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			rootCmd.SetOut(&stdout)
+			rootCmd.SetErr(&stderr)
+			rootCmd.SetArgs(tt.args)
+			t.Cleanup(func() {
+				rootCmd.SetOut(nil)
+				rootCmd.SetErr(nil)
+				rootCmd.SetArgs(nil)
+			})
+
+			err := rootCmd.Execute()
+
+			if err == nil {
+				t.Fatalf("rootCmd.Execute() = nil, want an error for %v", tt.args)
+			}
+			got := stderr.String()
+			if got == "" {
+				t.Fatalf("%v failed silently; the error must reach stderr", tt.args)
+			}
+			if !strings.HasPrefix(got, "Error:") {
+				t.Fatalf("stderr = %q, want it to start with the CLI's %q prefix", got, "Error:")
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("stderr = %q, want it to mention %q", got, tt.want)
+			}
+		})
 	}
 }
