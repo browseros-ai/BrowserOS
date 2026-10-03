@@ -190,15 +190,9 @@ def _missing(root: Path, requirement: _Requirement, target: str) -> list[str]:
         dll = root / "Debuggers" / arch / "dbghelp.dll"
         if dll.is_file():
             version = json.loads(
-                _capture(
-                    [
-                        "powershell.exe",
-                        "-NoProfile",
-                        "-NonInteractive",
-                        "-Command",
-                        "$v = (Get-Item -LiteralPath $env:BROWSEROS_SDK_FILE).VersionInfo; "
-                        "@($v.FileMajorPart, $v.FileMinorPart, $v.FileBuildPart, $v.FilePrivatePart) | ConvertTo-Json -Compress",
-                    ],
+                _powershell(
+                    "$v = (Get-Item -LiteralPath $env:BROWSEROS_SDK_FILE).VersionInfo; "
+                    "@($v.FileMajorPart, $v.FileMinorPart, $v.FileBuildPart, $v.FilePrivatePart) | ConvertTo-Json -Compress",
                     root,
                     dict(os.environ, BROWSEROS_SDK_FILE=str(dll)),
                 )
@@ -226,7 +220,7 @@ class _Downloads(HTMLParser):
             self.rows, self.links = [], []
         elif tag == "a" and self.in_row:
             href = dict(attrs).get("href", "")
-            if urlparse(href).hostname == "go.microsoft.com":
+            if href and urlparse(href).hostname == "go.microsoft.com":
                 self.links.append(href)
 
     def handle_data(self, data):
@@ -296,18 +290,11 @@ def _install(requirement: _Requirement, root: Path) -> None:
         env = dict(os.environ, BROWSEROS_SDK_INSTALLER=str(installer))
         # The catalog is live, so require Microsoft's Windows trust-chain
         # validation before executing its bootstrapper with machine privileges.
-        _capture(
-            [
-                shutil.which("pwsh") or "powershell.exe",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "$ErrorActionPreference = 'Stop'; "
-                "$s = Get-AuthenticodeSignature -LiteralPath $env:BROWSEROS_SDK_INSTALLER; "
-                "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch '(^|, )CN=Microsoft Corporation(,|$)') "
-                "{ throw 'Windows SDK installer is not validly signed by Microsoft Corporation' }; "
-                "$s.SignerCertificate.Subject",
-            ],
+        _powershell(
+            "$s = Get-AuthenticodeSignature -LiteralPath $env:BROWSEROS_SDK_INSTALLER; "
+            "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch '(^|, )CN=Microsoft Corporation(,|$)') "
+            "{ throw 'Windows SDK installer is not validly signed by Microsoft Corporation' }; "
+            "$s.SignerCertificate.Subject",
             directory,
             env,
         )
@@ -353,12 +340,25 @@ def _install(requirement: _Requirement, root: Path) -> None:
         installer.unlink(missing_ok=True)
 
 
+def _powershell(script: str, cwd: Path, env: dict[str, str]) -> str:
+    # GitHub's pwsh shell exports its module path. A different PowerShell
+    # edition must rebuild that path or native security cmdlets can fail.
+    # Windows os.environ exposes uppercase keys, unlike a normal Python dict.
+    env = {key: value for key, value in env.items() if key.upper() != "PSMODULEPATH"}
+    return _capture(
+        [
+            shutil.which("pwsh") or "powershell.exe",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "$ErrorActionPreference = 'Stop'; " + script,
+        ],
+        cwd,
+        env,
+    )
+
+
 def _capture(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
-    if Path(command[0]).stem.lower() in ("powershell", "pwsh"):
-        env = dict(os.environ if env is None else env)
-        # GitHub's pwsh shell exports its module path. A different PowerShell
-        # edition must rebuild that path or native security cmdlets can fail.
-        env.pop("PSModulePath", None)
     result = subprocess.run(
         command,
         cwd=cwd,
@@ -432,28 +432,28 @@ class WindowsSDKModule(Step):
 
     description = "Verify the pinned Windows SDK; install only on opted-in managed CI"
 
-    def validate(self, ctx: Context) -> None:
+    def validate(self, context: Context) -> None:
         if sys.platform != "win32":
             raise ValidationError("Host Windows SDK setup requires Windows")
 
-    def execute(self, ctx: Context) -> None:
-        requirement = _requirement(ctx)
+    def execute(self, context: Context) -> None:
+        requirement = _requirement(context)
         root = _sdk_root()
         log_info(
-            f"Chromium {ctx.chromium_version}: Windows SDK package {requirement.package}, directory {requirement.directory}, root {root}"
+            f"Chromium {context.chromium_version}: Windows SDK package {requirement.package}, directory {requirement.directory}, root {root}"
         )
-        missing = _missing(root, requirement, ctx.architecture)
+        missing = _missing(root, requirement, context.architecture)
         if missing:
             log_warning("Missing Windows SDK prerequisites:\n" + "\n".join(missing))
-            if ctx.architecture != "x64":
+            if context.architecture != "x64":
                 raise ValidationError(
                     f"Install SDK {requirement.package} with Desktop C++ and Debugging "
-                    f"Tools for {ctx.architecture}, then retry. Automatic CI SDK "
+                    f"Tools for {context.architecture}, then retry. Automatic CI SDK "
                     "installation is scoped to x64; existing ARM64 installations "
                     "remain supported."
                 )
             _install(requirement, root)
-            missing = _missing(root, requirement, ctx.architecture)
+            missing = _missing(root, requirement, context.architecture)
             if missing:
                 raise ValidationError(
                     "SDK installer completed but required files/package are still missing:\n"
@@ -461,7 +461,7 @@ class WindowsSDKModule(Step):
                 )
         else:
             log_info("Windows SDK already complete; skipping installer")
-        for path in _required_files(root, requirement.directory, ctx.architecture):
+        for path in _required_files(root, requirement.directory, context.architecture):
             log_info(f"Verified SDK file: {path} ({path.stat().st_size} bytes)")
-        _verify_toolchain(ctx, root, requirement)
+        _verify_toolchain(context, root, requirement)
         log_success("Pinned Windows SDK and Chromium x86/x64 environments verified")
