@@ -40,6 +40,12 @@ STRATEGIES = ("shallow", "full")
 
 def run(cmd, cwd: Path, env: Optional[dict] = None) -> None:
     log_info(f"[source] $ {' '.join(str(c) for c in cmd)}  (cwd={cwd})")
+    if cmd[0] == "git":
+        # Match depot_tools' Git-on-Borg policy: Googlesource does not serve LFS
+        # objects. Inherit this default through recursive Git children, while
+        # preserving explicit overrides and leaving gclient's hooks unchanged.
+        env = dict(os.environ if env is None else env)
+        env.setdefault("GIT_LFS_SKIP_SMUDGE", "1")
     subprocess.run(cmd, cwd=cwd, env=env, check=True)
 
 
@@ -395,10 +401,18 @@ def checkout(
     tag_ref = f"refs/tags/{version}"
     if reset and _git_output(["rev-parse", "--verify", "HEAD"], cwd=src):
         reset_source(src)
+    args = ["git", "checkout"]
+    if reset:
+        # A former DEPS gitlink may now be a tracked directory. Resetting its
+        # old HEAD does not remove the files obstructing checkout; explicit
+        # reset permits replacing them. The final gclient sync backs up the
+        # obsolete repository metadata and cleans stale dependency files.
+        args += ["--force"]
     if branch:
-        run(["git", "checkout", "-B", branch, tag_ref], cwd=src)
+        args += ["-B", branch, tag_ref]
     else:
-        run(["git", "checkout", "--detach", tag_ref], cwd=src)
+        args += ["--detach", tag_ref]
+    run(args, cwd=src)
     return src
 
 
