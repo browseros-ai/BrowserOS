@@ -16,7 +16,7 @@ from ...lib.utils import (
     safe_rmtree,
 )
 
-from ..source.provision import ensure
+from ..source.provision import prepare
 
 BROWSEROS_BRANCH = "browseros"
 
@@ -37,8 +37,8 @@ class GitSetupModule(Step):
     def execute(self, ctx: Context) -> None:
         # Build owns the checkout lock through packaging. This adapter must not
         # reacquire it or add destructive intent when --no-clean was selected.
-        ensure(
-            ctx.chromium_src.parent,
+        prepare(
+            ctx.chromium_src,
             ctx.chromium_version,
             strategy="full",
             branch=BROWSEROS_BRANCH,

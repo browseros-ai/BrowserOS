@@ -62,10 +62,10 @@ class GitSetupExecuteTest(unittest.TestCase):
         )
 
     def test_checks_out_tag_as_browseros_branch(self):
-        with mock.patch("bos_build.steps.setup.git.ensure") as prepare:
+        with mock.patch("bos_build.steps.setup.git.prepare") as prepare:
             GitSetupModule().execute(self.ctx)
         prepare.assert_called_once_with(
-            self.ctx.chromium_src.parent,
+            self.ctx.chromium_src,
             self.ctx.chromium_version,
             strategy="full",
             branch=BROWSEROS_BRANCH,
@@ -73,7 +73,7 @@ class GitSetupExecuteTest(unittest.TestCase):
 
     def test_missing_tag_stops_before_checkout(self):
         with mock.patch(
-            "bos_build.steps.setup.git.ensure", side_effect=ValidationError("missing")
+            "bos_build.steps.setup.git.prepare", side_effect=ValidationError("missing")
         ):
             with self.assertRaises(ValidationError):
                 GitSetupModule().execute(self.ctx)

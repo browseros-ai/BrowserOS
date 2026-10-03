@@ -193,7 +193,9 @@ def ensure_depot_tools(
     return depot_tools
 
 
-def ensure_gclient_config(root: Path, required_cpus: tuple[str, ...] = ()) -> None:
+def ensure_gclient_config(
+    root: Path, required_cpus: tuple[str, ...] = (), *, source_name: str = "src"
+) -> None:
     """Preserve custom solutions/vars and change only a literal target CPU list.
 
     .gclient is executable Python. We do not execute it while inspecting it or
@@ -201,7 +203,15 @@ def ensure_gclient_config(root: Path, required_cpus: tuple[str, ...] = ()) -> No
     source reset, rather than silently replacing developer configuration.
     """
     gclient_file = root / ".gclient"
-    content = gclient_file.read_text() if gclient_file.exists() else GCLIENT_SPEC
+    content = (
+        gclient_file.read_text()
+        if gclient_file.exists()
+        else (
+            GCLIENT_SPEC
+            if source_name == "src"
+            else GCLIENT_SPEC.replace('"name": "src"', f'"name": {source_name!r}')
+        )
+    )
     tree = ast.parse(content, filename=str(gclient_file))
     if required_cpus:
         writes = [
@@ -333,11 +343,11 @@ def reset_source(src: Path) -> None:
     )
 
 
-def _fetch_pin(root: Path, version: str, strategy: str) -> Path:
+def _fetch_pin(src: Path, version: str, strategy: str) -> Path:
     """Acquire the exact pin without changing an existing working tree."""
     if strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy '{strategy}'. Valid: {STRATEGIES}")
-    src = root / "src"
+    root = src.parent
     tag_ref = f"refs/tags/{version}"
     # Validate before passing a pin from a file to Git as a refspec.
     run(["git", "check-ref-format", tag_ref], cwd=root)
@@ -373,7 +383,7 @@ def _fetch_pin(root: Path, version: str, strategy: str) -> Path:
 
 
 def checkout(
-    root: Path,
+    src: Path,
     version: str,
     strategy: str = "shallow",
     *,
@@ -381,7 +391,7 @@ def checkout(
     branch: Optional[str] = None,
 ) -> Path:
     """Select only the requested tag; preserve work unless reset is explicit."""
-    src = _fetch_pin(root, version, strategy)
+    src = _fetch_pin(src, version, strategy)
     tag_ref = f"refs/tags/{version}"
     if reset and _git_output(["rev-parse", "--verify", "HEAD"], cwd=src):
         reset_source(src)
@@ -392,11 +402,9 @@ def checkout(
     return src
 
 
-def sync(
-    root: Path, depot_tools: Optional[Path] = None, *, reset: bool = False
-) -> None:
+def sync(src: Path, depot_tools: Optional[Path] = None, *, reset: bool = False) -> None:
     """Restore dependencies and run hooks after all destructive source cleanup."""
-    depot_tools = depot_tools or root / "depot_tools"
+    depot_tools = depot_tools or src.parent / "depot_tools"
     env = os.environ.copy()
     env["PATH"] = str(depot_tools) + os.pathsep + env.get("PATH", "")
     env["DEPOT_TOOLS_WIN_TOOLCHAIN"] = "0"
@@ -405,11 +413,11 @@ def sync(
     if reset:
         # Force also visits unchanged revisions and partially populated caches.
         args += ["--reset", "--force"]
-    run(args, cwd=root / "src", env=env)
+    run(args, cwd=src, env=env)
 
 
-def ensure(
-    root: Path,
+def prepare(
+    src: Path,
     version: str,
     strategy: str = "shallow",
     step_name: str = "all",
@@ -428,25 +436,36 @@ def ensure(
         raise ValueError(f"Unknown source step: {step_name}")
     if strategy not in STRATEGIES:
         raise ValueError(f"Unknown strategy: {strategy}")
-    root = root.expanduser().resolve()
+    # Resolve the selected source itself before deriving its parent. Resolving
+    # only the parent loses relative/symlink identity and can mutate a sibling
+    # checkout outside the lock held by the build command.
+    src = src.expanduser().resolve()
+    root = src.parent
+    if src == root or (src.exists() and not src.is_dir()):
+        raise ValueError(f"Invalid Chromium source directory: {src}")
+    if src.exists() and not (src / ".git").exists() and any(src.iterdir()):
+        raise ValueError(
+            f"Refusing to provision a nonempty non-Git source directory: {src}"
+        )
     root.mkdir(parents=True, exist_ok=True)
     ensure_gclient_config(
-        root, ("x64", "arm64") if sys.platform.startswith("linux") else ()
+        root,
+        ("x64", "arm64") if sys.platform.startswith("linux") else (),
+        source_name=src.name,
     )
     depot_tools = ensure_depot_tools(
         root, repair_cached_depot_tools=repair_cached_depot_tools
     )
-    src = root / "src"
     if step_name == "fetch":
-        _fetch_pin(root, version, strategy)
+        _fetch_pin(src, version, strategy)
         if not _git_output(["rev-parse", "--verify", "HEAD"], cwd=src):
-            checkout(root, version, strategy)
+            checkout(src, version, strategy)
     elif step_name in ("checkout", "all"):
-        checkout(root, version, strategy, reset=reset, branch=branch)
+        checkout(src, version, strategy, reset=reset, branch=branch)
     elif reset:
         reset_source(src)
     if step_name in ("sync", "all"):
-        sync(root, depot_tools, reset=reset)
+        sync(src, depot_tools, reset=reset)
         head = _git_output(["rev-parse", "HEAD"], cwd=src)
         pin = _git_output(
             ["rev-parse", "--verify", f"refs/tags/{version}^{{commit}}"], cwd=src
@@ -467,6 +486,32 @@ def ensure(
     else:
         log_success(f"Chromium checkout selected (sync still required): {src}")
     return src
+
+
+def ensure(
+    root: Path,
+    version: str,
+    strategy: str = "shallow",
+    step_name: str = "all",
+    repair_cached_depot_tools: bool = False,
+    *,
+    reset: bool = False,
+    branch: Optional[str] = None,
+) -> Path:
+    """Root-based provisioning adapter used by the source CLI and CI cache.
+
+    Builds call prepare with their exact source path; root-based callers retain
+    the public gclient-root/src layout without duplicating preparation logic.
+    """
+    return prepare(
+        root.expanduser() / "src",
+        version,
+        strategy,
+        step_name,
+        repair_cached_depot_tools,
+        reset=reset,
+        branch=branch,
+    )
 
 
 class _SourceStep(Step):
@@ -490,8 +535,8 @@ class SourceCheckoutModule(_SourceStep):
         # source_sync. Stage the pin without switching an existing dirty tree;
         # source_sync selects it after clean. A fresh repo needs an initial
         # HEAD so the unchanged clean maintenance step can reset it.
-        ensure(
-            ctx.chromium_src.parent,
+        prepare(
+            ctx.chromium_src,
             ctx.chromium_version,
             strategy="shallow",
             step_name="fetch",
@@ -503,8 +548,8 @@ class SourceSyncModule(_SourceStep):
     description = "gclient sync the provisioned chromium checkout"
 
     def execute(self, ctx: Context) -> None:
-        ensure(
-            ctx.chromium_src.parent,
+        prepare(
+            ctx.chromium_src,
             ctx.chromium_version,
             strategy="shallow",
             step_name="all",
