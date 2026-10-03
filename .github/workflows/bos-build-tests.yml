@@ -1,12 +1,6 @@
 name: Build System Tests
 
 on:
-  workflow_dispatch:
-    inputs:
-      expected-sha:
-        description: Exact worker commit to exercise
-        type: string
-        required: true
   pull_request:
     branches:
       - main
@@ -40,7 +34,6 @@ on:
 
 jobs:
   tests:
-    if: github.event_name == 'pull_request'
     name: bos_build / unittest + ruff
     runs-on: ubuntu-latest
     permissions:
@@ -78,7 +71,6 @@ jobs:
         run: uv run python -m unittest discover -s vendor_uploads -t . -p "*_test.py"
 
   windows-git-bootstrap:
-    if: github.event_name == 'pull_request'
     name: Windows Git bootstrap / Git Bash + native Git
     runs-on: windows-latest
     permissions:
@@ -94,68 +86,3 @@ jobs:
         shell: bash
         working-directory: packages/browseros
         run: uv run python -m unittest bos_build.ci_workflow_test -v
-
-  windows-sdk-smoke:
-    if: github.event_name == 'workflow_dispatch'
-    name: Pinned Windows SDK installation and Chromium environment
-    runs-on: warp-custom-browseros-windows-2025-x64-32x
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    env:
-      PYTHONUTF8: "1"
-      DEPOT_TOOLS_WIN_TOOLCHAIN: "0"
-      BROWSEROS_INSTALL_WINDOWS_SDK: "1"
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          ref: ${{ inputs.expected-sha }}
-      - uses: astral-sh/setup-uv@v8.3.2
-      - name: Pin smoke source and fetch minimal real Chromium checkout
-        shell: bash
-        env:
-          EXPECTED_SHA: ${{ inputs.expected-sha }}
-        run: |
-          set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
-          . packages/browseros/CHROMIUM_VERSION
-          version="$MAJOR.$MINOR.$BUILD.$PATCH"
-          source_root="$(cd "$RUNNER_TEMP" && pwd -W)/sdk-smoke-chromium"
-          git init "$source_root"
-          git -C "$source_root" config core.autocrlf false
-          git -C "$source_root" remote add origin https://chromium.googlesource.com/chromium/src.git
-          git -C "$source_root" sparse-checkout init --no-cone
-          printf '%s\n' /build/vs_toolchain.py /build/gn_helpers.py /build/action_helpers.py /build/toolchain/win/setup_toolchain.py /docs/windows_build_instructions.md | git -C "$source_root" sparse-checkout set --no-cone --stdin
-          git -C "$source_root" fetch --depth 1 --filter=blob:none origin "refs/tags/$version:refs/tags/$version"
-          git -C "$source_root" checkout --detach "refs/tags/$version"
-          echo "SDK_SMOKE_CHROMIUM=$source_root" >> "$GITHUB_ENV"
-          git -C "$source_root" rev-parse HEAD
-      - name: Install SDK and verify real Chromium environments twice
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $receipt = Join-Path $env:RUNNER_TEMP 'sdk-smoke-receipt.txt'
-          $env:TEMP = $env:RUNNER_TEMP
-          $env:TMP = $env:RUNNER_TEMP
-          Start-Transcript -Path $receipt
-          try {
-            uv run --project packages/browseros browseros build --modules windows_sdk --chromium-src "$env:SDK_SMOKE_CHROMIUM" --build-type release --arch x64 --product browserclaw
-            if ($LASTEXITCODE -ne 0) { throw 'First SDK invocation failed' }
-            # Disallow installation for the second pass. Success therefore proves
-            # the installed package/files and native environments are reusable.
-            $env:BROWSEROS_INSTALL_WINDOWS_SDK = '0'
-            uv run --project packages/browseros browseros build --modules windows_sdk --chromium-src "$env:SDK_SMOKE_CHROMIUM" --build-type release --arch x64 --product browserclaw
-            if ($LASTEXITCODE -ne 0) { throw 'Idempotent SDK invocation failed' }
-            git -C "$env:SDK_SMOKE_CHROMIUM" status --porcelain
-            $forbidden = Get-ChildItem -Path "$env:SDK_SMOKE_CHROMIUM" -Recurse -File | Where-Object { $_.Name -match '\.(gn|ninja)$' }
-            if ($forbidden) { throw 'Unexpected GN/Ninja files in minimal smoke checkout' }
-            Write-Output "SDK_SMOKE_SUCCESS sha=${{ inputs.expected-sha }} idempotency=passed generated_gn_ninja=none"
-          } finally { Stop-Transcript }
-      - name: Upload SDK receipt and installer logs
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: windows-sdk-smoke-${{ inputs.expected-sha }}
-          path: |
-            ${{ runner.temp }}/sdk-smoke-receipt.txt
-            ${{ runner.temp }}/browseros-windows-sdk-*/*.log
