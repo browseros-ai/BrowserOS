@@ -189,7 +189,7 @@ class CheckoutCommandsTest(unittest.TestCase):
                 mock.patch.object(provision, "run", fake_run),
                 mock.patch.object(provision, "_git_output", return_value=""),
             ):
-                provision.checkout(root, "148.0.7402.57", strategy=strategy)
+                provision.checkout(root / "src", "148.0.7402.57", strategy=strategy)
         return commands
 
     def test_shallow_fetches_pinned_tag_depth_two_no_tags(self):
@@ -217,7 +217,7 @@ class CheckoutCommandsTest(unittest.TestCase):
     def test_unknown_strategy_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             with self.assertRaisesRegex(ValueError, "Unknown strategy"):
-                provision.checkout(Path(tmp), "1.2.3.4", strategy="warp")
+                provision.checkout(Path(tmp) / "src", "1.2.3.4", strategy="warp")
 
 
 class SyncCommandTest(unittest.TestCase):
@@ -230,7 +230,7 @@ class SyncCommandTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             with mock.patch.object(provision, "run", fake_run):
-                provision.sync(root)
+                provision.sync(root / "src")
 
         self.assertEqual(len(commands), 1)
         self.assertEqual(commands[0][1:], ["sync", "-D", "--no-history", "--shallow"])
@@ -240,9 +240,7 @@ class ShallowProvisionPlanTest(unittest.TestCase):
     def test_shallow_interleaves_clean_between_checkout_and_sync(self):
         sw = Switches(preset="release", provision="shallow", sign=False, upload=False)
         steps = plan(sw, "x64", "linux")
-        self.assertEqual(
-            steps[:3], ["source_checkout", "clean", "source_sync"]
-        )
+        self.assertEqual(steps[:3], ["source_checkout", "clean", "source_sync"])
         self.assertNotIn("git_setup", steps)
 
     def test_shallow_without_clean(self):

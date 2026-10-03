@@ -74,7 +74,7 @@ class RestoreTest(unittest.TestCase):
 
         run_pipeline.assert_called_once_with(
             ["zstd.exe", "-d", "-c", str(tarball)],
-            ["tar.exe", "-xf", "-"],
+            ["tar.exe", "--exclude=.browseros-build-locks", "-xf", "-"],
             consumer_cwd=expected_root,
         )
         self.assertNotIn("-C", run_pipeline.call_args.args[1])
@@ -130,8 +130,20 @@ class RestoreTest(unittest.TestCase):
             [call[0] for call in run_calls],
             [
                 ["zstd.exe", "-d", "-f", "-o", str(tar_file), str(tarball)],
-                ["tar.exe", "--force-local", "-xf", str(tar_file)],
-                ["tar.exe", "--force-local", "-xf", str(tar_file)],
+                [
+                    "tar.exe",
+                    "--force-local",
+                    "--exclude=.browseros-build-locks",
+                    "-xf",
+                    str(tar_file),
+                ],
+                [
+                    "tar.exe",
+                    "--force-local",
+                    "--exclude=.browseros-build-locks",
+                    "-xf",
+                    str(tar_file),
+                ],
             ],
         )
         self.assertNotIn("env", run_calls[0][1])
@@ -184,7 +196,13 @@ class RestoreTest(unittest.TestCase):
             [call[0] for call in run_calls],
             [
                 ["zstd.exe", "-d", "-f", "-o", str(tar_file), str(tarball)],
-                ["tar.exe", "--force-local", "-xf", str(tar_file)],
+                [
+                    "tar.exe",
+                    "--force-local",
+                    "--exclude=.browseros-build-locks",
+                    "-xf",
+                    str(tar_file),
+                ],
             ],
         )
 
@@ -273,7 +291,14 @@ class SaveTest(unittest.TestCase):
             pipeline_calls,
             [
                 (
-                    ["tar.exe", "-cf", "-", "--exclude=./src/out", "."],
+                    [
+                        "tar.exe",
+                        "-cf",
+                        "-",
+                        "--exclude=./src/out",
+                        "--exclude=.browseros-build-locks",
+                        ".",
+                    ],
                     ["zstd.exe", "-T0", "-3", "-f", "-o", str(tarball)],
                     expected_root,
                     None,

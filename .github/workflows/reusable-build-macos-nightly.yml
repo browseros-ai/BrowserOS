@@ -173,7 +173,7 @@ jobs:
         id: chromium_workspace
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}
         shell: bash
-        run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}"
+        run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}" "${{ inputs.product }}"
 
       - name: Verify shared browser version
         env:
@@ -238,6 +238,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$BROWSEROS_REPO/packages/browseros"
+          # Resource caches live outside Chromium. Prune those leftovers while
+          # retaining the synchronized source and its hook-managed toolchains.
+          uv run browseros source clean-outputs \
+            --root "$(dirname "$CHROMIUM_SRC")" \
+            --product "$PRODUCT" \
+            --arch arm64
           uv run browseros build \
             --profile nightly-macos \
             --product "$PRODUCT" \
@@ -249,8 +255,6 @@ jobs:
       # this job; leaking either resource poisons the next queued product build.
       - name: Clean up disposable Chromium workspace
         if: always()
-        env:
-          MACOS_CHROMIUM_WORKSPACE_STATE_PATH: ${{ steps.chromium_workspace.outputs.state_path }}
         shell: bash
         run: |
           set -euo pipefail
