@@ -4,7 +4,7 @@ import { act } from 'react'
 import type { Root } from 'react-dom/client'
 
 interface HookState {
-  invitation: { eligible: boolean; bookUrl?: string }
+  invitation: { eligible: boolean; bookUrl?: string; requestedAt?: number }
   invitationUpdatedAt: number
   recorded: string[]
   recordSucceeds: boolean
@@ -415,6 +415,19 @@ describe('FeedbackInviteCard', () => {
     expect(container.textContent).toContain(
       "You're one of our most active users",
     )
+  })
+
+  /// A request that was already in flight when another tab saved its answer
+  /// lands after that answer, but it was asked before the snooze existed.
+  it('ignores an eligible answer that was requested before the dismissal', async () => {
+    state.invitation = { ...eligible, requestedAt: 1_500 }
+    storage['feedbackInviteDismissedAt:v1'] = '2000'
+    state.invitationUpdatedAt = 3_000
+
+    await render()
+
+    expect(container.innerHTML).toBe('')
+    expect(state.recorded).toEqual([])
   })
 
   it('hides an already-visible card when another tab confirms dismissal', async () => {

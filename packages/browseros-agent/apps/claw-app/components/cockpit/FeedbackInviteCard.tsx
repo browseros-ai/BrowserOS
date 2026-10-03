@@ -33,9 +33,11 @@ const SHOWN_TRACKED_KEY = 'feedbackInviteShownTracked'
 
 /**
  * Fences stale eligible query results after a server-confirmed answer. The
- * timestamp is compared with React Query's dataUpdatedAt, so a newer server
- * answer always wins and browser storage never becomes an eligibility source.
- * That is also what lets the card return once the server's snooze runs out.
+ * timestamp is compared with when the query's request started, so a request
+ * already in flight when the answer was saved cannot bring the card back, while
+ * any request made afterwards is the server's word and always wins. Browser
+ * storage never becomes an eligibility source, which is also what lets the card
+ * return once the server's snooze runs out.
  */
 const ANSWERED_AT_KEY = 'feedbackInviteDismissedAt:v1'
 
@@ -107,8 +109,8 @@ export function FeedbackInviteCard() {
   const [state, setState] = useState<InviteState>({ phase: 'waiting' })
   const appeared = useRef(false)
 
-  const fencedByNewerAnswer =
-    answeredAt !== null && answeredAt >= invitation.dataUpdatedAt
+  const askedAt = invitation.data?.requestedAt ?? invitation.dataUpdatedAt
+  const fencedByNewerAnswer = answeredAt !== null && answeredAt >= askedAt
   const offered =
     invitation.data?.eligible === true && !fencedByNewerAnswer
       ? invitation.data.bookUrl

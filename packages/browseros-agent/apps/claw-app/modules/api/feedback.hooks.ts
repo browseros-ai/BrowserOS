@@ -17,9 +17,23 @@ import { apiClient } from './client'
 
 const FEEDBACK_INVITATION_STALE_TIME_MS = 30_000
 
-export const useFeedbackInvitation = createQuery<FeedbackInvitation>({
+/**
+ * The server's answer, stamped with when it was asked for. An answer recorded
+ * after `requestedAt` may not be reflected in it, so the card fences on this
+ * rather than on when the response landed. Answers written straight into the
+ * cache after an outcome come from after the write and carry no stamp.
+ */
+export type StampedFeedbackInvitation = FeedbackInvitation & {
+  requestedAt?: number
+}
+
+export const useFeedbackInvitation = createQuery<StampedFeedbackInvitation>({
   queryKey: ['api', 'feedback', 'invitation'],
-  fetcher: async () => (await apiClient()).getFeedbackInvitation(),
+  fetcher: async () => {
+    const requestedAt = Date.now()
+    const invitation = await (await apiClient()).getFeedbackInvitation()
+    return { ...invitation, requestedAt }
+  },
   staleTime: FEEDBACK_INVITATION_STALE_TIME_MS,
   refetchOnMount: 'always',
 })
