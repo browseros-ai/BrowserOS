@@ -42,23 +42,14 @@ class CleanExecuteTest(unittest.TestCase):
             sparkle = chromium.with_sparkle()
             winsparkle = chromium.with_winsparkle()
 
-            with mock.patch.object(clean, "run_command") as run_cmd:
+            with mock.patch.object(clean, "reset_source") as run_cmd:
                 clean.CleanModule().execute(ctx)
 
             self.assertFalse(out_dir.exists())
             self.assertFalse(sparkle.exists())
             self.assertFalse(winsparkle.exists())
 
-            git_commands = [call.args[0] for call in run_cmd.call_args_list]
-            self.assertEqual(
-                git_commands[0], ["git", "reset", "--hard", "HEAD"]
-            )
-            self.assertTrue(
-                all(cmd[0] == "git" for cmd in git_commands),
-                f"expected only git commands, got: {git_commands}",
-            )
-            for call in run_cmd.call_args_list:
-                self.assertEqual(call.kwargs["cwd"], ctx.chromium_src)
+            run_cmd.assert_called_once_with(ctx.chromium_src)
 
     def test_missing_out_dir_is_tolerated(self):
         with (
@@ -68,7 +59,7 @@ class CleanExecuteTest(unittest.TestCase):
             chromium = MockChromium(Path(chromium_tmp))
             ctx = make_context(chromium, MockBrowserOSRoot(Path(root_tmp)))
 
-            with mock.patch.object(clean, "run_command"):
+            with mock.patch.object(clean, "reset_source"):
                 clean.CleanModule().execute(ctx)
 
     def test_single_arch_clean_keeps_other_arch_output(self):
@@ -82,7 +73,7 @@ class CleanExecuteTest(unittest.TestCase):
             x64_out = chromium.with_out_dir("x64")
             arm64_out = chromium.with_out_dir("arm64")
 
-            with mock.patch.object(clean, "run_command"):
+            with mock.patch.object(clean, "reset_source"):
                 clean.CleanModule().execute(ctx)
 
             self.assertFalse(x64_out.exists())
@@ -102,7 +93,7 @@ class CleanExecuteTest(unittest.TestCase):
             x64_checkpoint.mkdir(parents=True)
             arm64_checkpoint.mkdir(parents=True)
 
-            with mock.patch.object(clean, "run_command"):
+            with mock.patch.object(clean, "reset_source"):
                 clean.CleanModule().execute(ctx)
 
             self.assertFalse(x64_checkpoint.exists())
@@ -126,9 +117,7 @@ class CleanExecuteTest(unittest.TestCase):
                     other_arm64_out = chromium.with_out_dir(
                         "arm64", product=other_product
                     )
-                    other_x64_out = chromium.with_out_dir(
-                        "x64", product=other_product
-                    )
+                    other_x64_out = chromium.with_out_dir("x64", product=other_product)
 
                     ctx = Context(
                         root_dir=root.root,
@@ -139,7 +128,7 @@ class CleanExecuteTest(unittest.TestCase):
                         product=get_product_descriptor(product),
                     )
 
-                    with mock.patch.object(clean, "run_command"):
+                    with mock.patch.object(clean, "reset_source"):
                         clean.CleanModule().execute(ctx)
 
                     self.assertFalse(arm64_out.exists())
@@ -164,7 +153,7 @@ class CleanExecuteTest(unittest.TestCase):
             for arch in ("arm64", "x64", "universal"):
                 checkpoint_dir(ctx, arch).mkdir(parents=True)
 
-            with mock.patch.object(clean, "run_command"):
+            with mock.patch.object(clean, "reset_source"):
                 clean.CleanModule().execute(ctx)
 
             for arch in ("arm64", "x64", "universal"):
@@ -192,7 +181,7 @@ class CleanPruneOrphanBinariesTest(unittest.TestCase):
     }
 
     def _execute(self, ctx):
-        with mock.patch.object(clean, "run_command"):
+        with mock.patch.object(clean, "reset_source"):
             clean.CleanModule().execute(ctx)
 
     def test_prunes_orphan_and_keeps_managed_families_and_loose_files(self):

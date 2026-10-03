@@ -146,7 +146,13 @@ def _restore_windows_tarball(tarball: Path, root: Path) -> None:
 
         # --force-local: MSYS tar reads the colon in C:\... as a remote host
         # ("Cannot connect to C: resolve failed") without it.
-        tar_cmd = [find_tool("tar"), "--force-local", "-xf", str(tar_file)]
+        tar_cmd = [
+            find_tool("tar"),
+            "--force-local",
+            "--exclude=.browseros-build-locks",
+            "-xf",
+            str(tar_file),
+        ]
         tar_env = {**os.environ, "MSYS": "winsymlinks:nativestrict"}
         _log("extract pass 1/2")
         first_rc = _run_command(tar_cmd, cwd=root, env=tar_env)
@@ -198,7 +204,7 @@ def restore(key: str, root: Path) -> bool:
     else:
         _run_pipeline(
             [find_tool("zstd"), "-d", "-c", str(tarball)],
-            [find_tool("tar"), "-xf", "-"],
+            [find_tool("tar"), "--exclude=.browseros-build-locks", "-xf", "-"],
             consumer_cwd=root,
         )
         tarball.unlink()
@@ -231,6 +237,7 @@ def save(key: str, root: Path) -> None:
             "-cf",
             "-",
             "--exclude=./src/out",
+            "--exclude=.browseros-build-locks",
             ".",
         ],
         [find_tool("zstd"), "-T0", "-3", "-f", "-o", str(tarball)],

@@ -6,8 +6,9 @@ from pathlib import Path
 from ...core.resume import remove_checkpoint_dirs
 from ...core.step import Step, ValidationError, step
 from ...core.context import Context
-from ...lib.utils import run_command, log_info, log_success, log_warning, safe_rmtree
+from ...lib.utils import log_info, log_success, log_warning, safe_rmtree
 from ..storage.download import managed_binary_families
+from ..source.provision import reset_source
 
 UNIVERSAL_INPUT_ARCHITECTURES = ("arm64", "x64")
 
@@ -23,6 +24,16 @@ class CleanModule(Step):
             raise ValidationError(f"Chromium source not found: {ctx.chromium_src}")
 
     def execute(self, ctx: Context) -> None:
+        self.clean_outputs(ctx)
+        reset_source(ctx.chromium_src)
+        self._clean_sparkle(ctx)
+
+    def clean_outputs(self, ctx: Context) -> None:
+        """Remove product outputs/resources without deleting synced toolchains.
+
+        Prepared CI handoffs call only this part before patching. The ordinary
+        clean step additionally resets source and removes Sparkle staging.
+        """
         log_info("🧹 Cleaning build artifacts...")
 
         for out_path in self._output_dirs(ctx):
@@ -33,12 +44,6 @@ class CleanModule(Step):
                 f"Cleaned build directory: {out_path.relative_to(ctx.chromium_src)}"
             )
         remove_checkpoint_dirs(ctx, self._checkpoint_architectures(ctx))
-
-        log_info("\n🔀 Resetting git branch and removing tracked files...")
-        self._git_reset(ctx)
-
-        log_info("\n🧹 Cleaning Sparkle build artifacts...")
-        self._clean_sparkle(ctx)
 
         log_info("\n🧹 Pruning orphaned resource binaries...")
         self._prune_orphan_binary_families(ctx)
@@ -108,32 +113,21 @@ class CleanModule(Step):
             safe_rmtree(winsparkle_dir)
         log_success("Cleaned Sparkle/WinSparkle build directories")
 
-    def _git_reset(self, ctx: Context) -> None:
-        run_command(["git", "reset", "--hard", "HEAD"], cwd=ctx.chromium_src)
 
-        # Reset all dirty submodules so gclient sync doesn't choke
-        log_info("🧹 Resetting dirty submodules...")
-        run_command(
-            ["git", "submodule", "foreach", "--recursive",
-             "git checkout -- . && git clean -fd"],
-            cwd=ctx.chromium_src,
-        )
-
-        log_info("🧹 Running git clean with exclusions...")
-        run_command(
-            [
-                "git",
-                "clean",
-                "-fdx",
-                "chrome/",
-                "components/",
-                "third_party/",
-                "--exclude=build_tools/",
-                "--exclude=uc_staging/",
-                "--exclude=buildtools/",
-                "--exclude=tools/",
-                "--exclude=build/",
-            ],
-            cwd=ctx.chromium_src,
-        )
-        log_success("Git reset and clean complete")
+def clean_ci_outputs(src: Path) -> None:
+    """Remove known product outputs/checkpoints from an owned CI source cache."""
+    out = src / "out"
+    if not out.is_dir():
+        return
+    for pattern in ("Default_browseros_*", "Default_browserclaw_*"):
+        for path in out.glob(pattern):
+            if path.is_symlink():
+                path.unlink()
+            elif path.is_dir():
+                safe_rmtree(path)
+    for product in ("browseros", "browserclaw"):
+        path = out / ".browseros_resume" / product
+        if path.is_symlink():
+            path.unlink()
+        elif path.exists():
+            safe_rmtree(path)

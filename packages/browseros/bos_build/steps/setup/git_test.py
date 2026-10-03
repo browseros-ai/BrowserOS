@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest import mock
 
 from .git import GitSetupModule, BROWSEROS_BRANCH
+from ..source.provision import ensure_gclient_config
 from ...core.context import Context
 from ...core.step import ValidationError
 from ...lib.testing import MockBrowserOSRoot, MockChromium, make_context
@@ -61,49 +62,21 @@ class GitSetupExecuteTest(unittest.TestCase):
         )
 
     def test_checks_out_tag_as_browseros_branch(self):
-        commands = []
-
-        def fake_run_command(cmd, cwd=None):
-            commands.append(cmd)
-
-        with (
-            mock.patch("bos_build.steps.setup.git.run_command", fake_run_command),
-            mock.patch("bos_build.steps.setup.git.IS_LINUX", return_value=False),
-            mock.patch("bos_build.steps.setup.git.IS_WINDOWS", return_value=False),
-            mock.patch.object(GitSetupModule, "_verify_tag_exists", return_value=None),
-        ):
+        with mock.patch("bos_build.steps.setup.git.prepare") as prepare:
             GitSetupModule().execute(self.ctx)
-
-        tag_ref = f"tags/{self.ctx.chromium_version}"
-        # One checkout creates the branch straight from the tag; the redundant
-        # detached-HEAD checkout that #1216 shipped (and was reverted) is gone.
-        self.assertEqual(
-            commands,
-            [
-                ["git", "fetch", "--tags", "--force"],
-                ["git", "checkout", "-B", BROWSEROS_BRANCH, tag_ref],
-                ["gclient", "sync", "-D", "--no-history", "--shallow"],
-            ],
+        prepare.assert_called_once_with(
+            self.ctx.chromium_src,
+            self.ctx.chromium_version,
+            strategy="full",
+            branch=BROWSEROS_BRANCH,
         )
 
     def test_missing_tag_stops_before_checkout(self):
-        commands = []
-
-        def fake_run_command(cmd, cwd=None):
-            commands.append(cmd)
-
-        with (
-            mock.patch("bos_build.steps.setup.git.run_command", fake_run_command),
-            mock.patch.object(
-                GitSetupModule,
-                "_verify_tag_exists",
-                side_effect=ValidationError("missing"),
-            ),
+        with mock.patch(
+            "bos_build.steps.setup.git.prepare", side_effect=ValidationError("missing")
         ):
             with self.assertRaises(ValidationError):
                 GitSetupModule().execute(self.ctx)
-
-        self.assertEqual(commands, [["git", "fetch", "--tags", "--force"]])
 
 
 class EnsureGclientTargetCpusTest(unittest.TestCase):
@@ -119,15 +92,15 @@ class EnsureGclientTargetCpusTest(unittest.TestCase):
         self.gclient = self.chromium.root / ".gclient"
         self.module = GitSetupModule()
 
-    def test_missing_gclient_is_tolerated(self):
+    def test_missing_gclient_is_bootstrapped(self):
         self.gclient.unlink()
 
-        self.module._ensure_gclient_target_cpus(self.ctx, ["x64", "arm64"])
+        ensure_gclient_config(self.ctx.chromium_src.parent, ("x64", "arm64"))
 
-        self.assertFalse(self.gclient.exists())
+        self.assertTrue(self.gclient.exists())
 
     def test_appends_target_cpus_when_absent(self):
-        self.module._ensure_gclient_target_cpus(self.ctx, ["x64", "arm64"])
+        ensure_gclient_config(self.ctx.chromium_src.parent, ("x64", "arm64"))
 
         content = self.gclient.read_text()
         self.assertIn("target_cpus = ['x64', 'arm64']", content)
@@ -136,7 +109,7 @@ class EnsureGclientTargetCpusTest(unittest.TestCase):
     def test_merges_missing_archs_into_existing_list(self):
         self.gclient.write_text(self.gclient.read_text() + "\ntarget_cpus = ['x64']\n")
 
-        self.module._ensure_gclient_target_cpus(self.ctx, ["x64", "arm64"])
+        ensure_gclient_config(self.ctx.chromium_src.parent, ("x64", "arm64"))
 
         content = self.gclient.read_text()
         self.assertIn("target_cpus = ['arm64', 'x64']", content)
@@ -148,7 +121,7 @@ class EnsureGclientTargetCpusTest(unittest.TestCase):
         )
         before = self.gclient.read_text()
 
-        self.module._ensure_gclient_target_cpus(self.ctx, ["x64", "arm64"])
+        ensure_gclient_config(self.ctx.chromium_src.parent, ("x64", "arm64"))
 
         self.assertEqual(self.gclient.read_text(), before)
 

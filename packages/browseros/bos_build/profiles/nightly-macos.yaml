@@ -1,2 +1,6 @@
+# The workflow supplies a prepared disposable checkout and prunes product
+# outputs/resources separately. Do not reset or synchronize its source again.
 preset: release
 resource_mode: published
+clean: false
+provision: none
