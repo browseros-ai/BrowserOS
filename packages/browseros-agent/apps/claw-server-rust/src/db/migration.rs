@@ -2248,18 +2248,27 @@ mod m0019_add_feedback_invite_dismissal {
             // the two answer different questions. `outcome` is the funnel's strongest claim
             // about what the reader did, where a click outranks a later dismissal; this is
             // the reader's instruction to stop showing the card, which nothing outranks.
-            manager
-                .alter_table(
-                    Table::alter()
-                        .table(FeedbackInvite::Table)
-                        .add_column_if_not_exists(
-                            ColumnDef::new(FeedbackInvite::DismissedAtMs)
-                                .big_integer()
-                                .null(),
-                        )
-                        .to_owned(),
-                )
-                .await?;
+            // SQLite does not support `ADD COLUMN IF NOT EXISTS`. Guard with
+            // `PRAGMA table_info` so a lost migration row remains recoverable
+            // when the column already exists (for example after a pre-flight
+            // doctor prunes a newer migration ledger entry).
+            if !manager
+                .has_column("feedback_invite", "dismissed_at_ms")
+                .await?
+            {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(FeedbackInvite::Table)
+                            .add_column(
+                                ColumnDef::new(FeedbackInvite::DismissedAtMs)
+                                    .big_integer()
+                                    .null(),
+                            )
+                            .to_owned(),
+                    )
+                    .await?;
+            }
             // Installations already recorded as dismissed asked to stop under the previous
             // rule. Carry that across rather than showing them the card again.
             //
