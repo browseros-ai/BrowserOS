@@ -2358,7 +2358,9 @@ esac
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertEqual(self._outputs()["base_head"], "b" * 40)
-        self.assertIn("checkout --detach refs/tags/1.2.3.4", self.git_log.read_text())
+        self.assertIn(
+            "checkout --force --detach refs/tags/1.2.3.4", self.git_log.read_text()
+        )
         self.assertTrue(self._workspace_root().exists())
 
     def test_setup_repairs_base_with_tracked_changes(self):
