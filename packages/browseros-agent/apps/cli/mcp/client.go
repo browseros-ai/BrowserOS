@@ -146,9 +146,13 @@ func (c *Client) Health() (map[string]any, error) {
 	return data, err
 }
 
-// Status checks the /status endpoint (REST, not MCP).
+// Status checks BrowserOS-compatible REST status endpoints.
 func (c *Client) Status() (map[string]any, error) {
-	return c.restGET("/status")
+	data, err := c.restGET("/status")
+	if isHTTPStatus(err, http.StatusNotFound) {
+		return c.Health()
+	}
+	return data, err
 }
 
 func (c *Client) restGET(path string) (map[string]any, error) {
