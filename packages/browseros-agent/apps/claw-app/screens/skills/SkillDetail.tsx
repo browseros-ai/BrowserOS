@@ -39,7 +39,7 @@ function agentLabel(id: string): string {
   return AGENT_LABELS[id] ?? id
 }
 
-/** Shows the task's SKILL.md, token savings, linked coding agents, and run history. */
+/** Shows the skill's SKILL.md, token savings, linked coding agents, and run history. */
 export function SkillDetail() {
   const { detail, isLoading, isError } = useSkillDetailData()
   const navigate = useNavigate()
@@ -52,12 +52,12 @@ export function SkillDetail() {
         className="inline-flex w-fit items-center gap-1.5 font-medium text-[13px] text-ink-2 transition-colors hover:text-ink"
       >
         <ArrowLeft className="size-3.5" />
-        Tasks
+        Skills
       </button>
 
       {isError ? (
         <Notice>
-          Could not load this task. Check that BrowserOS neo is running and try
+          Could not load this skill. Check that BrowserOS neo is running and try
           again.
         </Notice>
       ) : isLoading || !detail ? (
@@ -209,7 +209,7 @@ function RunHistory({ runs }: { runs: SkillRun[] }) {
       <h2 className="font-semibold text-ink text-sm">Run history</h2>
       {runs.length === 0 ? (
         <div className="rounded-9 border border-ledger-border bg-card px-6 py-8 text-center text-ink-2 text-sm">
-          This task has not run yet.
+          This skill has not run yet.
         </div>
       ) : (
         <div className="overflow-clip rounded-9 border border-ledger-border bg-card">

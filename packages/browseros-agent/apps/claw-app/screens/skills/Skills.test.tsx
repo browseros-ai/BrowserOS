@@ -1,5 +1,5 @@
 /**
- * Static-markup checks for the Tasks list screen. Stubs the data hook so the
+ * Static-markup checks for the Skills list screen. Stubs the data hook so the
  * test does not need a running backend.
  */
 
@@ -56,15 +56,15 @@ const sampleSkill: Skill = {
   },
 }
 
-describe('Tasks list screen', () => {
+describe('Skills list screen', () => {
   it('renders the header', () => {
     dataOverride = { ...baseData }
-    expect(renderApp()).toContain('Tasks')
+    expect(renderApp()).toContain('Skills')
   })
 
-  it('shows the empty state when there are no tasks', () => {
+  it('shows the empty state when there are no skills', () => {
     dataOverride = { ...baseData }
-    expect(renderApp()).toContain('No tasks yet')
+    expect(renderApp()).toContain('No skills yet')
   })
 
   it('shows skeleton loading rows while the first page is pending', () => {
