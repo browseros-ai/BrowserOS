@@ -135,6 +135,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $receipt = Join-Path $env:RUNNER_TEMP 'sdk-smoke-receipt.txt'
+          $env:TEMP = $env:RUNNER_TEMP
+          $env:TMP = $env:RUNNER_TEMP
           Start-Transcript -Path $receipt
           try {
             uv run --project packages/browseros browseros build --modules windows_sdk --chromium-src "$env:SDK_SMOKE_CHROMIUM" --build-type release --arch x64 --product browserclaw
@@ -156,5 +158,4 @@ jobs:
           name: windows-sdk-smoke-${{ inputs.expected-sha }}
           path: |
             ${{ runner.temp }}/sdk-smoke-receipt.txt
-            ${{ runner.temp }}/../Temp/browseros-windows-sdk-*/**/*.log
-            C:/Users/*/AppData/Local/Temp/browseros-windows-sdk-*/*.log
+            ${{ runner.temp }}/browseros-windows-sdk-*/*.log

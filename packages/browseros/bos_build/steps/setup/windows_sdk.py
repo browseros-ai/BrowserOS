@@ -7,6 +7,7 @@ install Microsoft's SDK, then prove Chromium can load both x86 and x64 tools.
 
 import ast
 import ctypes
+import json
 import os
 import re
 import shutil
@@ -39,6 +40,7 @@ class _Requirement:
 
     directory: str
     package: str
+    debugger: str
 
 
 def _requirement(ctx: Context) -> _Requirement:
@@ -85,7 +87,12 @@ def _requirement(ctx: Context) -> _Requirement:
             "Cannot reconcile the Windows SDK package in pinned Chromium docs "
             "with SDK_VERSION; update the SDK requirement reader for this pin."
         )
-    return _Requirement(versions[0], match[1])
+    debugger = re.search(r"SDK Debugging Tools\s+(" + _VERSION + r")", instructions)
+    if not debugger:
+        raise ValidationError(
+            "Cannot read the debugging tools requirement from pinned Chromium docs"
+        )
+    return _Requirement(versions[0], match[1], debugger[1])
 
 
 def _sdk_root() -> Path:
@@ -119,7 +126,7 @@ def _required_files(root: Path, version: str, target: str) -> list[Path]:
         )
         files.extend(
             root / "bin" / version / arch / tool
-            for tool in ("rc.exe", "mt.exe", "midl.exe")
+            for tool in ("rc.exe", "mt.exe", "midl.exe", "d3dcompiler_47.dll")
         )
     # Cross-compiling ARM64 still uses x64-hosted tools. Keep that existing
     # local flow checkable without adding ARM provisioning to the CI image.
@@ -177,6 +184,28 @@ def _missing(root: Path, requirement: _Requirement, target: str) -> list[str]:
         missing.append(
             f"SDK package >= {requirement.package} in the {requirement.directory} family"
         )
+    # Debuggers live outside the versioned SDK tree. A new SDK registration
+    # alone cannot prove an older separately installed dbghelp supports large PDBs.
+    for arch in dict.fromkeys(("x86", "x64", target)):
+        dll = root / "Debuggers" / arch / "dbghelp.dll"
+        if dll.is_file():
+            version = json.loads(
+                _capture(
+                    [
+                        "powershell.exe",
+                        "-NoProfile",
+                        "-NonInteractive",
+                        "-Command",
+                        "$v = (Get-Item -LiteralPath $env:BROWSEROS_SDK_FILE).VersionInfo; "
+                        "@($v.FileMajorPart, $v.FileMinorPart, $v.FileBuildPart, $v.FilePrivatePart) | ConvertTo-Json -Compress",
+                    ],
+                    root,
+                    dict(os.environ, BROWSEROS_SDK_FILE=str(dll)),
+                )
+            )
+            log_info(f"Debugger {arch} file version: {'.'.join(map(str, version))}")
+            if tuple(version) < tuple(map(int, requirement.debugger.split("."))):
+                missing.append(f"{dll} must be >= {requirement.debugger}")
     return missing
 
 
@@ -269,10 +298,11 @@ def _install(requirement: _Requirement, root: Path) -> None:
         # validation before executing its bootstrapper with machine privileges.
         _capture(
             [
-                "powershell.exe",
+                shutil.which("pwsh") or "powershell.exe",
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
+                "$ErrorActionPreference = 'Stop'; "
                 "$s = Get-AuthenticodeSignature -LiteralPath $env:BROWSEROS_SDK_INSTALLER; "
                 "if ($s.Status -ne 'Valid' -or $s.SignerCertificate.Subject -notmatch '(^|, )CN=Microsoft Corporation(,|$)') "
                 "{ throw 'Windows SDK installer is not validly signed by Microsoft Corporation' }; "
@@ -324,6 +354,11 @@ def _install(requirement: _Requirement, root: Path) -> None:
 
 
 def _capture(command: list[str], cwd: Path, env: dict[str, str] | None = None) -> str:
+    if Path(command[0]).stem.lower() in ("powershell", "pwsh"):
+        env = dict(os.environ if env is None else env)
+        # GitHub's pwsh shell exports its module path. A different PowerShell
+        # edition must rebuild that path or native security cmdlets can fail.
+        env.pop("PSModulePath", None)
     result = subprocess.run(
         command,
         cwd=cwd,
