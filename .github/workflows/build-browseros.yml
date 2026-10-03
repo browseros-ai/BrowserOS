@@ -139,7 +139,7 @@ jobs:
       PYTHONUTF8: "1"
       # This ephemeral CI host may install the SDK required by the selected
       # Chromium pin. Local builds only validate; the module never elevates.
-      BROWSEROS_INSTALL_WINDOWS_SDK: ${{ runner.os == 'Windows' && '1' || '0' }}
+      BROWSEROS_INSTALL_WINDOWS_SDK: ${{ inputs.platform == 'windows' && '1' || '0' }}
     steps:
       - name: Validate inputs
         env:

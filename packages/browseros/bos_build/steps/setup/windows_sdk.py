@@ -100,7 +100,7 @@ def _sdk_root() -> Path:
     )
 
 
-def _required_files(root: Path, version: str) -> list[Path]:
+def _required_files(root: Path, version: str, target: str) -> list[Path]:
     headers = [
         "um/windows.h",
         "shared/sdkddkver.h",
@@ -120,6 +120,16 @@ def _required_files(root: Path, version: str) -> list[Path]:
         files.extend(
             root / "bin" / version / arch / tool
             for tool in ("rc.exe", "mt.exe", "midl.exe")
+        )
+    # Cross-compiling ARM64 still uses x64-hosted tools. Keep that existing
+    # local flow checkable without adding ARM provisioning to the CI image.
+    if target == "arm64":
+        files.extend(
+            [
+                root / "Lib" / version / "um" / "arm64" / "kernel32.lib",
+                root / "Lib" / version / "ucrt" / "arm64" / "ucrt.lib",
+                root / "Debuggers" / "arm64" / "dbghelp.dll",
+            ]
         )
     return files
 
@@ -151,10 +161,10 @@ def _installed_packages() -> list[str]:
     return sorted(versions)
 
 
-def _missing(root: Path, requirement: _Requirement) -> list[str]:
+def _missing(root: Path, requirement: _Requirement, target: str) -> list[str]:
     missing = [
         str(p)
-        for p in _required_files(root, requirement.directory)
+        for p in _required_files(root, requirement.directory, target)
         if not p.is_file() or p.stat().st_size == 0
     ]
     installed = _installed_packages()
@@ -357,7 +367,7 @@ def _verify_toolchain(ctx: Context, root: Path, requirement: _Requirement) -> No
         name in values for name in ("vs_path", "sdk_path", "runtime_dirs")
     ):
         raise ValidationError(f"Unexpected Chromium toolchain selection:\n{output}")
-    for arch in ("x86", "x64"):
+    for arch in dict.fromkeys(("x86", "x64", ctx.architecture)):
         result = _capture(
             [
                 sys.executable,
@@ -388,10 +398,8 @@ class WindowsSDKModule(Step):
     description = "Verify the pinned Windows SDK; install only on opted-in managed CI"
 
     def validate(self, ctx: Context) -> None:
-        if sys.platform != "win32" or ctx.architecture != "x64":
-            raise ValidationError(
-                "Host Windows SDK setup currently supports Windows x64 builds only"
-            )
+        if sys.platform != "win32":
+            raise ValidationError("Host Windows SDK setup requires Windows")
 
     def execute(self, ctx: Context) -> None:
         requirement = _requirement(ctx)
@@ -399,11 +407,18 @@ class WindowsSDKModule(Step):
         log_info(
             f"Chromium {ctx.chromium_version}: Windows SDK package {requirement.package}, directory {requirement.directory}, root {root}"
         )
-        missing = _missing(root, requirement)
+        missing = _missing(root, requirement, ctx.architecture)
         if missing:
             log_warning("Missing Windows SDK prerequisites:\n" + "\n".join(missing))
+            if ctx.architecture != "x64":
+                raise ValidationError(
+                    f"Install SDK {requirement.package} with Desktop C++ and Debugging "
+                    f"Tools for {ctx.architecture}, then retry. Automatic CI SDK "
+                    "installation is scoped to x64; existing ARM64 installations "
+                    "remain supported."
+                )
             _install(requirement, root)
-            missing = _missing(root, requirement)
+            missing = _missing(root, requirement, ctx.architecture)
             if missing:
                 raise ValidationError(
                     "SDK installer completed but required files/package are still missing:\n"
@@ -411,7 +426,7 @@ class WindowsSDKModule(Step):
                 )
         else:
             log_info("Windows SDK already complete; skipping installer")
-        for path in _required_files(root, requirement.directory):
+        for path in _required_files(root, requirement.directory, ctx.architecture):
             log_info(f"Verified SDK file: {path} ({path.stat().st_size} bytes)")
         _verify_toolchain(ctx, root, requirement)
         log_success("Pinned Windows SDK and Chromium x86/x64 environments verified")

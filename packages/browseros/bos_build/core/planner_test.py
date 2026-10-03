@@ -54,6 +54,7 @@ class ReleaseGoldenTest(unittest.TestCase):
             [
                 "clean",
                 "git_setup",
+                "windows_sdk",
                 "winsparkle_setup",
                 "download_resources",
                 "resources",
@@ -185,6 +186,7 @@ class CiGoldenTest(unittest.TestCase):
         self.assertEqual(
             plan(CI, "x64", "windows"),
             [
+                "windows_sdk",
                 "winsparkle_setup",
                 "download_resources",
                 "resources",
@@ -248,6 +250,7 @@ class DebugGoldenTest(unittest.TestCase):
             plan(Switches(preset="debug"), "x64", "windows"),
             [
                 "git_setup",
+                "windows_sdk",
                 "winsparkle_setup",
                 "download_resources",
                 "resources",
