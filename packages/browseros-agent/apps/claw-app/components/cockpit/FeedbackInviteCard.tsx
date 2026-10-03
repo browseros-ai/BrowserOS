@@ -148,7 +148,9 @@ export function FeedbackInviteCard() {
   // written straight into the cache rather than invalidated for a refetch that
   // would ask the same question again. Booking and declining both put the card
   // away; the server brings it back after a few days, because opening the
-  // booking page is not the same as booking.
+  // booking page is not the same as booking. Once the answer is saved the card
+  // may appear again on this mount, so a long-open cockpit picks up the
+  // server's next eligible answer instead of waiting for a reload.
   const answer = (outcome: 'clicked' | 'dismissed') => {
     track(
       outcome === 'clicked'
@@ -162,6 +164,7 @@ export function FeedbackInviteCard() {
         onSuccess: (settled) => {
           queryClient.setQueryData(useFeedbackInvitation.getKey(), settled)
           rememberAnswer()
+          appeared.current = false
         },
         onError: () => {
           toast.error(

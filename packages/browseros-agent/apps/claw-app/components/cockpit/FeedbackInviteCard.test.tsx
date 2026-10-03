@@ -361,6 +361,25 @@ describe('FeedbackInviteCard', () => {
     expect(state.recorded).toEqual([])
   })
 
+  /// The cockpit can stay open for days. Once the server offers the card again
+  /// after its snooze, the same mount shows it without a reload.
+  it('comes back on the same mount when a newer server answer is eligible', async () => {
+    state.invitation = eligible
+    await render()
+    await click(buttonWithText('No thanks'))
+    expect(container.innerHTML).toBe('')
+
+    state.recorded = []
+    state.invitationUpdatedAt =
+      Number(storage['feedbackInviteDismissedAt:v1']) + 1
+    await render()
+
+    expect(container.textContent).toContain(
+      "You're one of our most active users",
+    )
+    expect(state.recorded).toEqual(['shown'])
+  })
+
   it('does not persist a browser dismissal when the server write fails', async () => {
     state.invitation = eligible
     state.recordSucceeds = false
