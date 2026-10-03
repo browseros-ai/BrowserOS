@@ -274,7 +274,13 @@ def _install(requirement: _Requirement, root: Path) -> None:
         )
     # Logs survive failure; the downloaded executable is removed after use. A
     # failed attempt never writes a readiness marker: every retry inspects files.
-    directory = Path(tempfile.mkdtemp(prefix="browseros-windows-sdk-"))
+    # Production CI uploads this narrow glob even when the build fails, before
+    # its ephemeral host disappears. Keep each attempt isolated within it.
+    directory = Path(
+        tempfile.mkdtemp(
+            prefix="browseros-windows-sdk-", dir=os.environ.get("RUNNER_TEMP")
+        )
+    )
     log_info(f"Windows SDK installer logs: {directory}")
     catalog = directory / "downloads.html"
     _download(_DOWNLOADS, catalog)
