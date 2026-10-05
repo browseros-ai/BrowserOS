@@ -5,53 +5,103 @@
 //! acts through the ordinary act tool, so a run uses exactly the same code
 //! paths an agent would have used by hand.
 
+use crate::AppState;
+use crate::api::mcp::dispatch::{ToolCall, ToolIdentity, dispatch_tool_call};
+use crate::ids::SessionId;
 use browseros_core::{
     BrowserSession, PageId,
     snapshot::{SnapshotMode, SnapshotOptions},
 };
-use browseros_mcp::{
-    BrowserToolDefaults, BrowserToolOptions, OutputFileAccess, ToolCtx, ToolDef, execute_tool,
-};
+use browseros_mcp::{OutputFileAccess, ToolDef};
 use browseros_policy::action::{ActionSpace, Element, annotate_from_tree};
 use browseros_policy::drive::{Driver, Outcome, Status, TrailEntry};
 use browseros_policy::{Observation, Operation};
+use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
-use std::sync::{Arc, LazyLock};
+use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
 /// Observes and acts on one page for the duration of a run.
+///
+/// Actions go through the ordinary dispatch pipeline rather than straight to
+/// the tool, so a run's individual steps claim pages, record tab activity and
+/// produce an ownership notice exactly as the same action made by hand would.
+/// Calling the tool directly made a multi-step run less visible than the steps
+/// it replaced.
 pub struct PageDriver {
     browser: Arc<BrowserSession>,
     page: u32,
     output_files: OutputFileAccess,
     cancel: CancellationToken,
+    catalog: Arc<Vec<ToolDef>>,
+    act_index: usize,
+    session_id: SessionId,
+    identity: ToolIdentity,
+    default_tab_group_id: Option<String>,
+    state: AppState,
+    /// Notices the effects attached to an action, such as a page belonging to
+    /// someone else. Collected so the caller sees them, since a run makes these
+    /// actions on its behalf.
+    notices: Mutex<Vec<String>>,
 }
 
 impl PageDriver {
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "a dispatch needs exactly this context; bundling it would only move the list"
+    )]
     #[must_use]
     pub fn new(
         browser: Arc<BrowserSession>,
         page: u32,
         output_files: OutputFileAccess,
         cancel: CancellationToken,
-    ) -> Self {
-        Self {
+        catalog: Arc<Vec<ToolDef>>,
+        session_id: SessionId,
+        identity: ToolIdentity,
+        default_tab_group_id: Option<String>,
+        state: AppState,
+    ) -> Option<Self> {
+        let act_index = catalog.iter().position(|tool| tool.name == "act")?;
+        Some(Self {
             browser,
             page,
             output_files,
             cancel,
-        }
+            catalog,
+            act_index,
+            session_id,
+            identity,
+            default_tab_group_id,
+            state,
+            notices: Mutex::new(Vec::new()),
+        })
     }
 
-    fn ctx(&self) -> ToolCtx {
-        ToolCtx::new(BrowserToolOptions {
-            session: self.browser.clone(),
-            defaults: BrowserToolDefaults::default(),
-            cancel: self.cancel.child_token(),
-            output_files: self.output_files.clone(),
-            inner_call_hook: None,
-            preloaded_helpers: Vec::new(),
-        })
+    /// Anything the effects had to say about the pages this run touched.
+    #[must_use]
+    pub fn notices(&self) -> Vec<String> {
+        self.notices
+            .lock()
+            .map(|notices| notices.clone())
+            .unwrap_or_default()
+    }
+
+    fn call_for(&self, args: Value) -> ToolCall {
+        ToolCall::new(
+            self.catalog.clone(),
+            self.act_index,
+            args,
+            self.session_id.clone(),
+            Some(self.identity.clone()),
+            Some(self.browser.clone()),
+            self.cancel.child_token(),
+            self.cancel.clone(),
+            self.cancel.child_token(),
+            self.default_tab_group_id.clone(),
+            self.state.clone(),
+            self.output_files.clone(),
+        )
     }
 }
 
@@ -128,12 +178,20 @@ impl Driver for PageDriver {
             other => return Err(format!("{} is not executed here", other.as_str())),
         };
 
-        let ctx = self.ctx();
-        let result = execute_tool(cached_act_tool(), args, &ctx)
+        let result = dispatch_tool_call(self.call_for(args))
             .await
             .map_err(|error| error.to_string())?;
-        if result.is_error {
-            return Err(first_text(&result));
+        if result.is_error == Some(true) {
+            return Err(first_text(&result.content));
+        }
+        // An ownership notice is about a page the caller now has, so it travels
+        // out with the result rather than being dropped here.
+        for notice in notices_in(&result.content) {
+            if let Ok(mut collected) = self.notices.lock()
+                && !collected.contains(&notice)
+            {
+                collected.push(notice);
+            }
         }
         Ok(changed_from(&result))
     }
@@ -148,7 +206,7 @@ const WAIT_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
 /// unchanged diff says "no change since last snapshot", so a test for "no
 /// changes" never matched and every no-op reported a change. That went into
 /// the trail and into the history later decisions are shown.
-fn changed_from(result: &browseros_mcp::ToolResult) -> bool {
+fn changed_from(result: &rmcp::model::CallToolResult) -> bool {
     result
         .structured_content
         .as_ref()
@@ -159,25 +217,30 @@ fn changed_from(result: &browseros_mcp::ToolResult) -> bool {
         .unwrap_or(false)
 }
 
-fn cached_act_tool() -> &'static ToolDef {
-    static ACT_TOOL: LazyLock<ToolDef> = LazyLock::new(|| {
-        browseros_mcp::catalog()
-            .into_iter()
-            .find(|tool| tool.name == "act")
-            .unwrap_or_else(|| panic!("act tool missing from catalog"))
-    });
-    &ACT_TOOL
-}
-
-fn first_text(result: &browseros_mcp::ToolResult) -> String {
-    result
-        .content
+fn first_text(content: &[ContentBlock]) -> String {
+    content
         .iter()
         .find_map(|block| match block {
             rmcp::model::ContentBlock::Text(text) => Some(text.text.clone()),
             _ => None,
         })
         .unwrap_or_default()
+}
+
+/// Notices an effect appended to an action's result.
+///
+/// The effects add these as extra text blocks after the tool's own output, so
+/// anything that reads as a notice is collected and the action's own readback
+/// is left alone.
+fn notices_in(content: &[ContentBlock]) -> Vec<String> {
+    content
+        .iter()
+        .filter_map(|block| match block {
+            ContentBlock::Text(text) => Some(text.text.clone()),
+            _ => None,
+        })
+        .filter(|text| text.starts_with("Note:") || text.starts_with("note:"))
+        .collect()
 }
 
 /// The page title, read off the rendered tree's root line when it has one.
@@ -194,7 +257,7 @@ fn title_of(tree: &str) -> String {
 /// proof, so the caller gets the final url, what ran, and the confidence behind
 /// each step, and verifies in one turn of its own.
 #[must_use]
-pub fn render(goal: &str, outcome: &Outcome) -> (String, Value) {
+pub fn render(goal: &str, outcome: &Outcome, notices: &[String]) -> (String, Value) {
     let mut lines = Vec::new();
     lines.push(match &outcome.status {
         Status::Satisfied => {
@@ -235,6 +298,14 @@ pub fn render(goal: &str, outcome: &Outcome) -> (String, Value) {
         outcome.input_tokens,
         outcome.output_tokens,
     ));
+    // Anything the effects said about the pages this run touched. The caller
+    // owns those pages now, so these belong in its result.
+    if !notices.is_empty() {
+        lines.push("about the pages used:".to_string());
+        for notice in notices {
+            lines.push(format!("  {notice}"));
+        }
+    }
     if !outcome.trail.is_empty() {
         lines.push("what ran:".to_string());
         for (index, entry) in outcome.trail.iter().enumerate() {
@@ -254,6 +325,7 @@ pub fn render(goal: &str, outcome: &Outcome) -> (String, Value) {
             Status::NeedsText { reference, field } => json!({ "ref": reference, "field": field }),
             _ => Value::Null,
         },
+        "notices": notices,
         "trail": outcome.trail.iter().map(|entry| json!({
             "operation": entry.operation.as_str(),
             "target": entry.target,
@@ -338,8 +410,11 @@ mod tests {
     /// evidence and the caller is the one that can verify.
     #[test]
     fn a_satisfied_run_tells_the_caller_to_verify() {
-        let (text, structured) =
-            render("Find a flight.", &outcome(Status::Satisfied, vec![entry()]));
+        let (text, structured) = render(
+            "Find a flight.",
+            &outcome(Status::Satisfied, vec![entry()]),
+            &[],
+        );
         assert!(text.contains("Verify it yourself"), "{text}");
         assert_eq!(structured["status"], json!("satisfied"));
         assert_eq!(structured["url"], json!("https://example.com/results"));
@@ -362,7 +437,7 @@ mod tests {
             Status::Failed("provider returned 503".to_string()),
         ];
         for status in endings {
-            let (text, _) = render("Find a flight.", &outcome(status.clone(), Vec::new()));
+            let (text, _) = render("Find a flight.", &outcome(status.clone(), Vec::new()), &[]);
             assert!(
                 text.contains("page tools") || text.contains("browse again"),
                 "{status:?} did not name a way forward: {text}"
@@ -374,7 +449,11 @@ mod tests {
     /// carry on, because the session it would carry on in has been cancelled.
     #[test]
     fn an_operator_stop_does_not_invite_the_caller_to_continue() {
-        let (text, structured) = render("Find a flight.", &outcome(Status::Stopped, vec![entry()]));
+        let (text, structured) = render(
+            "Find a flight.",
+            &outcome(Status::Stopped, vec![entry()]),
+            &[],
+        );
         assert_eq!(structured["status"], json!("stopped"));
         assert!(text.contains("Stopped by the operator"), "{text}");
         assert!(
@@ -394,6 +473,7 @@ mod tests {
                 },
                 Vec::new(),
             ),
+            &[],
         );
         assert!(text.contains("[e4] textbox Email"), "{text}");
         assert!(text.contains("kind=\"fill\""), "{text}");
@@ -402,7 +482,7 @@ mod tests {
 
     #[test]
     fn the_trail_carries_the_cost_and_the_confidence() {
-        let (text, structured) = render("Anything.", &outcome(Status::Stalled, vec![entry()]));
+        let (text, structured) = render("Anything.", &outcome(Status::Stalled, vec![entry()]), &[]);
         assert!(text.contains("3200 input"), "{text}");
         assert!(text.contains("confidence 0.82"), "{text}");
         assert_eq!(structured["trail"][0]["targetConfidence"], json!(0.91));
@@ -417,18 +497,64 @@ mod tests {
         let unchanged = browseros_mcp::ToolResult::text(
             "no change since last snapshot",
             Some(json!({ "changed": false })),
-        );
+        )
+        .into_call_tool_result();
         assert!(!changed_from(&unchanged));
 
         let changed = browseros_mcp::ToolResult::text(
             "2 added, 1 removed",
             Some(json!({ "changed": true, "added": 2, "removed": 1 })),
-        );
+        )
+        .into_call_tool_result();
         assert!(changed_from(&changed));
 
         // Nothing to go on is reported as no change rather than guessed.
-        let silent = browseros_mcp::ToolResult::text("done", None);
+        let silent = browseros_mcp::ToolResult::text("done", None).into_call_tool_result();
         assert!(!changed_from(&silent));
+    }
+
+    /// An action on a page the caller does not own produces an ownership notice,
+    /// and a run makes that action on the caller's behalf, so the notice has to
+    /// travel out with the run's result rather than being dropped.
+    #[test]
+    fn notices_from_the_actions_reach_the_caller() {
+        let notices = vec![
+            "Note: page 7 belongs to another agent (Cowork).".to_string(),
+            "note: tab group abc is not open.".to_string(),
+        ];
+        let (text, structured) = render(
+            "Find a flight.",
+            &outcome(Status::Stalled, vec![entry()]),
+            &notices,
+        );
+        assert!(text.contains("about the pages used"), "{text}");
+        assert!(text.contains("belongs to another agent"), "{text}");
+        assert_eq!(structured["notices"], json!(notices));
+
+        // Nothing to say means nothing is said.
+        let (quiet, _) = render(
+            "Find a flight.",
+            &outcome(Status::Stalled, vec![entry()]),
+            &[],
+        );
+        assert!(!quiet.contains("about the pages used"), "{quiet}");
+    }
+
+    /// Only notices are collected, not the action's own readback.
+    #[test]
+    fn only_notice_blocks_are_collected() {
+        let content = vec![
+            ContentBlock::text("3 added, 1 removed"),
+            ContentBlock::text("Note: page 7 belongs to another agent (Cowork)."),
+            ContentBlock::text("note: tab group abc is not open."),
+        ];
+        assert_eq!(
+            notices_in(&content),
+            vec![
+                "Note: page 7 belongs to another agent (Cowork).".to_string(),
+                "note: tab group abc is not open.".to_string()
+            ]
+        );
     }
 
     #[test]

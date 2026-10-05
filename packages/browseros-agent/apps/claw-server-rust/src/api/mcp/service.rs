@@ -370,7 +370,7 @@ impl ClawMcpService {
             cancel,
             dispatch_cancel_for_run,
         );
-        let result = self.browse_outcome(raw_args, run_cancel).await;
+        let result = self.browse_outcome(started, raw_args, run_cancel).await;
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
             LocalToolDispatch {
@@ -392,7 +392,12 @@ impl ClawMcpService {
             .into_call_tool_result()
     }
 
-    async fn browse_outcome(&self, raw_args: &Value, cancel: CancellationToken) -> ToolResult {
+    async fn browse_outcome(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        cancel: CancellationToken,
+    ) -> ToolResult {
         let Some(page) = raw_args
             .get("page")
             .and_then(Value::as_u64)
@@ -431,21 +436,44 @@ impl ClawMcpService {
             max_duration: std::time::Duration::from_secs(u64::from(settings.budgets.max_seconds)),
         };
 
+        // The same identity and group a catalog dispatch would carry, so the
+        // run's pages are the caller's own.
+        let ownership_key = started.session.convo_id().clone();
+        let default_tab_group_id = self
+            .state
+            .sessions
+            .ownership()
+            .tab_group_ref(&ownership_key)
+            .await;
+        let identity = ToolIdentity {
+            session: started.session.clone(),
+            agent: started.session.agent().clone(),
+            ownership_key,
+            agent_label: started.agent_label.clone(),
+        };
+
         let browser_session = self.state.browser.session().await;
         let Some(browser_session) = browser_session else {
             return ToolResult::error(
                 "browse: the browser is not connected, so nothing was run. Start BrowserOS neo and check the cockpit.",
             );
         };
-        let driver = crate::api::mcp::browse::PageDriver::new(
+        let Some(driver) = crate::api::mcp::browse::PageDriver::new(
             browser_session,
             page,
             self.output_files.clone(),
             cancel,
-        );
+            self.catalog.clone(),
+            identity.session.id().clone(),
+            identity,
+            default_tab_group_id,
+            self.state.clone(),
+        ) else {
+            return ToolResult::error("browse: the act tool is missing from the catalog.");
+        };
         let decider = browseros_policy::Decider::new(credential.expose());
         let outcome = browseros_policy::drive(&decider, &driver, goal, budget).await;
-        let (text, structured) = crate::api::mcp::browse::render(goal, &outcome);
+        let (text, structured) = crate::api::mcp::browse::render(goal, &outcome, &driver.notices());
         ToolResult::text(text, Some(structured))
     }
 
