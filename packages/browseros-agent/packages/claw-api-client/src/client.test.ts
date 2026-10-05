@@ -285,7 +285,7 @@ describe('ClawApiClient', () => {
     expect(clone).not.toHaveBeenCalled()
   })
 
-  it('exposes all 18 facade operations', () => {
+  it('exposes all 23 facade operations', () => {
     const client = new ClawApiClient(baseUrl, {
       fetch: async () => Response.json({}),
     })
@@ -308,9 +308,14 @@ describe('ClawApiClient', () => {
       'listConnections',
       'connectHarness',
       'disconnectHarness',
+      'getJevMode',
+      'updateJevCredential',
+      'updateJevMode',
+      'updateJevBudgets',
+      'deleteJevCredential',
     ] as const
 
-    expect(methods).toHaveLength(18)
+    expect(methods).toHaveLength(23)
     for (const method of methods) expect(client[method]).toBeFunction()
   })
 })
