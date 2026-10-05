@@ -70,6 +70,17 @@ pub const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browse
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Your own agent name, e.g. \"claude-code\", \"codex\", \"cursor\". Send it on every call. It names this browser session, titles and colours the tab group your tabs live in, and is how the operator filters your runs in the audit log. 2026-07-28 removed the initialize handshake, so this argument is the only way the server can learn who you are.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
+const BROWSE_TOOL_NAME: &str = "browse";
+const BROWSE_DESCRIPTION: &str = "\
+Pursue one goal on a page you already own, deciding each step here instead of \
+round-tripping every page back to you. Pass the page id from tabs or navigate, \
+and a goal stated as the whole outcome you want. \
+Returns what ran, where it got to, and the confidence behind each step. \
+A finished run is not proof: verify the outcome yourself from the result. \
+It stops and hands back whenever it needs a value to type, runs out of steps, \
+stops making progress, or cannot proceed, and the page is left exactly where it \
+stopped so you can continue with snapshot and act. \
+Prefer the granular tools for a single step; this is for a multi-step goal.";
 const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
@@ -88,6 +99,7 @@ pub struct ClawMcpService {
     name_session_tool: Tool,
     save_skill_tool: Tool,
     mark_skill_run_tool: Tool,
+    browse_tool: Tool,
     request_help_tool: Tool,
     await_help_tool: Tool,
     output_files: OutputFileAccess,
@@ -125,6 +137,7 @@ impl ClawMcpService {
             name_session_tool: name_session_tool(),
             save_skill_tool: save_skill_tool(),
             mark_skill_run_tool: mark_skill_run_tool(),
+            browse_tool: browse_tool(),
             request_help_tool: request_help_tool(),
             await_help_tool: await_help_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
@@ -161,6 +174,13 @@ impl ClawMcpService {
         tools.push(decorate(self.mark_skill_run_tool.clone()));
         tools.push(decorate(self.request_help_tool.clone()));
         tools.push(decorate(self.await_help_tool.clone()));
+        // Advertised only when it can actually run. A tool that is always
+        // listed and always fails teaches every agent to try it once and waste
+        // a call, so a connection without a credential sees the surface it has
+        // always seen.
+        if self.state.jev_settings.is_active() {
+            tools.push(decorate(self.browse_tool.clone()));
+        }
         tools
     }
 
@@ -315,6 +335,109 @@ impl ClawMcpService {
         finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
             .await
             .into_call_tool_result()
+    }
+
+    /// Pursues a goal on a page the caller already owns.
+    ///
+    /// The run is the caller's own session, so the pages it touches are already
+    /// theirs and a handback needs no transfer. Every ending carries the trail,
+    /// and every ending that is not success names the way to continue, because
+    /// the granular tools are still there.
+    async fn call_browse(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        let dispatch_id = DispatchId::new();
+        let dispatch_cancel = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_cancel)
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserOS neo session is no longer live",
+            )]);
+        }
+        let started_at = StdInstant::now();
+        let result = self.browse_outcome(raw_args, cancel).await;
+        if let Err(error) = record_local_tool_dispatch(
+            &self.state,
+            LocalToolDispatch {
+                session: &started.session,
+                agent_label: &started.agent_label,
+                tool_name: BROWSE_TOOL_NAME,
+                raw_args,
+                result: &result,
+                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                dispatch_id: dispatch_id.clone(),
+            },
+        )
+        .await
+        {
+            warn!(error = %error, "local tool audit submission failed");
+        }
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    async fn browse_outcome(&self, raw_args: &Value, cancel: CancellationToken) -> ToolResult {
+        let Some(page) = raw_args
+            .get("page")
+            .and_then(Value::as_u64)
+            .and_then(|page| u32::try_from(page).ok())
+        else {
+            return ToolResult::error("browse: page is required, from tabs or navigate.");
+        };
+        let goal = raw_args
+            .get("goal")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|goal| !goal.is_empty());
+        let Some(goal) = goal else {
+            return ToolResult::error(
+                "browse: goal is required, stated as the whole outcome you want.",
+            );
+        };
+
+        // Read once, at the start. A credential removed between listing and
+        // calling has to say so and name the fallback, because the caller still
+        // has every granular tool.
+        let settings = self.state.jev_settings.get().await;
+        let Some(credential) = self.state.jev_settings.credential().await else {
+            return ToolResult::error(
+                "browse: goal-driven browsing is off, so nothing was run. Use snapshot and act instead.",
+            );
+        };
+
+        let max_steps = raw_args
+            .get("maxSteps")
+            .and_then(Value::as_u64)
+            .and_then(|steps| u32::try_from(steps).ok())
+            .unwrap_or(settings.budgets.max_steps);
+        let budget = browseros_policy::Budget {
+            max_steps,
+            max_duration: std::time::Duration::from_secs(u64::from(settings.budgets.max_seconds)),
+        };
+
+        let browser_session = self.state.browser.session().await;
+        let Some(browser_session) = browser_session else {
+            return ToolResult::error(
+                "browse: the browser is not connected, so nothing was run. Start BrowserOS neo and check the cockpit.",
+            );
+        };
+        let driver = crate::api::mcp::browse::PageDriver::new(
+            browser_session,
+            page,
+            self.output_files.clone(),
+            cancel,
+        );
+        let decider = browseros_policy::Decider::new(credential.expose());
+        let outcome = browseros_policy::drive(&decider, &driver, goal, budget).await;
+        let (text, structured) = crate::api::mcp::browse::render(goal, &outcome);
+        ToolResult::text(text, Some(structured))
     }
 
     async fn call_mark_skill_run(
@@ -891,6 +1014,9 @@ impl ServerHandler for ClawMcpService {
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(with_session_arg(self.mark_skill_run_tool.clone()));
         }
+        if name == BROWSE_TOOL_NAME && self.state.jev_settings.is_active() {
+            return Some(with_session_arg(self.browse_tool.clone()));
+        }
         self.find_tool_index(name)
             .map(|index| with_session_arg(self.catalog[index].to_mcp_tool()))
     }
@@ -905,12 +1031,16 @@ impl ServerHandler for ClawMcpService {
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
+        // Unrecognised while the mode is off, which is what an agent that
+        // never saw the tool advertised would expect.
+        let is_browse = request.name == BROWSE_TOOL_NAME && self.state.jev_settings.is_active();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
             && !is_save_skill
             && !is_mark_skill_run
             && !is_request_help
             && !is_await_help
+            && !is_browse
             && tool_index.is_none()
         {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
@@ -977,6 +1107,10 @@ impl ServerHandler for ClawMcpService {
         } else if is_await_help {
             Ok(self
                 .call_await_human_help(&started, context.ct.clone())
+                .await)
+        } else if is_browse {
+            Ok(self
+                .call_browse(&started, &raw_args, context.ct.clone())
                 .await)
         } else {
             let Some(tool_index) = tool_index else {
@@ -1207,6 +1341,36 @@ fn mark_skill_run_tool() -> Tool {
             .read_only(false)
             .destructive(false)
             .idempotent(true),
+    )
+}
+
+fn browse_tool() -> Tool {
+    let Value::Object(input_schema) = json!({
+        "type": "object",
+        "properties": {
+            "page": {
+                "type": "integer",
+                "description": "The page to work on, from tabs or navigate. It is already yours, and it stays yours."
+            },
+            "goal": {
+                "type": "string",
+                "description": "The whole outcome you want, e.g. \"Find one-way flights from Zurich to London on 20 September for one adult\". Not a single step."
+            },
+            "maxSteps": {
+                "type": "integer",
+                "description": "Stop after this many actions. Defaults to the value configured in the cockpit."
+            }
+        },
+        "required": ["page", "goal"]
+    }) else {
+        unreachable!();
+    };
+    Tool::new(BROWSE_TOOL_NAME, BROWSE_DESCRIPTION, input_schema).with_annotations(
+        ToolAnnotations::with_title("Browse toward a goal")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(false)
+            .open_world(true),
     )
 }
 
@@ -1600,6 +1764,63 @@ mod tests {
             accepted.and_then(|filter| filter.tools_list_changed),
             Some(true),
             "subscriptions/listen must be accepted (Some), not method-not-found"
+        );
+        Ok(())
+    }
+
+    /// The addon contract, asserted rather than described: a connection with no
+    /// credential must see exactly the surface it saw before this existed.
+    #[tokio::test]
+    async fn goal_driven_browsing_is_invisible_without_a_credential() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let state = call.state.clone();
+        let service = ClawMcpService::new(state.clone());
+
+        let without: Vec<String> = service
+            .listed_tools(true)
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        assert!(
+            !without.iter().any(|name| name == BROWSE_TOOL_NAME),
+            "an inactive mode must not be advertised: {without:?}"
+        );
+        assert!(
+            service.get_tool(BROWSE_TOOL_NAME).is_none(),
+            "and must not resolve by name either"
+        );
+
+        state
+            .jev_settings
+            .set_credential(crate::services::jev_settings::Credential::new("a-token"))
+            .await?;
+        let with: Vec<String> = service
+            .listed_tools(true)
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        assert!(
+            with.iter().any(|name| name == BROWSE_TOOL_NAME),
+            "a configured mode is advertised: {with:?}"
+        );
+
+        // Everything else is untouched: the new tool is additive, never a
+        // replacement, so the before list is a prefix of the after list.
+        assert_eq!(
+            with.len(),
+            without.len() + 1,
+            "exactly one tool was added\nbefore: {without:?}\nafter: {with:?}"
+        );
+        assert_eq!(with[..without.len()], without[..]);
+
+        // Pausing hides it again without discarding the credential.
+        state.jev_settings.set_paused(true).await?;
+        assert!(
+            !service
+                .listed_tools(true)
+                .into_iter()
+                .any(|tool| tool.name == BROWSE_TOOL_NAME),
+            "a paused mode is not advertised"
         );
         Ok(())
     }
