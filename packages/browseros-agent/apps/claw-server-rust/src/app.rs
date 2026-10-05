@@ -33,6 +33,7 @@ pub struct AppState {
     pub audit_log: Arc<AuditLog>,
     pub audit_worker: Arc<AuditWorker>,
     pub audit_settings: Arc<crate::services::audit_settings::AuditSettingsStore>,
+    pub jev_settings: Arc<crate::services::jev_settings::JevSettingsStore>,
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
     pub recording_ingest: Arc<RecordingIngestService>,
@@ -76,6 +77,9 @@ impl AppState {
         let audit_log = Arc::new(AuditLog::new(database.clone()));
         let audit_settings = Arc::new(
             crate::services::audit_settings::AuditSettingsStore::new(&config.browserclaw_dir).await,
+        );
+        let jev_settings = Arc::new(
+            crate::services::jev_settings::JevSettingsStore::new(&config.browserclaw_dir).await,
         );
         let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
         let recording_index = Arc::new(RecordingIndex::new(database.clone()));
@@ -188,6 +192,7 @@ impl AppState {
             audit_log,
             audit_worker,
             audit_settings,
+            jev_settings,
             session_tabs,
             recordings,
             recording_ingest,

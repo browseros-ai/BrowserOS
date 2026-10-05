@@ -8,6 +8,7 @@ pub mod harness;
 pub mod harness_skills;
 pub mod help;
 pub mod helpers;
+pub mod jev_settings;
 pub mod profiles;
 pub mod recordings;
 pub mod replay;
