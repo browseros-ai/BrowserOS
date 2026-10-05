@@ -16,3 +16,61 @@ UpdateTelemetryRequest:
   properties:
     consent:
       type: boolean
+JevBudgets:
+  type: object
+  additionalProperties: false
+  required: [maxSteps, maxSeconds]
+  properties:
+    maxSteps:
+      type: integer
+      format: int64
+      description: Stop a run after this many actions.
+    maxSeconds:
+      type: integer
+      format: int64
+      description: Stop a run after this many seconds.
+JevModeState:
+  type: object
+  additionalProperties: false
+  required: [configured, paused, active, fingerprint, budgets]
+  properties:
+    configured:
+      type: boolean
+      description: Whether a credential is stored. The credential itself is never returned.
+    paused:
+      type: boolean
+      description: Switched off by choice, with the credential kept.
+    active:
+      type: boolean
+      description: Whether the goal-driven tool is advertised to connected agents.
+    fingerprint:
+      type: string
+      description: The stored credential's last characters, or empty when none is stored.
+    budgets:
+      $ref: ./settings.yaml#/JevBudgets
+UpdateJevCredentialRequest:
+  type: object
+  additionalProperties: false
+  required: [credential]
+  properties:
+    credential:
+      type: string
+      description: The credential to store. Validated with one real request before it is accepted.
+UpdateJevModeRequest:
+  type: object
+  additionalProperties: false
+  required: [paused]
+  properties:
+    paused:
+      type: boolean
+UpdateJevBudgetsRequest:
+  type: object
+  additionalProperties: false
+  required: [maxSteps, maxSeconds]
+  properties:
+    maxSteps:
+      type: integer
+      format: int64
+    maxSeconds:
+      type: integer
+      format: int64

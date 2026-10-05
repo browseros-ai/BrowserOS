@@ -12,6 +12,61 @@ use crate::models;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JevBudgets {
+    /// Stop a run after this many actions.
+    #[serde(rename = "maxSteps")]
+    pub max_steps: i64,
+    /// Stop a run after this many seconds.
+    #[serde(rename = "maxSeconds")]
+    pub max_seconds: i64,
+}
+
+impl JevBudgets {
+    pub fn new(max_steps: i64, max_seconds: i64) -> JevBudgets {
+        JevBudgets {
+            max_steps,
+            max_seconds,
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct JevModeState {
+    /// Whether a credential is stored. The credential itself is never returned.
+    #[serde(rename = "configured")]
+    pub configured: bool,
+    /// Switched off by choice, with the credential kept.
+    #[serde(rename = "paused")]
+    pub paused: bool,
+    /// Whether the goal-driven tool is advertised to connected agents.
+    #[serde(rename = "active")]
+    pub active: bool,
+    /// The stored credential's last characters, or empty when none is stored.
+    #[serde(rename = "fingerprint")]
+    pub fingerprint: String,
+    #[serde(rename = "budgets")]
+    pub budgets: Box<models::JevBudgets>,
+}
+
+impl JevModeState {
+    pub fn new(
+        configured: bool,
+        paused: bool,
+        active: bool,
+        fingerprint: String,
+        budgets: models::JevBudgets,
+    ) -> JevModeState {
+        JevModeState {
+            configured,
+            paused,
+            active,
+            fingerprint,
+            budgets: Box::new(budgets),
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TelemetryState {
     #[serde(rename = "distinctId")]
     pub distinct_id: String,
@@ -28,6 +83,48 @@ impl TelemetryState {
             enabled,
             consent,
         }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateJevBudgetsRequest {
+    #[serde(rename = "maxSteps")]
+    pub max_steps: i64,
+    #[serde(rename = "maxSeconds")]
+    pub max_seconds: i64,
+}
+
+impl UpdateJevBudgetsRequest {
+    pub fn new(max_steps: i64, max_seconds: i64) -> UpdateJevBudgetsRequest {
+        UpdateJevBudgetsRequest {
+            max_steps,
+            max_seconds,
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateJevCredentialRequest {
+    /// The credential to store. Validated with one real request before it is accepted.
+    #[serde(rename = "credential")]
+    pub credential: String,
+}
+
+impl UpdateJevCredentialRequest {
+    pub fn new(credential: String) -> UpdateJevCredentialRequest {
+        UpdateJevCredentialRequest { credential }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateJevModeRequest {
+    #[serde(rename = "paused")]
+    pub paused: bool,
+}
+
+impl UpdateJevModeRequest {
+    pub fn new(paused: bool) -> UpdateJevModeRequest {
+        UpdateJevModeRequest { paused }
     }
 }
 

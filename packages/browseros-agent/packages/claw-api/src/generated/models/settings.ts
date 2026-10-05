@@ -15,6 +15,64 @@
 /**
  *
  * @export
+ * @interface JevBudgets
+ */
+export interface JevBudgets {
+    /**
+     * Stop a run after this many actions.
+     * @type {number}
+     * @memberof JevBudgets
+     */
+    maxSteps: number;
+    /**
+     * Stop a run after this many seconds.
+     * @type {number}
+     * @memberof JevBudgets
+     */
+    maxSeconds: number;
+}
+
+/**
+ *
+ * @export
+ * @interface JevModeState
+ */
+export interface JevModeState {
+    /**
+     * Whether a credential is stored. The credential itself is never returned.
+     * @type {boolean}
+     * @memberof JevModeState
+     */
+    configured: boolean;
+    /**
+     * Switched off by choice, with the credential kept.
+     * @type {boolean}
+     * @memberof JevModeState
+     */
+    paused: boolean;
+    /**
+     * Whether the goal-driven tool is advertised to connected agents.
+     * @type {boolean}
+     * @memberof JevModeState
+     */
+    active: boolean;
+    /**
+     * The stored credential's last characters, or empty when none is stored.
+     * @type {string}
+     * @memberof JevModeState
+     */
+    fingerprint: string;
+    /**
+     *
+     * @type {JevBudgets}
+     * @memberof JevModeState
+     */
+    budgets: JevBudgets;
+}
+
+/**
+ *
+ * @export
  * @interface TelemetryState
  */
 export interface TelemetryState {
@@ -36,6 +94,54 @@ export interface TelemetryState {
      * @memberof TelemetryState
      */
     consent: boolean;
+}
+
+/**
+ *
+ * @export
+ * @interface UpdateJevBudgetsRequest
+ */
+export interface UpdateJevBudgetsRequest {
+    /**
+     *
+     * @type {number}
+     * @memberof UpdateJevBudgetsRequest
+     */
+    maxSteps: number;
+    /**
+     *
+     * @type {number}
+     * @memberof UpdateJevBudgetsRequest
+     */
+    maxSeconds: number;
+}
+
+/**
+ *
+ * @export
+ * @interface UpdateJevCredentialRequest
+ */
+export interface UpdateJevCredentialRequest {
+    /**
+     * The credential to store. Validated with one real request before it is accepted.
+     * @type {string}
+     * @memberof UpdateJevCredentialRequest
+     */
+    credential: string;
+}
+
+/**
+ *
+ * @export
+ * @interface UpdateJevModeRequest
+ */
+export interface UpdateJevModeRequest {
+    /**
+     *
+     * @type {boolean}
+     * @memberof UpdateJevModeRequest
+     */
+    paused: boolean;
 }
 
 /**

@@ -58,6 +58,20 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/settings/telemetry",
             get(settings::telemetry).put(settings::update_telemetry),
         )
+        .route(
+            "/api/v1/settings/jev-mode",
+            get(settings::jev_mode)
+                .put(settings::update_jev_mode)
+                .delete(settings::delete_jev_credential),
+        )
+        .route(
+            "/api/v1/settings/jev-mode/credential",
+            axum::routing::put(settings::update_jev_credential),
+        )
+        .route(
+            "/api/v1/settings/jev-mode/budgets",
+            axum::routing::put(settings::update_jev_budgets),
+        )
         .route("/api/v1/sessions", get(sessions::list))
         .route("/api/v1/sessions/{session_id}", get(sessions::get))
         .route(

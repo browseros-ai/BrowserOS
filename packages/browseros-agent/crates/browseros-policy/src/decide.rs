@@ -72,6 +72,30 @@ impl Decider {
         }
     }
 
+    /// Asks the provider one trivial question, to prove a credential works.
+    ///
+    /// A credential field that reports success on a syntax check teaches the
+    /// user nothing: a wrong value, a blocked network and a suspended account
+    /// are indistinguishable until something is actually asked. The error is
+    /// the provider's own wording, because that is what tells them which of
+    /// the three it is.
+    pub async fn check(&self) -> Result<(), String> {
+        let mut definitions = std::collections::BTreeMap::new();
+        definitions.insert(
+            "reachable".to_string(),
+            rig::typesafeai::types::Question::Noul {
+                instructions: serde_json::json!("Answer true."),
+                criteria: None,
+            },
+        );
+        let query = DynamicQuery::new(definitions).map_err(|error| error.to_string())?;
+        self.model
+            .evaluate(&serde_json::json!({ "check": true }), query)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
     /// Decides the next operation for one observation.
     pub async fn decide(
         &self,

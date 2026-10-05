@@ -17,6 +17,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let token = std::env::var("JEV_TOKEN")
         .map_err(|_| "set JEV_TOKEN to the credential you want to measure with")?;
 
+    // The same check the cockpit runs before storing a credential.
+    let decider = Decider::new(token);
+    match decider.check().await {
+        Ok(()) => println!("credential  accepted by the provider"),
+        Err(reason) => return Err(format!("credential rejected: {reason}").into()),
+    }
+    match Decider::new("not-a-real-credential").check().await {
+        Ok(()) => println!("WARNING: a bogus credential was accepted"),
+        Err(reason) => println!(
+            "bogus one  rejected: {}",
+            reason.lines().next().unwrap_or("")
+        ),
+    }
+    println!();
+
     // A flight search with the destination already filled, so the correct next
     // step is typing the origin rather than submitting.
     let elements = vec![
@@ -38,7 +53,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         space: ActionSpace::new(elements, true, false),
     };
 
-    let step = Decider::new(token)
+    let step = decider
         .decide(
             "Find one-way flights from Zurich to London on 20 September 2026.",
             &observation,

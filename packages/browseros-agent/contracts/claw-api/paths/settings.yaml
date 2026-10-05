@@ -29,3 +29,85 @@ telemetry:
         $ref: ../responses.yaml#/BadRequest
       '500':
         $ref: ../responses.yaml#/InternalError
+jevMode:
+  get:
+    operationId: getJevMode
+    responses:
+      '200':
+        description: Current goal-driven browsing state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/JevModeState
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  put:
+    operationId: updateJevMode
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/settings.yaml#/UpdateJevModeRequest
+    responses:
+      '200':
+        description: Updated state.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/JevModeState
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  delete:
+    operationId: deleteJevCredential
+    responses:
+      '200':
+        description: The credential was forgotten.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/JevModeState
+      '500':
+        $ref: ../responses.yaml#/InternalError
+jevModeCredential:
+  put:
+    operationId: updateJevCredential
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/settings.yaml#/UpdateJevCredentialRequest
+    responses:
+      '200':
+        description: The credential was checked against the provider and stored.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/JevModeState
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
+jevModeBudgets:
+  put:
+    operationId: updateJevBudgets
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/settings.yaml#/UpdateJevBudgetsRequest
+    responses:
+      '200':
+        description: Updated budgets.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/JevModeState
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
