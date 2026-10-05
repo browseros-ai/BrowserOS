@@ -10,7 +10,16 @@
     "turbo.json"
   ],
   "globalEnv": ["CI"],
-  "globalPassThroughEnv": ["BROWSEROS_*", "NODE_ENV"],
+  "globalPassThroughEnv": [
+    "BROWSEROS_*",
+    "NODE_ENV",
+    "DEFAULT_BRANCH",
+    "GITHUB_OUTPUT",
+    "GITHUB_REPOSITORY",
+    "GITHUB_SERVER_URL",
+    "R2_UPLOAD_PREFIX",
+    "RELEASE_TAG"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -21,6 +30,7 @@
       "inputs": ["$TURBO_DEFAULT$", "tsconfig*.json"]
     },
     "test": {
+      "env": ["CLAW_MCP_SMOKE", "CLAW_MCP_CAPTURE_DIR"],
       "outputs": ["test-results/**", "coverage/**"]
     },
     "lint:rust": {

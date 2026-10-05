@@ -35,11 +35,14 @@ export function FastModeCard() {
             : 'Your agents can hand over a whole goal instead of stepping through every page.'}
         </p>
       </div>
-      <Button variant={status === 'off' ? 'default' : 'outline'} render={
-        <Link to="/fast-mode">
-          {status === 'off' ? 'Set it up' : 'Manage'}
-        </Link>
-      } />
+      <Button
+        variant={status === 'off' ? 'default' : 'outline'}
+        render={
+          <Link to="/fast-mode">
+            {status === 'off' ? 'Set it up' : 'Manage'}
+          </Link>
+        }
+      />
     </Card>
   )
 }

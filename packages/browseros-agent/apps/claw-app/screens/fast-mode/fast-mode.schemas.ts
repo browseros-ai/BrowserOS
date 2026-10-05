@@ -7,10 +7,7 @@
 import { z } from 'zod'
 
 export const credentialSchema = z.object({
-  credential: z
-    .string()
-    .trim()
-    .min(1, 'Paste the key from your provider.'),
+  credential: z.string().trim().min(1, 'Paste the key from your provider.'),
 })
 
 export const budgetsSchema = z.object({

@@ -63,7 +63,9 @@ export function KeyCard({ configured, fingerprint }: KeyCardProps) {
       // The provider's own wording, which is what says whether the key is
       // wrong, the account is suspended, or the network is blocked.
       const message =
-        error instanceof Error ? error.message : 'The provider rejected the key.'
+        error instanceof Error
+          ? error.message
+          : 'The provider rejected the key.'
       setProblem(message)
       toast.error('That key was not accepted.')
     }
@@ -143,7 +145,9 @@ export function KeyCard({ configured, fingerprint }: KeyCardProps) {
             </AlertDialogHeader>
             <AlertDialogFooter>
               <AlertDialogCancel>Keep it</AlertDialogCancel>
-              <AlertDialogAction onClick={onForget}>Forget key</AlertDialogAction>
+              <AlertDialogAction onClick={onForget}>
+                Forget key
+              </AlertDialogAction>
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>

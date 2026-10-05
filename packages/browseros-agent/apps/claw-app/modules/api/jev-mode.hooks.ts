@@ -33,11 +33,13 @@ export const useSaveJevCredential = createMutation<
     (await apiClient()).updateJevCredential({ credential }),
 })
 
-export const useSetJevPaused = createMutation<JevModeState, { paused: boolean }>(
-  {
-    mutationFn: async ({ paused }) => (await apiClient()).updateJevMode({ paused }),
-  },
-)
+export const useSetJevPaused = createMutation<
+  JevModeState,
+  { paused: boolean }
+>({
+  mutationFn: async ({ paused }) =>
+    (await apiClient()).updateJevMode({ paused }),
+})
 
 export const useSetJevBudgets = createMutation<
   JevModeState,

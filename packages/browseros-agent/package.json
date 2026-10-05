@@ -86,7 +86,7 @@
   "homepage": "https://github.com/browseros-ai/BrowserOS#readme",
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1140.0",
-    "@biomejs/biome": "2.5.14",
+    "@biomejs/biome": "2.5.15",
     "@browseros/build-server-tools": "workspace:*",
     "@browseros/shared": "workspace:*",
     "@sentry/cli": "^3.8.0",

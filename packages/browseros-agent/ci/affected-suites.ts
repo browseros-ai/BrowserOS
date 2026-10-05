@@ -295,7 +295,6 @@ function main(): void {
   const hasAny = suites.length > 0
   console.error(`[affected-suites] ${summary}`)
 
-  // biome-ignore lint/suspicious/noUndeclaredEnvVars: GitHub injects this output path outside Turbo tasks.
   const githubOutput = process.env.GITHUB_OUTPUT
   if (githubOutput) {
     appendFileSync(githubOutput, `matrix=${JSON.stringify(matrix)}\n`)

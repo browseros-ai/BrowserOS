@@ -77,7 +77,11 @@ export function FastMode() {
             <div className="flex items-center gap-2">
               <h1 className="font-medium text-sm">Goal-driven browsing</h1>
               <Badge variant={status === 'on' ? 'default' : 'secondary'}>
-                {status === 'on' ? 'On' : status === 'paused' ? 'Paused' : 'Off'}
+                {status === 'on'
+                  ? 'On'
+                  : status === 'paused'
+                    ? 'Paused'
+                    : 'Off'}
               </Badge>
             </div>
             <p className="max-w-prose text-muted-foreground text-sm">
