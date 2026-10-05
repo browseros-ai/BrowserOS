@@ -12,9 +12,11 @@
 pub mod action;
 pub mod answer;
 pub mod decide;
+pub mod drive;
 pub mod questions;
 
 pub use action::{ActionSpace, Element, Head, Operation};
 pub use answer::{AnswerError, Decision, interpret};
 pub use decide::{DecideError, Decider, Step};
+pub use drive::{Budget, Driver, Oracle, Outcome, Status, TrailEntry, drive};
 pub use questions::{Observation, PastAction};

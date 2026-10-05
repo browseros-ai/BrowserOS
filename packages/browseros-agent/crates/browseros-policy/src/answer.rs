@@ -12,7 +12,7 @@ use rig::typesafeai::types::Answer;
 use std::collections::BTreeMap;
 
 /// Why a decision could not be turned into an action.
-#[derive(Debug, thiserror::Error, PartialEq)]
+#[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum AnswerError {
     #[error("the answer is missing the `{0}` question")]
     Missing(&'static str),
