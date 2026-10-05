@@ -196,7 +196,13 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
     let path = req.uri().path().to_string();
     let reject_origin = (path == "/api/v1/recordings/events"
         && !trusted_recording_origin(req.headers()))
-        || (path == "/api/v1/extension/update-ready" && !trusted_update_origin(req.headers()));
+        || (path == "/api/v1/extension/update-ready" && !trusted_update_origin(req.headers()))
+        // The decision credential is the one setting that, if replaced, hands
+        // another party's model control of the browser. Every other route here
+        // answers any origin, which is survivable for a telemetry toggle and
+        // not for this.
+        || (path.starts_with("/api/v1/settings/jev-mode")
+            && !trusted_cockpit_origin(req.headers()));
     let span = info_span!("http_request", request_id = %request_id.0, %method, %path);
     async move {
         let start = Instant::now();
@@ -250,6 +256,24 @@ pub async fn request_context(mut req: Request, next: Next) -> Response {
 
 /// Stable origin derived from claw-app's manifest signing key.
 const BROWSERCLAW_EXTENSION_ORIGIN: &str = "chrome-extension://pjimfkbpehlcllblajnpfamdfjhhlgkc";
+
+/// Whether a request to change goal-driven browsing came from the cockpit.
+///
+/// A web page fetch always carries `Origin`, so accepting only the cockpit's
+/// own origin and requests with no origin at all keeps a visited page from
+/// reaching these routes, while leaving native and local callers working. The
+/// opaque `null` origin is not accepted here: the cockpit is a real origin and
+/// nothing else should be writing a credential.
+fn trusted_cockpit_origin(headers: &axum::http::HeaderMap) -> bool {
+    match headers
+        .get(header::ORIGIN)
+        .and_then(|value| value.to_str().ok())
+    {
+        None => true,
+        Some(BROWSERCLAW_EXTENSION_ORIGIN) => true,
+        Some(_) => false,
+    }
+}
 
 fn trusted_recording_origin(headers: &axum::http::HeaderMap) -> bool {
     match headers

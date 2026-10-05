@@ -125,13 +125,12 @@ pub(super) async fn update_jev_budgets(
             "maxSteps and maxSeconds must be whole numbers",
         )
     })?;
+    // Clamping used to turn an invalid value into the largest allowed one, so a
+    // negative number selected the longest possible run. Out of range is now a
+    // refusal: the cockpit validates too, but the HTTP API has other callers.
     let budgets = Budgets {
-        max_steps: u32::try_from(payload.max_steps)
-            .unwrap_or(u32::MAX)
-            .clamp(1, 200),
-        max_seconds: u32::try_from(payload.max_seconds)
-            .unwrap_or(u32::MAX)
-            .clamp(5, 600),
+        max_steps: in_range(&request_id, "maxSteps", payload.max_steps, 1, 200)?,
+        max_seconds: in_range(&request_id, "maxSeconds", payload.max_seconds, 5, 600)?,
     };
     let settings = state
         .jev_settings
@@ -167,4 +166,25 @@ fn to_jev_state(settings: JevSettings) -> JevModeState {
             i64::from(settings.budgets.max_seconds),
         ),
     )
+}
+
+/// A whole number inside its allowed range, or a refusal naming the bounds.
+fn in_range(
+    request_id: &RequestId,
+    field: &str,
+    value: i64,
+    low: u32,
+    high: u32,
+) -> Result<u32, CanonicalError> {
+    u32::try_from(value)
+        .ok()
+        .filter(|value| (low..=high).contains(value))
+        .ok_or_else(|| {
+            error(
+                request_id,
+                StatusCode::BAD_REQUEST,
+                "invalid_request",
+                &format!("{field} must be between {low} and {high}"),
+            )
+        })
 }
