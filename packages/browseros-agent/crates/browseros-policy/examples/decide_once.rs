@@ -1,3 +1,6 @@
+// A command line measurement tool, so printing to stdout is the whole point.
+#![allow(clippy::print_stdout)]
+
 //! Asks for one decision and prints what it cost, without touching a browser.
 //!
 //! The measurement tool behind the mode's latency and token figures. Reads the
