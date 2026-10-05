@@ -23,11 +23,42 @@ interface BudgetsCardProps {
 }
 
 export function BudgetsCard({ maxSteps, maxSeconds }: BudgetsCardProps) {
-  const [steps, setSteps] = useState(String(maxSteps))
-  const [seconds, setSeconds] = useState(String(maxSeconds))
+  // The saved values this draft was taken from, kept alongside it so an update
+  // arriving while the card is open can be reconciled during render. Without
+  // it the inputs kept stale text, looked dirty against the newer limits, and
+  // Save would overwrite them.
+  const [draft, setDraft] = useState({
+    steps: String(maxSteps),
+    seconds: String(maxSeconds),
+    fromSteps: maxSteps,
+    fromSeconds: maxSeconds,
+  })
   const [problem, setProblem] = useState<string | null>(null)
   const save = useSetJevBudgets()
   const queryClient = useQueryClient()
+
+  if (draft.fromSteps !== maxSteps || draft.fromSeconds !== maxSeconds) {
+    // An untouched field adopts the new value; an edit in progress is kept and
+    // only its baseline moves, so it stays the user's to save or abandon.
+    setDraft((current) => ({
+      steps:
+        current.steps === String(current.fromSteps)
+          ? String(maxSteps)
+          : current.steps,
+      seconds:
+        current.seconds === String(current.fromSeconds)
+          ? String(maxSeconds)
+          : current.seconds,
+      fromSteps: maxSteps,
+      fromSeconds: maxSeconds,
+    }))
+  }
+
+  const { steps, seconds } = draft
+  const setSteps = (value: string) =>
+    setDraft((current) => ({ ...current, steps: value }))
+  const setSeconds = (value: string) =>
+    setDraft((current) => ({ ...current, seconds: value }))
 
   const dirty = steps !== String(maxSteps) || seconds !== String(maxSeconds)
 

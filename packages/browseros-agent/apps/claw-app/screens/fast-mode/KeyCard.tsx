@@ -8,6 +8,7 @@
  * one is in place.
  */
 
+import { apiErrorReason } from '@browseros/claw-api-client'
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { toast } from 'sonner'
@@ -61,12 +62,11 @@ export function KeyCard({ configured, fingerprint }: KeyCardProps) {
       toast.success('Key checked and saved.')
     } catch (error) {
       // The provider's own wording, which is what says whether the key is
-      // wrong, the account is suspended, or the network is blocked.
-      const message =
-        error instanceof Error
-          ? error.message
-          : 'The provider rejected the key.'
-      setProblem(message)
+      // wrong, the account is suspended, or the network is blocked. The error's
+      // own message carries only the HTTP status, so showing that would hide
+      // exactly the part worth reading.
+      const reason = await apiErrorReason(error)
+      setProblem(reason ?? 'The provider did not accept that key.')
       toast.error('That key was not accepted.')
     }
   }
