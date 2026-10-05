@@ -2,7 +2,7 @@
   "name": "@browseros/app",
   "description": "manifest.json description",
   "private": true,
-  "version": "0.0.160",
+  "version": "0.0.161",
   "type": "module",
   "scripts": {
     "dev": "bun --env-file=../../.env.development wxt",
