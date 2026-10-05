@@ -351,6 +351,7 @@ impl ClawMcpService {
     ) -> CallToolResult {
         let dispatch_id = DispatchId::new();
         let dispatch_cancel = CancellationToken::new();
+        let dispatch_cancel_for_run = dispatch_cancel.clone();
         if !started
             .session
             .try_register_dispatch(dispatch_id.clone(), dispatch_cancel)
@@ -361,7 +362,15 @@ impl ClawMcpService {
             )]);
         }
         let started_at = StdInstant::now();
-        let result = self.browse_outcome(raw_args, cancel).await;
+        // The operator's Stop cancels the registered dispatch token, so the run
+        // has to watch it alongside the request token and the session. Without
+        // the link, Stop ended the dispatch record while the loop kept acting.
+        let run_cancel = linked_cancel_token(
+            started.session.child_token(),
+            cancel,
+            dispatch_cancel_for_run,
+        );
+        let result = self.browse_outcome(raw_args, run_cancel).await;
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
             LocalToolDispatch {

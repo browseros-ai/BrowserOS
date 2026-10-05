@@ -49,7 +49,14 @@ impl Oracle for Decider {
 
 /// What the loop needs from a browser.
 pub trait Driver {
-    /// The current page, as an action space plus the rendered tree.
+    /// Whether the run has been cancelled, by the operator or by the caller
+    /// going away.
+    ///
+    /// Asked between every stage rather than once per step, because a run that
+    /// keeps clicking after Stop is worse than a single call that does.
+    fn stopped(&self) -> bool;
+
+    /// The page as it is right now, as an action space plus the rendered tree.
     fn observe(&self) -> impl Future<Output = Result<Observation, String>>;
 
     /// Runs one operation. Returns whether the page changed, which is the
@@ -76,6 +83,8 @@ pub enum Status {
     OutOfBudget { steps: u32, elapsed_ms: u64 },
     /// Progress stopped improving.
     Stalled,
+    /// The operator stopped the session, or the caller went away.
+    Stopped,
     /// An answer did not fit the observation, so nothing was executed.
     Refused(String),
     /// The provider or the browser failed.
@@ -174,8 +183,12 @@ pub async fn drive<O: Oracle, D: Driver>(
     };
 
     for step_index in 0..budget.max_steps {
-        if started.elapsed() >= budget.max_duration {
-            return finish(
+        let out_of_time = |trail: Vec<TrailEntry>,
+                           url: String,
+                           title: String,
+                           input_tokens: u64,
+                           output_tokens: u64| {
+            finish(
                 Status::OutOfBudget {
                     steps: step_index,
                     elapsed_ms: u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
@@ -185,7 +198,20 @@ pub async fn drive<O: Oracle, D: Driver>(
                 title,
                 input_tokens,
                 output_tokens,
+            )
+        };
+        if driver.stopped() {
+            return finish(
+                Status::Stopped,
+                trail,
+                url,
+                title,
+                input_tokens,
+                output_tokens,
             );
+        }
+        if started.elapsed() >= budget.max_duration {
+            return out_of_time(trail, url, title, input_tokens, output_tokens);
         }
 
         let observation = match driver.observe().await {
@@ -286,6 +312,22 @@ pub async fn drive<O: Oracle, D: Driver>(
                 );
             }
             _ => {}
+        }
+
+        // Asked again here because observing and deciding can take seconds, and
+        // this is the last moment before the page is changed.
+        if driver.stopped() {
+            return finish(
+                Status::Stopped,
+                trail,
+                url,
+                title,
+                input_tokens,
+                output_tokens,
+            );
+        }
+        if started.elapsed() >= budget.max_duration {
+            return out_of_time(trail, url, title, input_tokens, output_tokens);
         }
 
         let page_changed = match driver
@@ -465,10 +507,32 @@ mod tests {
         }
     }
 
+    /// Takes long enough to decide that the run's deadline passes mid-step.
+    struct SlowOracle {
+        delay: Duration,
+        step: Step,
+    }
+
+    impl Oracle for SlowOracle {
+        async fn decide(
+            &self,
+            _goal: &str,
+            _observation: &Observation,
+            _history: &[PastAction],
+        ) -> Result<Step, DecideError> {
+            tokio::time::sleep(self.delay).await;
+            Ok(self.step.clone())
+        }
+    }
+
     struct FakeBrowser {
         acted: RefCell<Vec<(Operation, Option<String>)>>,
         page_changes: bool,
         observe_error: Option<String>,
+        /// Flips after this many `stopped` enquiries, so a test can stop a run
+        /// at a chosen stage rather than only before it starts.
+        stop_after: Option<usize>,
+        asked: RefCell<usize>,
     }
 
     impl FakeBrowser {
@@ -477,6 +541,18 @@ mod tests {
                 acted: RefCell::new(Vec::new()),
                 page_changes,
                 observe_error: None,
+                stop_after: None,
+                asked: RefCell::new(0),
+            }
+        }
+
+        fn stopping_after(enquiries: usize) -> Self {
+            Self {
+                acted: RefCell::new(Vec::new()),
+                page_changes: true,
+                observe_error: None,
+                stop_after: Some(enquiries),
+                asked: RefCell::new(0),
             }
         }
 
@@ -485,6 +561,8 @@ mod tests {
                 acted: RefCell::new(Vec::new()),
                 page_changes: false,
                 observe_error: Some("browser session not connected".to_string()),
+                stop_after: None,
+                asked: RefCell::new(0),
             }
         }
 
@@ -494,6 +572,12 @@ mod tests {
     }
 
     impl Driver for FakeBrowser {
+        fn stopped(&self) -> bool {
+            let mut asked = self.asked.borrow_mut();
+            *asked += 1;
+            self.stop_after.is_some_and(|limit| *asked > limit)
+        }
+
         async fn observe(&self) -> Result<Observation, String> {
             match &self.observe_error {
                 Some(error) => Err(error.clone()),
@@ -673,6 +757,88 @@ mod tests {
             Status::Failed("browser session not connected".to_string())
         );
         assert_eq!(outcome.decisions(), 0);
+    }
+
+    /// Stop before anything happens: nothing is observed and nothing runs.
+    #[tokio::test]
+    async fn a_stopped_run_does_nothing_at_all() {
+        let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Click, Some("e1"), 0.1, 0.5))]);
+        let browser = FakeBrowser::stopping_after(0);
+        let outcome = drive(&oracle, &browser, "Click things.", budget(10)).await;
+        assert_eq!(outcome.status, Status::Stopped);
+        assert!(browser.actions().is_empty());
+        assert_eq!(outcome.decisions(), 0);
+    }
+
+    /// The gap that mattered: a stop arriving while the provider is deciding
+    /// must land before the page is changed, not after.
+    #[tokio::test]
+    async fn a_stop_between_deciding_and_acting_changes_nothing() {
+        let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Click, Some("e1"), 0.1, 0.5))]);
+        // One enquiry passes at the top of the step, the next one stops it.
+        let browser = FakeBrowser::stopping_after(1);
+        let outcome = drive(&oracle, &browser, "Click things.", budget(10)).await;
+        assert_eq!(outcome.status, Status::Stopped);
+        assert!(
+            browser.actions().is_empty(),
+            "a stop before acting must leave the page alone"
+        );
+    }
+
+    /// Already expired when the step begins: the check at the top catches it.
+    #[tokio::test]
+    async fn an_expired_deadline_stops_before_observing() {
+        let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Click, Some("e1"), 0.1, 0.5))]);
+        let browser = FakeBrowser::new(true);
+        let outcome = drive(
+            &oracle,
+            &browser,
+            "Click things.",
+            Budget {
+                max_steps: 5,
+                max_duration: Duration::ZERO,
+            },
+        )
+        .await;
+        assert!(
+            matches!(outcome.status, Status::OutOfBudget { .. }),
+            "got {:?}",
+            outcome.status
+        );
+        assert!(browser.actions().is_empty());
+    }
+
+    /// The deadline expiring *while* the provider is deciding is the case the
+    /// top-of-step check cannot see. Only the check after deciding stops the
+    /// page from being changed past the budget.
+    #[tokio::test]
+    async fn a_deadline_passed_while_deciding_stops_before_acting() {
+        let oracle = SlowOracle {
+            delay: Duration::from_millis(60),
+            step: step(Operation::Click, Some("e1"), 0.1, 0.5),
+        };
+        let browser = FakeBrowser::new(true);
+        let outcome = drive(
+            &oracle,
+            &browser,
+            "Click things.",
+            Budget {
+                max_steps: 5,
+                // Alive at the top of the step, expired by the time the
+                // decision comes back.
+                max_duration: Duration::from_millis(20),
+            },
+        )
+        .await;
+        assert!(
+            matches!(outcome.status, Status::OutOfBudget { .. }),
+            "got {:?}",
+            outcome.status
+        );
+        assert!(
+            browser.actions().is_empty(),
+            "the budget must not be overrun by a whole action"
+        );
     }
 
     #[tokio::test]

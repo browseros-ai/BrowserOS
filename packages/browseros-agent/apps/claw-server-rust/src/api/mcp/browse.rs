@@ -56,6 +56,10 @@ impl PageDriver {
 }
 
 impl Driver for PageDriver {
+    fn stopped(&self) -> bool {
+        self.cancel.is_cancelled()
+    }
+
     async fn observe(&self) -> Result<Observation, String> {
         let snapshot = self
             .browser
@@ -184,6 +188,10 @@ pub fn render(goal: &str, outcome: &Outcome) -> (String, Value) {
             "Stopped: the run was no longer making progress. Continue with the page tools."
                 .to_string()
         }
+        Status::Stopped => {
+            "Stopped by the operator. Nothing further was run; the page is where it was left."
+                .to_string()
+        }
         Status::Refused(reason) => format!(
             "Stopped without acting: {reason}. Continue with the page tools."
         ),
@@ -260,6 +268,7 @@ fn status_name(status: &Status) -> &'static str {
         Status::NeedsText { .. } => "needs_text",
         Status::OutOfBudget { .. } => "out_of_budget",
         Status::Stalled => "stalled",
+        Status::Stopped => "stopped",
         Status::Refused(_) => "refused",
         Status::Failed(_) => "failed",
     }
@@ -332,6 +341,19 @@ mod tests {
                 "{status:?} did not name a way forward: {text}"
             );
         }
+    }
+
+    /// An operator Stop is the one ending that must NOT invite the caller to
+    /// carry on, because the session it would carry on in has been cancelled.
+    #[test]
+    fn an_operator_stop_does_not_invite_the_caller_to_continue() {
+        let (text, structured) = render("Find a flight.", &outcome(Status::Stopped, vec![entry()]));
+        assert_eq!(structured["status"], json!("stopped"));
+        assert!(text.contains("Stopped by the operator"), "{text}");
+        assert!(
+            !text.contains("continue with") && !text.contains("browse again"),
+            "a cancelled session is not something to resume: {text}"
+        );
     }
 
     #[test]
