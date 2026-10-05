@@ -30,6 +30,17 @@ pub struct Element {
     pub reference: String,
     pub role: String,
     pub name: String,
+    /// What the control currently holds, when it holds anything.
+    ///
+    /// Carried here rather than left to the rendered tree, because the tree is
+    /// trimmed to fit a budget and this is the difference between filling an
+    /// empty field and overwriting a correct one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<String>,
+    /// State annotations the renderer attached, such as `disabled` or
+    /// `checked`. A disabled control that looks enabled is a wasted step.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub state: Vec<String>,
 }
 
 impl Element {
@@ -42,6 +53,8 @@ impl Element {
             reference: reference.into(),
             role: role.into(),
             name: name.into(),
+            value: None,
+            state: Vec::new(),
         }
     }
 
@@ -56,12 +69,71 @@ impl Element {
 
     /// The label offered to the model, carrying the ref so the answer and the
     /// rendered tree can be lined up by a reader.
+    ///
+    /// The current value and any state ride on the label, so a candidate is
+    /// self describing even when the tree around it was trimmed away.
     #[must_use]
     pub fn label(&self) -> String {
-        if self.name.is_empty() {
+        let mut label = if self.name.is_empty() {
             format!("[{}] {}", self.reference, self.role)
         } else {
             format!("[{}] {} {}", self.reference, self.role, self.name)
+        };
+        if !self.state.is_empty() {
+            label.push_str(&format!(" [{}]", self.state.join(" ")));
+        }
+        match self.value.as_deref() {
+            Some(value) if !value.is_empty() => label.push_str(&format!(" = {value:?}")),
+            Some(_) => label.push_str(" = empty"),
+            None => {}
+        }
+        label
+    }
+}
+
+/// Reads the value and state annotations the renderer attached to each ref,
+/// and copies them onto the matching elements.
+///
+/// The browser's ref table carries role and name but not the current value, so
+/// the rendered line is the only place it exists. The format is the renderer's
+/// own and is stable: states sit in brackets before the ref, and a value
+/// follows the ref after a colon.
+///
+/// ```text
+/// - textbox "Search" [ref=e3]: "abc"
+/// - button "Load more" [disabled] [ref=e2]
+/// ```
+pub fn annotate_from_tree(elements: &mut [Element], tree: &str) {
+    let mut found: BTreeMap<&str, (Option<String>, Vec<String>)> = BTreeMap::new();
+    for line in tree.lines() {
+        let Some(marker) = line.find(" [ref=") else {
+            continue;
+        };
+        let after = &line[marker + " [ref=".len()..];
+        let Some(close) = after.find(']') else {
+            continue;
+        };
+        let reference = &after[..close];
+        if reference.is_empty() {
+            continue;
+        }
+        let value = after[close + 1..]
+            .strip_prefix(": ")
+            .map(|raw| raw.trim().trim_matches('"').to_string());
+        let state = line[..marker]
+            .match_indices('[')
+            .filter_map(|(open, _)| {
+                let rest = &line[open + 1..];
+                rest.find(']').map(|end| rest[..end].to_string())
+            })
+            .filter(|token| !token.is_empty() && !token.starts_with("ref="))
+            .collect();
+        found.insert(reference, (value, state));
+    }
+    for element in elements {
+        if let Some((value, state)) = found.get(element.reference.as_str()) {
+            element.value = value.clone();
+            element.state = state.clone();
         }
     }
 }
@@ -371,6 +443,48 @@ mod tests {
         let operations = space.available_operations();
         assert!(operations.contains(&Operation::ScrollDown));
         assert!(!operations.contains(&Operation::ScrollUp));
+    }
+
+    /// The gap this closes: the browser's ref table has role and name but not
+    /// the current value, so without reading it off the rendered line a filled
+    /// field is indistinguishable from an empty one.
+    #[test]
+    fn values_and_states_are_read_off_the_rendered_lines() {
+        let tree = concat!(
+            "- banner\n",
+            "  - link \"Home\" [ref=e1]\n",
+            "  - textbox \"Where to?\" [ref=e2]: \"Zurich\"\n",
+            "  - textbox \"Where from?\" [ref=e3]\n",
+            "  - button \"Load more\" [disabled] [ref=e4]\n",
+            "  - checkbox \"Direct only\" [checked] [ref=e5]"
+        );
+        let mut elements = vec![
+            Element::new("e1", "link", "Home"),
+            Element::new("e2", "textbox", "Where to?"),
+            Element::new("e3", "textbox", "Where from?"),
+            Element::new("e4", "button", "Load more"),
+            Element::new("e5", "checkbox", "Direct only"),
+        ];
+        annotate_from_tree(&mut elements, tree);
+
+        assert_eq!(elements[1].value.as_deref(), Some("Zurich"));
+        assert_eq!(elements[2].value, None, "an empty field carries no value");
+        assert_eq!(elements[3].state, vec!["disabled".to_string()]);
+        assert_eq!(elements[4].state, vec!["checked".to_string()]);
+        assert!(elements[0].state.is_empty());
+
+        // And the label a candidate is offered under says so, which is what
+        // survives the tree being trimmed.
+        assert_eq!(elements[1].label(), "[e2] textbox Where to? = \"Zurich\"");
+        assert_eq!(elements[3].label(), "[e4] button Load more [disabled]");
+    }
+
+    #[test]
+    fn annotating_ignores_lines_without_a_ref() {
+        let mut elements = vec![Element::new("e1", "button", "Go")];
+        annotate_from_tree(&mut elements, "- text \"nothing here\"\n- heading \"Hi\"");
+        assert_eq!(elements[0].value, None);
+        assert!(elements[0].state.is_empty());
     }
 
     #[test]

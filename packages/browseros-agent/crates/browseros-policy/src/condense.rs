@@ -36,6 +36,9 @@ pub struct Condensed {
     /// Context lines dropped, either as decoration or by the budget.
     pub dropped_lines: usize,
     pub original_bytes: usize,
+    /// Bytes by which the actionable lines alone overran the budget, so a page
+    /// whose controls cannot be trimmed is visible rather than silent.
+    pub over_budget: usize,
 }
 
 impl Condensed {
@@ -134,26 +137,24 @@ pub fn condense(tree: &str, budget: usize) -> Condensed {
     // reads correctly.
     kept.sort_by_key(|(index, _)| *index);
 
-    let mut text = String::with_capacity(used.min(budget.saturating_add(128)));
-    let mut truncated = 0usize;
-    for (position, (_, line)) in kept.iter().enumerate() {
-        if text.len().saturating_add(line.len()).saturating_add(1) > budget && position > 0 {
-            truncated = kept.len() - position;
-            break;
-        }
+    // Everything selected above is written, including actionable lines that
+    // overrun the budget. The budget gives way rather than a candidate: losing
+    // a line here used to lose its value and state, which the element list did
+    // not carry, so the model could overwrite a filled field or aim at a
+    // disabled control.
+    let mut text = String::with_capacity(used.saturating_add(128));
+    for (_, line) in &kept {
         text.push_str(line);
         text.push('\n');
     }
-    if truncated > 0 {
-        dropped_lines += truncated;
-        text.push_str(&format!("... {truncated} more lines omitted\n"));
-    }
+    let over_budget = text.len().saturating_sub(budget);
 
     Condensed {
         text: text.trim_end().to_string(),
         actionable_lines,
         dropped_lines,
         original_bytes,
+        over_budget,
     }
 }
 
@@ -219,10 +220,11 @@ mod tests {
         assert!(condensed.text.contains("- form"));
     }
 
-    /// A page whose controls alone overrun the budget truncates and says so,
-    /// rather than silently sending less than it claims.
+    /// A page whose controls alone overrun the budget keeps every one of them
+    /// and reports the overrun. Trimming here would take a candidate's value
+    /// and state with it, which changes the decision.
     #[test]
-    fn an_overrun_of_actionable_lines_is_reported() {
+    fn controls_that_overrun_the_budget_are_all_kept_and_the_overrun_is_reported() {
         let mut lines = Vec::new();
         for index in 1..=400 {
             lines.push(format!(
@@ -231,17 +233,22 @@ mod tests {
         }
         let tree = lines.join("\n");
         let condensed = condense(&tree, 2000);
+
+        assert_eq!(condensed.actionable_lines, 400);
+        for reference in ["e1", "e200", "e400"] {
+            assert!(
+                condensed.text.contains(&format!("[ref={reference}]")),
+                "{reference} was dropped"
+            );
+        }
         assert!(
-            condensed.kept_bytes() <= 2000 + 64,
-            "{}",
-            condensed.kept_bytes()
+            condensed.over_budget > 0,
+            "a page that cannot be trimmed has to say so"
         );
         assert!(
-            condensed.text.contains("more lines omitted"),
-            "a truncation has to be visible: {}",
-            condensed.text
+            !condensed.text.contains("omitted"),
+            "nothing was omitted, so nothing should claim it was"
         );
-        assert!(condensed.dropped_lines > 0);
     }
 
     #[test]

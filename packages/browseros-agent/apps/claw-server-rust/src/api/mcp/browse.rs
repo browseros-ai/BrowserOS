@@ -12,7 +12,7 @@ use browseros_core::{
 use browseros_mcp::{
     BrowserToolDefaults, BrowserToolOptions, OutputFileAccess, ToolCtx, ToolDef, execute_tool,
 };
-use browseros_policy::action::{ActionSpace, Element};
+use browseros_policy::action::{ActionSpace, Element, annotate_from_tree};
 use browseros_policy::drive::{Driver, Outcome, Status, TrailEntry};
 use browseros_policy::{Observation, Operation};
 use serde_json::{Value, json};
@@ -72,7 +72,7 @@ impl Driver for PageDriver {
             .await
             .map_err(|error| error.to_string())?;
 
-        let elements: Vec<Element> = snapshot
+        let mut elements: Vec<Element> = snapshot
             .refs
             .entries_in_order()
             .into_iter()
@@ -84,6 +84,11 @@ impl Driver for PageDriver {
                 )
             })
             .collect();
+
+        // The ref table carries role and name but not the current value, which
+        // only exists on the rendered line. Read it across before the tree is
+        // trimmed, so a candidate stays self describing either way.
+        annotate_from_tree(&mut elements, &snapshot.text);
 
         // Both scroll directions are offered without checking the scroll
         // position, which costs one wasted decision at a boundary at most: a
