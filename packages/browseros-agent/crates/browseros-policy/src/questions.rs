@@ -8,6 +8,7 @@
 //! action.
 
 use crate::action::{ActionSpace, Head, Operation};
+use crate::condense::{DEFAULT_TREE_BUDGET, condense};
 use rig::typesafeai::types::Question;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -75,8 +76,25 @@ pub struct Observation {
 }
 
 /// The shared state every question is answered against.
+///
+/// The tree is condensed before it is sent. Input tokens dominate the cost of
+/// a run and scale with the size of this state, so the page arrives as its
+/// actionable lines plus whatever grounding fits, rather than in full. The
+/// element list below it is the authoritative set of candidates either way.
 #[must_use]
 pub fn state(goal: &str, observation: &Observation, history: &[PastAction]) -> Value {
+    state_with_budget(goal, observation, history, DEFAULT_TREE_BUDGET)
+}
+
+/// The same state at an explicit tree budget, so the saving can be measured
+/// against a faithful baseline rather than estimated.
+#[must_use]
+pub fn state_with_budget(
+    goal: &str,
+    observation: &Observation,
+    history: &[PastAction],
+    tree_budget: usize,
+) -> Value {
     let recent: Vec<&PastAction> = history
         .iter()
         .rev()
@@ -85,12 +103,16 @@ pub fn state(goal: &str, observation: &Observation, history: &[PastAction]) -> V
         .into_iter()
         .rev()
         .collect();
+    let tree = condense(&observation.tree, tree_budget);
     json!({
         "goal": goal,
         "page": {
             "url": observation.url,
             "title": observation.title,
-            "tree": observation.tree,
+            "tree": tree.text,
+            // Said rather than hidden, so a decision made on a trimmed page is
+            // recognisable as one.
+            "tree_lines_omitted": tree.dropped_lines,
         },
         "elements": observation.space.elements,
         "recent_actions": recent,
@@ -294,6 +316,51 @@ mod tests {
                 .unwrap_or_else(|| panic!("the window should not be empty"))["target"],
             json!("e25"),
             "the window keeps the most recent actions, in order"
+        );
+    }
+
+    /// The point of condensing: a crowded page must not travel in full, and
+    /// the candidates must still all be there.
+    #[test]
+    fn the_state_sent_is_far_smaller_than_the_raw_tree() {
+        let mut lines = vec![
+            "- heading \"Results\"".to_string(),
+            "- textbox \"Search\" [ref=e1]".to_string(),
+            "- button \"Go\" [ref=e2]".to_string(),
+        ];
+        for index in 0..3000 {
+            lines.push(format!(
+                "  - text \"a decorative paragraph number {index}\""
+            ));
+        }
+        let observation = Observation {
+            url: "https://example.com".to_string(),
+            title: "Results".to_string(),
+            tree: lines.join("\n"),
+            space: ActionSpace::new(
+                page(&[("textbox", "Search"), ("button", "Go")]),
+                false,
+                false,
+            ),
+        };
+        let raw_bytes = observation.tree.len();
+        let state = state("Search for something.", &observation, &[]);
+        let sent = state["page"]["tree"]
+            .as_str()
+            .unwrap_or_else(|| panic!("the tree should be a string"));
+
+        assert!(
+            sent.len() * 10 < raw_bytes,
+            "expected at least a tenfold cut: {raw_bytes} -> {}",
+            sent.len()
+        );
+        assert!(sent.contains("[ref=e1]"), "candidates must survive");
+        assert!(sent.contains("[ref=e2]"));
+        assert!(
+            state["page"]["tree_lines_omitted"]
+                .as_u64()
+                .is_some_and(|omitted| omitted > 0),
+            "a trimmed page has to say so"
         );
     }
 

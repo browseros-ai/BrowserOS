@@ -6,7 +6,7 @@
 
 use crate::action::ActionSpace;
 use crate::answer::{AnswerError, Decision, interpret};
-use crate::questions::{Observation, PastAction, questions, state};
+use crate::questions::{Observation, PastAction, questions, state_with_budget};
 use rig::driver::Model;
 use rig::typesafeai::types::Answer;
 use rig::typesafeai::{DynamicQuery, Evaluate, Jev, JevConfig};
@@ -103,11 +103,29 @@ impl Decider {
         observation: &Observation,
         history: &[PastAction],
     ) -> Result<Step, DecideError> {
+        self.decide_with_budget(
+            goal,
+            observation,
+            history,
+            crate::condense::DEFAULT_TREE_BUDGET,
+        )
+        .await
+    }
+
+    /// The same decision at an explicit tree budget, for measuring what
+    /// condensing the page actually saves.
+    pub async fn decide_with_budget(
+        &self,
+        goal: &str,
+        observation: &Observation,
+        history: &[PastAction],
+        tree_budget: usize,
+    ) -> Result<Step, DecideError> {
         let built = questions(goal, observation);
         let dropped_targets = dropped(&observation.space);
         let query =
             DynamicQuery::new(built).map_err(|error| DecideError::Questions(error.to_string()))?;
-        let shared = state(goal, observation, history);
+        let shared = state_with_budget(goal, observation, history, tree_budget);
 
         let started = Instant::now();
         let evaluation = self
