@@ -10,7 +10,7 @@
     "@browseros/browser-core": "workspace:*",
     "@browseros/cdp-protocol": "workspace:*",
     "@browseros/shared": "workspace:*",
-    "@modelcontextprotocol/server": "^2.1.0",
+    "@modelcontextprotocol/server": "^2.2.0",
     "zod": "^4.5.2"
   },
   "exports": {
