@@ -10,7 +10,9 @@
 //! either.
 
 pub mod action;
+pub mod answer;
 pub mod questions;
 
 pub use action::{ActionSpace, Element, Head, Operation};
+pub use answer::{AnswerError, Decision, interpret};
 pub use questions::{Observation, PastAction};
