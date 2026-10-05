@@ -363,6 +363,7 @@ pub async fn drive<O: Oracle, D: Driver>(
         } else {
             stalled += 1;
             if stalled >= STALL_LIMIT {
+                let (url, title) = settled_location(driver, url, title).await;
                 return finish(
                     Status::Stalled,
                     trail,
@@ -375,6 +376,7 @@ pub async fn drive<O: Oracle, D: Driver>(
         }
     }
 
+    let (url, title) = settled_location(driver, url, title).await;
     finish(
         Status::OutOfBudget {
             steps: budget.max_steps,
@@ -386,6 +388,20 @@ pub async fn drive<O: Oracle, D: Driver>(
         input_tokens,
         output_tokens,
     )
+}
+
+/// Where the browser actually is, for an ending that follows an action.
+///
+/// Both the step cap and the stall rule can fire straight after an action, and
+/// the location captured at the top of that step is then out of date. If the
+/// last action navigated, the handback would name the previous page and the
+/// caller would resume against the wrong one. A failed read keeps what was
+/// already known rather than losing it.
+async fn settled_location<D: Driver>(driver: &D, url: String, title: String) -> (String, String) {
+    match driver.observe().await {
+        Ok(observation) => (observation.url, observation.title),
+        Err(_) => (url, title),
+    }
 }
 
 fn entry(step: &Step, page_changed: bool) -> TrailEntry {
@@ -529,6 +545,9 @@ mod tests {
         acted: RefCell<Vec<(Operation, Option<String>)>>,
         page_changes: bool,
         observe_error: Option<String>,
+        /// Reported by `observe` once any action has run, so a test can model a
+        /// page that moved under the run.
+        navigates_to: Option<&'static str>,
         /// Flips after this many `stopped` enquiries, so a test can stop a run
         /// at a chosen stage rather than only before it starts.
         stop_after: Option<usize>,
@@ -541,6 +560,18 @@ mod tests {
                 acted: RefCell::new(Vec::new()),
                 page_changes,
                 observe_error: None,
+                navigates_to: None,
+                stop_after: None,
+                asked: RefCell::new(0),
+            }
+        }
+
+        fn navigating_to(url: &'static str) -> Self {
+            Self {
+                acted: RefCell::new(Vec::new()),
+                page_changes: true,
+                observe_error: None,
+                navigates_to: Some(url),
                 stop_after: None,
                 asked: RefCell::new(0),
             }
@@ -551,6 +582,7 @@ mod tests {
                 acted: RefCell::new(Vec::new()),
                 page_changes: true,
                 observe_error: None,
+                navigates_to: None,
                 stop_after: Some(enquiries),
                 asked: RefCell::new(0),
             }
@@ -561,6 +593,7 @@ mod tests {
                 acted: RefCell::new(Vec::new()),
                 page_changes: false,
                 observe_error: Some("browser session not connected".to_string()),
+                navigates_to: None,
                 stop_after: None,
                 asked: RefCell::new(0),
             }
@@ -579,10 +612,18 @@ mod tests {
         }
 
         async fn observe(&self) -> Result<Observation, String> {
-            match &self.observe_error {
-                Some(error) => Err(error.clone()),
-                None => Ok(observation()),
+            if let Some(error) = &self.observe_error {
+                return Err(error.clone());
             }
+            let mut current = observation();
+            if let Some(prefix) = self.navigates_to {
+                // Each action moves the page on, so the location read before an
+                // action never matches the one after it.
+                let moves = self.acted.borrow().len();
+                current.url = format!("{prefix}/{moves}");
+                current.title = format!("Page {moves}");
+            }
+            Ok(current)
         }
 
         async fn act(&self, operation: Operation, target: Option<&str>) -> Result<bool, String> {
@@ -715,6 +756,50 @@ mod tests {
             outcome.status
         );
         assert_eq!(outcome.decisions(), 4);
+    }
+
+    /// The bug this closes: if the last permitted action navigates, the handback
+    /// used to name the page from before it, so a caller resuming from the
+    /// result was pointed at the wrong one.
+    #[tokio::test]
+    async fn the_step_cap_reports_the_page_the_run_ended_on() {
+        let steps: Vec<Result<Step, DecideError>> = (1..=4)
+            .map(|index| {
+                Ok(step(
+                    Operation::Click,
+                    Some("e1"),
+                    0.1,
+                    f64::from(index) * 0.1,
+                ))
+            })
+            .collect();
+        let oracle = ScriptedOracle::new(steps);
+        let browser = FakeBrowser::navigating_to("https://example.com/step");
+        let outcome = drive(&oracle, &browser, "Keep going.", budget(2)).await;
+        assert!(matches!(outcome.status, Status::OutOfBudget { .. }));
+        assert_eq!(
+            browser.actions().len(),
+            2,
+            "two actions ran, so the page moved twice"
+        );
+        assert_eq!(
+            outcome.url, "https://example.com/step/2",
+            "the handback must name the page after the last action, not before it"
+        );
+        assert_eq!(outcome.title, "Page 2");
+    }
+
+    #[tokio::test]
+    async fn a_stalled_run_also_reports_where_it_ended() {
+        let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Click, Some("e1"), 0.1, 0.5))]);
+        let browser = FakeBrowser::navigating_to("https://example.com/step");
+        let outcome = drive(&oracle, &browser, "Go nowhere.", budget(50)).await;
+        assert_eq!(outcome.status, Status::Stalled);
+        assert_eq!(
+            outcome.url,
+            format!("https://example.com/step/{}", browser.actions().len()),
+            "the handback must name the page after the last action"
+        );
     }
 
     /// An answer that does not fit the observation stops the run and executes

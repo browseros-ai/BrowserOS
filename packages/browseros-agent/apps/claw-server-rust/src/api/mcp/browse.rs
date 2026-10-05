@@ -116,8 +116,12 @@ impl Driver for PageDriver {
             Operation::ScrollUp => json!({
                 "page": self.page, "kind": "scroll", "direction": "up", "diff": "summary",
             }),
+            // Waiting touches nothing. It used to be sent as a zero notch
+            // scroll, which was a browser round trip pretending to be a pause
+            // and produced no diff to read.
             Operation::Wait => {
-                json!({ "page": self.page, "kind": "scroll", "amount": 0, "diff": "none" })
+                tokio::time::sleep(WAIT_PAUSE).await;
+                return Ok(false);
             }
             // Typing hands back for a value, and the terminal operations never
             // reach the browser, so nothing else can arrive here.
@@ -131,10 +135,28 @@ impl Driver for PageDriver {
         if result.is_error {
             return Err(first_text(&result));
         }
-        // The act readback says whether anything changed; a summary with no
-        // changes reads as unchanged.
-        Ok(!first_text(&result).contains("no changes"))
+        Ok(changed_from(&result))
     }
+}
+
+/// How long a wait pauses for before the page is read again.
+const WAIT_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Whether the action changed the page, read from the diff's own flag.
+///
+/// The prose was matched before, against a phrase that does not exist: an
+/// unchanged diff says "no change since last snapshot", so a test for "no
+/// changes" never matched and every no-op reported a change. That went into
+/// the trail and into the history later decisions are shown.
+fn changed_from(result: &browseros_mcp::ToolResult) -> bool {
+    result
+        .structured_content
+        .as_ref()
+        .and_then(|value| value.get("changed"))
+        .and_then(Value::as_bool)
+        // No diff was asked for or none came back, so there is nothing to
+        // claim. Reporting no change is the honest default.
+        .unwrap_or(false)
 }
 
 fn cached_act_tool() -> &'static ToolDef {
@@ -385,6 +407,28 @@ mod tests {
         assert!(text.contains("confidence 0.82"), "{text}");
         assert_eq!(structured["trail"][0]["targetConfidence"], json!(0.91));
         assert_eq!(structured["decisions"], json!(1));
+    }
+
+    /// The bug this closes: an unchanged diff says "no change since last
+    /// snapshot", so matching on "no changes" never fired and every no-op was
+    /// reported as a change.
+    #[test]
+    fn page_changed_comes_from_the_diff_flag_not_its_prose() {
+        let unchanged = browseros_mcp::ToolResult::text(
+            "no change since last snapshot",
+            Some(json!({ "changed": false })),
+        );
+        assert!(!changed_from(&unchanged));
+
+        let changed = browseros_mcp::ToolResult::text(
+            "2 added, 1 removed",
+            Some(json!({ "changed": true, "added": 2, "removed": 1 })),
+        );
+        assert!(changed_from(&changed));
+
+        // Nothing to go on is reported as no change rather than guessed.
+        let silent = browseros_mcp::ToolResult::text("done", None);
+        assert!(!changed_from(&silent));
     }
 
     #[test]
