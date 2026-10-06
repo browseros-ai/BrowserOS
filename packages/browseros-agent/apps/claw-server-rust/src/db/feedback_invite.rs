@@ -15,7 +15,7 @@ use sea_orm::{ConnectionTrait, DatabaseBackend, Statement, Value};
 /// How long the card stays away after the reader books or declines. Neither answer is
 /// final: opening the booking page is not the same as booking, and a decline is a "not
 /// now", so the card comes back once this has passed since the latest answer.
-pub const SNOOZE_MS: i64 = 3 * 24 * 60 * 60 * 1_000;
+pub const SNOOZE_MS: i64 = 2 * 24 * 60 * 60 * 1_000;
 
 #[derive(Clone)]
 pub struct FeedbackInviteRepository {
