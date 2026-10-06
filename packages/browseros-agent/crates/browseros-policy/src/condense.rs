@@ -27,6 +27,17 @@
 /// source of truth.
 pub const DEFAULT_TREE_BUDGET: usize = 4000;
 
+/// Share of the budget held for grounding, so a page whose controls alone
+/// exceed the budget still carries some prose.
+///
+/// Actionable lines are taken whatever the budget says, and on a real listing
+/// page they came to 19,436 bytes against a budget of 4,000. They consumed the
+/// whole allowance five times over, so every context line was dropped and the
+/// model was sent links and nothing else. The evidence that a goal is met is
+/// almost always prose, a price or a heading or a confirmation, so a decision
+/// was being asked to confirm an outcome from a view with the outcome removed.
+pub const CONTEXT_SHARE_PERCENT: usize = 30;
+
 /// The result of condensing, with enough detail to report the saving.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Condensed {
@@ -119,13 +130,28 @@ pub fn condense(tree: &str, budget: usize) -> Condensed {
     let mut kept: Vec<(usize, &str)> = Vec::new();
     let mut dropped_lines = 0usize;
     let mut used = 0usize;
+    let mut context_used = 0usize;
+    // Divided before multiplying: an unbounded budget overflows the other way
+    // round, which is the second time arithmetic on this budget has done that.
+    let context_reserve = (budget / 100).saturating_mul(CONTEXT_SHARE_PERCENT);
     for (tier, lines) in tiers.into_iter().enumerate() {
         for (index, line) in lines {
             let cost = line.len().saturating_add(1);
             // Actionable lines are taken whatever the budget says; the overrun
             // is reported below rather than silently losing a candidate.
-            if tier == 0 || used.saturating_add(cost) <= budget {
+            //
+            // Context is taken while the shared budget has room, which is the
+            // whole of a small page, and otherwise while the reserve has room.
+            // Without the reserve a page whose controls overran the budget lost
+            // every line of prose, which is the only place the evidence of a
+            // finished goal lives.
+            let fits_shared = used.saturating_add(cost) <= budget;
+            let fits_reserve = context_used.saturating_add(cost) <= context_reserve;
+            if tier == 0 || fits_shared || fits_reserve {
                 used = used.saturating_add(cost);
+                if tier > 0 {
+                    context_used = context_used.saturating_add(cost);
+                }
                 kept.push((index, line));
             } else {
                 dropped_lines += 1;
@@ -223,6 +249,52 @@ mod tests {
     /// A page whose controls alone overrun the budget keeps every one of them
     /// and reports the overrun. Trimming here would take a candidate's value
     /// and state with it, which changes the decision.
+    /// The starvation this closes, measured on a real listing page: actionable
+    /// lines came to 19,436 bytes against a 4,000 byte budget, so they consumed
+    /// the shared allowance five times over and every context line was dropped.
+    /// The model was sent links and no prose, and prose is where the evidence
+    /// that a goal is met lives.
+    #[test]
+    fn a_page_whose_controls_overrun_the_budget_still_carries_prose() {
+        let mut lines: Vec<String> = (1..=400)
+            .map(|index| {
+                format!("  - link \"Product number {index} in the listing\" [ref=e{index}]")
+            })
+            .collect();
+        lines.push("  - heading \"Price: INR 47,729\" [level=2]".to_string());
+        lines.push("  - paragraph".to_string());
+        lines.push("  - heading \"In stock\" [level=3]".to_string());
+        let tree = lines.join("\n");
+
+        let condensed = condense(&tree, DEFAULT_TREE_BUDGET);
+        assert!(
+            condensed.over_budget > 0,
+            "this fixture is meant to overrun, or it tests nothing"
+        );
+        assert!(
+            condensed.text.contains("Price: INR 47,729"),
+            "the evidence a goal was met has to survive: {}",
+            &condensed.text[..200.min(condensed.text.len())]
+        );
+        assert!(condensed.text.contains("In stock"));
+        // Every candidate is still kept, which is the invariant the reserve
+        // must not break.
+        assert_eq!(condensed.actionable_lines, 400);
+    }
+
+    /// A page that fits is unaffected: the reserve only comes into play once the
+    /// shared budget is exhausted, so nothing that used to travel is now cut.
+    #[test]
+    fn the_reserve_changes_nothing_for_a_page_that_fits() {
+        let tree =
+            "- main\n  - heading \"Results\" [level=1]\n  - link \"First\" [ref=e1]\n  - paragraph";
+        let condensed = condense(tree, DEFAULT_TREE_BUDGET);
+        assert_eq!(condensed.dropped_lines, 0);
+        assert!(condensed.text.contains("heading"));
+        assert!(condensed.text.contains("paragraph"));
+        assert!(condensed.text.contains("link"));
+    }
+
     #[test]
     fn controls_that_overrun_the_budget_are_all_kept_and_the_overrun_is_reported() {
         let mut lines = Vec::new();
