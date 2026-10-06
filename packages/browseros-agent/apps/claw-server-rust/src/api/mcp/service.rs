@@ -280,6 +280,7 @@ impl ClawMcpService {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: NAME_SESSION_TOOL_NAME,
+                decision_tokens: (0, 0),
                 raw_args: &dispatch_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
@@ -322,6 +323,7 @@ impl ClawMcpService {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: SAVE_SKILL_TOOL_NAME,
+                decision_tokens: (0, 0),
                 raw_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
@@ -377,6 +379,9 @@ impl ClawMcpService {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: BROWSE_TOOL_NAME,
+                // What the provider charged for this run, so the audit shows the
+                // cost of deciding rather than only the cost of the call itself.
+                decision_tokens: crate::api::mcp::browse::decision_tokens_in(&result),
                 raw_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
@@ -514,6 +519,7 @@ impl ClawMcpService {
                 session: &started.session,
                 agent_label: &started.agent_label,
                 tool_name: MARK_SKILL_RUN_TOOL_NAME,
+                decision_tokens: (0, 0),
                 raw_args,
                 result: &result,
                 duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),

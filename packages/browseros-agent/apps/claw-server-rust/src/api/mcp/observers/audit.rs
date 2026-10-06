@@ -54,6 +54,9 @@ pub struct LocalToolDispatch<'a> {
     pub result: &'a ToolResult,
     pub duration_ms: i64,
     pub dispatch_id: DispatchId,
+    /// Input and output tokens a decision provider charged for this dispatch.
+    /// Zero for every tool that calls no provider.
+    pub decision_tokens: (u64, u64),
 }
 
 pub async fn record_local_tool_dispatch(
@@ -87,6 +90,10 @@ pub async fn record_local_tool_dispatch(
                 dispatch.raw_args,
             ),
             tool_output_token_estimate: estimate_tool_output_tokens(&dispatch.result.content),
+            decision_input_token_estimate: i64::try_from(dispatch.decision_tokens.0)
+                .unwrap_or(i64::MAX),
+            decision_output_token_estimate: i64::try_from(dispatch.decision_tokens.1)
+                .unwrap_or(i64::MAX),
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         }))
         .await?;
@@ -148,6 +155,8 @@ async fn build_event(
             parent_dispatch_id: None,
             tool_input_token_estimate: estimate_tool_input_tokens(call.tool().name, &call.raw_args),
             tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         },
         preview: Some(preview_callback(call, &identity.session)),
@@ -338,6 +347,7 @@ mod tests {
         record_local_tool_dispatch(
             &call.state,
             LocalToolDispatch {
+                decision_tokens: (0, 0),
                 session,
                 agent_label: "Codex",
                 tool_name: "name_session",

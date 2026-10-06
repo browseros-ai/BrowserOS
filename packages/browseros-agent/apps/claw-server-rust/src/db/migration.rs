@@ -27,6 +27,7 @@ impl MigratorTrait for Migrator {
             Box::new(m0018_add_feedback_invite::Migration),
             Box::new(m0019_add_feedback_invite_dismissal::Migration),
             Box::new(m0020_add_feedback_invite_snooze::Migration),
+            Box::new(m0021_add_decision_token_estimates::Migration),
         ]
     }
 }
@@ -2363,5 +2364,73 @@ mod m0020_add_feedback_invite_snooze {
     enum FeedbackInvite {
         Table,
         SnoozedAtMs,
+    }
+}
+
+mod m0021_add_decision_token_estimates {
+    use super::*;
+
+    pub struct Migration;
+
+    impl MigrationName for Migration {
+        fn name(&self) -> &str {
+            "m0021_add_decision_token_estimates"
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl MigrationTrait for Migration {
+        async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            // Tokens a decision provider charged for, which nothing recorded before:
+            // a goal-driven run spending hundreds of thousands of them reported a
+            // session total built only from its own tool traffic, so the audit showed
+            // it costing about the same as a session that called no provider at all.
+            // Kept apart from the tool estimates because it is a different payer.
+            // Zero defaults preserve existing rows, which genuinely spent none.
+            for table in ["tool_dispatches", "tasks"] {
+                for column in [
+                    "decision_input_token_estimate",
+                    "decision_output_token_estimate",
+                ] {
+                    if !manager.has_column(table, column).await? {
+                        manager
+                            .alter_table(
+                                Table::alter()
+                                    .table(Alias::new(table))
+                                    .add_column(
+                                        ColumnDef::new(Alias::new(column))
+                                            .big_integer()
+                                            .not_null()
+                                            .default(0),
+                                    )
+                                    .to_owned(),
+                            )
+                            .await?;
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+            for table in ["tasks", "tool_dispatches"] {
+                for column in [
+                    "decision_output_token_estimate",
+                    "decision_input_token_estimate",
+                ] {
+                    if manager.has_column(table, column).await? {
+                        manager
+                            .alter_table(
+                                Table::alter()
+                                    .table(Alias::new(table))
+                                    .drop_column(Alias::new(column))
+                                    .to_owned(),
+                            )
+                            .await?;
+                    }
+                }
+            }
+            Ok(())
+        }
     }
 }

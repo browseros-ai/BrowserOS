@@ -515,6 +515,8 @@ mod tests {
 
     fn child(tool: &str, args: Value) -> ToolDispatchRow {
         ToolDispatchRow {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             id: 0,
             created_at: 0,
             agent_id: String::new(),

@@ -23,6 +23,8 @@ pub struct Model {
     pub duration_ms: Option<i64>,
     pub tool_input_token_estimate: i64,
     pub tool_output_token_estimate: i64,
+    pub decision_input_token_estimate: i64,
+    pub decision_output_token_estimate: i64,
     pub token_estimator_version: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dispatch_id: Option<String>,

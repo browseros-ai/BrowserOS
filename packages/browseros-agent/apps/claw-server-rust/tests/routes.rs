@@ -1668,6 +1668,8 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
     app.state
         .audit_log
         .record_tool_dispatch(RecordToolDispatchInput {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             agent_id: session.convo_id().as_str().to_string(),
             slug: session.agent().slug().to_string(),
             agent_label: session.agent().label().to_string(),

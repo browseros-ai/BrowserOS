@@ -244,6 +244,21 @@ impl Driver for PageDriver {
     }
 }
 
+/// What the decision provider charged for a run, read back off its own result.
+///
+/// The audit's token totals measure a session's tool traffic, which is what an
+/// agent pays. A goal-driven run also pays a provider, and recording only the
+/// first made a run that spent hundreds of thousands of provider tokens look
+/// like one that spent none.
+#[must_use]
+pub fn decision_tokens_in(result: &ToolResult) -> (u64, u64) {
+    let Some(structured) = result.structured_content.as_ref() else {
+        return (0, 0);
+    };
+    let read = |key: &str| structured.get(key).and_then(Value::as_u64).unwrap_or(0);
+    (read("inputTokens"), read("outputTokens"))
+}
+
 /// The page an action opened, if it opened one.
 ///
 /// The highest new id is the most recently opened, which is the one the action

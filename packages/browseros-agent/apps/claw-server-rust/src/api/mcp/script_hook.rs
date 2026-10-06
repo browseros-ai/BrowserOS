@@ -133,6 +133,8 @@ impl InnerCallHook for ScriptInnerCallHook {
             // v0 child and its token savings are projected.
             let tool_input_token_estimate = estimate_tool_input_tokens(&tool_name, &raw_args);
             let input = RecordToolDispatchInput {
+                decision_input_token_estimate: 0,
+                decision_output_token_estimate: 0,
                 agent_id: identity.session.convo_id().as_str().to_string(),
                 slug: identity.agent.slug().to_string(),
                 agent_label: identity.agent_label.clone(),
