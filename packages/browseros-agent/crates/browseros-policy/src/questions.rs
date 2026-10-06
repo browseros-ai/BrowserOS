@@ -80,7 +80,8 @@ pub struct Observation {
 /// The tree is condensed before it is sent. Input tokens dominate the cost of
 /// a run and scale with the size of this state, so the page arrives as its
 /// actionable lines plus whatever grounding fits, rather than in full. The
-/// element list below it is the authoritative set of candidates either way.
+/// element list below it is the set of candidates a decision can actually name,
+/// which on a large page is a fraction of what was observed.
 #[must_use]
 pub fn state(goal: &str, observation: &Observation, history: &[PastAction]) -> Value {
     state_with_budget(goal, observation, history, DEFAULT_TREE_BUDGET)
@@ -113,8 +114,17 @@ pub fn state_with_budget(
             // Said rather than hidden, so a decision made on a trimmed page is
             // recognisable as one.
             "tree_lines_omitted": tree.dropped_lines,
+            // Actionable lines are never dropped, so a page with more controls
+            // than the budget allows overruns it. Reported for the same reason
+            // as the omitted count: the overrun is the cost of a crowded page
+            // and was previously computed and discarded.
+            "tree_bytes_over_budget": tree.over_budget,
         },
-        "elements": observation.space.elements,
+        // Only what a decision can name. An answer is an index into the target
+        // options, which are capped, so an element outside them can never be
+        // chosen and sending it is cost with no reach. On a page of five hundred
+        // actionables this was the largest part of the request by far.
+        "elements": observation.space.offered_elements(),
         "recent_actions": recent,
     })
 }
@@ -213,6 +223,50 @@ mod tests {
             .enumerate()
             .map(|(index, (role, name))| Element::new(format!("e{}", index + 1), *role, *name))
             .collect()
+    }
+
+    /// The cost this closes: the tree was budgeted and the element list was not,
+    /// so a page of five hundred actionables sent all five hundred and the state
+    /// was dominated by elements a decision could never name. An answer is an
+    /// index into the capped target options, so anything outside them is unreachable.
+    #[test]
+    fn the_state_carries_only_elements_a_decision_can_name() {
+        let crowded = page(
+            &(0..crate::action::MAX_TARGET_OPTIONS + 40)
+                .map(|_| ("button", "Pick me"))
+                .collect::<Vec<_>>(),
+        );
+        let observed = crowded.len();
+        let state = state("Pick one.", &observation(crowded), &[]);
+
+        let sent = state["elements"]
+            .as_array()
+            .unwrap_or_else(|| panic!("elements must be an array"))
+            .len();
+        assert_eq!(
+            sent,
+            crate::action::MAX_TARGET_OPTIONS,
+            "the state must carry exactly the offered candidates"
+        );
+        assert!(
+            sent < observed,
+            "sending every observed element is the cost being removed: {sent} of {observed}"
+        );
+    }
+
+    /// A page inside the cap is unaffected: every element stays reachable, so
+    /// nothing is lost on the ordinary case.
+    #[test]
+    fn a_small_page_still_sends_every_element() {
+        let small = page(&[("textbox", "Where from?"), ("button", "Search")]);
+        let state = state("Find a flight.", &observation(small), &[]);
+        assert_eq!(
+            state["elements"]
+                .as_array()
+                .unwrap_or_else(|| panic!("elements must be an array"))
+                .len(),
+            2
+        );
     }
 
     /// The real guard: the provider's own validator must accept every set we

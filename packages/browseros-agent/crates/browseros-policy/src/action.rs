@@ -7,7 +7,7 @@
 //! head is resolved into one of three shapes before anything is sent.
 
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Upper bound the protocol places on a single choice question.
 pub const PROTOCOL_MAX_OPTIONS: usize = 255;
@@ -290,6 +290,39 @@ impl ActionSpace {
             can_scroll_up,
             elements,
         }
+    }
+
+    /// References a decision can actually name, across every head.
+    ///
+    /// The heads are capped at [`MAX_TARGET_OPTIONS`], so on a large page most
+    /// observed elements are not offered to the model at all. Sending those
+    /// anyway is pure cost: an answer is an index into the options, so an
+    /// element outside them can never be chosen.
+    #[must_use]
+    pub fn offered_references(&self) -> BTreeSet<&str> {
+        let mut offered = BTreeSet::new();
+        for head in [&self.click, &self.type_text] {
+            match head {
+                Head::Unavailable => {}
+                Head::Implied(reference) => {
+                    offered.insert(reference.as_str());
+                }
+                Head::Question { options, .. } => {
+                    offered.extend(options.keys().map(String::as_str));
+                }
+            }
+        }
+        offered
+    }
+
+    /// The elements a decision can actually name, in observed order.
+    #[must_use]
+    pub fn offered_elements(&self) -> Vec<&Element> {
+        let offered = self.offered_references();
+        self.elements
+            .iter()
+            .filter(|element| offered.contains(element.reference.as_str()))
+            .collect()
     }
 
     /// The operations worth offering for this observation.
