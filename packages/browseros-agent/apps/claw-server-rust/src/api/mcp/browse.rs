@@ -18,6 +18,7 @@ use browseros_policy::drive::{Driver, Outcome, Status, TrailEntry};
 use browseros_policy::{Observation, Operation};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -30,7 +31,10 @@ use tokio_util::sync::CancellationToken;
 /// it replaced.
 pub struct PageDriver {
     browser: Arc<BrowserSession>,
-    page: u32,
+    /// The page the run is working on, which moves when an action opens a new
+    /// one. A product link on a shopping site opens in a new tab, so a driver
+    /// pinned to one page watches the wrong one from the first click onwards.
+    page: AtomicU32,
     output_files: OutputFileAccess,
     cancel: CancellationToken,
     catalog: Arc<Vec<ToolDef>>,
@@ -65,7 +69,7 @@ impl PageDriver {
         let act_index = catalog.iter().position(|tool| tool.name == "act")?;
         Some(Self {
             browser,
-            page,
+            page: AtomicU32::new(page),
             output_files,
             cancel,
             catalog,
@@ -85,6 +89,23 @@ impl PageDriver {
             .lock()
             .map(|notices| notices.clone())
             .unwrap_or_default()
+    }
+
+    /// The page the run is on now, which is not always the one it started on.
+    #[must_use]
+    pub fn page(&self) -> u32 {
+        self.page.load(Ordering::Relaxed)
+    }
+
+    /// Page ids currently open, or None if they could not be read. A failure to
+    /// read them must not fail the action that was already carried out.
+    async fn open_page_ids(&self) -> Option<Vec<u32>> {
+        self.browser
+            .pages
+            .list()
+            .await
+            .ok()
+            .map(|pages| pages.into_iter().map(|page| page.page_id.0).collect())
     }
 
     fn call_for(&self, args: Value) -> ToolCall {
@@ -113,7 +134,7 @@ impl Driver for PageDriver {
     async fn observe(&self) -> Result<Observation, String> {
         let snapshot = self
             .browser
-            .observe(PageId(self.page))
+            .observe(PageId(self.page()))
             .await
             .snapshot_with_options(SnapshotOptions {
                 mode: SnapshotMode::Interactive,
@@ -155,16 +176,16 @@ impl Driver for PageDriver {
     async fn act(&self, operation: Operation, target: Option<&str>) -> Result<bool, String> {
         let args = match operation {
             Operation::Click => json!({
-                "page": self.page,
+                "page": self.page(),
                 "kind": "click",
                 "ref": target.ok_or_else(|| "click needs a target".to_string())?,
                 "diff": "summary",
             }),
             Operation::ScrollDown => json!({
-                "page": self.page, "kind": "scroll", "direction": "down", "diff": "summary",
+                "page": self.page(), "kind": "scroll", "direction": "down", "diff": "summary",
             }),
             Operation::ScrollUp => json!({
-                "page": self.page, "kind": "scroll", "direction": "up", "diff": "summary",
+                "page": self.page(), "kind": "scroll", "direction": "up", "diff": "summary",
             }),
             // Waiting touches nothing. It used to be sent as a zero notch
             // scroll, which was a browser round trip pretending to be a pause
@@ -178,6 +199,9 @@ impl Driver for PageDriver {
             other => return Err(format!("{} is not executed here", other.as_str())),
         };
 
+        // Read before the action so a page it opens can be told apart from one
+        // that was already there.
+        let before = self.open_page_ids().await;
         let result = dispatch_tool_call_in_process(self.call_for(args))
             .await
             .map_err(|error| error.to_string())?;
@@ -193,8 +217,32 @@ impl Driver for PageDriver {
                 collected.push(notice);
             }
         }
+        // A link that opens in a new tab, which is what a product link does on
+        // most shopping sites, leaves the page the run was watching genuinely
+        // unchanged while the work has moved elsewhere. Following it is the
+        // difference between a run that continues and one that repeats the same
+        // click until its budget runs out, leaving a duplicate tab behind each
+        // time.
+        if let (Some(before), Some(after)) = (before, self.open_page_ids().await)
+            && let Some(opened) = newly_opened(&before, &after)
+        {
+            self.page.store(opened, Ordering::Relaxed);
+            return Ok(true);
+        }
         Ok(changed_from(&result))
     }
+}
+
+/// The page an action opened, if it opened one.
+///
+/// The highest new id is the most recently opened, which is the one the action
+/// just produced when a single click somehow spawns several.
+fn newly_opened(before: &[u32], after: &[u32]) -> Option<u32> {
+    after
+        .iter()
+        .copied()
+        .filter(|page| !before.contains(page))
+        .max()
 }
 
 /// How long a wait pauses for before the page is read again.
@@ -524,6 +572,26 @@ mod tests {
         // Nothing to go on is reported as no change rather than guessed.
         let silent = ToolResult::text("done", None);
         assert!(!changed_from(&silent));
+    }
+
+    /// The bug this closes: a click on a product link opens a new tab, so the
+    /// page the run was watching did not change and the run clicked the same
+    /// link until its budget ran out, leaving a duplicate tab behind each time.
+    #[test]
+    fn the_page_an_action_opened_is_the_one_to_follow() {
+        assert_eq!(newly_opened(&[28], &[28, 29]), Some(29));
+
+        // Several at once: the newest is the one this action produced.
+        assert_eq!(newly_opened(&[28], &[28, 29, 30, 31]), Some(31));
+
+        // Nothing opened, so the run stays where it is and the diff decides.
+        assert_eq!(newly_opened(&[28, 29], &[28, 29]), None);
+
+        // A page closing is not a page opening.
+        assert_eq!(newly_opened(&[28, 29], &[28]), None);
+
+        // Ids are not assumed to arrive in order.
+        assert_eq!(newly_opened(&[40], &[44, 40, 41]), Some(44));
     }
 
     /// A navigation must survive either flag going missing, because losing it
