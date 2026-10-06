@@ -236,9 +236,15 @@ mod tests {
     /// model may name is the question's options, and they stay capped.
     #[test]
     fn only_candidates_a_decision_can_name_are_offered() {
+        // Distinct labels on purpose: identical ones collapse to a single
+        // implied target, which is a different behaviour tested separately.
+        let names: Vec<String> = (0..crate::action::MAX_TARGET_OPTIONS + 40)
+            .map(|index| format!("Pick me {index}"))
+            .collect();
         let crowded = page(
-            &(0..crate::action::MAX_TARGET_OPTIONS + 40)
-                .map(|_| ("button", "Pick me"))
+            &names
+                .iter()
+                .map(|name| ("button", name.as_str()))
                 .collect::<Vec<_>>(),
         );
         let observed = crowded.len();

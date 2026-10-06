@@ -143,6 +143,30 @@ pub fn annotate_from_tree(elements: &mut [Element], tree: &str) {
     }
 }
 
+/// Candidates a model could actually tell apart, keeping the first of each.
+///
+/// Two named candidates with the same role and name are indistinguishable to a
+/// model choosing by label: it cannot prefer one, and offering both spends a
+/// slot a distinct candidate could have used. A real listing page had 81 of its
+/// 250 offered candidates duplicated this way, so a third of the budget went on
+/// choices that carried nothing new, because the site renders each product as
+/// two links with the same text.
+///
+/// Unnamed candidates are deliberately left alone. They all share an empty
+/// name, so collapsing them would reduce every unnamed control on a page to one
+/// and undo the floor that keeps filter controls reachable.
+fn distinct_by_label<'a>(candidates: &[&'a Element]) -> Vec<&'a Element> {
+    let mut seen: BTreeSet<(&str, &str)> = BTreeSet::new();
+    candidates
+        .iter()
+        .copied()
+        .filter(|element| {
+            let name = element.name.trim();
+            name.is_empty() || seen.insert((element.role.as_str(), name))
+        })
+        .collect()
+}
+
 /// What an operation's target head resolved to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Head {
@@ -164,11 +188,13 @@ impl Head {
     /// Resolves candidates into one of the three shapes.
     #[must_use]
     pub fn from_candidates(candidates: &[&Element]) -> Self {
-        match candidates.len() {
+        let distinct = distinct_by_label(candidates);
+        match distinct.len() {
             0 => Self::Unavailable,
-            1 => Self::Implied(candidates[0].reference.clone()),
+            1 => Self::Implied(distinct[0].reference.clone()),
             _ => {
-                let dropped = candidates.len().saturating_sub(MAX_TARGET_OPTIONS);
+                let total = candidates.len();
+                let candidates: &[&Element] = &distinct;
                 // Taking the first 250 in document order spends the budget on
                 // whatever sits at the top of the page, which on a search result
                 // or an article is navigation and footnote markers, and drops the
@@ -200,7 +226,8 @@ impl Head {
                     .chain(named.iter().skip(named_slots))
                     .take(MAX_TARGET_OPTIONS)
                     .map(|element| (element.reference.clone(), element.label()))
-                    .collect();
+                    .collect::<BTreeMap<String, String>>();
+                let dropped = total.saturating_sub(options.len());
                 Self::Question { options, dropped }
             }
         }
@@ -537,6 +564,62 @@ mod tests {
         };
         assert_eq!(options.len(), 15);
         assert_eq!(*dropped, 0);
+    }
+
+    /// The waste this closes: a listing page rendered each product as two links
+    /// with the same text, so 81 of 250 offered candidates were duplicates and a
+    /// third of the budget bought nothing a model could choose between.
+    #[test]
+    fn candidates_a_model_cannot_tell_apart_are_offered_once() {
+        let mut elements: Vec<Element> = Vec::new();
+        for index in 1..=40 {
+            // Each product twice, exactly as the real page renders it.
+            elements.push(Element::new(
+                format!("a{index}"),
+                "link",
+                format!("Kit {index}"),
+            ));
+            elements.push(Element::new(
+                format!("b{index}"),
+                "link",
+                format!("Kit {index}"),
+            ));
+        }
+        let space = ActionSpace::new(elements, false, false);
+        let Head::Question { options, dropped } = &space.click else {
+            panic!("expected a question");
+        };
+        assert_eq!(options.len(), 40, "each distinct label is offered once");
+        assert_eq!(*dropped, 40, "the duplicates are reported as dropped");
+        // The first in document order is the one kept.
+        assert!(options.contains_key("a1") && !options.contains_key("b1"));
+    }
+
+    /// Unnamed candidates share an empty name, so collapsing them would reduce
+    /// every unnamed control on a page to one and undo the floor that keeps
+    /// filter controls reachable.
+    #[test]
+    fn unnamed_candidates_are_never_collapsed_together() {
+        let elements: Vec<Element> = (1..=30)
+            .map(|index| Element::new(format!("facet{index}"), "LabelText", ""))
+            .collect();
+        let space = ActionSpace::new(elements, false, false);
+        let Head::Question { options, dropped } = &space.click else {
+            panic!("expected a question");
+        };
+        assert_eq!(options.len(), 30, "every unnamed control stays reachable");
+        assert_eq!(*dropped, 0);
+    }
+
+    /// A page of identical controls offers one, because there is nothing to
+    /// choose between them, and one candidate is implied rather than asked about.
+    #[test]
+    fn a_page_of_identical_controls_implies_its_single_target() {
+        let elements: Vec<Element> = (1..=50)
+            .map(|index| Element::new(format!("e{index}"), "button", "Pick me"))
+            .collect();
+        let space = ActionSpace::new(elements, false, false);
+        assert_eq!(space.click, Head::Implied("e1".to_string()));
     }
 
     /// Document order still decides between candidates of the same kind, so the
