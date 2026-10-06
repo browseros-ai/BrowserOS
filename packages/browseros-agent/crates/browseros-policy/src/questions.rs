@@ -79,9 +79,18 @@ pub struct Observation {
 ///
 /// The tree is condensed before it is sent. Input tokens dominate the cost of
 /// a run and scale with the size of this state, so the page arrives as its
-/// actionable lines plus whatever grounding fits, rather than in full. The
-/// element list below it is the set of candidates a decision can actually name,
-/// which on a large page is a fraction of what was observed.
+/// actionable lines plus whatever grounding fits, rather than in full.
+///
+/// There is deliberately no element list here. `Element::label()` emits the
+/// reference, role, name, state and value, which is every field an `Element`
+/// has, and the target question already carries that label for every candidate
+/// it offers. Sending the list again cost about a fifth of a run's provider
+/// tokens and told the model nothing it was not already being told.
+///
+/// This relies on the condenser never dropping an actionable line, which is
+/// how a control's current value still reaches a decision that is judging
+/// whether a goal is met. If that invariant ever changes, this has to change
+/// with it.
 #[must_use]
 pub fn state(goal: &str, observation: &Observation, history: &[PastAction]) -> Value {
     state_with_budget(goal, observation, history, DEFAULT_TREE_BUDGET)
@@ -120,11 +129,6 @@ pub fn state_with_budget(
             // and was previously computed and discarded.
             "tree_bytes_over_budget": tree.over_budget,
         },
-        // Only what a decision can name. An answer is an index into the target
-        // options, which are capped, so an element outside them can never be
-        // chosen and sending it is cost with no reach. On a page of five hundred
-        // actionables this was the largest part of the request by far.
-        "elements": observation.space.offered_elements(),
         "recent_actions": recent,
     })
 }
@@ -225,48 +229,57 @@ mod tests {
             .collect()
     }
 
-    /// The cost this closes: the tree was budgeted and the element list was not,
-    /// so a page of five hundred actionables sent all five hundred and the state
-    /// was dominated by elements a decision could never name. An answer is an
-    /// index into the capped target options, so anything outside them is unreachable.
+    /// The cost this closes: the element list beside the tree was unbounded, so
+    /// a page of five hundred actionables sent all five hundred. It is now gone
+    /// entirely, because `Element::label()` carries every field an `Element` has
+    /// and the target question already sends that label per candidate. What the
+    /// model may name is the question's options, and they stay capped.
     #[test]
-    fn the_state_carries_only_elements_a_decision_can_name() {
+    fn only_candidates_a_decision_can_name_are_offered() {
         let crowded = page(
             &(0..crate::action::MAX_TARGET_OPTIONS + 40)
                 .map(|_| ("button", "Pick me"))
                 .collect::<Vec<_>>(),
         );
         let observed = crowded.len();
-        let state = state("Pick one.", &observation(crowded), &[]);
+        let observation = observation(crowded);
 
-        let sent = state["elements"]
-            .as_array()
-            .unwrap_or_else(|| panic!("elements must be an array"))
-            .len();
+        let state = state("Pick one.", &observation, &[]);
+        assert!(
+            state.get("elements").is_none(),
+            "the element list duplicated the options and must not come back"
+        );
+
+        let built = questions("Pick one.", &observation);
+        let Some(Question::Choice { criteria, .. }) = built.get(CLICK_TARGET) else {
+            panic!("a crowded page must offer a click target question");
+        };
         assert_eq!(
-            sent,
+            criteria.len(),
             crate::action::MAX_TARGET_OPTIONS,
-            "the state must carry exactly the offered candidates"
+            "the offered set stays capped"
         );
         assert!(
-            sent < observed,
-            "sending every observed element is the cost being removed: {sent} of {observed}"
+            criteria.len() < observed,
+            "sending every observed candidate is the cost being removed: {} of {observed}",
+            criteria.len()
         );
     }
 
-    /// A page inside the cap is unaffected: every element stays reachable, so
-    /// nothing is lost on the ordinary case.
+    /// The label carries value and state, which is what a decision judging
+    /// whether a goal is met needs and what the removed element list used to
+    /// carry. Losing it would be a real regression, so it is asserted here.
     #[test]
-    fn a_small_page_still_sends_every_element() {
-        let small = page(&[("textbox", "Where from?"), ("button", "Search")]);
-        let state = state("Find a flight.", &observation(small), &[]);
-        assert_eq!(
-            state["elements"]
-                .as_array()
-                .unwrap_or_else(|| panic!("elements must be an array"))
-                .len(),
-            2
-        );
+    fn an_offered_label_still_carries_value_and_state() {
+        let mut field = Element::new("e1", "textbox", "Search");
+        field.value = Some("ddr5".to_string());
+        field.state = vec!["disabled".to_string()];
+        let label = field.label();
+        assert!(label.contains("[e1]"), "{label}");
+        assert!(label.contains("textbox"), "{label}");
+        assert!(label.contains("Search"), "{label}");
+        assert!(label.contains("disabled"), "{label}");
+        assert!(label.contains("ddr5"), "{label}");
     }
 
     /// The real guard: the provider's own validator must accept every set we
