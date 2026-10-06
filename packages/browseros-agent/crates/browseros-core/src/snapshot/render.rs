@@ -91,35 +91,65 @@ struct RenderContext<'a, 'b> {
 /// turn one line into a paragraph.
 const BORROWED_NAME_MAX: usize = 120;
 
+/// How far into a discarded subtree a label may be found. The observed markup
+/// is `label > div > text`, so two levels is the case that matters and a bound
+/// keeps a deep wrapper from pulling in a whole section.
+const BORROWED_NAME_MAX_DEPTH: usize = 3;
+
 impl RenderContext<'_, '_> {
-    /// Text carried by a node's own skipped children, for a node the
-    /// accessibility tree left unnamed.
+    /// Text from the part of a node's subtree the renderer is about to discard,
+    /// for a node the accessibility tree left unnamed.
     ///
     /// A facet rendered as a `visibility: hidden` checkbox behind a clickable
-    /// label has no accessible name, and the label's text sits in a StaticText
-    /// child that `SKIP_ROLES` discards. The control was then offered as one of
-    /// a hundred identical nameless clickables with nothing to choose between
-    /// them. Only direct children are read, and only skipped ones, so a named
-    /// child's text is never duplicated onto its parent.
-    fn text_of_skipped_children(&self, node: &AxNode) -> String {
+    /// label has no accessible name. Its text is not a direct child either: the
+    /// markup is `label > div > text`, and that middle div is an unnamed generic
+    /// the renderer drops, so the text under it was lost with it. A real listing
+    /// page offered 99 such controls as identical nameless clickables with
+    /// nothing to choose between them.
+    ///
+    /// Descent stops at any node that will render on its own line, so a named
+    /// sibling's text is never stolen onto its parent.
+    fn text_of_discarded_subtree(&self, node: &AxNode, depth: usize) -> String {
+        if depth >= BORROWED_NAME_MAX_DEPTH {
+            return String::new();
+        }
         let mut parts: Vec<String> = Vec::new();
         for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
             let Some(child) = self.by_id.get(child_id).copied() else {
                 continue;
             };
-            let Some(role) = str_val(child.role.as_ref()) else {
-                continue;
+            let role = if child.ignored.unwrap_or(false) {
+                None
+            } else {
+                str_val(child.role.as_ref())
             };
-            if !is_skip_role(&role) {
+            let name = str_val(child.name.as_ref()).unwrap_or_default();
+            let is_cursor_hit = child
+                .backend_dom_node_id
+                .and_then(|id| {
+                    self.opts
+                        .cursor_hits
+                        .as_ref()
+                        .map(|hits| hits.contains_key(&id))
+                })
+                .unwrap_or(false);
+            // A child that renders carries its own line. Leave it alone.
+            if !is_dropped(role.as_deref(), &name, is_cursor_hit) {
                 continue;
             }
-            let text = str_val(child.name.as_ref()).unwrap_or_default();
-            let text = text.trim();
-            if !text.is_empty() {
+            let text = name.trim();
+            if text.is_empty() {
+                parts.push(self.text_of_discarded_subtree(child, depth + 1));
+            } else {
                 parts.push(text.to_string());
             }
         }
-        let joined = parts.join(" ");
+        let joined = parts
+            .iter()
+            .map(|part| part.trim())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
         if joined.chars().count() > BORROWED_NAME_MAX {
             joined.chars().take(BORROWED_NAME_MAX).collect()
         } else {
@@ -181,7 +211,7 @@ impl RenderContext<'_, '_> {
         // display, and only after the drop decision above, so the set of
         // rendered nodes is unchanged and nothing previously hidden appears.
         let borrowed = if name.is_empty() {
-            self.text_of_skipped_children(node)
+            self.text_of_discarded_subtree(node, 0)
         } else {
             String::new()
         };
@@ -476,6 +506,47 @@ mod tests {
         assert!(
             !rendered.contains("StaticText"),
             "the text node itself stays skipped: {rendered}"
+        );
+    }
+
+    /// The real markup is `label > div > text`, with the middle div an unnamed
+    /// generic the renderer drops, so the label has to be reachable through it.
+    #[test]
+    fn a_label_is_found_through_a_dropped_wrapper() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3", "4"]),
+            ax("3", "generic", &[]),
+            ax("4", "generic", &["5"]),
+            ax("5", "StaticText", &[]),
+        ];
+        nodes[4].name = Some(name("32 GB"));
+        nodes[1].backend_dom_node_id = Some(301);
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(
+            rendered.contains("LabelText \"32 GB\""),
+            "the label text sits two levels down and must still be found: {rendered}"
+        );
+    }
+
+    /// A named descendant renders on its own line, so its text must not also be
+    /// pulled onto the unnamed parent.
+    #[test]
+    fn a_rendered_descendants_text_is_not_stolen() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "button", &[]),
+        ];
+        nodes[2].name = Some(name("Apply"));
+        nodes[1].backend_dom_node_id = Some(401);
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(rendered.contains("button \"Apply\""), "{rendered}");
+        assert!(
+            !rendered.contains("LabelText \"Apply\""),
+            "a rendered child keeps its own text: {rendered}"
         );
     }
 
