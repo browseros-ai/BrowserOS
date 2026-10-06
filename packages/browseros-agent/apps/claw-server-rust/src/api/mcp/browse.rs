@@ -165,9 +165,20 @@ impl Driver for PageDriver {
         // position, which costs one wasted decision at a boundary at most: a
         // scroll that changes nothing leaves progress flat, and the loop's
         // stall rule ends a run that keeps doing it.
+        // The page's own title, not the first line of its tree. Reading the
+        // tree gave the caller things like `navigation "Shortcuts menu"` where
+        // a title was expected, while the real one was a lookup away.
+        let title = self
+            .browser
+            .pages
+            .get_info(PageId(self.page()))
+            .await
+            .map(|info| info.title)
+            .unwrap_or_default();
+
         Ok(Observation {
             url: snapshot.url.clone(),
-            title: title_of(&snapshot.text),
+            title,
             tree: snapshot.text,
             space: ActionSpace::new(elements, true, true),
         })
@@ -307,13 +318,6 @@ fn notices_in(content: &[ContentBlock]) -> Vec<String> {
 }
 
 /// The page title, read off the rendered tree's root line when it has one.
-fn title_of(tree: &str) -> String {
-    tree.lines()
-        .next()
-        .map(|line| line.trim_start_matches(['-', ' ']).to_string())
-        .unwrap_or_default()
-}
-
 /// What the caller is told, as text and as structured content.
 ///
 /// The outcome carries evidence rather than a verdict. A done decision is not
@@ -681,14 +685,5 @@ mod tests {
                 "note: tab group abc is not open.".to_string()
             ]
         );
-    }
-
-    #[test]
-    fn the_title_comes_off_the_tree_root() {
-        assert_eq!(
-            title_of("- Flight search\n  - button \"Go\""),
-            "Flight search"
-        );
-        assert_eq!(title_of(""), "");
     }
 }
