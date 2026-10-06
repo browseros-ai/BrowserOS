@@ -8,7 +8,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CaseContext, ContractCase } from './cases'
-import { expectError, expectOk, waitUntil } from './helpers'
+import { expectError, expectOk, refForLabel, waitUntil } from './helpers'
 import { imageOf, textOf } from './mcp-client'
 
 function magicHex(base64: string, bytes: number): string {
@@ -279,12 +279,7 @@ export const captureIoCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/upload.html'))
       const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-      const ref = snap
-        .split('\n')
-        .find((line) => line.includes('Single upload'))
-        ?.match(/\[ref=(e\d+)\]/)?.[1]
-      if (!ref)
-        throw new Error(`no single-upload ref in:\n${snap.slice(0, 300)}`)
+      const ref = refForLabel(snap, 'Single upload')
       const dir = await mkdtemp(join(tmpdir(), 'claw-upload-'))
       const file = join(dir, 'single-fixture.txt')
       await writeFile(file, 'single upload contents')
@@ -309,12 +304,7 @@ export const captureIoCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/upload.html'))
       const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-      const ref = snap
-        .split('\n')
-        .find((line) => line.includes('Multi upload'))
-        ?.match(/\[ref=(e\d+)\]/)?.[1]
-      if (!ref)
-        throw new Error(`no multi-upload ref in:\n${snap.slice(0, 300)}`)
+      const ref = refForLabel(snap, 'Multi upload')
       const dir = await mkdtemp(join(tmpdir(), 'claw-upload-'))
       const first = join(dir, 'multi-one.txt')
       const second = join(dir, 'multi-two.txt')
@@ -342,11 +332,7 @@ export const captureIoCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/links.html'))
       const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-      const ref = snap
-        .split('\n')
-        .find((line) => line.includes('Download report'))
-        ?.match(/\[ref=(e\d+)\]/)?.[1]
-      if (!ref) throw new Error(`no download ref in:\n${snap.slice(0, 300)}`)
+      const ref = refForLabel(snap, 'Download report')
       const text = expectOk(
         await ctx.mcp.callTool('download', { page, ref }),
         'download',
@@ -382,11 +368,7 @@ export const captureIoCases: ContractCase[] = [
       const paths: string[] = []
       for (const attempt of ['first', 'second']) {
         const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-        const ref = snap
-          .split('\n')
-          .find((line) => line.includes('Download report'))
-          ?.match(/\[ref=(e\d+)\]/)?.[1]
-        if (!ref) throw new Error(`no download ref on the ${attempt} attempt`)
+        const ref = refForLabel(snap, 'Download report')
         const text = expectOk(
           await ctx.mcp.callTool('download', { page, ref }),
           `download ${attempt}`,
@@ -428,11 +410,7 @@ export const captureIoCases: ContractCase[] = [
       // sat in the download folder.
       const page = await ctx.openPage(ctx.fixture('/links.html'))
       const snap = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-      const ref = snap
-        .split('\n')
-        .find((line) => line.includes('Download report'))
-        ?.match(/\[ref=(e\d+)\]/)?.[1]
-      if (!ref) throw new Error('no download ref')
+      const ref = refForLabel(snap, 'Download report')
       const text = expectOk(
         await ctx.mcp.callTool('download', { page, ref }),
         'download',
