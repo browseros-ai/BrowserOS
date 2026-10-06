@@ -399,7 +399,13 @@ pub async fn drive<O: Oracle, D: Driver>(
 
         // Progress that never improves means the run is going nowhere, whatever
         // the operations claim.
-        if step.decision.progress > best_progress {
+        //
+        // A claimed improvement only counts when the page actually moved. A model
+        // reporting progress rising on an action that changed nothing is
+        // describing its own confidence rather than the page, and letting that
+        // reset the counter is what let four dead scrolls in a row run on: each
+        // one claimed more progress than the last while the page sat still.
+        if page_changed && step.decision.progress > best_progress {
             best_progress = step.decision.progress;
             stalled = 0;
         } else {
@@ -811,6 +817,11 @@ mod tests {
     }
 
     /// Progress that never improves ends the run, whatever the operations claim.
+    ///
+    /// On a page nothing moves, every step counts against the limit including the
+    /// first: a baseline set by an action that changed nothing is not a baseline.
+    /// This used to cost one extra step, which at the measured cost of a decision
+    /// is the most expensive kind of waste there is.
     #[tokio::test]
     async fn a_run_whose_progress_never_improves_is_stopped() {
         let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Click, Some("e1"), 0.1, 0.5))]);
@@ -819,10 +830,35 @@ mod tests {
         assert_eq!(outcome.status, Status::Stalled);
         assert_eq!(
             browser.actions().len(),
-            1 + STALL_LIMIT as usize,
-            "the first step sets the progress baseline, then the limit counts \
-             the steps that fail to beat it"
+            STALL_LIMIT as usize,
+            "a step that changes nothing counts against the limit, the first included"
         );
+    }
+
+    /// The rule is about the page, not about the model's confidence. A run whose
+    /// actions do move the page keeps going even while it reports the same
+    /// progress, because the stall rule must not end work that is happening.
+    #[tokio::test]
+    async fn a_run_that_moves_the_page_is_not_called_stalled() {
+        let climbing = (1..=8)
+            .map(|index| {
+                Ok(step(
+                    Operation::Click,
+                    Some("e1"),
+                    0.1,
+                    f64::from(index) / 10.0,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let oracle = ScriptedOracle::new(climbing);
+        let browser = FakeBrowser::new(true);
+        let outcome = drive(&oracle, &browser, "Keep going.", budget(6)).await;
+        assert!(
+            matches!(outcome.status, Status::OutOfBudget { .. }),
+            "a run that keeps changing the page runs to its budget, got {:?}",
+            outcome.status
+        );
+        assert_eq!(browser.actions().len(), 6);
     }
 
     #[tokio::test]
