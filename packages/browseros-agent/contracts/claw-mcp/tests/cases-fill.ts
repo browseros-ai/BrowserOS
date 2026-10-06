@@ -249,7 +249,7 @@ export const fillCases: ContractCase[] = [
         const cleared = expectOk(await ctx.mcp.callTool('snapshot', { page }))
         const emptyLine = cleared
           .split('\n')
-          .find((line) => line.includes('textbox "Text field '))
+          .find((line) => line.includes('textbox "Text field'))
         if (!emptyLine?.endsWith(']')) {
           throw new Error('The iframe field was not cleared')
         }
