@@ -13,8 +13,15 @@ async function snapshot(ctx: CaseContext, page: number): Promise<string> {
 }
 
 function refFor(snapshot: string, needle: string): string {
+  // The fixture labels a field as `<label>Name <input></label>`, and the
+  // accessible name a browser computes for that lost its trailing space: the
+  // name is now `Name`, not `Name `. The needles here were written with the
+  // space, so it is ignored and both shapes match. `fieldRef` in the fill
+  // cases already matched this way, which is why those passed while these did
+  // not, on the same fixture in the same run.
+  const wanted = needle.replace(/\s+$/, '')
   for (const line of snapshot.split('\n')) {
-    if (line.includes(needle)) {
+    if (line.includes(wanted)) {
       const match = line.match(/\[ref=(e\d+)\]/)
       if (match) return match[1]
     }

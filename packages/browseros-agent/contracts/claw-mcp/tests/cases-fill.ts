@@ -227,9 +227,11 @@ export const fillCases: ContractCase[] = [
         // Cross-site DOM access is blocked in the parent. The accessibility
         // snapshot independently exposes the child field's value.
         const snapshot = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+        // Matched without the trailing space for the same reason `fieldRef`
+        // above does: the accessible name is `Text field`, not `Text field `.
         const filledLine = snapshot
           .split('\n')
-          .find((line) => line.includes('textbox "Text field '))
+          .find((line) => line.includes('textbox "Text field'))
         if (!filledLine?.endsWith(': "frame text"')) {
           throw new Error(
             `The iframe did not receive the requested text: ${snapshot}`,
