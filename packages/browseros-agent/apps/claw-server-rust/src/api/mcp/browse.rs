@@ -407,8 +407,8 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
             "Stopped: the run was no longer making progress. Continue with the page tools."
                 .to_string()
         }
-        Status::Unconfirmed { satisfied } => format!(
-            "The run reports the goal is done, with confidence {satisfied:.2}, below the bar to claim it. The page is where it finished: read it and decide for yourself."
+        Status::Unconfirmed { satisfied, progress } => format!(
+            "The goal looks met: progress {progress:.2}, confidence {satisfied:.2}, below the bar to assert it. The page is where the run left it, so read it and decide for yourself rather than calling again."
         ),
         Status::Stopped => {
             "Stopped by the operator. Nothing further was run; the page is where it was left."
@@ -630,11 +630,25 @@ mod tests {
         let (text, structured) = render(
             "Open the product page.",
             29,
-            &outcome(Status::Unconfirmed { satisfied: 0.42 }, vec![entry()]),
+            &outcome(
+                Status::Unconfirmed {
+                    satisfied: 0.42,
+                    progress: 0.98,
+                },
+                vec![entry()],
+            ),
             &[],
         );
         assert_eq!(structured["status"], json!("unconfirmed"));
         assert!(text.contains("0.42"), "the confidence is shown: {text}");
+        assert!(
+            text.contains("0.98"),
+            "the progress that justified this ending is shown too: {text}"
+        );
+        assert!(
+            text.contains("rather than calling again"),
+            "the caller is told not to retry work that is already done: {text}"
+        );
         assert!(
             text.contains("read it"),
             "the caller is pointed at the page: {text}"

@@ -23,6 +23,23 @@ pub const SATISFIED_THRESHOLD: f64 = 0.9;
 /// treated as stuck.
 pub const STALL_LIMIT: u32 = 3;
 
+/// Progress at or above which a decision's own answer says the goal is met.
+///
+/// The progress question's top criterion is the words "Every requirement of the
+/// goal is satisfied", so this answer is about the same proposition the
+/// satisfied gate asks about, on a scale the gate does not share. The loop read
+/// only the gate and discarded this, which is how a run that had already put the
+/// page in the requested state was handed back as blocked.
+///
+/// Calibrated against measured runs rather than assumed. A goal that was
+/// unambiguously complete answered 1.50, 1.43 and 1.07 on the terminal decision;
+/// goals barely begun answered 0.05 to 0.43. One threshold cannot separate those
+/// perfectly on a handful of samples, so this sits at the bottom of the complete
+/// band and the ending it produces is `Unconfirmed`, which tells the caller to
+/// look rather than asserting success. A false positive costs a read; a false
+/// negative is what sent callers away from finished work.
+pub const PROGRESS_MET: f64 = 1.0;
+
 /// Where decisions come from.
 ///
 /// A seam, so the loop's budgets and stop rules are testable with a scripted
@@ -86,7 +103,7 @@ pub enum Status {
     /// The model answered that the goal is done, but with confidence below
     /// [`SATISFIED_THRESHOLD`]. The work may well be finished; nothing here is
     /// sure enough to say so, and the caller is the one who can look.
-    Unconfirmed { satisfied: f64 },
+    Unconfirmed { satisfied: f64, progress: f64 },
     /// The operator stopped the session, or the caller went away.
     Stopped,
     /// An answer did not fit the observation, so nothing was executed.
@@ -160,6 +177,27 @@ impl Default for Budget {
 
 /// Drives one goal to a stopping point.
 pub async fn drive<O: Oracle, D: Driver>(
+    oracle: &O,
+    driver: &D,
+    goal: &str,
+    budget: Budget,
+) -> Outcome {
+    drive_to_a_stop(oracle, driver, goal, budget).await
+}
+
+/// Whether a decision's own answer says the goal is met on a page the run moved.
+///
+/// Both halves matter. The progress answer is the only signal that saw the page
+/// after the last action, because a trail entry records the state the decision
+/// was looking at before acting: on a goal that completed in one click the trail
+/// read 0.05 while the decision that saw it finished read 1.50. And a run that
+/// never moved the page has no standing to claim anything, so progress asserted
+/// about a page nothing touched cannot rewrite an ending.
+fn goal_looks_met(decision: &Decision, trail: &[TrailEntry]) -> bool {
+    decision.progress >= PROGRESS_MET && trail.iter().any(|entry| entry.page_changed)
+}
+
+async fn drive_to_a_stop<O: Oracle, D: Driver>(
     oracle: &O,
     driver: &D,
     goal: &str,
@@ -294,6 +332,7 @@ pub async fn drive<O: Oracle, D: Driver>(
                 return finish(
                     Status::Unconfirmed {
                         satisfied: step.decision.satisfied,
+                        progress: step.decision.progress,
                     },
                     trail,
                     url,
@@ -303,6 +342,21 @@ pub async fn drive<O: Oracle, D: Driver>(
                 );
             }
             Operation::Blocked => {
+                // A decision that cannot proceed and also reports every
+                // requirement met is describing a finished page, not a failure.
+                if goal_looks_met(&step.decision, &trail) {
+                    return finish(
+                        Status::Unconfirmed {
+                            satisfied: step.decision.satisfied,
+                            progress: step.decision.progress,
+                        },
+                        trail,
+                        url,
+                        title,
+                        input_tokens,
+                        output_tokens,
+                    );
+                }
                 return finish(
                     Status::Blocked,
                     trail,
@@ -412,6 +466,19 @@ pub async fn drive<O: Oracle, D: Driver>(
             stalled += 1;
             if stalled >= STALL_LIMIT {
                 let (url, title) = settled_location(driver, url, title).await;
+                if goal_looks_met(&step.decision, &trail) {
+                    return finish(
+                        Status::Unconfirmed {
+                            satisfied: step.decision.satisfied,
+                            progress: step.decision.progress,
+                        },
+                        trail,
+                        url,
+                        title,
+                        input_tokens,
+                        output_tokens,
+                    );
+                }
                 return finish(
                     Status::Stalled,
                     trail,
@@ -710,13 +777,89 @@ mod tests {
         let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Done, None, 0.3, 1.0))]);
         let browser = FakeBrowser::new(true);
         let outcome = drive(&oracle, &browser, "Submit the form.", budget(10)).await;
-        assert_eq!(outcome.status, Status::Unconfirmed { satisfied: 0.3 });
+        assert_eq!(
+            outcome.status,
+            Status::Unconfirmed {
+                satisfied: 0.3,
+                progress: 1.0
+            }
+        );
         assert!(!outcome.status.is_satisfied());
         assert_ne!(
             outcome.status,
             Status::Stalled,
             "a run that reached the goal must not be reported as going nowhere"
         );
+    }
+
+    /// The misreporting this corrects, measured on real runs: calls that had
+    /// already put the page in the state the goal asked for, with the filter in
+    /// the url and the results changed, came back as `blocked` and `stalled`.
+    /// A decision that cannot proceed and also reports every requirement met is
+    /// describing a finished page.
+    #[tokio::test]
+    async fn a_blocked_decision_that_reports_the_goal_met_is_not_a_failure() {
+        let oracle = ScriptedOracle::new(vec![
+            Ok(step(Operation::Click, Some("e1"), 0.2, 0.4)),
+            Ok(step(Operation::Blocked, None, 0.45, PROGRESS_MET)),
+        ]);
+        let browser = FakeBrowser::new(true);
+        let outcome = drive(&oracle, &browser, "Tick the filter.", budget(4)).await;
+        assert!(
+            matches!(outcome.status, Status::Unconfirmed { .. }),
+            "a finished page must not read as blocked, got {:?}",
+            outcome.status
+        );
+    }
+
+    /// The same rule at the stall exit, which is the other way a finished run was
+    /// handed back as a failure.
+    #[tokio::test]
+    async fn a_stalled_run_that_reports_the_goal_met_is_not_a_failure() {
+        // Moves the page every time, so only the stall rule can end it.
+        let steps = (0..8)
+            .map(|_| Ok(step(Operation::Click, Some("e1"), 0.3, PROGRESS_MET)))
+            .collect::<Vec<_>>();
+        let oracle = ScriptedOracle::new(steps);
+        let browser = FakeBrowser::new(true);
+        let outcome = drive(&oracle, &browser, "Tick the filter.", budget(20)).await;
+        assert!(
+            matches!(outcome.status, Status::Unconfirmed { .. }),
+            "a finished page must not read as stalled, got {:?}",
+            outcome.status
+        );
+    }
+
+    /// Progress asserted about a page nothing touched cannot rewrite an ending,
+    /// or a model could talk a genuinely blocked run into looking finished.
+    #[tokio::test]
+    async fn progress_on_a_page_that_never_moved_does_not_rewrite_the_ending() {
+        let oracle = ScriptedOracle::new(vec![
+            Ok(step(Operation::Click, Some("e1"), 0.2, 0.4)),
+            // Below the satisfaction gate on purpose, so the blocked branch is
+            // what this test actually exercises.
+            Ok(step(Operation::Blocked, None, 0.5, PROGRESS_MET + 1.0)),
+        ]);
+        let browser = FakeBrowser::new(false);
+        let outcome = drive(&oracle, &browser, "Tick the filter.", budget(4)).await;
+        assert_eq!(
+            outcome.status,
+            Status::Blocked,
+            "a run that moved nothing keeps its blocked ending"
+        );
+    }
+
+    /// A blocked run that makes no claim of completion is reported as blocked,
+    /// which is the case the rule must not swallow.
+    #[tokio::test]
+    async fn a_blocked_run_that_got_nowhere_still_reports_blocked() {
+        let oracle = ScriptedOracle::new(vec![
+            Ok(step(Operation::Click, Some("e1"), 0.2, 0.3)),
+            Ok(step(Operation::Blocked, None, 0.2, 0.4)),
+        ]);
+        let browser = FakeBrowser::new(true);
+        let outcome = drive(&oracle, &browser, "Do the impossible.", budget(4)).await;
+        assert_eq!(outcome.status, Status::Blocked);
     }
 
     /// The counter this corrects: every ending that happens before an action
