@@ -51,6 +51,12 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         if let Some(notice) = run_script_notice(context.call) {
             return Ok(Some(append_notice(context.result, notice)));
         }
+        // Closing a page releases its claim, and the claims effect runs before this
+        // one, so looking the owner up here finds nothing and reports the agent's
+        // own tab as the user's. Whose tab it was is not useful once it is gone.
+        if context.call.flags.close_page {
+            return Ok(None);
+        }
         let Some(page_id) = extract_page_id(context.call) else {
             return Ok(None);
         };
@@ -315,6 +321,30 @@ mod tests {
         assert!(!annotated.is_error);
         let text = text_of(&annotated);
         assert!(text.contains("user's own tabs"), "{text}");
+        Ok(())
+    }
+
+    /// The bug this closes: closing a page releases its claim, and the claims
+    /// effect runs first, so the lookup here found nothing and told an agent the
+    /// tab it had just opened and closed itself was one of the user's.
+    #[tokio::test]
+    async fn closing_a_page_says_nothing_about_whose_it_was() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call(
+            "tabs",
+            json!({ "action": "close", "page": 5 }),
+        )
+        .await?;
+        assert!(
+            call.flags.close_page,
+            "this test only means something while the call is recognised as a close"
+        );
+        // The claim is already gone by the time this effect runs, which is exactly
+        // the state that produced the wrong notice.
+        let ok = ToolResult::text("closed page 5", None);
+        assert!(
+            run(&call, &ok).await.is_none(),
+            "a closed page must not be labelled as anyone's"
+        );
         Ok(())
     }
 

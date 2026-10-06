@@ -237,6 +237,17 @@ impl Driver for PageDriver {
         if let (Some(before), Some(after)) = (before, self.open_page_ids().await)
             && let Some(opened) = newly_opened(&before, &after)
         {
+            // Claimed the same way a page opened through tabs is, so it joins the
+            // caller's tab group and does not read back as the user's own tab.
+            crate::api::mcp::effects::ownership_claims::record_new_page(
+                &self.state,
+                &self.identity,
+                Some(&self.browser),
+                self.session_id.as_str(),
+                opened,
+                crate::clock::now_epoch_ms(),
+            )
+            .await;
             self.page.store(opened, Ordering::Relaxed);
             return Ok(true);
         }
