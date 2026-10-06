@@ -176,6 +176,15 @@ mod tests {
         is_recoverable_sqlite_error, is_recoverable_sqlite_result_code, migration::Migrator,
         open_and_migrate,
     };
+
+    /// Taken from the registry rather than written down, so adding a migration
+    /// does not need four hardcoded counts bumped with it. The assertion means
+    /// "every registered migration was applied", which is what these tests are
+    /// actually about.
+    fn expected_migration_count() -> usize {
+        use sea_orm_migration::MigratorTrait;
+        Migrator::migrations().len()
+    }
     use crate::error::AppError;
     use sea_orm::{
         ConnectionTrait, DbBackend, DbErr, Statement,
@@ -331,7 +340,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), expected_migration_count());
         assert_eq!(
             migrations[0].try_get::<String>("", "version")?,
             "m0001_baseline"
@@ -551,7 +560,10 @@ mod tests {
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
             .await?;
-        assert_eq!(migration_count, 20);
+        assert_eq!(
+            migration_count,
+            i64::try_from(expected_migration_count()).unwrap_or(i64::MAX)
+        );
         conn.close().await?;
         Ok(())
     }
@@ -615,7 +627,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations ORDER BY version".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), expected_migration_count());
         assert_eq!(
             migrations
                 .iter()
@@ -638,7 +650,10 @@ mod tests {
             .await?
             .ok_or_else(|| anyhow::anyhow!("migration count missing"))?
             .try_get::<i64>("", "count")?;
-        assert_eq!(migration_count, 20);
+        assert_eq!(
+            migration_count,
+            i64::try_from(expected_migration_count()).unwrap_or(i64::MAX)
+        );
         Ok(())
     }
 
@@ -774,7 +789,7 @@ mod tests {
                 "SELECT version FROM seaql_migrations".to_string(),
             ))
             .await?;
-        assert_eq!(migrations.len(), 20);
+        assert_eq!(migrations.len(), expected_migration_count());
         Ok(())
     }
 
