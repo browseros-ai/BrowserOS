@@ -109,9 +109,14 @@ impl RenderContext<'_, '_> {
     ///
     /// Descent stops at any node that will render on its own line, so a named
     /// sibling's text is never stolen onto its parent.
-    fn text_of_discarded_subtree(&self, node: &AxNode, depth: usize) -> String {
+    /// Returns `None` when the text must not be borrowed at all, because a
+    /// descendant that renders already carries it as its own accessible name.
+    /// `<label>Name <input></label>` is that case: the label's text is the
+    /// textbox's name, so lifting it onto the label would print the same name
+    /// twice and leave a line that looks like the control but has no ref.
+    fn text_of_discarded_subtree(&self, node: &AxNode, depth: usize) -> Option<String> {
         if depth >= BORROWED_NAME_MAX_DEPTH {
-            return String::new();
+            return Some(String::new());
         }
         let mut parts: Vec<String> = Vec::new();
         for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
@@ -133,13 +138,18 @@ impl RenderContext<'_, '_> {
                         .map(|hits| hits.contains_key(&id))
                 })
                 .unwrap_or(false);
-            // A child that renders carries its own line. Leave it alone.
+            // A child that renders carries its own line. If it is named, that
+            // name is what this node's text was for, so there is nothing here
+            // to borrow.
             if !is_dropped(role.as_deref(), &name, is_cursor_hit) {
+                if !name.trim().is_empty() {
+                    return None;
+                }
                 continue;
             }
             let text = name.trim();
             if text.is_empty() {
-                parts.push(self.text_of_discarded_subtree(child, depth + 1));
+                parts.push(self.text_of_discarded_subtree(child, depth + 1)?);
             } else {
                 parts.push(text.to_string());
             }
@@ -150,11 +160,11 @@ impl RenderContext<'_, '_> {
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join(" ");
-        if joined.chars().count() > BORROWED_NAME_MAX {
+        Some(if joined.chars().count() > BORROWED_NAME_MAX {
             joined.chars().take(BORROWED_NAME_MAX).collect()
         } else {
             joined
-        }
+        })
     }
 
     fn visit(&mut self, node_id: &str, depth: usize) {
@@ -211,7 +221,7 @@ impl RenderContext<'_, '_> {
         // display, and only after the drop decision above, so the set of
         // rendered nodes is unchanged and nothing previously hidden appears.
         let borrowed = if name.is_empty() {
-            self.text_of_discarded_subtree(node, 0)
+            self.text_of_discarded_subtree(node, 0).unwrap_or_default()
         } else {
             String::new()
         };
@@ -550,7 +560,32 @@ mod tests {
         );
     }
 
-    /// A node that already has a name keeps it, so a named parent never has a
+    /// The regression this closes, caught on the contract fixture rather than
+    /// in CI: `<label>Name <input></label>` has the label's text serving as the
+    /// textbox's accessible name. Borrowing it printed `LabelText "Name"` with
+    /// no ref immediately above `textbox "Name"`, and a helper that takes the
+    /// first line matching the label then found a line it could not act on.
+    #[test]
+    fn text_a_named_control_already_uses_is_not_borrowed() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3", "4"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "textbox", &[]),
+        ];
+        nodes[2].name = Some(name("Name"));
+        nodes[3].name = Some(name("Name"));
+        nodes[3].backend_dom_node_id = Some(501);
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(rendered.contains("textbox \"Name\""), "{rendered}");
+        assert!(
+            !rendered.contains("LabelText \"Name\""),
+            "the label must not become a nameless decoy for its own field: {rendered}"
+        );
+    }
+
+    /// A named parent keeps its name, so a named parent never has a
     /// child's text appended to it.
     #[test]
     fn a_named_control_does_not_borrow_anything() {
