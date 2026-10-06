@@ -164,8 +164,19 @@ impl Head {
             1 => Self::Implied(candidates[0].reference.clone()),
             _ => {
                 let dropped = candidates.len().saturating_sub(MAX_TARGET_OPTIONS);
-                let options = candidates
+                // Taking the first 250 in document order spends the budget on
+                // whatever sits at the top of the page, which on a search result
+                // or an article is navigation, filters and footnote markers, and
+                // drops the content. A model choosing by label can do nothing
+                // with an unnamed control anyway, so named candidates are kept
+                // first and anything dropped is the least useful of them.
+                // Document order is preserved within each group.
+                let (named, unnamed): (Vec<&&Element>, Vec<&&Element>) = candidates
                     .iter()
+                    .partition(|element| !element.name.trim().is_empty());
+                let options = named
+                    .into_iter()
+                    .chain(unnamed)
                     .take(MAX_TARGET_OPTIONS)
                     .map(|element| (element.reference.clone(), element.label()))
                     .collect();
@@ -395,6 +406,51 @@ mod tests {
         assert!(
             options.len() <= PROTOCOL_MAX_OPTIONS,
             "a head over the protocol limit is refused outright"
+        );
+    }
+
+    /// The bug this closes: the cap was spent on whatever came first in document
+    /// order, which on a real page is navigation chrome and footnote markers,
+    /// and the named content was what got dropped.
+    #[test]
+    fn the_cap_is_spent_on_named_candidates_before_unnamed_ones() {
+        // Unnamed controls first, as a page's chrome and footnote markers are.
+        let mut elements: Vec<Element> = (1..=MAX_TARGET_OPTIONS)
+            .map(|index| Element::new(format!("chrome{index}"), "link", ""))
+            .collect();
+        elements.push(Element::new("content1", "link", "Add to basket"));
+        elements.push(Element::new("content2", "link", "32GB DDR5 6000MHz"));
+
+        let space = ActionSpace::new(elements, false, false);
+        let Head::Question { options, dropped } = &space.click else {
+            panic!("expected a question");
+        };
+        assert_eq!(options.len(), MAX_TARGET_OPTIONS);
+        assert_eq!(
+            *dropped, 2,
+            "the count dropped is unchanged by the ordering"
+        );
+        assert!(
+            options.contains_key("content1") && options.contains_key("content2"),
+            "a named candidate must survive the cap"
+        );
+    }
+
+    /// Document order still decides between candidates of the same kind, so the
+    /// offered set stays stable for a page that has not changed.
+    #[test]
+    fn named_candidates_keep_their_document_order() {
+        let elements: Vec<Element> = (1..=MAX_TARGET_OPTIONS + 3)
+            .map(|index| Element::new(format!("e{index}"), "button", format!("Button {index}")))
+            .collect();
+        let space = ActionSpace::new(elements, false, false);
+        let Head::Question { options, .. } = &space.click else {
+            panic!("expected a question");
+        };
+        assert!(options.contains_key("e1"), "the first is kept");
+        assert!(
+            !options.contains_key(&format!("e{}", MAX_TARGET_OPTIONS + 3)),
+            "the last past the cap is dropped"
         );
     }
 

@@ -455,8 +455,16 @@ fn describe(entry: &TrailEntry) -> String {
     } else {
         "no change"
     };
+    // A step that chose from a capped list chose from part of the page. Saying
+    // so in the text matters: a caller reading only the prose had no way to know
+    // the decision never saw the rest.
+    let capped = if entry.dropped_targets > 0 {
+        format!(", {} targets not offered", entry.dropped_targets)
+    } else {
+        String::new()
+    };
     format!(
-        "{}{target} (confidence {:.2}, {changed}, {}ms)",
+        "{}{target} (confidence {:.2}, {changed}, {}ms{capped})",
         entry.operation.as_str(),
         entry.operation_confidence,
         entry.latency_ms
