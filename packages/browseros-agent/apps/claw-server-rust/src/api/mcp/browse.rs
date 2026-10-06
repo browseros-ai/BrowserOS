@@ -18,7 +18,7 @@ use browseros_policy::drive::{Driver, Outcome, Status, TrailEntry};
 use browseros_policy::{Observation, Operation};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio_util::sync::CancellationToken;
 
@@ -47,6 +47,10 @@ pub struct PageDriver {
     /// someone else. Collected so the caller sees them, since a run makes these
     /// actions on its behalf.
     notices: Mutex<Vec<String>>,
+    /// Scroll directions that have already been tried and moved nothing, so a
+    /// short page stops being offered a scroll it cannot perform.
+    scroll_down_dead: AtomicBool,
+    scroll_up_dead: AtomicBool,
 }
 
 impl PageDriver {
@@ -79,6 +83,8 @@ impl PageDriver {
             default_tab_group_id,
             state,
             notices: Mutex::new(Vec::new()),
+            scroll_down_dead: AtomicBool::new(false),
+            scroll_up_dead: AtomicBool::new(false),
         })
     }
 
@@ -180,7 +186,11 @@ impl Driver for PageDriver {
             url: snapshot.url.clone(),
             title,
             tree: snapshot.text,
-            space: ActionSpace::new(elements, true, true),
+            space: ActionSpace::new(
+                elements,
+                !self.scroll_down_dead.load(Ordering::Relaxed),
+                !self.scroll_up_dead.load(Ordering::Relaxed),
+            ),
         })
     }
 
@@ -239,6 +249,10 @@ impl Driver for PageDriver {
         {
             // Claimed the same way a page opened through tabs is, so it joins the
             // caller's tab group and does not read back as the user's own tab.
+            // A new page scrolls on its own terms, so both directions are
+            // offered again.
+            self.scroll_down_dead.store(false, Ordering::Relaxed);
+            self.scroll_up_dead.store(false, Ordering::Relaxed);
             crate::api::mcp::effects::ownership_claims::record_new_page(
                 &self.state,
                 &self.identity,
@@ -251,7 +265,13 @@ impl Driver for PageDriver {
             self.page.store(opened, Ordering::Relaxed);
             return Ok(true);
         }
-        Ok(changed_from(&result))
+        let changed = changed_from(&result);
+        match retired_direction(operation, changed) {
+            Some(Operation::ScrollDown) => self.scroll_down_dead.store(true, Ordering::Relaxed),
+            Some(Operation::ScrollUp) => self.scroll_up_dead.store(true, Ordering::Relaxed),
+            _ => {}
+        }
+        Ok(changed)
     }
 }
 
@@ -268,6 +288,22 @@ pub fn decision_tokens_in(result: &ToolResult) -> (u64, u64) {
     };
     let read = |key: &str| structured.get(key).and_then(Value::as_u64).unwrap_or(0);
     (read("inputTokens"), read("outputTokens"))
+}
+
+/// The scroll direction to stop offering, if this action retired one.
+///
+/// A page that fits the viewport cannot scroll, and offering both directions
+/// anyway cost one wasted decision per direction per step until the budget ran
+/// out. A direction that moved nothing once will not move anything later on the
+/// same page, so it is withdrawn rather than offered again.
+fn retired_direction(operation: Operation, changed: bool) -> Option<Operation> {
+    if changed {
+        return None;
+    }
+    match operation {
+        Operation::ScrollDown | Operation::ScrollUp => Some(operation),
+        _ => None,
+    }
 }
 
 /// The page an action opened, if it opened one.
@@ -690,6 +726,30 @@ mod tests {
         // Nothing to go on is reported as no change rather than guessed.
         let silent = ToolResult::text("done", None);
         assert!(!changed_from(&silent));
+    }
+
+    /// The cost this closes: both scroll directions were offered on every step
+    /// regardless of whether the page could scroll, so a page that fits the
+    /// viewport burned a decision per direction per step. Observed as four dead
+    /// scrolls on one short page.
+    #[test]
+    fn a_scroll_that_moves_nothing_retires_that_direction() {
+        assert_eq!(
+            retired_direction(Operation::ScrollDown, false),
+            Some(Operation::ScrollDown)
+        );
+        assert_eq!(
+            retired_direction(Operation::ScrollUp, false),
+            Some(Operation::ScrollUp)
+        );
+
+        // A scroll that worked stays available.
+        assert_eq!(retired_direction(Operation::ScrollDown, true), None);
+
+        // Only scrolling is withdrawn. A click that changes nothing may still be
+        // the right thing to try on a control that needs two.
+        assert_eq!(retired_direction(Operation::Click, false), None);
+        assert_eq!(retired_direction(Operation::Wait, false), None);
     }
 
     /// The bug this closes: a click on a product link opens a new tab, so the
