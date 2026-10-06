@@ -20,6 +20,11 @@ pub const PROTOCOL_MAX_OPTIONS: usize = 255;
 /// for a single decision, against under 150 for a small page.
 pub const MAX_TARGET_OPTIONS: usize = 250;
 
+/// Most of the target budget goes to named candidates, but not all of it: the
+/// remainder is held for unnamed ones so a page whose controls are unnamed does
+/// not lose every one of them to a crowd of named links.
+pub const NAMED_SHARE_PERCENT: usize = 80;
+
 /// One element the page offered, reduced to what a decision needs.
 ///
 /// Deliberately not a browser type: the policy is testable without a browser,
@@ -166,17 +171,33 @@ impl Head {
                 let dropped = candidates.len().saturating_sub(MAX_TARGET_OPTIONS);
                 // Taking the first 250 in document order spends the budget on
                 // whatever sits at the top of the page, which on a search result
-                // or an article is navigation, filters and footnote markers, and
-                // drops the content. A model choosing by label can do nothing
-                // with an unnamed control anyway, so named candidates are kept
-                // first and anything dropped is the least useful of them.
-                // Document order is preserved within each group.
+                // or an article is navigation and footnote markers, and drops the
+                // content. A model choosing by label can do little with an
+                // unnamed control, so named candidates come first and document
+                // order decides within each group.
+                //
+                // Named candidates may not take every slot, though. On a listing
+                // page there were 255 named product links and 109 unnamed
+                // controls, so named-first evicted the unnamed group entirely and
+                // with it every filter on the page: offered went from 85 to 0 and
+                // a run could not narrow a listing at all. A floor keeps the
+                // smaller group reachable, because a class that is never offered
+                // cannot be chosen however little the model can do with it.
                 let (named, unnamed): (Vec<&&Element>, Vec<&&Element>) = candidates
                     .iter()
                     .partition(|element| !element.name.trim().is_empty());
+                let unnamed_floor = if unnamed.is_empty() {
+                    0
+                } else {
+                    (MAX_TARGET_OPTIONS - MAX_TARGET_OPTIONS * NAMED_SHARE_PERCENT / 100)
+                        .min(unnamed.len())
+                };
+                let named_slots = MAX_TARGET_OPTIONS.saturating_sub(unnamed_floor);
                 let options = named
-                    .into_iter()
-                    .chain(unnamed)
+                    .iter()
+                    .take(named_slots)
+                    .chain(unnamed.iter())
+                    .chain(named.iter().skip(named_slots))
                     .take(MAX_TARGET_OPTIONS)
                     .map(|element| (element.reference.clone(), element.label()))
                     .collect();
@@ -467,6 +488,55 @@ mod tests {
             options.contains_key("content1") && options.contains_key("content2"),
             "a named candidate must survive the cap"
         );
+    }
+
+    /// The regression this closes, measured on a real listing page: 255 named
+    /// product links and 109 unnamed controls against a cap of 250, so
+    /// named-first took every slot and evicted all 109, which was every filter
+    /// on the page. Offered went from 85 under document order to 0.
+    #[test]
+    fn a_crowd_of_named_candidates_cannot_evict_every_unnamed_one() {
+        let mut elements: Vec<Element> = (1..=255)
+            .map(|index| Element::new(format!("link{index}"), "link", format!("Product {index}")))
+            .collect();
+        elements
+            .extend((1..=109).map(|index| Element::new(format!("facet{index}"), "LabelText", "")));
+
+        let space = ActionSpace::new(elements, false, false);
+        let Head::Question { options, dropped } = &space.click else {
+            panic!("expected a question");
+        };
+        assert_eq!(options.len(), MAX_TARGET_OPTIONS);
+        assert_eq!(*dropped, 364 - MAX_TARGET_OPTIONS);
+
+        let unnamed_offered = options.keys().filter(|r| r.starts_with("facet")).count();
+        assert!(
+            unnamed_offered > 0,
+            "a class that is never offered cannot be chosen"
+        );
+        assert_eq!(
+            unnamed_offered,
+            MAX_TARGET_OPTIONS - MAX_TARGET_OPTIONS * NAMED_SHARE_PERCENT / 100
+        );
+        // Named candidates still take the majority, which is the point of the
+        // ordering in the first place.
+        assert!(options.keys().filter(|r| r.starts_with("link")).count() > unnamed_offered);
+    }
+
+    /// With room for everything the floor changes nothing, so an ordinary page
+    /// is unaffected.
+    #[test]
+    fn the_floor_does_nothing_when_every_candidate_fits() {
+        let mut elements: Vec<Element> = (1..=10)
+            .map(|i| Element::new(format!("a{i}"), "link", format!("A {i}")))
+            .collect();
+        elements.extend((1..=5).map(|i| Element::new(format!("b{i}"), "LabelText", "")));
+        let space = ActionSpace::new(elements, false, false);
+        let Head::Question { options, dropped } = &space.click else {
+            panic!("expected a question");
+        };
+        assert_eq!(options.len(), 15);
+        assert_eq!(*dropped, 0);
     }
 
     /// Document order still decides between candidates of the same kind, so the
