@@ -321,10 +321,10 @@ fn notices_in(content: &[ContentBlock]) -> Vec<String> {
 /// What the caller is told, as text and as structured content.
 ///
 /// The outcome carries evidence rather than a verdict. A done decision is not
-/// proof, so the caller gets the final url, what ran, and the confidence behind
-/// each step, and verifies in one turn of its own.
+/// proof, so the caller gets the page and url it finished on, what ran, and the
+/// confidence behind each step, and verifies in one turn of its own.
 #[must_use]
-pub fn render(goal: &str, outcome: &Outcome, notices: &[String]) -> (String, Value) {
+pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (String, Value) {
     let mut lines = Vec::new();
     lines.push(match &outcome.status {
         Status::Satisfied => {
@@ -345,6 +345,9 @@ pub fn render(goal: &str, outcome: &Outcome, notices: &[String]) -> (String, Val
             "Stopped: the run was no longer making progress. Continue with the page tools."
                 .to_string()
         }
+        Status::Unconfirmed { satisfied } => format!(
+            "The run reports the goal is done, with confidence {satisfied:.2}, below the bar to claim it. The page is where it finished: read it and decide for yourself."
+        ),
         Status::Stopped => {
             "Stopped by the operator. Nothing further was run; the page is where it was left."
                 .to_string()
@@ -357,10 +360,12 @@ pub fn render(goal: &str, outcome: &Outcome, notices: &[String]) -> (String, Val
         ),
     });
     lines.push(format!(
-        "goal: {goal}\nat: {} ({})\ndecisions: {}, {}ms, {} input and {} output tokens",
+        "goal: {goal}\nat: page {} {} ({})\ndecisions: {} over {} actions, {}ms, {} input and {} output tokens",
+        page,
         outcome.url,
         outcome.title,
-        outcome.decisions(),
+        outcome.decisions,
+        outcome.actions(),
         outcome.elapsed_ms,
         outcome.input_tokens,
         outcome.output_tokens,
@@ -382,9 +387,14 @@ pub fn render(goal: &str, outcome: &Outcome, notices: &[String]) -> (String, Val
 
     let structured = json!({
         "status": status_name(&outcome.status),
+        // Where the run actually finished, which is not where it started once an
+        // action opened a new tab. Without it a caller had to list tabs and guess
+        // which one held the result.
+        "page": page,
         "url": outcome.url,
         "title": outcome.title,
-        "decisions": outcome.decisions(),
+        "decisions": outcome.decisions,
+        "actions": outcome.actions(),
         "elapsedMs": outcome.elapsed_ms,
         "inputTokens": outcome.input_tokens,
         "outputTokens": outcome.output_tokens,
@@ -434,6 +444,7 @@ fn status_name(status: &Status) -> &'static str {
         Status::NeedsText { .. } => "needs_text",
         Status::OutOfBudget { .. } => "out_of_budget",
         Status::Stalled => "stalled",
+        Status::Unconfirmed { .. } => "unconfirmed",
         Status::Stopped => "stopped",
         Status::Refused(_) => "refused",
         Status::Failed(_) => "failed",
@@ -448,6 +459,11 @@ mod tests {
     fn outcome(status: Status, trail: Vec<TrailEntry>) -> Outcome {
         Outcome {
             status,
+            // One more than the trail: the decision that ended the run made no
+            // action of its own, which is the case the old counter lost.
+            decisions: u32::try_from(trail.len())
+                .unwrap_or(u32::MAX)
+                .saturating_add(1),
             trail,
             url: "https://example.com/results".to_string(),
             title: "Results".to_string(),
@@ -479,6 +495,7 @@ mod tests {
     fn a_satisfied_run_tells_the_caller_to_verify() {
         let (text, structured) = render(
             "Find a flight.",
+            25,
             &outcome(Status::Satisfied, vec![entry()]),
             &[],
         );
@@ -504,12 +521,64 @@ mod tests {
             Status::Failed("provider returned 503".to_string()),
         ];
         for status in endings {
-            let (text, _) = render("Find a flight.", &outcome(status.clone(), Vec::new()), &[]);
+            let (text, _) = render(
+                "Find a flight.",
+                25,
+                &outcome(status.clone(), Vec::new()),
+                &[],
+            );
             assert!(
                 text.contains("page tools") || text.contains("browse again"),
                 "{status:?} did not name a way forward: {text}"
             );
         }
+    }
+
+    /// The gap this closes: a run that followed a link into a new tab reported
+    /// the page it started on, so the caller had to list tabs and guess which
+    /// one held the result.
+    #[test]
+    fn the_result_names_the_page_the_run_finished_on() {
+        let (text, structured) = render(
+            "Open the product page.",
+            29,
+            &outcome(Status::Satisfied, vec![entry()]),
+            &[],
+        );
+        assert_eq!(structured["page"], json!(29));
+        assert!(
+            text.contains("page 29"),
+            "the model reads the text, not the structured block: {text}"
+        );
+    }
+
+    /// An unconfirmed ending must not read like a failure. The run believes the
+    /// goal is met and the page is sitting on the result, so the caller is told
+    /// to look rather than told the run went nowhere.
+    #[test]
+    fn an_unconfirmed_ending_points_at_the_page_not_at_a_failure() {
+        let (text, structured) = render(
+            "Open the product page.",
+            29,
+            &outcome(Status::Unconfirmed { satisfied: 0.42 }, vec![entry()]),
+            &[],
+        );
+        assert_eq!(structured["status"], json!("unconfirmed"));
+        assert!(text.contains("0.42"), "the confidence is shown: {text}");
+        assert!(
+            text.contains("read it"),
+            "the caller is pointed at the page: {text}"
+        );
+        assert!(
+            !text.contains("no longer making progress"),
+            "an unconfirmed finish is not a stall: {text}"
+        );
+        assert!(
+            structured["url"]
+                .as_str()
+                .is_some_and(|url| !url.is_empty()),
+            "the page it finished on has to be in the result"
+        );
     }
 
     /// An operator Stop is the one ending that must NOT invite the caller to
@@ -518,6 +587,7 @@ mod tests {
     fn an_operator_stop_does_not_invite_the_caller_to_continue() {
         let (text, structured) = render(
             "Find a flight.",
+            25,
             &outcome(Status::Stopped, vec![entry()]),
             &[],
         );
@@ -533,6 +603,7 @@ mod tests {
     fn needing_text_names_the_field_and_the_exact_next_call() {
         let (text, structured) = render(
             "Fill the form.",
+            25,
             &outcome(
                 Status::NeedsText {
                     reference: "e4".to_string(),
@@ -549,11 +620,20 @@ mod tests {
 
     #[test]
     fn the_trail_carries_the_cost_and_the_confidence() {
-        let (text, structured) = render("Anything.", &outcome(Status::Stalled, vec![entry()]), &[]);
+        let (text, structured) = render(
+            "Anything.",
+            25,
+            &outcome(Status::Stalled, vec![entry()]),
+            &[],
+        );
         assert!(text.contains("3200 input"), "{text}");
         assert!(text.contains("confidence 0.82"), "{text}");
         assert_eq!(structured["trail"][0]["targetConfidence"], json!(0.91));
-        assert_eq!(structured["decisions"], json!(1));
+        // Reported apart, because an ending that acted on nothing still paid
+        // for the decision that produced it.
+        assert_eq!(structured["actions"], json!(1));
+        assert_eq!(structured["decisions"], json!(2));
+        assert!(text.contains("2 over 1 actions"), "{text}");
     }
 
     /// The bug this closes: an unchanged diff says "no change since last
@@ -654,6 +734,7 @@ mod tests {
         ];
         let (text, structured) = render(
             "Find a flight.",
+            25,
             &outcome(Status::Stalled, vec![entry()]),
             &notices,
         );
@@ -664,6 +745,7 @@ mod tests {
         // Nothing to say means nothing is said.
         let (quiet, _) = render(
             "Find a flight.",
+            25,
             &outcome(Status::Stalled, vec![entry()]),
             &[],
         );

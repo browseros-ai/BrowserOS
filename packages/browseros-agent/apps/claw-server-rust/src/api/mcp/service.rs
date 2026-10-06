@@ -473,7 +473,8 @@ impl ClawMcpService {
         };
         let decider = browseros_policy::Decider::new(credential.expose());
         let outcome = browseros_policy::drive(&decider, &driver, goal, budget).await;
-        let (text, structured) = crate::api::mcp::browse::render(goal, &outcome, &driver.notices());
+        let (text, structured) =
+            crate::api::mcp::browse::render(goal, driver.page(), &outcome, &driver.notices());
         ToolResult::text(text, Some(structured))
     }
 

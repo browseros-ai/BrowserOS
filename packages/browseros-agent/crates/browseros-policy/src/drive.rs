@@ -83,6 +83,10 @@ pub enum Status {
     OutOfBudget { steps: u32, elapsed_ms: u64 },
     /// Progress stopped improving.
     Stalled,
+    /// The model answered that the goal is done, but with confidence below
+    /// [`SATISFIED_THRESHOLD`]. The work may well be finished; nothing here is
+    /// sure enough to say so, and the caller is the one who can look.
+    Unconfirmed { satisfied: f64 },
     /// The operator stopped the session, or the caller went away.
     Stopped,
     /// An answer did not fit the observation, so nothing was executed.
@@ -119,6 +123,9 @@ pub struct TrailEntry {
 #[derive(Debug, Clone)]
 pub struct Outcome {
     pub status: Status,
+    /// Decision calls made, which is not the same as actions executed: every
+    /// ending that happens before an action still paid for its decision.
+    pub decisions: u32,
     pub trail: Vec<TrailEntry>,
     pub url: String,
     pub title: String,
@@ -128,8 +135,9 @@ pub struct Outcome {
 }
 
 impl Outcome {
+    /// Actions carried out against the page.
     #[must_use]
-    pub fn decisions(&self) -> usize {
+    pub fn actions(&self) -> usize {
         self.trail.len()
     }
 }
@@ -164,6 +172,10 @@ pub async fn drive<O: Oracle, D: Driver>(
     let mut output_tokens = 0u64;
     let mut best_progress = f64::NEG_INFINITY;
     let mut stalled = 0u32;
+    let mut repeats = 0u32;
+    // Read by `finish` on every exit, including the ones that happen before any
+    // action, which is where reporting the trail length understated the cost.
+    let decisions = std::sync::atomic::AtomicU32::new(0u32);
     let mut url = String::new();
     let mut title = String::new();
 
@@ -174,6 +186,7 @@ pub async fn drive<O: Oracle, D: Driver>(
                   input_tokens: u64,
                   output_tokens: u64| Outcome {
         status,
+        decisions: decisions.load(std::sync::atomic::Ordering::Relaxed),
         trail,
         url,
         title,
@@ -254,6 +267,7 @@ pub async fn drive<O: Oracle, D: Driver>(
                 );
             }
         };
+        decisions.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         input_tokens += step.input_tokens.unwrap_or(0);
         output_tokens += step.output_tokens.unwrap_or(0);
 
@@ -273,10 +287,14 @@ pub async fn drive<O: Oracle, D: Driver>(
         match step.decision.operation {
             Operation::Done => {
                 // Chosen without the gate agreeing. Trust the number over the
-                // label, and treat weak evidence as being stuck rather than
-                // finished.
+                // label and do not claim the goal is met, but do not call it a
+                // stall either: a run that has moved the page and believes it is
+                // finished is not a run going nowhere, and saying so sent the
+                // caller back to the page tools when the work was already done.
                 return finish(
-                    Status::Stalled,
+                    Status::Unconfirmed {
+                        satisfied: step.decision.satisfied,
+                    },
                     trail,
                     url,
                     title,
@@ -354,6 +372,30 @@ pub async fn drive<O: Oracle, D: Driver>(
             text: None,
             page_changed,
         });
+
+        // The same action, repeated, changing nothing. The progress rule below
+        // does not catch this on its own: a run can keep reporting rising
+        // progress while clicking one control that does nothing, which is how a
+        // single link got clicked once per remaining step.
+        let repeated_itself = history.len() >= 2
+            && history[history.len() - 2].operation == history[history.len() - 1].operation
+            && history[history.len() - 2].target == history[history.len() - 1].target;
+        if repeated_itself && !page_changed {
+            repeats += 1;
+            if repeats >= STALL_LIMIT {
+                let (url, title) = settled_location(driver, url, title).await;
+                return finish(
+                    Status::Stalled,
+                    trail,
+                    url,
+                    title,
+                    input_tokens,
+                    output_tokens,
+                );
+            }
+        } else {
+            repeats = 0;
+        }
 
         // Progress that never improves means the run is going nowhere, whatever
         // the operations claim.
@@ -653,15 +695,64 @@ mod tests {
         );
     }
 
-    /// DONE chosen while the gate disagrees is treated as stuck. The number is
-    /// trusted over the label.
+    /// DONE chosen while the gate disagrees is not success, and it is not a
+    /// stall either. The number is trusted over the label, but a run that
+    /// believes it has finished is not a run going nowhere, and calling it one
+    /// sent callers back to the page tools on work that was already done.
     #[tokio::test]
-    async fn done_without_the_gate_agreeing_is_not_success() {
+    async fn done_without_the_gate_agreeing_is_unconfirmed_not_stalled() {
         let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Done, None, 0.3, 1.0))]);
         let browser = FakeBrowser::new(true);
         let outcome = drive(&oracle, &browser, "Submit the form.", budget(10)).await;
-        assert_eq!(outcome.status, Status::Stalled);
+        assert_eq!(outcome.status, Status::Unconfirmed { satisfied: 0.3 });
         assert!(!outcome.status.is_satisfied());
+        assert_ne!(
+            outcome.status,
+            Status::Stalled,
+            "a run that reached the goal must not be reported as going nowhere"
+        );
+    }
+
+    /// The counter this corrects: every ending that happens before an action
+    /// reported zero decisions while having paid a provider for one.
+    #[tokio::test]
+    async fn a_decision_is_counted_even_when_no_action_follows_it() {
+        let oracle = ScriptedOracle::new(vec![Ok(step(Operation::Done, None, 0.3, 1.0))]);
+        let outcome = drive(
+            &oracle,
+            &FakeBrowser::new(true),
+            "Submit the form.",
+            budget(10),
+        )
+        .await;
+        assert_eq!(outcome.actions(), 0, "nothing ran against the page");
+        assert_eq!(outcome.decisions, 1, "but a decision was made and paid for");
+    }
+
+    /// A run that keeps performing one action that does nothing is stuck, even
+    /// while the model reports progress climbing. This is what let a single link
+    /// be clicked once per remaining step.
+    #[tokio::test]
+    async fn repeating_one_action_that_changes_nothing_stops_the_run() {
+        let climbing = (1..=10)
+            .map(|index| {
+                Ok(step(
+                    Operation::Click,
+                    Some("e1"),
+                    0.1,
+                    f64::from(index) / 20.0,
+                ))
+            })
+            .collect::<Vec<_>>();
+        let oracle = ScriptedOracle::new(climbing);
+        let browser = FakeBrowser::new(false);
+        let outcome = drive(&oracle, &browser, "Click a dead control.", budget(50)).await;
+        assert_eq!(outcome.status, Status::Stalled);
+        assert!(
+            browser.actions().len() <= 1 + STALL_LIMIT as usize,
+            "a repeated no-op must stop on the repeat rule, not run to the cap: ran {}",
+            browser.actions().len()
+        );
     }
 
     #[tokio::test]
@@ -710,7 +801,7 @@ mod tests {
             browser.actions(),
             vec![(Operation::Click, Some("e1".to_string()))]
         );
-        assert_eq!(outcome.decisions(), 1);
+        assert_eq!(outcome.actions(), 1);
         let entry = &outcome.trail[0];
         assert_eq!(entry.operation, Operation::Click);
         assert_eq!(entry.target.as_deref(), Some("e1"));
@@ -755,7 +846,7 @@ mod tests {
             "got {:?}",
             outcome.status
         );
-        assert_eq!(outcome.decisions(), 4);
+        assert_eq!(outcome.actions(), 4);
     }
 
     /// The bug this closes: if the last permitted action navigates, the handback
@@ -841,7 +932,7 @@ mod tests {
             outcome.status,
             Status::Failed("browser session not connected".to_string())
         );
-        assert_eq!(outcome.decisions(), 0);
+        assert_eq!(outcome.actions(), 0);
     }
 
     /// Stop before anything happens: nothing is observed and nothing runs.
@@ -852,7 +943,7 @@ mod tests {
         let outcome = drive(&oracle, &browser, "Click things.", budget(10)).await;
         assert_eq!(outcome.status, Status::Stopped);
         assert!(browser.actions().is_empty());
-        assert_eq!(outcome.decisions(), 0);
+        assert_eq!(outcome.actions(), 0);
     }
 
     /// The gap that mattered: a stop arriving while the provider is deciding
