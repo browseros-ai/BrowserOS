@@ -6,13 +6,13 @@
 //! paths an agent would have used by hand.
 
 use crate::AppState;
-use crate::api::mcp::dispatch::{ToolCall, ToolIdentity, dispatch_tool_call};
+use crate::api::mcp::dispatch::{ToolCall, ToolIdentity, dispatch_tool_call_in_process};
 use crate::ids::SessionId;
 use browseros_core::{
     BrowserSession, PageId,
     snapshot::{SnapshotMode, SnapshotOptions},
 };
-use browseros_mcp::{OutputFileAccess, ToolDef};
+use browseros_mcp::{OutputFileAccess, ToolDef, ToolResult};
 use browseros_policy::action::{ActionSpace, Element, annotate_from_tree};
 use browseros_policy::drive::{Driver, Outcome, Status, TrailEntry};
 use browseros_policy::{Observation, Operation};
@@ -178,10 +178,10 @@ impl Driver for PageDriver {
             other => return Err(format!("{} is not executed here", other.as_str())),
         };
 
-        let result = dispatch_tool_call(self.call_for(args))
+        let result = dispatch_tool_call_in_process(self.call_for(args))
             .await
             .map_err(|error| error.to_string())?;
-        if result.is_error == Some(true) {
+        if result.is_error {
             return Err(first_text(&result.content));
         }
         // An ownership notice is about a page the caller now has, so it travels
@@ -200,21 +200,36 @@ impl Driver for PageDriver {
 /// How long a wait pauses for before the page is read again.
 const WAIT_PAUSE: std::time::Duration = std::time::Duration::from_millis(300);
 
-/// Whether the action changed the page, read from the diff's own flag.
+/// Whether the action changed the page, read from the diff's own flags.
 ///
-/// The prose was matched before, against a phrase that does not exist: an
-/// unchanged diff says "no change since last snapshot", so a test for "no
-/// changes" never matched and every no-op reported a change. That went into
-/// the trail and into the history later decisions are shown.
-fn changed_from(result: &rmcp::model::CallToolResult) -> bool {
-    result
-        .structured_content
-        .as_ref()
-        .and_then(|value| value.get("changed"))
-        .and_then(Value::as_bool)
+/// This signal has now broken twice, in both directions. First the prose was
+/// matched against a phrase that does not exist, so every no-op reported a
+/// change. Then the structured flag was read through the wire envelope, which
+/// strips it for a tool with no output schema, so every action including a
+/// navigation reported no change. Both went into the trail and into the history
+/// later decisions are shown, so a run was told nothing it did had any effect.
+///
+/// A navigation is therefore read from two independent fields: it takes both of
+/// them being wrong to lose it again.
+fn changed_from(result: &ToolResult) -> bool {
+    let Some(structured) = result.structured_content.as_ref() else {
         // No diff was asked for or none came back, so there is nothing to
         // claim. Reporting no change is the honest default.
-        .unwrap_or(false)
+        return false;
+    };
+    let changed = structured
+        .get("changed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let url_changed = structured
+        .get("urlChanged")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let moved = match (structured.get("beforeUrl"), structured.get("afterUrl")) {
+        (Some(before), Some(after)) => !before.is_null() && !after.is_null() && before != after,
+        _ => false,
+    };
+    changed || url_changed || moved
 }
 
 fn first_text(content: &[ContentBlock]) -> String {
@@ -494,23 +509,66 @@ mod tests {
     /// reported as a change.
     #[test]
     fn page_changed_comes_from_the_diff_flag_not_its_prose() {
-        let unchanged = browseros_mcp::ToolResult::text(
+        let unchanged = ToolResult::text(
             "no change since last snapshot",
             Some(json!({ "changed": false })),
-        )
-        .into_call_tool_result();
+        );
         assert!(!changed_from(&unchanged));
 
-        let changed = browseros_mcp::ToolResult::text(
+        let changed = ToolResult::text(
             "2 added, 1 removed",
             Some(json!({ "changed": true, "added": 2, "removed": 1 })),
-        )
-        .into_call_tool_result();
+        );
         assert!(changed_from(&changed));
 
         // Nothing to go on is reported as no change rather than guessed.
-        let silent = browseros_mcp::ToolResult::text("done", None).into_call_tool_result();
+        let silent = ToolResult::text("done", None);
         assert!(!changed_from(&silent));
+    }
+
+    /// A navigation must survive either flag going missing, because losing it
+    /// is what told a run that a click which changed the page did nothing.
+    #[test]
+    fn a_navigation_is_a_change_from_either_field() {
+        let only_url_flag = ToolResult::text(
+            "navigated",
+            Some(json!({ "changed": false, "urlChanged": true })),
+        );
+        assert!(
+            changed_from(&only_url_flag),
+            "urlChanged alone must count as a change"
+        );
+
+        let only_urls = ToolResult::text(
+            "navigated",
+            Some(json!({
+                "beforeUrl": "https://example.com/",
+                "afterUrl": "https://www.iana.org/help/example-domains",
+            })),
+        );
+        assert!(
+            changed_from(&only_urls),
+            "differing before and after urls must count as a change"
+        );
+
+        let same_urls = ToolResult::text(
+            "no change since last snapshot",
+            Some(json!({
+                "changed": false,
+                "beforeUrl": "https://example.com/",
+                "afterUrl": "https://example.com/",
+            })),
+        );
+        assert!(!changed_from(&same_urls));
+
+        let null_urls = ToolResult::text(
+            "no change since last snapshot",
+            Some(json!({ "changed": false, "beforeUrl": null, "afterUrl": null })),
+        );
+        assert!(
+            !changed_from(&null_urls),
+            "two absent urls are not two different urls"
+        );
     }
 
     /// An action on a page the caller does not own produces an ownership notice,
