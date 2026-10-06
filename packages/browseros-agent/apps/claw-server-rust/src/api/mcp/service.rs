@@ -1409,13 +1409,89 @@ fn browse_tool() -> Tool {
     }) else {
         unreachable!();
     };
-    Tool::new(BROWSE_TOOL_NAME, BROWSE_DESCRIPTION, input_schema).with_annotations(
-        ToolAnnotations::with_title("Browse toward a goal")
-            .read_only(false)
-            .destructive(false)
-            .idempotent(false)
-            .open_world(true),
-    )
+    let Value::Object(output_schema) = browse_output_schema() else {
+        unreachable!();
+    };
+    Tool::new(BROWSE_TOOL_NAME, BROWSE_DESCRIPTION, input_schema)
+        .with_raw_output_schema(Arc::new(output_schema))
+        .with_annotations(
+            ToolAnnotations::with_title("Browse toward a goal")
+                .read_only(false)
+                .destructive(false)
+                .idempotent(false)
+                .open_world(true),
+        )
+}
+
+/// What a run promises its caller, declared so the structured result can be
+/// validated rather than parsed out of prose.
+///
+/// A tool that ships structured content without declaring a schema is exactly
+/// what the wire envelope drops it for, and this was the one tool doing it while
+/// its result is the whole point of calling it.
+fn browse_output_schema() -> Value {
+    let confidence = json!({ "type": "number", "minimum": 0 });
+    let count = json!({ "type": "integer", "minimum": 0 });
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "status", "page", "url", "title", "decisions", "actions",
+            "elapsedMs", "inputTokens", "outputTokens", "needsText", "notices", "trail"
+        ],
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": [
+                    "satisfied", "unconfirmed", "blocked", "needs_text",
+                    "out_of_budget", "stalled", "stopped", "refused", "failed"
+                ],
+                "description": "How the run ended. `satisfied` is a decision, not proof: verify it."
+            },
+            "page": { "type": "integer", "minimum": 0, "description": "The page the run finished on, which is not always the one it started on." },
+            "url": { "type": "string" },
+            "title": { "type": "string" },
+            "decisions": count.clone(),
+            "actions": count.clone(),
+            "elapsedMs": count.clone(),
+            "inputTokens": count.clone(),
+            "outputTokens": count.clone(),
+            "needsText": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["ref", "field"],
+                "properties": {
+                    "ref": { "type": "string" },
+                    "field": { "type": "string" }
+                },
+                "description": "Present only when the run stopped for a value only the caller can supply."
+            },
+            "notices": { "type": "array", "items": { "type": "string" } },
+            "trail": {
+                "type": "array",
+                "description": "One entry per action carried out, in order.",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                        "operation", "target", "operationConfidence", "targetConfidence",
+                        "satisfied", "progress", "pageChanged", "latencyMs", "droppedTargets"
+                    ],
+                    "properties": {
+                        "operation": { "type": "string" },
+                        "target": { "type": ["string", "null"] },
+                        "operationConfidence": confidence.clone(),
+                        "targetConfidence": { "type": ["number", "null"], "minimum": 0 },
+                        "satisfied": confidence.clone(),
+                        "progress": confidence,
+                        "pageChanged": { "type": "boolean" },
+                        "latencyMs": count.clone(),
+                        "droppedTargets": count
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn request_help_tool() -> Tool {
@@ -1793,6 +1869,87 @@ mod tests {
     fn supported_protocol_versions_includes_modern_and_legacy() {
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2026_07_28));
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
+    }
+
+    /// A declared output schema that drifts from what the tool actually sends is
+    /// worse than none: a spec-compliant client validates against it and rejects
+    /// the result. The producer and the promise are checked against each other in
+    /// both directions, so adding a field to either one alone fails here.
+    #[test]
+    fn the_browse_output_schema_matches_what_a_run_actually_returns() {
+        let schema = browse_output_schema();
+        let declared: std::collections::BTreeSet<&str> = schema["properties"]
+            .as_object()
+            .unwrap_or_else(|| panic!("properties must be an object"))
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        let outcome = browseros_policy::drive::Outcome {
+            status: browseros_policy::drive::Status::NeedsText {
+                reference: "e4".to_string(),
+                field: "[e4] textbox Email".to_string(),
+            },
+            decisions: 3,
+            trail: vec![browseros_policy::drive::TrailEntry {
+                operation: browseros_policy::Operation::Click,
+                target: Some("e7".to_string()),
+                operation_confidence: 0.82,
+                target_confidence: Some(0.91),
+                satisfied: 0.2,
+                progress: 0.4,
+                page_changed: true,
+                latency_ms: 310,
+                input_tokens: Some(1200),
+                output_tokens: Some(90),
+                dropped_targets: 4,
+            }],
+            url: "https://example.com/results".to_string(),
+            title: "Results".to_string(),
+            elapsed_ms: 2400,
+            input_tokens: 3200,
+            output_tokens: 410,
+        };
+        let (_, sent) = crate::api::mcp::browse::render("Anything.", 29, &outcome, &[]);
+        let produced: std::collections::BTreeSet<&str> = sent
+            .as_object()
+            .unwrap_or_else(|| panic!("a result must be an object"))
+            .keys()
+            .map(String::as_str)
+            .collect();
+
+        assert_eq!(
+            produced, declared,
+            "the schema and the rendered result must carry the same fields"
+        );
+
+        let trail_declared: std::collections::BTreeSet<&str> =
+            schema["properties"]["trail"]["items"]["properties"]
+                .as_object()
+                .unwrap_or_else(|| panic!("trail item properties must be an object"))
+                .keys()
+                .map(String::as_str)
+                .collect();
+        let trail_produced: std::collections::BTreeSet<&str> = sent["trail"][0]
+            .as_object()
+            .unwrap_or_else(|| panic!("a trail entry must be an object"))
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            trail_produced, trail_declared,
+            "a trail entry must carry exactly the declared fields"
+        );
+
+        // Every status the loop can report has to be nameable in the schema, or a
+        // run ending that way produces a result no client can validate.
+        let statuses = schema["properties"]["status"]["enum"]
+            .as_array()
+            .unwrap_or_else(|| panic!("status must be an enum"));
+        assert!(
+            statuses.iter().any(|value| value == "unconfirmed"),
+            "a status added to the loop must be added here too"
+        );
     }
 
     #[tokio::test]
