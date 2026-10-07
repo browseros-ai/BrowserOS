@@ -1113,6 +1113,7 @@ async fn canonical_cancel_stops_an_idle_zero_dispatch_session() -> anyhow::Resul
                 version: "1".to_string(),
                 title: None,
             },
+            None,
         )
         .await?;
 

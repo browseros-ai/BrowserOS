@@ -1,6 +1,6 @@
 use crate::api::mcp::{
     dispatch::{ToolEffect, ToolEffectContext},
-    naming::{build_session_group_title, client_prefix_from_slug},
+    naming::session_group_title,
 };
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
@@ -18,10 +18,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         let Some(label) = identity.session.take_rename_nudge().await else {
             return Ok(None);
         };
-        let title = build_session_group_title(
-            client_prefix_from_slug(identity.session.agent().slug()),
-            &label,
-        );
+        let title = session_group_title(&identity.session, &label);
         let mut result = context.result.clone();
         result.content.push(ContentBlock::text(format!(
             "Tip: this session is \"{title}\" — rename it with name_session name=\"<2-3 word task label>\""

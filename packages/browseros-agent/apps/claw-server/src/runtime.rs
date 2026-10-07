@@ -587,6 +587,7 @@ mod tests {
                     version: "1".to_string(),
                     title: None,
                 },
+                None,
             )
             .await?;
         state
