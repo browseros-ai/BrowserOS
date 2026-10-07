@@ -639,6 +639,13 @@ async fn canonical_control_settings_and_empty_lists() -> anyhow::Result<()> {
         assert!(json_body(&bytes)?.get(key).is_some(), "GET {path}");
     }
 
+    let (_, _, bytes) = request(&app.router, "GET", "/api/v1/system", None, Body::empty()).await?;
+    assert_eq!(
+        json_body(&bytes)?["schema"],
+        json!({ "databaseAhead": false, "unknownMigrations": [] }),
+        "a current database reports no skew"
+    );
+
     let (status, _, bytes) = request(
         &app.router,
         "PUT",
