@@ -584,6 +584,71 @@ async fn mcp_stateless_product_precedence_fallback_and_reuse() -> anyhow::Result
 }
 
 #[tokio::test]
+async fn mcp_declared_product_survives_profile_resolution_and_reuse() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let profiles_dir = app.state.config.browserclaw_dir.join("agents");
+    tokio::fs::create_dir_all(&profiles_dir).await?;
+    tokio::fs::write(
+        profiles_dir.join("codex-profile.json"),
+        json!({
+            "id": "codex-profile", "name": "Codex", "slug": "mcp",
+            "harness": "Codex", "loginMode": "profile", "selectedSites": [],
+            "approvals": {}, "aclRuleIds": [], "customAclRules": [],
+            "mcpUrl": "http://127.0.0.1:9200/mcp", "status": "configured",
+            "createdAt": "now", "updatedAt": "now"
+        })
+        .to_string(),
+    )
+    .await?;
+
+    let first = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "profile task", "agentName": "Codex" } }),
+        Some("unknown-proxy"),
+    ).await?;
+    let text = first["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(text.starts_with("renamed to codex/profile-task"), "{first}");
+    let handle = first["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing session handle: {first}"))?;
+    let session = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(handle))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("missing session"))?;
+    assert_eq!(
+        session.agent().profile_id().map(ProfileId::as_str),
+        Some("codex-profile")
+    );
+    assert_eq!(session.agent().slug(), "mcp");
+    assert!(session.convo_id().as_str().starts_with("mcp-"));
+    assert_eq!(session.client_name(), "unknown-proxy");
+
+    let reused = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "continued task", "session": handle, "agentName": "claude" } }),
+        None,
+    ).await?;
+    assert_eq!(
+        reused["result"]["_meta"]["com.browseros.neo/session"],
+        handle
+    );
+    let text = reused["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(
+        text.starts_with("renamed to codex/continued-task"),
+        "{reused}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_stateless_tool_schema_has_one_optional_product_fallback() -> anyhow::Result<()> {
     let app = test_app().await?;
     let anonymous = stateless_mcp_request(&app.router, "tools/list", json!({}), None).await?;

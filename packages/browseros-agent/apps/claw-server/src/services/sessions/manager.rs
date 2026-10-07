@@ -215,14 +215,17 @@ impl Sessions {
         client: ClientInfo,
     ) -> AppResult<Arc<Session>> {
         let id = SessionId::new(Ulid::new().to_string());
-        self.mint_with_id(id, agent, client).await
+        self.mint_with_id(id, agent, client, None).await
     }
 
+    /// Publishes ownership and client presentation together. `declared_product`
+    /// comes from the unmodified agentName, before a saved profile rewrites its slug.
     pub async fn mint_with_id(
         self: &Arc<Self>,
         id: SessionId,
         agent: ClientIdentity,
         client: ClientInfo,
+        declared_product: Option<&'static str>,
     ) -> AppResult<Arc<Session>> {
         let identity = {
             let mut reserved_keys = self.reserved_keys.lock().await;
@@ -234,11 +237,12 @@ impl Sessions {
             reserved_keys.insert(identity.convo_id().clone());
             identity
         };
-        let session = Session::new(
+        let session = Session::new_with_declared_product(
             id.clone(),
             agent,
             identity,
             client.name.clone(),
+            declared_product,
             Instant::now(),
         );
         let audit_result = self

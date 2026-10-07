@@ -3,7 +3,9 @@
 //! session's original agent and conversation identities.
 
 use crate::{
-    identity::{client_product_prefix, slugify_client_name, unversioned_client_slug},
+    identity::{
+        CLIENT_ALIASES, client_product_prefix, slugify_client_name, unversioned_client_slug,
+    },
     services::sessions::Session,
 };
 
@@ -49,6 +51,7 @@ fn legacy_client_prefix(slug: &str) -> &str {
 /// available for custom names and keeps owning conversations, claims, and colors.
 fn session_client_prefix(session: &Session) -> &str {
     client_product_prefix(session.client_name())
+        .or(session.declared_client_product())
         .unwrap_or_else(|| client_prefix_from_slug(session.agent().slug()))
 }
 
@@ -65,10 +68,13 @@ pub fn is_session_group_candidate(session: &Session, title: &str) -> bool {
         || prefix == legacy_client_prefix(session.agent().slug())
         || slugify_client_name(session.client_name())
             .is_some_and(|slug| prefix == legacy_client_prefix(&slug))
-        // The old 20-character cap truncated our established Desktop wrapper
-        // alias before its product suffix, so recognition of the full alias alone
-        // cannot recover those still-open groups.
-        || (expected == "claude" && prefix == "browserclaw-claude")
+        // The old cap truncated some aliases before their product suffix. Derive
+        // all historical spellings together so adding an alias cannot leave its
+        // existing groups out of reconnect suggestions.
+        || CLIENT_ALIASES.iter().any(|(alias, canonical)| {
+            client_product_prefix(canonical) == Some(expected)
+                && prefix == legacy_client_prefix(alias)
+        })
 }
 
 /// Byte length of `slug` kept under both caps, never splitting a segment except when

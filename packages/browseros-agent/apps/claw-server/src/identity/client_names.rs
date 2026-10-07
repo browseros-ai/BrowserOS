@@ -4,15 +4,23 @@
 
 use super::slugify_client_name;
 
+// Keep full wire aliases here. Tab naming also derives their old bounded forms
+// from this table because those titles can survive a server upgrade.
+pub(crate) const CLIENT_ALIASES: [(&str, &str); 4] = [
+    ("codex-mcp-client", "codex"),
+    ("codex-posthog-dashboard", "codex"),
+    ("codex-browserclaw", "codex"),
+    ("browserclaw-claude-desktop-wrapper", "claude-desktop"),
+];
+
 /// Canonical analytics spelling for established wire aliases. Unknown values
 /// are returned intact so the existing long-tail analytics contract survives.
 #[must_use]
 pub fn canonical_client_name(slug: &str) -> &str {
-    match slug {
-        "codex-mcp-client" | "codex-posthog-dashboard" | "codex-browserclaw" => "codex",
-        "browserclaw-claude-desktop-wrapper" => "claude-desktop",
-        other => other,
-    }
+    CLIENT_ALIASES
+        .iter()
+        .find_map(|(alias, canonical)| (*alias == slug).then_some(*canonical))
+        .unwrap_or(slug)
 }
 
 /// Recognizes a client product for display. Exact normalized names prevent a

@@ -122,15 +122,23 @@ struct StartedSession {
 struct SessionClient {
     identity: ClientInfo,
     reported: ClientInfo,
+    declared_product: Option<&'static str>,
 }
 
 impl SessionClient {
     fn resolve(reported: Option<ClientInfo>, declared: Option<ClientInfo>) -> Self {
+        let declared_product = declared
+            .as_ref()
+            .and_then(|client| crate::identity::client_product_prefix(&client.name));
         let identity = declared
             .or_else(|| reported.clone())
             .unwrap_or_else(default_agent_client_info);
         let reported = reported.unwrap_or_else(|| identity.clone());
-        Self { identity, reported }
+        Self {
+            identity,
+            reported,
+            declared_product,
+        }
     }
 }
 
@@ -549,7 +557,12 @@ impl ClawMcpService {
             let session = self
                 .state
                 .sessions
-                .mint_with_id(session_id.clone(), agent, client.reported.clone())
+                .mint_with_id(
+                    session_id.clone(),
+                    agent,
+                    client.reported.clone(),
+                    client.declared_product,
+                )
                 .await
                 .map_err(|error| {
                     McpError::internal_error(format!("mcp session start failed: {error}"), None)

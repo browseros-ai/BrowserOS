@@ -1595,6 +1595,7 @@ mod tests {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
         recorder.seed_group_titled("group-legacy", "codex-mcp-client/legacy-task", [103]);
+        recorder.seed_group_titled("group-truncated", "codex-posthog/dashboard", [104]);
         recorder.seed_group_titled("group-theirs", "cowork/research", [102]);
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         let mut call =
@@ -1610,6 +1611,7 @@ mod tests {
 
         assert!(text.contains("codex/invoice-run"), "{text}");
         assert!(text.contains("codex-mcp-client/legacy-task"), "{text}");
+        assert!(text.contains("codex-posthog/dashboard"), "{text}");
         assert!(text.contains("may be earlier tasks"), "{text}");
         assert!(!text.contains("they are tasks of yours"), "{text}");
         assert!(
