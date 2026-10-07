@@ -16,6 +16,7 @@ tempfile.workspace = true
 thiserror.workspace = true
 time.workspace = true
 toml_edit.workspace = true
+url.workspace = true
 
 [lints]
 workspace = true

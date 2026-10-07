@@ -1,5 +1,9 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
+use crate::catalog::AgentId;
 use crate::error::Error;
 
 /// Product-owned skill content and the directory name used by each harness.
@@ -100,12 +104,21 @@ impl SkillEnvironment {
     /// their skills directly when that override is visible to the installer.
     #[must_use]
     pub fn common_skill_roots(&self) -> Vec<PathBuf> {
-        let mut roots = vec![
-            self.home_dir.join(".agents/skills"),
-            self.variable("CLAUDE_CONFIG_DIR")
-                .unwrap_or_else(|| self.home_dir.join(".claude"))
-                .join("skills"),
-        ];
+        self.common_skill_roots_except(&BTreeSet::new())
+    }
+
+    /// Shared roots remain available to other local agents, including clients
+    /// outside the MCP catalog. An opt-out removes only its private baseline.
+    #[must_use]
+    pub fn common_skill_roots_except(&self, disconnected: &BTreeSet<AgentId>) -> Vec<PathBuf> {
+        let mut roots = vec![self.home_dir.join(".agents/skills")];
+        if !disconnected.contains(&AgentId::ClaudeCode) {
+            roots.push(
+                self.variable("CLAUDE_CONFIG_DIR")
+                    .unwrap_or_else(|| self.home_dir.join(".claude"))
+                    .join("skills"),
+            );
+        }
         if let Some(copilot_home) = self.variable("COPILOT_HOME") {
             roots.push(copilot_home.join("skills"));
         }

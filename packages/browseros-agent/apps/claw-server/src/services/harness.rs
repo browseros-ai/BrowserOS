@@ -5,8 +5,9 @@ use crate::{
 use harness_integrations::{
     AgentId, AgentScope, DisconnectInput, Error as ManagerError, InspectEntryInput, LinkInput,
     ListLinksFilter, ListedLink, ManifestLinkEntry, ManifestServerEntry, McpManager, McpServer,
-    McpServerSpec, MigrateServerInput, ServerManifest, SkillEnvironment, SkillReconcileOutcome,
-    SkillReconciler, SkillSpec, SkillWarning, is_installed, resolve_agent_surface,
+    McpServerSpec, MigrateServerInput, ReconcileInput, ServerManifest, SkillEnvironment,
+    SkillReconcileOutcome, SkillReconciler, SkillSpec, SkillWarning, is_installed,
+    resolve_agent_surface,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -19,10 +20,15 @@ use std::{
     process,
     str::FromStr,
     sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 use url::Url;
+
+mod preferences;
+mod reconciliation;
+use preferences::Preferences;
+pub use reconciliation::ReconciliationOutcome;
 
 pub const BROWSEROS_MCP_SERVER_NAME: &str = "browseros-neo";
 pub const BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME: &str = "BrowserOS neo";
@@ -210,7 +216,8 @@ impl HarnessService {
         let environment = SkillEnvironment::current(&home_dir);
         let managed_skill = ManagedSkill {
             reconciler: SkillReconciler::new(skill_workspace_dir.clone())
-                .with_provisioned_roots(environment.common_skill_roots()),
+                .with_provisioned_roots(environment.common_skill_roots())
+                .with_owned_name(super::harness_skills::MANAGED_SKILL_DIRECTORY),
             spec,
             environment,
         };
@@ -302,7 +309,6 @@ impl HarnessService {
         let guard = self.mutex.clone().lock_owned().await;
         let agent = harness.agent_id();
         let spec = spec_for(agent, mcp_url).map_err(manager_app_error)?;
-        let target_mcp_url = mcp_url.to_string();
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
         let managed_skill = self.managed_skill.clone();
@@ -310,54 +316,46 @@ impl HarnessService {
             // A cancelled HTTP request does not cancel blocking filesystem work.
             // Keep ownership until it finishes so periodic repair cannot race it.
             let _guard = guard;
+            Preferences::initialize(&workspace_dir, &manager)
+                .map_err(HarnessOperationError::Manager)?;
             let was_connected = recognized_browseros_links(&manager, &workspace_dir)
                 .map_err(HarnessOperationError::Manager)?
                 .into_iter()
                 .any(|link| link.agent == agent);
-            let managed_links = managed_browseros_links(&manager, &workspace_dir)
-                .map_err(HarnessOperationError::Manager)?;
-            if let Err(error) = migrate_browseros_agent(
-                &manager,
-                &workspace_dir,
+            let mut input = ReconcileInput::new(
+                McpServer {
+                    name: BROWSEROS_MCP_SERVER_NAME.into(),
+                    spec,
+                },
                 agent,
-                &target_mcp_url,
-                &managed_links,
-            ) {
-                if matches!(&error, ManagerError::ForeignEntry { .. }) {
-                    return Err(HarnessOperationError::Manager(error));
-                }
-                tracing::warn!(harness = %harness, agent = %agent, %error, "BrowserOS MCP identity migration before connect failed");
+            );
+            input.aliases = BROWSEROS_LEGACY_MCP_SERVER_NAMES
+                .iter()
+                .map(|name| (*name).into())
+                .collect();
+            let summary =
+                with_legacy_manifest_migration(&workspace_dir, || manager.reconcile(input.clone()))
+                    .map_err(HarnessOperationError::Manager)?;
+            if !summary.connected {
+                return Err(HarnessOperationError::Manager(ManagerError::ForeignEntry {
+                    server_name: BROWSEROS_MCP_SERVER_NAME.into(),
+                    agent,
+                    config_path: harness_integrations::resolve_agent_mcp_config_path(
+                        agent,
+                        AgentScope::System,
+                    )
+                    .map_err(HarnessOperationError::Manager)?,
+                }));
             }
-            let canonical_path = managed_browseros_links(&manager, &workspace_dir)
-                .map_err(HarnessOperationError::Manager)?
-                .into_iter()
-                .find(|link| {
-                    link.agent == agent && link.server_name == BROWSEROS_MCP_SERVER_NAME
-                })
-                .map(|link| link.config_path);
-            let allow_overwrite = allow_canonical_destination_overwrite(
-                &manager,
-                agent,
-                canonical_path.as_deref(),
-                canonical_path.is_some(),
-            )
-            .map_err(HarnessOperationError::Manager)?;
-            let summary = relink_managed_server(
-                &manager,
-                &workspace_dir,
-                BROWSEROS_MCP_SERVER_NAME,
-                agent,
-                spec,
-                allow_overwrite,
-                canonical_path.as_deref(),
-            )?;
             let config_path = managed_browseros_links(&manager, &workspace_dir)
                 .map_err(HarnessOperationError::Manager)?
                 .into_iter()
-                .find(|link| {
-                    link.agent == agent && link.server_name == BROWSEROS_MCP_SERVER_NAME
-                })
+                .find(|link| link.agent == agent)
                 .map(|link| link.config_path);
+            // Resume maintenance only after MCP setup succeeded. Failed Connect
+            // must not silently undo a previously saved Disconnect choice.
+            Preferences::set_disconnected(&workspace_dir, agent, false)
+                .map_err(HarnessOperationError::Manager)?;
             let skill_warning = managed_skill.as_ref().and_then(|managed_skill| {
                 reconcile_skill_warning(&manager, &workspace_dir, managed_skill)
             });
@@ -401,14 +399,26 @@ impl HarnessService {
         let managed_skill = self.managed_skill.clone();
         let result = tokio::task::spawn_blocking(move || {
             let _guard = guard;
-            adopt_config_only_aliases_for_disconnect(&manager, &workspace_dir, agent)
+            Preferences::initialize(&workspace_dir, &manager)
                 .map_err(HarnessOperationError::Manager)?;
+            // Persist intent before cleanup: even interrupted/failed removal must
+            // not let the next startup or periodic pass reconnect this agent.
+            Preferences::set_disconnected(&workspace_dir, agent, true)
+                .map_err(HarnessOperationError::Manager)?;
+            let config_path = managed_browseros_links(&manager, &workspace_dir)
+                .map_err(HarnessOperationError::Manager)?
+                .into_iter()
+                .find(|link| link.agent == agent)
+                .map(|link| link.config_path);
             let mut unlinked = false;
             let mut removed_manifest = false;
             let mut first_error = None;
             for server_name in BROWSEROS_MCP_SERVER_NAMES {
                 match with_legacy_manifest_migration(&workspace_dir, || {
-                    manager.disconnect(DisconnectInput::new(server_name, agent))
+                    let mut input = DisconnectInput::new(server_name, agent);
+                    input.unmanaged_endpoint = Some("http://127.0.0.1/mcp".into());
+                    input.config_path = config_path.clone();
+                    manager.disconnect(input)
                 }) {
                     Ok(summary) => {
                         unlinked |= summary.unlinked;
@@ -464,7 +474,12 @@ impl HarnessService {
         let workspace_dir = self.workspace_dir.clone();
         let agents = Harness::ALL.map(Harness::agent_id);
         let (links_result, installed_result) = tokio::task::spawn_blocking(move || {
-            let links = recognized_browseros_links(&manager, &workspace_dir);
+            let links =
+                recognized_browseros_links(&manager, &workspace_dir).and_then(|mut links| {
+                    let preferences = Preferences::read(&workspace_dir)?;
+                    links.retain(|link| !preferences.disconnected.contains(&link.agent));
+                    Ok(links)
+                });
             (links, is_installed(&agents))
         })
         .await?;
@@ -565,45 +580,6 @@ impl HarnessService {
         .map_err(manager_app_error)
     }
 
-    /// Repairs common skills immediately and every minute, independent of app or
-    /// MCP presence. The owning HTTP runtime supplies shutdown; each pass finishes
-    /// before another starts, with filesystem work delegated to a blocking thread.
-    pub async fn maintain_skills(&self, shutdown: impl std::future::Future<Output = ()>) {
-        if self.managed_skill.is_none() {
-            return;
-        }
-        let mut ticker = tokio::time::interval(Duration::from_secs(60));
-        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        tokio::pin!(shutdown);
-        loop {
-            tokio::select! {
-                biased;
-                () = &mut shutdown => return,
-                _ = ticker.tick() => {}
-            }
-            match self.run_skill_reconciliation().await {
-                Ok(outcome) => {
-                    for warning in &outcome.warnings {
-                        tracing::warn!(target = %warning.target.display(), warning = %warning.message,
-                            "harness skill reconciliation needs a retry");
-                    }
-                    if outcome.installed + outcome.updated + outcome.removed > 0 {
-                        tracing::info!(
-                            installed = outcome.installed,
-                            updated = outcome.updated,
-                            removed = outcome.removed,
-                            unchanged = outcome.unchanged,
-                            "reconciled managed harness skills"
-                        );
-                    }
-                }
-                Err(error) => {
-                    tracing::warn!(%error, "harness skill reconciliation failed; will retry")
-                }
-            }
-        }
-    }
-
     pub async fn migrate_browseros_identity(
         &self,
         target_mcp_url: &str,
@@ -689,20 +665,25 @@ fn reconcile_managed_skill(
     workspace_dir: &Path,
     managed_skill: &ManagedSkill,
 ) -> Result<SkillReconcileOutcome, ManagerError> {
-    // Common skill roots are provisioned independently of these optional MCP
-    // consumers. Disconnect removes a connection, not the shared instructions
-    // that future/local agents can discover before they have browser tools.
+    let preferences = Preferences::read(workspace_dir)?;
+    let reconciler = managed_skill.reconciler.clone().with_provisioned_roots(
+        managed_skill
+            .environment
+            .common_skill_roots_except(&preferences.disconnected),
+    );
+    // The desired physical targets combine eligible private roots and shared
+    // roots. Disconnect cannot remove instructions another agent still needs.
     let consumers = match recognized_browseros_links(manager, workspace_dir) {
         Ok(links) => links
             .into_iter()
             .map(|link| link.agent)
+            .filter(|agent| !preferences.disconnected.contains(agent))
             .collect::<BTreeSet<_>>(),
         Err(error) => {
             // A damaged MCP manifest must not block baseline instructions. Defer
             // native/legacy cleanup because their consumers are currently unknown.
-            let mut outcome = managed_skill
-                .reconciler
-                .repair_provisioned(&managed_skill.spec, &managed_skill.environment)?;
+            let mut outcome =
+                reconciler.repair_provisioned(&managed_skill.spec, &managed_skill.environment)?;
             outcome.warnings.push(SkillWarning {
                 target: workspace_dir.to_path_buf(),
                 message: format!(
@@ -715,7 +696,7 @@ fn reconcile_managed_skill(
     // Heal installs from before the skill directory was renamed: remove the legacy
     // `browserclaw` directories (marker-verified) so the reconcile below replants the
     // skill under its current `browseros-neo` name. Idempotent and a no-op once done.
-    let migrated = managed_skill.reconciler.remove_legacy_directories(
+    let migrated = reconciler.remove_legacy_directories(
         super::harness_skills::LEGACY_SKILL_DIRECTORY_NAME,
         &managed_skill.environment,
     )?;
@@ -725,9 +706,7 @@ fn reconcile_managed_skill(
             "migrated legacy BrowserOS neo skill directories to the current name"
         );
     }
-    managed_skill
-        .reconciler
-        .reconcile(&managed_skill.spec, &consumers, &managed_skill.environment)
+    reconciler.reconcile(&managed_skill.spec, &consumers, &managed_skill.environment)
 }
 
 fn reconcile_skill_warning(
@@ -840,50 +819,6 @@ fn deduplicate_browseros_links(links: Vec<ListedLink>) -> BTreeMap<AgentId, List
         }
     }
     by_agent
-}
-
-fn adopt_config_only_aliases_for_disconnect(
-    manager: &McpManager,
-    workspace_dir: &Path,
-    agent: AgentId,
-) -> Result<(), ManagerError> {
-    let linked_names = managed_browseros_links(manager, workspace_dir)?
-        .into_iter()
-        .filter(|link| link.agent == agent)
-        .map(|link| link.server_name)
-        .collect::<BTreeSet<_>>();
-    for source_name in BROWSEROS_LEGACY_MCP_SERVER_NAMES {
-        if linked_names.contains(source_name) {
-            continue;
-        }
-        let entry = match manager.inspect_entry(InspectEntryInput::new(source_name, agent)) {
-            Ok(Some(entry)) if is_historical_browseros_spec(&entry.spec) => entry,
-            Ok(_) => continue,
-            Err(error) => {
-                tracing::warn!(agent = %agent, %source_name, %error, "legacy BrowserOS MCP disconnect inspection failed");
-                continue;
-            }
-        };
-        let allow_destination_overwrite = allow_canonical_destination_overwrite(
-            manager,
-            agent,
-            Some(&entry.config_path),
-            linked_names.contains(BROWSEROS_MCP_SERVER_NAME),
-        )?;
-        let mut input = MigrateServerInput::new(
-            source_name,
-            McpServer {
-                name: BROWSEROS_MCP_SERVER_NAME.to_string(),
-                spec: entry.spec.clone(),
-            },
-            agent,
-        );
-        input.config_path = Some(entry.config_path);
-        input.unmanaged_source_spec = Some(entry.spec);
-        input.allow_destination_overwrite = allow_destination_overwrite;
-        with_legacy_manifest_migration(workspace_dir, || manager.migrate_server(input.clone()))?;
-    }
-    Ok(())
 }
 
 fn migrate_browseros_identity(
