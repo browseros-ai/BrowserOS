@@ -24,7 +24,7 @@ pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<(
 
         let state = &context.call.state;
         // Cheap refusal before touching consent state or the database.
-        if !state.run_failures.is_configured() {
+        if !state.error_reporter.is_configured() {
             return Ok(());
         }
 
@@ -42,8 +42,8 @@ pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<(
 
         let consent = state.analytics.get_state().await.consent;
         state
-            .run_failures
-            .report(consent, script, &error, context.duration_ms, now_epoch_ms())
+            .error_reporter
+            .report_run_failure(consent, script, &error, context.duration_ms, now_epoch_ms())
             .await;
         Ok(())
     })

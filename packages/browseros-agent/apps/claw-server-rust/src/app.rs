@@ -46,7 +46,7 @@ pub struct AppState {
     pub skills: Arc<SkillService>,
     pub skill_runs: Arc<SkillRunService>,
     pub analytics: Arc<AnalyticsService>,
-    pub run_failures: Arc<crate::services::run_failures::RunFailureReporter>,
+    pub error_reporter: Arc<crate::services::error_reporting::ErrorReporter>,
     pub feedback_cohort: Arc<crate::services::feedback_cohort::FeedbackCohort>,
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
     pub profiles: Arc<ProfileService>,
@@ -101,7 +101,7 @@ impl AppState {
         let analytics_sink: Arc<dyn AnalyticsSink> = analytics.clone();
         // Shares the analytics install id, so a failure report and a product event are
         // the same anonymous install and neither adds a new identifier.
-        let run_failures = Arc::new(crate::services::run_failures::RunFailureReporter::from_env(
+        let error_reporter = Arc::new(crate::services::error_reporting::ErrorReporter::from_env(
             crate::db::run_error_budget::RunErrorBudgetRepository::new(database.clone()),
             analytics.get_state().await.distinct_id,
             &config.browserclaw_dir.join("logs"),
@@ -205,7 +205,7 @@ impl AppState {
             skills,
             skill_runs,
             analytics,
-            run_failures,
+            error_reporter,
             feedback_cohort,
             feedback_invites,
             profiles,
@@ -224,6 +224,26 @@ impl AppState {
     pub async fn live_tab_activity(&self) -> Vec<TabActivityRecord> {
         let session = self.browser.session().await;
         self.tab_activity.snapshot(session.as_deref()).await
+    }
+
+    /// Reports one-time startup conditions worth seeing remotely. Right now that is the database
+    /// having been migrated by a newer BrowserOS neo (read-forward), which the server survives but
+    /// which signals a version skew the user should resolve by updating. Consent-gated and drawn
+    /// from the shared daily budget, so it cannot exceed the cap or report without consent.
+    pub async fn report_startup_state(&self) {
+        let MigrationOutcome::DatabaseAhead { unknown } = &self.migration else {
+            return;
+        };
+        let consent = self.analytics.get_state().await.consent;
+        self.error_reporter
+            .report_error(
+                consent,
+                "startup",
+                "database_ahead".to_string(),
+                Some(unknown.join(",")),
+                crate::clock::now_epoch_ms(),
+            )
+            .await;
     }
 }
 

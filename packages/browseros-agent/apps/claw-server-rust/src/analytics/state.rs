@@ -136,6 +136,17 @@ fn read_state(path: &Path) -> io::Result<Option<AnalyticsState>> {
     Ok(Some(state))
 }
 
+/// Reads the persisted consent choice synchronously, for a caller that cannot await (the panic
+/// hook). A missing file is the system default; an unreadable or malformed file fails closed, so
+/// telemetry is never sent on an uncertain consent state.
+pub(crate) fn read_consent(path: &Path) -> bool {
+    match read_state(path) {
+        Ok(Some(state)) => state.enabled,
+        Ok(None) => default_enabled(),
+        Err(_) => false,
+    }
+}
+
 pub(crate) async fn persist_state(path: &Path, state: &AnalyticsState) -> io::Result<()> {
     let path = path.to_owned();
     let state = state.clone();
