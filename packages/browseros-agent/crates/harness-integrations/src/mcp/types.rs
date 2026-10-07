@@ -59,6 +59,34 @@ pub struct McpServer {
     pub spec: McpServerSpec,
 }
 
+/// Inputs for conservative background maintenance. Aliases are recognized in
+/// place; existing entries retain their name, options and transport shape.
+#[derive(Debug, Clone)]
+pub struct ReconcileInput {
+    pub server: McpServer,
+    pub agent: AgentId,
+    pub aliases: Vec<String>,
+    pub config_path: Option<PathBuf>,
+}
+
+impl ReconcileInput {
+    pub fn new(server: McpServer, agent: AgentId) -> Self {
+        Self {
+            server,
+            agent,
+            aliases: Vec::new(),
+            config_path: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReconcileSummary {
+    pub connected: bool,
+    pub created: bool,
+    pub updated: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ManifestLinkEntry {
@@ -205,6 +233,10 @@ pub struct DisconnectInput {
     pub agent: AgentId,
     pub scope: AgentScope,
     pub remove_if_last: bool,
+    /// Also remove a config-only entry with the same endpoint identity (any port).
+    /// Custom hosts/paths/credentials remain foreign; no adoption write is needed.
+    pub unmanaged_endpoint: Option<String>,
+    pub config_path: Option<PathBuf>,
 }
 
 impl DisconnectInput {
@@ -214,6 +246,8 @@ impl DisconnectInput {
             agent,
             scope: AgentScope::System,
             remove_if_last: true,
+            unmanaged_endpoint: None,
+            config_path: None,
         }
     }
 }

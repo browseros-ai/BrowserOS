@@ -202,12 +202,14 @@ async fn serve(
         config,
         analytics,
         async move {
-            heal_boot_config(&heal_state).await;
             // Only the HTTP process that acquired the listener owns provisioning.
             // Keep repair off request handling and stop it with this runtime.
             heal_state
                 .harness
-                .maintain_skills(heal_state.shutdown.requested())
+                .maintain_integrations(
+                    &heal_state.config.public_mcp_url(),
+                    heal_state.shutdown.requested(),
+                )
                 .await;
         },
     )
@@ -303,80 +305,6 @@ async fn ready_after<T, E>(
     let running = start.await?;
     analytics.capture(events::SERVER_STARTED, json!({}));
     Ok(running)
-}
-
-/// Auto-connects harnesses once while preserving existing user choices.
-async fn run_first_launch_auto_connect(state: &AppState) {
-    use claw_server::services::first_run;
-    if first_run::is_first_run_connect_done(&state.config.browserclaw_dir).await {
-        return;
-    }
-    match state
-        .harness
-        .first_run_connect(&state.config.public_mcp_url())
-        .await
-    {
-        Ok(outcome) => {
-            info!(
-                connected = outcome.connected,
-                failed = outcome.failed,
-                already_linked = outcome.already_linked,
-                seeded_existing = outcome.seeded_existing,
-                "first-run harness auto-connect settled"
-            );
-            if let Err(err) =
-                first_run::mark_first_run_connect_done(&state.config.browserclaw_dir).await
-            {
-                error!(error = %err, "failed to persist first-run auto-connect marker");
-            }
-        }
-        // Listing the harnesses failed: leave the marker unset so the next
-        // launch retries the sweep rather than skipping it forever.
-        Err(err) => error!(error = %err, "first-run harness auto-connect skipped: listing failed"),
-    }
-}
-
-async fn heal_boot_config(state: &AppState) {
-    match state
-        .harness
-        .migrate_browseros_identity(&state.config.public_mcp_url())
-        .await
-    {
-        Ok(outcome) => info!(
-            migrated = outcome.migrated,
-            skipped = outcome.skipped,
-            failed = outcome.failed,
-            "completed BrowserOS MCP identity migration"
-        ),
-        Err(err) => error!(error = %err, "BrowserOS MCP identity migration failed"),
-    }
-    run_first_launch_auto_connect(state).await;
-    // Re-point every connected agent at the current canonical URL first (the
-    // proxy port may have moved on this app launch), then repair any config
-    // that still drifted from the now-current manifest spec.
-    match state
-        .harness
-        .migrate_connected_urls(&state.config.public_mcp_url())
-        .await
-    {
-        Ok(outcome) => info!(
-            migrated = outcome.migrated,
-            failed = outcome.failed,
-            "re-synced connected MCP agents to the current URL"
-        ),
-        Err(err) => error!(error = %err, "MCP URL migration failed"),
-    }
-    match state.harness.run_integrity_scan().await {
-        Ok(outcome) => info!(
-            verified = outcome.verified,
-            drifted = outcome.drifted,
-            missing = outcome.missing,
-            healed = outcome.healed,
-            failed = outcome.failed,
-            "completed MCP config integrity scan"
-        ),
-        Err(err) => error!(error = %err, "MCP config integrity scan failed"),
-    }
 }
 
 async fn wait_for_shutdown(shutdown: ShutdownHandle) {

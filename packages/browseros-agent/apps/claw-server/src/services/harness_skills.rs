@@ -15,7 +15,7 @@ const EMBEDDED_BROWSERCLAW_SKILL: &str =
 const SKILL_FRONTMATTER_NAME: &str = "browseros-neo";
 /// On-disk directory name for the managed skill; matches the SKILL.md frontmatter
 /// `name` so agents that require `name == parent directory` accept it.
-const MANAGED_SKILL_DIRECTORY: &str = "browseros-neo";
+pub(crate) const MANAGED_SKILL_DIRECTORY: &str = "browseros-neo";
 /// The pre-rename directory name earlier builds installed the skill under. Existing
 /// installs at this name are migrated to `MANAGED_SKILL_DIRECTORY` on reconcile.
 pub(crate) const LEGACY_SKILL_DIRECTORY_NAME: &str = "browserclaw";

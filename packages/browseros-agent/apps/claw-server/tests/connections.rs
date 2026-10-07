@@ -382,14 +382,13 @@ async fn run_connections_case() -> anyhow::Result<()> {
         .connect_browseros(Harness::Antigravity, MCP_URL)
         .await?;
     assert!(antigravity.installed);
-    assert!(
-        antigravity
-            .message
-            .contains("skill reconciliation needs a retry")
+    assert_eq!(
+        antigravity.message,
+        "BrowserOS registered as an MCP server in Antigravity."
     );
     assert_eq!(
         fs::read_to_string(antigravity_skill.join("SKILL.md"))?,
-        "foreign skill"
+        "managed skill v1\n"
     );
     assert_eq!(
         fs::read_to_string(antigravity_skill.join("keep.txt"))?,
@@ -723,12 +722,17 @@ async fn assert_identity_migration(
         .disconnect_browseros(Harness::Cursor)
         .await?;
     assert!(!collision_disconnect.installed);
-    assert!(
-        collision_disconnect
-            .message
-            .contains(BROWSEROS_MCP_SERVER_NAME)
+    let after_disconnect = fs::read_to_string(cursor_path)?;
+    let remaining: Value = serde_json::from_str(&after_disconnect)?;
+    assert_eq!(
+        remaining["mcpServers"][BROWSEROS_MCP_SERVER_NAME],
+        json!({"command":"foreign"})
     );
-    assert_eq!(fs::read_to_string(cursor_path)?, collision_raw);
+    assert!(
+        remaining["mcpServers"]
+            .get(BROWSEROS_NEO_LEGACY_MCP_SERVER_NAME)
+            .is_none()
+    );
     assert!(!collision_workspace.join("manifest.json").exists());
 
     let collision_connect = collision_service
@@ -740,7 +744,7 @@ async fn assert_identity_migration(
             .message
             .contains(BROWSEROS_MCP_SERVER_NAME)
     );
-    assert_eq!(fs::read_to_string(cursor_path)?, collision_raw);
+    assert_eq!(fs::read_to_string(cursor_path)?, after_disconnect);
     assert!(!collision_workspace.join("manifest.json").exists());
     fs::remove_file(cursor_path)?;
 
@@ -865,9 +869,12 @@ async fn assert_legacy_manifest_migration(
 
     let migrated = McpManager::new(&workspace).list()?;
     assert_eq!(migrated.len(), 1);
-    assert_eq!(migrated[0].name, BROWSEROS_MCP_SERVER_NAME);
+    assert_eq!(migrated[0].name, BROWSERCLAW_LEGACY_MCP_SERVER_NAME);
     assert_eq!(migrated[0].added_at, added_at);
     assert_eq!(migrated[0].links[&AgentId::ClaudeCode].created_at, added_at);
+    // The conservative connect path keeps a recognized alias in place. Remove
+    // this helper fixture so the subsequent first-connection scenario starts empty.
+    fs::remove_file(claude_path)?;
 
     let corrupt_workspace = home.join("claw/corrupt-mcp-manager");
     fs::create_dir_all(&corrupt_workspace)?;

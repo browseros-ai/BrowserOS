@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -26,6 +26,7 @@ use super::{
 pub struct SkillReconciler {
     workspace_dir: PathBuf,
     provisioned_roots: Vec<PathBuf>,
+    owned_name: Option<String>,
 }
 
 impl SkillReconciler {
@@ -34,6 +35,7 @@ impl SkillReconciler {
         Self {
             workspace_dir: workspace_dir.into(),
             provisioned_roots: Vec::new(),
+            owned_name: None,
         }
     }
 
@@ -43,6 +45,15 @@ impl SkillReconciler {
     #[must_use]
     pub fn with_provisioned_roots(mut self, roots: impl IntoIterator<Item = PathBuf>) -> Self {
         self.provisioned_roots = roots.into_iter().collect();
+        self
+    }
+
+    /// Claims one product-owned skill name, including older installs without a
+    /// marker. Its packaged content is authoritative; all other skill names still
+    /// require ownership evidence before replacement or cleanup.
+    #[must_use]
+    pub fn with_owned_name(mut self, name: impl Into<String>) -> Self {
+        self.owned_name = Some(name.into());
         self
     }
 
@@ -154,6 +165,7 @@ impl SkillReconciler {
         mut identity: impl FnMut(&Path) -> Result<PathBuf, Error>,
         mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
     ) -> Result<SkillReconcileOutcome, Error> {
+        let owns_name = self.owned_name.as_deref() == Some(spec.name.as_str());
         let original = read_manifest(&self.workspace_dir)?;
         let plan = plan_reconciliation(
             &original,
@@ -188,6 +200,7 @@ impl SkillReconciler {
             let marker = if metadata.as_ref().is_some_and(|value| value.is_dir()) {
                 match read_marker(target) {
                     Ok(marker) => marker,
+                    Err(_) if owns_name => None,
                     Err(error) => {
                         preserve_original_records.insert(target.clone());
                         outcome.warnings.push(SkillWarning {
@@ -203,7 +216,7 @@ impl SkillReconciler {
             let marker_controls = marker
                 .as_ref()
                 .is_some_and(|marker| marker.controls(&spec.name));
-            if metadata.is_some() && !record_controls && !marker_controls {
+            if metadata.is_some() && !owns_name && !record_controls && !marker_controls {
                 preserve_original_records.insert(target.clone());
                 outcome.warnings.push(SkillWarning {
                     target: target.clone(),
@@ -245,7 +258,15 @@ impl SkillReconciler {
                 || !marker_matches;
 
             if needs_replace {
-                match replace(target, spec, &desired_hash) {
+                // Ownership covers the instructions, not arbitrary sibling assets.
+                // File-level replacement also preserves matching SKILL.md timestamps
+                // when only a missing/outdated ownership marker needs repair.
+                let result = if owns_name {
+                    replace_owned_instructions(target, spec, &desired_hash, actual_hash.as_deref())
+                } else {
+                    replace(target, spec, &desired_hash)
+                };
+                match result {
                     Ok(()) => {
                         if metadata.is_some() {
                             outcome.updated += 1;
@@ -297,7 +318,7 @@ impl SkillReconciler {
                 records.remove(&target);
                 continue;
             }
-            let marker_controls = if record_controls {
+            let marker_controls = if record_controls || owns_name {
                 false
             } else if metadata.as_ref().is_some_and(|value| value.is_dir()) {
                 match read_marker(&target) {
@@ -316,13 +337,17 @@ impl SkillReconciler {
             } else {
                 false
             };
-            if !record_controls && !marker_controls {
+            if !owns_name && !record_controls && !marker_controls {
                 continue;
             }
             match metadata {
-                Some(_) => match remove_path(&target) {
-                    Ok(()) => {
-                        outcome.removed += 1;
+                Some(_) => match if owns_name {
+                    remove_owned_instructions(&target)
+                } else {
+                    remove_path(&target).map(|()| true)
+                } {
+                    Ok(removed) => {
+                        outcome.removed += usize::from(removed);
                         records.remove(&target);
                     }
                     Err(error) => {
@@ -597,6 +622,64 @@ fn expand_root(candidate: &str, environment: &SkillEnvironment) -> Option<PathBu
         root.push(component);
     }
     Some(root)
+}
+
+/// Named product instructions may predate our ledger. Update only their owned
+/// files, never swap/delete the directory containing another installer's assets.
+fn replace_owned_instructions(
+    target: &Path,
+    spec: &SkillSpec,
+    desired_hash: &str,
+    actual_hash: Option<&str>,
+) -> std::io::Result<()> {
+    ensure_owned_directory(target)?;
+    if actual_hash != Some(desired_hash) {
+        write_owned_file(&target.join("SKILL.md"), &spec.content)?;
+    }
+    let marker = marker_content(&OwnershipMarker::new(&spec.name, desired_hash))
+        .map_err(std::io::Error::other)?;
+    write_owned_file(&target.join(MARKER_FILE), &marker)
+}
+
+fn ensure_owned_directory(target: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(target) {
+        Ok(metadata) if !metadata.is_dir() => Err(std::io::Error::other(
+            "skill directory is not a regular directory; refusing to follow or replace it",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => fs::create_dir_all(target),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_owned_file(path: &Path, content: &str) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing skill parent"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(content.as_bytes())?;
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+
+fn remove_owned_instructions(target: &Path) -> std::io::Result<bool> {
+    ensure_owned_directory(target)?;
+    let mut removed = false;
+    for name in ["SKILL.md", MARKER_FILE] {
+        match fs::remove_file(target.join(name)) {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    match fs::remove_dir(target) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {}
+        Err(error) => return Err(error),
+    }
+    Ok(removed)
 }
 
 fn replace_managed_directory(
