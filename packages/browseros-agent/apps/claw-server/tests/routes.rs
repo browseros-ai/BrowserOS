@@ -483,6 +483,45 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn mcp_stateless_metadata_names_session_without_agent_argument() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    // Exercise the real JSON decoding and rmcp dispatch seam: incoming _meta is
+    // moved into RequestContext, which a direct resolver call cannot reproduce.
+    let (status, headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": {
+                "_meta": {
+                    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                    "io.modelcontextprotocol/clientCapabilities": {},
+                    "io.modelcontextprotocol/clientInfo": {
+                        "name": "codex-mcp-client", "version": "1.0"
+                    }
+                },
+                "name": "name_session",
+                "arguments": { "name": "metadata check" }
+            }
+        })),
+        &[
+            ("mcp-protocol-version", "2026-07-28"),
+            ("mcp-method", "tools/call"),
+            ("mcp-name", "name_session"),
+        ],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!headers.contains_key("mcp-session-id"));
+    let text = body["result"]["content"][0]["text"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing tool text: {body}"))?;
+    assert!(text.starts_with("renamed to codex/metadata-check"), "{text}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Result<()> {
     let app = test_app().await?;
     let session_id = initialize_mcp(&app).await?;
