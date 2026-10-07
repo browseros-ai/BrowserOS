@@ -228,7 +228,7 @@ export const fillCases: ContractCase[] = [
         // above does: the accessible name is `Text field`, not `Text field `.
         const filledLine = snapshot
           .split('\n')
-          .find((line) => line.includes('textbox "Text field'))
+          .find((line) => /textbox "Text field\s*"/.test(line))
         if (!filledLine?.endsWith(': "frame text"')) {
           throw new Error(
             `The iframe did not receive the requested text: ${snapshot}`,
@@ -246,7 +246,7 @@ export const fillCases: ContractCase[] = [
         const cleared = expectOk(await ctx.mcp.callTool('snapshot', { page }))
         const emptyLine = cleared
           .split('\n')
-          .find((line) => line.includes('textbox "Text field'))
+          .find((line) => /textbox "Text field\s*"/.test(line))
         if (!emptyLine?.endsWith(']')) {
           throw new Error('The iframe field was not cleared')
         }

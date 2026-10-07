@@ -20,13 +20,14 @@ pub use skills::SkillsRepository;
 use crate::error::{AppError, AppResult, IoPath};
 use migration::Migrator;
 use sea_orm::{
-    DatabaseConnection, DbErr, RuntimeErr, SqlxSqliteConnector,
+    ConnectionTrait, DatabaseConnection, DbErr, RuntimeErr, SqlxSqliteConnector, Statement,
     sqlx::sqlite::{
         SqliteConnectOptions, SqliteError, SqliteJournalMode, SqlitePoolOptions, SqliteSynchronous,
     },
 };
 use sea_orm_migration::MigratorTrait;
 use std::{
+    collections::HashSet,
     ffi::OsString,
     path::{Path, PathBuf},
     time::Duration,
@@ -34,17 +35,51 @@ use std::{
 
 pub const DATABASE_FILENAME: &str = "browserclaw.sqlite";
 
+/// How the on-disk schema relates to this binary's known migrations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MigrationOutcome {
+    /// The binary was in step with the database, or it applied the pending migrations.
+    UpToDate,
+    /// The database carries migrations this build does not know: it was written by a newer
+    /// BrowserOS neo. The server starts read-forward on the superset schema instead of crashing.
+    DatabaseAhead { unknown: Vec<String> },
+}
+
 #[derive(Clone)]
-pub struct Database(DatabaseConnection);
+pub struct Database {
+    connection: DatabaseConnection,
+    migration: MigrationOutcome,
+}
 
 impl Database {
     /// Opens and migrates BrowserClaw's shared durable state database.
     pub async fn open(path: impl AsRef<Path>) -> AppResult<Self> {
-        open_and_migrate::<Migrator>(path.as_ref()).await.map(Self)
+        let (connection, migration) = open_and_migrate::<Migrator>(path.as_ref()).await?;
+        if let MigrationOutcome::DatabaseAhead { unknown } = &migration {
+            tracing::warn!(
+                unknown = unknown.join(", "),
+                "database was migrated by a newer BrowserOS neo; starting read-forward. Update BrowserOS neo so the server matches its data."
+            );
+        }
+        Ok(Self {
+            connection,
+            migration,
+        })
     }
 
     pub(in crate::db) fn connection(&self) -> &DatabaseConnection {
-        &self.0
+        &self.connection
+    }
+
+    /// How the on-disk schema compares to this binary, for the health surface.
+    #[must_use]
+    pub fn migration_outcome(&self) -> &MigrationOutcome {
+        &self.migration
+    }
+
+    #[cfg(test)]
+    async fn close(self) -> Result<(), DbErr> {
+        self.connection.close().await
     }
 }
 
@@ -59,13 +94,15 @@ const SQLITE_NOTADB: i32 = 26;
 const SQLITE_PRIMARY_RESULT_CODE_MASK: i32 = 0xff;
 
 /// Opens and migrates SQLite, recovering corrupt or invalid database files once.
-async fn open_and_migrate<M: MigratorTrait>(path: &Path) -> AppResult<DatabaseConnection> {
+async fn open_and_migrate<M: MigratorTrait>(
+    path: &Path,
+) -> AppResult<(DatabaseConnection, MigrationOutcome)> {
     if let Some(parent) = path.parent() {
         tokio::fs::create_dir_all(parent).await.with_path(parent)?;
     }
 
     match connect_and_migrate::<M>(path).await {
-        Ok(conn) => Ok(conn),
+        Ok(result) => Ok(result),
         Err(error) if is_recoverable_sqlite_error(&error) => {
             tracing::warn!(
                 path = %path.display(),
@@ -110,7 +147,9 @@ fn is_recoverable_sqlite_result_code(code: i32) -> bool {
     )
 }
 
-async fn connect_and_migrate<M: MigratorTrait>(path: &Path) -> Result<DatabaseConnection, DbErr> {
+async fn connect_and_migrate<M: MigratorTrait>(
+    path: &Path,
+) -> Result<(DatabaseConnection, MigrationOutcome), DbErr> {
     let options = SqliteConnectOptions::new()
         .filename(path)
         .create_if_missing(true)
@@ -136,11 +175,90 @@ async fn connect_and_migrate<M: MigratorTrait>(path: &Path) -> Result<DatabaseCo
     .map_err(|error| DbErr::Custom(format!("SQLite connection task failed: {error}")))?
     .map_err(|error| DbErr::Conn(RuntimeErr::SqlxError(error)))?;
     let conn = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
-    if let Err(error) = M::up(&conn, None).await {
-        conn.close().await?;
-        return Err(error);
+    match migrate_forward_compatible::<M>(&conn).await {
+        Ok(outcome) => Ok((conn, outcome)),
+        Err(error) => {
+            conn.close().await?;
+            Err(error)
+        }
     }
-    Ok(conn)
+}
+
+/// Runs migrations while tolerating a database that is newer than this binary.
+///
+/// `sea_orm`'s `Migrator::up` aborts when the database records a migration this build does not
+/// contain (the "migration file is missing" error), which turns a routine version skew (a newer
+/// BrowserOS neo migrated the data, then an older sidecar runs) into a crash before the server can
+/// bind. When the database only holds EXTRA newer migrations and every migration this build knows
+/// is already applied, the schema is an additive superset and the older server can run on it, so
+/// we skip `up()` and start read-forward. We only run `up()` when there is nothing unknown to
+/// reconcile, and we refuse clearly when the two have genuinely diverged.
+async fn migrate_forward_compatible<M: MigratorTrait>(
+    conn: &DatabaseConnection,
+) -> Result<MigrationOutcome, DbErr> {
+    let known: Vec<String> = M::migrations()
+        .iter()
+        .map(|migration| migration.name().to_string())
+        .collect();
+    let known_set: HashSet<&str> = known.iter().map(String::as_str).collect();
+    let applied = applied_migration_versions(conn).await?;
+    let applied_set: HashSet<&str> = applied.iter().map(String::as_str).collect();
+
+    let has_pending_known = known
+        .iter()
+        .any(|name| !applied_set.contains(name.as_str()));
+    let unknown: Vec<String> = applied
+        .into_iter()
+        .filter(|name| !known_set.contains(name.as_str()))
+        .collect();
+
+    match (unknown.is_empty(), has_pending_known) {
+        // Nothing the binary does not know: in step, or the binary is ahead and applies its pending
+        // migrations. This is the normal path and matches the previous behavior.
+        (true, _) => {
+            M::up(conn, None).await?;
+            Ok(MigrationOutcome::UpToDate)
+        }
+        // The database is strictly ahead: every known migration is applied plus extra newer ones.
+        // Calling up() here would abort on the unknown rows, so start read-forward instead.
+        (false, false) => Ok(MigrationOutcome::DatabaseAhead { unknown }),
+        // Diverged: the binary has unapplied migrations AND the database has migrations the binary
+        // does not know. We cannot reconcile that; fail with a clear, actionable message rather
+        // than the opaque sea-orm error.
+        (false, true) => Err(DbErr::Custom(format!(
+            "database schema is incompatible with this BrowserOS neo build: it has migrations this \
+             build does not know ({}) and this build has unapplied migrations. Update BrowserOS neo \
+             so the server matches its data.",
+            unknown.join(", ")
+        ))),
+    }
+}
+
+/// Migration versions recorded as applied, or an empty list when the database is fresh (the
+/// `seaql_migrations` table does not exist yet).
+async fn applied_migration_versions(conn: &DatabaseConnection) -> Result<Vec<String>, DbErr> {
+    let statement = Statement::from_string(
+        conn.get_database_backend(),
+        "SELECT version FROM seaql_migrations ORDER BY version",
+    );
+    match conn.query_all(statement).await {
+        Ok(rows) => rows
+            .iter()
+            .map(|row| row.try_get::<String>("", "version"))
+            .collect(),
+        // A fresh database has no migrations table yet; everything is pending.
+        Err(error) if is_missing_migrations_table(&error) => Ok(Vec::new()),
+        Err(error) => Err(error),
+    }
+}
+
+fn is_missing_migrations_table(error: &DbErr) -> bool {
+    // The only non-error reason this read fails is a fresh database with no migrations table yet,
+    // which SQLite reports verbatim. Any other failure that merely mentions the table (a malformed
+    // or unreadable table) must surface rather than be mistaken for "no migrations applied".
+    error
+        .to_string()
+        .contains("no such table: seaql_migrations")
 }
 
 async fn back_up_database(path: &Path) -> AppResult<()> {
@@ -171,10 +289,10 @@ fn append_suffix(path: &Path, suffix: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::{
-        AuditLog, DATABASE_FILENAME, Database, SQLITE_CORRUPT, SQLITE_NOTADB, append_suffix,
-        audit_log::ListDispatchesQuery, back_up_database, connect_and_migrate,
-        is_recoverable_sqlite_error, is_recoverable_sqlite_result_code, migration::Migrator,
-        open_and_migrate,
+        AuditLog, DATABASE_FILENAME, Database, MigrationOutcome, SQLITE_CORRUPT, SQLITE_NOTADB,
+        append_suffix, audit_log::ListDispatchesQuery, back_up_database, connect_and_migrate,
+        is_missing_migrations_table, is_recoverable_sqlite_error,
+        is_recoverable_sqlite_result_code, migration::Migrator, open_and_migrate,
     };
 
     /// Taken from the registry rather than written down, so adding a migration
@@ -185,7 +303,6 @@ mod tests {
         use sea_orm_migration::MigratorTrait;
         Migrator::migrations().len()
     }
-    use crate::error::AppError;
     use sea_orm::{
         ConnectionTrait, DbBackend, DbErr, Statement,
         sqlx::{
@@ -441,7 +558,7 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().join(DATABASE_FILENAME);
 
-        let through_18 = open_and_migrate::<MigratorThrough18>(&path).await?;
+        let (through_18, _) = open_and_migrate::<MigratorThrough18>(&path).await?;
         through_18
             .execute_unprepared(
                 "INSERT INTO feedback_invite (install_id, shown_at_ms, outcome, settled_at_ms) \
@@ -498,7 +615,7 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().join(DATABASE_FILENAME);
 
-        let through_19 = open_and_migrate::<MigratorThrough19>(&path).await?;
+        let (through_19, _) = open_and_migrate::<MigratorThrough19>(&path).await?;
         through_19
             .execute_unprepared(
                 "INSERT INTO feedback_invite \
@@ -534,28 +651,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn older_migrator_does_not_replace_a_newer_database() -> anyhow::Result<()> {
+    async fn an_older_binary_starts_read_forward_on_a_newer_database() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let path = dir.path().join(DATABASE_FILENAME);
-        let current = Database::open(&path).await?;
-        current.0.close().await?;
+        // A current build creates the database at the full schema.
+        let (current, _) = connect_and_migrate::<Migrator>(&path).await?;
+        current.close().await?;
 
-        let error = match open_and_migrate::<MigratorThrough6>(&path).await {
-            Ok(conn) => {
-                conn.close().await?;
-                anyhow::bail!("older migrator replaced a database with newer migrations");
-            }
-            Err(error) => error,
+        // An older build that only knows the first six migrations opens the newer database. It must
+        // start read-forward (report it as ahead), never crash and never treat it as corrupt.
+        let (conn, outcome) = connect_and_migrate::<MigratorThrough6>(&path).await?;
+        let MigrationOutcome::DatabaseAhead { unknown } = outcome else {
+            conn.close().await?;
+            anyhow::bail!("expected the newer database to be reported as ahead");
         };
-        assert!(matches!(&error, AppError::Db(_)));
-        assert!(
-            error
-                .to_string()
-                .contains("m0007_add_session_efficiency_stats"),
-            "unexpected migration error: {error}"
-        );
-        assert!(!append_suffix(&path, ".bak").exists());
+        assert!(unknown.contains(&"m0007_add_session_efficiency_stats".to_string()));
+        assert!(unknown.contains(&"m0020_add_feedback_invite_snooze".to_string()));
+        conn.close().await?;
 
+        // The database is left intact: no backup was made and it still carries every migration.
+        assert!(!append_suffix(&path, ".bak").exists());
         let mut conn = SqliteConnection::connect_with(&sqlite_options(&path)).await?;
         let migration_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM seaql_migrations")
             .fetch_one(&mut conn)
@@ -566,6 +681,51 @@ mod tests {
         );
         conn.close().await?;
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_diverged_database_fails_with_a_clear_message() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join(DATABASE_FILENAME);
+        // The database is at the first six migrations, plus a migration from a future build that no
+        // known migrator contains.
+        let (conn, _) = connect_and_migrate::<MigratorThrough6>(&path).await?;
+        conn.execute_unprepared(
+            "INSERT INTO seaql_migrations (version, applied_at) VALUES ('m9999_from_the_future', 0)",
+        )
+        .await?;
+        conn.close().await?;
+
+        // A build that still has pending known migrations cannot reconcile the unknown row: it must
+        // refuse with an actionable error rather than the opaque sea-orm one.
+        let error = match connect_and_migrate::<Migrator>(&path).await {
+            Ok((conn, _)) => {
+                conn.close().await?;
+                anyhow::bail!("a diverged database should not open");
+            }
+            Err(error) => error,
+        };
+        let message = error.to_string();
+        assert!(message.contains("incompatible"), "unexpected: {message}");
+        assert!(
+            message.contains("m9999_from_the_future"),
+            "unexpected: {message}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn only_a_missing_migrations_table_is_treated_as_a_fresh_database() {
+        assert!(is_missing_migrations_table(&DbErr::Custom(
+            "no such table: seaql_migrations".to_string()
+        )));
+        // Errors that merely mention the table must propagate, not be read as a fresh database.
+        assert!(!is_missing_migrations_table(&DbErr::Custom(
+            "malformed database schema (seaql_migrations)".to_string()
+        )));
+        assert!(!is_missing_migrations_table(&DbErr::Custom(
+            "no such table: sessions".to_string()
+        )));
     }
 
     #[test]
@@ -602,7 +762,7 @@ mod tests {
     async fn migration_7_upgrades_a_version_6_database_once() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let path = dir.path().join(DATABASE_FILENAME);
-        let version_6 = connect_and_migrate::<MigratorThrough6>(&path).await?;
+        let (version_6, _) = connect_and_migrate::<MigratorThrough6>(&path).await?;
         version_6.close().await?;
 
         let upgraded = Database::open(&path).await?;
@@ -638,7 +798,7 @@ mod tests {
                 .count(),
             1
         );
-        upgraded.0.close().await?;
+        upgraded.close().await?;
 
         let reopened = Database::open(&path).await?;
         let migration_count = reopened
@@ -779,7 +939,7 @@ mod tests {
         let dir = tempdir()?;
         let path = dir.path().join(DATABASE_FILENAME);
         let first = Database::open(&path).await?;
-        first.0.close().await?;
+        first.close().await?;
 
         let second = Database::open(&path).await?;
         let migrations = second

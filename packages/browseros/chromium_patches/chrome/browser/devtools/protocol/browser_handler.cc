@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 6af060d287872bf2ae881ff013c124eb7508c839..f2de902c3451c2822aaacc633c6c1a2889fbc5d3 100644
+index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbdd620a2d6 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
 @@ -4,24 +4,39 @@
@@ -62,7 +62,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..f2de902c3451c2822aaacc633c6c1a28
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -76,6 +104,398 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -76,6 +104,404 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -200,11 +200,38 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..f2de902c3451c2822aaacc633c6c1a28
 +  return info;
 +}
 +
++// A tab's contents, owning window, and valid strip index for synchronous use.
++// Tab mutations can invalidate the index; pinning returns its new location.
 +struct TabLookupResult {
 +  raw_ptr<content::WebContents> web_contents = nullptr;
 +  raw_ptr<BrowserWindowInterface> bwi = nullptr;
 +  int tab_index = -1;
 +};
++
++Response ResolveTabLocation(content::WebContents* wc, TabLookupResult* result) {
++  BrowserWindowInterface* found_bwi = nullptr;
++  int found_index = TabStripModel::kNoTab;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [wc, &found_bwi, &found_index](BrowserWindowInterface* bwi) {
++        TabStripModel* tab_strip = bwi->GetTabStripModel();
++        int index = tab_strip->GetIndexOfWebContents(wc);
++        if (tab_strip->ContainsIndex(index)) {
++          found_bwi = bwi;
++          found_index = index;
++          return false;
++        }
++        return true;
++      });
++
++  if (!found_bwi) {
++    return Response::ServerError("No tab with given id");
++  }
++
++  result->web_contents = wc;
++  result->bwi = found_bwi;
++  result->tab_index = found_index;
++  return Response::Success();
++}
 +
 +Response ResolveTabIdentifier(std::optional<std::string> target_id,
 +                              std::optional<int> tab_id,
@@ -228,28 +255,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..f2de902c3451c2822aaacc633c6c1a28
 +      return Response::ServerError("No web contents in the target");
 +    }
 +
-+    BrowserWindowInterface* found_bwi = nullptr;
-+    int found_index = -1;
-+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-+        [wc, &found_bwi, &found_index](BrowserWindowInterface* bwi) {
-+          TabStripModel* tab_strip = bwi->GetTabStripModel();
-+          int idx = tab_strip->GetIndexOfWebContents(wc);
-+          if (idx != TabStripModel::kNoTab) {
-+            found_bwi = bwi;
-+            found_index = idx;
-+            return false;
-+          }
-+          return true;
-+        });
-+
-+    if (!found_bwi) {
-+      return Response::ServerError("No tab with given id");
-+    }
-+
-+    result->web_contents = wc;
-+    result->bwi = found_bwi;
-+    result->tab_index = found_index;
-+    return Response::Success();
++    return ResolveTabLocation(wc, result);
 +  }
 +
 +  // tab_id provided
@@ -461,7 +467,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..f2de902c3451c2822aaacc633c6c1a28
  }  // namespace
  
  BrowserHandler::BrowserHandler(protocol::UberDispatcher* dispatcher,
-@@ -126,6 +546,67 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -126,6 +552,67 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -529,7 +535,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..f2de902c3451c2822aaacc633c6c1a28
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -305,3 +786,666 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -305,3 +792,672 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -775,14 +781,20 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..f2de902c3451c2822aaacc633c6c1a28
 +    return Response::ServerError("Failed to create tab");
 +  }
 +
-+  TabStripModel* tab_strip = bwi->GetTabStripModel();
-+  int new_index = tab_strip->GetIndexOfWebContents(new_wc);
-+
-+  if (pinned.value_or(false) && new_index != TabStripModel::kNoTab) {
-+    new_index = tab_strip->SetTabPinned(new_index, true);
++  // Navigation can reroute a popup request into a normal window. Resolve the
++  // actual owner and a valid strip index before pinning or serializing the tab.
++  TabLookupResult lookup;
++  Response response = ResolveTabLocation(new_wc, &lookup);
++  if (!response.IsSuccess()) {
++    return response;
 +  }
 +
-+  *out_tab = BuildTabInfo(new_wc, bwi, new_index);
++  if (pinned.value_or(false)) {
++    lookup.tab_index =
++        lookup.bwi->GetTabStripModel()->SetTabPinned(lookup.tab_index, true);
++  }
++
++  *out_tab = BuildTabInfo(lookup.web_contents, lookup.bwi, lookup.tab_index);
 +  return Response::Success();
 +}
 +

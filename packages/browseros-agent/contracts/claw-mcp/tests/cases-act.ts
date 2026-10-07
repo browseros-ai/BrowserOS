@@ -13,15 +13,8 @@ async function snapshot(ctx: CaseContext, page: number): Promise<string> {
 }
 
 function refFor(snapshot: string, needle: string): string {
-  // The fixture labels a field as `<label>Name <input></label>`, and the
-  // accessible name a browser computes for that lost its trailing space: the
-  // name is now `Name`, not `Name `. The needles here were written with the
-  // space, so it is ignored and both shapes match. `fieldRef` in the fill
-  // cases already matched this way, which is why those passed while these did
-  // not, on the same fixture in the same run.
-  const wanted = needle.replace(/\s+$/, '')
   for (const line of snapshot.split('\n')) {
-    if (line.includes(wanted)) {
+    if (line.replace(/\s+"/g, '"').includes(needle)) {
       const match = line.match(/\[ref=(e\d+)\]/)
       if (match) return match[1]
     }
@@ -129,7 +122,7 @@ export const actCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      const nameRef = refFor(snap, '"Name ')
+      const nameRef = refFor(snap, '"Name"')
       // type sends key events to the focused element; a real click is the
       // reliable focus primitive (act kind=focus is broken on both
       // servers — see the focus case). Click, then type.
@@ -194,7 +187,7 @@ export const actCases: ContractCase[] = [
         await ctx.mcp.callTool('act', {
           page,
           kind: 'fill',
-          ref: refFor(snap, '"Nickname '),
+          ref: refFor(snap, '"Nickname"'),
           value: 'Grace Hopper',
         }),
         'act fill',
@@ -224,8 +217,8 @@ export const actCases: ContractCase[] = [
           page,
           kind: 'fill',
           fields: [
-            { ref: refFor(snap, '"Name '), value: 'Katherine Johnson' },
-            { ref: refFor(snap, '"Bio '), value: 'orbital mechanics' },
+            { ref: refFor(snap, '"Name"'), value: 'Katherine Johnson' },
+            { ref: refFor(snap, '"Bio"'), value: 'orbital mechanics' },
           ],
         }),
         'act fill fields[]',
@@ -250,7 +243,7 @@ export const actCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      const nameRef = refFor(snap, '"Name ')
+      const nameRef = refFor(snap, '"Name"')
       expectOk(
         await ctx.mcp.callTool('act', { page, kind: 'click', ref: nameRef }),
       )
@@ -289,7 +282,7 @@ export const actCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      const nameRef = refFor(snap, '"Name ')
+      const nameRef = refFor(snap, '"Name"')
       expectOk(
         await ctx.mcp.callTool('act', { page, kind: 'click', ref: nameRef }),
       )
@@ -331,7 +324,7 @@ export const actCases: ContractCase[] = [
       const result = await ctx.mcp.callTool('act', {
         page,
         kind: 'press',
-        ref: refFor(snap, '"Name '),
+        ref: refFor(snap, '"Name"'),
         key: 'Cmd+c',
       })
       if (result.isError) {
@@ -348,7 +341,7 @@ export const actCases: ContractCase[] = [
         await ctx.mcp.callTool('act', {
           page,
           kind: 'press',
-          ref: refFor(snap, '"Name '),
+          ref: refFor(snap, '"Name"'),
           key: 'NotARealKey',
         }),
         'act press invalid key',
@@ -385,7 +378,7 @@ export const actCases: ContractCase[] = [
         await ctx.mcp.callTool('act', {
           page,
           kind: 'focus',
-          ref: refFor(snap, '"Bio '),
+          ref: refFor(snap, '"Bio"'),
         }),
         'act focus by ref',
       )
@@ -490,7 +483,7 @@ export const actCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = await snapshot(ctx, page)
-      const ref = refFor(snap, 'Color ')
+      const ref = refFor(snap, '"Color"')
       expectOk(
         await ctx.mcp.callTool('act', {
           page,

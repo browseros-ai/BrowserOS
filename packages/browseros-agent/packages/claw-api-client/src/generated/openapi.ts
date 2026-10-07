@@ -593,6 +593,7 @@ export interface components {
       /** Format: uri */
       url: string
       capabilities?: components['schemas']['SystemCapabilities']
+      schema?: components['schemas']['SchemaStatus']
     }
     SystemCapabilities: {
       /**
@@ -606,6 +607,13 @@ export interface components {
        * @description Maximum UTF-8 encoded request-body bytes accepted by canonical recording ingest.
        */
       recordingIngestMaxBytes?: number
+    }
+    /** @description How the data this server opened compares to the schema this build knows. When the database was migrated by a newer BrowserOS neo, the server runs read-forward on the columns it understands and reports the migrations it does not have, so the app can prompt the user to update BrowserOS neo to match its data. */
+    SchemaStatus: {
+      /** @description True when the database carries applied migrations this build does not contain. */
+      databaseAhead: boolean
+      /** @description Names of the applied migrations this build does not know. Empty unless databaseAhead is true. */
+      unknownMigrations: string[]
     }
     CockpitStats: {
       hasMeasuredStats: boolean
