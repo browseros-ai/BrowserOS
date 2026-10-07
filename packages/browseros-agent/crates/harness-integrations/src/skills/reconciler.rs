@@ -21,10 +21,11 @@ use super::{
     types::{SkillEnvironment, SkillReconcileOutcome, SkillSpec, SkillWarning, TargetPlatform},
 };
 
-/// Reconciles product-supplied skills into catalog-defined global harness roots.
+/// Reconciles product-supplied skills into provisioned and connected-harness roots.
 #[derive(Debug, Clone)]
 pub struct SkillReconciler {
     workspace_dir: PathBuf,
+    provisioned_roots: Vec<PathBuf>,
 }
 
 impl SkillReconciler {
@@ -32,7 +33,17 @@ impl SkillReconciler {
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),
+            provisioned_roots: Vec::new(),
         }
+    }
+
+    /// Configures skill roots to provision before any consuming application is installed.
+    /// These share the normal ownership, repair and cleanup plan with connected consumers;
+    /// an empty consumer list therefore cannot delete a proactively provisioned skill.
+    #[must_use]
+    pub fn with_provisioned_roots(mut self, roots: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.provisioned_roots = roots.into_iter().collect();
+        self
     }
 
     /// Converges every desired physical target and removes stale controlled targets.
@@ -42,7 +53,23 @@ impl SkillReconciler {
         consumers: &BTreeSet<AgentId>,
         environment: &SkillEnvironment,
     ) -> Result<SkillReconcileOutcome, Error> {
-        self.reconcile_with(spec, consumers, environment, replace_managed_directory)
+        self.reconcile_with(
+            spec,
+            Some(consumers),
+            environment,
+            replace_managed_directory,
+        )
+    }
+
+    /// Repairs baseline targets when connection discovery is unavailable. Unknown
+    /// consumers are different from an empty set: preserve their records and
+    /// directories until a successful discovery can authorize cleanup again.
+    pub fn repair_provisioned(
+        &self,
+        spec: &SkillSpec,
+        environment: &SkillEnvironment,
+    ) -> Result<SkillReconcileOutcome, Error> {
+        self.reconcile_with(spec, None, environment, replace_managed_directory)
     }
 
     /// One-time, idempotent migration for a renamed managed skill: removes the
@@ -106,7 +133,7 @@ impl SkillReconciler {
     fn reconcile_with(
         &self,
         spec: &SkillSpec,
-        consumers: &BTreeSet<AgentId>,
+        consumers: Option<&BTreeSet<AgentId>>,
         environment: &SkillEnvironment,
         mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
     ) -> Result<SkillReconcileOutcome, Error> {
@@ -122,13 +149,20 @@ impl SkillReconciler {
     fn reconcile_with_identity(
         &self,
         spec: &SkillSpec,
-        consumers: &BTreeSet<AgentId>,
+        consumers: Option<&BTreeSet<AgentId>>,
         environment: &SkillEnvironment,
         mut identity: impl FnMut(&Path) -> Result<PathBuf, Error>,
         mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
     ) -> Result<SkillReconcileOutcome, Error> {
         let original = read_manifest(&self.workspace_dir)?;
-        let plan = plan_reconciliation(&original, spec, consumers, environment, &mut identity)?;
+        let plan = plan_reconciliation(
+            &original,
+            spec,
+            consumers,
+            environment,
+            &self.provisioned_roots,
+            &mut identity,
+        )?;
         let mut records = plan.records;
         let desired_hash = content_hash(spec.content.as_bytes());
         let mut outcome = SkillReconcileOutcome::default();
@@ -343,11 +377,22 @@ struct ReconciliationPlan {
 fn plan_reconciliation(
     original: &SkillManifest,
     spec: &SkillSpec,
-    consumers: &BTreeSet<AgentId>,
+    consumers: Option<&BTreeSet<AgentId>>,
     environment: &SkillEnvironment,
+    provisioned_roots: &[PathBuf],
     identity: &mut impl FnMut(&Path) -> Result<PathBuf, Error>,
 ) -> Result<ReconciliationPlan, Error> {
-    let desired = desired_targets(consumers, &spec.name, environment, identity)?;
+    let mut desired = consumers
+        .map(|consumers| desired_targets(consumers, &spec.name, environment, identity))
+        .transpose()?
+        .unwrap_or_default();
+    for root in provisioned_roots {
+        // Provisioning records deliberately have no fictional MCP consumers. The
+        // desired physical destination, not connection presence, keeps them alive.
+        desired
+            .entry(identity(&root.join(&spec.name))?)
+            .or_default();
+    }
     let mut records = BTreeMap::<PathBuf, SkillManifestEntry>::new();
     let mut original_records = BTreeMap::<PathBuf, Vec<SkillManifestEntry>>::new();
     let mut manifest_controlled_targets = BTreeSet::new();
@@ -403,11 +448,22 @@ fn plan_reconciliation(
         }
     }
 
-    let mut cleanup_targets = records.keys().cloned().collect::<BTreeSet<_>>();
-    for agent in AgentId::ALL {
-        if resolve_harness_definition(agent).skill.is_some() {
-            let target = resolve_agent_skill_target(agent, &spec.name, environment)?;
-            cleanup_targets.insert(identity(&target)?);
+    let mut cleanup_targets = BTreeSet::new();
+    if consumers.is_some() {
+        cleanup_targets.extend(records.keys().cloned());
+        for agent in AgentId::ALL {
+            if resolve_harness_definition(agent).skill.is_some() {
+                let target = resolve_agent_skill_target(agent, &spec.name, environment)?;
+                cleanup_targets.insert(identity(&target)?);
+            }
+        }
+    } else {
+        // Repair may update content at a common destination, but must not erase
+        // its last known consumers merely because MCP state could not be read.
+        for (target, consumers) in &mut desired {
+            if let Some(record) = records.get(target) {
+                consumers.extend(&record.consumers);
+            }
         }
     }
     Ok(ReconciliationPlan {
@@ -704,7 +760,7 @@ mod tests {
 
         let installed = reconciler.reconcile_with_identity(
             &spec,
-            &BTreeSet::from([AgentId::ClaudeCode]),
+            Some(&BTreeSet::from([AgentId::ClaudeCode])),
             &environment,
             identity,
             replace_managed_directory,
@@ -715,7 +771,7 @@ mod tests {
 
         let shared = reconciler.reconcile_with_identity(
             &spec,
-            &BTreeSet::from([AgentId::ClaudeCode, AgentId::Codex]),
+            Some(&BTreeSet::from([AgentId::ClaudeCode, AgentId::Codex])),
             &environment,
             |target| {
                 Ok(if target == claude || target == agents {
@@ -734,7 +790,7 @@ mod tests {
 
         let removed = reconciler.reconcile_with_identity(
             &spec,
-            &BTreeSet::new(),
+            Some(&BTreeSet::new()),
             &environment,
             |target| {
                 Ok(if target == claude || target == agents {
@@ -763,7 +819,7 @@ mod tests {
         let error = reconciler
             .reconcile_with_identity(
                 &spec,
-                &BTreeSet::from([AgentId::Cursor]),
+                Some(&BTreeSet::from([AgentId::Cursor])),
                 &environment,
                 |target| {
                     identity_calls += 1;
@@ -910,7 +966,7 @@ mod tests {
         let replacement = SkillSpec::new("browserclaw", "new")?;
         let outcome = reconciler.reconcile_with(
             &replacement,
-            &consumers,
+            Some(&consumers),
             &environment,
             |target, spec, hash| {
                 let mut calls = 0;

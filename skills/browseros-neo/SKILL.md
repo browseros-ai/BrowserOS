@@ -63,6 +63,8 @@ When you hit something only a person can do (a sign-in, a one-time code, a captc
 
 ## Failure
 
+This skill may be installed before your agent is connected. If BrowserOS neo's MCP tools are unavailable, open its MCP connections page and connect your agent, or copy the endpoint from Manual Setup into your agent's MCP settings. Then refresh its MCP connections or start a new session. The skill alone does not provide browser tools.
+
 If a call reports `browser session not connected`, tell the user to start BrowserOS neo and check the cockpit. Do not silently fall back to another browser tool.
 
 A failed `run` comes back with the error and the captured logs. Read those first: they name the cause, and guessing from anything else sends you after the wrong one. Elapsed time adds a single thing the message may not make obvious: a run that died at about thirty seconds hit the wall-clock cap, so split the work rather than raising the timeout, which is clamped.

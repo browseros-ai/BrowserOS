@@ -19,6 +19,75 @@ fn spec(content: &str) -> Result<SkillSpec, harness_integrations::Error> {
 }
 
 #[test]
+fn provisioned_roots_survive_disconnect_and_preserve_foreign_skills()
+-> Result<(), Box<dyn std::error::Error>> {
+    let root = tempdir()?;
+    let environment = SkillEnvironment::new(root.path().join("home"), TargetPlatform::Linux);
+    let reconciler = SkillReconciler::new(root.path().join("state"))
+        .with_provisioned_roots(environment.common_skill_roots());
+    let shared = root.path().join("home/.agents/skills/browserclaw");
+    let claude = root.path().join("home/.claude/skills/browserclaw");
+    fs::create_dir_all(&claude)?;
+    fs::write(claude.join("SKILL.md"), "user-authored skill")?;
+
+    let first = reconciler.reconcile(&spec("v1")?, &agents(&[AgentId::Codex]), &environment)?;
+    assert_eq!(first.installed, 1);
+    assert_eq!(first.warnings.len(), 1);
+    let before = fs::metadata(shared.join("SKILL.md"))?.modified()?;
+    let disconnected = reconciler.reconcile(&spec("v1")?, &BTreeSet::new(), &environment)?;
+    assert_eq!(disconnected.removed, 0);
+    assert_eq!(disconnected.unchanged, 1);
+    assert_eq!(fs::metadata(shared.join("SKILL.md"))?.modified()?, before);
+    assert_eq!(
+        fs::read_to_string(claude.join("SKILL.md"))?,
+        "user-authored skill"
+    );
+    let manifest_before = fs::metadata(root.path().join("state/skills.json"))?.modified()?;
+    reconciler.reconcile(&spec("v1")?, &BTreeSet::new(), &environment)?;
+    assert_eq!(
+        fs::metadata(root.path().join("state/skills.json"))?.modified()?,
+        manifest_before
+    );
+
+    fs::remove_file(shared.join("SKILL.md"))?;
+    let repaired = reconciler.reconcile(&spec("v2")?, &BTreeSet::new(), &environment)?;
+    assert_eq!(repaired.updated, 1);
+    assert_eq!(fs::read_to_string(shared.join("SKILL.md"))?, "v2");
+    Ok(())
+}
+
+#[test]
+fn proactive_skills_honor_custom_claude_and_copilot_homes() -> Result<(), Box<dyn std::error::Error>>
+{
+    let root = tempdir()?;
+    let home = root.path().join("home");
+    let environment = SkillEnvironment::new(&home, TargetPlatform::Linux)
+        .with_variable("CLAUDE_CONFIG_DIR", root.path().join("claude-profile"))
+        .with_variable("COPILOT_HOME", root.path().join("copilot-profile"));
+    let reconciler = SkillReconciler::new(root.path().join("state"))
+        .with_provisioned_roots(environment.common_skill_roots());
+    let result = reconciler.reconcile(
+        &spec("profile instructions")?,
+        &BTreeSet::new(),
+        &environment,
+    )?;
+    assert_eq!(result.installed, 3);
+    for target in [
+        "home/.agents/skills/browserclaw/SKILL.md",
+        "claude-profile/skills/browserclaw/SKILL.md",
+        "copilot-profile/skills/browserclaw/SKILL.md",
+    ] {
+        assert_eq!(
+            fs::read_to_string(root.path().join(target))?,
+            "profile instructions"
+        );
+    }
+    assert!(!home.join(".claude").exists());
+    assert!(!home.join(".copilot").exists());
+    Ok(())
+}
+
+#[test]
 fn resolves_current_global_roots_and_groups_shared_targets()
 -> Result<(), Box<dyn std::error::Error>> {
     let root = tempdir()?;

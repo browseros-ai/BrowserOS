@@ -79,7 +79,7 @@ impl SkillEnvironment {
     #[must_use]
     pub fn current(home_dir: impl Into<PathBuf>) -> Self {
         let mut environment = Self::new(home_dir, TargetPlatform::current());
-        for variable in ["CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME"] {
+        for variable in ["CLAUDE_CONFIG_DIR", "XDG_CONFIG_HOME", "COPILOT_HOME"] {
             if let Some(value) = std::env::var_os(variable).filter(|value| !value.is_empty()) {
                 environment
                     .variables
@@ -93,6 +93,23 @@ impl SkillEnvironment {
     pub fn with_variable(mut self, name: impl Into<String>, value: impl Into<PathBuf>) -> Self {
         self.variables.insert(name.into(), value.into());
         self
+    }
+
+    /// Common local agents discover the shared root; Claude Code needs its personal
+    /// root too. Custom Copilot homes opt out of shared-root discovery, so provision
+    /// their skills directly when that override is visible to the installer.
+    #[must_use]
+    pub fn common_skill_roots(&self) -> Vec<PathBuf> {
+        let mut roots = vec![
+            self.home_dir.join(".agents/skills"),
+            self.variable("CLAUDE_CONFIG_DIR")
+                .unwrap_or_else(|| self.home_dir.join(".claude"))
+                .join("skills"),
+        ];
+        if let Some(copilot_home) = self.variable("COPILOT_HOME") {
+            roots.push(copilot_home.join("skills"));
+        }
+        roots
     }
 
     pub(crate) fn variable(&self, name: &str) -> Option<PathBuf> {

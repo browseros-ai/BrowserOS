@@ -8,6 +8,7 @@ use std::{
 use crate::{
     catalog::{AgentId, PerOsPaths, get_catalog_entry, list_supported_agents},
     error::Error,
+    skills::SkillEnvironment,
 };
 
 use super::types::{AgentInfo, AgentScope, AgentSurface};
@@ -46,7 +47,7 @@ pub fn resolve_agent_mcp_config_path(agent: AgentId, scope: AgentScope) -> Resul
 
 pub(crate) fn has_install_fingerprint(agent: AgentId) -> Result<bool, Error> {
     let checks = selected_os_paths(&get_catalog_entry(agent).install_check_paths);
-    any_exists(checks)
+    any_installation_evidence(checks)
 }
 
 /// Reports catalog install checks separately from config-path writability.
@@ -132,9 +133,65 @@ pub(crate) fn path_exists(path: &Path) -> Result<bool, Error> {
     }
 }
 
-pub(crate) fn any_exists(paths: &[&str]) -> Result<bool, Error> {
+fn any_installation_evidence(paths: &[&str]) -> Result<bool, Error> {
     for path in expand_paths(paths) {
-        if path_exists(&path)? {
+        if has_installation_evidence(&path)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// A skills-only directory can be planted before its application is installed.
+/// Keep accepting an app's empty initialization directory, but do not let skill
+/// provisioning itself opt that app into automatic MCP configuration.
+fn has_installation_evidence(path: &Path) -> Result<bool, Error> {
+    let roots = expand_paths(&["$HOME", "$USERPROFILE"])
+        .into_iter()
+        .flat_map(|home| SkillEnvironment::current(home).common_skill_roots())
+        .map(|root| fs::canonicalize(&root).unwrap_or(root))
+        .collect::<Vec<_>>();
+    let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    has_non_skill_state(&path, &roots, true)
+}
+
+fn has_non_skill_state(
+    path: &Path,
+    skill_roots: &[PathBuf],
+    accept_empty: bool,
+) -> Result<bool, Error> {
+    let metadata = match fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(Error::io("inspect", path, error)),
+    };
+    if !metadata.is_dir() {
+        return Ok(true);
+    }
+    let mut entries = fs::read_dir(path)
+        .map_err(|error| Error::io("inspect install directory", path, error))?
+        .peekable();
+    if entries.peek().is_none() {
+        return Ok(accept_empty);
+    }
+    for entry in entries {
+        let entry = entry.map_err(|error| Error::io("inspect install directory", path, error))?;
+        if entry.file_name() == "skills" || entry.file_name() == ".DS_Store" {
+            continue;
+        }
+        let child = entry.path();
+        if skill_roots.contains(&child) {
+            continue;
+        }
+        // A nested override can create ~/.claude/profiles/work/skills. Inspect
+        // only ancestors of known skill roots so those scaffolding directories
+        // do not impersonate an installed app. Other app state qualifies at once;
+        // this never recursively scans arbitrary application directories.
+        if skill_roots.iter().any(|root| root.starts_with(&child)) {
+            if has_non_skill_state(&child, skill_roots, false)? {
+                return Ok(true);
+            }
+        } else {
             return Ok(true);
         }
     }
@@ -155,17 +212,28 @@ fn pick_expanded_config_path(expanded: Vec<PathBuf>) -> Result<Option<PathBuf>, 
     Ok(expanded.into_iter().next())
 }
 
-fn is_config_path_installed(config_path: &Path) -> Result<bool, Error> {
+pub(crate) fn is_config_path_installed(config_path: &Path) -> Result<bool, Error> {
     if path_exists(config_path)? {
         return Ok(true);
     }
     match config_path.parent() {
-        Some(parent) => path_exists(parent),
+        Some(parent) => {
+            // A home-level config (notably ~/.claude.json) does not make every
+            // user with a home directory an installed agent. Actual config files
+            // and the agent's own install fingerprints still qualify above.
+            if expand_paths(&["$HOME", "$USERPROFILE"])
+                .iter()
+                .any(|home| home == parent)
+            {
+                return Ok(false);
+            }
+            has_installation_evidence(parent)
+        }
         None => Ok(false),
     }
 }
 
-/// Checks whether each agent has an install fingerprint or a writable config location.
+/// Checks app/config evidence, excluding home and skills-only directories.
 pub fn is_installed(agents: &[AgentId]) -> Result<BTreeMap<AgentId, bool>, Error> {
     let mut result = BTreeMap::new();
     for agent in agents {
