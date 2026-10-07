@@ -253,8 +253,12 @@ async fn applied_migration_versions(conn: &DatabaseConnection) -> Result<Vec<Str
 }
 
 fn is_missing_migrations_table(error: &DbErr) -> bool {
-    let message = error.to_string();
-    message.contains("seaql_migrations") || message.contains("no such table")
+    // The only non-error reason this read fails is a fresh database with no migrations table yet,
+    // which SQLite reports verbatim. Any other failure that merely mentions the table (a malformed
+    // or unreadable table) must surface rather than be mistaken for "no migrations applied".
+    error
+        .to_string()
+        .contains("no such table: seaql_migrations")
 }
 
 async fn back_up_database(path: &Path) -> AppResult<()> {
@@ -287,8 +291,8 @@ mod tests {
     use super::{
         AuditLog, DATABASE_FILENAME, Database, MigrationOutcome, SQLITE_CORRUPT, SQLITE_NOTADB,
         append_suffix, audit_log::ListDispatchesQuery, back_up_database, connect_and_migrate,
-        is_recoverable_sqlite_error, is_recoverable_sqlite_result_code, migration::Migrator,
-        open_and_migrate,
+        is_missing_migrations_table, is_recoverable_sqlite_error,
+        is_recoverable_sqlite_result_code, migration::Migrator, open_and_migrate,
     };
     use sea_orm::{
         ConnectionTrait, DbBackend, DbErr, Statement,
@@ -696,6 +700,20 @@ mod tests {
             "unexpected: {message}"
         );
         Ok(())
+    }
+
+    #[test]
+    fn only_a_missing_migrations_table_is_treated_as_a_fresh_database() {
+        assert!(is_missing_migrations_table(&DbErr::Custom(
+            "no such table: seaql_migrations".to_string()
+        )));
+        // Errors that merely mention the table must propagate, not be read as a fresh database.
+        assert!(!is_missing_migrations_table(&DbErr::Custom(
+            "malformed database schema (seaql_migrations)".to_string()
+        )));
+        assert!(!is_missing_migrations_table(&DbErr::Custom(
+            "no such table: sessions".to_string()
+        )));
     }
 
     #[test]

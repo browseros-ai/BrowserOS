@@ -83,14 +83,16 @@ async fn main() -> anyhow::Result<()> {
             Err(run_error)
         }
     };
-    // Decided here, after teardown, and only for this one cause: the supervising
-    // browser relaunches on another port for this code and stops supervising for
-    // the rest of its session for any other non-zero exit.
-    if let Err(error) = &outcome
-        && let Some(conflict) = error.downcast_ref::<PortConflict>()
-    {
-        error!(port = conflict.port, "{conflict}");
-        std::process::exit(EXIT_PORT_CONFLICT);
+    if let Err(error) = &outcome {
+        let detail = error.to_string();
+        record_startup(&logs_dir, "failed", Some(detail.as_str()));
+        // Decided here, after teardown, and only for this one cause: the supervising
+        // browser relaunches on another port for this code and stops supervising for
+        // the rest of its session for any other non-zero exit.
+        if let Some(conflict) = error.downcast_ref::<PortConflict>() {
+            error!(port = conflict.port, "{conflict}");
+            std::process::exit(EXIT_PORT_CONFLICT);
+        }
     }
     outcome
 }
