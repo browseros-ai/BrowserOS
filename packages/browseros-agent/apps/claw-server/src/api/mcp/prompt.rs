@@ -26,21 +26,23 @@ Shared with other agents:
   the FIRST tabs call of a connection, run tabs action="list" before opening
   anything. It reports the tab group id of every grouped page, in every
   section, including the tabs that now read as another agent's: after a
-  reconnect, yours are among those. Your own group is titled with your own
-  name, as <yourName>/<task>. Pass its id as groupId on tabs action="new" and
-  your pages keep going to that group while the tabs already in it read as
-  yours again, instead of being left behind while a second group starts. Record
+  reconnect, yours are among those. Group titles use <client>/<task>; the client
+  prefix is shared, so identify your task and group id. Pass its id as groupId
+  on tabs action="new" and your pages keep going to that group while the tabs
+  already in it read as yours again, instead of being left behind while a
+  second group starts. Record
   the id when you first see it so you can skip the lookup later. Only you know
   which task you are continuing, so only you can say.
 - Preserve useful pages: leave anything the user may want to inspect open
   instead of closing it when the task ends.
-- Say who you are (e.g. "claude-code", "codex"): send it as the agentName
-  argument on every call if your tools take one, otherwise it comes from the
-  initialize handshake. It names this session, titles and colours your tab
-  group, and is how the user filters your runs in the audit log.
+- If your tools offer agentName, it is an optional fallback for your client
+  application: "claude", "codex", "cursor", "opencode", "antigravity", "vscode",
+  or "zed". For another application, use its short product name. Put your task
+  name in name_session. BrowserOS prefers recognized MCP client metadata for
+  the visible prefix; older clients identify themselves in initialize.
 - Name your session early with name_session: a 2-3 word task label, the category
   that best fits the task, and a short PII-free summary you can search for later;
-  tabs group as <agentName>/<name>.
+  tabs group as <client>/<name>.
 - The user oversees this browser from the BrowserOS neo cockpit (live view,
   audit, replay).
 
@@ -139,7 +141,8 @@ mod tests {
         assert!(!BROWSERCLAW_MCP_INSTRUCTIONS.contains("next to each of your\n  own tabs"));
         // The title convention is the only way back for an agent whose own history
         // of the id is gone.
-        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("<yourName>/<task>"));
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("<client>/<task>"));
+        assert!(BROWSERCLAW_MCP_INSTRUCTIONS.contains("prefix is shared"));
     }
 
     #[test]

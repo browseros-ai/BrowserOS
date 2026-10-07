@@ -9,6 +9,7 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 
 ## Shared browser etiquette
 
+- If a tool offers `agentName`, it is an optional fallback for your client application: `claude`, `codex`, `cursor`, `opencode`, `antigravity`, `vscode`, or `zed`. For another application, use its short product name. Put the task name in `name_session`; BrowserOS prefers recognized MCP client metadata for the visible prefix.
 - Call `name_session` early with a 2-3 word task label, the best-fit `category`, and a short PII-free `summary` you can search for later; tabs group as `<client>/<name>` in the cockpit.
 - Open your own tab with `tabs` action `"new"` for work of your own. You may also use the user's tabs and other agents' tabs: ownership is a label telling you whose a tab is, never a barrier.
 - A tab that is not yours is still someone's. Leave it as you found it unless the user asked you to change it, and prefer your own tab for anything exploratory.

@@ -1,7 +1,7 @@
 use crate::{
     api::mcp::{
         dispatch::{ToolCall, ToolEffect, ToolEffectContext, result_page_id},
-        naming::{client_prefix_from_slug, desired_group_title},
+        naming::{desired_group_title, is_session_group_candidate},
         timeouts::TAB_GROUP_OPERATION,
     },
     ids::ConvoId,
@@ -80,21 +80,18 @@ async fn own_group_candidates_notice(context: &ToolEffectContext<'_>) -> Option<
     }
     let identity = context.call.identity.as_ref()?;
     let browser = context.call.browser_session.as_ref()?;
-    // The title is `{prefix}/{label}`, so the separator terminates the prefix and
-    // this match cannot run into a longer client name the way a bare prefix would.
-    let prefix = format!("{}/", client_prefix_from_slug(identity.agent.slug()));
     let candidates = open_groups(browser, context.call.output_files.clone())
         .await?
         .into_iter()
-        .filter(|(_, title)| title.starts_with(&prefix))
+        .filter(|(_, title)| is_session_group_candidate(&identity.session, title))
         .map(|(group_id, title)| format!("{title} (id {group_id})"))
         .collect::<Vec<_>>();
     if candidates.is_empty() {
         return None;
     }
     Some(format!(
-        "note: a new tab group is being started for this session. These open groups are already \
-         named for you, so they are tasks of yours from an earlier connection: {}. If you are \
+        "note: a new tab group is being started for this session. These open groups have a matching client prefix and may be \
+         earlier tasks: {}. If you are \
          continuing one of them, pass its id as groupId on tabs action=\"new\" and your pages go \
          there instead, with the tabs already in it reading as yours again.",
         candidates.join("; ")
@@ -1597,6 +1594,7 @@ mod tests {
     {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
+        recorder.seed_group_titled("group-legacy", "codex-mcp-client/legacy-task", [103]);
         recorder.seed_group_titled("group-theirs", "cowork/research", [102]);
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         let mut call =
@@ -1611,6 +1609,9 @@ mod tests {
         let text = note_text(&annotated);
 
         assert!(text.contains("codex/invoice-run"), "{text}");
+        assert!(text.contains("codex-mcp-client/legacy-task"), "{text}");
+        assert!(text.contains("may be earlier tasks"), "{text}");
+        assert!(!text.contains("they are tasks of yours"), "{text}");
         assert!(
             text.contains("group-earlier"),
             "names the id to pass: {text}"

@@ -482,6 +482,139 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     Ok(())
 }
 
+// Send actual stateless wire requests, not typed handler calls. rmcp extracts
+// metadata during decoding, and each request must carry its own protocol signals.
+async fn stateless_mcp_request(
+    router: &Router,
+    method: &str,
+    mut params: Value,
+    client_name: Option<&str>,
+) -> anyhow::Result<Value> {
+    let mut meta = json!({
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}
+    });
+    if let Some(name) = client_name {
+        meta["io.modelcontextprotocol/clientInfo"] = json!({ "name": name, "version": "1.0" });
+    }
+    params["_meta"] = meta;
+    let tool_name = params["name"].as_str().unwrap_or_default().to_string();
+    let mut headers = vec![
+        ("mcp-protocol-version", "2026-07-28"),
+        ("mcp-method", method),
+    ];
+    if method == "tools/call" {
+        headers.push(("mcp-name", tool_name.as_str()));
+    }
+    let (status, response_headers, body) = request_json_with_headers(
+        router,
+        "POST",
+        "/mcp",
+        Some(json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })),
+        &headers,
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!response_headers.contains_key("mcp-session-id"));
+    assert!(body["error"].is_null(), "{body}");
+    Ok(body)
+}
+
+#[tokio::test]
+async fn mcp_stateless_product_precedence_fallback_and_reuse() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    for (reported, declared, expected) in [
+        (Some("Claude Code"), Some("cld-messaging"), "claude/task"),
+        (Some("codex-mcp-client"), Some("claude"), "codex/task"),
+        (Some("unknown-proxy"), Some("OpenCode"), "opencode/task"),
+        (None, Some("VS Code"), "vscode/task"),
+        (None, Some("cld-account2"), "cld-account2/task"),
+        (Some("custom-mcp-proxy"), None, "custom-mcp-proxy/task"),
+        (None, None, "agent/task"),
+    ] {
+        let mut arguments = json!({ "name": "task" });
+        if let Some(name) = declared {
+            arguments["agentName"] = json!(name);
+        }
+        let body = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": "name_session", "arguments": arguments }),
+            reported,
+        )
+        .await?;
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            text.starts_with(&format!("renamed to {expected} ")),
+            "{body}"
+        );
+    }
+
+    let first = stateless_mcp_request(&app.router, "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "first task", "agentName": "cld-messaging" } }),
+        Some("Claude Code")).await?;
+    let handle = first["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing application session handle: {first}"))?;
+    for reported in [None, Some("codex-mcp-client")] {
+        let reused = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": "name_session", "arguments": {
+                "session": handle, "name": "second task", "agentName": "different-worker"
+            } }),
+            reported,
+        )
+        .await?;
+        let text = reused["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            text.starts_with("renamed to claude/second-task"),
+            "{reused}"
+        );
+        assert_eq!(
+            reused["result"]["_meta"]["com.browseros.neo/session"],
+            handle
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn mcp_stateless_tool_schema_has_one_optional_product_fallback() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let anonymous = stateless_mcp_request(&app.router, "tools/list", json!({}), None).await?;
+    let identified =
+        stateless_mcp_request(&app.router, "tools/list", json!({}), Some("Claude Code")).await?;
+    assert_eq!(anonymous["result"]["tools"], identified["result"]["tools"]);
+    let tools = anonymous["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("missing tools: {anonymous}"))?;
+    assert!(!tools.is_empty());
+    for tool in tools {
+        let schema = &tool["inputSchema"];
+        assert_eq!(schema["properties"]["agentName"]["type"], "string");
+        assert!(
+            !schema["required"]
+                .as_array()
+                .is_some_and(|required| required.contains(&json!("agentName"))),
+            "{tool}"
+        );
+        let description = schema["properties"]["agentName"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(description.contains("client application"), "{description}");
+        assert!(
+            description.contains("Put your task name in name_session"),
+            "{description}"
+        );
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn mcp_stateless_metadata_names_session_without_agent_argument() -> anyhow::Result<()> {
     let app = test_app().await?;
@@ -517,7 +650,10 @@ async fn mcp_stateless_metadata_names_session_without_agent_argument() -> anyhow
     let text = body["result"]["content"][0]["text"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("missing tool text: {body}"))?;
-    assert!(text.starts_with("renamed to codex/metadata-check"), "{text}");
+    assert!(
+        text.starts_with("renamed to codex/metadata-check"),
+        "{text}"
+    );
     Ok(())
 }
 
@@ -552,7 +688,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("name_session missing"))?;
     assert_eq!(
         tool["description"],
-        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <agentName>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
+        "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update."
     );
     assert_eq!(
         tool["inputSchema"],
@@ -746,7 +882,7 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
 
     let mut stream = McpSseStream::open(&app.router, &session_id).await?;
     let tip = format!(
-        "Tip: this session is \"claude-code/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
+        "Tip: this session is \"claude/{generated}\" — rename it with name_session name=\"<2-3 word task label>\""
     );
     for id in 3..=7 {
         let (status, _headers, body) = request_json_with_headers(

@@ -42,31 +42,6 @@ pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 /// final defensive bound at the analytics boundary.
 pub(crate) const TASK_SUMMARY_MAX_CHARS: usize = 200;
 
-const KNOWN_CLIENTS: [&str; 15] = [
-    "claude-desktop",
-    "claude-code",
-    "claude-ai",
-    "cursor",
-    "vscode",
-    "vscode-insiders",
-    "codex",
-    "zed",
-    "opencode",
-    "antigravity",
-    "windsurf",
-    "cline",
-    "continue",
-    "goose",
-    "browseros-cli",
-];
-
-const CLIENT_ALIASES: [(&str, &str); 4] = [
-    ("codex-mcp-client", "codex"),
-    ("codex-posthog-dashboard", "codex"),
-    ("codex-browserclaw", "codex"),
-    ("browserclaw-claude-desktop-wrapper", "claude-desktop"),
-];
-
 const UNRECOGNIZED_EMPTY: &str = "unrecognized-empty";
 
 pub(crate) const HARNESS_VALUES: [&str; 7] = [
@@ -377,24 +352,13 @@ fn bucket_client_name(raw: &str) -> String {
             separator_pending = true;
         }
     }
-    if let Some((_, canonical)) = CLIENT_ALIASES
-        .iter()
-        .find(|(alias, _)| *alias == slug.as_str())
-    {
-        return (*canonical).to_string();
-    }
-
-    if KNOWN_CLIENTS.contains(&slug.as_str()) {
-        return slug;
-    }
-
-    // Not allowlisted: record the client's own slug so the long tail is visible
+    // Preserve the client's own slug so the long tail is visible
     // instead of collapsed into one opaque bucket. A blank name has nothing to
     // record, so it is reported as empty.
     if slug.is_empty() {
         UNRECOGNIZED_EMPTY.to_string()
     } else {
-        slug
+        crate::identity::canonical_client_name(&slug).to_string()
     }
 }
 
