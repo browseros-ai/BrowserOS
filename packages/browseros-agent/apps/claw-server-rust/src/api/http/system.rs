@@ -1,8 +1,9 @@
+use crate::db::MigrationOutcome;
 use crate::{AppState, VERSION};
 use axum::{Json, extract::State, http::StatusCode};
 use claw_api::models::{
-    BrowserLink, HealthResponse, ShutdownResponse, SystemCapabilities, SystemDiagnostics,
-    SystemInfo, system_capabilities::RecordingIngestVersion,
+    BrowserLink, HealthResponse, SchemaStatus, ShutdownResponse, SystemCapabilities,
+    SystemDiagnostics, SystemInfo, system_capabilities::RecordingIngestVersion,
 };
 
 /// Liveness, plus the state of the link this server exists to provide.
@@ -71,7 +72,17 @@ pub(super) async fn info(State(state): State<AppState>) -> Json<SystemInfo> {
     capabilities.recording_ingest_max_bytes =
         Some(i64::try_from(super::RECORDING_INGEST_MAX_BYTES).unwrap_or(i64::MAX));
     info.capabilities = Some(Box::new(capabilities));
+    info.schema = Some(Box::new(schema_status(&state.migration)));
     Json(info)
+}
+
+/// Translates how this server's data compares to its schema into the published signal the app uses
+/// to decide whether BrowserOS neo needs updating to match the data it opened.
+fn schema_status(migration: &MigrationOutcome) -> SchemaStatus {
+    match migration {
+        MigrationOutcome::DatabaseAhead { unknown } => SchemaStatus::new(true, unknown.clone()),
+        MigrationOutcome::UpToDate => SchemaStatus::new(false, Vec::new()),
+    }
 }
 
 /// OS discovery can read files or invoke platform APIs; keep it off Tokio's executor.
@@ -97,6 +108,25 @@ pub(super) async fn diagnostics() -> Json<SystemDiagnostics> {
 
 #[cfg(test)]
 mod diagnostics_tests {
+    use super::schema_status;
+    use crate::db::MigrationOutcome;
+
+    #[test]
+    fn schema_status_reports_a_database_ahead_of_the_server() {
+        let ahead = schema_status(&MigrationOutcome::DatabaseAhead {
+            unknown: vec!["m9999_from_a_newer_build".to_string()],
+        });
+        assert!(ahead.database_ahead);
+        assert_eq!(
+            ahead.unknown_migrations,
+            vec!["m9999_from_a_newer_build".to_string()]
+        );
+
+        let current = schema_status(&MigrationOutcome::UpToDate);
+        assert!(!current.database_ahead);
+        assert!(current.unknown_migrations.is_empty());
+    }
+
     #[tokio::test]
     async fn only_public_metadata_is_serialized() -> Result<(), Box<dyn std::error::Error>> {
         let result = super::diagnostics().await.0;

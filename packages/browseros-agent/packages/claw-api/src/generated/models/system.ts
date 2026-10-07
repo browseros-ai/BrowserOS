@@ -68,6 +68,26 @@ export const HealthResponseStatusEnum = {
 export type HealthResponseStatusEnum = typeof HealthResponseStatusEnum[keyof typeof HealthResponseStatusEnum];
 
 /**
+ * How the data this server opened compares to the schema this build knows. When the database was migrated by a newer BrowserOS neo, the server runs read-forward on the columns it understands and reports the migrations it does not have, so the app can prompt the user to update BrowserOS neo to match its data.
+ * @export
+ * @interface SchemaStatus
+ */
+export interface SchemaStatus {
+    /**
+     * True when the database carries applied migrations this build does not contain.
+     * @type {boolean}
+     * @memberof SchemaStatus
+     */
+    databaseAhead: boolean;
+    /**
+     * Names of the applied migrations this build does not know. Empty unless databaseAhead is true.
+     * @type {Array<string>}
+     * @memberof SchemaStatus
+     */
+    unknownMigrations: Array<string>;
+}
+
+/**
  *
  * @export
  * @interface ShutdownResponse
@@ -175,4 +195,10 @@ export interface SystemInfo {
      * @memberof SystemInfo
      */
     capabilities?: SystemCapabilities;
+    /**
+     *
+     * @type {SchemaStatus}
+     * @memberof SystemInfo
+     */
+    schema?: SchemaStatus;
 }

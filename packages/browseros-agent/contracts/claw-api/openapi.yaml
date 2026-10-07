@@ -112,6 +112,8 @@ components:
       $ref: ./schemas/system.yaml#/SystemInfo
     SystemCapabilities:
       $ref: ./schemas/system.yaml#/SystemCapabilities
+    SchemaStatus:
+      $ref: ./schemas/system.yaml#/SchemaStatus
     CockpitStats:
       $ref: ./schemas/cockpit.yaml#/CockpitStats
     CockpitStatsWindow:

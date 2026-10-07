@@ -13,7 +13,9 @@ use std::{
     future::Future,
     io::{self, Write},
     net::SocketAddr,
+    path::{Path, PathBuf},
     sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::net::TcpListener;
 use tracing::{error, info, warn};
@@ -52,7 +54,23 @@ async fn main() -> anyhow::Result<()> {
     };
     let config = Arc::new(claw_server_rust::config::Config::load(config_path)?);
     let _guard = init_tracing(config.clone())?;
-    let state = AppState::new(config.clone()).await?;
+    // A boot that fails before the server binds used to leave no reason in the log: the error went
+    // to stderr (which the supervising browser does not capture) and the buffered file appender
+    // never flushed it. Capture panics synchronously and record the startup outcome so the failure
+    // is always diagnosable from the log directory.
+    let logs_dir = config.browserclaw_dir.join("logs");
+    install_panic_hook(logs_dir.clone());
+    record_startup(&logs_dir, "starting", None);
+    let state = match AppState::new(config.clone()).await {
+        Ok(state) => state,
+        Err(error) => {
+            let detail = error.to_string();
+            error!(error = %error, "startup failed before the server could bind");
+            record_startup(&logs_dir, "failed", Some(detail.as_str()));
+            return Err(error.into());
+        }
+    };
+    record_startup(&logs_dir, "initialized", None);
     let mut runtime = AppRuntime::start(state);
     let run_result = run(&mut runtime, config, stdio_mode).await;
     let shutdown_result = runtime.shutdown().await;
@@ -65,14 +83,16 @@ async fn main() -> anyhow::Result<()> {
             Err(run_error)
         }
     };
-    // Decided here, after teardown, and only for this one cause: the supervising
-    // browser relaunches on another port for this code and stops supervising for
-    // the rest of its session for any other non-zero exit.
-    if let Err(error) = &outcome
-        && let Some(conflict) = error.downcast_ref::<PortConflict>()
-    {
-        error!(port = conflict.port, "{conflict}");
-        std::process::exit(EXIT_PORT_CONFLICT);
+    if let Err(error) = &outcome {
+        let detail = error.to_string();
+        record_startup(&logs_dir, "failed", Some(detail.as_str()));
+        // Decided here, after teardown, and only for this one cause: the supervising
+        // browser relaunches on another port for this code and stops supervising for
+        // the rest of its session for any other non-zero exit.
+        if let Some(conflict) = error.downcast_ref::<PortConflict>() {
+            error!(port = conflict.port, "{conflict}");
+            std::process::exit(EXIT_PORT_CONFLICT);
+        }
     }
     outcome
 }
@@ -98,6 +118,51 @@ async fn run(
         return serve_stdio(state).await;
     }
     serve(runtime, config).await
+}
+
+fn epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX))
+        .unwrap_or(0)
+}
+
+/// Appends panics to a dedicated file synchronously. The non-blocking log appender drops its buffer
+/// when the process exits on a panic, so without this a crash leaves no trace.
+fn install_panic_hook(logs_dir: PathBuf) {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let line = format!(
+            "{} v{VERSION} pid={} PANIC: {info}\n",
+            epoch_ms(),
+            std::process::id()
+        );
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(logs_dir.join("claw-server-panics.log"))
+        {
+            let _ = file.write_all(line.as_bytes());
+        }
+        let detail = info.to_string();
+        record_startup(&logs_dir, "panicked", Some(detail.as_str()));
+        default_hook(info);
+    }));
+}
+
+/// Overwrites the latest startup outcome so a failed boot is diagnosable from the log directory
+/// without live instrumentation. Outcomes: starting, initialized, failed, panicked.
+fn record_startup(logs_dir: &Path, outcome: &str, detail: Option<&str>) {
+    let record = json!({
+        "version": VERSION,
+        "pid": std::process::id(),
+        "atMs": epoch_ms(),
+        "outcome": outcome,
+        "detail": detail,
+    });
+    if let Err(error) = std::fs::write(logs_dir.join("startup.json"), record.to_string()) {
+        warn!(error = %error, "failed to write the startup record");
+    }
 }
 
 fn init_tracing(config: Arc<claw_server_rust::config::Config>) -> anyhow::Result<WorkerGuard> {

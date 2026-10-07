@@ -3,7 +3,8 @@ use crate::{
     api::http,
     config::Config,
     db::{
-        AuditLog, DATABASE_FILENAME, Database, RecordingIndex, SessionTabLedger, SkillsRepository,
+        AuditLog, DATABASE_FILENAME, Database, MigrationOutcome, RecordingIndex, SessionTabLedger,
+        SkillsRepository,
     },
     error::{AppError, AppResult},
     runtime::ShutdownHandle,
@@ -57,6 +58,9 @@ pub struct AppState {
     pub help: Arc<crate::services::help::HelpRegistry>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     pub shutdown: ShutdownHandle,
+    /// How the data this server opened compares to the schema this build knows, published on
+    /// `/system/info` so the app can prompt an update when the database is ahead of the server.
+    pub migration: MigrationOutcome,
 }
 
 /// Overall cap on how long a human-help request stays open before it is reaped, so a crashed or
@@ -73,6 +77,7 @@ impl AppState {
         tokio::fs::create_dir_all(&config.browserclaw_dir).await?;
         let store = JsonStore::new(config.browserclaw_dir.clone());
         let database = Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?;
+        let migration = database.migration_outcome().clone();
         let audit_log = Arc::new(AuditLog::new(database.clone()));
         let audit_settings = Arc::new(
             crate::services::audit_settings::AuditSettingsStore::new(&config.browserclaw_dir).await,
@@ -212,6 +217,7 @@ impl AppState {
             help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
             extension_updates: Arc::default(),
             shutdown: ShutdownHandle::new(),
+            migration,
         })
     }
 

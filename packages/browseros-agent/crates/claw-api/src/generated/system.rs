@@ -74,6 +74,27 @@ pub mod health_response {
     pub use super::HealthResponseStatus as Status;
 }
 
+/// SchemaStatus : How the data this server opened compares to the schema this build knows. When the database was migrated by a newer BrowserOS neo, the server runs read-forward on the columns it understands and reports the migrations it does not have, so the app can prompt the user to update BrowserOS neo to match its data.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SchemaStatus {
+    /// True when the database carries applied migrations this build does not contain.
+    #[serde(rename = "databaseAhead")]
+    pub database_ahead: bool,
+    /// Names of the applied migrations this build does not know. Empty unless databaseAhead is true.
+    #[serde(rename = "unknownMigrations")]
+    pub unknown_migrations: Vec<String>,
+}
+
+impl SchemaStatus {
+    /// How the data this server opened compares to the schema this build knows. When the database was migrated by a newer BrowserOS neo, the server runs read-forward on the columns it understands and reports the migrations it does not have, so the app can prompt the user to update BrowserOS neo to match its data.
+    pub fn new(database_ahead: bool, unknown_migrations: Vec<String>) -> SchemaStatus {
+        SchemaStatus {
+            database_ahead,
+            unknown_migrations,
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ShutdownResponse {
     #[serde(rename = "status")]
@@ -188,6 +209,8 @@ pub struct SystemInfo {
     pub url: String,
     #[serde(rename = "capabilities", skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Box<models::SystemCapabilities>>,
+    #[serde(rename = "schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Box<models::SchemaStatus>>,
 }
 
 impl SystemInfo {
@@ -197,6 +220,7 @@ impl SystemInfo {
             version,
             url,
             capabilities: None,
+            schema: None,
         }
     }
 }
