@@ -71,6 +71,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     record_startup(&logs_dir, "initialized", None);
+    // Report one-time startup conditions worth seeing remotely, such as a database migrated by a
+    // newer BrowserOS neo (read-forward). Consent-gated and drawn from the shared daily budget.
+    state.report_startup_state().await;
     let mut runtime = AppRuntime::start(state);
     let run_result = run(&mut runtime, config, stdio_mode).await;
     let shutdown_result = runtime.shutdown().await;

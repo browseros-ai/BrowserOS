@@ -1,18 +1,60 @@
-//! Decides whether a `run` failure leaves the machine, and in what form.
+//! Decides whether a server-side error leaves the machine, and in what form.
 //!
-//! Five gates, cheapest and most privacy-protective first, so a report that will not be
-//! sent costs nothing to refuse and no payload is built for it.
+//! Gates run cheapest and most privacy-protective first, so a report that will not be sent costs
+//! nothing to refuse and no payload is built for it. Run failures stay the primary case; general
+//! errors (for example a database skew found at startup) report through the same gates and the same
+//! daily budget, built with the same allowlist-by-construction discipline.
 
 use crate::{
     analytics::{error_allowlist::classify, script_fingerprint::fingerprint},
     db::run_error_budget::{BudgetDecision, DAILY_RUN_ERROR_CAP, RunErrorBudgetRepository},
 };
 use std::{
+    borrow::Cow,
     io::Write,
     sync::{Arc, Mutex},
 };
 
-const BUILD_SENTRY_DSN: Option<&str> = option_env!("CLAW_SENTRY_DSN");
+pub(crate) const BUILD_SENTRY_DSN: Option<&str> = option_env!("CLAW_SENTRY_DSN");
+
+/// Resolves the DSN from the environment, then the build-time value, treating blank as unset. A
+/// developer build has neither unless one is supplied deliberately.
+#[must_use]
+pub(crate) fn resolve_dsn() -> Option<String> {
+    std::env::var("CLAW_SENTRY_DSN")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| BUILD_SENTRY_DSN.map(str::to_string))
+        .filter(|value| !value.trim().is_empty())
+}
+
+/// Which deployment this is, so dev, alpha, and production noise separate in Sentry.
+fn sentry_environment() -> &'static str {
+    if cfg!(debug_assertions) {
+        "development"
+    } else {
+        "production"
+    }
+}
+
+/// Builds a hardened Sentry client, or `None` when the DSN is absent or invalid. One place sets the
+/// options so the run-failure sink and the startup reporter stay identically locked down, and both
+/// carry `release` and `environment` for version attribution and regression tracking.
+#[must_use]
+pub(crate) fn build_sentry_client(dsn: &str) -> Option<sentry::Client> {
+    let options = sentry::ClientOptions {
+        dsn: dsn.parse().ok(),
+        release: Some(Cow::Borrowed(crate::VERSION)),
+        environment: Some(Cow::Borrowed(sentry_environment())),
+        // Never let Sentry infer anything about the machine or the user.
+        send_default_pii: false,
+        attach_stacktrace: false,
+        max_breadcrumbs: 0,
+        ..Default::default()
+    };
+    let client = sentry::Client::from_config(options);
+    client.is_enabled().then_some(client)
+}
 
 /// Everything we are willing to say about one failed run.
 ///
@@ -53,10 +95,55 @@ pub enum Delivery {
     SuppressedByBudget,
 }
 
+/// Everything we are willing to say about one general server-side error.
+///
+/// Like `RunFailureEvent`, constructed only from caller-fixed, low-cardinality fields, so there is
+/// no field here that can hold user text. Callers pass fixed labels and already-safe context (for
+/// example migration names), never a raw error message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GeneralErrorEvent {
+    /// Coarse source, for example `startup` or `db`.
+    pub kind: &'static str,
+    /// A fixed, low-cardinality label, for example `database_ahead`. Never a raw message.
+    pub label: String,
+    /// Optional structural context already stripped of user data, for example migration names.
+    pub detail: Option<String>,
+    /// The anonymous per-install UUID, the same one PostHog already uses.
+    pub install_id: String,
+}
+
+/// Builds the hand-made Sentry event for a general error, grouped by `kind:label` so one cause
+/// reads as one issue. Nothing is derived from ambient state; only the fields above are attached.
+pub(crate) fn build_general_event(event: &GeneralErrorEvent) -> sentry::protocol::Event<'static> {
+    let mut sentry_event = sentry::protocol::Event::new();
+    sentry_event.level = sentry::Level::Error;
+    sentry_event.logger = Some(event.kind.to_string());
+    sentry_event.message = Some(format!("{}: {}", event.kind, event.label));
+    sentry_event.fingerprint =
+        Cow::Owned(vec![Cow::Owned(format!("{}:{}", event.kind, event.label))]);
+    sentry_event
+        .tags
+        .insert("kind".to_string(), event.kind.to_string());
+    sentry_event
+        .tags
+        .insert("label".to_string(), event.label.clone());
+    sentry_event.user = Some(sentry::User {
+        id: Some(event.install_id.clone()),
+        ..Default::default()
+    });
+    if let Some(detail) = &event.detail {
+        sentry_event
+            .extra
+            .insert("detail".to_string(), detail.clone().into());
+    }
+    sentry_event
+}
+
 /// Where a built event goes. A trait so the decision logic can be tested without a
 /// network, and so tests can assert on exactly what would have left the machine.
-pub trait RunFailureSink: Send + Sync {
+pub trait ErrorSink: Send + Sync {
     fn send(&self, event: RunFailureEvent, delivery: Delivery);
+    fn send_error(&self, event: GeneralErrorEvent, delivery: Delivery);
 }
 
 /// Forwards to Sentry as a hand-built event.
@@ -72,22 +159,13 @@ impl SentrySink {
     /// build unless one is supplied deliberately.
     #[must_use]
     pub fn new(dsn: &str) -> Option<Self> {
-        let options = sentry::ClientOptions {
-            dsn: dsn.parse().ok(),
-            // Never let Sentry infer anything about the machine or the user.
-            send_default_pii: false,
-            attach_stacktrace: false,
-            max_breadcrumbs: 0,
-            ..Default::default()
-        };
-        let client = sentry::Client::from_config(options);
-        client.is_enabled().then(|| Self {
+        build_sentry_client(dsn).map(|client| Self {
             client: Arc::new(client),
         })
     }
 }
 
-impl RunFailureSink for SentrySink {
+impl ErrorSink for SentrySink {
     fn send(&self, event: RunFailureEvent, delivery: Delivery) {
         if delivery == Delivery::SuppressedByBudget {
             return;
@@ -118,6 +196,13 @@ impl RunFailureSink for SentrySink {
         );
         self.client.capture_event(sentry_event, None);
     }
+
+    fn send_error(&self, event: GeneralErrorEvent, delivery: Delivery) {
+        if delivery == Delivery::SuppressedByBudget {
+            return;
+        }
+        self.client.capture_event(build_general_event(&event), None);
+    }
 }
 
 /// Writes what Sentry would have received to a rolling daily file.
@@ -146,7 +231,7 @@ impl FileSink {
     }
 }
 
-impl RunFailureSink for FileSink {
+impl ErrorSink for FileSink {
     fn send(&self, event: RunFailureEvent, delivery: Delivery) {
         let status = match delivery {
             Delivery::Sent => "would-send",
@@ -164,17 +249,36 @@ impl RunFailureSink for FileSink {
         let _ = appender.write_all(record.as_bytes());
         let _ = appender.flush();
     }
+
+    fn send_error(&self, event: GeneralErrorEvent, delivery: Delivery) {
+        let status = match delivery {
+            Delivery::Sent => "would-send",
+            Delivery::SuppressedByBudget => "over-daily-cap",
+        };
+        let record = format!(
+            "---- {status} ----\nkind: {}\nlabel: {}\ninstall_id: {}\ndetail: {}\n\n",
+            event.kind,
+            event.label,
+            event.install_id,
+            event.detail.as_deref().unwrap_or(""),
+        );
+        let Ok(mut appender) = self.appender.lock() else {
+            return;
+        };
+        let _ = appender.write_all(record.as_bytes());
+        let _ = appender.flush();
+    }
 }
 
-/// Owns the decision about whether a run failure is reported.
-pub struct RunFailureReporter {
-    sink: Option<Box<dyn RunFailureSink>>,
+/// Owns the decision about whether a server-side error is reported.
+pub struct ErrorReporter {
+    sink: Option<Box<dyn ErrorSink>>,
     budget: RunErrorBudgetRepository,
     install_id: String,
     cap: i64,
 }
 
-impl RunFailureReporter {
+impl ErrorReporter {
     /// Builds a reporter from the ambient configuration. With no DSN this is a reporter
     /// that refuses everything, which is the correct default for a developer build.
     /// With a DSN, reports go to Sentry. Without one, they go to a rolling file under
@@ -186,20 +290,16 @@ impl RunFailureReporter {
         install_id: String,
         log_dir: &std::path::Path,
     ) -> Self {
-        let dsn = std::env::var("CLAW_SENTRY_DSN")
-            .ok()
-            .filter(|value| !value.trim().is_empty())
-            .or_else(|| BUILD_SENTRY_DSN.map(str::to_string))
-            .filter(|value| !value.trim().is_empty());
+        let dsn = resolve_dsn();
         let sink = match dsn.as_deref().and_then(SentrySink::new) {
-            Some(sentry) => Some(Box::new(sentry) as Box<dyn RunFailureSink>),
+            Some(sentry) => Some(Box::new(sentry) as Box<dyn ErrorSink>),
             None => {
                 tracing::info!(
                     directory = %log_dir.display(),
                     "no Sentry DSN configured; run failures will be written to {}",
                     FileSink::FILENAME_PREFIX
                 );
-                FileSink::new(log_dir).map(|sink| Box::new(sink) as Box<dyn RunFailureSink>)
+                FileSink::new(log_dir).map(|sink| Box::new(sink) as Box<dyn ErrorSink>)
             }
         };
         Self {
@@ -212,7 +312,7 @@ impl RunFailureReporter {
 
     #[must_use]
     pub fn with_sink(
-        sink: Box<dyn RunFailureSink>,
+        sink: Box<dyn ErrorSink>,
         budget: RunErrorBudgetRepository,
         install_id: String,
         cap: i64,
@@ -238,7 +338,7 @@ impl RunFailureReporter {
     /// signature will not let it.
     ///
     /// Returns whether an event was sent, for the caller's own metrics.
-    pub async fn report(
+    pub async fn report_run_failure(
         &self,
         consent: bool,
         script: &str,
@@ -272,6 +372,46 @@ impl RunFailureReporter {
         );
         delivery == Delivery::Sent
     }
+
+    /// Considers one general server-side error, drawing from the same daily budget as a run
+    /// failure so a single machine still never exceeds the cap across all sources.
+    ///
+    /// `kind` and `label` must be caller-fixed, low-cardinality values and `detail` must already be
+    /// stripped of user data; this method does not classify, because its callers are internal code,
+    /// not user input.
+    pub async fn report_error(
+        &self,
+        consent: bool,
+        kind: &'static str,
+        label: String,
+        detail: Option<String>,
+        now_ms: i64,
+    ) -> bool {
+        if !consent {
+            return false;
+        }
+        let Some(sink) = self.sink.as_ref() else {
+            return false;
+        };
+        let delivery = match self.budget.claim(now_ms, self.cap).await {
+            Ok(BudgetDecision::Allowed { .. }) => Delivery::Sent,
+            Ok(BudgetDecision::Suppressed { .. }) => Delivery::SuppressedByBudget,
+            Err(error) => {
+                tracing::debug!(%error, "error-report budget unavailable; not reporting");
+                return false;
+            }
+        };
+        sink.send_error(
+            GeneralErrorEvent {
+                kind,
+                label,
+                detail,
+                install_id: self.install_id.clone(),
+            },
+            delivery,
+        );
+        delivery == Delivery::Sent
+    }
 }
 
 #[cfg(test)]
@@ -286,12 +426,23 @@ mod tests {
     #[derive(Default)]
     struct RecordingSink {
         seen: Mutex<Vec<(RunFailureEvent, Delivery)>>,
+        errors: Mutex<Vec<(GeneralErrorEvent, Delivery)>>,
     }
 
     impl RecordingSink {
         /// Only the ones that would actually have left the machine.
         fn delivered(&self) -> Vec<RunFailureEvent> {
             self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter(|(_, delivery)| *delivery == Delivery::Sent)
+                .map(|(event, _)| event.clone())
+                .collect()
+        }
+
+        fn delivered_errors(&self) -> Vec<GeneralErrorEvent> {
+            self.errors
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .iter()
@@ -310,9 +461,16 @@ mod tests {
         }
     }
 
-    impl RunFailureSink for Arc<RecordingSink> {
+    impl ErrorSink for Arc<RecordingSink> {
         fn send(&self, event: RunFailureEvent, delivery: Delivery) {
             self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((event, delivery));
+        }
+
+        fn send_error(&self, event: GeneralErrorEvent, delivery: Delivery) {
+            self.errors
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .push((event, delivery));
@@ -322,10 +480,10 @@ mod tests {
     async fn reporter(
         dir: &std::path::Path,
         cap: i64,
-    ) -> anyhow::Result<(RunFailureReporter, Arc<RecordingSink>)> {
+    ) -> anyhow::Result<(ErrorReporter, Arc<RecordingSink>)> {
         let db = Database::open(dir.join("browserclaw.sqlite")).await?;
         let sink = Arc::new(RecordingSink::default());
-        let reporter = RunFailureReporter::with_sink(
+        let reporter = ErrorReporter::with_sink(
             Box::new(sink.clone()),
             RunErrorBudgetRepository::new(db),
             "11111111-2222-3333-4444-555555555555".to_string(),
@@ -340,7 +498,7 @@ mod tests {
         let (reporter, sink) = reporter(dir.path(), 10).await?;
         assert!(
             !reporter
-                .report(false, "const a = 1;", "boom", 10, NOW)
+                .report_run_failure(false, "const a = 1;", "boom", 10, NOW)
                 .await
         );
         assert!(sink.delivered().is_empty());
@@ -351,14 +509,18 @@ mod tests {
     async fn without_a_dsn_the_reporter_refuses_everything() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let db = Database::open(dir.path().join("browserclaw.sqlite")).await?;
-        let reporter = RunFailureReporter {
+        let reporter = ErrorReporter {
             sink: None,
             budget: RunErrorBudgetRepository::new(db),
             install_id: "id".to_string(),
             cap: 10,
         };
         assert!(!reporter.is_configured());
-        assert!(!reporter.report(true, "const a = 1;", "boom", 10, NOW).await);
+        assert!(
+            !reporter
+                .report_run_failure(true, "const a = 1;", "boom", 10, NOW)
+                .await
+        );
         Ok(())
     }
 
@@ -367,9 +529,17 @@ mod tests {
         let dir = tempdir()?;
         let (reporter, sink) = reporter(dir.path(), 10).await?;
         for _ in 0..10 {
-            assert!(reporter.report(true, "const a = 1;", "boom", 10, NOW).await);
+            assert!(
+                reporter
+                    .report_run_failure(true, "const a = 1;", "boom", 10, NOW)
+                    .await
+            );
         }
-        assert!(!reporter.report(true, "const a = 1;", "boom", 10, NOW).await);
+        assert!(
+            !reporter
+                .report_run_failure(true, "const a = 1;", "boom", 10, NOW)
+                .await
+        );
         assert_eq!(
             sink.delivered().len(),
             10,
@@ -388,7 +558,7 @@ mod tests {
         let dir = tempdir()?;
         let (reporter, sink) = reporter(dir.path(), 10).await?;
         reporter
-            .report(
+            .report_run_failure(
                 true,
                 "const pid = 20;\nawait browser.nav(pid).goto('https://x.test/?q=secret');",
                 "ReferenceError: fetch is not defined",
@@ -424,7 +594,9 @@ await browser.nav(3).goto('https://bank.test/transfer?to=4471&amount=48201.55');
 await browser.upload(3, { path: '/Users/amara/Desktop/passport.pdf' });";
         let error = "Error: transfer declined for amara.okafor@example.com, balance 48,201.55";
 
-        reporter.report(true, script, error, 900, NOW).await;
+        reporter
+            .report_run_failure(true, script, error, 900, NOW)
+            .await;
         let events = sink.delivered();
         let event = events.first().unwrap_or_else(|| panic!("no event sent"));
         let payload = format!(
@@ -452,6 +624,72 @@ await browser.upload(3, { path: '/Users/amara/Desktop/passport.pdf' });";
         assert!(event.script_fingerprint.contains("browser.input"));
         assert!(event.script_fingerprint.contains(".fill"));
         assert!(event.script_fingerprint.contains("browser.upload"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn report_error_delivers_a_general_event_and_respects_consent() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (reporter, sink) = reporter(dir.path(), 10).await?;
+        assert!(
+            reporter
+                .report_error(
+                    true,
+                    "startup",
+                    "database_ahead".to_string(),
+                    Some("m0021_add_decision_token_estimates".to_string()),
+                    NOW,
+                )
+                .await
+        );
+        let events = sink.delivered_errors();
+        let event = events
+            .first()
+            .unwrap_or_else(|| panic!("no error event sent"));
+        assert_eq!(event.kind, "startup");
+        assert_eq!(event.label, "database_ahead");
+        assert_eq!(
+            event.detail.as_deref(),
+            Some("m0021_add_decision_token_estimates")
+        );
+        assert_eq!(event.install_id, "11111111-2222-3333-4444-555555555555");
+
+        assert!(
+            !reporter
+                .report_error(false, "startup", "x".to_string(), None, NOW)
+                .await,
+            "consent must gate general errors too"
+        );
+        Ok(())
+    }
+
+    /// The daily cap is a single total across every source, not one cap per source.
+    #[tokio::test]
+    async fn run_failures_and_general_errors_share_one_daily_budget() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let (reporter, sink) = reporter(dir.path(), 3).await?;
+        assert!(
+            reporter
+                .report_run_failure(true, "const a = 1;", "boom", 10, NOW)
+                .await
+        );
+        assert!(
+            reporter
+                .report_error(true, "startup", "database_ahead".to_string(), None, NOW)
+                .await
+        );
+        assert!(
+            reporter
+                .report_error(true, "db", "open_failed".to_string(), None, NOW)
+                .await
+        );
+        assert!(
+            !reporter
+                .report_run_failure(true, "const a = 1;", "boom", 10, NOW)
+                .await,
+            "the fourth report of any kind is over the shared cap"
+        );
+        assert_eq!(sink.delivered().len() + sink.delivered_errors().len(), 3);
         Ok(())
     }
 
@@ -488,14 +726,11 @@ mod file_sink_tests {
             .collect()
     }
 
-    async fn reporter_writing_to(
-        dir: &std::path::Path,
-        cap: i64,
-    ) -> anyhow::Result<RunFailureReporter> {
+    async fn reporter_writing_to(dir: &std::path::Path, cap: i64) -> anyhow::Result<ErrorReporter> {
         let db = Database::open(dir.join("browserclaw.sqlite")).await?;
         let logs = dir.join("logs");
         let sink = FileSink::new(&logs).unwrap_or_else(|| panic!("could not open the log"));
-        Ok(RunFailureReporter::with_sink(
+        Ok(ErrorReporter::with_sink(
             Box::new(sink),
             RunErrorBudgetRepository::new(db),
             "11111111-2222-3333-4444-555555555555".to_string(),
@@ -509,7 +744,7 @@ mod file_sink_tests {
     async fn from_env_always_resolves_to_some_sink() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let db = Database::open(dir.path().join("browserclaw.sqlite")).await?;
-        let reporter = RunFailureReporter::from_env(
+        let reporter = ErrorReporter::from_env(
             RunErrorBudgetRepository::new(db),
             "install".to_string(),
             &dir.path().join("logs"),
@@ -526,7 +761,7 @@ mod file_sink_tests {
         let dir = tempdir()?;
         let reporter = reporter_writing_to(dir.path(), 10).await?;
         reporter
-            .report(
+            .report_run_failure(
                 true,
                 "const pid = 20;\nawait browser.nav(pid).goto('https://x.test/?q=secret');",
                 "ReferenceError: fetch is not defined",
@@ -555,7 +790,7 @@ mod file_sink_tests {
         let reporter = reporter_writing_to(dir.path(), 2).await?;
         for _ in 0..4 {
             reporter
-                .report(
+                .report_run_failure(
                     true,
                     "const a = 1;",
                     "TypeError: read is not a function",
@@ -583,7 +818,9 @@ await browser.input(3).fill(p, 'hunter2-correct-horse');\n\
 await browser.nav(3).goto('https://bank.test/transfer?to=4471&amount=48201.55');";
         let error = "Error: declined for amara.okafor@example.com, balance 48,201.55";
 
-        reporter.report(true, script, error, 900, NOW).await;
+        reporter
+            .report_run_failure(true, script, error, 900, NOW)
+            .await;
 
         let log = log_contents(&dir.path().join("logs"));
         assert!(!log.is_empty(), "nothing was written");
@@ -611,7 +848,9 @@ await browser.nav(3).goto('https://bank.test/transfer?to=4471&amount=48201.55');
     async fn consent_off_writes_nothing_at_all() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let reporter = reporter_writing_to(dir.path(), 10).await?;
-        reporter.report(false, "const a = 1;", "boom", 5, NOW).await;
+        reporter
+            .report_run_failure(false, "const a = 1;", "boom", 5, NOW)
+            .await;
         assert!(log_contents(&dir.path().join("logs")).is_empty());
         Ok(())
     }
