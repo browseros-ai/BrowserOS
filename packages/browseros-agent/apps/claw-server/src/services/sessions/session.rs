@@ -25,6 +25,10 @@ pub struct Session {
     agent: ClientIdentity,
     identity: ConversationIdentity,
     usage: UsageTracker,
+    // A matching saved profile can replace the declared name with an unrelated
+    // slug. Retain its recognized product before that resolution, for display
+    // only, and freeze it alongside the raw protocol client metadata.
+    declared_client_product: Option<&'static str>,
     dispatches: Mutex<DispatchState>,
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
@@ -48,11 +52,26 @@ impl Session {
         client_name: String,
         now: Instant,
     ) -> Arc<Self> {
+        Self::new_with_declared_product(id, agent, identity, client_name, None, now)
+    }
+
+    /// Creates a session with its declared product fallback already fixed, before
+    /// the registry publishes it to concurrent dispatches. It never affects ownership.
+    #[must_use]
+    pub(crate) fn new_with_declared_product(
+        id: SessionId,
+        agent: ClientIdentity,
+        identity: ConversationIdentity,
+        client_name: String,
+        declared_client_product: Option<&'static str>,
+        now: Instant,
+    ) -> Arc<Self> {
         Arc::new(Self {
             id,
             agent,
             identity,
             usage: UsageTracker::new(client_name),
+            declared_client_product,
             dispatches: Mutex::new(DispatchState {
                 accepting: true,
                 active: BTreeMap::new(),
@@ -89,6 +108,11 @@ impl Session {
     #[must_use]
     pub fn client_name(&self) -> &str {
         self.usage.client_name()
+    }
+
+    #[must_use]
+    pub fn declared_client_product(&self) -> Option<&'static str> {
+        self.declared_client_product
     }
 
     pub fn mark_used(&self) {
