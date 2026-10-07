@@ -6,7 +6,7 @@ use harness_integrations::{
     AgentId, AgentScope, DisconnectInput, Error as ManagerError, InspectEntryInput, LinkInput,
     ListLinksFilter, ListedLink, ManifestLinkEntry, ManifestServerEntry, McpManager, McpServer,
     McpServerSpec, MigrateServerInput, ServerManifest, SkillEnvironment, SkillReconcileOutcome,
-    SkillReconciler, SkillSpec, is_installed, resolve_agent_surface,
+    SkillReconciler, SkillSpec, SkillWarning, is_installed, resolve_agent_surface,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -19,7 +19,7 @@ use std::{
     process,
     str::FromStr,
     sync::Arc,
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::sync::Mutex;
 use url::Url;
@@ -207,10 +207,12 @@ impl HarnessService {
         spec: SkillSpec,
         analytics: Arc<dyn AnalyticsSink>,
     ) -> Self {
+        let environment = SkillEnvironment::current(&home_dir);
         let managed_skill = ManagedSkill {
-            reconciler: SkillReconciler::new(skill_workspace_dir.clone()),
+            reconciler: SkillReconciler::new(skill_workspace_dir.clone())
+                .with_provisioned_roots(environment.common_skill_roots()),
             spec,
-            environment: SkillEnvironment::current(&home_dir),
+            environment,
         };
         Self::build(
             workspace_dir,
@@ -297,7 +299,7 @@ impl HarnessService {
         harness: Harness,
         mcp_url: &str,
     ) -> AppResult<ConnectionState> {
-        let _guard = self.mutex.lock().await;
+        let guard = self.mutex.clone().lock_owned().await;
         let agent = harness.agent_id();
         let spec = spec_for(agent, mcp_url).map_err(manager_app_error)?;
         let target_mcp_url = mcp_url.to_string();
@@ -305,6 +307,9 @@ impl HarnessService {
         let workspace_dir = self.workspace_dir.clone();
         let managed_skill = self.managed_skill.clone();
         let result = tokio::task::spawn_blocking(move || {
+            // A cancelled HTTP request does not cancel blocking filesystem work.
+            // Keep ownership until it finishes so periodic repair cannot race it.
+            let _guard = guard;
             let was_connected = recognized_browseros_links(&manager, &workspace_dir)
                 .map_err(HarnessOperationError::Manager)?
                 .into_iter()
@@ -389,12 +394,13 @@ impl HarnessService {
     }
 
     pub async fn disconnect_browseros(&self, harness: Harness) -> AppResult<ConnectionState> {
-        let _guard = self.mutex.lock().await;
+        let guard = self.mutex.clone().lock_owned().await;
         let agent = harness.agent_id();
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
         let managed_skill = self.managed_skill.clone();
         let result = tokio::task::spawn_blocking(move || {
+            let _guard = guard;
             adopt_config_only_aliases_for_disconnect(&manager, &workspace_dir, agent)
                 .map_err(HarnessOperationError::Manager)?;
             let mut unlinked = false;
@@ -543,17 +549,59 @@ impl HarnessService {
     }
 
     pub async fn run_skill_reconciliation(&self) -> AppResult<SkillReconcileOutcome> {
-        let _guard = self.mutex.lock().await;
+        let guard = self.mutex.clone().lock_owned().await;
         let Some(managed_skill) = self.managed_skill.clone() else {
             return Ok(SkillReconcileOutcome::default());
         };
         let manager = self.manager.clone();
         let workspace_dir = self.workspace_dir.clone();
         tokio::task::spawn_blocking(move || {
+            // The worker may be aborted during shutdown, but its blocking pass
+            // still owns the mutation lock until the filesystem work completes.
+            let _guard = guard;
             reconcile_managed_skill(&manager, &workspace_dir, &managed_skill)
         })
         .await?
         .map_err(manager_app_error)
+    }
+
+    /// Repairs common skills immediately and every minute, independent of app or
+    /// MCP presence. The owning HTTP runtime supplies shutdown; each pass finishes
+    /// before another starts, with filesystem work delegated to a blocking thread.
+    pub async fn maintain_skills(&self, shutdown: impl std::future::Future<Output = ()>) {
+        if self.managed_skill.is_none() {
+            return;
+        }
+        let mut ticker = tokio::time::interval(Duration::from_secs(60));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        tokio::pin!(shutdown);
+        loop {
+            tokio::select! {
+                biased;
+                () = &mut shutdown => return,
+                _ = ticker.tick() => {}
+            }
+            match self.run_skill_reconciliation().await {
+                Ok(outcome) => {
+                    for warning in &outcome.warnings {
+                        tracing::warn!(target = %warning.target.display(), warning = %warning.message,
+                            "harness skill reconciliation needs a retry");
+                    }
+                    if outcome.installed + outcome.updated + outcome.removed > 0 {
+                        tracing::info!(
+                            installed = outcome.installed,
+                            updated = outcome.updated,
+                            removed = outcome.removed,
+                            unchanged = outcome.unchanged,
+                            "reconciled managed harness skills"
+                        );
+                    }
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "harness skill reconciliation failed; will retry")
+                }
+            }
+        }
     }
 
     pub async fn migrate_browseros_identity(
@@ -641,6 +689,29 @@ fn reconcile_managed_skill(
     workspace_dir: &Path,
     managed_skill: &ManagedSkill,
 ) -> Result<SkillReconcileOutcome, ManagerError> {
+    // Common skill roots are provisioned independently of these optional MCP
+    // consumers. Disconnect removes a connection, not the shared instructions
+    // that future/local agents can discover before they have browser tools.
+    let consumers = match recognized_browseros_links(manager, workspace_dir) {
+        Ok(links) => links
+            .into_iter()
+            .map(|link| link.agent)
+            .collect::<BTreeSet<_>>(),
+        Err(error) => {
+            // A damaged MCP manifest must not block baseline instructions. Defer
+            // native/legacy cleanup because their consumers are currently unknown.
+            let mut outcome = managed_skill
+                .reconciler
+                .repair_provisioned(&managed_skill.spec, &managed_skill.environment)?;
+            outcome.warnings.push(SkillWarning {
+                target: workspace_dir.to_path_buf(),
+                message: format!(
+                    "Could not discover MCP connections; preserved connected skill targets: {error}"
+                ),
+            });
+            return Ok(outcome);
+        }
+    };
     // Heal installs from before the skill directory was renamed: remove the legacy
     // `browserclaw` directories (marker-verified) so the reconcile below replants the
     // skill under its current `browseros-neo` name. Idempotent and a no-op once done.
@@ -654,10 +725,6 @@ fn reconcile_managed_skill(
             "migrated legacy BrowserOS neo skill directories to the current name"
         );
     }
-    let consumers = recognized_browseros_links(manager, workspace_dir)?
-        .into_iter()
-        .map(|link| link.agent)
-        .collect::<BTreeSet<_>>();
     managed_skill
         .reconciler
         .reconcile(&managed_skill.spec, &consumers, &managed_skill.environment)

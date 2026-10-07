@@ -70,9 +70,13 @@ fn connections_adapter_writes_lists_disconnects_and_heals() -> anyhow::Result<()
         .arg("--exact")
         .arg("connections_adapter_writes_lists_disconnects_and_heals")
         .arg("--nocapture")
+        .env_clear()
         .env(CHILD_CASE, "1")
         .env(TEST_HOME, root.path())
         .env("HOME", root.path())
+        .env("USERPROFILE", root.path())
+        .env("APPDATA", root.path().join("AppData/Roaming"))
+        .env("PATH", "")
         .env("CLAUDE_CONFIG_DIR", root.path())
         .env("XDG_CONFIG_HOME", root.path().join(".config"))
         .output()?;
@@ -101,6 +105,9 @@ async fn run_connections_case() -> anyhow::Result<()> {
     );
     let paths = config_paths()?;
 
+    // The home directory alone is not installation evidence for ~/.claude.json.
+    fs::create_dir_all(home.join(".claude"))?;
+
     for (agent, path) in &paths {
         if *agent != AgentId::Antigravity {
             fs::create_dir_all(parent(path)?)?;
@@ -120,6 +127,7 @@ async fn run_connections_case() -> anyhow::Result<()> {
         "Antigravity is not installed on this machine. Launch it once so the MCP config directory exists, then try again."
     );
     fs::create_dir_all(parent(path_for(&paths, AgentId::Antigravity)?)?)?;
+    fs::create_dir_all(home.join(".gemini/antigravity"))?;
 
     let initial = service.list_browseros_connections().await?;
     assert_eq!(initial.len(), 7);

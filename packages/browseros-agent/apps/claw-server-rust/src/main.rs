@@ -201,7 +201,15 @@ async fn serve(
         build_router(state),
         config,
         analytics,
-        async move { heal_boot_config(&heal_state).await },
+        async move {
+            heal_boot_config(&heal_state).await;
+            // Only the HTTP process that acquired the listener owns provisioning.
+            // Keep repair off request handling and stop it with this runtime.
+            heal_state
+                .harness
+                .maintain_skills(heal_state.shutdown.requested())
+                .await;
+        },
     )
     .await
 }
@@ -368,22 +376,6 @@ async fn heal_boot_config(state: &AppState) {
             "completed MCP config integrity scan"
         ),
         Err(err) => error!(error = %err, "MCP config integrity scan failed"),
-    }
-    match state.harness.run_skill_reconciliation().await {
-        Ok(outcome) => {
-            for warning in &outcome.warnings {
-                warn!(target = %warning.target.display(), warning = %warning.message, "harness skill reconciliation needs a retry");
-            }
-            info!(
-                installed = outcome.installed,
-                updated = outcome.updated,
-                removed = outcome.removed,
-                unchanged = outcome.unchanged,
-                warnings = outcome.warnings.len(),
-                "completed harness skill reconciliation"
-            );
-        }
-        Err(err) => error!(error = %err, "harness skill reconciliation failed"),
     }
 }
 
