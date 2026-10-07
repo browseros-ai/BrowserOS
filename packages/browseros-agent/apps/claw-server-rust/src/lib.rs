@@ -15,3 +15,4 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use app::{AppState, build_router};
 pub use runtime::{AppRuntime, ShutdownHandle};
+pub use services::error_reporting::StartupReporter;

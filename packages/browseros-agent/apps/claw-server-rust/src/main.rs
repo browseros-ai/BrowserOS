@@ -1,7 +1,7 @@
 use anyhow::Context;
 use axum::Router;
 use claw_server_rust::{
-    AppRuntime, AppState, ShutdownHandle, VERSION,
+    AppRuntime, AppState, ShutdownHandle, StartupReporter, VERSION,
     analytics::{AnalyticsSink, events},
     api::mcp::browser_mcp_service,
     build_router,
@@ -59,7 +59,10 @@ async fn main() -> anyhow::Result<()> {
     // never flushed it. Capture panics synchronously and record the startup outcome so the failure
     // is always diagnosable from the log directory.
     let logs_dir = config.browserclaw_dir.join("logs");
-    install_panic_hook(logs_dir.clone());
+    // Reports fatal boot failures and panics to Sentry independently of the database, which the
+    // runtime reporter needs but a boot crash may not have. Built before anything that can fail.
+    let startup_reporter = StartupReporter::from_dir(&config.browserclaw_dir).await;
+    install_panic_hook(logs_dir.clone(), startup_reporter.clone());
     record_startup(&logs_dir, "starting", None);
     let state = match AppState::new(config.clone()).await {
         Ok(state) => state,
@@ -67,6 +70,8 @@ async fn main() -> anyhow::Result<()> {
             let detail = error.to_string();
             error!(error = %error, "startup failed before the server could bind");
             record_startup(&logs_dir, "failed", Some(detail.as_str()));
+            // A fixed label only: the error text can carry a path or other user data.
+            startup_reporter.report("startup", "init_failed", None);
             return Err(error.into());
         }
     };
@@ -96,6 +101,9 @@ async fn main() -> anyhow::Result<()> {
             error!(port = conflict.port, "{conflict}");
             std::process::exit(EXIT_PORT_CONFLICT);
         }
+        // A genuine post-init failure, not the expected port handoff above, is worth seeing
+        // remotely. Fixed label only, for the same reason as the init path.
+        startup_reporter.report("startup", "run_failed", None);
     }
     outcome
 }
@@ -130,9 +138,10 @@ fn epoch_ms() -> u64 {
         .unwrap_or(0)
 }
 
-/// Appends panics to a dedicated file synchronously. The non-blocking log appender drops its buffer
-/// when the process exits on a panic, so without this a crash leaves no trace.
-fn install_panic_hook(logs_dir: PathBuf) {
+/// Appends panics to a dedicated file synchronously and reports them to Sentry before the process
+/// exits. The non-blocking log appender drops its buffer when the process exits on a panic, so
+/// without this a crash leaves no trace.
+fn install_panic_hook(logs_dir: PathBuf, reporter: StartupReporter) {
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let line = format!(
@@ -149,6 +158,11 @@ fn install_panic_hook(logs_dir: PathBuf) {
         }
         let detail = info.to_string();
         record_startup(&logs_dir, "panicked", Some(detail.as_str()));
+        // Report the source location only, never the payload, which can hold user data, then flush.
+        let location = info
+            .location()
+            .map(|location| format!("{}:{}", location.file(), location.line()));
+        reporter.report("startup", "panic", location.as_deref());
         default_hook(info);
     }));
 }

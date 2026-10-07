@@ -15,6 +15,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+mod startup;
+pub use startup::StartupReporter;
+
 pub(crate) const BUILD_SENTRY_DSN: Option<&str> = option_env!("CLAW_SENTRY_DSN");
 
 /// Resolves the DSN from the environment, then the build-time value, treating blank as unset. A
