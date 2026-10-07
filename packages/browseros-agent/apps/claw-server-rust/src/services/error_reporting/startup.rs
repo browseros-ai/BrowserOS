@@ -9,7 +9,7 @@
 
 use super::{GeneralErrorEvent, build_general_event, build_sentry_client, resolve_dsn};
 use crate::{
-    analytics::state::{load_or_create_state, state_path},
+    analytics::state::{load_or_create_state, read_consent, state_path},
     clock::now_epoch_ms,
     db::run_error_budget::utc_day,
 };
@@ -51,9 +51,12 @@ impl BootBudget {
         }
     }
 
-    /// Reserves one report against today's budget, returning whether there was room. A stored day
-    /// other than today resets the count. Any file or parse error fails closed (no room), so a
-    /// budget we cannot track never lets an unbounded number of reports out.
+    /// Reserves one report against today's budget, returning whether there was room.
+    ///
+    /// Fails closed: only a missing file (nothing sent yet) or a valid counter from an earlier day
+    /// starts at zero. A file that is present but unreadable or malformed is assumed spent, so a
+    /// corrupt counter can never re-grant the day's allowance. Writes go through a temp file and a
+    /// rename so an interrupted write never leaves a torn file behind.
     #[must_use]
     pub fn claim(&self, epoch_ms: i64, cap: i64) -> bool {
         let _lock = self
@@ -61,11 +64,15 @@ impl BootBudget {
             .lock()
             .unwrap_or_else(|poison| poison.into_inner());
         let today = utc_day(epoch_ms);
-        let sent_today = std::fs::read_to_string(&self.path)
-            .ok()
-            .and_then(|raw| serde_json::from_str::<BudgetFile>(&raw).ok())
-            .filter(|file| file.day == today)
-            .map_or(0, |file| file.sent);
+        let sent_today = match std::fs::read(&self.path) {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => 0,
+            Err(_) => return false,
+            Ok(bytes) => match serde_json::from_slice::<BudgetFile>(&bytes) {
+                Ok(file) if file.day == today => file.sent,
+                Ok(_) => 0,
+                Err(_) => return false,
+            },
+        };
         if sent_today >= cap {
             return false;
         }
@@ -73,8 +80,13 @@ impl BootBudget {
             day: today,
             sent: sent_today + 1,
         };
-        serde_json::to_string(&next)
-            .is_ok_and(|serialized| std::fs::write(&self.path, serialized).is_ok())
+        let Ok(serialized) = serde_json::to_vec(&next) else {
+            return false;
+        };
+        let temp = self.path.with_extension("tmp");
+        std::fs::write(&temp, &serialized)
+            .and_then(|()| std::fs::rename(&temp, &self.path))
+            .is_ok()
     }
 }
 
@@ -84,14 +96,16 @@ pub struct StartupReporter {
     client: Option<Arc<sentry::Client>>,
     budget: Arc<BootBudget>,
     install_id: Option<String>,
-    consent: bool,
+    state_path: PathBuf,
 }
 
 impl StartupReporter {
-    /// Builds the reporter from the data directory, reading consent and the install id from the
-    /// analytics state file so it is usable before the database or anything else is available.
+    /// Builds the reporter from the data directory, reading the install id from the analytics state
+    /// file so it is usable before the database or anything else is available. Consent is not cached
+    /// here: it is read live on each report, so a later opt-out is honored by the long-lived hook.
     pub async fn from_dir(browserclaw_dir: &Path) -> Self {
-        let state = load_or_create_state(&state_path(browserclaw_dir)).await;
+        let state_path = state_path(browserclaw_dir);
+        let state = load_or_create_state(&state_path).await;
         let client = resolve_dsn()
             .as_deref()
             .and_then(build_sentry_client)
@@ -100,7 +114,7 @@ impl StartupReporter {
             client,
             budget: Arc::new(BootBudget::new(browserclaw_dir)),
             install_id: state.distinct_id,
-            consent: state.enabled,
+            state_path,
         }
     }
 
@@ -109,7 +123,9 @@ impl StartupReporter {
     /// and `detail` must be caller-fixed and free of user data (a fixed label, or a panic's source
     /// location, never a raw error message).
     pub fn report(&self, kind: &'static str, label: &str, detail: Option<&str>) {
-        if !self.consent {
+        // Read live, not cached at boot: a user who turns telemetry off through the running server
+        // persists that choice to this file, and the long-lived panic hook must honor it.
+        if !read_consent(&self.state_path) {
             return;
         }
         let (Some(client), Some(install_id)) = (&self.client, &self.install_id) else {
@@ -192,6 +208,37 @@ mod tests {
             BootBudget::new(dir.path()).claim(DAY_ONE, DAILY_STARTUP_REPORT_CAP),
             "a report with no client must not have drawn down the budget"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn a_corrupt_counter_is_assumed_spent() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let budget = BootBudget::new(dir.path());
+        assert!(budget.claim(DAY_ONE, DAILY_STARTUP_REPORT_CAP));
+        // A torn write leaves the counter unreadable. It must not re-grant the day's allowance.
+        std::fs::write(
+            dir.path().join("startup-report-budget.json"),
+            b"{ not valid",
+        )?;
+        assert!(
+            !budget.claim(DAY_ONE, DAILY_STARTUP_REPORT_CAP),
+            "a corrupt counter must fail closed, not reset the cap"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn consent_is_read_live_from_the_state_file() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = state_path(dir.path());
+        assert!(read_consent(&path), "a missing file is the system default");
+        std::fs::write(&path, br#"{"enabled":false}"#)?;
+        assert!(!read_consent(&path), "a persisted opt-out must be honored");
+        std::fs::write(&path, br#"{"enabled":true}"#)?;
+        assert!(read_consent(&path));
+        std::fs::write(&path, b"{ not valid")?;
+        assert!(!read_consent(&path), "a corrupt consent file fails closed");
         Ok(())
     }
 }
