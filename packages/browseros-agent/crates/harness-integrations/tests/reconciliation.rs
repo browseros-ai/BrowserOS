@@ -153,3 +153,40 @@ fn disconnects_unrecorded_local_entry_without_touching_foreign_entries()
     assert!(!root.path().join("state/manifest.json").exists());
     Ok(())
 }
+
+#[test]
+fn repairs_all_local_aliases_even_beside_a_foreign_canonical_entry()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (agent, file, raw) in [
+        (
+            AgentId::Cursor,
+            "cursor.json",
+            r#"{"mcpServers":{"browseros-neo":{"url":"http://127.0.0.1:9001/mcp","disabled":false},"BrowserClaw":{"url":"http://127.0.0.1:9001/mcp","headers":{"X":"keep"}}}}"#,
+        ),
+        (
+            AgentId::Codex,
+            "codex.toml",
+            "[mcp_servers.browseros-neo]\nurl = \"http://127.0.0.1:9001/mcp\"\nenabled = false\n[mcp_servers.BrowserClaw]\nurl = \"http://127.0.0.1:9001/mcp\"\nhttp_headers = { X = \"keep\" }\n",
+        ),
+    ] {
+        let root = tempfile::tempdir()?;
+        let manager = McpManager::new(root.path().join("state"));
+        let path = root.path().join(file);
+        fs::write(&path, raw)?;
+        assert!(manager.reconcile(input(agent, &path, 9002))?.updated);
+        assert_eq!(fs::read_to_string(&path)?, raw.replace(":9001/", ":9002/"));
+        assert_eq!(manager.list_links(Default::default())?.len(), 2);
+        let modified = fs::metadata(&path)?.modified()?;
+        assert!(!manager.reconcile(input(agent, &path, 9002))?.updated);
+        assert_eq!(fs::metadata(&path)?.modified()?, modified);
+        // A customized canonical endpoint cannot shadow the older local entry.
+        let foreign = raw.replacen("http://127.0.0.1:9001/mcp", "https://example.com/mcp", 1);
+        fs::write(&path, &foreign)?;
+        assert!(manager.reconcile(input(agent, &path, 9003))?.updated);
+        assert_eq!(
+            fs::read_to_string(&path)?,
+            foreign.replace(":9001/", ":9003/")
+        );
+    }
+    Ok(())
+}

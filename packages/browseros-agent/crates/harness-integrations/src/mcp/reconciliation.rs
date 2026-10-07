@@ -46,20 +46,22 @@ pub(super) fn reconcile(
     let surface = resolve_agent_surface(input.agent, AgentScope::System)?;
     let target = target_url(&input.server.spec)?;
     let edited = edit_existing(&file.raw_content, &names, &surface, &target)?;
-    let (name, next_raw, created) = match edited {
-        Existing::Missing => (input.server.name.clone(), None, true),
+    let (names, next_raw, created) = match edited {
+        Existing::Missing => (vec![input.server.name.clone()], None, true),
         Existing::Foreign => return Ok(ReconcileSummary::default()),
-        Existing::Recognized { name, raw } => (name, Some(raw), false),
+        Existing::Recognized { names, raw } => (names, Some(raw), false),
     };
     let updated = next_raw
         .as_ref()
         .is_some_and(|raw| raw != &file.raw_content);
-    let linked = state
-        .manifest
-        .servers
-        .get(&name)
-        .and_then(|server| server.links.get(&input.agent))
-        .is_some_and(|link| link.config_path == file.config_path);
+    let linked = names.iter().all(|name| {
+        state
+            .manifest
+            .servers
+            .get(name)
+            .and_then(|server| server.links.get(&input.agent))
+            .is_some_and(|link| link.config_path == file.config_path)
+    });
     if !created && !updated && linked {
         return Ok(ReconcileSummary {
             connected: true,
@@ -67,7 +69,6 @@ pub(super) fn reconcile(
         });
     }
     let mut link = LinkInput::new(input.server, input.agent);
-    link.server.name = name;
     link.config_path = path;
     // Only a recognized endpoint reaches adoption. Unknown entries never reach
     // the overwrite-capable planner; explicit connection still has its own rules.
@@ -75,14 +76,24 @@ pub(super) fn reconcile(
     let now = time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .map_err(|error| invalid(error.to_string()))?;
-    let mut planned = plan_link(&state, &link, &now)?;
+    // A profile can contain multiple historic names. Adopt every recognized
+    // endpoint in one manifest update and write the combined port edits once;
+    // a foreign canonical entry must not hide a valid local alias.
+    let mut planning = state.clone();
+    let mut plan = Plan {
+        ops: Vec::new(),
+        next_manifest: state.manifest.clone(),
+    };
+    for name in names {
+        link.server.name = name;
+        plan = plan_link(&planning, &link, &now)?.plan;
+        planning.manifest = plan.next_manifest.clone();
+    }
     if let Some(next_raw) = next_raw {
-        planned
-            .plan
-            .ops
+        plan.ops
             .retain(|op| !matches!(op, FsOp::WriteFile { path, .. } if path == &file.config_path));
         if updated {
-            planned.plan.ops.insert(
+            plan.ops.insert(
                 0,
                 FsOp::WriteFile {
                     path: file.config_path.clone(),
@@ -91,12 +102,12 @@ pub(super) fn reconcile(
             );
         }
     }
-    if planned.plan.next_manifest == state.manifest {
-        planned.plan.ops.retain(
+    if plan.next_manifest == state.manifest {
+        plan.ops.retain(
             |op| !matches!(op, FsOp::WriteFile { path, .. } if path == &state.manifest_path),
         );
     }
-    apply_plan(&planned.plan)?;
+    apply_plan(&plan)?;
     Ok(ReconcileSummary {
         connected: true,
         created,
@@ -149,7 +160,7 @@ pub(super) fn disconnect_unrecorded(
 enum Existing {
     Missing,
     Foreign,
-    Recognized { name: String, raw: String },
+    Recognized { names: Vec<String>, raw: String },
 }
 
 fn target_url(spec: &McpServerSpec) -> Result<Url, Error> {
@@ -265,37 +276,32 @@ fn edit_json(
         .value()
         .and_then(|value| value.as_object())
         .ok_or_else(|| invalid("MCP server collection is not an object"))?;
+    let canonical_present = container
+        .get(&transform_key(names[0], surface.stdio))
+        .is_some();
+    let mut recognized = Vec::new();
+    let mut updated = false;
     for name in names {
         let key = transform_key(name, surface.stdio);
         let Some(property) = container.get(&key) else {
             continue;
         };
         let Some(entry) = property.value().and_then(|value| value.as_object()) else {
-            if *name == names[0] {
-                return Ok(Existing::Foreign);
-            }
             continue;
         };
         let Some(slot) =
             endpoint_slot(surface, |field| entry.get(field)?.value()?.to_serde_value())
         else {
-            if *name == names[0] {
-                return Ok(Existing::Foreign);
-            }
             continue;
         };
         let Some(next) = new_endpoint(&slot.url, target) else {
-            if *name == names[0] {
-                return Ok(Existing::Foreign);
-            }
             continue;
         };
+        recognized.push((*name).to_string());
         if next == slot.url {
-            return Ok(Existing::Recognized {
-                name: (*name).to_string(),
-                raw: raw.to_string(),
-            });
+            continue;
         }
+        updated = true;
         let node = entry
             .get(slot.field)
             .and_then(|property| property.value())
@@ -312,12 +318,16 @@ fn edit_json(
             .set_raw_value(
                 serde_json::to_string(&next).map_err(|error| invalid(error.to_string()))?,
             );
-        return Ok(Existing::Recognized {
-            name: (*name).to_string(),
-            raw: root.to_string(),
-        });
     }
-    Ok(Existing::Missing)
+    Ok(edited_entries(
+        recognized,
+        canonical_present,
+        if updated {
+            root.to_string()
+        } else {
+            raw.to_string()
+        },
+    ))
 }
 
 fn edit_toml(
@@ -333,15 +343,17 @@ fn edit_toml(
     let container = container
         .as_table_like_mut()
         .ok_or_else(|| invalid("MCP server collection is not a table"))?;
+    let canonical_present = container
+        .get(&transform_key(names[0], surface.stdio))
+        .is_some();
+    let mut recognized = Vec::new();
+    let mut updated = false;
     for name in names {
         let key = transform_key(name, surface.stdio);
         let Some(entry) = container.get_mut(&key) else {
             continue;
         };
         let Some(entry) = entry.as_table_like_mut() else {
-            if *name == names[0] {
-                return Ok(Existing::Foreign);
-            }
             continue;
         };
         let Some(slot) = endpoint_slot(surface, |field| {
@@ -358,23 +370,16 @@ fn edit_toml(
                 ))
             }
         }) else {
-            if *name == names[0] {
-                return Ok(Existing::Foreign);
-            }
             continue;
         };
         let Some(next) = new_endpoint(&slot.url, target) else {
-            if *name == names[0] {
-                return Ok(Existing::Foreign);
-            }
             continue;
         };
+        recognized.push((*name).to_string());
         if next == slot.url {
-            return Ok(Existing::Recognized {
-                name: (*name).to_string(),
-                raw: raw.to_string(),
-            });
+            continue;
         }
+        updated = true;
         let field = entry
             .get_mut(slot.field)
             .ok_or_else(|| invalid("endpoint disappeared"))?;
@@ -386,12 +391,26 @@ fn edit_toml(
         let decor = value.decor().clone();
         *value = Value::from(next);
         *value.decor_mut() = decor;
-        return Ok(Existing::Recognized {
-            name: (*name).to_string(),
-            raw: document.to_string(),
-        });
     }
-    Ok(Existing::Missing)
+    Ok(edited_entries(
+        recognized,
+        canonical_present,
+        if updated {
+            document.to_string()
+        } else {
+            raw.to_string()
+        },
+    ))
+}
+
+fn edited_entries(names: Vec<String>, canonical_present: bool, raw: String) -> Existing {
+    if !names.is_empty() {
+        Existing::Recognized { names, raw }
+    } else if canonical_present {
+        Existing::Foreign
+    } else {
+        Existing::Missing
+    }
 }
 
 fn invalid(message: impl Into<String>) -> Error {
