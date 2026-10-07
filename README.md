@@ -161,7 +161,7 @@ BrowserOS/
 │
 └── packages/browseros-agent/        # Agent platform (TypeScript / Rust / Go)
     ├── apps/
-    │   ├── claw-server-rust/        # BrowserOS neo backend: MCP endpoint + JSON API (Rust)
+    │   ├── claw-server/             # BrowserOS neo backend: MCP endpoint + JSON API (Rust)
     │   ├── claw-app/                # BrowserOS neo dashboard extension (WXT + React)
     │   ├── claw-onboard/            # BrowserOS neo onboarding flow (Vite)
     │   ├── server/                  # BrowserOS MCP server + AI agent loop (Bun)
@@ -192,7 +192,7 @@ BrowserOS/
 | Package | What it does |
 |---------|-------------|
 | [`packages/browseros`](packages/browseros/) | Chromium fork: patches, build system, signing |
-| [`apps/claw-server-rust`](packages/browseros-agent/apps/claw-server-rust/) | BrowserOS neo backend: MCP endpoint agents connect to, plus the API behind the dashboard |
+| [`apps/claw-server`](packages/browseros-agent/apps/claw-server/) | BrowserOS neo backend: MCP endpoint agents connect to, plus the API behind the dashboard |
 | [`apps/claw-app`](packages/browseros-agent/apps/claw-app/) | BrowserOS neo new-tab dashboard: watch, replay, and manage agent sessions |
 | [`apps/claw-onboard`](packages/browseros-agent/apps/claw-onboard/) | BrowserOS neo first-run onboarding |
 | [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing the browser MCP tools and running the BrowserOS AI agent loop |

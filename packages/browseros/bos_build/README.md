@@ -296,12 +296,14 @@ its own package file:
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
 | BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
-| BrowserClaw server | `.../apps/claw-server-rust/Cargo.toml` | `release-claw-server.yml` | `claw-server-rust/v*` |
+| BrowserClaw server | `.../apps/claw-server/Cargo.toml` | `release-claw-server.yml` | `claw-server/v*` |
 | BrowserOS onboarding | `.../apps/app-onboard/package.json` | `release-app-onboard.yml` | `app-onboard/v*` |
 | BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
 
 BrowserClaw browser builds and server OTA both consume the server bundles
-published under the historical `claw-server-rust/prod-resources` key. Packaging
+published under the historical `claw-server-rust/prod-resources` key. The source
+package is `claw-server`; release records still use the `claw-server-rust` ID.
+Packaging
 normalizes the binary name to `browseros-claw-server` for browser compatibility.
 
 One dispatch-only family workflow builds both signed macOS nightlies on the

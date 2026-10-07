@@ -8,7 +8,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use claw_server_rust::{
+use claw_server::{
     AppState, build_router,
     config::Config,
     db::feedback_invite::{InviteOutcome, SNOOZE_MS},
@@ -444,7 +444,7 @@ fn cohort_document(
 }
 
 fn now_ms() -> i64 {
-    claw_server_rust::services::feedback_cohort::now_ms()
+    claw_server::services::feedback_cohort::now_ms()
 }
 
 async fn request(

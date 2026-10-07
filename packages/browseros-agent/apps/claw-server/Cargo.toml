@@ -1,5 +1,5 @@
 [package]
-name = "claw-server-rust"
+name = "claw-server"
 version = "0.0.67"
 edition.workspace = true
 rust-version.workspace = true

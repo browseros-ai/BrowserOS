@@ -3,7 +3,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use claw_server_rust::{
+use claw_server::{
     AppState,
     analytics::{AnalyticsSink, events},
     build_router,

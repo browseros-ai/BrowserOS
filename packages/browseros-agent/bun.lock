@@ -237,8 +237,8 @@
         "vite": "^7.3.6",
       },
     },
-    "apps/claw-server-rust": {
-      "name": "@browseros/claw-server-rust",
+    "apps/claw-server": {
+      "name": "@browseros/claw-server",
       "version": "0.0.0",
     },
     "apps/server": {
@@ -648,7 +648,7 @@
 
     "@browseros/claw-onboard": ["@browseros/claw-onboard@workspace:apps/claw-onboard"],
 
-    "@browseros/claw-server-rust": ["@browseros/claw-server-rust@workspace:apps/claw-server-rust"],
+    "@browseros/claw-server": ["@browseros/claw-server@workspace:apps/claw-server"],
 
     "@browseros/diagnostics": ["@browseros/diagnostics@workspace:packages/diagnostics"],
 

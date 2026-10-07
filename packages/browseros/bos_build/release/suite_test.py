@@ -718,7 +718,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
             "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
             "packages/browseros-agent/apps/server/package.json",
             "packages/browseros-agent/apps/app/package.json",
-            "packages/browseros-agent/apps/claw-server-rust/Cargo.toml",
+            "packages/browseros-agent/apps/claw-server/Cargo.toml",
             "packages/browseros-agent/apps/claw-app/package.json",
             "packages/browseros-agent/apps/app-onboard/package.json",
             "packages/browseros-agent/apps/claw-onboard/package.json",

@@ -75,13 +75,14 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
         workspace_path="apps/app",
         tag_prefix="ext-agent/v",
     ),
+    # Release records persist this ID; only the source package and path were renamed.
     "claw-server-rust": ComponentSpec(
         id="claw-server-rust",
         display_name="BrowserOS neo server",
         version_scheme="semver",
-        manifest_path=Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml"),
+        manifest_path=Path("packages/browseros-agent/apps/claw-server/Cargo.toml"),
         lockfile_path=Path("packages/browseros-agent/Cargo.lock"),
-        package_name="claw-server-rust",
+        package_name="claw-server",
         tag_prefix="claw-server/v",
     ),
     "browserclaw": ComponentSpec(

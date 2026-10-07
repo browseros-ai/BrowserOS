@@ -7,7 +7,7 @@ use claw_api::models::{
     HealthResponse, RecordingMetadata, SessionDetail, SessionList, ShutdownResponse, SystemInfo,
     TelemetryState,
 };
-use claw_server_rust::error::{CanonicalError, RequestId};
+use claw_server::error::{CanonicalError, RequestId};
 use serde::de::DeserializeOwned;
 use std::{fs, path::PathBuf};
 

@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use claw_server_rust::{
+use claw_server::{
     analytics::NoopAnalyticsSink,
     services::harness::{Harness, HarnessService},
 };

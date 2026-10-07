@@ -4,7 +4,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode, header},
 };
 use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
-use claw_server_rust::{
+use claw_server::{
     AppState, build_router,
     config::Config,
     db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
@@ -545,7 +545,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
                 },
                 "session": {
                     "type": "string",
-                    "description": claw_server_rust::api::mcp::SESSION_ARG_DESCRIPTION
+                    "description": claw_server::api::mcp::SESSION_ARG_DESCRIPTION
                 }
             },
             "required": ["name"]

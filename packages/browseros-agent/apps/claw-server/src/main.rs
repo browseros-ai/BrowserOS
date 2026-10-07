@@ -1,6 +1,6 @@
 use anyhow::Context;
 use axum::Router;
-use claw_server_rust::{
+use claw_server::{
     AppRuntime, AppState, ShutdownHandle, VERSION,
     analytics::{AnalyticsSink, events},
     api::mcp::browser_mcp_service,
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
         }
         CliAction::Run { config, stdio } => (config, stdio),
     };
-    let config = Arc::new(claw_server_rust::config::Config::load(config_path)?);
+    let config = Arc::new(claw_server::config::Config::load(config_path)?);
     let _guard = init_tracing(config.clone())?;
     // A boot that fails before the server binds used to leave no reason in the log: the error went
     // to stderr (which the supervising browser does not capture) and the buffered file appender
@@ -99,7 +99,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn run(
     runtime: &mut AppRuntime,
-    config: Arc<claw_server_rust::config::Config>,
+    config: Arc<claw_server::config::Config>,
     stdio_mode: bool,
 ) -> anyhow::Result<()> {
     let state = runtime.state();
@@ -165,7 +165,7 @@ fn record_startup(logs_dir: &Path, outcome: &str, detail: Option<&str>) {
     }
 }
 
-fn init_tracing(config: Arc<claw_server_rust::config::Config>) -> anyhow::Result<WorkerGuard> {
+fn init_tracing(config: Arc<claw_server::config::Config>) -> anyhow::Result<WorkerGuard> {
     std::fs::create_dir_all(config.browserclaw_dir.join("logs")).with_context(|| {
         format!(
             "failed to create log directory {}",
@@ -191,7 +191,7 @@ fn init_tracing(config: Arc<claw_server_rust::config::Config>) -> anyhow::Result
 
 async fn serve(
     runtime: &mut AppRuntime,
-    config: Arc<claw_server_rust::config::Config>,
+    config: Arc<claw_server::config::Config>,
 ) -> anyhow::Result<()> {
     let state = runtime.state();
     let heal_state = state.clone();
@@ -218,7 +218,7 @@ async fn serve(
 async fn serve_with_boot_task(
     runtime: &mut AppRuntime,
     app: Router,
-    config: Arc<claw_server_rust::config::Config>,
+    config: Arc<claw_server::config::Config>,
     analytics: Arc<dyn AnalyticsSink>,
     boot_task: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
@@ -254,7 +254,7 @@ async fn serve_with_boot_task(
     // Use the ACTUAL bound address, not the requested port, so an OS-assigned
     // or dev port (config port 0) is still published correctly.
     let bound = listener.local_addr().unwrap_or(addr);
-    info!(%bound, "claw-server-rust listening");
+    info!(%bound, "claw-server listening");
     // Publish the canonical MCP URL for external discovery (the Codex and Claude
     // Desktop plugins). This is the proxy port (the source of truth), falling
     // back to the direct server port in dev where the proxy is unavailable, so
@@ -274,7 +274,7 @@ async fn serve_with_boot_task(
         None => format!("http://{bound}"),
     };
     runtime.spawn_task("runtime file publication", async move {
-        claw_server_rust::services::runtime_file::write(&runtime_dir, &runtime_url).await;
+        claw_server::services::runtime_file::write(&runtime_dir, &runtime_url).await;
     });
     let shutdown = runtime.state().shutdown;
     runtime.spawn_task("harness integration reconciliation", boot_task);
@@ -307,7 +307,7 @@ async fn ready_after<T, E>(
 
 /// Auto-connects harnesses once while preserving existing user choices.
 async fn run_first_launch_auto_connect(state: &AppState) {
-    use claw_server_rust::services::first_run;
+    use claw_server::services::first_run;
     if first_run::is_first_run_connect_done(&state.config.browserclaw_dir).await {
         return;
     }
@@ -413,7 +413,7 @@ async fn wait_for_shutdown_signal() {
 mod tests {
     use super::{PortConflict, ready_after, serve_with_boot_task};
     use axum::Router;
-    use claw_server_rust::{
+    use claw_server::{
         AppRuntime, AppState,
         analytics::{AnalyticsSink, events},
         config::Config,

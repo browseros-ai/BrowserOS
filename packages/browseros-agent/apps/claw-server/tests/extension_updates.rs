@@ -2,7 +2,7 @@
 //! scripted; the actual guard and scheduling policy run in ExtensionUpdates.
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId};
-use claw_server_rust::services::extension_updates::{ExtensionUpdates, UpdateOutcome};
+use claw_server::services::extension_updates::{ExtensionUpdates, UpdateOutcome};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::sync::{
@@ -237,7 +237,7 @@ async fn cancelled_checks_release_the_worker_debugger_attachment() -> Result<(),
 #[tokio::test]
 async fn running_coordinator_reads_sessions_and_recovers_on_notification_and_timer()
 -> anyhow::Result<()> {
-    use claw_server_rust::{
+    use claw_server::{
         AppState,
         config::Config,
         identity::{ClientIdentity, ClientInfo},
