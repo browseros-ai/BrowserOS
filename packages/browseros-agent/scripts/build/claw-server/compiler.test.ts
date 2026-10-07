@@ -84,7 +84,7 @@ describe('BrowserClaw Rust compiler', () => {
     for (const invocation of invocations) {
       expect(invocation.args).toContain('--release')
       expect(invocation.args).toContain('--locked')
-      expect(invocation.args).toContain('claw-server-rust')
+      expect(invocation.args).toContain('claw-server')
       expect(invocation.args).toContain('browseros-claw-server-rs')
     }
   })

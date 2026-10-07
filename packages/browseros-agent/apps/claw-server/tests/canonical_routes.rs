@@ -10,7 +10,7 @@ use axum::{
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
 use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, TargetId};
-use claw_server_rust::{
+use claw_server::{
     AppState, build_router,
     config::Config,
     db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},

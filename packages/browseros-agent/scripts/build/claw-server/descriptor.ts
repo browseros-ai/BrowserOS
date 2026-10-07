@@ -8,18 +8,19 @@ const INLINE_ENV_KEYS = [
   'CLAW_SENTRY_DSN',
 ] as const
 
-export const clawServerRustBuildProduct: ResourceBuildProductDescriptor = {
+export const clawServerBuildProduct: ResourceBuildProductDescriptor = {
   label: 'BrowserClaw Rust server',
-  packageDir: 'apps/claw-server-rust',
+  packageDir: 'apps/claw-server',
   versionSource: {
     type: 'cargo-toml',
-    path: 'apps/claw-server-rust/Cargo.toml',
+    path: 'apps/claw-server/Cargo.toml',
   },
-  distRoot: 'dist/prod/claw-server-rust',
+  distRoot: 'dist/prod/claw-server',
   stagedBinaryBaseName: 'browseros-claw-server',
+  // Published archives and R2 keys keep their existing identity so browser builds
+  // can still download earlier releases after the source package rename.
   archiveBaseName: 'browseros-claw-server-rust-resources',
-  defaultManifestPath:
-    'scripts/build/config/claw-server-rust-prod-resources.json',
+  defaultManifestPath: 'scripts/build/config/claw-server-prod-resources.json',
   includeArtifactIdentity: true,
   archiveFilesOnly: true,
   expectedArtifactFiles: (target) => [

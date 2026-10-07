@@ -10,19 +10,19 @@ import {
   resolveTargets,
 } from '@browseros/build-server-tools'
 
-import { clawServerRustBuildProduct } from './descriptor'
+import { clawServerBuildProduct } from './descriptor'
 
 const agentRoot = resolve(import.meta.dir, '../../..')
 
 describe('BrowserClaw Rust build descriptor', () => {
   it('matches the release artifact and R2 contract', () => {
-    expect(clawServerRustBuildProduct).toMatchObject({
-      packageDir: 'apps/claw-server-rust',
+    expect(clawServerBuildProduct).toMatchObject({
+      packageDir: 'apps/claw-server',
       versionSource: {
         type: 'cargo-toml',
-        path: 'apps/claw-server-rust/Cargo.toml',
+        path: 'apps/claw-server/Cargo.toml',
       },
-      distRoot: 'dist/prod/claw-server-rust',
+      distRoot: 'dist/prod/claw-server',
       stagedBinaryBaseName: 'browseros-claw-server',
       archiveBaseName: 'browseros-claw-server-rust-resources',
       includeArtifactIdentity: true,
@@ -35,14 +35,11 @@ describe('BrowserClaw Rust build descriptor', () => {
   })
 
   it('reads the canonical Cargo version and supplies a CI-only telemetry key', () => {
-    const config = loadBuildConfig(agentRoot, clawServerRustBuildProduct, {
+    const config = loadBuildConfig(agentRoot, clawServerBuildProduct, {
       ci: true,
     })
     const cargo = Bun.TOML.parse(
-      readFileSync(
-        resolve(agentRoot, 'apps/claw-server-rust/Cargo.toml'),
-        'utf8',
-      ),
+      readFileSync(resolve(agentRoot, 'apps/claw-server/Cargo.toml'), 'utf8'),
     ) as { package: { version: string } }
 
     expect(config.version).toBe(cargo.package.version)
@@ -50,9 +47,9 @@ describe('BrowserClaw Rust build descriptor', () => {
   })
 
   it('defaults to all five uploads and stages only the canonical skill', () => {
-    const args = parseBuildArgs([], clawServerRustBuildProduct)
+    const args = parseBuildArgs([], clawServerBuildProduct)
     const manifest = loadManifest(
-      resolve(agentRoot, clawServerRustBuildProduct.defaultManifestPath),
+      resolve(agentRoot, clawServerBuildProduct.defaultManifestPath),
     )
 
     expect(args.upload).toBe(true)
@@ -60,9 +57,7 @@ describe('BrowserClaw Rust build descriptor', () => {
       resolveTargets('all').map((target) => target.id),
     )
     for (const target of args.targets) {
-      expect(
-        clawServerRustBuildProduct.expectedArtifactFiles?.(target),
-      ).toEqual([
+      expect(clawServerBuildProduct.expectedArtifactFiles?.(target)).toEqual([
         `resources/bin/browseros-claw-server${target.os === 'windows' ? '.exe' : ''}`,
         'resources/skills/browserclaw/SKILL.md',
       ])
@@ -87,10 +82,10 @@ describe('BrowserClaw Rust build descriptor', () => {
     ) as { scripts: Record<string, string> }
 
     expect(packageJson.scripts['build:claw-server']).toBe(
-      'FORCE_COLOR=1 bun scripts/build/claw-server-rust.ts --target=all',
+      'FORCE_COLOR=1 bun scripts/build/claw-server.ts --target=all',
     )
     expect(packageJson.scripts['build:claw-server:native']).toBe(
-      'cargo build --release -p claw-server-rust',
+      'cargo build --release -p claw-server',
     )
   })
 })

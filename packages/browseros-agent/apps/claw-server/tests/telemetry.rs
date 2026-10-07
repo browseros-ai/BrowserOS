@@ -3,7 +3,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
-use claw_server_rust::{AppState, build_router, config::Config};
+use claw_server::{AppState, build_router, config::Config};
 use serde_json::{Value, json};
 use std::{env, path::Path, process::Command, sync::Arc, time::Duration};
 use tower::ServiceExt;

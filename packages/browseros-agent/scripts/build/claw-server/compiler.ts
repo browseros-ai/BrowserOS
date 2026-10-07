@@ -10,7 +10,7 @@ import {
 } from '@browseros/build-server-tools'
 
 const BINARY_BASE_NAME = 'browseros-claw-server-rs'
-const PACKAGE_NAME = 'claw-server-rust'
+const PACKAGE_NAME = 'claw-server'
 const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
 const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='

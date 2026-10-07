@@ -1,4 +1,4 @@
-use claw_server_rust::VERSION;
+use claw_server::VERSION;
 use std::process::Command;
 use tempfile::tempdir;
 

@@ -442,9 +442,9 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 		Dir:     root,
 		Env:     env,
 		Restart: true,
-		Cmd:     []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", sidecarPath},
+		Cmd:     []string{"cargo", "run", "-p", "claw-server", "--", "--config", sidecarPath},
 		BeforeStart: func() error {
-			if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "apps/claw-server-rust/resources"), userDataDir, p); err != nil {
+			if err := writeServerSidecarConfig(sidecarPath, filepath.Join(root, "apps/claw-server/resources"), userDataDir, p); err != nil {
 				return err
 			}
 			return killPort(p.Server, 3*time.Second)
@@ -465,9 +465,9 @@ func startRustClawSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root st
 
 func rustClawWatchInputs(root string) []string {
 	inputs := []string{
-		filepath.Join(root, "apps/claw-server-rust/src"),
-		filepath.Join(root, "apps/claw-server-rust/Cargo.toml"),
-		filepath.Join(root, "apps/claw-server-rust/tests/fixtures/legacy-drizzle"),
+		filepath.Join(root, "apps/claw-server/src"),
+		filepath.Join(root, "apps/claw-server/Cargo.toml"),
+		filepath.Join(root, "apps/claw-server/tests/fixtures/legacy-drizzle"),
 	}
 	for _, pattern := range []string{
 		filepath.Join(root, "crates", "*", "src"),

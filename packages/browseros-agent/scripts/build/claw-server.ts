@@ -2,11 +2,11 @@
 
 import { runCompiledResourceBuild } from '@browseros/build-server-tools'
 
-import { compileClawServerBinaries } from './claw-server-rust/compiler'
-import { clawServerRustBuildProduct } from './claw-server-rust/descriptor'
+import { compileClawServerBinaries } from './claw-server/compiler'
+import { clawServerBuildProduct } from './claw-server/descriptor'
 
 runCompiledResourceBuild(
-  clawServerRustBuildProduct,
+  clawServerBuildProduct,
   compileClawServerBinaries,
   process.argv.slice(2),
 ).catch((error) => {

@@ -24,7 +24,7 @@ func TestClawCommandsUseStandaloneWXTAndRustServer(t *testing.T) {
 	}
 
 	server := clawServerCommand("/tmp/claw-server.json")
-	wantServer := []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", "/tmp/claw-server.json"}
+	wantServer := []string{"cargo", "run", "-p", "claw-server", "--", "--config", "/tmp/claw-server.json"}
 	if !reflect.DeepEqual(server, wantServer) {
 		t.Fatalf("claw server command got %#v want %#v", server, wantServer)
 	}
