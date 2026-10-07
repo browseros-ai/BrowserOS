@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     env, fs,
     io::ErrorKind,
     path::{Path, PathBuf},
@@ -152,14 +152,20 @@ fn has_installation_evidence(path: &Path) -> Result<bool, Error> {
         .map(|root| fs::canonicalize(&root).unwrap_or(root))
         .collect::<Vec<_>>();
     let path = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    has_non_skill_state(&path, &roots, true)
+    has_non_skill_state(&path, &roots, true, &mut BTreeSet::new())
 }
 
 fn has_non_skill_state(
     path: &Path,
     skill_roots: &[PathBuf],
     accept_empty: bool,
+    visited: &mut BTreeSet<PathBuf>,
 ) -> Result<bool, Error> {
+    // Paths are physical identities. Repeated aliases add no application state
+    // and must not loop when a profile symlink points back to an ancestor.
+    if !visited.insert(path.to_path_buf()) {
+        return Ok(false);
+    }
     let metadata = match fs::metadata(path) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(false),
@@ -180,6 +186,7 @@ fn has_non_skill_state(
             continue;
         }
         let child = entry.path();
+        let child = fs::canonicalize(&child).unwrap_or(child);
         if skill_roots.contains(&child) {
             continue;
         }
@@ -188,7 +195,7 @@ fn has_non_skill_state(
         // do not impersonate an installed app. Other app state qualifies at once;
         // this never recursively scans arbitrary application directories.
         if skill_roots.iter().any(|root| root.starts_with(&child)) {
-            if has_non_skill_state(&child, skill_roots, false)? {
+            if has_non_skill_state(&child, skill_roots, false, visited)? {
                 return Ok(true);
             }
         } else {

@@ -61,38 +61,59 @@ fn nested_provisioned_profiles_are_not_installed_apps() -> anyhow::Result<()> {
     isolated(
         "nested_provisioned_profiles_are_not_installed_apps",
         Some(".claude/profiles/work"),
+        check_nested_profile_detection,
+    )
+}
+
+#[cfg(unix)]
+#[test]
+fn linked_provisioned_profiles_are_not_installed_apps() -> anyhow::Result<()> {
+    isolated(
+        "linked_provisioned_profiles_are_not_installed_apps",
+        Some(".claude/profiles/work"),
         |home| async move {
-            let service = HarnessService::new_with_managed_skill(
-                home.join("state/mcp"),
-                home.join("state/skills"),
-                home.clone(),
-                SkillSpec::new("browseros-neo", "nested profile instructions")?,
-                Arc::new(NoopAnalyticsSink),
-            );
-            service.run_skill_reconciliation().await?;
-            assert!(
-                home.join(".claude/profiles/work/skills/browseros-neo/SKILL.md")
-                    .is_file()
-            );
-            assert!(!is_installed(&[AgentId::ClaudeCode])?[&AgentId::ClaudeCode]);
-            assert!(
-                !service
-                    .connect_browseros(Harness::ClaudeCode, "http://127.0.0.1:9200/mcp")
-                    .await?
-                    .installed
-            );
-            assert!(!home.join(".claude/profiles/work/.claude.json").exists());
-            fs::write(home.join(".claude/profiles/work/settings.json"), "{}")?;
-            assert!(is_installed(&[AgentId::ClaudeCode])?[&AgentId::ClaudeCode]);
-            assert!(
-                service
-                    .connect_browseros(Harness::ClaudeCode, "http://127.0.0.1:9200/mcp")
-                    .await?
-                    .installed
-            );
-            Ok(())
+            let profiles = home.join("external-profiles");
+            fs::create_dir_all(&profiles)?;
+            fs::create_dir_all(home.join(".claude"))?;
+            std::os::unix::fs::symlink(&profiles, home.join(".claude/profiles"))?;
+            // A profile alias may loop back to an ancestor. Discovery must not
+            // recurse forever when following canonical provisioning ancestors.
+            std::os::unix::fs::symlink(&profiles, profiles.join("self"))?;
+            check_nested_profile_detection(home).await
         },
     )
+}
+
+async fn check_nested_profile_detection(home: PathBuf) -> anyhow::Result<()> {
+    let service = HarnessService::new_with_managed_skill(
+        home.join("state/mcp"),
+        home.join("state/skills"),
+        home.clone(),
+        SkillSpec::new("browseros-neo", "nested profile instructions")?,
+        Arc::new(NoopAnalyticsSink),
+    );
+    service.run_skill_reconciliation().await?;
+    assert!(
+        home.join(".claude/profiles/work/skills/browseros-neo/SKILL.md")
+            .is_file()
+    );
+    assert!(!is_installed(&[AgentId::ClaudeCode])?[&AgentId::ClaudeCode]);
+    assert!(
+        !service
+            .connect_browseros(Harness::ClaudeCode, "http://127.0.0.1:9200/mcp")
+            .await?
+            .installed
+    );
+    assert!(!home.join(".claude/profiles/work/.claude.json").exists());
+    fs::write(home.join(".claude/profiles/work/settings.json"), "{}")?;
+    assert!(is_installed(&[AgentId::ClaudeCode])?[&AgentId::ClaudeCode]);
+    assert!(
+        service
+            .connect_browseros(Harness::ClaudeCode, "http://127.0.0.1:9200/mcp")
+            .await?
+            .installed
+    );
+    Ok(())
 }
 
 #[test]
