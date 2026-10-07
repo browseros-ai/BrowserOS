@@ -408,7 +408,7 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
                 .to_string()
         }
         Status::Unconfirmed { satisfied, progress } => format!(
-            "The goal looks met: progress {progress:.2}, confidence {satisfied:.2}, below the bar to assert it. The page is where the run left it, so read it and decide for yourself rather than calling again."
+            "The run stopped claiming the goal is done, at confidence {satisfied:.2} and progress {progress:.2}, below the bar to assert it. Neither number is evidence: check the facts below against your goal, and read the page."
         ),
         Status::Stopped => {
             "Stopped by the operator. Nothing further was run; the page is where it was left."
@@ -421,13 +421,22 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
             "Stopped: {reason}. The page tools still work, so continue with snapshot and act."
         ),
     });
+    let actions = outcome.actions();
+    let changed = outcome
+        .trail
+        .iter()
+        .filter(|entry| entry.page_changed)
+        .count();
+    lines.push(format!(
+        "what changed: {changed} of {actions} actions changed the page. If that does not match what your goal asked for, the goal is not done, whatever the status says."
+    ));
     lines.push(format!(
         "goal: {goal}\nat: page {} {} ({})\ndecisions: {} over {} actions, {}ms, {} input and {} output tokens",
         page,
         outcome.url,
         outcome.title,
         outcome.decisions,
-        outcome.actions(),
+        actions,
         outcome.elapsed_ms,
         outcome.input_tokens,
         outcome.output_tokens,
@@ -646,11 +655,18 @@ mod tests {
             "the progress that justified this ending is shown too: {text}"
         );
         assert!(
-            text.contains("rather than calling again"),
-            "the caller is told not to retry work that is already done: {text}"
+            !text.contains("looks met"),
+            "the ending must not assert the goal is met: a run that applied one of two \
+             filters reported progress 1.00, so the claim cannot be made from these \
+             numbers: {text}"
         );
         assert!(
-            text.contains("read it"),
+            text.contains("1 of 1 actions changed the page"),
+            "the ending carries what the run observed, which a caller can check \
+             against the goal: {text}"
+        );
+        assert!(
+            text.contains("read the page"),
             "the caller is pointed at the page: {text}"
         );
         assert!(
