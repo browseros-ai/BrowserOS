@@ -203,15 +203,16 @@ impl PageView {
             control.guard = guard_of(control);
         }
 
-        let url = url.into();
-        let fingerprint = fingerprint_of(&url, &controls);
-        Self {
-            url,
+        let mut view = Self {
+            url: url.into(),
             title: title.into(),
             text: text.into(),
             controls,
-            fingerprint,
-        }
+            fingerprint: 0,
+        };
+        view.budget_text(Self::TEXT_BUDGET);
+        view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
+        view
     }
 
     /// Builds the view from a rendered snapshot and the refs minted for it.
@@ -282,15 +283,44 @@ impl PageView {
             control.guard = guard_of(control);
         }
 
-        let url = url.into();
-        let fingerprint = fingerprint_of(&url, &controls);
-        Self {
-            url,
+        let mut view = Self {
+            url: url.into(),
             title: title.into(),
             text: text.to_string(),
             controls,
-            fingerprint,
+            fingerprint: 0,
+        };
+        // Budget before fingerprinting, so the hash covers the text that
+        // travels to the model and not the whole document.
+        view.budget_text(Self::TEXT_BUDGET);
+        view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
+        view
+    }
+
+    /// Builds a view from parts that are already decided.
+    ///
+    /// For callers that hold a control list and want to vary the rest, which is
+    /// how the page-identity behaviour is checked.
+    #[must_use]
+    pub fn from_snapshot_parts(
+        url: impl Into<String>,
+        title: impl Into<String>,
+        text: &str,
+        mut controls: Vec<Control>,
+    ) -> Self {
+        for control in &mut controls {
+            control.guard = guard_of(control);
         }
+        let mut view = Self {
+            url: url.into(),
+            title: title.into(),
+            text: text.to_string(),
+            controls,
+            fingerprint: 0,
+        };
+        view.budget_text(Self::TEXT_BUDGET);
+        view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
+        view
     }
 
     /// The control with this reference, if it is still on the page.
@@ -334,11 +364,15 @@ impl PageView {
         if self.text.len() <= budget {
             return;
         }
+        // Trimming changes what a decision would be made from, so the
+        // fingerprint is recomputed below rather than left describing text that
+        // no longer travels.
         // Floor to a character boundary before slicing: a budget that lands
         // mid-character would otherwise panic on the slice itself.
         let ceiling = floor_char_boundary(&self.text, budget);
         let cut = self.text[..ceiling].rfind('\n').unwrap_or(ceiling);
         self.text.truncate(cut);
+        self.fingerprint = fingerprint_of(&self.url, &self.title, &self.text, &self.controls);
     }
 }
 
@@ -396,9 +430,24 @@ fn guard_of(control: &Control) -> u64 {
     hasher.finish()
 }
 
-fn fingerprint_of(url: &str, controls: &[Control]) -> u64 {
+/// Covers everything a decision was made from: where the page was, what it
+/// said, and what could be acted on.
+///
+/// The text is included because the model reads it, and without it a page whose
+/// copy changed from a success message to an error, with the url and every
+/// control unchanged, counted as the same page. A completion claim formed by
+/// reading the first was then accepted against the second.
+///
+/// The text hashed is the budgeted text, so this covers the slice that actually
+/// travelled to the model rather than the whole document. Per-control guards
+/// deliberately exclude it: a control's identity must not move because
+/// unrelated copy did, or the narrow check becomes as blunt as this one and the
+/// loop refuses work for no reason.
+fn fingerprint_of(url: &str, title: &str, text: &str, controls: &[Control]) -> u64 {
     let mut hasher = DefaultHasher::new();
     url.hash(&mut hasher);
+    title.hash(&mut hasher);
+    text.hash(&mut hasher);
     for control in controls {
         control.guard.hash(&mut hasher);
     }
@@ -678,6 +727,119 @@ mod tests {
         let after = view_of(&[ax("1", 11, "button", "Applied")]);
         assert!(!after.is_fresh_for(before.fingerprint));
         assert!(before.is_fresh_for(before.fingerprint));
+    }
+
+    /// The hole this closes. A page whose copy changed from a success message
+    /// to an error, with the url and every control identical, counted as the
+    /// same page, so a completion claim formed from the first was accepted
+    /// against the second.
+    #[test]
+    fn a_page_whose_text_changed_is_not_the_same_page() {
+        let nodes = vec![ax("1", 11, "button", "Continue")];
+        let refs = refs_for(&nodes);
+        let before = PageView::from_ax(
+            "https://example.com/cart",
+            "Cart",
+            "Item added to your cart",
+            &nodes,
+            &refs,
+        );
+        let after = PageView::from_ax(
+            "https://example.com/cart",
+            "Cart",
+            "Out of stock",
+            &nodes,
+            &refs,
+        );
+        assert_eq!(before.url, after.url);
+        assert_eq!(
+            before.controls, after.controls,
+            "the controls are identical"
+        );
+        assert!(
+            !after.is_fresh_for(before.fingerprint),
+            "the text the decision was read from changed, so this is not the same page"
+        );
+    }
+
+    /// The asymmetry that makes the narrow check worth having. A control's own
+    /// guard must not move because unrelated copy did, or refusing a stale
+    /// decision would refuse almost every decision.
+    #[test]
+    fn unrelated_text_does_not_move_a_controls_guard() {
+        let nodes = vec![ax("1", 11, "button", "Continue")];
+        let refs = refs_for(&nodes);
+        let before = PageView::from_ax("https://example.com", "T", "one story", &nodes, &refs);
+        let after = PageView::from_ax("https://example.com", "T", "another story", &nodes, &refs);
+        assert_eq!(
+            before.controls[0].guard, after.controls[0].guard,
+            "the control is the same control"
+        );
+        assert!(
+            after.control_is_fresh(&before.controls[0].reference, before.controls[0].guard),
+            "so a decision about it is still actionable"
+        );
+        assert!(
+            !after.is_fresh_for(before.fingerprint),
+            "while the page as a whole has moved"
+        );
+    }
+
+    /// The title names the page a claim is about, so it counts too.
+    #[test]
+    fn a_changed_title_is_not_the_same_page() {
+        let nodes = vec![ax("1", 11, "button", "Continue")];
+        let refs = refs_for(&nodes);
+        let before = PageView::from_ax("https://example.com", "Cart", "same", &nodes, &refs);
+        let after = PageView::from_ax("https://example.com", "Checkout", "same", &nodes, &refs);
+        assert!(!after.is_fresh_for(before.fingerprint));
+    }
+
+    /// The hash covers the text that travels, so trimming further keeps it
+    /// honest rather than leaving it describing text the model never saw.
+    #[test]
+    fn trimming_the_text_moves_the_fingerprint() {
+        let nodes = vec![ax("1", 11, "button", "Continue")];
+        let refs = refs_for(&nodes);
+        let mut view = PageView::from_ax(
+            "https://example.com",
+            "T",
+            "first\nsecond\nthird",
+            &nodes,
+            &refs,
+        );
+        let before = view.fingerprint;
+        view.budget_text(6);
+        assert_ne!(view.fingerprint, before);
+        assert_eq!(view.text, "first");
+    }
+
+    /// And a page built from a long document is fingerprinted over the budgeted
+    /// slice, not the whole thing, so two pages differing only beyond the
+    /// budget read as the same page.
+    #[test]
+    fn text_beyond_the_budget_does_not_affect_the_fingerprint() {
+        let nodes = vec![ax("1", 11, "button", "Continue")];
+        let refs = refs_for(&nodes);
+        let head = "visible\n".repeat(PageView::TEXT_BUDGET / 8 + 10);
+        let one = PageView::from_ax(
+            "https://e.com",
+            "T",
+            format!("{head}tail one"),
+            &nodes,
+            &refs,
+        );
+        let two = PageView::from_ax(
+            "https://e.com",
+            "T",
+            format!("{head}tail two"),
+            &nodes,
+            &refs,
+        );
+        assert_eq!(
+            one.fingerprint, two.fingerprint,
+            "neither tail reached the model, so neither can move the hash"
+        );
     }
 
     #[test]
