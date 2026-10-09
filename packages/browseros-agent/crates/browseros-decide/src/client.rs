@@ -235,7 +235,10 @@ impl Jev {
             422 => Err(JevError::Invalid(body)),
             429 => Err(JevError::RateLimited),
             529 => Err(JevError::Overloaded),
-            other => Err(JevError::Unexpected { status: other, body }),
+            other => Err(JevError::Unexpected {
+                status: other,
+                body,
+            }),
         }
     }
 
@@ -252,9 +255,12 @@ impl Jev {
                 criteria: None,
             },
         );
-        self.ask(&Value::String("A connectivity check.".to_string()), &questions)
-            .await
-            .map(|response| response.model)
+        self.ask(
+            &Value::String("A connectivity check.".to_string()),
+            &questions,
+        )
+        .await
+        .map(|response| response.model)
     }
 }
 
