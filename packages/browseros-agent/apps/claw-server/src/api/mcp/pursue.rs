@@ -106,6 +106,12 @@ impl PageDriver {
     }
 
     fn call_for(&self, args: Value) -> ToolCall {
+        // Child tokens, not clones. A clone shares one cancellation state, and
+        // dispatch cancels the token it was given on every completion path
+        // including success, so a clone of the run's own token would be
+        // cancelled by the first action: `stopped` would then be true and the
+        // run would end after one step. A child is cancelled by its parent but
+        // never the other way round, which is the direction wanted here.
         ToolCall::new(
             self.catalog.clone(),
             self.act_index,
@@ -113,8 +119,8 @@ impl PageDriver {
             self.session_id.clone(),
             Some(self.identity.clone()),
             Some(self.session.clone()),
-            self.cancel.clone(),
-            self.cancel.clone(),
+            self.cancel.child_token(),
+            self.cancel.child_token(),
             CancellationToken::new(),
             self.default_tab_group_id.clone(),
             self.state.clone(),
@@ -422,6 +428,41 @@ mod tests {
         assert!(
             covered_or_gone(&changed.to_string()),
             "and a capture that raced the page: {changed}"
+        );
+    }
+
+    /// The invariant the dispatch tokens rest on, which a clone gets wrong.
+    ///
+    /// Dispatch cancels the token it was handed on every completion path,
+    /// success included. A clone shares one state, so handing dispatch a clone
+    /// of the run's own token meant the first action cancelled the run: it
+    /// would report stopped after one step. A child is cancelled by its parent
+    /// and never the reverse.
+    #[test]
+    fn a_child_token_does_not_cancel_its_parent() {
+        let run = tokio_util::sync::CancellationToken::new();
+
+        let shared = run.clone();
+        shared.cancel();
+        assert!(
+            run.is_cancelled(),
+            "a clone shares one state, which is why it cannot be handed to dispatch"
+        );
+
+        let run = tokio_util::sync::CancellationToken::new();
+        let child = run.child_token();
+        child.cancel();
+        assert!(
+            !run.is_cancelled(),
+            "a child cancelling leaves the run alone"
+        );
+
+        let run = tokio_util::sync::CancellationToken::new();
+        let child = run.child_token();
+        run.cancel();
+        assert!(
+            child.is_cancelled(),
+            "and an operator stopping the run still reaches the action"
         );
     }
 
