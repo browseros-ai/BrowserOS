@@ -32,6 +32,13 @@ pub const MIN_OFFERED_UNNAMED: usize = 4;
 /// execution: code responds by exploring or handing back.
 pub const NONE_OF_THESE: &str = "none_of_these";
 
+/// How many control-and-value pairs a select question may offer in total.
+///
+/// Under the protocol's 255 with room for the escape option. Flattening a
+/// select's values multiplies them, so this is a ceiling on the product rather
+/// than on any one control.
+pub const MAX_SELECT_OPTIONS: usize = 200;
+
 /// One offered candidate.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
@@ -167,8 +174,28 @@ impl ActionSpace {
     #[must_use]
     pub fn select_options(&self) -> std::collections::BTreeMap<String, Value> {
         let mut options = std::collections::BTreeMap::new();
-        for candidate in &self.offered {
-            for value in &candidate.options {
+        // Capped, because flattening multiplies: two dropdowns of 150 values
+        // each would exceed the protocol's 255 options on their own and the
+        // request would be refused before it was sent, taking the whole step
+        // with it even though the goal may have needed a different control.
+        //
+        // Spread across the controls rather than filled from the first, so one
+        // long dropdown cannot crowd out every other one. Candidates arrive
+        // scored, so the share goes to the most relevant controls first.
+        let with_values: Vec<&Candidate> = self
+            .offered
+            .iter()
+            .filter(|candidate| !candidate.options.is_empty())
+            .collect();
+        if with_values.is_empty() {
+            return options;
+        }
+        let share = (MAX_SELECT_OPTIONS / with_values.len()).max(1);
+        for candidate in with_values {
+            for value in candidate.options.iter().take(share) {
+                if options.len() >= MAX_SELECT_OPTIONS {
+                    return options;
+                }
                 options.insert(
                     format!("{}::{value}", candidate.reference),
                     json!({
@@ -392,6 +419,44 @@ mod tests {
             ActionSpace::split_select("e9::Price: Low to High").expect("splits back");
         assert_eq!(reference, "e9");
         assert_eq!(value, "Price: Low to High");
+    }
+
+    /// Flattening multiplies, so a page with several long dropdowns could push
+    /// one question past the protocol's 255 options and have the whole step
+    /// refused before it was sent.
+    #[test]
+    fn a_select_question_stays_within_the_protocol_ceiling() {
+        let mut controls = Vec::new();
+        for index in 0..4 {
+            let mut select = control(&format!("s{index}"), "combobox", &format!("Filter {index}"));
+            select.options = (0..150).map(|value| format!("value {value}")).collect();
+            controls.push(select);
+        }
+        let space = ActionSpace::build(&view_with(controls), "choose something", None);
+        let options = space.select_options();
+        assert!(
+            options.len() <= MAX_SELECT_OPTIONS,
+            "{} options offered, over the {MAX_SELECT_OPTIONS} cap",
+            options.len()
+        );
+        assert!(options.len() < crate::client::MAX_CHOICE_OPTIONS);
+    }
+
+    /// One long dropdown must not crowd out the others, or a goal about the
+    /// second one could not be answered at all.
+    #[test]
+    fn every_dropdown_gets_a_share_of_the_select_options() {
+        let mut long = control("s1", "combobox", "Huge");
+        long.options = (0..400).map(|value| format!("v{value}")).collect();
+        let mut short = control("s2", "combobox", "Sort by");
+        short.options = vec!["Price: Low to High".to_string()];
+        let space = ActionSpace::build(&view_with(vec![long, short]), "sort by price", None);
+        let options = space.select_options();
+        assert!(
+            options.keys().any(|key| key.starts_with("s2::")),
+            "the short dropdown still appears: {:?}",
+            options.keys().take(3).collect::<Vec<_>>()
+        );
     }
 
     /// A control with no fixed values contributes no select option, so nothing
