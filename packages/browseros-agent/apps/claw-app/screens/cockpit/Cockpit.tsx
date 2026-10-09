@@ -7,6 +7,7 @@ import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
+import { UltrafastBanner } from '@/components/cockpit/UltrafastBanner'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
@@ -79,6 +80,7 @@ export function Cockpit() {
   const content =
     state !== 'ready' ? (
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
+        <UltrafastBanner />
         <ProductHuntBanner />
         <FeedbackInviteCard />
         <CockpitOnboarding
@@ -95,6 +97,7 @@ export function Cockpit() {
           pendingTakeOverSessionId={takeover.pendingTakeOverSessionId}
           cancelPendingSessionId={takeover.stopPendingSessionId}
         />
+        <UltrafastBanner />
         <CockpitHero />
         {shouldLoadStats && stats.data?.hasMeasuredStats ? (
           <SavedStatsBand stats={stats.data} />

@@ -32,6 +32,9 @@ export const AnalyticsEvent = {
   InstallGuideDownloadClicked: 'install_guide_download_clicked',
   ManualSetupOpened: 'manual_setup_opened',
   ManualSetupCommandCopied: 'manual_setup_command_copied',
+  UltrafastBannerClicked: 'ultrafast_banner_clicked',
+  UltrafastWaitlistViewed: 'ultrafast_waitlist_viewed',
+  UltrafastWaitlistJoined: 'ultrafast_waitlist_joined',
 } as const
 
 export type AnalyticsEventName =
