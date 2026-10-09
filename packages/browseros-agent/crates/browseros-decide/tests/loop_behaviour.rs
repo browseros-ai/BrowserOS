@@ -65,10 +65,11 @@ impl Scripted {
 }
 
 impl Oracle for Scripted {
-    async fn ask(
+    async fn ask_within(
         &self,
         _state: &serde_json::Value,
         _questions: &BTreeMap<String, Question>,
+        _budget: std::time::Duration,
     ) -> Result<Response, JevError> {
         let mut script = self.0.lock().expect("the script");
         if script.len() > 1 {
@@ -87,6 +88,11 @@ struct Fake {
     acts: Mutex<Vec<Result<bool, ActError>>>,
     pages: Mutex<Vec<PageView>>,
     settles: Mutex<u32>,
+    /// Observations succeed this many times, then fail the way a closed tab
+    /// does. Counted rather than flagged, so the first view can be built and
+    /// only the read-back fails, which is the case worth testing.
+    blind_after: std::sync::atomic::AtomicU32,
+    observed: std::sync::atomic::AtomicU32,
 }
 
 impl Fake {
@@ -103,7 +109,15 @@ impl Fake {
                 pages
             }),
             settles: Mutex::new(0),
+            blind_after: std::sync::atomic::AtomicU32::new(u32::MAX),
+            observed: std::sync::atomic::AtomicU32::new(0),
         }
+    }
+
+    fn blind_after(self, observations: u32) -> Self {
+        self.blind_after
+            .store(observations, std::sync::atomic::Ordering::SeqCst);
+        self
     }
 
     fn with_one_page(acts: Vec<Result<bool, ActError>>) -> Self {
@@ -131,6 +145,12 @@ impl Driver for Fake {
     }
 
     async fn observe(&self) -> Result<PageView, String> {
+        let seen = self
+            .observed
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if seen >= self.blind_after.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("the tab was closed".to_string());
+        }
         let mut pages = self.pages.lock().expect("the pages");
         if pages.len() > 1 {
             Ok(pages.pop().expect("checked"))
@@ -563,4 +583,38 @@ async fn a_blocked_run_tells_the_caller_what_it_was_choosing_between() {
         "and names it: {:?}",
         outcome.offered_controls
     );
+}
+
+/// A completion claim needs a real observation to check against. Falling back
+/// to the previous page made the check pass by construction, so a closed tab
+/// read as a satisfied goal.
+///
+/// The first observation succeeds, so the run gets a view and a decision; only
+/// the read-back fails. Blinding the browser from the start would fail at
+/// startup instead and never reach the path this covers.
+#[tokio::test]
+async fn a_completion_claim_is_not_confirmed_from_a_failed_observation() {
+    let fake = Fake::with_one_page(vec![]).blind_after(1);
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "DONE", 0.99)])]);
+    let outcome = pursue(&oracle, &fake, "Be finished", budget()).await;
+    assert_ne!(
+        outcome.status,
+        Status::Satisfied,
+        "nothing was read back, so nothing is confirmed"
+    );
+    assert!(
+        matches!(outcome.status, Status::NeedsInput(ref reason) if reason.contains("could not be read back")),
+        "and it says why, rather than reporting a failure: {:?}",
+        outcome.status
+    );
+}
+
+/// With the read-back working, the same claim is accepted, so this refuses an
+/// unverifiable claim rather than refusing claims.
+#[tokio::test]
+async fn a_completion_claim_with_a_working_read_back_is_accepted() {
+    let fake = Fake::with_one_page(vec![]);
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "DONE", 0.99)])]);
+    let outcome = pursue(&oracle, &fake, "Be finished", budget()).await;
+    assert_eq!(outcome.status, Status::Satisfied);
 }

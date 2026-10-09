@@ -13,12 +13,13 @@
 
 use std::collections::BTreeMap;
 
-use crate::client::{Jev, JevError, Question};
+use crate::client::{Jev, JevError, MAX_RETRIES, Question};
 use crate::gate::{self, Decision, Verdict};
 use crate::operations::Operation;
 use crate::questions;
 use crate::space::ActionSpace;
 use crate::view::PageView;
+use std::time::Duration;
 
 /// How many consecutive actions may change nothing before the run stops.
 pub const STALL_LIMIT: u32 = 3;
@@ -52,20 +53,23 @@ pub enum ActError {
 /// script in a test. The loop's job is deciding what to do with an answer, and
 /// that is the part worth testing without a network.
 pub trait Oracle {
-    fn ask(
+    /// Asks, giving up after `budget`, which covers the whole call.
+    fn ask_within(
         &self,
         state: &serde_json::Value,
         questions: &BTreeMap<String, Question>,
+        budget: Duration,
     ) -> impl Future<Output = Result<crate::client::Response, JevError>>;
 }
 
 impl Oracle for Jev {
-    async fn ask(
+    async fn ask_within(
         &self,
         state: &serde_json::Value,
         questions: &BTreeMap<String, Question>,
+        budget: Duration,
     ) -> Result<crate::client::Response, JevError> {
-        Jev::ask(self, state, questions).await
+        Jev::ask_within(self, state, questions, budget).await
     }
 }
 
@@ -243,7 +247,15 @@ pub async fn pursue<O: Oracle, D: Driver>(
         let state = questions::state(&view, &space, &recent);
 
         decisions += 1;
-        let response = match ask_with_retries(oracle, &state, &built).await {
+        // The smaller of the published default and what the run has left, so a
+        // slow provider cannot carry a run past the user's own limit.
+        let elapsed = started.elapsed();
+        let run_left = Duration::from_secs(budget.max_seconds).saturating_sub(elapsed);
+        let ask_budget = run_left.min(crate::client::DEFAULT_TIMEOUT);
+        if ask_budget.is_zero() {
+            return finish(Status::OutOfBudget, trail, &view, decisions, input_tokens);
+        }
+        let response = match ask_with_retries(oracle, &state, &built, ask_budget).await {
             Ok(response) => response,
             Err(error) => {
                 return finish(
@@ -256,6 +268,15 @@ pub async fn pursue<O: Oracle, D: Driver>(
             }
         };
         input_tokens += response.usage.input_tokens;
+
+        // Checked again after the answer: the request may have taken the rest of
+        // the run's time, and acting past the limit is what the limit forbids.
+        if driver.stopped() {
+            return finish(Status::Stopped, trail, &view, decisions, input_tokens);
+        }
+        if started.elapsed().as_secs() >= budget.max_seconds {
+            return finish(Status::OutOfBudget, trail, &view, decisions, input_tokens);
+        }
 
         let decision = match gate::read(&response) {
             Ok(decision) => decision,
@@ -274,7 +295,26 @@ pub async fn pursue<O: Oracle, D: Driver>(
         // The model looked at a page; if that page has moved since, its verdict
         // is about something that is no longer there.
         if decision.operation.is_terminal() {
-            let settled = refresh(driver, &view).await;
+            // A completion claim needs a real observation to check against.
+            // Falling back to the previous page here would make the check pass
+            // by construction, so a closed tab or a lost connection would read
+            // as a satisfied goal.
+            let settled = match driver.observe().await {
+                Ok(settled) => settled,
+                Err(error) => {
+                    return finish(
+                        Status::NeedsInput(format!(
+                            "the run answered {} but the page could not be read back to check it: \
+                             {error}. Nothing is confirmed; look at the page yourself",
+                            decision.operation.as_str()
+                        )),
+                        trail,
+                        &view,
+                        decisions,
+                        input_tokens,
+                    );
+                }
+            };
             let fresh = settled.is_fresh_for(view.fingerprint);
             view = settled;
             if decision.operation == Operation::Done && fresh {
@@ -449,19 +489,37 @@ pub async fn pursue<O: Oracle, D: Driver>(
     }
 }
 
-/// Retries only what retrying can fix.
+/// Retries only what retrying can fix, inside a budget.
+///
+/// Follows the published contract rather than a local invention: the budget
+/// covers every attempt and every delay between them, a delay that would
+/// exhaust what is left is not taken, and a wait the service named itself wins
+/// over the computed one.
 async fn ask_with_retries<O: Oracle>(
     oracle: &O,
     state: &serde_json::Value,
     questions: &BTreeMap<String, Question>,
+    budget: Duration,
 ) -> Result<crate::client::Response, JevError> {
-    let mut attempt: u64 = 0;
+    let deadline = std::time::Instant::now() + budget;
+    let mut attempt: u32 = 0;
     loop {
-        match oracle.ask(state, questions).await {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(JevError::TimedOut(budget));
+        }
+        match oracle.ask_within(state, questions, left).await {
             Ok(response) => return Ok(response),
-            Err(error) if error.is_retryable() && attempt < 2 => {
+            Err(error) if error.is_retryable() && attempt < MAX_RETRIES => {
                 attempt += 1;
-                tokio::time::sleep(std::time::Duration::from_millis(250 * attempt)).await;
+                let delay = crate::client::backoff(attempt, error.retry_after());
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                // A delay that would consume what is left buys nothing: the
+                // attempt after it could not run, so the last error stands.
+                if delay >= left {
+                    return Err(error);
+                }
+                tokio::time::sleep(delay).await;
             }
             Err(error) => return Err(error),
         }
@@ -469,6 +527,11 @@ async fn ask_with_retries<O: Oracle>(
 }
 
 /// Re-observes, keeping the last view if the browser cannot answer.
+///
+/// Only for the paths where a stale view is harmless: deciding again, where the
+/// next answer is about whatever is observed then. It must not be used to check
+/// a claim, because the fallback would make that check pass by construction,
+/// which is why the terminal path observes directly.
 async fn refresh<D: Driver>(driver: &D, previous: &PageView) -> PageView {
     driver.observe().await.unwrap_or_else(|_| previous.clone())
 }

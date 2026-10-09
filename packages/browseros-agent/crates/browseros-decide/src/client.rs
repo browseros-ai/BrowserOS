@@ -7,6 +7,7 @@
 //! bills us.
 
 use std::collections::BTreeMap;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -128,16 +129,38 @@ pub struct Response {
     pub usage: Usage,
 }
 
+/// The documented retry defaults, followed rather than invented.
+///
+/// The published client retries 408, 429 and the whole 500 to 599 range, allows
+/// two retries, and backs off exponentially from half a second, doubling, capped
+/// at five, with up to a quarter of each delay subtracted as jitter.
+pub const MAX_RETRIES: u32 = 2;
+pub const RETRY_INITIAL: Duration = Duration::from_millis(500);
+pub const RETRY_CAP: Duration = Duration::from_secs(5);
+pub const RETRY_JITTER: f64 = 0.25;
+
+/// The documented total budget for one call, covering every attempt and every
+/// delay between them rather than each attempt separately.
+pub const DEFAULT_TIMEOUT: Duration = Duration::from_secs(30);
+
 #[derive(Debug, thiserror::Error)]
 pub enum JevError {
     #[error("the credential was not accepted")]
     Unauthorized,
     #[error("the request was rejected as invalid: {0}")]
     Invalid(String),
+    /// The rate limit was exceeded. Carries the wait the service asked for,
+    /// when it named one.
     #[error("rate limited")]
-    RateLimited,
-    #[error("the service is overloaded")]
-    Overloaded,
+    RateLimited { retry_after: Option<Duration> },
+    /// The service failed to process the request. One case for the whole 5xx
+    /// range, as the published taxonomy has it: 529 is not special, and
+    /// treating it as the only retryable server error meant an ordinary 503
+    /// ended a run the published client would have retried.
+    #[error("the service failed to process the request: {status}")]
+    ServerError { status: u16 },
+    #[error("the request timed out after {0:?}")]
+    TimedOut(Duration),
     #[error("could not reach the service: {0}")]
     Transport(String),
     #[error("{0}")]
@@ -148,12 +171,59 @@ pub enum JevError {
 
 impl JevError {
     /// Whether the same request is worth sending again.
+    ///
+    /// Follows the published retryable set: a request timeout, a rate limit,
+    /// every server error, and a failure with no response at all.
+    #[must_use]
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            Self::RateLimited | Self::Overloaded | Self::Transport(_)
+            Self::RateLimited { .. }
+                | Self::ServerError { .. }
+                | Self::TimedOut(_)
+                | Self::Transport(_)
         )
     }
+
+    /// The wait the service asked for, when it named one.
+    #[must_use]
+    pub fn retry_after(&self) -> Option<Duration> {
+        match self {
+            Self::RateLimited { retry_after } => *retry_after,
+            _ => None,
+        }
+    }
+}
+
+/// The delay before a given attempt, counting from one.
+///
+/// Exponential from the documented half second, doubling, capped at five, with
+/// jitter subtracted. A service that named its own wait overrides this, because
+/// it knows better than a formula does.
+#[must_use]
+pub fn backoff(attempt: u32, asked_for: Option<Duration>) -> Duration {
+    if let Some(asked_for) = asked_for {
+        return asked_for.min(RETRY_CAP);
+    }
+    let shift = attempt.saturating_sub(1).min(8);
+    let capped = RETRY_INITIAL.saturating_mul(1u32 << shift).min(RETRY_CAP);
+    // Jitter derived from the attempt rather than a random source, so a test
+    // can predict it while a retry storm still spreads.
+    let fraction = RETRY_JITTER * f64::from(attempt % 4) / 3.0;
+    capped.mul_f64(1.0 - fraction)
+}
+
+/// Reads the wait a service asked for, from either documented header.
+fn retry_after_from(headers: &reqwest::header::HeaderMap) -> Option<Duration> {
+    if let Some(value) = headers.get("retry-after-ms")
+        && let Ok(text) = value.to_str()
+        && let Ok(millis) = text.trim().parse::<u64>()
+    {
+        return Some(Duration::from_millis(millis));
+    }
+    let value = headers.get(reqwest::header::RETRY_AFTER)?;
+    let seconds = value.to_str().ok()?.trim().parse::<u64>().ok()?;
+    Some(Duration::from_secs(seconds))
 }
 
 #[derive(Serialize)]
@@ -204,26 +274,47 @@ impl Jev {
         state: &Value,
         questions: &BTreeMap<String, Question>,
     ) -> Result<Response, JevError> {
+        self.ask_within(state, questions, DEFAULT_TIMEOUT).await
+    }
+
+    /// Asks every question, giving up after `budget`.
+    ///
+    /// The budget is the whole call as the published contract defines it: every
+    /// attempt and every delay between them, not each attempt separately. A
+    /// caller with less time than the default should pass what it has, which is
+    /// how a run's own time limit reaches the request.
+    pub async fn ask_within(
+        &self,
+        state: &Value,
+        questions: &BTreeMap<String, Question>,
+        budget: Duration,
+    ) -> Result<Response, JevError> {
         if questions.is_empty() {
             return Err(JevError::Shape("no questions".to_string()));
         }
         for (id, question) in questions {
             question.validate(id)?;
         }
-        let response = self
+        let send = self
             .http
             .post(&self.endpoint)
             .bearer_auth(&self.token)
+            .timeout(budget)
             .json(&Request {
                 state,
                 model: &self.model,
                 questions,
             })
-            .send()
-            .await
-            .map_err(|error| JevError::Transport(error.to_string()))?;
+            .send();
+        let response = match tokio::time::timeout(budget, send).await {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) if error.is_timeout() => return Err(JevError::TimedOut(budget)),
+            Ok(Err(error)) => return Err(JevError::Transport(error.to_string())),
+            Err(_elapsed) => return Err(JevError::TimedOut(budget)),
+        };
 
         let status = response.status().as_u16();
+        let retry_after = retry_after_from(response.headers());
         let body = response
             .text()
             .await
@@ -232,9 +323,13 @@ impl Jev {
             200 => serde_json::from_str(&body)
                 .map_err(|error| JevError::Shape(format!("could not read the answer: {error}"))),
             401 => Err(JevError::Unauthorized),
+            408 => Err(JevError::TimedOut(Duration::ZERO)),
             422 => Err(JevError::Invalid(body)),
-            429 => Err(JevError::RateLimited),
-            529 => Err(JevError::Overloaded),
+            429 => Err(JevError::RateLimited { retry_after }),
+            // The whole range, per the published taxonomy, rather than 529
+            // alone: an ordinary 503 was ending runs the published client
+            // would have retried.
+            500..=599 => Err(JevError::ServerError { status }),
             other => Err(JevError::Unexpected {
                 status: other,
                 body,
@@ -318,16 +413,59 @@ mod tests {
         }
     }
 
-    /// Rate limiting and overload are worth retrying; a rejected credential and
-    /// a malformed request are not, because the same request will fail again.
+    /// The published retryable set, which this follows rather than invents: a
+    /// request timeout, a rate limit, and **every** server error. Treating 529
+    /// as the only retryable one meant an ordinary 503 ended a run the
+    /// published client would have retried.
     #[test]
-    fn only_transient_failures_are_retryable() {
-        assert!(JevError::RateLimited.is_retryable());
-        assert!(JevError::Overloaded.is_retryable());
+    fn the_published_retryable_set_is_what_is_retried() {
+        assert!(JevError::RateLimited { retry_after: None }.is_retryable());
+        assert!(JevError::TimedOut(Duration::from_secs(1)).is_retryable());
         assert!(JevError::Transport("reset".to_string()).is_retryable());
+        for status in [500, 502, 503, 529, 599] {
+            assert!(
+                JevError::ServerError { status }.is_retryable(),
+                "{status} is inside the documented range"
+            );
+        }
         assert!(!JevError::Unauthorized.is_retryable());
         assert!(!JevError::Invalid("bad".to_string()).is_retryable());
         assert!(!JevError::Shape("bad".to_string()).is_retryable());
+        assert!(
+            !JevError::Unexpected {
+                status: 418,
+                body: String::new()
+            }
+            .is_retryable()
+        );
+    }
+
+    /// Exponential from the documented half second, doubling, capped at five.
+    #[test]
+    fn the_backoff_grows_and_is_capped() {
+        let first = backoff(1, None);
+        let second = backoff(2, None);
+        assert!(first >= RETRY_INITIAL.mul_f64(1.0 - RETRY_JITTER));
+        assert!(first <= RETRY_INITIAL);
+        assert!(second > first, "{second:?} follows {first:?}");
+        for attempt in 1..12 {
+            assert!(
+                backoff(attempt, None) <= RETRY_CAP,
+                "attempt {attempt} stays under the cap"
+            );
+        }
+    }
+
+    /// A service that names its own wait knows better than the formula does.
+    #[test]
+    fn a_service_named_wait_overrides_the_formula() {
+        let asked = Duration::from_millis(1_200);
+        assert_eq!(backoff(1, Some(asked)), asked);
+        assert_eq!(
+            backoff(1, Some(Duration::from_secs(600))),
+            RETRY_CAP,
+            "but not past the cap"
+        );
     }
 
     /// A Noul carries no confidence: the probability is the certainty. Parsing
