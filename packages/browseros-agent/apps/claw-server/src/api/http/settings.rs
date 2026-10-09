@@ -72,7 +72,10 @@ pub(super) async fn update_jev_credential(
             "credential must not be empty",
         ));
     }
-    let model = match browseros_decide::Jev::new(credential.expose()).check().await {
+    let model = match browseros_decide::Jev::new(credential.expose())
+        .check()
+        .await
+    {
         Ok(model) => model,
         Err(reason) => {
             return Err(error(
