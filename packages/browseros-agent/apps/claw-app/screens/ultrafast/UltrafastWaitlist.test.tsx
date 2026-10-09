@@ -304,20 +304,23 @@ describe('UltrafastWaitlist', () => {
 })
 
 describe('UltrafastWaitlistView', () => {
-  it('renders the price, form, and launch note', () => {
-    const html = renderToStaticMarkup(
-      createElement(UltrafastWaitlistView, {
-        price: 20,
-        joined: false,
-        canJoin: true,
-        onJoin: () => {},
-      }),
-    )
-    expect(html).toContain('$20')
-    expect(html).toContain('/month')
-    expect(html).toContain('Join the waitlist</button>')
-    expect(html).toContain('No payment today.')
-  })
+  it.each([9, 19] as const)(
+    'renders the $%i price, form, and launch note',
+    (price) => {
+      const html = renderToStaticMarkup(
+        createElement(UltrafastWaitlistView, {
+          price,
+          joined: false,
+          canJoin: true,
+          onJoin: () => {},
+        }),
+      )
+      expect(html).toContain(`$${price}`)
+      expect(html).toContain('/month')
+      expect(html).toContain('Request early access</button>')
+      expect(html).toContain('No payment today.')
+    },
+  )
 })
 
 describe('normalizeEmail', () => {

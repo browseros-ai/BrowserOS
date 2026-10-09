@@ -8,7 +8,7 @@
  * funnel's denominator.
  */
 
-import { ArrowUpRight, Zap } from 'lucide-react'
+import { ArrowRight, Zap } from 'lucide-react'
 import { Link } from 'react-router'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import { useUltrafastJoined } from '@/screens/ultrafast/ultrafast-price'
@@ -20,15 +20,20 @@ export function UltrafastBanner() {
     <Link
       to="/ultrafast"
       onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
-      className="group flex items-center justify-center gap-3 rounded-[9px] border border-cyanotype-border bg-accent-tint/50 px-4 py-2.5 text-[13px] leading-5"
+      className="group flex min-h-12 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-cyanotype-border bg-accent-tint/50 px-[18px] py-2.5 text-[13px] leading-5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cyanotype-blue focus-visible:ring-offset-2"
     >
-      <span className="flex items-center gap-1.5 font-semibold text-cyanotype-blue uppercase tracking-[0.06em]">
-        <Zap className="size-3.5" />
-        Ultrafast mode
+      <span className="flex shrink-0 items-center gap-2">
+        <Zap aria-hidden="true" className="size-4 text-cyanotype-blue" />
+        <span className="font-[650] text-[16px] text-cyanotype-ink leading-[22px] tracking-[-0.035em]">
+          <span className="text-cyanotype-blue italic">Ultrafast</span> mode
+        </span>
       </span>
-      <span className="flex items-center gap-0.5 text-cyanotype-ink underline-offset-4 group-hover:underline">
-        Join the waitlist
-        <ArrowUpRight className="size-3.5" />
+      <span className="order-last w-full text-cyanotype-soft md:order-none md:w-auto md:min-w-0 md:flex-1 md:border-cyanotype-border md:border-l md:pl-5">
+        Faster browser tasks. 10× fewer tokens from your main agent.
+      </span>
+      <span className="ml-auto flex shrink-0 items-center gap-2 font-medium text-cyanotype-blue underline-offset-4 group-hover:underline">
+        Request early access
+        <ArrowRight aria-hidden="true" className="size-4" />
       </span>
     </Link>
   )

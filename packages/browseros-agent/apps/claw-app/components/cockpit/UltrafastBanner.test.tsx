@@ -93,7 +93,7 @@ describe('UltrafastBanner', () => {
     await render()
 
     expect(container.textContent).toContain('Ultrafast mode')
-    expect(container.textContent).toContain('Join the waitlist')
+    expect(container.textContent).toContain('Request early access')
     expect(container.querySelector('a')?.getAttribute('href')).toBe(
       '/ultrafast',
     )

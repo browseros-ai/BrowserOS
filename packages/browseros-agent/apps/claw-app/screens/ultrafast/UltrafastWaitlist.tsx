@@ -36,8 +36,9 @@ import {
 } from './ultrafast-price'
 
 const PERKS = [
-  'Agents finish browser tasks in a fraction of the time',
-  'Early access to new speed features',
+  'Faster clicks, typing, and navigation',
+  'Bring your own Claude, Codex, or other agent subscription to power your main agent',
+  'Use 10× fewer tokens from your main agent, with our browser-action model handling most actions',
 ]
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
@@ -104,10 +105,9 @@ function UltrafastWaitlistPending({
   status: 'loading' | 'unavailable'
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-3 px-8 pt-16 pb-16">
-      <h1 className="font-extrabold text-[28px] text-cyanotype-ink leading-[1.15] tracking-[-0.025em]">
-        <span className="font-bold text-cyanotype-blue italic">Ultrafast</span>{' '}
-        mode
+    <div className="mx-auto flex w-full max-w-xl flex-col gap-3 px-8 py-14">
+      <h1 className="font-[650] text-[32px] text-cyanotype-ink leading-[39px] tracking-[-0.035em]">
+        <span className="text-cyanotype-blue italic">Ultrafast</span> mode
       </h1>
       <p role="status" className="text-[14px] text-cyanotype-soft leading-6">
         {status === 'loading'
@@ -141,49 +141,57 @@ export function UltrafastWaitlistView({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-8 pt-16 pb-16">
+    <div className="mx-auto flex w-full max-w-xl flex-col gap-7 px-8 py-14">
       <header className="space-y-3">
-        <p className="font-semibold text-[12px] text-cyanotype-blue uppercase tracking-[0.08em]">
+        <p className="font-semibold text-[12px] text-cyanotype-blue uppercase leading-[18px] tracking-[0.1em]">
           Coming soon
         </p>
-        <h1 className="font-extrabold text-[28px] text-cyanotype-ink leading-[1.15] tracking-[-0.025em]">
-          <span className="font-bold text-cyanotype-blue italic">
-            Ultrafast
-          </span>{' '}
-          mode
+        <h1 className="font-[650] text-[32px] text-cyanotype-ink leading-[39px] tracking-[-0.035em]">
+          <span className="text-cyanotype-blue italic">Ultrafast</span> mode
         </h1>
-        <p className="text-[14px] text-cyanotype-soft leading-6">
-          The same agents, a lot less waiting. Join the waitlist and we'll turn
-          it on for you first.
+        <p className="text-[15px] text-cyanotype-soft leading-6">
+          We trained our own browser-action model for faster browser tasks.
         </p>
       </header>
 
       <section
         aria-label="Ultrafast pricing"
-        className="rounded-[9px] border border-cyanotype-border bg-accent-tint/50 p-6"
+        className="flex flex-col gap-[22px] rounded-xl border border-cyanotype-border bg-card p-6 shadow-[0_3px_12px_#102a4305]"
       >
-        <div className="flex items-center gap-2 text-cyanotype-blue">
-          <Zap className="size-4" />
-          <span className="font-semibold text-[13px]">Ultrafast</span>
+        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 flex-1 items-center gap-3">
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-accent-tint/50">
+              <Zap
+                aria-hidden="true"
+                className="size-[22px] text-cyanotype-blue"
+              />
+            </span>
+            <h2 className="min-w-0 flex-1 font-semibold text-[15px] text-cyanotype-ink leading-[22px] tracking-[-0.015em]">
+              Unlimited browser-action model access
+            </h2>
+          </div>
+          <p className="flex shrink-0 items-baseline gap-[3px] text-cyanotype-ink">
+            <span className="font-bold text-[28px] tabular-nums leading-[34px] tracking-[-0.04em]">
+              ${price}
+            </span>
+            <span className="text-[13px] text-cyanotype-soft">/month</span>
+          </p>
         </div>
-        <p className="mt-3 flex items-baseline gap-1 text-cyanotype-ink">
-          <span className="font-extrabold text-[40px] tabular-nums leading-none tracking-[-0.03em]">
-            ${price}
-          </span>
-          <span className="text-[14px] text-cyanotype-soft">/month</span>
-        </p>
-        <ul className="mt-5 space-y-2">
+        <ul className="space-y-3.5">
           {PERKS.map((perk) => (
             <li
               key={perk}
-              className="flex items-start gap-2 text-[13px] text-cyanotype-ink leading-5"
+              className="flex items-start gap-2.5 text-[14px] text-cyanotype-ink leading-[22px]"
             >
-              <Check className="mt-0.5 size-4 shrink-0 text-cyanotype-blue" />
-              {perk}
+              <Check
+                aria-hidden="true"
+                className="mt-0.5 size-[18px] shrink-0 text-cyanotype-blue"
+              />
+              <span className="min-w-0 flex-1">{perk}</span>
             </li>
           ))}
         </ul>
-        <div className="mt-6">
+        <div className="pt-0.5">
           {joined ? (
             <p
               role="status"
@@ -194,7 +202,7 @@ export function UltrafastWaitlistView({
             </p>
           ) : (
             <form onSubmit={handleSubmit} noValidate className="space-y-2">
-              <div className="flex gap-2">
+              <div className="flex flex-col items-start gap-2 sm:flex-row">
                 <Input
                   type="email"
                   name="email"
@@ -208,15 +216,20 @@ export function UltrafastWaitlistView({
                     setValue(event.target.value)
                     setInvalid(false)
                   }}
-                  className="h-9 flex-1 bg-background text-[13px]"
+                  className="h-[42px] min-w-0 rounded-md border-cyanotype-border bg-background text-[14px] sm:flex-1"
                 />
-                <Button
-                  type="submit"
-                  disabled={!canJoin}
-                  className="h-9 shrink-0 bg-cyanotype-blue px-4 text-[13px] text-on-cyanotype hover:bg-cyanotype-blue-hover"
-                >
-                  Join the waitlist
-                </Button>
+                <div className="flex w-full shrink-0 flex-col gap-2.5 sm:w-auto">
+                  <Button
+                    type="submit"
+                    disabled={!canJoin}
+                    className="h-[42px] rounded-md bg-cyanotype-blue px-4 text-[14px] text-on-cyanotype hover:bg-cyanotype-blue-hover"
+                  >
+                    Request early access
+                  </Button>
+                  <p className="text-center text-[12px] text-cyanotype-muted leading-[19px]">
+                    No payment today.
+                  </p>
+                </div>
               </div>
               {invalid && (
                 <p role="alert" className="text-[12px] text-destructive">
@@ -231,9 +244,6 @@ export function UltrafastWaitlistView({
               )}
             </form>
           )}
-          <p className="mt-3 text-[12px] text-cyanotype-muted">
-            No payment today. You'll choose whether to subscribe at launch.
-          </p>
         </div>
       </section>
     </div>

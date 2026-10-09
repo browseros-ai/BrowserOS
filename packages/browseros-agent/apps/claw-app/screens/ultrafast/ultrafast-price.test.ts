@@ -32,13 +32,13 @@ describe('priceForId', () => {
     expect(priceForId(id)).toBe(priceForId(id))
   })
 
-  it('splits ids roughly evenly between $10 and $20', () => {
-    const counts = { 10: 0, 20: 0 }
+  it('splits ids roughly evenly between $9 and $19', () => {
+    const counts = { 9: 0, 19: 0 }
     for (let i = 0; i < 2000; i++) {
       counts[priceForId(crypto.randomUUID())]++
     }
-    expect(counts[10]).toBeGreaterThan(800)
-    expect(counts[20]).toBeGreaterThan(800)
+    expect(counts[9]).toBeGreaterThan(800)
+    expect(counts[19]).toBeGreaterThan(800)
   })
 })
 

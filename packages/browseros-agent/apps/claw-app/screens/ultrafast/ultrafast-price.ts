@@ -17,7 +17,7 @@
 import { useState, useSyncExternalStore } from 'react'
 import { useTelemetryState } from '@/modules/analytics/telemetry.hooks'
 
-const ULTRAFAST_PRICES_USD = [10, 20] as const
+const ULTRAFAST_PRICES_USD = [9, 19] as const
 export type UltrafastPrice = (typeof ULTRAFAST_PRICES_USD)[number]
 
 const JOINED_KEY = 'ultrafastWaitlistJoined:v1'
