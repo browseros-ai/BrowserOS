@@ -10,6 +10,7 @@ import { Replay } from '@/screens/replay/Replay'
 import { SkillDetail } from '@/screens/skills/SkillDetail'
 import { Skills } from '@/screens/skills/Skills'
 import { TaskDetailPage } from '@/screens/task-detail/TaskDetailPage'
+import { UltrafastWaitlist } from '@/screens/ultrafast/UltrafastWaitlist'
 
 /** Mounts the v2 cockpit route tree. */
 export function App() {
@@ -30,6 +31,7 @@ export function App() {
           />
           <Route path="/skills" element={<Skills />} />
           <Route path="/skills/:name" element={<SkillDetail />} />
+          <Route path="/ultrafast" element={<UltrafastWaitlist />} />
           <Route
             path="/audit"
             element={
