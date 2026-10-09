@@ -11,10 +11,11 @@
 import { ArrowUpRight, Zap } from 'lucide-react'
 import { Link } from 'react-router'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
-import { readJoined } from '@/screens/ultrafast/ultrafast-price'
+import { useUltrafastJoined } from '@/screens/ultrafast/ultrafast-price'
 
 export function UltrafastBanner() {
-  if (readJoined()) return null
+  const joined = useUltrafastJoined()
+  if (joined) return null
   return (
     <Link
       to="/ultrafast"

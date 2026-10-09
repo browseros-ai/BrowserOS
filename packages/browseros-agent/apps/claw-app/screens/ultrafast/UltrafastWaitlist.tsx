@@ -29,9 +29,9 @@ import {
   subscribeToCaptureState,
 } from '@/modules/analytics/posthog'
 import {
-  readJoined,
   rememberJoined,
   type UltrafastPrice,
+  useUltrafastJoined,
   useUltrafastPrice,
 } from './ultrafast-price'
 
@@ -49,14 +49,18 @@ export function normalizeEmail(value: string): string | null {
 }
 
 export function UltrafastWaitlist() {
-  const price = useUltrafastPrice()
-  const [joined, setJoined] = useState(readJoined)
+  const priceState = useUltrafastPrice()
+  const joinedAnywhere = useUltrafastJoined()
+  // Covers storage being unavailable, where the shared flag cannot be written.
+  const [joinedHere, setJoinedHere] = useState(false)
+  const joined = joinedAnywhere || joinedHere
   const capturing = useSyncExternalStore(
     subscribeToCaptureState,
     isCapturing,
     () => false,
   )
   const viewTracked = useRef(false)
+  const price = priceState.status === 'ready' ? priceState.price : null
 
   // Waits for capture so a cold open still counts its view once PostHog is up.
   useEffect(() => {
@@ -68,21 +72,49 @@ export function UltrafastWaitlist() {
     })
   }, [capturing, joined, price])
 
-  if (price === null) return null
+  if (priceState.status !== 'ready') {
+    return <UltrafastWaitlistPending status={priceState.status} />
+  }
 
   const handleJoin = (email: string) => {
-    track(AnalyticsEvent.UltrafastWaitlistJoined, { price_usd: price, email })
+    // Capture can stop between render and submit. A join remembered without
+    // its event would later report a view with already_joined and no join.
+    if (!isCapturing()) return
+    track(AnalyticsEvent.UltrafastWaitlistJoined, {
+      price_usd: priceState.price,
+      email,
+    })
     rememberJoined()
-    setJoined(true)
+    setJoinedHere(true)
   }
 
   return (
     <UltrafastWaitlistView
-      price={price}
+      price={priceState.price}
       joined={joined}
       canJoin={capturing}
       onJoin={handleJoin}
     />
+  )
+}
+
+function UltrafastWaitlistPending({
+  status,
+}: {
+  status: 'loading' | 'unavailable'
+}) {
+  return (
+    <div className="mx-auto flex w-full max-w-xl flex-col gap-3 px-8 pt-16 pb-16">
+      <h1 className="font-extrabold text-[28px] text-cyanotype-ink leading-[1.15] tracking-[-0.025em]">
+        <span className="font-bold text-cyanotype-blue italic">Ultrafast</span>{' '}
+        mode
+      </h1>
+      <p role="status" className="text-[14px] text-cyanotype-soft leading-6">
+        {status === 'loading'
+          ? 'Loading…'
+          : "Can't reach neo's local service right now. This page will load once it's back."}
+      </p>
+    </div>
   )
 }
 

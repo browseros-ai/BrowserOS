@@ -8,14 +8,18 @@
  * price. The price is derived from the server's analytics UUID, the same
  * identity PostHog uses, so every captured event for a user agrees on it
  * across tabs, reloads and cleared extension storage.
+ *
+ * There is deliberately no price without that UUID. Signups cannot be
+ * captured without it anyway, and a stand-in price could differ from the
+ * real one once the server answers.
  */
 
+import { useState, useSyncExternalStore } from 'react'
 import { useTelemetryState } from '@/modules/analytics/telemetry.hooks'
 
 const ULTRAFAST_PRICES_USD = [10, 20] as const
 export type UltrafastPrice = (typeof ULTRAFAST_PRICES_USD)[number]
 
-const FALLBACK_PRICE_KEY = 'ultrafastWaitlistPrice:v1'
 const JOINED_KEY = 'ultrafastWaitlistJoined:v1'
 
 /** FNV-1a, so the split is even and stable without a crypto dependency. */
@@ -28,38 +32,31 @@ export function priceForId(id: string): UltrafastPrice {
   return ULTRAFAST_PRICES_USD[(hash >>> 0) % ULTRAFAST_PRICES_USD.length]
 }
 
-function isPrice(value: number): value is UltrafastPrice {
-  return (ULTRAFAST_PRICES_USD as readonly number[]).includes(value)
-}
+export type UltrafastPriceState =
+  | { status: 'loading' }
+  | { status: 'unavailable' }
+  | { status: 'ready'; price: UltrafastPrice }
 
 /**
- * Only used when the local server cannot be reached. Capture is off without
- * the server's UUID, so this price never reaches analytics; it just keeps the
- * page stable for the reader.
+ * The reader's price, pinned for the life of the page once known: the server
+ * can swap its analytics UUID mid-visit, and the offer must not change while
+ * it is being read. The telemetry query keeps polling, so an unavailable
+ * server recovers into a ready price without a reload.
  */
-export function fallbackPrice(random: () => number = Math.random) {
-  try {
-    const stored = Number(localStorage.getItem(FALLBACK_PRICE_KEY))
-    if (isPrice(stored)) return stored
-    const price =
-      ULTRAFAST_PRICES_USD[
-        Math.floor(random() * ULTRAFAST_PRICES_USD.length)
-      ] ?? ULTRAFAST_PRICES_USD[0]
-    localStorage.setItem(FALLBACK_PRICE_KEY, String(price))
-    return price
-  } catch {
-    return ULTRAFAST_PRICES_USD[0]
-  }
-}
-
-/** The reader's price, or null while the server's identity is loading. */
-export function useUltrafastPrice(): UltrafastPrice | null {
+export function useUltrafastPrice(): UltrafastPriceState {
   const telemetry = useTelemetryState()
   const distinctId = telemetry.data?.distinctId
-  if (distinctId) return priceForId(distinctId)
-  if (telemetry.isPending) return null
-  return fallbackPrice()
+  const [pinned, setPinned] = useState<UltrafastPrice | null>(null)
+  if (pinned !== null) return { status: 'ready', price: pinned }
+  if (distinctId) {
+    const price = priceForId(distinctId)
+    setPinned(price)
+    return { status: 'ready', price }
+  }
+  return telemetry.isError ? { status: 'unavailable' } : { status: 'loading' }
 }
+
+const joinedListeners = new Set<() => void>()
 
 export function readJoined(): boolean {
   try {
@@ -75,4 +72,22 @@ export function rememberJoined(): void {
   } catch {
     // The signup is already counted; the page just forgets it on reload.
   }
+  for (const listener of joinedListeners) listener()
+}
+
+/** Same-tab joins notify directly; other tabs arrive as storage events. */
+function subscribeToJoined(listener: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === JOINED_KEY) listener()
+  }
+  joinedListeners.add(listener)
+  window.addEventListener('storage', onStorage)
+  return () => {
+    joinedListeners.delete(listener)
+    window.removeEventListener('storage', onStorage)
+  }
+}
+
+export function useUltrafastJoined(): boolean {
+  return useSyncExternalStore(subscribeToJoined, readJoined, () => false)
 }
