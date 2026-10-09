@@ -2038,3 +2038,132 @@ async fn extension_update_notification_is_an_origin_restricted_wakeup() -> anyho
     }
     Ok(())
 }
+
+/// The decision-model credential must never appear in any response. Checked on
+/// the raw bytes rather than a typed struct, because the risk is a field nobody
+/// meant to serialise rather than one the type system knows about.
+#[tokio::test]
+async fn the_decision_credential_never_appears_in_a_response() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let secret = "sk-this-must-never-be-echoed-back";
+    app.state
+        .jev_settings
+        .set_credential(
+            claw_server::services::jev_settings::Credential::new(secret),
+            "jev-1.13.0".to_string(),
+        )
+        .await?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/settings/jev-mode",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(
+        !raw.contains(secret),
+        "the credential leaked into a response body"
+    );
+
+    let body = json_body(&bytes)?;
+    assert_eq!(body["configured"], serde_json::json!(true));
+    assert_eq!(body["active"], serde_json::json!(true));
+    assert_eq!(
+        body["model"],
+        serde_json::json!("jev-1.13.0"),
+        "the resolved version is reported so an operator can tell which model answered"
+    );
+    // Rendered with a leading ellipsis, so the comparison is against the tail
+    // after it: enough to tell two keys apart, never enough to reconstruct one.
+    assert!(
+        body["fingerprint"].as_str().is_some_and(|shown| {
+            let tail = shown.trim_start_matches('.');
+            !tail.is_empty() && secret.ends_with(tail) && tail.len() < secret.len() / 2
+        }),
+        "the fingerprint is a short tail of the credential, not the whole thing: {}",
+        body["fingerprint"]
+    );
+    Ok(())
+}
+
+/// Pausing keeps the credential and only stops the mode being offered, which is
+/// a different intent from forgetting the key.
+#[tokio::test]
+async fn pausing_the_decision_mode_keeps_the_credential() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    app.state
+        .jev_settings
+        .set_credential(
+            claw_server::services::jev_settings::Credential::new("sk-kept"),
+            "jev-1.13.0".to_string(),
+        )
+        .await?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/jev-mode",
+        Some("application/json"),
+        Body::from(r#"{"paused":true}"#),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = json_body(&bytes)?;
+    assert_eq!(body["paused"], serde_json::json!(true));
+    assert_eq!(body["configured"], serde_json::json!(true));
+    assert_eq!(
+        body["active"],
+        serde_json::json!(false),
+        "a paused mode is not offered to agents"
+    );
+    Ok(())
+}
+
+/// An empty credential is refused before any request leaves the process, so a
+/// blank form submission cannot cost a round trip or clear a working key.
+#[tokio::test]
+async fn an_empty_decision_credential_is_refused() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, _, _) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/jev-mode/credential",
+        Some("application/json"),
+        Body::from(r#"{"credential":""}"#),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        !app.state.jev_settings.is_active(),
+        "a refused credential leaves the mode off"
+    );
+    Ok(())
+}
+
+/// The credential route is the one setting that, if replaced by another origin,
+/// hands someone else's model control of the browser. It must refuse an
+/// untrusted origin even though the rest of the settings surface does not.
+#[tokio::test]
+async fn a_hostile_origin_cannot_replace_the_decision_credential() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, _, _) = request_with_headers(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/jev-mode/credential",
+        Some("application/json"),
+        &[("origin", "https://evil.example")],
+        Body::from(r#"{"credential":"sk-attacker-key"}"#),
+    )
+    .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "an untrusted origin must not be able to swap the decision credential"
+    );
+    assert!(!app.state.jev_settings.is_active());
+    Ok(())
+}
