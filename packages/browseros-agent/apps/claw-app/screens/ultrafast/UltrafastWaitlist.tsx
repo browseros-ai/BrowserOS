@@ -4,14 +4,25 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * Waitlist for Ultrafast mode, used to measure demand at a monthly price.
- * Joining is one click and collects no contact details: the signal is the
- * `ultrafast_waitlist_joined` event against `ultrafast_waitlist_viewed`, split
- * by the `price_usd` each reader was shown.
+ * Signups are the `ultrafast_waitlist_joined` event against
+ * `ultrafast_waitlist_viewed`, split by the `price_usd` each reader was shown.
+ *
+ * The email the reader types is the one piece of user content the cockpit
+ * sends, and only because they submitted it to join. It rides on the join
+ * event rather than `identify()`: identity must stay the server's anonymous
+ * UUID, and person profiles are off, so the event is where it is stored.
  */
 
 import { Check, Zap } from 'lucide-react'
-import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import {
+  type FormEvent,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from 'react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   isCapturing,
@@ -28,6 +39,14 @@ const PERKS = [
   'Agents finish browser tasks in a fraction of the time',
   'Early access to new speed features',
 ]
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/** Trimmed, lowercased email, or null when it does not look like one. */
+export function normalizeEmail(value: string): string | null {
+  const email = value.trim().toLowerCase()
+  return EMAIL_PATTERN.test(email) ? email : null
+}
 
 export function UltrafastWaitlist() {
   const price = useUltrafastPrice()
@@ -51,26 +70,44 @@ export function UltrafastWaitlist() {
 
   if (price === null) return null
 
-  const handleJoin = () => {
-    track(AnalyticsEvent.UltrafastWaitlistJoined, { price_usd: price })
+  const handleJoin = (email: string) => {
+    track(AnalyticsEvent.UltrafastWaitlistJoined, { price_usd: price, email })
     rememberJoined()
     setJoined(true)
   }
 
   return (
-    <UltrafastWaitlistView price={price} joined={joined} onJoin={handleJoin} />
+    <UltrafastWaitlistView
+      price={price}
+      joined={joined}
+      canJoin={capturing}
+      onJoin={handleJoin}
+    />
   )
 }
 
 export function UltrafastWaitlistView({
   price,
   joined,
+  canJoin,
   onJoin,
 }: {
   price: UltrafastPrice
   joined: boolean
-  onJoin: () => void
+  /** False when analytics is off, since the signup could not be saved. */
+  canJoin: boolean
+  onJoin: (email: string) => void
 }) {
+  const [value, setValue] = useState('')
+  const [invalid, setInvalid] = useState(false)
+
+  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const email = normalizeEmail(value)
+    setInvalid(email === null)
+    if (email) onJoin(email)
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-8 pt-16 pb-16">
       <header className="space-y-3">
@@ -121,15 +158,46 @@ export function UltrafastWaitlistView({
               className="flex items-center gap-2 font-semibold text-[13px] text-cyanotype-ink"
             >
               <Check className="size-4 text-cyanotype-blue" />
-              You're on the list. We'll let you know here in neo.
+              You're on the list. We'll email you when it's ready.
             </p>
           ) : (
-            <Button
-              onClick={onJoin}
-              className="h-9 w-full bg-cyanotype-blue text-[13px] text-on-cyanotype hover:bg-cyanotype-blue-hover"
-            >
-              Join the waitlist
-            </Button>
+            <form onSubmit={handleSubmit} noValidate className="space-y-2">
+              <div className="flex gap-2">
+                <Input
+                  type="email"
+                  name="email"
+                  autoComplete="email"
+                  placeholder="you@example.com"
+                  aria-label="Email"
+                  aria-invalid={invalid || undefined}
+                  value={value}
+                  disabled={!canJoin}
+                  onChange={(event) => {
+                    setValue(event.target.value)
+                    setInvalid(false)
+                  }}
+                  className="h-9 flex-1 bg-background text-[13px]"
+                />
+                <Button
+                  type="submit"
+                  disabled={!canJoin}
+                  className="h-9 shrink-0 bg-cyanotype-blue px-4 text-[13px] text-on-cyanotype hover:bg-cyanotype-blue-hover"
+                >
+                  Join the waitlist
+                </Button>
+              </div>
+              {invalid && (
+                <p role="alert" className="text-[12px] text-destructive">
+                  Enter a valid email address.
+                </p>
+              )}
+              {!canJoin && (
+                <p className="text-[12px] text-cyanotype-soft">
+                  Signups are saved through usage analytics, which is off. Turn
+                  it on under Privacy in the sidebar to join.
+                </p>
+              )}
+            </form>
           )}
           <p className="mt-3 text-[12px] text-cyanotype-muted">
             No payment today. You'll choose whether to subscribe at launch.

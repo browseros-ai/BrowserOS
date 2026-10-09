@@ -6,6 +6,8 @@
  * The cockpit's event catalog. Events are metadata about which screens
  * and controls get used; they never carry user content (no urls,
  * titles, prompts, tool i/o). `track` only accepts scalar properties.
+ * The one exception is the email a reader submits to join the Ultrafast
+ * waitlist, which they type in for exactly that purpose.
  */
 
 import { capture } from './posthog'
