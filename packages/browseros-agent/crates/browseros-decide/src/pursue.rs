@@ -27,6 +27,12 @@ pub const STALL_LIMIT: u32 = 3;
 /// changes under every decision is not one this can finish.
 pub const STALE_RETRIES: u32 = 3;
 
+/// How many times a run may choose to wait before it is treated as stuck.
+///
+/// Waiting makes no observable progress, so without a limit a model that keeps
+/// choosing it would spend the whole step budget looking busy.
+pub const WAIT_LIMIT: u32 = 3;
+
 /// What went wrong when an operation ran.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ActError {
@@ -164,6 +170,7 @@ pub async fn pursue<O: Oracle, D: Driver>(
     // Set once a control has refused a click, so the keyboard fallback is
     // offered when it is actually needed rather than on every step.
     let mut fallback_needed = false;
+    let mut waits = 0;
 
     let first = match driver.observe().await {
         Ok(view) => view,
@@ -267,6 +274,20 @@ pub async fn pursue<O: Oracle, D: Driver>(
             .and_then(|reference| view.control(reference))
             .map(|control| control.name.clone());
 
+        // Waiting touches nothing, so it never reaches the browser: the act tool
+        // has no kind for it. Settle and look again instead, without counting a
+        // wait as an action, so a model that keeps waiting runs out of
+        // decisions rather than appearing to make progress.
+        if decision.operation == Operation::Wait {
+            waits += 1;
+            if waits > WAIT_LIMIT {
+                return finish(Status::Stalled, trail, &view, decisions, input_tokens);
+            }
+            driver.settle().await;
+            view = refresh(driver, &view).await;
+            continue;
+        }
+
         match gate::verdict(&decision, target_name.as_deref()) {
             Verdict::Execute => {}
             Verdict::HandBack(reason) => {
@@ -298,15 +319,30 @@ pub async fn pursue<O: Oracle, D: Driver>(
             }
         }
 
-        // The decision was made about a particular control. Check that control,
-        // not the whole page: a live page changes constantly in places that have
-        // nothing to do with it.
+        // The decision was made about a particular control, on a page observed
+        // before the model was asked. Comparing the guard against that same
+        // page would always agree with itself, so the page is observed again
+        // here and the guard saved with the decision is compared against what
+        // is there now.
+        //
+        // Narrow on purpose: a live page changes constantly in places that have
+        // nothing to do with the chosen control, and refusing to act on any of
+        // that would never finish anything.
         if let Some(reference) = decision.target.as_deref() {
             let guard = space.candidate(reference).map(|candidate| candidate.guard);
-            if let Some(guard) = guard
-                && !view.control_is_fresh(reference, guard)
-            {
-                view = refresh(driver, &view).await;
+            let settled = match driver.observe().await {
+                Ok(settled) => settled,
+                Err(error) => {
+                    return finish(Status::Failed(error), trail, &view, decisions, input_tokens);
+                }
+            };
+            let still_there = guard.is_some_and(|guard| settled.control_is_fresh(reference, guard));
+            view = settled;
+            if !still_there {
+                stalled += 1;
+                if stalled >= STALL_LIMIT {
+                    return finish(Status::Stalled, trail, &view, decisions, input_tokens);
+                }
                 continue;
             }
         }

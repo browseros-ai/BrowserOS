@@ -347,3 +347,119 @@ async fn an_unsure_decision_is_not_executed() {
         outcome.status
     );
 }
+
+/// Waiting never reaches the browser: the act tool has no kind for it, so
+/// sending it there ended the run. It is offered on every page, so this was
+/// reachable on any goal.
+#[tokio::test]
+async fn waiting_does_not_reach_the_browser() {
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "WAIT", 0.99)])]);
+    // Any act at all would be wrong, so the script offers none: the fake
+    // returns Ok(false) for an unexpected call, and a run that acted would
+    // show an action in its trail.
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = pursue(&oracle, &fake, "Wait for the page", budget()).await;
+    assert_eq!(
+        outcome.actions(),
+        0,
+        "a wait is not an action, status {:?}",
+        outcome.status
+    );
+    assert_ne!(
+        outcome.status,
+        Status::Failed("WAIT does not reach the browser".to_string()),
+        "waiting must not be sent to the browser"
+    );
+    assert!(fake.settles() >= 1, "it settled and looked again instead");
+}
+
+/// A run that only ever waits makes no observable progress, so it stops rather
+/// than spending its whole budget looking busy.
+#[tokio::test]
+async fn a_run_that_only_waits_stops() {
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "WAIT", 0.99)])]);
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = pursue(&oracle, &fake, "Wait forever", budget()).await;
+    assert_eq!(outcome.status, Status::Stalled);
+    assert!(
+        outcome.decisions <= 5,
+        "it stopped quickly rather than burning the budget, decisions {}",
+        outcome.decisions
+    );
+}
+
+/// The guard is compared against a page observed after the decision was made.
+/// Comparing it against the page the decision was made on always agreed with
+/// itself, so a control that changed under the decision was still acted on.
+///
+/// Here the control never settles: every observation gives it a different
+/// guard, so no decision is ever about the control that is there now and
+/// nothing is clicked.
+#[tokio::test]
+async fn a_control_that_keeps_changing_is_never_acted_on() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let shifting: Vec<PageView> = (1..=12)
+        .map(|guard| {
+            let mut page = page(guard);
+            page.controls = vec![Control {
+                reference: "e1".to_string(),
+                role: "button".to_string(),
+                name: "Apply".to_string(),
+                value: None,
+                state: ControlState::default(),
+                guard,
+                options: Vec::new(),
+            }];
+            page
+        })
+        .collect();
+    let fake = Fake::new(vec![Ok(true); 6], shifting);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert_eq!(
+        outcome.actions(),
+        0,
+        "the control was never the one the decision was about, status {:?}",
+        outcome.status
+    );
+    assert_eq!(outcome.status, Status::Stalled);
+    assert!(
+        outcome.decisions > 1,
+        "decisions were spent and refused, not executed"
+    );
+}
+
+/// And once it does settle, the re-decided answer is acted on: the check
+/// refuses a stale decision rather than refusing to work.
+#[tokio::test]
+async fn a_control_that_settles_is_acted_on_after_one_refusal() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let mut settled = page(2);
+    settled.controls = vec![Control {
+        reference: "e1".to_string(),
+        role: "button".to_string(),
+        name: "Apply".to_string(),
+        value: None,
+        state: ControlState::default(),
+        guard: 999,
+        options: Vec::new(),
+    }];
+    let fake = Fake::new(vec![Ok(true); 6], vec![page(1), settled]);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert!(
+        outcome.actions() >= 1,
+        "it acted once the page settled, status {:?}",
+        outcome.status
+    );
+    assert!(
+        outcome.decisions > outcome.actions() as u32,
+        "the first decision was refused: {} decisions for {} actions",
+        outcome.decisions,
+        outcome.actions()
+    );
+}
