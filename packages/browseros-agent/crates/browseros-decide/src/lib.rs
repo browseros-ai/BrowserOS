@@ -6,9 +6,14 @@
 //! model answers narrow closed-set questions about a small state.
 
 pub mod client;
+pub mod gate;
+pub mod operations;
+pub mod questions;
 pub mod relevance;
 pub mod space;
 pub mod view;
 
 pub use client::{Answer, Jev, JevError, Question, Response, Usage};
+pub use gate::{Decision, Verdict, read, verdict};
+pub use operations::{Consequence, Operation};
 pub use view::{Control, ControlState, PageView};
