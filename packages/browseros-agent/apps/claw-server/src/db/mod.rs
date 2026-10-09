@@ -953,7 +953,7 @@ mod tests {
 
         let first = Database::open(&path).await?;
         first
-            .0
+            .connection()
             .execute_unprepared(
                 "INSERT INTO feedback_invite \
                     (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms) \
@@ -961,24 +961,25 @@ mod tests {
             )
             .await?;
         first
-            .0
+            .connection()
             .execute_unprepared(
                 "INSERT INTO run_error_budget (day, sent, suppressed) \
                  VALUES ('2026-09-30', 7, 3)",
             )
             .await?;
-        first.0.close().await?;
+        first.close().await?;
 
         for attempt in 1..=2 {
             let mut conn = SqliteConnection::connect_with(&sqlite_options(&path)).await?;
-            let deleted = sqlx::query("DELETE FROM seaql_migrations WHERE version IN (?, ?, ?)")
+            let deleted = sqlx::query("DELETE FROM seaql_migrations WHERE version IN (?, ?, ?, ?)")
                 .bind("m0017_add_run_error_budget")
                 .bind("m0018_add_feedback_invite")
                 .bind("m0019_add_feedback_invite_dismissal")
+                .bind("m0020_add_feedback_invite_snooze")
                 .execute(&mut conn)
                 .await?
                 .rows_affected();
-            assert_eq!(deleted, 3, "doctor pass {attempt} should prune three rows");
+            assert_eq!(deleted, 4, "doctor pass {attempt} should prune four rows");
             conn.close().await?;
 
             let reopened = Database::open(&path).await?;
@@ -991,7 +992,7 @@ mod tests {
                 .await?;
             assert_eq!(
                 migrations.len(),
-                19,
+                20,
                 "doctor pass {attempt} was not repaired"
             );
 
@@ -1020,7 +1021,7 @@ mod tests {
                 .ok_or_else(|| anyhow::anyhow!("run-error budget row should survive"))?;
             assert_eq!(budget.try_get::<i64>("", "sent")?, 7);
             assert_eq!(budget.try_get::<i64>("", "suppressed")?, 3);
-            reopened.0.close().await?;
+            reopened.close().await?;
         }
 
         assert!(!append_suffix(&path, ".bak").exists());

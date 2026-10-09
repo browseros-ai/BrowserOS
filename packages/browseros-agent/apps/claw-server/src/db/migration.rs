@@ -2330,18 +2330,23 @@ mod m0020_add_feedback_invite_snooze {
             // Booking and declining no longer end the invitation; each puts the card away
             // for a few days from the latest answer. `dismissed_at_ms` keeps the first
             // decline, so the moving time needs its own column.
-            manager
-                .alter_table(
-                    Table::alter()
-                        .table(FeedbackInvite::Table)
-                        .add_column_if_not_exists(
-                            ColumnDef::new(FeedbackInvite::SnoozedAtMs)
-                                .big_integer()
-                                .null(),
-                        )
-                        .to_owned(),
-                )
-                .await?;
+            if !manager
+                .has_column("feedback_invite", "snoozed_at_ms")
+                .await?
+            {
+                manager
+                    .alter_table(
+                        Table::alter()
+                            .table(FeedbackInvite::Table)
+                            .add_column(
+                                ColumnDef::new(FeedbackInvite::SnoozedAtMs)
+                                    .big_integer()
+                                    .null(),
+                            )
+                            .to_owned(),
+                    )
+                    .await?;
+            }
             // Earlier answers start their snooze from when they were given, so a reader
             // who declined or booked more than a snooze ago sees the card again.
             manager
