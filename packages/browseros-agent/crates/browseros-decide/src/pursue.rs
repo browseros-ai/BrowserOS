@@ -81,8 +81,12 @@ pub trait Driver {
     /// The page as it is now.
     fn observe(&self) -> impl Future<Output = Result<PageView, String>>;
 
-    /// Runs one operation. Returns whether the page changed.
-    fn act(&self, decision: &Decision) -> impl Future<Output = Result<bool, ActError>>;
+    /// Runs one operation.
+    ///
+    /// Whether the page moved is not asked for here. The loop observes before
+    /// and after and compares page identity itself, which is authoritative and
+    /// needs no agreement with another component about how it words a result.
+    fn act(&self, decision: &Decision) -> impl Future<Output = Result<(), ActError>>;
 
     /// Settles the page after an input, in code rather than by spending a
     /// decision on a wait.
@@ -440,8 +444,9 @@ pub async fn pursue<O: Oracle, D: Driver>(
             }
         }
 
-        let changed = match driver.act(&decision).await {
-            Ok(changed) => changed,
+        let before = view.fingerprint;
+        match driver.act(&decision).await {
+            Ok(()) => {}
             Err(ActError::Stale(reason)) => {
                 if reason.contains("covered") {
                     fallback_needed = true;
@@ -466,6 +471,12 @@ pub async fn pursue<O: Oracle, D: Driver>(
 
         driver.settle().await;
         view = refresh(driver, &view).await;
+        // Authoritative, and free: the page either has the identity it had
+        // before the action or it does not. Reading a tool's wording for this
+        // was wrong twice, once by searching prose that never carried it and
+        // once by reading structured content the dispatch strips from any tool
+        // without an output schema.
+        let changed = !view.is_fresh_for(before);
 
         recent.push(describe(&decision, &target_name, changed));
         if recent.len() > 5 {

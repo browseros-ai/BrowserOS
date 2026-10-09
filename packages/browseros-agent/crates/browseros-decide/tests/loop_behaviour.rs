@@ -85,7 +85,7 @@ impl Oracle for Scripted {
 
 /// A browser whose page and act results are scripted.
 struct Fake {
-    acts: Mutex<Vec<Result<bool, ActError>>>,
+    acts: Mutex<Vec<Result<(), ActError>>>,
     pages: Mutex<Vec<PageView>>,
     settles: Mutex<u32>,
     /// Observations succeed this many times, then fail the way a closed tab
@@ -93,10 +93,15 @@ struct Fake {
     /// only the read-back fails, which is the case worth testing.
     blind_after: std::sync::atomic::AtomicU32,
     observed: std::sync::atomic::AtomicU32,
+    /// When set, acting advances the page's identity, the way a real action
+    /// that changes something does. Observations alone must not move it, or a
+    /// test cannot tell an action's effect from a page settling.
+    moves_on_act: std::sync::atomic::AtomicBool,
+    version: std::sync::atomic::AtomicU64,
 }
 
 impl Fake {
-    fn new(acts: Vec<Result<bool, ActError>>, pages: Vec<PageView>) -> Self {
+    fn new(acts: Vec<Result<(), ActError>>, pages: Vec<PageView>) -> Self {
         Self {
             acts: Mutex::new({
                 let mut acts = acts;
@@ -111,7 +116,17 @@ impl Fake {
             settles: Mutex::new(0),
             blind_after: std::sync::atomic::AtomicU32::new(u32::MAX),
             observed: std::sync::atomic::AtomicU32::new(0),
+            moves_on_act: std::sync::atomic::AtomicBool::new(false),
+            version: std::sync::atomic::AtomicU64::new(1),
         }
+    }
+
+    /// Makes the first action change the page, and later ones leave it alone,
+    /// which is the ordinary shape of a run that gets somewhere and then stops.
+    fn moving_once(self) -> Self {
+        self.moves_on_act
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self
     }
 
     fn blind_after(self, observations: u32) -> Self {
@@ -120,7 +135,7 @@ impl Fake {
         self
     }
 
-    fn with_one_page(acts: Vec<Result<bool, ActError>>) -> Self {
+    fn with_one_page(acts: Vec<Result<(), ActError>>) -> Self {
         Self::new(acts, vec![page(1)])
     }
 
@@ -153,18 +168,29 @@ impl Driver for Fake {
         }
         let mut pages = self.pages.lock().expect("the pages");
         if pages.len() > 1 {
-            Ok(pages.pop().expect("checked"))
-        } else {
-            Ok(pages.last().cloned().unwrap_or_else(|| page(1)))
+            return Ok(pages.pop().expect("checked"));
         }
+        let mut current = pages.last().cloned().unwrap_or_else(|| page(1));
+        // The version an action moved, so an observation reflects what the
+        // action did rather than a page the test queued in advance.
+        let version = self.version.load(std::sync::atomic::Ordering::SeqCst);
+        if version > 1 {
+            current = page(version);
+        }
+        Ok(current)
     }
 
-    async fn act(&self, _decision: &Decision) -> Result<bool, ActError> {
-        self.acts
-            .lock()
-            .expect("the acts")
-            .pop()
-            .unwrap_or(Ok(false))
+    async fn act(&self, _decision: &Decision) -> Result<(), ActError> {
+        let result = self.acts.lock().expect("the acts").pop().unwrap_or(Ok(()));
+        if result.is_ok()
+            && self
+                .moves_on_act
+                .swap(false, std::sync::atomic::Ordering::SeqCst)
+        {
+            self.version
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        result
     }
 
     async fn settle(&self) {
@@ -190,7 +216,7 @@ async fn a_stale_act_is_retried_rather_than_ending_the_run() {
     ])]);
     let fake = Fake::with_one_page(vec![
         Err(ActError::Stale("the control moved".to_string())),
-        Ok(true),
+        Ok(()),
     ]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert!(
@@ -232,7 +258,7 @@ async fn three_actions_that_change_nothing_stop_the_run() {
         (OPERATION, "CLICK", 0.95),
         (CLICK_TARGET, "e1", 0.95),
     ])]);
-    let fake = Fake::with_one_page(vec![Ok(false), Ok(false), Ok(false), Ok(false)]);
+    let fake = Fake::with_one_page(vec![Ok(()), Ok(()), Ok(()), Ok(())]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert_eq!(outcome.status, Status::Stalled);
     assert_eq!(
@@ -304,7 +330,7 @@ async fn the_page_is_settled_in_code_after_an_action() {
         (OPERATION, "CLICK", 0.95),
         (CLICK_TARGET, "e1", 0.95),
     ])]);
-    let fake = Fake::with_one_page(vec![Ok(true), Ok(false), Ok(false), Ok(false)]);
+    let fake = Fake::with_one_page(vec![Ok(()), Ok(()), Ok(()), Ok(())]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert!(
         fake.settles() >= 1,
@@ -315,18 +341,44 @@ async fn the_page_is_settled_in_code_after_an_action() {
 
 /// The outcome reports what was observed, so a caller can check the claim
 /// rather than trust a label.
+///
+/// Whether the page moved comes from comparing page identity across the action,
+/// not from anything the browser tool said. That was wrong twice: once reading
+/// prose that never carried it, once reading structured content the dispatch
+/// strips from a tool with no output schema. The page either has the identity
+/// it had or it does not.
 #[tokio::test]
 async fn the_outcome_reports_what_actually_changed() {
     let oracle = Scripted::new(vec![says(&[
         (OPERATION, "CLICK", 0.95),
         (CLICK_TARGET, "e1", 0.95),
     ])]);
-    let fake = Fake::with_one_page(vec![Ok(true), Ok(false), Ok(false), Ok(false)]);
+    // The page moves once and then settles, so exactly one action changed it.
+    let fake = Fake::with_one_page(vec![Ok(()); 6]).moving_once();
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
-    assert_eq!(outcome.changed(), 1);
+    assert_eq!(
+        outcome.changed(),
+        1,
+        "one action moved the page, status {:?}",
+        outcome.status
+    );
     assert!(outcome.actions() >= 1);
     assert!(outcome.input_tokens > 0, "the cost is reported");
     assert!(!outcome.url_before.is_empty());
+}
+
+/// And an action that leaves the page as it was is reported as changing
+/// nothing, which is what the stall rule counts.
+#[tokio::test]
+async fn an_action_that_moves_nothing_is_reported_as_such() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(()); 6]);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert_eq!(outcome.changed(), 0);
+    assert_eq!(outcome.status, Status::Stalled);
 }
 
 /// A step budget is a real limit.
@@ -336,7 +388,7 @@ async fn the_step_budget_ends_the_run() {
         (OPERATION, "CLICK", 0.95),
         (CLICK_TARGET, "e1", 0.95),
     ])]);
-    let fake = Fake::with_one_page(vec![Ok(true); 20]);
+    let fake = Fake::with_one_page(vec![Ok(()); 20]);
     let outcome = pursue(
         &oracle,
         &fake,
@@ -358,7 +410,7 @@ async fn an_unsure_decision_is_not_executed() {
         (OPERATION, "CLICK", 0.95),
         (CLICK_TARGET, "e1", 0.30),
     ])]);
-    let fake = Fake::with_one_page(vec![Ok(true); 8]);
+    let fake = Fake::with_one_page(vec![Ok(()); 8]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert_eq!(
         outcome.actions(),
@@ -375,7 +427,7 @@ async fn an_unsure_decision_is_not_executed() {
 async fn waiting_does_not_reach_the_browser() {
     let oracle = Scripted::new(vec![says(&[(OPERATION, "WAIT", 0.99)])]);
     // Any act at all would be wrong, so the script offers none: the fake
-    // returns Ok(false) for an unexpected call, and a run that acted would
+    // returns Ok(()) for an unexpected call, and a run that acted would
     // show an action in its trail.
     let fake = Fake::with_one_page(vec![]);
     let outcome = pursue(&oracle, &fake, "Wait for the page", budget()).await;
@@ -436,7 +488,7 @@ async fn a_control_that_keeps_changing_is_never_acted_on() {
             page
         })
         .collect();
-    let fake = Fake::new(vec![Ok(true); 6], shifting);
+    let fake = Fake::new(vec![Ok(()); 6], shifting);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert_eq!(
         outcome.actions(),
@@ -469,7 +521,7 @@ async fn a_control_that_settles_is_acted_on_after_one_refusal() {
         guard: 999,
         options: Vec::new(),
     }];
-    let fake = Fake::new(vec![Ok(true); 6], vec![page(1), settled]);
+    let fake = Fake::new(vec![Ok(()); 6], vec![page(1), settled]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert!(
         outcome.actions() >= 1,
@@ -553,7 +605,7 @@ async fn a_non_terminal_ending_reports_no_terminal_confidence() {
         (OPERATION, "CLICK", 0.95),
         (CLICK_TARGET, "e1", 0.95),
     ])]);
-    let fake = Fake::with_one_page(vec![Ok(false), Ok(false), Ok(false)]);
+    let fake = Fake::with_one_page(vec![Ok(()), Ok(()), Ok(())]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert_eq!(outcome.status, Status::Stalled);
     assert_eq!(outcome.terminal_confidence, None);
@@ -629,7 +681,7 @@ async fn every_ending_reports_what_the_decision_could_see() {
         (OPERATION, "CLICK", 0.95),
         (CLICK_TARGET, "e1", 0.95),
     ])]);
-    let fake = Fake::with_one_page(vec![Ok(false), Ok(false), Ok(false)]);
+    let fake = Fake::with_one_page(vec![Ok(()), Ok(()), Ok(())]);
     let stalled = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert_eq!(stalled.status, Status::Stalled);
     assert_eq!(

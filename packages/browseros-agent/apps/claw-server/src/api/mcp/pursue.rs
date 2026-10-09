@@ -158,7 +158,7 @@ impl Driver for PageDriver {
         Ok(view)
     }
 
-    async fn act(&self, decision: &Decision) -> Result<bool, ActError> {
+    async fn act(&self, decision: &Decision) -> Result<(), ActError> {
         let Some(args) = self.args_for(decision) else {
             return Err(ActError::Fatal(format!(
                 "{} does not reach the browser",
@@ -211,7 +211,7 @@ impl Driver for PageDriver {
                 held.push(notice);
             }
         }
-        Ok(changed_from(&result))
+        Ok(())
     }
 
     async fn settle(&self) {
@@ -243,30 +243,6 @@ fn first_text(result: &rmcp::model::CallToolResult) -> String {
         .filter_map(|block| block.as_text().map(|text| text.text.clone()))
         .collect::<Vec<_>>()
         .join("\n")
-}
-
-/// Whether the act result says the page moved.
-///
-/// Read from the structured content, which is where the flag is. The rendered
-/// text carries a diff or the words "no change since last snapshot", and
-/// neither contains anything a search for a boolean would find: looking there
-/// reported every working action as unchanged, which stalled a run after three
-/// of them.
-fn changed_from(result: &rmcp::model::CallToolResult) -> bool {
-    let Some(structured) = result.structured_content.as_ref() else {
-        // No structured content means no diff was requested or none was
-        // produced. Treating that as unchanged is the safe reading: it counts
-        // toward the stall rather than claiming progress.
-        return false;
-    };
-    structured
-        .get("changed")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || structured
-            .get("urlChanged")
-            .and_then(Value::as_bool)
-            .unwrap_or(false)
 }
 
 /// Anything the dispatch said about pages the caller now owns.
