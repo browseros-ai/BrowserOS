@@ -123,6 +123,13 @@ pub struct JevSettingsStore {
     state: Mutex<JevSettings>,
     /// Mirrors `is_active` for the synchronous tool-list path.
     active: AtomicBool,
+    /// Announces a change in whether the mode is offered.
+    ///
+    /// The tool list changes when a credential is added, paused or forgotten,
+    /// and the server already advertises that it notifies clients of tool list
+    /// changes. Without this it never did, which made the advertisement false:
+    /// a client that listed tools at connect would never discover the tool.
+    visibility: tokio::sync::watch::Sender<bool>,
 }
 
 impl JevSettingsStore {
@@ -130,9 +137,11 @@ impl JevSettingsStore {
         let path = browserclaw_dir.as_ref().join(JEV_SETTINGS_FILE);
         let state = load_or_default(&path).await;
         let active = AtomicBool::new(state.is_active());
+        let (visibility, _) = tokio::sync::watch::channel(state.is_active());
         Self {
             path,
             state: Mutex::new(state),
+            visibility,
             active,
         }
     }
@@ -205,8 +214,26 @@ impl JevSettingsStore {
                 source,
             })?;
         *state = next.clone();
-        self.active.store(next.is_active(), Ordering::Relaxed);
+        let active = next.is_active();
+        self.active.store(active, Ordering::Relaxed);
+        // Only when it actually moved: a budget change does not alter the tool
+        // list, and telling a client to re-list its tools for nothing is a
+        // cost. `send_if_modified` notifies only when the closure reports a
+        // change, which is the comparison done once and correctly rather than
+        // by hand at the call site.
+        self.visibility.send_if_modified(|current| {
+            let moved = *current != active;
+            *current = active;
+            moved
+        });
         Ok(next)
+    }
+
+    /// Watches whether the mode is offered, so a connection can tell its client
+    /// when the tool list changes.
+    #[must_use]
+    pub fn visibility(&self) -> tokio::sync::watch::Receiver<bool> {
+        self.visibility.subscribe()
     }
 }
 
@@ -414,6 +441,56 @@ mod tests {
             .await?;
         store.clear().await?;
         assert_eq!(store.get().await.model, "");
+        Ok(())
+    }
+
+    /// The tool list changes when the mode's visibility does, and this server
+    /// advertises that it notifies clients of tool list changes. The signal is
+    /// what makes that advertisement true.
+    #[tokio::test]
+    async fn the_visibility_change_is_announced() -> AppResult<()> {
+        let dir = tempdir()?;
+        let store = JevSettingsStore::new(dir.path()).await;
+        let mut watch = store.visibility();
+        assert!(!*watch.borrow_and_update(), "off until a key is stored");
+
+        store
+            .set_credential(Credential::new("secret-token"), "jev-1.13.0".to_string())
+            .await?;
+        assert!(watch.changed().await.is_ok(), "storing a key announces it");
+        assert!(*watch.borrow_and_update());
+
+        store.set_paused(true).await?;
+        assert!(watch.changed().await.is_ok(), "pausing announces it too");
+        assert!(!*watch.borrow_and_update());
+        Ok(())
+    }
+
+    /// A change that leaves the tool list alone says nothing. A notification
+    /// for a budget edit would be noise, and a client re-listing its tools for
+    /// nothing is a cost.
+    #[tokio::test]
+    async fn a_change_that_does_not_move_visibility_is_silent() -> AppResult<()> {
+        let dir = tempdir()?;
+        let store = JevSettingsStore::new(dir.path()).await;
+        store
+            .set_credential(Credential::new("secret-token"), "jev-1.13.0".to_string())
+            .await?;
+        let mut watch = store.visibility();
+        let _ = watch.borrow_and_update();
+
+        store
+            .set_budgets(Budgets {
+                max_steps: 7,
+                max_seconds: 11,
+            })
+            .await?;
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), watch.changed())
+                .await
+                .is_err(),
+            "a budget edit does not change the tool list"
+        );
         Ok(())
     }
 

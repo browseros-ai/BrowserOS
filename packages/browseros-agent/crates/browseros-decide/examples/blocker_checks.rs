@@ -36,6 +36,148 @@ fn cart(text: &str) -> PageView {
     )
 }
 
+/// The three of the eight that the plan said need a live check rather than only
+/// a unit test: the retry and deadline contract against a real call, the key's
+/// confidence against a real press decision, and the indeterminate state
+/// against a page that has one.
+async fn remaining_checks(jev: &Jev, failures: &mut u32) {
+    // The deadline. A budget smaller than any real round trip must give up
+    // rather than wait, and it must say it timed out rather than something else.
+    println!("\nthe deadline: does an impossible budget give up?");
+    let mut trivial = std::collections::BTreeMap::new();
+    trivial.insert(
+        "q".to_string(),
+        browseros_decide::Question::Noul {
+            instructions: serde_json::json!("Is this a test?"),
+            criteria: None,
+        },
+    );
+    let started = std::time::Instant::now();
+    match jev
+        .ask_within(
+            &serde_json::json!("a state"),
+            &trivial,
+            std::time::Duration::from_millis(1),
+        )
+        .await
+    {
+        Err(browseros_decide::JevError::TimedOut(_)) => {
+            println!(
+                "  timed out after {:?}, as a timeout rather than a transport error",
+                started.elapsed()
+            );
+        }
+        Err(other) => {
+            println!("  gave up as {other}, which is not a timeout");
+            *failures += 1;
+        }
+        Ok(_) => {
+            println!("  it answered within a millisecond, so this check proves nothing");
+        }
+    }
+
+    // And a real budget still works, so the deadline bounds rather than breaks.
+    println!("\nthe deadline: does a real budget still answer?");
+    match jev
+        .ask_within(
+            &serde_json::json!("The sky is blue."),
+            &trivial,
+            std::time::Duration::from_secs(30),
+        )
+        .await
+    {
+        Ok(response) => println!(
+            "  answered, input {} tokens, model {}",
+            response.usage.input_tokens, response.model
+        ),
+        Err(error) => {
+            println!("  FAILED: {error}");
+            *failures += 1;
+        }
+    }
+
+    // The key's confidence. A page whose control cannot be clicked is where a
+    // press is the right answer, so this asks for one and reads every part.
+    println!("\nthe key: is every judgement of a press reported?");
+    let mut covered = control("e9", "combobox", "Sort by:");
+    covered.options = vec!["Featured".to_string(), "Price: Low to High".to_string()];
+    let page = PageView::from_snapshot_parts(
+        "https://example.com/s",
+        "Results",
+        "Sort by: Featured",
+        vec![covered, control("e1", "link", "Home")],
+    );
+    let goal = "Open the sort dropdown using the keyboard, because a click is blocked";
+    let space = ActionSpace::build(&page, goal, None);
+    // Press is offered once something has refused a click, which is this case.
+    let operations = questions::available(&space, &page, true);
+    let built = questions::build(goal, &space, &operations);
+    let state = questions::state(&page, &space, &[]);
+    match jev.ask(&state, &built).await {
+        Ok(response) => {
+            let decision = gate::read(&response).expect("reads");
+            let (weakest, confidence) = decision.weakest();
+            println!(
+                "  chose {} key {:?}; weakest judgement was {} at {confidence:.2}",
+                decision.operation.as_str(),
+                decision.key,
+                weakest.as_str()
+            );
+            if decision.operation == Operation::Press && decision.key_confidence.is_none() {
+                println!("  FAILED: a press came back with no confidence for its key");
+                *failures += 1;
+            }
+        }
+        Err(error) => {
+            println!("  FAILED: {error}");
+            *failures += 1;
+        }
+    }
+
+    // The indeterminate state. The model has to be told "some of this group",
+    // not "none of it".
+    println!("\nthe mixed checkbox: is a partial selection described as one?");
+    let mut parent = control("e2", "checkbox", "All brands");
+    parent.state.indeterminate = true;
+    let page = PageView::from_snapshot_parts(
+        "https://example.com/s",
+        "Results",
+        "Brand\nAll brands\nCorsair\nKingston",
+        vec![parent, control("e3", "checkbox", "Corsair")],
+    );
+    let goal = "Clear every brand filter so no brand is selected";
+    let space = ActionSpace::build(&page, goal, None);
+    let described = space.offered.iter().any(|candidate| {
+        candidate
+            .descriptor
+            .get("current")
+            .and_then(|value| value.as_str())
+            .is_some_and(|state| state.contains("partially"))
+    });
+    println!("  the descriptor says partially selected: {described}");
+    if !described {
+        println!("  FAILED: the model would be told nothing is selected");
+        *failures += 1;
+    }
+    let operations = questions::available(&space, &page, false);
+    let built = questions::build(goal, &space, &operations);
+    let state = questions::state(&page, &space, &[]);
+    match jev.ask(&state, &built).await {
+        Ok(response) => {
+            let decision = gate::read(&response).expect("reads");
+            println!(
+                "  asked to clear a partial selection, it chose {} on {:?}",
+                decision.operation.as_str(),
+                decision.target
+            );
+        }
+        Err(error) => {
+            println!("  FAILED: {error}");
+            *failures += 1;
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let token = std::env::var("JEV_TOKEN").expect("JEV_TOKEN must be set in the environment");
@@ -142,6 +284,8 @@ async fn main() {
             failures += 1;
         }
     }
+
+    remaining_checks(&jev, &mut failures).await;
 
     println!(
         "\n{}",

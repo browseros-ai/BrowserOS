@@ -380,8 +380,14 @@ impl ClawMcpService {
         let started_at = StdInstant::now();
         // An operator stopping the run, a client cancelling it, and the session
         // ending all have to reach the loop, which checks between every step.
-        let cancel = {
-            let linked = CancellationToken::new();
+        //
+        // The bridge is aborted when this scope ends. A run that finishes
+        // normally cancels neither watched token, so without that the task
+        // would sit waiting forever: one leaked task per call. Dropping the
+        // guard aborts it on every path out of here, which is more reliable
+        // than remembering to abort before each return.
+        let linked = CancellationToken::new();
+        let bridge = {
             let child = linked.clone();
             let operator = dispatch_cancel.clone();
             let client = cancel.clone();
@@ -390,10 +396,11 @@ impl ClawMcpService {
                     () = operator.cancelled() => child.cancel(),
                     () = client.cancelled() => child.cancel(),
                 }
-            });
-            linked
+            })
         };
-        let result = self.run_pursue(started, raw_args, cancel).await;
+        let bridge = AbortOnDrop(bridge);
+        let result = self.run_pursue(started, raw_args, linked).await;
+        drop(bridge);
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
             LocalToolDispatch {
@@ -1032,6 +1039,21 @@ impl ServerHandler for ClawMcpService {
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         self.learn_session_from_notification(&context).await;
+        // The tool list changes when the decision credential is added, paused
+        // or forgotten, and this server advertises that it notifies clients of
+        // that. It has to actually do so, or a client that listed tools at
+        // connect would never discover the tool.
+        let mut visibility = self.state.jev_settings.visibility();
+        let peer = context.peer.clone();
+        tokio::spawn(async move {
+            while visibility.changed().await.is_ok() {
+                if peer.notify_tool_list_changed().await.is_err() {
+                    // The client is gone. Nothing to tell and nothing to log:
+                    // a disconnect is the ordinary end of this task.
+                    break;
+                }
+            }
+        });
     }
 
     fn list_tools(
@@ -1404,6 +1426,18 @@ fn mark_skill_run_tool() -> Tool {
             .destructive(false)
             .idempotent(true),
     )
+}
+
+/// Aborts a spawned task when it goes out of scope.
+///
+/// Used for the cancellation bridge, which waits on tokens that a normally
+/// finished run never fires. Without this it would outlive every call.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
 }
 
 fn pursue_tool() -> Tool {
