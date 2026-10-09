@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 
 const requests: { url: string; body: unknown; headers: Headers }[] = []
 let status = 200
+let acknowledgement: string | number = 'Ok'
 const endpoint = Bun.serve({
   hostname: '127.0.0.1',
   port: 0,
@@ -12,7 +13,10 @@ const endpoint = Bun.serve({
       body: await request.json(),
       headers: request.headers,
     })
-    return Response.json({ status: status === 200 ? 1 : 0 }, { status })
+    return Response.json(
+      { status: status === 200 ? acknowledgement : 0 },
+      { status },
+    )
   },
 })
 
@@ -25,6 +29,7 @@ const { submitUltrafastSignup } = await import('./ultrafast-signup')
 beforeEach(() => {
   requests.length = 0
   status = 200
+  acknowledgement = 'Ok'
 })
 
 afterAll(() => {
@@ -42,6 +47,14 @@ const signup = {
 }
 
 describe('waitlist delivery', () => {
+  it.each(['Ok', 1])(
+    'tests that the PostHog acknowledgement %j confirms signup',
+    async (value) => {
+      acknowledgement = value
+      await expect(submitUltrafastSignup(signup)).resolves.toBeUndefined()
+    },
+  )
+
   it('tests that signup reaches ingestion without starting the analytics SDK', async () => {
     await submitUltrafastSignup(signup)
 

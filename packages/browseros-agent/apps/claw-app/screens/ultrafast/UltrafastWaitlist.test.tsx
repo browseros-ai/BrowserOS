@@ -29,7 +29,7 @@ const state: {
   capturing: true,
   tracked: [],
   requests: [],
-  response: async () => Response.json({ status: 1 }),
+  response: async () => Response.json({ status: 'Ok' }),
 }
 
 const originalKey = process.env.VITE_CLAW_POSTHOG_KEY
@@ -119,7 +119,7 @@ beforeEach(async () => {
   state.capturing = true
   state.tracked = []
   state.requests = []
-  state.response = async () => Response.json({ status: 1 })
+  state.response = async () => Response.json({ status: 'Ok' })
   fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
     Object.assign(
       async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
@@ -362,7 +362,7 @@ describe('UltrafastWaitlist', () => {
     expect(container.textContent).not.toContain('on the list')
 
     await act(async () => {
-      accept(Response.json({ status: 1 }))
+      accept(Response.json({ status: 'Ok' }))
     })
     expect(storage[JOINED_KEY]).toBe('true')
     expect(container.textContent).toContain('on the list')
@@ -391,7 +391,7 @@ describe('UltrafastWaitlist', () => {
         'try again',
       )
 
-      state.response = async () => Response.json({ status: 1 })
+      state.response = async () => Response.json({ status: 'Ok' })
       await submit('ada@example.com')
       expect(storage[JOINED_KEY]).toBe('true')
       expect(container.textContent).toContain('on the list')

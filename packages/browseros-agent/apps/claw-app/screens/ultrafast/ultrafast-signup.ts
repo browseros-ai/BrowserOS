@@ -36,7 +36,8 @@ export async function submitUltrafastSignup(input: {
     !result ||
     typeof result !== 'object' ||
     !('status' in result) ||
-    result.status !== 1
+    // Current ingestion uses "Ok"; older PostHog versions use 1.
+    (result.status !== 'Ok' && result.status !== 1)
   ) {
     throw new Error('Waitlist signup was not accepted')
   }
