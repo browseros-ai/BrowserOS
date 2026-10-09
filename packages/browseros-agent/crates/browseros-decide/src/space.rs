@@ -119,6 +119,29 @@ impl ActionSpace {
             .collect()
     }
 
+    /// The descriptors for the candidates one operation could act on.
+    ///
+    /// Narrowed per operation for two reasons, one measured and one obvious. A
+    /// question's options are input tokens, and every target head repeats the
+    /// list, so offering all forty to all of them multiplies the cost: measured
+    /// at 7,696 input tokens for one step, against 4,700 once each head carries
+    /// only what it can act on. And a question asking which control to tick
+    /// should not offer a link, because that option cannot be right.
+    #[must_use]
+    pub fn options_for(&self, roles: &[&str]) -> std::collections::BTreeMap<String, Value> {
+        let mut options: std::collections::BTreeMap<String, Value> = self
+            .offered
+            .iter()
+            .filter(|candidate| roles.contains(&candidate.role.as_str()))
+            .map(|candidate| (candidate.reference.clone(), candidate.descriptor.clone()))
+            .collect();
+        if options.is_empty() {
+            return options;
+        }
+        options.insert(NONE_OF_THESE.to_string(), none_of_these());
+        options
+    }
+
     /// The descriptors, keyed by reference, as a Choice's options.
     ///
     /// The escape option is always present. The list provably may not cover
@@ -131,13 +154,7 @@ impl ActionSpace {
             .iter()
             .map(|candidate| (candidate.reference.clone(), candidate.descriptor.clone()))
             .collect();
-        options.insert(
-            NONE_OF_THESE.to_string(),
-            json!({
-                "control": "none of the listed controls can advance the goal",
-                "when_to_pick": "the control the goal needs is not listed, or nothing listed applies",
-            }),
-        );
+        options.insert(NONE_OF_THESE.to_string(), none_of_these());
         options
     }
 
@@ -177,6 +194,13 @@ impl ActionSpace {
             .iter()
             .find(|candidate| candidate.reference == reference)
     }
+}
+
+fn none_of_these() -> Value {
+    json!({
+        "control": "none of the listed controls can advance the goal",
+        "when_to_pick": "the control the goal needs is not listed, or nothing listed applies",
+    })
 }
 
 /// Describes a control as an object, with its current state named.

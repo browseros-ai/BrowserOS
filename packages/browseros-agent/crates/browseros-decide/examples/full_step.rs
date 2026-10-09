@@ -60,7 +60,7 @@ fn page() -> PageView {
 async fn step(jev: &Jev, goal: &str, expect: Operation) {
     let view = page();
     let space = ActionSpace::build(&view, goal, None);
-    let operations = questions::available(&space, &view);
+    let operations = questions::available(&space, &view, false);
     let built = questions::build(goal, &space, &operations);
     let state = questions::state(&view, &space, &[]);
 

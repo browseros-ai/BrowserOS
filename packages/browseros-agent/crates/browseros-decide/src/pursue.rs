@@ -161,6 +161,9 @@ pub async fn pursue<O: Oracle, D: Driver>(
     let mut input_tokens = 0;
     let mut stalled = 0;
     let mut last_acted: Option<String> = None;
+    // Set once a control has refused a click, so the keyboard fallback is
+    // offered when it is actually needed rather than on every step.
+    let mut fallback_needed = false;
 
     let first = match driver.observe().await {
         Ok(view) => view,
@@ -203,7 +206,7 @@ pub async fn pursue<O: Oracle, D: Driver>(
         }
 
         let space = ActionSpace::build(&view, goal, last_acted.as_deref());
-        let operations = questions::available(&space, &view);
+        let operations = questions::available(&space, &view, fallback_needed);
         let built = questions::build(goal, &space, &operations);
         let state = questions::state(&view, &space, &recent);
 
@@ -310,7 +313,10 @@ pub async fn pursue<O: Oracle, D: Driver>(
 
         let changed = match driver.act(&decision).await {
             Ok(changed) => changed,
-            Err(ActError::Stale(_)) => {
+            Err(ActError::Stale(reason)) => {
+                if reason.contains("covered") {
+                    fallback_needed = true;
+                }
                 stalled += 1;
                 if stalled > STALE_RETRIES {
                     return finish(Status::Stalled, trail, &view, decisions, input_tokens);

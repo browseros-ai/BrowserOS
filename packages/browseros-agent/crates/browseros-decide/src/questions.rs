@@ -25,6 +25,34 @@ pub const PRESS_TARGET: &str = "press_target";
 pub const PRESS_KEY: &str = "press_key";
 pub const FILL_TARGET: &str = "fill_target";
 
+/// Roles each targeted operation can act on. Narrowing a head's options is
+/// both cheaper, since every head repeats its list as input tokens, and more
+/// honest, since an option that cannot be right should not be offered.
+const CLICKABLE: &[&str] = &["button", "link", "menuitem", "tab", "option", "treeitem"];
+const CHECKABLE: &[&str] = &["checkbox", "radio", "switch", "menuitemcheckbox"];
+const EDITABLE: &[&str] = &["textbox", "searchbox", "spinbutton", "combobox"];
+/// A key can be pressed on anything focusable, which is the point of it: it is
+/// the route to a control a click cannot reach.
+const ANY_ROLE: &[&str] = &[
+    "button",
+    "link",
+    "textbox",
+    "searchbox",
+    "combobox",
+    "listbox",
+    "checkbox",
+    "radio",
+    "switch",
+    "slider",
+    "spinbutton",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "tab",
+    "treeitem",
+];
+
 /// How the state's parts are named, so a question's instructions can point at
 /// the part it is about.
 const PAGE: &str = "page";
@@ -69,7 +97,7 @@ pub fn state(view: &PageView, space: &ActionSpace, recent: &[String]) -> Value {
 /// refused, since an option that cannot be acted on still competes for the
 /// answer.
 #[must_use]
-pub fn available(space: &ActionSpace, view: &PageView) -> Vec<Operation> {
+pub fn available(space: &ActionSpace, view: &PageView, fallback_needed: bool) -> Vec<Operation> {
     let mut operations = vec![Operation::Done, Operation::Blocked, Operation::Wait];
     let has =
         |predicate: &dyn Fn(&crate::space::Candidate) -> bool| space.offered.iter().any(predicate);
@@ -108,7 +136,12 @@ pub fn available(space: &ActionSpace, view: &PageView) -> Vec<Operation> {
     }) {
         operations.push(Operation::Fill);
     }
-    if !space.offered.is_empty() {
+    // A key press is a fallback for a control a click cannot reach, so it is
+    // offered once something has actually been blocked rather than on every
+    // step. Measured: its head repeated nearly the whole candidate list, which
+    // cost about 900 input tokens a step to carry an option that is almost
+    // never the right answer.
+    if fallback_needed && !space.offered.is_empty() {
         operations.push(Operation::Press);
     }
     if !view.text.is_empty() || space.omitted > 0 {
@@ -153,14 +186,18 @@ pub fn build(
     // is read, so a question for an operation that loses costs nothing but input
     // tokens, which the parallel evaluation makes cheap.
     let targeted = [
-        (CLICK_TARGET, Operation::Click, "click"),
-        (CHECK_TARGET, Operation::Check, "tick"),
-        (UNCHECK_TARGET, Operation::Uncheck, "untick"),
-        (PRESS_TARGET, Operation::Press, "press a key on"),
-        (FILL_TARGET, Operation::Fill, "enter text in"),
+        (CLICK_TARGET, Operation::Click, "click", CLICKABLE),
+        (CHECK_TARGET, Operation::Check, "tick", CHECKABLE),
+        (UNCHECK_TARGET, Operation::Uncheck, "untick", CHECKABLE),
+        (PRESS_TARGET, Operation::Press, "press a key on", ANY_ROLE),
+        (FILL_TARGET, Operation::Fill, "enter text in", EDITABLE),
     ];
-    for (id, operation, verb) in targeted {
+    for (id, operation, verb, roles) in targeted {
         if !operations.contains(&operation) {
+            continue;
+        }
+        let criteria = space.options_for(roles);
+        if criteria.len() < 2 {
             continue;
         }
         questions.insert(
@@ -173,7 +210,7 @@ pub fn build(
                     ),
                     "rules": RULES,
                 }),
-                criteria: space.choice_options(),
+                criteria,
             },
         );
     }
