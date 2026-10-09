@@ -72,6 +72,7 @@
               "browseros/features/connect-mcps",
               "browseros/features/smart-nudges",
               "browseros/features/use-with-claude-code",
+              "browseros/features/use-any-acp-agent",
               "browseros/features/sync-to-cloud",
               "browseros/features/ad-blocking",
               "browseros/features/vertical-tabs"
