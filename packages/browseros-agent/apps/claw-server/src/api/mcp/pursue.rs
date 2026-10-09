@@ -269,20 +269,25 @@ fn notices_in(text: &str) -> Vec<String> {
 pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (String, Value) {
     let mut lines = Vec::new();
     lines.push(match &outcome.status {
-        Status::Satisfied => {
-            "The goal looks satisfied, on a page that had not moved since the run looked at it. \
-             Verify it yourself: a decision is not evidence."
-                .to_string()
-        }
+        Status::Satisfied => format!(
+            "The goal looks satisfied, on a page that had not moved since the run looked at it, \
+             claimed at confidence {}. That is a claim and not evidence, so verify it yourself; \
+             the lower the confidence, the more that matters.",
+            confidence_text(outcome.terminal_confidence)
+        ),
         Status::Blocked(reason) => format!(
-            "Stopped: {reason}. The page tools still work, so continue with snapshot and act."
+            "Stopped: {reason}, at confidence {}. The page tools still work, so continue with \
+             snapshot and act.",
+            confidence_text(outcome.terminal_confidence)
         ),
         Status::Stalled => {
             "Stopped: three actions in a row changed nothing. Continue with the page tools."
                 .to_string()
         }
         Status::NeedsInput(reason) => format!(
-            "Stopped and handing back: {reason}. Do that step yourself, then call pursue again."
+            "Stopped and handing back: {reason}. You decide what happens next: this run has one \
+             page and one goal, and you have the wider intent. Options are to scroll or expand a \
+             facet with snapshot and act, restate the goal, or stop."
         ),
         Status::OutOfBudget => {
             "Stopped at the run's budget without finishing. Call pursue again to continue."
@@ -299,6 +304,18 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
         outcome.changed(),
         outcome.actions()
     ));
+    if outcome.offered > 0 || outcome.omitted > 0 {
+        lines.push(format!(
+            "what the last decision could see: {} controls offered, {} held back by the cap.",
+            outcome.offered, outcome.omitted
+        ));
+    }
+    if !outcome.offered_controls.is_empty() {
+        lines.push("it was choosing between these, and said none of them would do:".to_string());
+        for control in &outcome.offered_controls {
+            lines.push(format!("  {control}"));
+        }
+    }
     lines.push(format!(
         "goal: {goal}\nat: page {page} {} ({})\nstarted at: {}\ndecisions: {} over {} actions, \
          {} input tokens",
@@ -326,6 +343,10 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
         "actions": outcome.actions(),
         "actionsThatChangedThePage": outcome.changed(),
         "inputTokens": outcome.input_tokens,
+        "controlsOffered": outcome.offered,
+        "controlsHeldBack": outcome.omitted,
+        "offeredControls": outcome.offered_controls,
+        "terminalConfidence": outcome.terminal_confidence,
         "trail": outcome.trail.iter().map(|step| json!({
             "operation": step.operation.as_str(),
             "target": step.target,
@@ -336,6 +357,15 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
         })).collect::<Vec<_>>(),
     });
     (lines.join("\n"), structured)
+}
+
+/// Reads a terminal confidence for a caller, saying plainly when there is none
+/// rather than printing a zero that would look like certainty of the opposite.
+fn confidence_text(confidence: Option<f64>) -> String {
+    confidence.map_or_else(
+        || "unknown".to_string(),
+        |confidence| format!("{confidence:.2}"),
+    )
 }
 
 fn status_name(status: &Status) -> &'static str {

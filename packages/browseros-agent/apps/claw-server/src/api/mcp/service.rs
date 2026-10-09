@@ -54,7 +54,9 @@ const PURSUE_DESCRIPTION: &str = "Pursue one goal on a page you already own, dec
 here instead of returning every page to you. Pass the page id from tabs or navigate, and the goal \
 stated as the whole outcome you want rather than one step. It can operate dropdowns, checkboxes \
 and keyboard controls, and it hands back when a step needs text you have to supply or when it is \
-not confident enough to act on something consequential.";
+not confident enough to act on something consequential. When none of the controls on the page can \
+advance the goal, it stops and tells you what it was choosing between, so you can scroll, expand a \
+filter, restate the goal, or stop.";
 
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
@@ -1451,7 +1453,8 @@ fn pursue_output_schema() -> Value {
         "additionalProperties": false,
         "required": [
             "status", "page", "url", "urlBefore", "title", "decisions", "actions",
-            "actionsThatChangedThePage", "inputTokens", "trail"
+            "actionsThatChangedThePage", "inputTokens", "controlsOffered",
+            "controlsHeldBack", "offeredControls", "trail"
         ],
         "properties": {
             "status": {
@@ -1469,6 +1472,18 @@ fn pursue_output_schema() -> Value {
             "actions": count.clone(),
             "actionsThatChangedThePage": count.clone(),
             "inputTokens": count.clone(),
+            "controlsOffered": count.clone(),
+            "controlsHeldBack": count.clone(),
+            "offeredControls": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "What the last decision was choosing between, when it reported that none of them could advance the goal."
+            },
+            "terminalConfidence": {
+                "type": ["number", "null"],
+                "minimum": 0,
+                "description": "How sure the run was when it claimed the goal was done or blocked. Reported rather than acted on: a claim is not evidence, and you decide whether to verify it."
+            },
             "trail": {
                 "type": "array",
                 "items": {

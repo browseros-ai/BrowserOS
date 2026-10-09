@@ -463,3 +463,104 @@ async fn a_control_that_settles_is_acted_on_after_one_refusal() {
         outcome.actions()
     );
 }
+
+/// The escape answer is a question for the caller, not something for the loop
+/// to explore around. Previously it re-observed, rebuilt the same shortlist on
+/// an unchanged page, got the same answer, and spent three decisions reaching a
+/// stall with nothing done.
+#[tokio::test]
+async fn the_escape_answer_hands_back_with_what_it_was_choosing_between() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.99),
+        (CLICK_TARGET, "none_of_these", 1.0),
+    ])]);
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = pursue(&oracle, &fake, "Tick a filter that is not here", budget()).await;
+
+    assert!(
+        matches!(outcome.status, Status::NeedsInput(_)),
+        "got {:?}",
+        outcome.status
+    );
+    assert_eq!(outcome.actions(), 0, "nothing was done");
+    assert_eq!(
+        outcome.decisions, 1,
+        "and it handed back on the first answer rather than going round three times"
+    );
+    assert!(
+        !outcome.offered_controls.is_empty(),
+        "the caller is told what the decision was choosing between"
+    );
+    assert!(
+        outcome
+            .offered_controls
+            .iter()
+            .any(|control| control.contains("Apply")),
+        "by name: {:?}",
+        outcome.offered_controls
+    );
+    assert_eq!(outcome.offered, 1);
+}
+
+/// A terminal answer carries the confidence behind it, because the published
+/// guidance is to use confidence to act, ask for review, or escalate, and
+/// handing the number to the caller is the review branch. It is not gated on:
+/// a low-confidence claim is still reported, with its number attached.
+#[tokio::test]
+async fn a_completion_claim_carries_its_confidence_and_is_not_refused() {
+    for confidence in [0.21, 0.99] {
+        let oracle = Scripted::new(vec![says(&[(OPERATION, "DONE", confidence)])]);
+        let fake = Fake::with_one_page(vec![]);
+        let outcome = pursue(&oracle, &fake, "Be finished", budget()).await;
+        assert_eq!(
+            outcome.status,
+            Status::Satisfied,
+            "a claim at {confidence} is reported, not refused"
+        );
+        assert_eq!(
+            outcome.terminal_confidence,
+            Some(confidence),
+            "and the caller can see how sure it was"
+        );
+    }
+}
+
+/// An ending that was not a terminal answer has no terminal confidence to
+/// report, rather than a zero that would read as certainty of the opposite.
+#[tokio::test]
+async fn a_non_terminal_ending_reports_no_terminal_confidence() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(false), Ok(false), Ok(false)]);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert_eq!(outcome.status, Status::Stalled);
+    assert_eq!(outcome.terminal_confidence, None);
+}
+
+/// A blocked run reports what the decision could see, because that is the
+/// answer the model actually gives when nothing on the page advances the goal,
+/// and the caller is the one deciding what happens next.
+#[tokio::test]
+async fn a_blocked_run_tells_the_caller_what_it_was_choosing_between() {
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "BLOCKED", 0.96)])]);
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = pursue(&oracle, &fake, "Tick a filter that is not here", budget()).await;
+
+    assert!(
+        matches!(outcome.status, Status::Blocked(_)),
+        "got {:?}",
+        outcome.status
+    );
+    assert_eq!(outcome.terminal_confidence, Some(0.96));
+    assert_eq!(outcome.offered, 1, "it reports how much it could see");
+    assert!(
+        outcome
+            .offered_controls
+            .iter()
+            .any(|control| control.contains("Apply")),
+        "and names it: {:?}",
+        outcome.offered_controls
+    );
+}
