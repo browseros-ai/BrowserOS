@@ -830,6 +830,57 @@ describe('AcpAgentRuntime', () => {
       await fixture.runtime.close(fixture.agent.id, 'conversation-9'),
     ).toBe(false)
   })
+
+  it('keeps the agent process when only the MCP lease header changes', async () => {
+    const fixture = await runtimeFixture({})
+    const request = {
+      agent: fixture.agent,
+      conversationId: 'conversation-lease',
+      readOnly: false,
+      messages: [textMessage('user-1', 'user', 'hello')],
+    }
+
+    await collect(
+      await fixture.runtime.stream({
+        ...request,
+        browserToolLeaseToken: 'lease-token-one',
+      }),
+    )
+    await collect(
+      await fixture.runtime.stream({
+        ...request,
+        browserToolLeaseToken: 'lease-token-two',
+      }),
+    )
+
+    expect(fixture.providerSettings).toHaveLength(1)
+    expect(fixture.acpRuntime.ensureSessionCalls).toHaveLength(1)
+    expect(fixture.acpRuntime.closeCalls).toEqual([])
+  })
+
+  it('replaces the session when the working directory changes', async () => {
+    const fixture = await runtimeFixture({})
+    const request = {
+      agent: fixture.agent,
+      conversationId: 'conversation-cwd',
+      browserToolLeaseToken: BROWSER_TOOL_LEASE_TOKEN,
+      readOnly: false,
+      messages: [textMessage('user-1', 'user', 'hello')],
+    }
+
+    await collect(await fixture.runtime.stream(request))
+    await collect(
+      await fixture.runtime.stream({
+        ...request,
+        agent: { ...fixture.agent, workingDirectory: '/other/workspace' },
+      }),
+    )
+
+    expect(fixture.providerSettings).toHaveLength(2)
+    expect(fixture.acpRuntime.closeCalls).toEqual([
+      { reason: 'policy-change', discardPersistentState: false },
+    ])
+  })
 })
 
 function historyInput(
