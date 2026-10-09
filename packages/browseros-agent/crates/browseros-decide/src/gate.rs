@@ -24,23 +24,73 @@ pub struct Decision {
     pub value: Option<String>,
     /// The key, for a press.
     pub key: Option<String>,
+    pub key_confidence: Option<f64>,
     /// True when the model said none of the offered controls will do.
     pub none_of_these: bool,
     pub input_tokens: u64,
 }
 
+/// Which judgement of an answer was the least certain.
+///
+/// Named rather than only counted, because "it needed 0.75 and had 0.31" does
+/// not say what to do and "the key was the weak part" does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Weakest {
+    Operation,
+    Target,
+    Key,
+}
+
+impl Weakest {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Operation => "which operation to use",
+            Self::Target => "which control to use it on",
+            Self::Key => "which key to press",
+        }
+    }
+}
+
 impl Decision {
-    /// The confidence the gate judges, which is the weakest part of the answer.
+    /// The confidence the gate judges: the least certain judgement the
+    /// execution depends on.
     ///
     /// The minimum rather than a product or an average, following the published
-    /// pattern: an operation chosen confidently but aimed at a control chosen
-    /// by a coin flip is a coin flip.
+    /// pattern, which reports "the least certain judgement in the call" because
+    /// one wrong argument is enough to spoil the result, and argues against a
+    /// product on the grounds that it answers a different question and falls as
+    /// a call takes more arguments whether or not any judgement is shaky.
+    ///
+    /// Every argument the execution depends on counts, the key included. A
+    /// press whose operation and target are certain but whose key is a coin
+    /// flip is a coin flip: `Enter` and `Escape` do opposite things.
     #[must_use]
     pub fn confidence(&self) -> f64 {
-        match self.target_confidence {
-            Some(target) => self.operation_confidence.min(target),
-            None => self.operation_confidence,
+        self.weakest().1
+    }
+
+    /// The least certain judgement and its confidence.
+    ///
+    /// A Choice always carries a confidence and only a Noul does not, so a
+    /// Choice answer that arrives without one is an anomaly rather than a
+    /// permission: it counts as zero, which is the safe direction.
+    #[must_use]
+    pub fn weakest(&self) -> (Weakest, f64) {
+        let mut weakest = (Weakest::Operation, self.operation_confidence);
+        if self.operation.needs_target() {
+            let target = self.target_confidence.unwrap_or(0.0);
+            if target < weakest.1 {
+                weakest = (Weakest::Target, target);
+            }
         }
+        if self.operation == Operation::Press {
+            let key = self.key_confidence.unwrap_or(0.0);
+            if key < weakest.1 {
+                weakest = (Weakest::Key, key);
+            }
+        }
+        weakest
     }
 }
 
@@ -82,6 +132,7 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
         target_confidence: None,
         value: None,
         key: None,
+        key_confidence: None,
         none_of_these: false,
         input_tokens: response.usage.input_tokens,
     };
@@ -127,10 +178,12 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
     }
 
     if operation == Operation::Press {
-        decision.key = response
+        let answer = response
             .answers
             .get(PRESS_KEY)
-            .and_then(|answer| answer.choice.clone());
+            .ok_or_else(|| ReadError::Missing(PRESS_KEY.to_string()))?;
+        decision.key = answer.choice.clone();
+        decision.key_confidence = answer.confidence;
     }
 
     Ok(decision)
@@ -177,7 +230,7 @@ pub fn verdict(decision: &Decision, target_name: Option<&str>) -> Verdict {
     }
 
     let consequence = decision.operation.consequence(target_name);
-    let confidence = decision.confidence();
+    let (weakest, confidence) = decision.weakest();
     if confidence >= consequence.bar() {
         return Verdict::Execute;
     }
@@ -186,16 +239,20 @@ pub fn verdict(decision: &Decision, target_name: Option<&str>) -> Verdict {
     // make a submit any safer.
     if consequence == Consequence::High {
         return Verdict::HandBack(format!(
-            "{} on {:?} needs confidence {:.2} and had {confidence:.2}",
+            "{} on {:?} needs confidence {:.2} and had {confidence:.2}; the least certain \
+             judgement was {}",
             decision.operation.as_str(),
             target_name.unwrap_or("an unnamed control"),
-            consequence.bar()
+            consequence.bar(),
+            weakest.as_str()
         ));
     }
     Verdict::Explore(format!(
-        "{} had confidence {confidence:.2}, under the {:.2} this needs",
+        "{} had confidence {confidence:.2}, under the {:.2} this needs; the least certain \
+         judgement was {}",
         decision.operation.as_str(),
-        consequence.bar()
+        consequence.bar(),
+        weakest.as_str()
     ))
 }
 
@@ -389,6 +446,91 @@ mod tests {
             verdict(&decision, Some("Search")),
             Verdict::HandBack(_)
         ));
+    }
+
+    /// Every argument the execution depends on counts toward the minimum, the
+    /// key included. Enter and Escape do opposite things, so a confident
+    /// operation and target cannot carry a coin-flip key.
+    #[test]
+    fn an_unsure_key_drags_the_confidence_down() {
+        let response = response(&[
+            (OPERATION, answer("PRESS", 0.99)),
+            (PRESS_TARGET, answer("e1", 0.98)),
+            (PRESS_KEY, answer("Enter", 0.31)),
+        ]);
+        let decision = read(&response).expect("reads");
+        assert!((decision.confidence() - 0.31).abs() < f64::EPSILON);
+        assert_eq!(decision.weakest().0, Weakest::Key);
+        assert!(
+            matches!(verdict(&decision, Some("Sort by")), Verdict::Explore(_)),
+            "it does not execute"
+        );
+    }
+
+    /// The weak judgement is named, because a bare number does not say what to
+    /// do about it.
+    #[test]
+    fn the_hand_back_names_the_weak_judgement() {
+        let response = response(&[
+            (OPERATION, answer("PRESS", 0.99)),
+            (PRESS_TARGET, answer("e1", 0.99)),
+            (PRESS_KEY, answer("Enter", 0.20)),
+        ]);
+        let decision = read(&response).expect("reads");
+        match verdict(&decision, Some("Place your order")) {
+            Verdict::HandBack(reason) => assert!(
+                reason.contains("which key to press"),
+                "the reason says which judgement was weak: {reason}"
+            ),
+            other => panic!("expected a hand back, got {other:?}"),
+        }
+    }
+
+    /// A key's confidence only counts for a press. A click does not have one and
+    /// must not be judged as though its key were missing.
+    #[test]
+    fn a_key_confidence_is_ignored_for_operations_without_a_key() {
+        let response = response(&[
+            (OPERATION, answer("CLICK", 0.95)),
+            (CLICK_TARGET, answer("e1", 0.9)),
+            (PRESS_KEY, answer("Enter", 0.01)),
+        ]);
+        let decision = read(&response).expect("reads");
+        assert!((decision.confidence() - 0.9).abs() < f64::EPSILON);
+        assert_eq!(decision.weakest().0, Weakest::Target);
+        assert_eq!(verdict(&decision, Some("Corsair")), Verdict::Execute);
+    }
+
+    /// A Choice always carries a confidence and only a Noul does not, so one
+    /// arriving without it is an anomaly rather than a permission.
+    #[test]
+    fn a_choice_with_no_confidence_counts_as_zero() {
+        let mut no_confidence = answer("e1", 0.0);
+        no_confidence.confidence = None;
+        let response = response(&[(OPERATION, answer("CLICK", 0.99))]);
+        let mut response = response;
+        response
+            .answers
+            .insert(CLICK_TARGET.to_string(), no_confidence);
+        let decision = read(&response).expect("reads");
+        assert!(decision.confidence().abs() < f64::EPSILON);
+        assert!(matches!(
+            verdict(&decision, Some("Corsair")),
+            Verdict::Explore(_)
+        ));
+    }
+
+    /// A press with no key answer at all is refused rather than pressed blind.
+    #[test]
+    fn a_press_without_a_key_answer_is_refused() {
+        let response = response(&[
+            (OPERATION, answer("PRESS", 0.99)),
+            (PRESS_TARGET, answer("e1", 0.99)),
+        ]);
+        assert_eq!(
+            read(&response),
+            Err(ReadError::Missing(PRESS_KEY.to_string()))
+        );
     }
 
     #[test]
