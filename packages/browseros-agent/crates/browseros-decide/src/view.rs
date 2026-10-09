@@ -1,10 +1,18 @@
 //! A typed view of one page, built from the accessibility snapshot the browser
 //! already produces.
 //!
-//! Nothing here parses rendered text. The snapshot layer already computes a
-//! typed node with its role, name, value and state properties, and already
-//! assigns the `eN` reference the act tool accepts, so this is a translation
-//! between two typed representations rather than a second extraction.
+//! There are two ways in, and the difference matters.
+//!
+//! [`PageView::from_ax`] reads the typed nodes directly, which is the shape this
+//! wants: a role, a name, a value and the state properties, already computed.
+//!
+//! [`PageView::from_snapshot`] exists because the browser does not hand those
+//! nodes out. They are consumed while the snapshot is rendered, and retaining
+//! them would mean changing the capture path every tool shares. So this reads
+//! the rendered line for each reference instead. That is reading our own
+//! renderer's output, whose format this crate does not guess at, rather than
+//! reading the page; but it is still a parse, and the typed path is the one to
+//! prefer if the capture ever exposes its nodes.
 //!
 //! Two hashes come out of it. A page fingerprint covers everything a decision
 //! was made about, and a per-control guard covers one control. Both exist so a
@@ -206,6 +214,85 @@ impl PageView {
         }
     }
 
+    /// Builds the view from a rendered snapshot and the refs minted for it.
+    ///
+    /// Each reference appears on exactly one line, in a format the renderer
+    /// owns: an indent, the role, an optional quoted name, zero or more
+    /// bracketed states, the reference, and an optional quoted value after a
+    /// colon. A select's values are the `option` lines nested under it.
+    #[must_use]
+    pub fn from_snapshot(
+        url: impl Into<String>,
+        title: impl Into<String>,
+        text: &str,
+        refs: &RefMap,
+    ) -> Self {
+        let lines: Vec<&str> = text.lines().collect();
+        let mut by_ref: HashMap<&str, usize> = HashMap::new();
+        for (index, line) in lines.iter().enumerate() {
+            if let Some(reference) = reference_in(line) {
+                by_ref.insert(reference, index);
+            }
+        }
+
+        let mut controls = Vec::new();
+        for entry in refs.entries_in_order() {
+            let reference = entry.ref_id.to_string();
+            let Some(&index) = by_ref.get(reference.as_str()) else {
+                continue;
+            };
+            let line = lines[index];
+            let role = role_in(line).unwrap_or_else(|| entry.role.clone());
+            if !ACTIONABLE_ROLES.contains(&role.as_str()) {
+                continue;
+            }
+            let states = states_in(line);
+            let mut state = ControlState {
+                editable: EDITABLE_ROLES.contains(&role.as_str()),
+                ..ControlState::default()
+            };
+            for word in &states {
+                match word.as_str() {
+                    "checked" => state.checked = Some(true),
+                    "unchecked" => state.checked = Some(false),
+                    "expanded" => state.expanded = Some(true),
+                    "collapsed" => state.expanded = Some(false),
+                    "selected" => state.selected = Some(true),
+                    "disabled" => state.disabled = true,
+                    "required" => state.required = true,
+                    _ => {}
+                }
+            }
+            // The renderer prints only the true half of checked, so a checkbox
+            // with no annotation is unticked rather than unknown.
+            if state.checked.is_none() && matches!(role.as_str(), "checkbox" | "radio" | "switch") {
+                state.checked = Some(false);
+            }
+            controls.push(Control {
+                reference,
+                options: nested_options(&lines, index),
+                role,
+                name: name_in(line).unwrap_or_else(|| entry.name.clone()),
+                value: value_in(line),
+                state,
+                guard: 0,
+            });
+        }
+        for control in &mut controls {
+            control.guard = guard_of(control);
+        }
+
+        let url = url.into();
+        let fingerprint = fingerprint_of(&url, &controls);
+        Self {
+            url,
+            title: title.into(),
+            text: text.to_string(),
+            controls,
+            fingerprint,
+        }
+    }
+
     /// The control with this reference, if it is still on the page.
     #[must_use]
     pub fn control(&self, reference: &str) -> Option<&Control> {
@@ -308,6 +395,80 @@ fn fingerprint_of(url: &str, controls: &[Control]) -> u64 {
         control.guard.hash(&mut hasher);
     }
     hasher.finish()
+}
+
+fn indent_of(line: &str) -> usize {
+    line.len() - line.trim_start().len()
+}
+
+fn reference_in(line: &str) -> Option<&str> {
+    let start = line.find("[ref=")? + "[ref=".len();
+    let rest = &line[start..];
+    let end = rest.find(']')?;
+    Some(&rest[..end])
+}
+
+fn role_in(line: &str) -> Option<String> {
+    let rest = line.trim_start().strip_prefix("- ")?;
+    Some(
+        rest.split([' ', ':'])
+            .next()
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
+/// The first quoted run on the line, which the renderer writes as the name.
+fn name_in(line: &str) -> Option<String> {
+    let start = line.find('"')? + 1;
+    let rest = &line[start..];
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// The bracketed words, excluding the reference and the cursor hint, which are
+/// not states.
+fn states_in(line: &str) -> Vec<String> {
+    let mut states = Vec::new();
+    let mut rest = line;
+    while let Some(start) = rest.find('[') {
+        rest = &rest[start + 1..];
+        let Some(end) = rest.find(']') else { break };
+        let word = &rest[..end];
+        if !word.starts_with("ref=") && !word.starts_with("cursor=") {
+            states.push(word.to_string());
+        }
+        rest = &rest[end + 1..];
+    }
+    states
+}
+
+/// The quoted value the renderer writes after a colon.
+fn value_in(line: &str) -> Option<String> {
+    let marker = line.rfind("]: \"").map(|index| index + 3);
+    let start = marker.or_else(|| line.rfind(": \"").map(|index| index + 2))?;
+    let rest = line.get(start..)?.strip_prefix('"')?;
+    let end = rest.rfind('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// The option lines nested directly under a control, which is how a select's
+/// values appear in a rendered snapshot.
+fn nested_options(lines: &[&str], index: usize) -> Vec<String> {
+    let parent_indent = indent_of(lines[index]);
+    let mut options = Vec::new();
+    for line in lines.iter().skip(index + 1) {
+        let indent = indent_of(line);
+        if indent <= parent_indent {
+            break;
+        }
+        if role_in(line).as_deref() == Some("option")
+            && let Some(name) = name_in(line)
+        {
+            options.push(name);
+        }
+    }
+    options
 }
 
 #[cfg(test)]
@@ -546,6 +707,125 @@ mod tests {
         view.text = "ααααααααα".to_string();
         view.budget_text(5);
         assert!(view.text.len() <= 5);
+    }
+
+    /// The renderer's own format, read back.
+    ///
+    /// Built the way production does: the refs are minted first and the lines
+    /// are written with the ids that came back, because in a real capture the
+    /// same map that minted them produced the text.
+    #[test]
+    fn a_rendered_snapshot_reads_back_into_controls() {
+        let mut refs = RefMap::new();
+        refs.begin_snapshot();
+        let mut minted = Vec::new();
+        for (backend, role, name) in [
+            (34, "checkbox", "Corsair"),
+            (35, "checkbox", "Kingston"),
+            (36, "button", "Apply"),
+            (37, "textbox", "Search"),
+            (99, "combobox", "Sort by:"),
+            (100, "option", "Featured"),
+            (101, "option", "Price: Low to High"),
+        ] {
+            minted.push(refs.mint(MintRef {
+                backend_node_id: backend,
+                role,
+                name,
+                document_id: None,
+                frame_id: Some(&FrameId::from("frame".to_string())),
+            }));
+        }
+        let text = format!(
+            "- main\n  \
+             - checkbox \"Corsair\" [ref={}]\n  \
+             - checkbox \"Kingston\" [checked] [ref={}]\n  \
+             - button \"Apply\" [disabled] [ref={}]\n  \
+             - textbox \"Search\" [required] [ref={}]: \"32gb ddr5\"\n  \
+             - combobox \"Sort by:\" [ref={}]\n    \
+             - option \"Featured\" [selected] [ref={}]\n    \
+             - option \"Price: Low to High\" [ref={}]",
+            minted[0], minted[1], minted[2], minted[3], minted[4], minted[5], minted[6]
+        );
+        let view = PageView::from_snapshot("https://example.com", "Example", &text, &refs);
+
+        let corsair = view
+            .controls
+            .iter()
+            .find(|control| control.name == "Corsair")
+            .expect("the unticked checkbox");
+        assert_eq!(
+            corsair.state.checked,
+            Some(false),
+            "the renderer prints only the ticked half, so no annotation means unticked"
+        );
+
+        let kingston = view
+            .controls
+            .iter()
+            .find(|control| control.name == "Kingston")
+            .expect("the ticked checkbox");
+        assert_eq!(kingston.state.checked, Some(true));
+
+        let apply = view
+            .controls
+            .iter()
+            .find(|control| control.name == "Apply")
+            .expect("the button");
+        assert!(apply.state.disabled);
+        assert!(!apply.is_offerable());
+
+        let search = view
+            .controls
+            .iter()
+            .find(|control| control.name == "Search")
+            .expect("the field");
+        assert!(search.state.required);
+        assert_eq!(search.value.as_deref(), Some("32gb ddr5"));
+        assert!(search.state.editable);
+
+        let sort = view
+            .controls
+            .iter()
+            .find(|control| control.name == "Sort by:")
+            .expect("the select");
+        assert_eq!(
+            sort.options,
+            vec!["Featured", "Price: Low to High"],
+            "a select's values are the option lines nested under it"
+        );
+    }
+
+    /// A reference, a cursor hint and a state are all bracketed, and only one of
+    /// them is a state.
+    #[test]
+    fn a_reference_and_a_cursor_hint_are_not_states() {
+        let line = "  - link \"Deals\" [ref=e7] [cursor=pointer]";
+        assert_eq!(reference_in(line), Some("e7"));
+        assert!(states_in(line).is_empty());
+        assert_eq!(name_in(line).as_deref(), Some("Deals"));
+        assert_eq!(role_in(line).as_deref(), Some("link"));
+        assert_eq!(value_in(line), None);
+    }
+
+    /// A value containing a colon must not be cut at the colon.
+    #[test]
+    fn a_value_with_a_colon_survives() {
+        let line = "  - textbox \"Note\" [ref=e8]: \"ratio 16:9\"";
+        assert_eq!(value_in(line).as_deref(), Some("ratio 16:9"));
+    }
+
+    /// Options nested under one select do not leak into the next.
+    #[test]
+    fn nested_options_stop_at_the_next_sibling() {
+        let lines = vec![
+            "  - combobox \"First\" [ref=e1]",
+            "    - option \"A\" [ref=e2]",
+            "  - combobox \"Second\" [ref=e3]",
+            "    - option \"B\" [ref=e4]",
+        ];
+        assert_eq!(nested_options(&lines, 0), vec!["A"]);
+        assert_eq!(nested_options(&lines, 2), vec!["B"]);
     }
 
     #[test]
