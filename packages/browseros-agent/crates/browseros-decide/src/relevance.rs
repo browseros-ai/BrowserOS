@@ -83,10 +83,21 @@ pub fn score(goal: &str, control: &Control, last_acted: Option<&str>) -> i32 {
 
     // A word the goal and the control's name share is the strongest cheap
     // signal that this is the control the goal is about.
+    let mut shared = 0;
     for word in &name_words {
         if goal_words.contains(word) {
+            shared += 1;
             score += 10;
         }
+    }
+
+    // A control whose whole name is what the goal named beats one that merely
+    // mentions it. Measured on a real listing: a goal naming a brand put nine
+    // product titles above the brand facet, because each title shared two or
+    // three words with the goal while the facet shared only its one. The facet
+    // is the control the goal meant.
+    if shared > 0 && name_words.len() <= 2 {
+        score += 12;
     }
 
     // A goal's value may name an option rather than the control, as "sort by

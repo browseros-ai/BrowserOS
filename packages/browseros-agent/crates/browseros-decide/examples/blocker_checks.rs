@@ -15,6 +15,7 @@ use browseros_decide::{Jev, Verdict, gate, questions};
 fn control(reference: &str, role: &str, name: &str) -> Control {
     Control {
         reference: reference.to_string(),
+        clickable: false,
         role: role.to_string(),
         name: name.to_string(),
         value: None,

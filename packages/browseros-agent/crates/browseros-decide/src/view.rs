@@ -133,6 +133,15 @@ impl ControlState {
 pub struct Control {
     /// The reference the act tool already understands.
     pub reference: String,
+    /// The page gives this a pointer cursor, so a person would click it even
+    /// though its role is not one of the interactive ones.
+    ///
+    /// Sites build facets as a styled label over a hidden input, and the thing
+    /// a user clicks then has a role like `LabelText` or `generic`. The
+    /// renderer already marks those, and ignoring the mark meant a whole filter
+    /// panel was visible in the snapshot and unusable: named, referenced, and
+    /// filtered out one layer later as not actionable.
+    pub clickable: bool,
     pub role: String,
     pub name: String,
     pub value: Option<String>,
@@ -155,7 +164,13 @@ impl Control {
     /// still competes for the answer.
     #[must_use]
     pub fn is_offerable(&self) -> bool {
-        !self.state.disabled && (!self.name.is_empty() || !self.options.is_empty())
+        if self.state.disabled {
+            return false;
+        }
+        if self.name.is_empty() && self.options.is_empty() {
+            return false;
+        }
+        ACTIONABLE_ROLES.contains(&self.role.as_str()) || self.clickable
     }
 }
 
@@ -206,6 +221,9 @@ impl PageView {
             let state = ControlState::from_ax(node, &role);
             let control = Control {
                 reference: entry.ref_id.to_string(),
+                // The typed path has no cursor information to read, so a
+                // control reaches this only by its role.
+                clickable: false,
                 role: role.clone(),
                 name,
                 value: text_of(node.value.as_ref()).filter(|value| !value.is_empty()),
@@ -260,7 +278,12 @@ impl PageView {
             };
             let line = lines[index];
             let role = role_in(line).unwrap_or_else(|| entry.role.clone());
-            if !ACTIONABLE_ROLES.contains(&role.as_str()) {
+            // Role alone is not the test any more: a styled facet label carries
+            // a role like `LabelText` and is still what a person clicks. The
+            // renderer's pointer mark is the signal, and `is_offerable` applies
+            // it.
+            let clickable = line.contains("[cursor=pointer]");
+            if !ACTIONABLE_ROLES.contains(&role.as_str()) && !clickable {
                 continue;
             }
             let states = states_in(line);
@@ -292,6 +315,7 @@ impl PageView {
             }
             controls.push(Control {
                 reference,
+                clickable,
                 options: nested_options(&lines, index),
                 role,
                 name: name_in(line).unwrap_or_else(|| entry.name.clone()),
@@ -673,6 +697,74 @@ mod tests {
             view.controls[5].state.editable,
             "a textbox can be typed into"
         );
+    }
+
+    /// A styled facet label is what a person clicks, and its role is not one of
+    /// the interactive ones. The renderer marks it with a pointer cursor, and
+    /// ignoring that mark meant a whole filter panel reached the snapshot
+    /// named and referenced, and was then discarded one layer later.
+    #[test]
+    fn a_pointer_marked_control_is_offerable_whatever_its_role() {
+        let mut refs = RefMap::new();
+        refs.begin_snapshot();
+        let minted = refs.mint(MintRef {
+            backend_node_id: 30,
+            role: "LabelText",
+            name: "ADATA",
+            document_id: None,
+            frame_id: Some(&FrameId::from("f".to_string())),
+        });
+        let text = format!("- main\n  - LabelText \"ADATA\" [ref={minted}] [cursor=pointer]");
+        let view = PageView::from_snapshot("https://e.com", "RAM", &text, &refs);
+        let facet = view
+            .controls
+            .iter()
+            .find(|control| control.name == "ADATA")
+            .expect("the facet label is a control");
+        assert!(facet.clickable);
+        assert!(
+            facet.is_offerable(),
+            "a person would click it, so it can be offered"
+        );
+    }
+
+    /// Without the mark, a role nothing can act on is still left out, so this
+    /// widens the net rather than removing it.
+    #[test]
+    fn an_unmarked_non_interactive_role_is_still_left_out() {
+        let mut refs = RefMap::new();
+        refs.begin_snapshot();
+        let minted = refs.mint(MintRef {
+            backend_node_id: 31,
+            role: "LabelText",
+            name: "Just a label",
+            document_id: None,
+            frame_id: Some(&FrameId::from("f".to_string())),
+        });
+        let text = format!("- main\n  - LabelText \"Just a label\" [ref={minted}]");
+        let view = PageView::from_snapshot("https://e.com", "T", &text, &refs);
+        assert!(
+            view.controls.is_empty(),
+            "no pointer mark and no interactive role means nothing to offer"
+        );
+    }
+
+    /// And a marked control with no name is still not offerable: a person could
+    /// click it, but the model could not say which one it meant.
+    #[test]
+    fn a_pointer_marked_control_with_no_name_is_not_offerable() {
+        let mut refs = RefMap::new();
+        refs.begin_snapshot();
+        let minted = refs.mint(MintRef {
+            backend_node_id: 32,
+            role: "generic",
+            name: "",
+            document_id: None,
+            frame_id: Some(&FrameId::from("f".to_string())),
+        });
+        let text = format!("- main\n  - generic [ref={minted}] [cursor=pointer]");
+        let view = PageView::from_snapshot("https://e.com", "T", &text, &refs);
+        assert!(view.controls.iter().all(|control| !control.is_offerable()));
     }
 
     /// A disabled control is not offered. An option the model cannot usefully

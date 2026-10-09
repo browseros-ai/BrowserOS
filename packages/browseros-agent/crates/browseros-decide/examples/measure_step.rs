@@ -17,6 +17,7 @@ const BASELINE: f64 = 13_871.0;
 fn control(reference: &str, role: &str, name: &str) -> Control {
     Control {
         reference: reference.to_string(),
+        clickable: false,
         role: role.to_string(),
         name: name.to_string(),
         value: None,

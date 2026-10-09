@@ -18,6 +18,7 @@ use browseros_decide::view::{Control, ControlState, PageView};
 fn control(reference: &str, role: &str, name: &str) -> Control {
     Control {
         reference: reference.to_string(),
+        clickable: false,
         role: role.to_string(),
         name: name.to_string(),
         value: None,
@@ -490,6 +491,7 @@ async fn a_control_that_keeps_changing_is_never_acted_on() {
             let mut page = page(guard);
             page.controls = vec![Control {
                 reference: "e1".to_string(),
+                clickable: false,
                 role: "button".to_string(),
                 name: "Apply".to_string(),
                 value: None,
@@ -530,6 +532,7 @@ async fn a_control_that_settles_is_acted_on_after_one_refusal() {
     let mut settled = page(2);
     settled.controls = vec![Control {
         reference: "e1".to_string(),
+        clickable: false,
         role: "button".to_string(),
         name: "Apply".to_string(),
         value: None,
@@ -770,6 +773,7 @@ async fn a_control_that_keeps_moving_says_so() {
             let mut page = page(guard);
             page.controls = vec![Control {
                 reference: "e1".to_string(),
+                clickable: false,
                 role: "button".to_string(),
                 name: "Apply".to_string(),
                 value: None,

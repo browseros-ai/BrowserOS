@@ -43,6 +43,9 @@ pub const MAX_SELECT_OPTIONS: usize = 200;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Candidate {
     pub reference: String,
+    /// The page gives this a pointer cursor, so it belongs in the click head
+    /// whatever its role says.
+    pub clickable: bool,
     /// What travels to the model: an object carrying the control's current
     /// state, not a flattened label. The option values of a question accept
     /// structured JSON, so there is no reason to hide state in prose.
@@ -136,10 +139,19 @@ impl ActionSpace {
     /// should not offer a link, because that option cannot be right.
     #[must_use]
     pub fn options_for(&self, roles: &[&str]) -> std::collections::BTreeMap<String, Value> {
+        // A pointer-marked control belongs in the click head whatever its role
+        // is. Narrowing by role alone excluded exactly the controls the naming
+        // work had just made usable: a brand facet reached the offered set,
+        // scored third, and was then kept out of the only question that could
+        // have chosen it, so the model correctly answered that none of the
+        // product links it was shown would narrow by brand.
+        let clickable_head = roles.contains(&"button") && roles.contains(&"link");
         let mut options: std::collections::BTreeMap<String, Value> = self
             .offered
             .iter()
-            .filter(|candidate| roles.contains(&candidate.role.as_str()))
+            .filter(|candidate| {
+                roles.contains(&candidate.role.as_str()) || (clickable_head && candidate.clickable)
+            })
             .map(|candidate| (candidate.reference.clone(), candidate.descriptor.clone()))
             .collect();
         if options.is_empty() {
@@ -269,11 +281,46 @@ fn none_of_these() -> Value {
 ///
 /// A model that can see a checkbox is already ticked does not need a rule
 /// telling it not to tick it again.
+/// Roles a model can act on by name. Anything else that is clickable is
+/// described functionally instead.
+const MEANINGFUL_ROLES: &[&str] = &[
+    "button",
+    "link",
+    "textbox",
+    "searchbox",
+    "combobox",
+    "listbox",
+    "checkbox",
+    "radio",
+    "switch",
+    "slider",
+    "spinbutton",
+    "menuitem",
+    "menuitemcheckbox",
+    "menuitemradio",
+    "option",
+    "tab",
+    "treeitem",
+];
+
 fn candidate_of(control: &Control) -> Candidate {
-    let label = if control.name.is_empty() {
+    // A role the accessibility tree invented is not a description. A facet
+    // rendered as a styled label arrives as `LabelText`, which tells a model
+    // nothing about what clicking it would do, and a model asked which control
+    // filters by brand answered that none of them would: the one that would was
+    // described to it as "LabelText". So a clickable control whose role carries
+    // no meaning is described by what it is instead.
+    let role = if MEANINGFUL_ROLES.contains(&control.role.as_str()) {
         control.role.clone()
+    } else if control.clickable {
+        "clickable filter or option".to_string()
     } else {
-        format!("{} {:?}", control.role, control.name)
+        control.role.clone()
+    };
+    let label = if control.name.is_empty() {
+        role
+    } else {
+        format!("{role} {:?}", control.name)
     };
     let mut descriptor = json!({ "control": label });
     if let Some(state) = control.state.describe() {
@@ -290,6 +337,7 @@ fn candidate_of(control: &Control) -> Candidate {
     }
     Candidate {
         reference: control.reference.clone(),
+        clickable: control.clickable,
         descriptor,
         options: control.options.clone(),
         role: control.role.clone(),
@@ -306,6 +354,7 @@ mod tests {
     fn control(reference: &str, role: &str, name: &str) -> Control {
         Control {
             reference: reference.to_string(),
+            clickable: false,
             role: role.to_string(),
             name: name.to_string(),
             value: None,
