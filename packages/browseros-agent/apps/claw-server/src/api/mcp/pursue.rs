@@ -214,8 +214,20 @@ impl Driver for PageDriver {
 }
 
 /// Whether a failure is one another observation could clear.
+///
+/// Matched on what the browser's errors actually say, read from
+/// `browseros_core::error`, not on words guessed at. Two of the three patterns
+/// here were previously wrong: the error says `Stale ref` with a capital and
+/// `Unknown ref` rather than "no ref", so a lost reference was treated as fatal
+/// and the retry path it exists for never ran.
+///
+/// The two reference errors and the capture error all end by saying what to do,
+/// and that instruction is the most reliable signal available: an error that
+/// asks for a new snapshot is telling us a new snapshot would help.
 fn covered_or_gone(reason: &str) -> bool {
-    reason.contains("covered") || reason.contains("stale") || reason.contains("No ref")
+    reason.contains("take a new snapshot")
+        || reason.contains("; retry.")
+        || reason.contains("is covered by")
 }
 
 fn first_text(result: &rmcp::model::CallToolResult) -> String {
@@ -377,5 +389,64 @@ fn status_name(status: &Status) -> &'static str {
         Status::OutOfBudget => "out_of_budget",
         Status::Stopped => "stopped",
         Status::Failed(_) => "failed",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::covered_or_gone;
+    use browseros_core::{CoreError, Ref};
+
+    /// The wordings this has to recognise come from the browser's own error
+    /// type, so they are built from it rather than copied into a string here
+    /// where they could drift apart from it silently.
+    #[test]
+    fn the_browsers_recoverable_errors_are_recognised() {
+        let stale = CoreError::StaleRef {
+            ref_id: Ref::from("e34".to_string()),
+            role: "button".to_string(),
+            name: "Apply".to_string(),
+        };
+        assert!(
+            covered_or_gone(&stale.to_string()),
+            "a stale reference is worth another snapshot: {stale}"
+        );
+
+        let unknown = CoreError::UnknownRef(Ref::from("e99".to_string()));
+        assert!(
+            covered_or_gone(&unknown.to_string()),
+            "so is an unknown one: {unknown}"
+        );
+
+        let changed = CoreError::DocumentChanged;
+        assert!(
+            covered_or_gone(&changed.to_string()),
+            "and a capture that raced the page: {changed}"
+        );
+    }
+
+    /// A covered control is the case the dropdown work was about, and it is
+    /// retryable because dismissing the cover may well succeed.
+    #[test]
+    fn a_covered_control_is_recognised() {
+        let covered = "Element e101 (combobox \"Sort by:\") is covered by <div.nav-left> at its \
+                       click point; the click would hit that element instead.";
+        assert!(covered_or_gone(covered));
+    }
+
+    /// Something that is not recoverable must not be retried, or the loop would
+    /// spin on it.
+    #[test]
+    fn an_unrecoverable_failure_is_not_recognised() {
+        for reason in [
+            "the browser is not connected",
+            "Dropdown execution was not confirmed; inspect before retrying.",
+            "page 7 does not belong to this session",
+        ] {
+            assert!(
+                !covered_or_gone(reason),
+                "{reason} is not cleared by looking again"
+            );
+        }
     }
 }
