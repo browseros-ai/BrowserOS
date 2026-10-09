@@ -1537,6 +1537,11 @@ fn pursue_output_schema() -> Value {
                 "items": { "type": "string" },
                 "description": "What the last decision was choosing between, when it reported that none of them could advance the goal."
             },
+            "stoppedBecause": {
+                "type": ["string", "null"],
+                "enum": ["nothing_changed", "not_confident", "control_kept_moving", "browser_kept_failing", "only_waiting", null],
+                "description": "Why the run stopped making progress, when it stopped for that reason. Each one calls for a different response, so this is a word to branch on rather than a sentence to read."
+            },
             "terminalConfidence": {
                 "type": ["number", "null"],
                 "minimum": 0,

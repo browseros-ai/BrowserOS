@@ -11,7 +11,7 @@ use std::sync::Mutex;
 
 use browseros_decide::client::{Answer, JevError, Question, Response, Usage};
 use browseros_decide::gate::Decision;
-use browseros_decide::pursue::{ActError, Budget, Driver, Oracle, Status, pursue};
+use browseros_decide::pursue::{ActError, Budget, Driver, Oracle, Status, Stuck, pursue};
 use browseros_decide::questions::{CLICK_TARGET, OPERATION, SELECT_VALUE};
 use browseros_decide::view::{Control, ControlState, PageView};
 
@@ -260,7 +260,11 @@ async fn three_actions_that_change_nothing_stop_the_run() {
     ])]);
     let fake = Fake::with_one_page(vec![Ok(()), Ok(()), Ok(()), Ok(())]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
-    assert_eq!(outcome.status, Status::Stalled);
+    assert!(
+        matches!(outcome.status, Status::Stalled(_)),
+        "got {:?}",
+        outcome.status
+    );
     assert_eq!(
         outcome.changed(),
         0,
@@ -378,7 +382,11 @@ async fn an_action_that_moves_nothing_is_reported_as_such() {
     let fake = Fake::with_one_page(vec![Ok(()); 6]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
     assert_eq!(outcome.changed(), 0);
-    assert_eq!(outcome.status, Status::Stalled);
+    assert!(
+        matches!(outcome.status, Status::Stalled(_)),
+        "got {:?}",
+        outcome.status
+    );
 }
 
 /// A step budget is a real limit.
@@ -452,7 +460,11 @@ async fn a_run_that_only_waits_stops() {
     let oracle = Scripted::new(vec![says(&[(OPERATION, "WAIT", 0.99)])]);
     let fake = Fake::with_one_page(vec![]);
     let outcome = pursue(&oracle, &fake, "Wait forever", budget()).await;
-    assert_eq!(outcome.status, Status::Stalled);
+    assert!(
+        matches!(outcome.status, Status::Stalled(_)),
+        "got {:?}",
+        outcome.status
+    );
     assert!(
         outcome.decisions <= 5,
         "it stopped quickly rather than burning the budget, decisions {}",
@@ -496,7 +508,11 @@ async fn a_control_that_keeps_changing_is_never_acted_on() {
         "the control was never the one the decision was about, status {:?}",
         outcome.status
     );
-    assert_eq!(outcome.status, Status::Stalled);
+    assert!(
+        matches!(outcome.status, Status::Stalled(_)),
+        "got {:?}",
+        outcome.status
+    );
     assert!(
         outcome.decisions > 1,
         "decisions were spent and refused, not executed"
@@ -607,7 +623,11 @@ async fn a_non_terminal_ending_reports_no_terminal_confidence() {
     ])]);
     let fake = Fake::with_one_page(vec![Ok(()), Ok(()), Ok(())]);
     let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
-    assert_eq!(outcome.status, Status::Stalled);
+    assert!(
+        matches!(outcome.status, Status::Stalled(_)),
+        "got {:?}",
+        outcome.status
+    );
     assert_eq!(outcome.terminal_confidence, None);
 }
 
@@ -683,7 +703,7 @@ async fn every_ending_reports_what_the_decision_could_see() {
     ])]);
     let fake = Fake::with_one_page(vec![Ok(()), Ok(()), Ok(())]);
     let stalled = pursue(&oracle, &fake, "Click apply", budget()).await;
-    assert_eq!(stalled.status, Status::Stalled);
+    assert!(matches!(stalled.status, Status::Stalled(_)));
     assert_eq!(
         stalled.offered, 1,
         "a stalled run still says how much of the page it was choosing from"
@@ -694,4 +714,118 @@ async fn every_ending_reports_what_the_decision_could_see() {
     let satisfied = pursue(&oracle, &fake, "Be finished", budget()).await;
     assert_eq!(satisfied.status, Status::Satisfied);
     assert_eq!(satisfied.offered, 1, "and so does a satisfied one");
+}
+
+/// The reason a run stopped has to be true of what happened. One counter used
+/// to serve four situations and the caller was told about one of them, so a run
+/// that applied a filter in a single successful action was told that three
+/// actions in a row had changed nothing.
+#[tokio::test]
+async fn a_stall_names_the_reason_that_actually_happened() {
+    // Nothing changed: actions ran and left the page alone.
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(()); 6]);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NothingChanged));
+    assert!(
+        outcome.actions() >= 1,
+        "and it really did run actions, which is what makes that reason the true one"
+    );
+
+    // Not confident: the gate declined, so no action ever ran. The old message
+    // would have claimed three actions changed nothing.
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.20),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(()); 6]);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
+    assert_eq!(
+        outcome.actions(),
+        0,
+        "no action ran, so no reason mentioning actions could be true"
+    );
+
+    // Only waiting: no action either, and a different reason again.
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "WAIT", 0.99)])]);
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = pursue(&oracle, &fake, "Wait forever", budget()).await;
+    assert_eq!(outcome.status, Status::Stalled(Stuck::OnlyWaiting));
+}
+
+/// A control that keeps moving gets its own reason, rather than being counted
+/// against the budget for actions that did nothing.
+#[tokio::test]
+async fn a_control_that_keeps_moving_says_so() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let shifting: Vec<PageView> = (1..=12)
+        .map(|guard| {
+            let mut page = page(guard);
+            page.controls = vec![Control {
+                reference: "e1".to_string(),
+                role: "button".to_string(),
+                name: "Apply".to_string(),
+                value: None,
+                state: ControlState::default(),
+                guard,
+                options: Vec::new(),
+            }];
+            page
+        })
+        .collect();
+    let fake = Fake::new(vec![Ok(()); 6], shifting);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert_eq!(outcome.status, Status::Stalled(Stuck::ControlKeptMoving));
+}
+
+/// Each reason has its own budget. Three refusals to act is not three actions
+/// that did nothing, and one shared counter meant whichever came first spent
+/// the other's allowance.
+#[tokio::test]
+async fn the_reasons_do_not_share_a_budget() {
+    // Two refusals then a working action: the refusals must not have eaten the
+    // allowance that lets the run continue.
+    let oracle = Scripted::new(vec![
+        says(&[(OPERATION, "CLICK", 0.95), (CLICK_TARGET, "e1", 0.20)]),
+        says(&[(OPERATION, "CLICK", 0.95), (CLICK_TARGET, "e1", 0.20)]),
+        says(&[(OPERATION, "CLICK", 0.95), (CLICK_TARGET, "e1", 0.95)]),
+    ]);
+    let fake = Fake::with_one_page(vec![Ok(()); 6]).moving_once();
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert!(
+        outcome.actions() >= 1,
+        "the action after two refusals still ran, status {:?}",
+        outcome.status
+    );
+    assert_eq!(outcome.changed(), 1);
+}
+
+/// A stall carries what the decision could see, like its neighbours. It is the
+/// ending that fires most on a hard page and it told the caller least.
+#[tokio::test]
+async fn a_stall_says_what_it_was_choosing_between() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.20),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(()); 6]);
+    let outcome = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert!(
+        !outcome.offered_controls.is_empty(),
+        "a stall names the controls it had, status {:?}",
+        outcome.status
+    );
+    assert!(
+        outcome
+            .offered_controls
+            .iter()
+            .any(|control| control.contains("Apply"))
+    );
 }

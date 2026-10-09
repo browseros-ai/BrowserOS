@@ -274,10 +274,10 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
              snapshot and act.",
             confidence_text(outcome.terminal_confidence)
         ),
-        Status::Stalled => {
-            "Stopped: three actions in a row changed nothing. Continue with the page tools."
-                .to_string()
-        }
+        Status::Stalled(cause) => format!(
+            "Stopped making progress: {}. Continue with the page tools.",
+            cause.describe(outcome.actions())
+        ),
         Status::NeedsInput(reason) => format!(
             "Stopped and handing back: {reason}. You decide what happens next: this run has one \
              page and one goal, and you have the wider intent. Options are to scroll or expand a \
@@ -329,6 +329,7 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
 
     let structured = json!({
         "status": status_name(&outcome.status),
+        "stoppedBecause": stopped_because(&outcome.status),
         "page": page,
         "url": outcome.url_after,
         "urlBefore": outcome.url_before,
@@ -362,11 +363,26 @@ fn confidence_text(confidence: Option<f64>) -> String {
     )
 }
 
+/// The reason a run stopped making progress, as a short word a caller can
+/// branch on rather than a sentence it would have to read.
+fn stopped_because(status: &Status) -> Option<&'static str> {
+    match status {
+        Status::Stalled(cause) => Some(match cause {
+            browseros_decide::Stuck::NothingChanged => "nothing_changed",
+            browseros_decide::Stuck::NotConfident => "not_confident",
+            browseros_decide::Stuck::ControlKeptMoving => "control_kept_moving",
+            browseros_decide::Stuck::BrowserKeptFailing => "browser_kept_failing",
+            browseros_decide::Stuck::OnlyWaiting => "only_waiting",
+        }),
+        _ => None,
+    }
+}
+
 fn status_name(status: &Status) -> &'static str {
     match status {
         Status::Satisfied => "satisfied",
         Status::Blocked(_) => "blocked",
-        Status::Stalled => "stalled",
+        Status::Stalled(_) => "stalled",
         Status::NeedsInput(_) => "needs_input",
         Status::OutOfBudget => "out_of_budget",
         Status::Stopped => "stopped",

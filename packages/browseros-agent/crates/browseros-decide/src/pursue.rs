@@ -28,6 +28,52 @@ pub const STALL_LIMIT: u32 = 3;
 /// changes under every decision is not one this can finish.
 pub const STALE_RETRIES: u32 = 3;
 
+/// Why a run gave up making progress.
+///
+/// One counter used to serve four unrelated situations and the caller was told
+/// about one of them, so a run that applied a filter in a single successful
+/// action was told that three actions in a row had changed nothing. Naming the
+/// cause is the whole point: the reasons call for different responses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Stuck {
+    /// Actions ran and left the page as it was.
+    NothingChanged,
+    /// The gate declined to act, usually because confidence was short.
+    NotConfident,
+    /// The chosen control kept moving between the decision and the action.
+    ControlKeptMoving,
+    /// The browser kept reporting something a retry might clear, and it did
+    /// not clear.
+    BrowserKeptFailing,
+    /// The run kept choosing to wait, which makes no observable progress.
+    OnlyWaiting,
+}
+
+impl Stuck {
+    /// What to tell the caller, which has to be true of what happened.
+    #[must_use]
+    pub fn describe(self, actions: usize) -> String {
+        match self {
+            Self::NothingChanged => {
+                format!("{actions} action(s) ran and the page was the same afterwards each time")
+            }
+            Self::NotConfident => {
+                "it could not find a control it was confident enough to use".to_string()
+            }
+            Self::ControlKeptMoving => {
+                "the control it chose kept changing before it could be used".to_string()
+            }
+            Self::BrowserKeptFailing => {
+                "the browser kept refusing the action, and looking again did not clear it"
+                    .to_string()
+            }
+            Self::OnlyWaiting => {
+                "it kept choosing to wait, which makes no progress to observe".to_string()
+            }
+        }
+    }
+}
+
 /// How many times a run may choose to wait before it is treated as stuck.
 ///
 /// Waiting makes no observable progress, so without a limit a model that keeps
@@ -101,8 +147,8 @@ pub enum Status {
     Satisfied,
     /// Nothing offered could advance the goal.
     Blocked(String),
-    /// Three consecutive actions changed nothing.
-    Stalled,
+    /// The run stopped making progress, with the reason it stopped.
+    Stalled(Stuck),
     /// The caller has to supply something before this can continue.
     NeedsInput(String),
     /// The step or time budget ran out.
@@ -190,7 +236,13 @@ pub async fn pursue<O: Oracle, D: Driver>(
     let mut recent: Vec<String> = Vec::new();
     let mut decisions = 0;
     let mut input_tokens = 0;
-    let mut stalled = 0;
+    // A counter each, because they are different situations with different
+    // answers: three refusals to act is not three actions that did nothing, and
+    // one shared budget meant whichever came first spent the other's.
+    let mut unchanged = 0;
+    let mut declined = 0;
+    let mut moved = 0;
+    let mut refused = 0;
     let mut last_acted: Option<String> = None;
     // Set once a control has refused a click, so the keyboard fallback is
     // offered when it is actually needed rather than on every step.
@@ -371,7 +423,13 @@ pub async fn pursue<O: Oracle, D: Driver>(
         if decision.operation == Operation::Wait {
             waits += 1;
             if waits > WAIT_LIMIT {
-                return finish(Status::Stalled, trail, &view, decisions, input_tokens);
+                return finish(
+                    Status::Stalled(Stuck::OnlyWaiting),
+                    trail,
+                    &view,
+                    decisions,
+                    input_tokens,
+                );
             }
             driver.settle().await;
             view = refresh(driver, &view).await;
@@ -407,9 +465,18 @@ pub async fn pursue<O: Oracle, D: Driver>(
                         input_tokens,
                     );
                 }
-                stalled += 1;
-                if stalled >= STALL_LIMIT {
-                    return finish(Status::Stalled, trail, &view, decisions, input_tokens);
+                declined += 1;
+                if declined >= STALL_LIMIT {
+                    return stuck(
+                        &space,
+                        finish(
+                            Status::Stalled(Stuck::NotConfident),
+                            trail,
+                            &view,
+                            decisions,
+                            input_tokens,
+                        ),
+                    );
                 }
                 view = refresh(driver, &view).await;
                 continue;
@@ -436,9 +503,18 @@ pub async fn pursue<O: Oracle, D: Driver>(
             let still_there = guard.is_some_and(|guard| settled.control_is_fresh(reference, guard));
             view = settled;
             if !still_there {
-                stalled += 1;
-                if stalled >= STALL_LIMIT {
-                    return finish(Status::Stalled, trail, &view, decisions, input_tokens);
+                moved += 1;
+                if moved >= STALL_LIMIT {
+                    return stuck(
+                        &space,
+                        finish(
+                            Status::Stalled(Stuck::ControlKeptMoving),
+                            trail,
+                            &view,
+                            decisions,
+                            input_tokens,
+                        ),
+                    );
                 }
                 continue;
             }
@@ -451,9 +527,18 @@ pub async fn pursue<O: Oracle, D: Driver>(
                 if reason.contains("covered") {
                     fallback_needed = true;
                 }
-                stalled += 1;
-                if stalled > STALE_RETRIES {
-                    return finish(Status::Stalled, trail, &view, decisions, input_tokens);
+                refused += 1;
+                if refused > STALE_RETRIES {
+                    return stuck(
+                        &space,
+                        finish(
+                            Status::Stalled(Stuck::BrowserKeptFailing),
+                            trail,
+                            &view,
+                            decisions,
+                            input_tokens,
+                        ),
+                    );
                 }
                 view = refresh(driver, &view).await;
                 continue;
@@ -496,11 +581,20 @@ pub async fn pursue<O: Oracle, D: Driver>(
         // Only a step that changed nothing counts toward the stall. A wait is
         // not an action here, so it cannot be one of the three.
         if changed {
-            stalled = 0;
+            unchanged = 0;
         } else {
-            stalled += 1;
-            if stalled >= STALL_LIMIT {
-                return finish(Status::Stalled, trail, &view, decisions, input_tokens);
+            unchanged += 1;
+            if unchanged >= STALL_LIMIT {
+                return stuck(
+                    &space,
+                    finish(
+                        Status::Stalled(Stuck::NothingChanged),
+                        trail,
+                        &view,
+                        decisions,
+                        input_tokens,
+                    ),
+                );
             }
         }
     }
@@ -551,6 +645,16 @@ async fn ask_with_retries<O: Oracle>(
 /// which is why the terminal path observes directly.
 async fn refresh<D: Driver>(driver: &D, previous: &PageView) -> PageView {
     driver.observe().await.unwrap_or_else(|_| previous.clone())
+}
+
+/// Attaches what the decision could see to a stall.
+///
+/// A stall is the ending that fires most often on a hard page, and it was the
+/// one that told the caller least: its neighbours already carry this and it did
+/// not. Knowing what it was choosing between is often the whole answer.
+fn stuck(space: &ActionSpace, mut outcome: Outcome) -> Outcome {
+    outcome.offered_controls = offered_labels(space);
+    outcome
 }
 
 /// The offered controls as the caller sees them, so a hand back says what the
