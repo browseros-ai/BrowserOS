@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/chrome_content_browser_client.cc b/chrome/browser/chrome_content_browser_client.cc
-index 89df9311afa2cf904d3e99ea23aaf4ace6353e3f..a9f0489a53b1776af8614814892513c0a36b648a 100644
+index 19045777b3d811c15ba6e3f16cff859a05327b88..d9dc05f599ce12f8d44c08440a388edeaac45778 100644
 --- a/chrome/browser/chrome_content_browser_client.cc
 +++ b/chrome/browser/chrome_content_browser_client.cc
-@@ -642,6 +642,7 @@
+@@ -665,6 +665,7 @@
  #endif
  
  #if BUILDFLAG(ENABLE_EXTENSIONS_CORE)
@@ -10,7 +10,7 @@ index 89df9311afa2cf904d3e99ea23aaf4ace6353e3f..a9f0489a53b1776af8614814892513c0
  #include "chrome/browser/extensions/chrome_content_browser_client_extensions_part.h"
  #include "chrome/browser/extensions/chrome_extension_cookies.h"
  #include "chrome/browser/extensions/extension_util.h"
-@@ -1524,7 +1525,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
+@@ -1612,7 +1613,7 @@ void ChromeContentBrowserClient::RegisterLocalStatePrefs(
  void ChromeContentBrowserClient::RegisterProfilePrefs(
      user_prefs::PrefRegistrySyncable* registry) {
    registry->RegisterBooleanPref(prefs::kDisable3DAPIs, false);
@@ -19,7 +19,7 @@ index 89df9311afa2cf904d3e99ea23aaf4ace6353e3f..a9f0489a53b1776af8614814892513c0
    // Register user prefs for mapping SitePerProcess and IsolateOrigins in
    // user policy in addition to the same named ones in Local State (which are
    // used for mapping the command-line flags).
-@@ -5148,6 +5149,44 @@ bool ChromeContentBrowserClient::
+@@ -5030,6 +5031,44 @@ bool ChromeContentBrowserClient::
               prefs.root_scrollbar_theme_color;
  }
  
@@ -64,7 +64,7 @@ index 89df9311afa2cf904d3e99ea23aaf4ace6353e3f..a9f0489a53b1776af8614814892513c0
  void ChromeContentBrowserClient::BrowserURLHandlerCreated(
      BrowserURLHandler* handler) {
    // The group policy NTP URL handler must be registered before the other NTP
-@@ -5164,6 +5203,13 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
+@@ -5046,6 +5085,13 @@ void ChromeContentBrowserClient::BrowserURLHandlerCreated(
    handler->AddHandlerPair(&HandleChromeAboutAndChromeSyncRewrite,
                            BrowserURLHandler::null_handler());
  
@@ -78,7 +78,7 @@ index 89df9311afa2cf904d3e99ea23aaf4ace6353e3f..a9f0489a53b1776af8614814892513c0
  #if BUILDFLAG(IS_ANDROID)
    // Handler to rewrite chrome://newtab on Android.
    handler->AddHandlerPair(&chrome::android::HandleAndroidNativePageURL,
-@@ -8210,6 +8256,15 @@ content::ContentBrowserClient::LocalNetworkAccessRequestPolicyOverride
+@@ -8131,6 +8177,15 @@ content::ContentBrowserClient::LocalNetworkAccessRequestPolicyOverride
  ChromeContentBrowserClient::ShouldOverrideLocalNetworkAccessRequestPolicy(
      content::BrowserContext* browser_context,
      const url::Origin& origin) {

@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/api/settings_private/prefs_util.cc b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-index 09bec76bcb0bff911734048fec8e11cfc83f9f62..705be5febe79ea8e6f44d8218b7ab17132269f59 100644
+index 3b2361d90cb07d2cd657c53f9b2723ceb9faeead..ba4ca5bd86abc938cb6fa3b82c306c3dd78e626b 100644
 --- a/chrome/browser/extensions/api/settings_private/prefs_util.cc
 +++ b/chrome/browser/extensions/api/settings_private/prefs_util.cc
-@@ -1224,6 +1224,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
+@@ -1259,6 +1259,10 @@ const PrefsUtil::TypedPrefMap& PrefsUtil::GetAllowlistedKeys() {
        settings_api::PrefType::kBoolean;
    (*s_allowlist)[::prefs::kImportDialogSearchEngine] =
        settings_api::PrefType::kBoolean;

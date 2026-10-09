@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/BUILD.gn b/chrome/browser/BUILD.gn
-index bfc8555485593dc25c72fa74f20a70ce70ea6598..8c479f2beba1027310cf11cc458bfea1c4a58f81 100644
+index b58905ddb371f96377320c2948fe64bb17257663..52757c6073f53b89413387c3c105da6fa29b9aab 100644
 --- a/chrome/browser/BUILD.gn
 +++ b/chrome/browser/BUILD.gn
 @@ -13,6 +13,7 @@ import("//build/config/python.gni")
@@ -19,7 +19,20 @@ index bfc8555485593dc25c72fa74f20a70ce70ea6598..8c479f2beba1027310cf11cc458bfea1
      "ENABLE_UPDATER=$enable_updater",
      "ENABLE_UPDATE_NOTIFICATIONS=$enable_update_notifications",
      "USE_MINIKIN_HYPHENATION=$use_minikin_hyphenation",
-@@ -1552,6 +1555,25 @@ source_set("core") {
+@@ -933,6 +936,12 @@ source_set("core") {
+     "//chrome/browser/battery",
+     "//chrome/browser/bluetooth",
+     "//chrome/browser/browser_actuator/internals",
++    # These sources include BrowserOS headers directly; the aggregate browser
++    # target's private deps do not provide include access to the split core.
++    "//chrome/browser/browseros/core",
++    "//chrome/browser/browseros/metrics",
++    "//chrome/browser/browseros/onboarding",
++    "//chrome/browser/browseros/server",
+     "//chrome/browser/browsing_data",
+     "//chrome/browser/browsing_data:constants",
+     "//chrome/browser/btm",
+@@ -1578,6 +1587,25 @@ source_set("core") {
      ]
    }
  
@@ -45,11 +58,11 @@ index bfc8555485593dc25c72fa74f20a70ce70ea6598..8c479f2beba1027310cf11cc458bfea1
    if (!is_win && !is_android) {
      sources += [
        "certificate_viewer_stub.cc",
-@@ -2076,6 +2098,7 @@ source_set("browser") {
-     "//chrome/browser/bookmarks",
-     "//chrome/browser/bookmarks:impl",
+@@ -2077,6 +2105,7 @@ source_set("browser") {
      "//chrome/browser/breadcrumbs",
+     "//chrome/browser/browser_actuator",
+     "//chrome/browser/browser_actuator/internals",
 +    "//chrome/browser/browseros",
-     "//chrome/browser/browsing_data:constants",
      "//chrome/browser/browsing_data:impl",
-     "//chrome/browser/browsing_topics",
+     "//chrome/browser/btm",
+     "//chrome/browser/btm:impl",

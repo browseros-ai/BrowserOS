@@ -1,17 +1,17 @@
 diff --git a/chrome/test/BUILD.gn b/chrome/test/BUILD.gn
-index 9e2dc913343f72fa11c257659e7360aa9035e647..2382da35060d02877729977ef18873891f8eb2cd 100644
+index 167b043f9a1f7ec59d8e10705b4956b5647f6886..c8868501943955756fb59eb97403a2e08157eaf4 100644
 --- a/chrome/test/BUILD.gn
 +++ b/chrome/test/BUILD.gn
-@@ -5872,6 +5872,8 @@ test("unit_tests") {
-     "//chrome/browser/bookmarks:unit_tests",
-     "//chrome/browser/breadcrumbs",
+@@ -4872,6 +4872,8 @@ test("unit_tests") {
      "//chrome/browser/breadcrumbs:unit_tests",
+     "//chrome/browser/browser_actuator:unit_tests",
+     "//chrome/browser/browser_actuator/internals:unit_tests",
 +    "//chrome/browser/browseros/core:unit_tests",
 +    "//chrome/browser/browseros/server:unit_tests",
      "//chrome/browser/browsing_data:constants",
      "//chrome/browser/browsing_data:unit_tests",
      "//chrome/browser/btm:unit_tests",
-@@ -6768,6 +6770,10 @@ test("unit_tests") {
+@@ -5756,6 +5758,10 @@ test("unit_tests") {
      # but when we tried to pull it up to the common.gypi level, it broke
      # other things like the ui and startup tests. *shrug*
      ldflags = [ "-Wl,-ObjC" ]

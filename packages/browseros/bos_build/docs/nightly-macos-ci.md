@@ -134,7 +134,8 @@ Set `BROWSEROS_REPO_PATH` to the persistent BrowserOS checkout and
 `BROWSEROS_CHROMIUM_SRC` to the warm CI-owned Chromium clone base. The runner must
 run in the logged-in GUI user's session with Xcode, depot_tools, `uv`, `gh`,
 signing/notarization credentials, and enough disk for disposable workspaces.
-The Chromium helper repairs the CI base and creates a run-specific APFS workspace;
+The Chromium helper fetches the exact pin and syncs the CI base before copying it
+under the same checkout lock into a product-qualified APFS workspace;
 both workspace and signing-keychain cleanup run under `if: always()`.
 
 The optional `PROD_MACOS_BROWSEROS_PASSKEY_PROFILE_B64` and

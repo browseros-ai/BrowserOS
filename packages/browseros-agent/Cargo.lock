@@ -485,8 +485,8 @@ dependencies = [
 ]
 
 [[package]]
-name = "claw-server-rust"
-version = "0.0.60"
+name = "claw-server"
+version = "0.0.68"
 dependencies = [
  "anyhow",
  "axum",
@@ -1172,6 +1172,7 @@ dependencies = [
  "thiserror",
  "time",
  "toml_edit",
+ "url",
 ]
 
 [[package]]

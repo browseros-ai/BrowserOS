@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
-index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c70c9d50b 100644
+index 80dbf1e8b81ecba427928e58f012a67aafa988db..060bea7d1ecf655cc8a18900d6d6e916f019f4d7 100644
 --- a/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
 +++ b/chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
-@@ -13,13 +13,18 @@
+@@ -13,13 +13,19 @@
  #include "base/metrics/user_metrics.h"
  #include "base/notreached.h"
  #include "base/strings/strcat.h"
@@ -13,6 +13,7 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
  #include "chrome/browser/ui/browser_actions.h"
  #include "chrome/browser/ui/browser_commands.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_features.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/customize_chrome/side_panel_controller.h"
  #include "chrome/browser/ui/layout_constants.h"
  #include "chrome/browser/ui/side_panel/side_panel_action_callback.h"
@@ -21,7 +22,7 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
  #include "chrome/browser/ui/tabs/public/tab_features.h"
  #include "chrome/browser/ui/toolbar/pinned_toolbar/pinned_toolbar_actions_ids.h"
  #include "chrome/browser/ui/views/event_utils.h"
-@@ -32,7 +37,11 @@
+@@ -32,7 +38,11 @@
  #include "chrome/browser/ui/views/toolbar/toolbar_ink_drop_util.h"
  #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
  #include "chrome/browser/ui/web_applications/app_browser_controller.h"
@@ -33,7 +34,7 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
  #include "ui/actions/action_id.h"
  #include "ui/actions/actions.h"
  #include "ui/base/metadata/metadata_impl_macros.h"
-@@ -97,6 +106,28 @@ PinnedActionToolbarButton::PinnedActionToolbarButton(
+@@ -97,6 +107,28 @@ PinnedActionToolbarButton::PinnedActionToolbarButton(
    GetViewAccessibility().SetDescription(
        std::u16string(), ax::mojom::DescriptionFrom::kAttributeExplicitlyEmpty);
  
@@ -42,9 +43,9 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
 +    if (browseros::IsBrowserOSAction(action_id)) {
 +      // Check if labels should be shown
 +      bool show_labels = true;
-+      if (browser_ && browser_->profile()) {
-+        show_labels =
-+            browseros::ShouldShowToolbarLabels(browser_->profile()->GetPrefs());
++      if (browser_ && browser_->GetProfile()) {
++        show_labels = browseros::ShouldShowToolbarLabels(
++            browser_->GetProfile()->GetPrefs());
 +      }
 +
 +      if (show_labels) {
@@ -62,7 +63,7 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
    // Normally, the notify action is determined by whether a view is draggable
    // (and is set to press for non-draggable and release for draggable views).
    // However, PinnedActionToolbarButton may be draggable or non-draggable
-@@ -235,6 +266,30 @@ void PinnedActionToolbarButton::OnMouseReleased(const ui::MouseEvent& event) {
+@@ -236,6 +268,30 @@ void PinnedActionToolbarButton::OnMouseReleased(const ui::MouseEvent& event) {
    skip_execution_ = false;
  }
  
@@ -77,9 +78,9 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
 +  }
 +
 +  bool show_labels = true;
-+  if (browser_ && browser_->profile()) {
-+    show_labels =
-+        browseros::ShouldShowToolbarLabels(browser_->profile()->GetPrefs());
++  if (browser_ && browser_->GetProfile()) {
++    show_labels = browseros::ShouldShowToolbarLabels(
++        browser_->GetProfile()->GetPrefs());
 +  }
 +
 +  if (show_labels) {
@@ -93,7 +94,7 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
  void PinnedActionToolbarButton::UpdateIcon() {
    const std::optional<VectorIcons>& icons = GetVectorIcons();
    // If the button is a cached permanent button the color provider will not be
-@@ -247,7 +302,12 @@ void PinnedActionToolbarButton::UpdateIcon() {
+@@ -248,7 +304,12 @@ void PinnedActionToolbarButton::UpdateIcon() {
                                      ? icons->touch_icon
                                      : icons->icon;
  
@@ -107,7 +108,7 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
      UpdateIconsWithColors(
          icon, GetColorProvider()->GetColor(kColorToolbarActionItemEngaged),
          GetColorProvider()->GetColor(kColorToolbarActionItemEngaged),
-@@ -341,6 +401,26 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
+@@ -341,6 +402,26 @@ void PinnedActionToolbarButtonActionViewInterface::ActionItemChangedImpl(
      }
    }
  
@@ -115,9 +116,9 @@ index 91fef775c36b9068bb041d044504345f9aead372..8a8673236f93929ce127159d32519e4c
 +  if (browseros::IsBrowserOSAction(action_view_->GetActionId())) {
 +    // Check if labels should be shown
 +    bool show_labels = true;
-+    if (action_view_->GetBrowser() && action_view_->GetBrowser()->profile()) {
++    if (action_view_->browser() && action_view_->browser()->GetProfile()) {
 +      show_labels = browseros::ShouldShowToolbarLabels(
-+          action_view_->GetBrowser()->profile()->GetPrefs());
++          action_view_->browser()->GetProfile()->GetPrefs());
 +    }
 +
 +    if (show_labels) {

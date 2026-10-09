@@ -1,16 +1,16 @@
 diff --git a/chrome/browser/themes/theme_service.cc b/chrome/browser/themes/theme_service.cc
-index bf9cb4c809b32995f3774af9c243dc4f5347c802..f020b0bd3e7d5e550a82ad1feed42942c2f1d640 100644
+index cb1dd91e6d83b83cf1391f2d6215b10a9770731e..6d64c0c9d745fa2ab218c199f11552e8542804bc 100644
 --- a/chrome/browser/themes/theme_service.cc
 +++ b/chrome/browser/themes/theme_service.cc
-@@ -31,6 +31,7 @@
- #include "base/task/thread_pool.h"
+@@ -34,6 +34,7 @@
  #include "base/trace_event/trace_event.h"
  #include "build/build_config.h"
+ #include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_prefs.h"
  #include "chrome/browser/extensions/extension_service.h"
  #include "chrome/browser/extensions/theme_installed_infobar_delegate.h"
- #include "chrome/browser/new_tab_page/chrome_colors/chrome_colors_util.h"
-@@ -288,11 +289,11 @@ void ThemeService::RegisterProfilePrefs(
+ #include "chrome/browser/infobars/browser_infobar_manager.h"
+@@ -312,11 +313,11 @@ void ThemeService::RegisterProfilePrefs(
                                  SK_ColorTRANSPARENT);
    registry->RegisterIntegerPref(
        prefs::kDeprecatedBrowserColorSchemeDoNotUse,
@@ -24,10 +24,12 @@ index bf9cb4c809b32995f3774af9c243dc4f5347c802..f020b0bd3e7d5e550a82ad1feed42942
    registry->RegisterIntegerPref(
        prefs::kDeprecatedUserColorDoNotUse, SK_ColorTRANSPARENT,
        user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
-@@ -328,6 +329,7 @@ ThemeService::~ThemeService() = default;
+@@ -355,6 +356,9 @@ ThemeService::~ThemeService() = default;
  void ThemeService::Init() {
    theme_helper_->DCheckCalledOnValidSequence();
  
++  // Seed the BrowserOS default before ThemeService builds its initial theme.
++  // SyncDefaultTheme only seeds the color while its preference is default.
 +  browseros::SyncDefaultTheme(profile_->GetPrefs());
    InitFromPrefs();
  

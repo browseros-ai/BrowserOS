@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/extensions/external_provider_impl.cc b/chrome/browser/extensions/external_provider_impl.cc
-index 074cfef37f0b0956dcddcfe4813bee1cdc275467..4df8d0632c7a427e10bdc66d42b0f8b39c5493fe 100644
+index 1cf32e1b816acb5316337a7303fd905929d3335b..5470c3476997ab81c709c07f95f488b0177e8a33 100644
 --- a/chrome/browser/extensions/external_provider_impl.cc
 +++ b/chrome/browser/extensions/external_provider_impl.cc
-@@ -30,6 +30,8 @@
+@@ -32,6 +32,8 @@
  #include "chrome/browser/browser_features.h"
  #include "chrome/browser/browser_process.h"
  #include "chrome/browser/browser_process_platform_part.h"
@@ -11,7 +11,7 @@ index 074cfef37f0b0956dcddcfe4813bee1cdc275467..4df8d0632c7a427e10bdc66d42b0f8b3
  #include "chrome/browser/extensions/extension_management.h"
  #include "chrome/browser/extensions/extension_migrator.h"
  #include "chrome/browser/extensions/external_component_loader.h"
-@@ -503,7 +505,7 @@ void ExternalProviderImpl::RetrieveExtensionsFromPrefs(
+@@ -541,7 +543,7 @@ void ExternalProviderImpl::RetrieveExtensionsFromPrefs(
        }
        external_file_extensions->emplace_back(
            extension_id, version, path, crx_location_, creation_flags,
@@ -20,7 +20,7 @@ index 074cfef37f0b0956dcddcfe4813bee1cdc275467..4df8d0632c7a427e10bdc66d42b0f8b3
      } else {                       // if (external_update_url)
        CHECK(external_update_url);  // Checking of keys above ensures this.
        if (download_location_ == ManifestLocation::kInvalidLocation) {
-@@ -922,6 +924,44 @@ void ExternalProviderImpl::CreateExternalProviders(
+@@ -959,6 +961,44 @@ void ExternalProviderImpl::CreateExternalProviders(
      provider_list->push_back(std::move(initial_external_extensions_provider));
    }
  #endif  // BUILDFLAG(ENABLE_EXTENSIONS)

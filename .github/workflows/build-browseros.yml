@@ -137,6 +137,9 @@ jobs:
       # build CLI with UnicodeEncodeError; force UTF-8 for python and all
       # its subprocesses (gclient, hooks). No-op on Linux/macOS.
       PYTHONUTF8: "1"
+      # This ephemeral CI host may install the SDK required by the selected
+      # Chromium pin. Local builds only validate; the module never elevates.
+      BROWSEROS_INSTALL_WINDOWS_SDK: ${{ inputs.platform == 'windows' && '1' || '0' }}
     steps:
       - name: Validate inputs
         env:
@@ -310,33 +313,24 @@ jobs:
             --key "${{ steps.pin.outputs.cache_key }}" \
             --root "$CHROMIUM_ROOT"
 
-      - name: Ensure chromium checkout at pinned tag
+      - name: Prepare chromium source and dependencies
         run: |
           set -euo pipefail
           uv run --project packages/browseros browseros source ensure \
-            --root "$CHROMIUM_ROOT" --step checkout \
+            --root "$CHROMIUM_ROOT" --reset \
             --repair-cached-depot-tools
 
-      - name: Reset chromium tree (clean module)
+      - name: Clean cached product outputs and resources
         working-directory: packages/browseros
         run: |
           set -euo pipefail
-          uv run browseros build --modules clean \
-            --chromium-src "$CHROMIUM_SRC" \
-            --build-type release \
-            --arch "${{ inputs.arch }}" \
+          # Output-only cleanup preserves the toolchains restored by sync.
+          uv run browseros source clean-outputs --root "$CHROMIUM_ROOT" \
+            --all-products --arch "${{ inputs.arch }}" \
             --product "${{ inputs.product }}"
 
-      - name: Sync chromium dependencies (gclient)
-        run: |
-          set -euo pipefail
-          uv run --project packages/browseros browseros source ensure \
-            --root "$CHROMIUM_ROOT" --step sync \
-            --repair-cached-depot-tools
-
-      # Save immediately after sync: the tree is pristine (no BrowserOS or
-      # BrowserClaw patches, no out/ dir), which keeps the cache deterministic
-      # and as small as possible.
+      # Save only after successful preparation and output cleanup, before
+      # product patches/resources. The root is exclusive to this hosted job.
       - name: Save chromium checkout (WarpCache)
         if: runner.os != 'Windows' && steps.warpcache.outputs.cache-hit != 'true'
         uses: WarpBuilds/cache/save@v1
@@ -468,6 +462,17 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 30
+
+      # SDK setup can fail before browser artifacts exist. Preserve the native
+      # installer diagnostics before the ephemeral Windows runner is destroyed.
+      - name: Upload Windows SDK installer logs
+        if: always() && inputs.platform == 'windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: windows-sdk-logs-${{ inputs.product }}-${{ inputs.arch }}
+          path: ${{ runner.temp }}/browseros-windows-sdk-*/*.log
+          if-no-files-found: ignore
+          retention-days: 14
 
       - name: Report disk usage
         if: always()

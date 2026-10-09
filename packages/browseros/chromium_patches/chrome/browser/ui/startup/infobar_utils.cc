@@ -1,13 +1,23 @@
 diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
-index 4907b9a951040624eab323061636a222315194e5..237ddaf198aabc5f1f6737b4ddb1e6e50cf3e774 100644
+index 598e361a2988674243dd6ace9cc63de2f74ed1e1..6192225cedac276f5f954f1c5e8bdabb7c264da5 100644
 --- a/chrome/browser/ui/startup/infobar_utils.cc
 +++ b/chrome/browser/ui/startup/infobar_utils.cc
-@@ -185,10 +185,6 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
+@@ -253,20 +253,6 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
    infobars::ContentInfoBarManager* infobar_manager =
        infobars::ContentInfoBarManager::FromWebContents(web_contents);
  
 -  if (!google_apis::HasAPIKeyConfigured()) {
--    GoogleApiKeysInfoBarDelegate::Create(infobar_manager);
+-    if (infobars::IsInfoBarMigrated(
+-            infobars::InfoBarDelegate::GOOGLE_API_KEYS_INFOBAR_DELEGATE)) {
+-      if (auto* manager =
+-              infobars::BrowserInfoBarManager::From(g_browser_process)) {
+-        manager->Show(
+-            tabs::TabInterface::GetFromContents(web_contents),
+-            infobars::InfoBarDelegate::GOOGLE_API_KEYS_INFOBAR_DELEGATE);
+-      }
+-    } else {
+-      GoogleApiKeysInfoBarDelegate::Create(infobar_manager);
+-    }
 -  }
 -
    if (ObsoleteSystem::IsObsoleteNowOrSoon()) {

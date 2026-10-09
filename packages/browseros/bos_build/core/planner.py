@@ -227,7 +227,9 @@ def _plan_release(switches: Switches, platform: str) -> List[str]:
         # needs the vendored library whether or not the build is signed
         # (ninja: 'third_party/winsparkle/x64/Release/WinSparkle.dll'
         # missing and no known rule to make it).
-        steps.append("winsparkle_setup")
+        # Requirements come from the selected source, after provisioning and
+        # before resources/patches. Prepared CI (provision=none) checks too.
+        steps.extend(["windows_sdk", "winsparkle_setup"])
 
     if switches.resource_mode == "source":
         steps.extend(["prepare_common_resources", "prepare_server_resources"])
@@ -264,7 +266,9 @@ def _plan_debug(switches: Switches, platform: str) -> List[str]:
     steps: List[str] = []
     steps.extend(_provision_steps(switches))
     if platform == "windows":
-        steps.append("winsparkle_setup")
+        # Requirements come from the selected source, after provisioning and
+        # before resources/patches. Prepared CI (provision=none) checks too.
+        steps.extend(["windows_sdk", "winsparkle_setup"])
     if switches.resource_mode == "source":
         steps.extend(["prepare_common_resources", "prepare_server_resources"])
     elif switches.download:

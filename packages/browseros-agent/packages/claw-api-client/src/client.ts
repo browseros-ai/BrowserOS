@@ -11,6 +11,7 @@ import type {
   HealthResponse,
   RecordFeedbackInviteRequest,
   RecordingMetadata,
+  ResolveHelpResponse,
   SessionDetail,
   SessionList,
   SessionScreenshotList,
@@ -189,6 +190,17 @@ export class ClawApiClient {
     )
   }
 
+  async resolveHelp(
+    request: SessionRequest & { note?: string },
+  ): Promise<ResolveHelpResponse> {
+    return this.unwrap(
+      await this.client.POST('/api/v1/sessions/{sessionId}/help/resolve', {
+        params: { path: { sessionId: request.sessionId } },
+        body: { note: request.note },
+      }),
+    )
+  }
+
   async getRecording(request: SessionRequest): Promise<RecordingMetadata> {
     return this.unwrap(
       await this.client.GET('/api/v1/sessions/{sessionId}/recording', {
@@ -231,8 +243,10 @@ export class ClawApiClient {
       await this.client.GET('/api/v1/sessions/{sessionId}/preview', {
         params: {
           path: { sessionId: request.sessionId },
-          query:
-            request.refresh === undefined ? {} : { refresh: request.refresh },
+          query: {
+            refresh: request.refresh,
+            browserTabId: request.browserTabId,
+          },
         },
         parseAs: 'blob',
       }),

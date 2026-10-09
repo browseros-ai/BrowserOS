@@ -37,6 +37,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/system/ready': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    /** @description Strict gate for callers that need agent tools to work, rather than only needing the process to answer. Deliberately separate from health so a transient link loss cannot be read as a reason to restart this process. */
+    get: operations['getReadiness']
+    put?: never
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/system/shutdown': {
     parameters: {
       query?: never
@@ -47,6 +64,23 @@ export interface paths {
     get?: never
     put?: never
     post: operations['shutdown']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/extension/update-ready': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Wake the sidecar to independently inspect the BrowserOS extension's staged update through CDP. The request carries no version and does not itself authorize a reload. Browser origins other than the Neo extension are denied. */
+    post: operations['notifyExtensionUpdateReady']
     delete?: never
     options?: never
     head?: never
@@ -162,6 +196,23 @@ export interface paths {
     get?: never
     put?: never
     post: operations['cancelSession']
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/sessions/{sessionId}/help/resolve': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put?: never
+    /** @description Hand control back to a waiting agent after a human has taken over its page. */
+    post: operations['resolveHelp']
     delete?: never
     options?: never
     head?: never
@@ -460,8 +511,23 @@ export interface components {
       requestId?: string
     }
     HealthResponse: {
-      /** @enum {string} */
+      /**
+       * @description Reports only that this process is serving. It stays `ok` while the browser link is down, because the supervisor restarts the server on a non-200 and a restart cannot restore a link the operating system tore down. Read `browser` for whether agent tools can actually run.
+       * @enum {string}
+       */
       status: 'ok'
+      browser?: components['schemas']['BrowserLink']
+    }
+    /** @description The server's live connection to the browser it drives. */
+    BrowserLink: {
+      connected: boolean
+      /**
+       * Format: int64
+       * @description Milliseconds since the link was lost, while the server reconnects. Absent when connected.
+       */
+      downForMs: number | null
+      /** @description Why the link was last lost, when known. */
+      lastError: string | null
     }
     ShutdownResponse: {
       /** @enum {string} */
@@ -479,6 +545,7 @@ export interface components {
       /** Format: uri */
       url: string
       capabilities?: components['schemas']['SystemCapabilities']
+      schema?: components['schemas']['SchemaStatus']
     }
     SystemCapabilities: {
       /**
@@ -492,6 +559,13 @@ export interface components {
        * @description Maximum UTF-8 encoded request-body bytes accepted by canonical recording ingest.
        */
       recordingIngestMaxBytes?: number
+    }
+    /** @description How the data this server opened compares to the schema this build knows. When the database was migrated by a newer BrowserOS neo, the server runs read-forward on the columns it understands and reports the migrations it does not have, so the app can prompt the user to update BrowserOS neo to match its data. */
+    SchemaStatus: {
+      /** @description True when the database carries applied migrations this build does not contain. */
+      databaseAhead: boolean
+      /** @description Names of the applied migrations this build does not know. Empty unless databaseAhead is true. */
+      unknownMigrations: string[]
     }
     CockpitStats: {
       hasMeasuredStats: boolean
@@ -545,6 +619,8 @@ export interface components {
     LiveSessionState: {
       state: components['schemas']['LiveSessionActivityState']
       browserTabs: components['schemas']['SessionBrowserTab'][]
+      /** @description Present only while the agent is waiting for human help on this session. */
+      helpRequest?: components['schemas']['HelpRequest']
     }
     SessionBrowserTab: {
       /** Format: int64 */
@@ -662,6 +738,33 @@ export interface components {
       status: components['schemas']['SessionStatus']
       /** Format: int64 */
       cancelledDispatches: number
+    }
+    /** @enum {string} */
+    HelpRequestKind: 'login' | 'captcha' | 'approval' | 'other'
+    /** @description A pending request for human help from a blocked agent (sign-in, captcha, an approval it should not make). The agent waits until a human takes over the page and hands control back. */
+    HelpRequest: {
+      requestId: string
+      reason: string
+      details?: string
+      resumeHint?: string
+      kind?: components['schemas']['HelpRequestKind']
+      /**
+       * Format: int64
+       * @description The browser tab the human should take over.
+       */
+      browserTabId: number
+      url?: string
+      title?: string
+      /** Format: int64 */
+      requestedAt: number
+    }
+    /** @description Hand control back to the waiting agent, optionally with a note for it. */
+    ResolveHelpRequest: {
+      note?: string
+    }
+    ResolveHelpResponse: {
+      /** @description True when a pending request was found and signalled to resume. */
+      resolved: boolean
     }
     RecordingMetadata: {
       hasData: boolean
@@ -1050,7 +1153,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description The server is ready. */
+      /** @description This process is serving. Always 200 while it can answer, including while the browser link is down; inspect `browser` to tell those apart. */
       200: {
         headers: {
           [name: string]: unknown
@@ -1060,6 +1163,36 @@ export interface operations {
         }
       }
       500: components['responses']['InternalError']
+    }
+  }
+  getReadiness: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The server holds a live link to the browser. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HealthResponse']
+        }
+      }
+      500: components['responses']['InternalError']
+      /** @description The server is serving but has no live link to the browser. */
+      503: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['HealthResponse']
+        }
+      }
     }
   }
   shutdown: {
@@ -1081,6 +1214,33 @@ export interface operations {
         }
       }
       500: components['responses']['InternalError']
+    }
+  }
+  notifyExtensionUpdateReady: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Notification accepted; activation is asynchronous. */
+      204: {
+        headers: {
+          [name: string]: unknown
+        }
+        content?: never
+      }
+      /** @description Untrusted browser origin. */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
+        }
+      }
     }
   }
   getSystemInfo: {
@@ -1302,6 +1462,34 @@ export interface operations {
       500: components['responses']['InternalError']
     }
   }
+  resolveHelp: {
+    parameters: {
+      query?: never
+      header?: never
+      path: {
+        sessionId: components['parameters']['SessionId']
+      }
+      cookie?: never
+    }
+    requestBody?: {
+      content: {
+        'application/json': components['schemas']['ResolveHelpRequest']
+      }
+    }
+    responses: {
+      /** @description The waiting agent was signalled to resume, or no pending request was found. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ResolveHelpResponse']
+        }
+      }
+      400: components['responses']['BadRequest']
+      500: components['responses']['InternalError']
+    }
+  }
   getRecording: {
     parameters: {
       query?: never
@@ -1389,6 +1577,8 @@ export interface operations {
   getSessionPreview: {
     parameters: {
       query?: {
+        /** @description Capture this currently session-owned browser tab. Omitted follows the most recently active owned tab; an unavailable or unowned tab returns 404. */
+        browserTabId?: number
         /** @description Ignored client cache-busting token for preview URLs. */
         refresh?: number
       }
@@ -1400,7 +1590,7 @@ export interface operations {
     }
     requestBody?: never
     responses: {
-      /** @description Fresh viewport JPEG from the session's most recently active currently owned browser tab. */
+      /** @description Fresh viewport JPEG from the selected currently owned browser tab, or the most recently active owned tab when no selection is supplied. */
       200: {
         headers: {
           [name: string]: unknown

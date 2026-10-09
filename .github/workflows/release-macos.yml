@@ -266,7 +266,8 @@ jobs:
         id: chromium_workspace
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}
         shell: bash
-        run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}"
+        # Prepare once and copy every product before either build applies patches.
+        run: bash .github/scripts/macos-chromium-workspace.sh setup "${{ steps.inputs.outputs.chromium_src }}" "${{ steps.inputs.outputs.products }}"
 
       - name: Setup Bun
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
@@ -348,6 +349,8 @@ jobs:
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros
         env:
           BROWSEROS_BUILD_SOURCE_SHA: ${{ steps.sync.outputs.source_sha }}
+          BROWSEROS_CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.browseros_chromium_src }}
+          BROWSERCLAW_CHROMIUM_SRC: ${{ steps.chromium_workspace.outputs.browserclaw_chromium_src }}
           BROWSEROS_SERVER_RESOURCE_VERSION: ${{ steps.inputs.outputs.products == 'browseros' && inputs.server_version || '' }}
           BROWSERCLAW_SERVER_RESOURCE_VERSION: ${{ steps.inputs.outputs.products == 'browserclaw' && inputs.server_version || '' }}
           ONBOARDING_RESOURCE_VERSION: ${{ inputs.onboarding_version }}
@@ -373,12 +376,24 @@ jobs:
         run: |
           set -euo pipefail
           for product in ${{ steps.inputs.outputs.product_ids }}; do
+            case "$product" in
+              browseros) chromium_src="$BROWSEROS_CHROMIUM_SRC" ;;
+              browserclaw) chromium_src="$BROWSERCLAW_CHROMIUM_SRC" ;;
+              *) echo "::error::Unknown product: $product"; exit 1 ;;
+            esac
+            test -n "$chromium_src"
+            # Prune persistent BrowserOS resource leftovers without resetting
+            # the prepared source. Universal retains this copy for both arches.
+            uv run browseros source clean-outputs \
+              --root "$(dirname "$chromium_src")" \
+              --product "$product" \
+              --arch "${{ steps.inputs.outputs.arch }}"
             args=(
-              --preset release
+              --profile release-ci
               --product "$product"
               --arch "${{ steps.inputs.outputs.arch }}"
               --resource-mode "${{ steps.inputs.outputs.resource_mode }}"
-              --chromium-src "${{ steps.chromium_workspace.outputs.chromium_src }}"
+              --chromium-src "$chromium_src"
             )
             if [ "${{ steps.inputs.outputs.upload_to_r2 }}" != "true" ]; then
               args+=(--no-upload)
@@ -396,8 +411,6 @@ jobs:
 
       - name: Clean up disposable Chromium workspace
         if: always()
-        env:
-          MACOS_CHROMIUM_WORKSPACE_STATE_PATH: ${{ steps.chromium_workspace.outputs.state_path }}
         shell: bash
         run: |
           set -euo pipefail

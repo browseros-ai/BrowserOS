@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/buildflags.gni b/chrome/browser/buildflags.gni
-index 095e232be0479..55b11261c28cf 100644
+index bc2754dc1f599cd094d52c551bb0854b981614fc..4742d45ad4732ebb4b25c359fe797e9895c037d4 100644
 --- a/chrome/browser/buildflags.gni
 +++ b/chrome/browser/buildflags.gni
 @@ -3,6 +3,7 @@
@@ -11,7 +11,7 @@ index 095e232be0479..55b11261c28cf 100644
  # IMPORTANT
  # We are not accepting any new build flags in //chrome. See
 @@ -16,6 +17,8 @@ declare_args() {
-   enable_updater = is_chrome_branded && !is_fuchsia && target_os != "android"
+   enable_updater = is_chrome_branded && target_os != "android"
  
    # Detect updates and notify the user for Google Chrome across all platforms.
 -  # Chromium does not use an auto-updater.

@@ -185,7 +185,7 @@ describe('release-claw-server workflow', () => {
   it('reflects the version only after finalization', () => {
     const reflection = section('  reflect-version:')
     expect(reflection).toContain('- finalize')
-    expect(reflection).toContain('apps/claw-server-rust/Cargo.toml')
+    expect(reflection).toContain('apps/claw-server/Cargo.toml')
     expect(reflection).toContain('Cargo.lock')
     expect(reflection).toContain('git config user.name "github-actions[bot]"')
     expect(reflection).toContain('gh pr create')

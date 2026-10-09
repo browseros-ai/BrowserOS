@@ -1,22 +1,11 @@
 diff --git a/tools/metrics/histograms/metadata/extensions/enums.xml b/tools/metrics/histograms/metadata/extensions/enums.xml
-index 036730f9e8912c0ea740f8ea6c6baa59053af4c8..2b49e754e89cde6f39094cffdc5bbe24f1dae710 100644
+index 460630d8491054408e0e404cb576d147822515a9..473354944833273e0d3c5ef30282b2973f007b31 100644
 --- a/tools/metrics/histograms/metadata/extensions/enums.xml
 +++ b/tools/metrics/histograms/metadata/extensions/enums.xml
-@@ -2917,6 +2917,33 @@ Called by update_extension_histograms.py.-->
-   <int value="1975" label="CONTEXTUALTASKSPRIVATE_LAUNCHPANELINNEWTAB"/>
-   <int value="1976" label="DICTATIONPRIVATE_UPDATETRANSCRIPTION"/>
-   <int value="1977" label="DICTATIONPRIVATE_SETSTREAMSTATE"/>
-+  <int value="1978" label="DELETED_BROWSER_OS_GETACCESSIBILITYTREE"/>
-+  <int value="1979" label="DELETED_BROWSER_OS_GETINTERACTIVESNAPSHOT"/>
-+  <int value="1980" label="DELETED_BROWSER_OS_CLICK"/>
-+  <int value="1981" label="DELETED_BROWSER_OS_INPUTTEXT"/>
-+  <int value="1982" label="DELETED_BROWSER_OS_CLEAR"/>
-+  <int value="1983" label="DELETED_BROWSER_OS_GETPAGELOADSTATUS"/>
-+  <int value="1984" label="DELETED_BROWSER_OS_SCROLLUP"/>
-+  <int value="1985" label="DELETED_BROWSER_OS_SCROLLDOWN"/>
-+  <int value="1986" label="DELETED_BROWSER_OS_SCROLLTONODE"/>
-+  <int value="1987" label="DELETED_BROWSER_OS_SENDKEYS"/>
-+  <int value="1988" label="DELETED_BROWSER_OS_GETPAGESTRUCTURE"/>
+@@ -2921,6 +2921,33 @@ Called by update_extension_histograms.py.-->
+   <int value="1986" label="ENTERPRISE_WEBRTC_STARTCAPTURE"/>
+   <int value="1987" label="ENTERPRISE_WEBRTC_GETCAPTURESTATUS"/>
+   <int value="1988" label="ENTERPRISE_WEBRTC_STOPCAPTURE"/>
 +  <int value="1989" label="DELETED_BROWSER_OS_CAPTURESCREENSHOT"/>
 +  <int value="1990" label="DELETED_BROWSER_OS_GETSNAPSHOT"/>
 +  <int value="1991" label="BROWSER_OS_GETPREF"/>
@@ -33,14 +22,25 @@ index 036730f9e8912c0ea740f8ea6c6baa59053af4c8..2b49e754e89cde6f39094cffdc5bbe24
 +  <int value="2002" label="BROWSER_OS_CHOOSEPATH"/>
 +  <int value="2003" label="BROWSER_OS_SHOWTOAST"/>
 +  <int value="2004" label="BROWSER_OS_SHOWINFOBAR"/>
++  <int value="2005" label="DELETED_BROWSER_OS_GETACCESSIBILITYTREE"/>
++  <int value="2006" label="DELETED_BROWSER_OS_GETINTERACTIVESNAPSHOT"/>
++  <int value="2007" label="DELETED_BROWSER_OS_CLICK"/>
++  <int value="2008" label="DELETED_BROWSER_OS_INPUTTEXT"/>
++  <int value="2009" label="DELETED_BROWSER_OS_CLEAR"/>
++  <int value="2010" label="DELETED_BROWSER_OS_GETPAGELOADSTATUS"/>
++  <int value="2011" label="DELETED_BROWSER_OS_SCROLLUP"/>
++  <int value="2012" label="DELETED_BROWSER_OS_SCROLLDOWN"/>
++  <int value="2013" label="DELETED_BROWSER_OS_SCROLLTONODE"/>
++  <int value="2014" label="DELETED_BROWSER_OS_SENDKEYS"/>
++  <int value="2015" label="DELETED_BROWSER_OS_GETPAGESTRUCTURE"/>
  </enum>
  
  <!-- LINT.ThenChange(//extensions/browser/extension_function_histogram_value.h:HistogramValue) -->
-@@ -3307,6 +3334,7 @@ Called by update_extension_permission.py.-->
-   <int value="267" label="kIndigoPrivate"/>
-   <int value="268" label="kContextualTasksPrivate"/>
-   <int value="269" label="kDictationPrivate"/>
-+  <int value="270" label="kBrowserOS"/>
+@@ -3316,6 +3343,7 @@ Called by update_extension_permission.py.-->
+   <int value="272" label="kBluetoothPeripheral"/>
+   <int value="273" label="kPublicSuffix"/>
+   <int value="274" label="kEnterpriseWebrtc"/>
++  <int value="275" label="kBrowserOS"/>
  </enum>
  
- <enum name="ExtensionPolicyReinstallReason">
+ <enum name="ExtensionPinReason">

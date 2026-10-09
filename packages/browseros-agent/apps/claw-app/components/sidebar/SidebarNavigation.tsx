@@ -21,7 +21,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { name: 'Cockpit', to: '/', icon: LayoutDashboard },
   { name: 'MCP', to: '/mcp', icon: PlugZap },
-  { name: 'Tasks', to: '/skills', icon: Repeat },
+  { name: 'Skills', to: '/skills', icon: Repeat },
   { name: 'Audit', to: '/audit', icon: ScrollText },
 ]
 

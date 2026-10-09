@@ -1,5 +1,5 @@
 diff --git a/ui/webui/resources/tools/generate_grd.py b/ui/webui/resources/tools/generate_grd.py
-index 63dfeef208af5..7b858b941c51c 100644
+index 7ff7e7e99304817095fbea3d3a3d29ce71e2492c..9652872d48345d41440929f86a58a096dfe961ae 100644
 --- a/ui/webui/resources/tools/generate_grd.py
 +++ b/ui/webui/resources/tools/generate_grd.py
 @@ -37,6 +37,10 @@
@@ -13,7 +13,7 @@ index 63dfeef208af5..7b858b941c51c 100644
  
  import argparse
  import json
-@@ -112,6 +116,7 @@ def main(argv):
+@@ -122,6 +126,7 @@ def main(argv):
    parser.add_argument('--root-gen-dir', required=True)
    parser.add_argument('--input-files', nargs="*")
    parser.add_argument('--input-files-base-dir')
@@ -21,9 +21,9 @@ index 63dfeef208af5..7b858b941c51c 100644
    parser.add_argument('--output-files-base-dir', default='grit')
    parser.add_argument('--grdp-files', nargs="*")
    parser.add_argument('--resource-path-rewrites', nargs="*")
-@@ -157,6 +162,14 @@ def main(argv):
-             f'Error: input_file {filename} found outside of ' + \
-             'input_files_base_dir'
+@@ -176,6 +181,14 @@ def main(argv):
+           + 'input_files_base_dir'
+         )
  
 +        if args.ignore_missing_input_files:
 +          real_base_dir = os.path.join(_CWD, '..', '..',
@@ -34,5 +34,5 @@ index 63dfeef208af5..7b858b941c51c 100644
 +            continue
 +
          filepath = os.path.join(base_dir, filename).replace('\\', '/')
-         grd_file.write(_generate_include_row(
-             args.grd_prefix, filename, filepath,
+         grd_file.write(
+           _generate_include_row(

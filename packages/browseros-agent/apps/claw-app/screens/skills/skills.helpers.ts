@@ -3,7 +3,7 @@
  * Copyright 2025 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * Pure formatters for the Tasks list and detail. No React, no side effects.
+ * Pure formatters for the Skills list and detail. No React, no side effects.
  */
 
 /** Every skill is namespaced under this prefix so it never collides with a

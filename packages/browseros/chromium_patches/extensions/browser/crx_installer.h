@@ -1,5 +1,5 @@
 diff --git a/extensions/browser/crx_installer.h b/extensions/browser/crx_installer.h
-index b12d3bdac536ee86554c72ca6d9e3def25848616..e77160c9fd4914213c3acfeffdf81ad7b27e32b0 100644
+index 27352c236270b9b4122272c0d4373da0a82614a8..975f7fb8aa7d075e3077b7446bf83a916c41bafd 100644
 --- a/extensions/browser/crx_installer.h
 +++ b/extensions/browser/crx_installer.h
 @@ -21,6 +21,7 @@
@@ -10,7 +10,7 @@ index b12d3bdac536ee86554c72ca6d9e3def25848616..e77160c9fd4914213c3acfeffdf81ad7
  #include "extensions/browser/install_flag.h"
  #include "extensions/browser/manifest_check_level.h"
  #include "extensions/browser/preload_check.h"
-@@ -249,6 +250,12 @@ class CrxInstaller : public SandboxedUnpackerClient {
+@@ -245,6 +246,12 @@ class CrxInstaller : public SandboxedUnpackerClient {
    void set_install_immediately(bool val) {
      set_install_flag(kInstallFlagInstallImmediately, val);
    }
@@ -23,7 +23,7 @@ index b12d3bdac536ee86554c72ca6d9e3def25848616..e77160c9fd4914213c3acfeffdf81ad7
    void set_do_not_sync(bool val) {
      set_install_flag(kInstallFlagDoNotSync, val);
    }
-@@ -546,6 +553,9 @@ class CrxInstaller : public SandboxedUnpackerClient {
+@@ -539,6 +546,9 @@ class CrxInstaller : public SandboxedUnpackerClient {
    // Sequenced task runner where most file I/O operations will be performed.
    scoped_refptr<base::SequencedTaskRunner> shared_file_task_runner_;
  

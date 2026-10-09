@@ -1,10 +1,10 @@
 diff --git a/chrome/browser/extensions/api/side_panel/side_panel_service.h b/chrome/browser/extensions/api/side_panel/side_panel_service.h
-index 9c8540e08e301..44c20d03f8d4e 100644
+index e25c3c06d4f97170b4413edbb139151c83873391..8c395ef466b11f2f63410c36b80f9bed54377ae5 100644
 --- a/chrome/browser/extensions/api/side_panel/side_panel_service.h
 +++ b/chrome/browser/extensions/api/side_panel/side_panel_service.h
-@@ -161,6 +161,26 @@ class SidePanelService : public BrowserContextKeyedAPI,
+@@ -165,6 +165,26 @@ class SidePanelService : public BrowserContextKeyedAPI,
                               std::optional<int> tab_id,
-                              const std::string& path);
+                              std::string_view path);
  
 +  // Toggles the extension's contextual side panel for a specific tab.
 +  // If `desired_state` is provided, opens (true) or closes (false) the panel.

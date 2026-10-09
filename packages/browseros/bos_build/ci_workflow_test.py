@@ -394,9 +394,8 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
             "Resolve chromium pin and paths",
             "Restore chromium checkout (WarpCache)",
             "Restore chromium checkout (R2)",
-            "Ensure chromium checkout at pinned tag",
-            "Reset chromium tree (clean module)",
-            "Sync chromium dependencies (gclient)",
+            "Prepare chromium source and dependencies",
+            "Clean cached product outputs and resources",
         ):
             with self.subTest(phase=phase):
                 self.assertLess(bootstrap_index, indexes[phase])
@@ -405,8 +404,7 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         steps = self.build_steps()
 
         for phase in (
-            "Ensure chromium checkout at pinned tag",
-            "Sync chromium dependencies (gclient)",
+            "Prepare chromium source and dependencies",
         ):
             with self.subTest(phase=phase):
                 step = next(step for step in steps if step.get("name") == phase)
@@ -1474,19 +1472,25 @@ print(json.dumps({
         )
         self.assertIn("macos-chromium-workspace.sh setup", setup["run"])
         self.assertIn("${{ steps.inputs.outputs.chromium_src }}", setup["run"])
+        self.assertIn("${{ steps.inputs.outputs.products }}", setup["run"])
         self.assertIn(
-            '--chromium-src "${{ steps.chromium_workspace.outputs.chromium_src }}"',
+            '--chromium-src "$chromium_src"',
             build["run"],
         )
+        for product in ("browseros", "browserclaw"):
+            self.assertEqual(
+                build["env"][f"{product.upper()}_CHROMIUM_SRC"],
+                "${{ steps.chromium_workspace.outputs." + product + "_chromium_src }}",
+            )
+        self.assertIn("--profile release-ci", build["run"])
+        self.assertIn("browseros source clean-outputs", build["run"])
+        self.assertNotIn("--modules clean", build["run"])
         self.assertNotIn(
             '--chromium-src "${{ steps.inputs.outputs.chromium_src }}"',
             build["run"],
         )
         self.assertEqual(workspace_cleanup["if"], "always()")
-        self.assertEqual(
-            workspace_cleanup["env"]["MACOS_CHROMIUM_WORKSPACE_STATE_PATH"],
-            "${{ steps.chromium_workspace.outputs.state_path }}",
-        )
+        self.assertNotIn("MACOS_CHROMIUM_WORKSPACE_STATE_PATH", workspace_cleanup.get("env", {}))
         self.assertIn("macos-chromium-workspace.sh", workspace_cleanup["run"])
         self.assertIn(" cleanup", workspace_cleanup["run"])
         self.assertEqual(keychain_cleanup["if"], "always()")
@@ -1961,13 +1965,17 @@ class ProductNightlyWorkflowTest(unittest.TestCase):
             "--resource-mode published",
         ):
             self.assertIn(token, build["run"])
+        self.assertIn("browseros source clean-outputs", build["run"])
+        self.assertNotIn("--modules clean", build["run"])
+        workspace_setup = self.named_step(workflow, "build", "Setup disposable Chromium workspace")
+        self.assertIn("${{ inputs.product }}", workspace_setup["run"])
         self.assertIn("Clean up disposable Chromium workspace", text)
         self.assertIn("Clean up macOS signing keychain", text)
         self.assertIn("actions/upload-artifact@v7", text)
         self.assertIn("release.json", text)
         self.assertNotIn("gh release create", text)
 
-@unittest.skipIf(os.name == "nt", "macOS signing helper shell tests run on POSIX")
+@unittest.skipIf(os.name == "nt", "macOS workspace helper shell tests run on POSIX")
 class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -1994,38 +2002,47 @@ class MacOSChromiumWorkspaceHelperTest(unittest.TestCase):
         self.base_root_resolved = self.base_root.resolve()
         self.base_src_resolved = self.base_src.resolve()
         self.head = "a" * 40
-        self._write_fake_uname()
-        self._write_fake_stat()
+        self._write_fake_uv()
         self._write_fake_git()
         self._write_fake_cp()
+        depot_tools = self.base_root / "depot_tools"
+        (depot_tools / ".git").mkdir(parents=True)
+        gclient = depot_tools / "gclient"
+        gclient.write_text("#!/usr/bin/env bash\nset -euo pipefail\nprintf '%s\\n' \"$*\" >> \"$GCLIENT_LOG\"\n")
+        gclient.chmod(0o755)
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def _write_fake_uname(self):
-        uname = self.bin_dir / "uname"
-        uname.write_text(
-            """#!/usr/bin/env bash
-set -euo pipefail
-printf '%s\\n' "${UNAME_VALUE:-Darwin}"
-"""
-        )
-        uname.chmod(0o755)
+    def _write_fake_uv(self):
+        import sys
 
-    def _write_fake_stat(self):
-        stat = self.bin_dir / "stat"
-        stat.write_text(
-            """#!/usr/bin/env bash
-set -euo pipefail
-path="${@: -1}"
-if [ "${STAT_SPLIT_WORKSPACE_PARENT:-}" = "1" ] && [[ "$path" == *"browseros-ci-apfs-workspaces"* ]]; then
-  printf '222\\n'
-else
-  printf '111\\n'
-fi
+        # Exercise the shell-to-CLI handoff on Linux CI, replacing only the
+        # macOS platform/device facts and external git/gclient/cp executables.
+        uv = self.bin_dir / "uv"
+        uv.write_text(
+            f"#!{sys.executable}\n"
+            f"import sys\nsys.path.insert(0, {str(REPO_ROOT / 'packages/browseros')!r})\n"
+            """import os
+from pathlib import Path
+from types import SimpleNamespace
+from bos_build.cli.source import app
+from bos_build.steps.source import workspace
+workspace.sys = SimpleNamespace(platform='darwin')
+if os.environ.get('STAT_SPLIT_WORKSPACE_PARENT') == '1':
+    real_stat = Path.stat
+    def split_stat(path, *args, **kwargs):
+        result = real_stat(path, *args, **kwargs)
+        if path.name == 'browseros-ci-apfs-workspaces':
+            values = list(result)
+            values[2] += 1
+            return os.stat_result(values)
+        return result
+    Path.stat = split_stat
+app(args=sys.argv[sys.argv.index('source') + 1:])
 """
         )
-        stat.chmod(0o755)
+        uv.chmod(0o755)
 
     def _write_fake_git(self):
         git = self.bin_dir / "git"
@@ -2040,7 +2057,7 @@ if [ "${1:-}" = "-C" ]; then
 fi
 cmd="${1:-}"
 shift || true
-repo="${repo:-.}"
+repo="${repo:-$PWD}"
 repo_was_cleaned() {
   [ -f "$GIT_CLEAN_LOG" ] || return 1
   while IFS= read -r cleaned_repo; do
@@ -2050,11 +2067,16 @@ repo_was_cleaned() {
 }
 case "$cmd" in
   rev-parse)
-    target="${1:-}"
+    target="${@: -1}"
     case "$target" in
       HEAD)
-        printf '%s\\n' "${GIT_HEAD:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+        if [ -f "$GIT_CHECKOUT_HEAD" ]; then
+          cat "$GIT_CHECKOUT_HEAD"
+        else
+          printf '%s\\n' "${GIT_HEAD:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}"
+        fi
         ;;
+      --is-shallow-repository) printf 'false\\n' ;;
       refs/tags/*)
         printf '%s\\n' "${GIT_PIN_HEAD:-${GIT_HEAD:-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa}}"
         ;;
@@ -2076,6 +2098,9 @@ case "$cmd" in
   clean)
     printf '%s\\n' "$repo" >> "$GIT_CLEAN_LOG"
     ;;
+  checkout)
+    printf '%s\\n' "${GIT_PIN_HEAD:-$GIT_HEAD}" > "$GIT_CHECKOUT_HEAD"
+    ;;
 esac
 """
         )
@@ -2093,7 +2118,10 @@ case "${1:-}" in
     /bin/cp "$2" "$3"
     ;;
   -cR)
-    [ "${CP_FAIL_CLONE:-}" != "1" ] || exit 66
+    if [ "${CP_FAIL_CLONE:-}" = "1" ] && [[ "$3" == *"-browserclaw/"* ]]; then
+      printf 'partial copy\\n' > "$(dirname "$3")/partial-copy"
+      exit 66
+    fi
     /bin/cp -R "$2" "$3"
     ;;
   *)
@@ -2112,6 +2140,8 @@ esac
                 "BROWSEROS_CHROMIUM_VERSION_FILE": str(self.version_file),
                 "CP_LOG": str(self.cp_log),
                 "GIT_HEAD": self.head,
+                "GIT_CHECKOUT_HEAD": str(self.root / "git-checkout-head"),
+                "GCLIENT_LOG": str(self.root / "gclient.log"),
                 "GIT_CLEAN_LOG": str(self.git_clean_log),
                 "GIT_LOG": str(self.git_log),
                 "GITHUB_ENV": str(self.github_env),
@@ -2145,11 +2175,11 @@ esac
     def _workspace_parent(self):
         return self.base_root_resolved.parent / "browseros-ci-apfs-workspaces"
 
-    def _workspace_root(self, tag="123-4"):
-        return self._workspace_parent() / f"browseros-ci-chromium-{tag}"
+    def _workspace_root(self, tag="123-4", product="browseros"):
+        return self._workspace_parent() / f"browseros-ci-chromium-{tag}-{product}"
 
-    def _state_path(self, tag="123-4"):
-        return self.runner_temp / f"browseros-ci-chromium-workspace-{tag}.env"
+    def _state_path(self, tag="123-4", product="browseros"):
+        return self.runner_temp / f"browseros-ci-chromium-workspace-{tag}-{product}.env"
 
     def _write_workspace_marker(self, workspace_root, tag="old-1"):
         marker = workspace_root / ".browseros-workspace-state.env"
@@ -2164,6 +2194,7 @@ esac
                     f"base_head={self.head}",
                     "chromium_version=1.2.3.4",
                     f"run_tag={tag}",
+                    "product=browseros",
                 )
             )
             + "\n",
@@ -2190,23 +2221,30 @@ esac
 
         env_lines = self.github_env.read_text(encoding="utf-8").splitlines()
         self.assertIn(f"CHROMIUM_SRC={workspace_src}", env_lines)
-        self.assertIn(
-            f"MACOS_CHROMIUM_WORKSPACE_STATE_PATH={state_path}",
-            env_lines,
-        )
+        self.assertEqual(outputs["browseros_state_path"], str(state_path))
+        self.assertEqual(outputs["browseros_chromium_src"], str(workspace_src))
         cp_lines = self.cp_log.read_text(encoding="utf-8").splitlines()
         self.assertTrue(any(line.startswith("-c ") for line in cp_lines))
         self.assertTrue(any(line.startswith("-cR ") for line in cp_lines))
         self.assertFalse(any(line.startswith("-R ") for line in cp_lines))
+        locks = list((workspace_root / ".browseros-build-locks").iterdir())
+        self.assertEqual(len(locks), 1)
+        lock_inode = locks[0].stat().st_ino
 
         cleanup = self._run_helper(
             "cleanup",
             MACOS_CHROMIUM_WORKSPACE_STATE_PATH=str(state_path),
         )
         self.assertEqual(cleanup.returncode, 0, cleanup.stderr + cleanup.stdout)
-        self.assertFalse(workspace_root.exists())
+        self.assertEqual(
+            {path.name for path in workspace_root.iterdir()},
+            {".browseros-build-locks", ".browseros-workspace-state.env"},
+        )
         self.assertFalse(state_path.exists())
         self.assertTrue(self.base_src.is_dir())
+        self.assertEqual(locks[0].stat().st_ino, lock_inode)
+        self.assertEqual(self._run_helper("cleanup").returncode, 0)
+        self.assertEqual(locks[0].stat().st_ino, lock_inode)
 
     def test_setup_reaps_only_marked_stale_owned_workspaces(self):
         parent = self._workspace_parent()
@@ -2221,7 +2259,8 @@ esac
         result = self._run_helper("setup", self.base_src)
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertFalse(stale.exists())
+        self.assertFalse((stale / "src").exists())
+        self.assertTrue((stale / ".browseros-workspace-state.env").exists())
         self.assertTrue(unmarked.exists())
         self.assertTrue(Path(self._outputs()["workspace_root"]).exists())
         self.assertTrue(self.base_root.exists())
@@ -2241,7 +2280,7 @@ esac
         )
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertFalse(stale.exists())
+        self.assertFalse((stale / "src").exists())
         self.assertTrue(self._workspace_root().exists())
         self.assertTrue(self.base_root.exists())
 
@@ -2266,12 +2305,12 @@ esac
 
         result = self._run_helper("cleanup")
 
-        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
-        self.assertIn("Ignoring unexpected Chromium workspace path", result.stderr)
-        self.assertFalse(state_path.exists())
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Workspace cleanup failed", result.stderr + result.stdout)
+        self.assertTrue(state_path.exists())
         self.assertTrue(self.base_root.exists())
 
-    def test_setup_rejects_unowned_state_path(self):
+    def test_setup_does_not_use_unowned_state_override(self):
         outside_state = self.root / "outside.env"
 
         result = self._run_helper(
@@ -2280,12 +2319,9 @@ esac
             MACOS_CHROMIUM_WORKSPACE_STATE_PATH=str(outside_state),
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn(
-            "Unexpected macOS Chromium workspace state path",
-            result.stderr + result.stdout,
-        )
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse(outside_state.exists())
+        self.assertTrue(self._state_path().exists())
 
     def test_setup_fails_when_workspace_parent_is_not_on_base_volume(self):
         result = self._run_helper(
@@ -2296,27 +2332,36 @@ esac
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn(
-            "workspace parent is not on the base checkout volume",
+            "must share an APFS volume",
             result.stderr + result.stdout,
         )
         self.assertFalse(self._workspace_root().exists())
 
     def test_setup_fails_without_full_copy_fallback_when_apfs_clone_fails(self):
-        result = self._run_helper("setup", self.base_src, CP_FAIL_CLONE="1")
+        result = self._run_helper("setup", self.base_src, "all", CP_FAIL_CLONE="1")
 
         self.assertNotEqual(result.returncode, 0)
-        self.assertFalse(self._workspace_root().exists())
-        self.assertFalse(self._state_path().exists())
+        for product in ("browseros", "browserclaw"):
+            root = self._workspace_root(product=product)
+            self.assertEqual(
+                {path.name for path in root.iterdir()},
+                {".browseros-build-locks", ".browseros-workspace-state.env"},
+            )
+            self.assertFalse(self._state_path(product=product).exists())
+        self.assertEqual(self._outputs(), {})
         cp_lines = self.cp_log.read_text(encoding="utf-8").splitlines()
         self.assertTrue(any(line.startswith("-cR ") for line in cp_lines))
         self.assertFalse(any(line.startswith("-R ") for line in cp_lines))
 
-    def test_setup_fails_when_base_is_not_at_pinned_chromium_tag(self):
+    def test_setup_refreshes_base_when_not_at_pinned_chromium_tag(self):
         result = self._run_helper("setup", self.base_src, GIT_PIN_HEAD="b" * 40)
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("does not match pinned", result.stderr + result.stdout)
-        self.assertFalse(self._workspace_root().exists())
+        self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+        self.assertEqual(self._outputs()["base_head"], "b" * 40)
+        self.assertIn(
+            "checkout --force --detach refs/tags/1.2.3.4", self.git_log.read_text()
+        )
+        self.assertTrue(self._workspace_root().exists())
 
     def test_setup_repairs_base_with_tracked_changes(self):
         result = self._run_helper(
@@ -2342,6 +2387,9 @@ esac
         nested_repo = self.base_src / "third_party" / "v8"
         nested_repo.mkdir(parents=True)
         (nested_repo / ".git").mkdir()
+        (self.base_root / ".gclient_entries").write_text(
+            "entries = {'src/third_party/v8': 'fixture'}\n"
+        )
 
         result = self._run_helper(
             "setup",
@@ -2352,16 +2400,20 @@ esac
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertTrue(self._workspace_root().exists())
+        self.assertIn(str(nested_repo.resolve()), self.git_clean_log.read_text())
 
     def test_setup_removes_browseros_output_dirs_from_base(self):
         out_dir = self.base_src / "out" / "Default_browseros_arm64"
         out_dir.mkdir(parents=True)
 
-        result = self._run_helper("setup", self.base_src)
+        result = self._run_helper("setup", self.base_src, "all")
 
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         self.assertFalse(out_dir.exists())
-        self.assertTrue(self._workspace_root().exists())
+        for product in ("browseros", "browserclaw"):
+            self.assertTrue(self._workspace_root(product=product).exists())
+            self.assertIn(f"{product}_chromium_src", self._outputs())
+        self.assertEqual(len((self.root / "gclient.log").read_text().splitlines()), 1)
 
 
 @unittest.skipIf(os.name == "nt", "macOS signing helper shell tests run on POSIX")
@@ -2868,7 +2920,7 @@ class ChromiumGitRunbookTest(unittest.TestCase):
 
         bootstrap_index = release_flow.index("`GIT_CONFIG_GLOBAL`")
         source_ensure_index = release_flow.index(
-            "`browseros source ensure --step checkout --repair-cached-depot-tools`"
+            "`browseros source ensure --reset --repair-cached-depot-tools`"
         )
         self.assertLess(bootstrap_index, source_ensure_index)
         self.assertIn(

@@ -1,5 +1,5 @@
 diff --git a/chrome/install_static/chromium_install_modes.h b/chrome/install_static/chromium_install_modes.h
-index f29a8228fe611cc2d0a9dcab08cd624f60d2ebdc..bc7f3c72ae489cd96128e2f45d7049a0c4e5db9e 100644
+index a6d969df56d13d94eaa968934f909d6fd23b5f2f..56bf2a72ca207aefee13cbdf984ee7fbe7d3afcc 100644
 --- a/chrome/install_static/chromium_install_modes.h
 +++ b/chrome/install_static/chromium_install_modes.h
 @@ -10,6 +10,7 @@
@@ -10,10 +10,12 @@ index f29a8228fe611cc2d0a9dcab08cd624f60d2ebdc..bc7f3c72ae489cd96128e2f45d7049a0
  #include "chrome/common/chrome_icon_resources_win.h"
  #include "chrome/install_static/install_constants.h"
  
-@@ -19,9 +20,81 @@ namespace install_static {
+@@ -19,9 +20,83 @@ namespace install_static {
  // and user data directory paths. May be empty if no such dir is to be used.
  inline constexpr wchar_t kCompanyPathName[] = L"";
  
++// Product-specific registrations keep BrowserOS and BrowserOS neo installs
++// isolated. COM interface IDs below still follow the shared Chromium ABI.
 +struct ProductInstallIdentity {
 +  const wchar_t* base_app_name;
 +  const wchar_t* base_app_id;
@@ -94,7 +96,7 @@ index f29a8228fe611cc2d0a9dcab08cd624f60d2ebdc..bc7f3c72ae489cd96128e2f45d7049a0
  
  // The brand-specific safe browsing client name.
  inline constexpr char kSafeBrowsingName[] = "chromium";
-@@ -43,47 +116,31 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
+@@ -52,42 +127,29 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
          .install_suffix =
              L"",  // Empty install_suffix for the primary install mode.
          .logo_suffix = L"",  // No logo suffix for the primary install mode.
@@ -140,30 +142,20 @@ index f29a8228fe611cc2d0a9dcab08cd624f60d2ebdc..bc7f3c72ae489cd96128e2f45d7049a0
 +        .elevator_iid = {0xBB19A0E5,
 +                         0x00C6,
                           0x4966,
--                         {0x94, 0xb2, 0x5a, 0xfe, 0xc6, 0xfe, 0xd9,
--                          0x3a}},  // IElevator IID and TypeLib
--        // {BB19A0E5-00C6-4966-94B2-5AFEC6FED93A}.
+                          {0x94, 0xb2, 0x5a, 0xfe, 0xc6, 0xfe, 0xd9,
+                           0x3a}},  // IElevator IID and TypeLib
+         // {BB19A0E5-00C6-4966-94B2-5AFEC6FED93A}.
+         .old_elevator_iids = {},
 -        .tracing_service_clsid = {0x83f69367,
 -                                  0x442d,
 -                                  0x447f,
 -                                  {0x8b, 0xcc, 0x0e, 0x3f, 0x97, 0xbe, 0x9c,
 -                                   0xf2}},  // SystemTraceSession CLSID.
--        .tracing_service_iid = {0xa3fd580a,
--                                0xffd4,
-+                         {0x94, 0xB2, 0x5A, 0xFE, 0xC6, 0xFE, 0xD9, 0x3A}},
 +        .tracing_service_clsid = kProductInstallIdentity.tracing_service_clsid,
-+        .tracing_service_iid = {0xA3FD580A,
-+                                0xFFD4,
-                                 0x4075,
--                                {0x91, 0x74, 0x75, 0xd0, 0xb1, 0x99, 0xd3,
--                                 0xcb}},  // ISystemTraceSessionChromium IID and
--                                          // TypeLib
-+                                {0x91, 0x74, 0x75, 0xD0, 0xB1, 0x99, 0xD3,
-+                                 0xCB}},
-         .default_channel_name =
-             L"",  // Empty default channel name since no update integration.
-         .channel_strategy = ChannelStrategy::UNSUPPORTED,
-@@ -97,10 +154,7 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
+         .tracing_service_iid = {0xe0b03e2d,
+                                 0x7682,
+                                 0x4d83,
+@@ -108,10 +170,7 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
              icon_resources::kHtmlDocIndex,  // HTML doc icon resource index.
          .pdf_doc_icon_resource_index =
              icon_resources::kPDFDocIndex,  // PDF doc icon resource index.

@@ -1,0 +1,9 @@
+{
+  "name": "@browseros/claw-server",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "lint:rust": "cargo fmt --package claw-server -- --check && cargo clippy --package claw-server --all-targets --locked -- -D warnings",
+    "test:rust": "cargo test --package claw-server --locked"
+  }
+}

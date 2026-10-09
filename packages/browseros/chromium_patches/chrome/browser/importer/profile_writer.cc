@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/importer/profile_writer.cc b/chrome/browser/importer/profile_writer.cc
-index 35842f390f52847f831c29b11c4a3bfad78c0e8a..f87cf5549e4e3ea5dcd75ada41bac55c085caf3b 100644
+index 35842f390f52847f831c29b11c4a3bfad78c0e8a..15d16e897247878bd912e61f5f5725244e4f4f31 100644
 --- a/chrome/browser/importer/profile_writer.cc
 +++ b/chrome/browser/importer/profile_writer.cc
 @@ -11,6 +11,7 @@
@@ -25,7 +25,7 @@ index 35842f390f52847f831c29b11c4a3bfad78c0e8a..f87cf5549e4e3ea5dcd75ada41bac55c
 +#include "extensions/common/extension.h"
 +#include "extensions/browser/webstore_installer.h"
 +#include "extensions/browser/extension_registry.h"
-+#include "chrome/browser/extensions/extension_install_prompt.h"
++#include "extensions/browser/install_prompt_data.h"
 +#include "chrome/browser/extensions/webstore_install_with_prompt.h"
 +#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
 +#include "chrome/browser/ui/browser_window/public/profile_browser_collection.h"
@@ -48,7 +48,7 @@ index 35842f390f52847f831c29b11c4a3bfad78c0e8a..f87cf5549e4e3ea5dcd75ada41bac55c
 + private:
 +  ~SilentWebstoreInstaller() override = default;
 +
-+  std::unique_ptr<ExtensionInstallPrompt::Prompt> CreateInstallPrompt()
++  std::unique_ptr<extensions::InstallPromptData> CreateInstallPrompt()
 +      const override {
 +    return nullptr;
 +  }

@@ -8,10 +8,17 @@ import { AgentRunningCard } from './AgentRunningCard'
 
 interface RunningGridProps {
   sessions: LiveSessionCardRecord[]
+  /** Foreground a blocked agent's tab and open the in-control bar. */
+  onTakeOver?: (sessionId: string, browserTabId: number) => void
+  takeOverPendingSessionId?: string
 }
 
 /** Renders one card and one set of controls per connected live session. */
-export function RunningGrid({ sessions }: RunningGridProps) {
+export function RunningGrid({
+  sessions,
+  onTakeOver,
+  takeOverPendingSessionId,
+}: RunningGridProps) {
   const queryClient = useQueryClient()
   const focus = useFocusBrowserTab()
   const cancel = useCancelSession()
@@ -82,6 +89,7 @@ export function RunningGrid({ sessions }: RunningGridProps) {
           // is activity-sorted); a sticky selection would lag tab switches.
           const liveTabId = session.browserTabs[0]?.browserTabId
           const shownTabId = pinned ? rawPin : liveTabId
+          const help = session.helpRequest
           return (
             <AgentRunningCard
               key={session.sessionId}
@@ -107,8 +115,17 @@ export function RunningGrid({ sessions }: RunningGridProps) {
               onWatch={
                 shownTabId !== undefined ? () => onWatch(shownTabId) : undefined
               }
+              onTakeOver={
+                help && onTakeOver
+                  ? () => onTakeOver(session.sessionId, help.browserTabId)
+                  : undefined
+              }
               onStop={() => onStop(session.sessionId)}
-              isFocusPending={pendingBrowserTabId === shownTabId}
+              isFocusPending={
+                help
+                  ? takeOverPendingSessionId === session.sessionId
+                  : pendingBrowserTabId === shownTabId
+              }
               isCancelPending={cancelPendingSessionId === session.sessionId}
             />
           )

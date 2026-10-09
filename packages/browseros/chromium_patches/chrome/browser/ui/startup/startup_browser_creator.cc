@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/startup/startup_browser_creator.cc b/chrome/browser/ui/startup/startup_browser_creator.cc
-index bed74e910df0667b636c5b1e404df913febbc019..1ede5472b8f5666bee2fbeca32eb47ea38f5e85a 100644
+index 661831f8e98d65b9e2b4767f3424b49701be4665..5f0437474ad5661003bf1b2689969c7b55ca77e0 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
-@@ -41,6 +41,9 @@
+@@ -42,6 +42,9 @@
  #include "chrome/browser/apps/platform_apps/platform_app_launch.h"
  #include "chrome/browser/browser_features.h"
  #include "chrome/browser/browser_process.h"
@@ -11,15 +11,17 @@ index bed74e910df0667b636c5b1e404df913febbc019..1ede5472b8f5666bee2fbeca32eb47ea
 +#include "chrome/browser/browseros/onboarding/browseros_onboarding_prefs.h"
  #include "chrome/browser/extensions/startup_helper.h"
  #include "chrome/browser/first_run/first_run.h"
- #include "chrome/browser/lifetime/browser_shutdown.h"
-@@ -476,6 +479,69 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
+ #include "chrome/browser/global_features.h"
+@@ -486,6 +489,72 @@ void OpenNewWindowForFirstRun(const base::CommandLine& command_line,
  }
  #endif  // BUILDFLAG(ENABLE_DICE_SUPPORT)
  
 +#if !BUILDFLAG(IS_CHROMEOS)
 +// Exit callback for the BrowserOS onboarding first-run flow. Opens a browser
 +// window whether onboarding completed or was dismissed (close/cancel/crash),
-+// so the user is never left without a window.
++// so the user is never left without a window. Chromium's finish reason is
++// accepted for callback compatibility; BrowserOS gates its handoff on status
++// after the native extension-readiness check.
 +void OpenNewWindowForBrowserOSOnboarding(
 +    const base::CommandLine& command_line,
 +    Profile* profile,
@@ -27,7 +29,8 @@ index bed74e910df0667b636c5b1e404df913febbc019..1ede5472b8f5666bee2fbeca32eb47ea
 +    const std::vector<GURL>& first_run_urls,
 +    chrome::startup::IsProcessStartup process_startup,
 +    chrome::startup::IsFirstRun is_first_run,
-+    ProfilePicker::FirstRunExitStatus status) {
++    ProfilePicker::FirstRunExitStatus status,
++    ProfilePicker::FirstRunFinishReason /*finish_reason*/) {
 +  // kAbortTask: a newer first-run attempt took over the picker and owns the
 +  // launch. kAbandonedFlow: the user reached a browser window some other way
 +  // or quit the app from the onboarding window.
@@ -82,7 +85,7 @@ index bed74e910df0667b636c5b1e404df913febbc019..1ede5472b8f5666bee2fbeca32eb47ea
  #if BUILDFLAG(IS_CHROMEOS)
  // Returns the app id of the kiosk app associated with the current user session.
  // Returns nullopt for non-kiosk user sessions and for ARCVM kiosk sessions,
-@@ -714,6 +780,26 @@ void StartupBrowserCreator::LaunchBrowser(
+@@ -732,6 +801,26 @@ void StartupBrowserCreator::LaunchBrowser(
        command_line, {profile, StartupProfileMode::kBrowserWindow});
  
    if (!IsSilentLaunchEnabled(command_line, profile)) {

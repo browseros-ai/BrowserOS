@@ -91,11 +91,41 @@ cancel:
         $ref: ../responses.yaml#/Conflict
       '500':
         $ref: ../responses.yaml#/InternalError
+resolveHelp:
+  post:
+    operationId: resolveHelp
+    description: Hand control back to a waiting agent after a human has taken over its page.
+    parameters:
+      - $ref: ../parameters.yaml#/SessionId
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/sessions.yaml#/ResolveHelpRequest
+    responses:
+      '200':
+        description: The waiting agent was signalled to resume, or no pending request was found.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/sessions.yaml#/ResolveHelpResponse
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
 preview:
   get:
     operationId: getSessionPreview
     parameters:
       - $ref: ../parameters.yaml#/SessionId
+      - name: browserTabId
+        in: query
+        description: Capture this currently session-owned browser tab. Omitted follows the most recently active owned tab; an unavailable or unowned tab returns 404.
+        schema:
+          type: integer
+          format: int64
+          minimum: 1
       - name: refresh
         in: query
         description: Ignored client cache-busting token for preview URLs.
@@ -105,7 +135,7 @@ preview:
           minimum: 0
     responses:
       '200':
-        description: Fresh viewport JPEG from the session's most recently active currently owned browser tab.
+        description: Fresh viewport JPEG from the selected currently owned browser tab, or the most recently active owned tab when no selection is supplied.
         content:
           image/jpeg:
             schema:

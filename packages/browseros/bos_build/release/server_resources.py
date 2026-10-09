@@ -145,7 +145,7 @@ def server_build_command(
             "--release",
             "--locked",
             "-p",
-            "claw-server-rust",
+            "claw-server",
             "--bin",
             "browseros-claw-server-rs",
             "--target",

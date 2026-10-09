@@ -3,7 +3,31 @@ health:
     operationId: getHealth
     responses:
       '200':
-        description: The server is ready.
+        description: >-
+          This process is serving. Always 200 while it can answer, including while
+          the browser link is down; inspect `browser` to tell those apart.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/HealthResponse
+      '500':
+        $ref: ../responses.yaml#/InternalError
+ready:
+  get:
+    operationId: getReadiness
+    description: >-
+      Strict gate for callers that need agent tools to work, rather than only
+      needing the process to answer. Deliberately separate from health so a
+      transient link loss cannot be read as a reason to restart this process.
+    responses:
+      '200':
+        description: The server holds a live link to the browser.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/HealthResponse
+      '503':
+        description: The server is serving but has no live link to the browser.
         content:
           application/json:
             schema:
@@ -47,3 +71,20 @@ diagnostics:
               $ref: ../schemas/system.yaml#/SystemDiagnostics
       '500':
         $ref: ../responses.yaml#/InternalError
+
+extensionUpdateReady:
+  post:
+    operationId: notifyExtensionUpdateReady
+    description: >-
+      Wake the sidecar to independently inspect the BrowserOS extension's staged
+      update through CDP. The request carries no version and does not itself
+      authorize a reload. Browser origins other than the Neo extension are denied.
+    responses:
+      '204':
+        description: Notification accepted; activation is asynchronous.
+      '403':
+        description: Untrusted browser origin.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError

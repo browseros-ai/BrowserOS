@@ -28,6 +28,82 @@ impl CancelSessionResponse {
     }
 }
 
+/// HelpRequest : A pending request for human help from a blocked agent (sign-in, captcha, an approval it should not make). The agent waits until a human takes over the page and hands control back.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HelpRequest {
+    #[serde(rename = "requestId")]
+    pub request_id: String,
+    #[serde(rename = "reason")]
+    pub reason: String,
+    #[serde(rename = "details", skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
+    #[serde(rename = "resumeHint", skip_serializing_if = "Option::is_none")]
+    pub resume_hint: Option<String>,
+    #[serde(rename = "kind", skip_serializing_if = "Option::is_none")]
+    pub kind: Option<models::HelpRequestKind>,
+    /// The browser tab the human should take over.
+    #[serde(rename = "browserTabId")]
+    pub browser_tab_id: i64,
+    #[serde(rename = "url", skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(rename = "title", skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(rename = "requestedAt")]
+    pub requested_at: i64,
+}
+
+impl HelpRequest {
+    /// A pending request for human help from a blocked agent (sign-in, captcha, an approval it should not make). The agent waits until a human takes over the page and hands control back.
+    pub fn new(
+        request_id: String,
+        reason: String,
+        browser_tab_id: i64,
+        requested_at: i64,
+    ) -> HelpRequest {
+        HelpRequest {
+            request_id,
+            reason,
+            details: None,
+            resume_hint: None,
+            kind: None,
+            browser_tab_id,
+            url: None,
+            title: None,
+            requested_at,
+        }
+    }
+}
+
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum HelpRequestKind {
+    #[serde(rename = "login")]
+    Login,
+    #[serde(rename = "captcha")]
+    Captcha,
+    #[serde(rename = "approval")]
+    Approval,
+    #[serde(rename = "other")]
+    Other,
+}
+
+impl std::fmt::Display for HelpRequestKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        match self {
+            Self::Login => write!(f, "login"),
+            Self::Captcha => write!(f, "captcha"),
+            Self::Approval => write!(f, "approval"),
+            Self::Other => write!(f, "other"),
+        }
+    }
+}
+
+impl Default for HelpRequestKind {
+    fn default() -> HelpRequestKind {
+        Self::Login
+    }
+}
+
 ///
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum LiveSessionActivityState {
@@ -58,6 +134,9 @@ pub struct LiveSessionState {
     pub state: models::LiveSessionActivityState,
     #[serde(rename = "browserTabs")]
     pub browser_tabs: Vec<models::SessionBrowserTab>,
+    /// Present only while the agent is waiting for human help on this session.
+    #[serde(rename = "helpRequest", skip_serializing_if = "Option::is_none")]
+    pub help_request: Option<Box<models::HelpRequest>>,
 }
 
 impl LiveSessionState {
@@ -68,7 +147,35 @@ impl LiveSessionState {
         LiveSessionState {
             state,
             browser_tabs,
+            help_request: None,
         }
+    }
+}
+
+/// ResolveHelpRequest : Hand control back to the waiting agent, optionally with a note for it.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveHelpRequest {
+    #[serde(rename = "note", skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+impl ResolveHelpRequest {
+    /// Hand control back to the waiting agent, optionally with a note for it.
+    pub fn new() -> ResolveHelpRequest {
+        ResolveHelpRequest { note: None }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResolveHelpResponse {
+    /// True when a pending request was found and signalled to resume.
+    #[serde(rename = "resolved")]
+    pub resolved: bool,
+}
+
+impl ResolveHelpResponse {
+    pub fn new(resolved: bool) -> ResolveHelpResponse {
+        ResolveHelpResponse { resolved }
     }
 }
 

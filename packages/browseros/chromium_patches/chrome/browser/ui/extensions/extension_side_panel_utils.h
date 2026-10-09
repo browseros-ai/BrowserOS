@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/extensions/extension_side_panel_utils.h b/chrome/browser/ui/extensions/extension_side_panel_utils.h
-index 9e6cc5062846c..af36f14f4e6b2 100644
+index 7e9cf5118b5355b138a8d7716721c02279da1dd2..2ccb76a685e4a7d42b0c8cff2bbfe9a853e3578c 100644
 --- a/chrome/browser/ui/extensions/extension_side_panel_utils.h
 +++ b/chrome/browser/ui/extensions/extension_side_panel_utils.h
-@@ -62,6 +62,25 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
+@@ -57,6 +57,25 @@ void CloseContextualExtensionSidePanel(BrowserWindowInterface* browser_window,
                                         content::WebContents* web_contents,
                                         const ExtensionId& extension_id);
  

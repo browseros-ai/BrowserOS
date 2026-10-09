@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/views/session_restore_infobar/session_restore_infobar_delegate.h b/chrome/browser/ui/views/session_restore_infobar/session_restore_infobar_delegate.h
-index b4cef54f99df89ac0c7997bbb7187e0ce8845ede..3da16fa2c075bc4c07b7956440feceaeff845918 100644
+index 7fb5a1d2364c2e9b2354fb93a81c442cfa5e7562..dc130791ac7c8912a56d56350f54a04e0549ad70 100644
 --- a/chrome/browser/ui/views/session_restore_infobar/session_restore_infobar_delegate.h
 +++ b/chrome/browser/ui/views/session_restore_infobar/session_restore_infobar_delegate.h
-@@ -70,7 +70,7 @@ class SessionRestoreInfoBarDelegate : public ConfirmInfoBarDelegate {
+@@ -44,7 +44,7 @@ class SessionRestoreInfoBarDelegate : public ConfirmInfoBarDelegate {
  
    // ConfirmInfoBarDelegate:
    infobars::InfoBarDelegate::InfoBarIdentifier GetIdentifier() const override;

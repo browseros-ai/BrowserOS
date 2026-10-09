@@ -7,52 +7,52 @@
     <language>en</language>
 
     <item>
-      <sparkle:version>0.0.60</sparkle:version>
-      <pubDate>Wed, 30 Sep 2026 15:27:23 +0000</pubDate>
+      <sparkle:version>0.0.67</sparkle:version>
+      <pubDate>Wed, 07 Oct 2026 14:55:18 +0000</pubDate>
 
       <!-- macOS arm64 -->
       <enclosure
-        url="https://cdn.browseros.com/server/browserclaw_server_0.0.60_darwin_arm64.zip"
+        url="https://cdn.browseros.com/server/browserclaw_server_0.0.67_darwin_arm64.zip"
         sparkle:os="macos"
         sparkle:arch="arm64"
-        sparkle:edSignature="igM+HYSNyLYVItwcVv/Q2lLE7ENKtwXcgcDyHuSt4mFlSMYY+SRLKWYNVULceTTjgtRQBso5SH7SeW97AdVnAQ=="
-        length="11344705"
+        sparkle:edSignature="e7lbEtfQ341ZAgvv8aMJtl+t5dM2Xj8MKysmIIxagdYJV7o4CpYvrjUHEeWvwb3Ae0KEZA2iwWB+07ehD1jFBQ=="
+        length="11522561"
         type="application/zip"/>
 
       <!-- macOS x86_64 -->
       <enclosure
-        url="https://cdn.browseros.com/server/browserclaw_server_0.0.60_darwin_x64.zip"
+        url="https://cdn.browseros.com/server/browserclaw_server_0.0.67_darwin_x64.zip"
         sparkle:os="macos"
         sparkle:arch="x86_64"
-        sparkle:edSignature="suzhCzvJBJRjkh0vgc97pr8SIA+bjeR/MiDI1aX6rglO3MOBMLimSYWS7dleo7elCAGUV67Bk09OeyYgyqXYCA=="
-        length="12547231"
+        sparkle:edSignature="BNPbGLQ9D8bM0erMF1/89lUNS4JeFLNIaH+PBY1xjbmAalyteKnUMhqQNn9slkG5zVZ5MtJPWJWFifwA0lS+CA=="
+        length="12744169"
         type="application/zip"/>
 
       <!-- Linux arm64 -->
       <enclosure
-        url="https://cdn.browseros.com/server/browserclaw_server_0.0.60_linux_arm64.zip"
+        url="https://cdn.browseros.com/server/browserclaw_server_0.0.67_linux_arm64.zip"
         sparkle:os="linux"
         sparkle:arch="arm64"
-        sparkle:edSignature="tYSA+2/YqdvZNQgFA7nnh6nVwj0he1NLRQXyKSxJSjO2775Dd0uqT+HzMw7MNjaEXWCPfHMZR7OeVbN1wLeMAg=="
-        length="11765073"
+        sparkle:edSignature="Ky6TPFAk0jqh5xNtBucAS4m2wXlawSC0b+9GKM9MIUp7XWaZSANiT+86nJy3icIe/yGwh1RlfDKMqLlmW/SBDg=="
+        length="11950872"
         type="application/zip"/>
 
       <!-- Linux x86_64 -->
       <enclosure
-        url="https://cdn.browseros.com/server/browserclaw_server_0.0.60_linux_x64.zip"
+        url="https://cdn.browseros.com/server/browserclaw_server_0.0.67_linux_x64.zip"
         sparkle:os="linux"
         sparkle:arch="x86_64"
-        sparkle:edSignature="jOP+k0x/z+AsyBrekB3WGmQwR3dUjLZzfZ7gfS+CxhnKMAgoy006htHlj09G3+USkq3qEQ37ckP4iMusXT2sBw=="
-        length="12596424"
+        sparkle:edSignature="cXfdMN7TmJF/78yBbZBL1CnaS6HDkG4fVwVAqsTFAXOxhE18O1m0IwxMoQXjsMt2fhJ1gflTV4G/zGR9BMA8CQ=="
+        length="12796133"
         type="application/zip"/>
 
       <!-- Windows x86_64 -->
       <enclosure
-        url="https://cdn.browseros.com/server/browserclaw_server_0.0.60_windows_x64.zip"
+        url="https://cdn.browseros.com/server/browserclaw_server_0.0.67_windows_x64.zip"
         sparkle:os="windows"
         sparkle:arch="x86_64"
-        sparkle:edSignature="pYy5Z4GDghod+BuirYS2OGLrP2jLREDuZYC7oTQJnXYgQ6JGfEN2XS1XR3WG393ODhn1uEQiH6VDp+qIl8DYCA=="
-        length="12701594"
+        sparkle:edSignature="2At0Mx6rt27n2FhILatj9ySknW4m+xlcjBPM24vKmkDElNRxO9NvXNlfOwcUAJw+SBl+FCNJUPSyvfKGQPleBg=="
+        length="12908555"
         type="application/zip"/>
     </item>
 

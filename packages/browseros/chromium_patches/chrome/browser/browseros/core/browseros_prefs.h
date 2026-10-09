@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/core/browseros_prefs.h b/chrome/browser/browseros/core/browseros_prefs.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..893ade589e58d07c85848b790079481c2452b9e7
+index 0000000000000000000000000000000000000000..19e8b58261088485efa15d05db4819df283d81a7
 --- /dev/null
 +++ b/chrome/browser/browseros/core/browseros_prefs.h
-@@ -0,0 +1,125 @@
+@@ -0,0 +1,134 @@
 +// Copyright 2025 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -57,6 +57,15 @@ index 0000000000000000000000000000000000000000..893ade589e58d07c85848b790079481c
 +inline constexpr char kNtpFocusContent[] = "browseros.ntp_focus_content";
 +
 +inline constexpr char kOnboardingCompleted[] = "browseros.onboarding_completed";
++
++// Local-only first-install records keyed by active product extension ID. An
++// empty record is eligible; discovery adds the bundled version, then READY adds
++// a fixed deadline. Expiry marks the record released until that bundled version
++// is replaced, covering installers that finish after the timer. Retaining the
++// user-set dictionary (even empty) prevents re-enrollment after expiry,
++// recovery, or a browser restart.
++inline constexpr char kExtensionInstallGrace[] =
++    "browseros.extension_install_grace";
 +
 +// Boolean: Automation-driven tabs never pull the user's attention. A tab counts
 +// as automation-driven while a DevTools client is attached to it, which is

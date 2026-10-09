@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/mac/BUILD.gn b/chrome/browser/mac/BUILD.gn
-index 14a8b883a382ffa08bfc0948003b0b12cde693c4..45aa308a70d5d49424d0f2070a8b2ba6ea84a0a1 100644
+index 14f31d28f68fbc84da119000aedeff81423f58da..1929884dafa15fe21a2d7a1b51909e15c5344a26 100644
 --- a/chrome/browser/mac/BUILD.gn
 +++ b/chrome/browser/mac/BUILD.gn
-@@ -49,6 +49,13 @@ source_set("key_window_notifier") {
+@@ -50,6 +50,13 @@ source_set("key_window_notifier") {
    public_deps = [ "//base" ]
  }
  

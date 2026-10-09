@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/win/winsparkle_glue.cc b/chrome/browser/win/winsparkle_glue.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..08612fa1795d97550c56f02254ea89168fc5b9e6
+index 0000000000000000000000000000000000000000..f86e22cf3df9d1aa48c25b7366c8b5d7162eef6b
 --- /dev/null
 +++ b/chrome/browser/win/winsparkle_glue.cc
 @@ -0,0 +1,377 @@

@@ -1,5 +1,5 @@
 diff --git a/third_party/blink/public/devtools_protocol/BUILD.gn b/third_party/blink/public/devtools_protocol/BUILD.gn
-index d88feab1fb458d2dafc26236981aaaccc765f41f..a7c845bb62124589a228ad8ea3df40f39ee600ee 100644
+index accd4d91cf3d65ccc0339848ba31f64e25c38e63..378ae7ada39f5c429f8bb7f54ea3bee905f9cfac 100644
 --- a/third_party/blink/public/devtools_protocol/BUILD.gn
 +++ b/third_party/blink/public/devtools_protocol/BUILD.gn
 @@ -12,6 +12,7 @@ domains = [
@@ -10,7 +10,7 @@ index d88feab1fb458d2dafc26236981aaaccc765f41f..a7c845bb62124589a228ad8ea3df40f3
    "domains/Browser.pdl",
    "domains/CSS.pdl",
    "domains/CacheStorage.pdl",
-@@ -30,6 +31,7 @@ domains = [
+@@ -31,6 +32,7 @@ domains = [
    "domains/Fetch.pdl",
    "domains/FileSystem.pdl",
    "domains/HeadlessExperimental.pdl",

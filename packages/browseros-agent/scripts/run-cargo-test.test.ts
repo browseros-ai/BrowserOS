@@ -70,14 +70,14 @@ describe('reconcileCargoCounts', () => {
 
 describe('buildCargoJunitXml', () => {
   it('emits counts the summary parser reads off the testsuite element', () => {
-    const xml = buildCargoJunitXml('claw-server-rust', {
+    const xml = buildCargoJunitXml('claw-server', {
       passed: 13,
       failed: 1,
       ignored: 2,
       total: 16,
     })
     expect(xml).toContain(
-      '<testsuite name="claw-server-rust" tests="16" failures="1" errors="0" skipped="2">',
+      '<testsuite name="claw-server" tests="16" failures="1" errors="0" skipped="2">',
     )
     expect(xml).toContain('<testsuites tests="16" failures="1">')
   })

@@ -1,8 +1,8 @@
 diff --git a/chrome/app/settings_strings.grdp b/chrome/app/settings_strings.grdp
-index 763bba112d55b235b1a4a11ea027342ef3920dfe..3d0072122c9829a0ddcd6bfcfe1ab187f32c55b5 100644
+index caae29834c2cf5fd07bbfb05dc1f98be09e34470..c4d394aea392ef966064d703a729f1001ddfa400 100644
 --- a/chrome/app/settings_strings.grdp
 +++ b/chrome/app/settings_strings.grdp
-@@ -3910,6 +3910,12 @@
+@@ -3806,6 +3806,12 @@
        <message name="IDS_SETTINGS_IMPORT_AUTOFILL_FORM_DATA_CHECKBOX" desc="Checkbox for importing form data for autofill">
          Autofill form data
        </message>

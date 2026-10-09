@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/toolbar/BUILD.gn b/chrome/browser/ui/toolbar/BUILD.gn
-index 008a773482fb3e6d4e6fd68b2b642339f9d58161..3cbe518ef13061d496f8db13ef46c62a5496aa9b 100644
+index 605a25e6dec8bc3a7523bf697ef81b4746eb8a65..c2e94c25d74cb8962fc30512d2b29811895adfb4 100644
 --- a/chrome/browser/ui/toolbar/BUILD.gn
 +++ b/chrome/browser/ui/toolbar/BUILD.gn
-@@ -237,6 +237,7 @@ source_set("impl") {
+@@ -249,6 +249,7 @@ source_set("impl") {
      ]
  
      deps += [

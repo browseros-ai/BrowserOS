@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/profiles/profile_window.cc b/chrome/browser/profiles/profile_window.cc
-index c13b772bc2eae7e744e53374733b7d40595dd78c..6881556779f7a8e4f656e863229d338a3f8ff6c3 100644
+index c2f8c2028e8f036bac6c5a1183ac26019fc8fae6..01aad58e93a1218248c3dc7d9aedd5ee21883065 100644
 --- a/chrome/browser/profiles/profile_window.cc
 +++ b/chrome/browser/profiles/profile_window.cc
 @@ -6,6 +6,9 @@
@@ -22,25 +22,27 @@ index c13b772bc2eae7e744e53374733b7d40595dd78c..6881556779f7a8e4f656e863229d338a
    DCHECK(profile);
    TRACE_EVENT1("browser", "FindOrCreateNewWindowForProfile", "profile_path",
                 profile->GetPath());
-@@ -104,6 +108,7 @@ void FindOrCreateNewWindowForProfile(
+@@ -108,6 +112,9 @@ void FindOrCreateNewWindowForProfile(
    base::RecordAction(UserMetricsAction("NewWindow"));
    base::CommandLine command_line(base::CommandLine::NO_PROGRAM);
    StartupBrowserCreator browser_creator;
++  // Carry the picker's queued tabs into startup before the browser-created
++  // callback can clear the onboarding host and release its profile keep-alive.
 +  browser_creator.AddFirstRunTabs(first_run_tabs);
  
  #if !BUILDFLAG(IS_CHROMEOS)
    if (open_command_line_urls) {
-@@ -130,6 +135,18 @@ void OpenBrowserWindowForProfile(base::OnceCallback<void(Browser*)> callback,
-                                  bool is_new_profile,
-                                  bool open_command_line_urls,
-                                  Profile* profile) {
+@@ -135,6 +142,18 @@ void OpenBrowserWindowForProfile(
+     bool is_new_profile,
+     bool open_command_line_urls,
+     Profile* profile) {
 +  OpenBrowserWindowForProfileWithFirstRunTabs(
-+      std::move(callback), always_create, is_new_profile,
-+      open_command_line_urls, profile, std::vector<GURL>());
++      std::move(callback), always_create, is_new_profile, open_command_line_urls,
++      profile, std::vector<GURL>());
 +}
 +
 +void OpenBrowserWindowForProfileWithFirstRunTabs(
-+    base::OnceCallback<void(Browser*)> callback,
++    base::OnceCallback<void(BrowserWindowInterface*)> callback,
 +    bool always_create,
 +    bool is_new_profile,
 +    bool open_command_line_urls,
@@ -49,7 +51,7 @@ index c13b772bc2eae7e744e53374733b7d40595dd78c..6881556779f7a8e4f656e863229d338a
    DCHECK_CURRENTLY_ON(BrowserThread::UI);
    TRACE_EVENT1("browser", "OpenBrowserWindowForProfile", "profile_path",
                 profile->GetPath().AsUTF8Unsafe());
-@@ -199,7 +216,8 @@ void OpenBrowserWindowForProfile(base::OnceCallback<void(Browser*)> callback,
+@@ -208,7 +227,8 @@ void OpenBrowserWindowForProfile(
    // Passing true for |always_create| means we won't duplicate the code that
    // tries to find a browser.
    profiles::FindOrCreateNewWindowForProfile(

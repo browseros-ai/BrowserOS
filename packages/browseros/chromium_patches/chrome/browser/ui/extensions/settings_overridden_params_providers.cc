@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/extensions/settings_overridden_params_providers.cc b/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
-index c39cdf2db7e2fe1877aa7cda847939ef21e3cf4f..9b7ebad81276eb5efcdacc6bec27133141c11447 100644
+index 59a08a4e0ec57771c631408eebaec98aee6562bd..7b595864cf4ee9787d65a0ad5ce2213e408a1cfc 100644
 --- a/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
 +++ b/chrome/browser/ui/extensions/settings_overridden_params_providers.cc
 @@ -11,6 +11,7 @@

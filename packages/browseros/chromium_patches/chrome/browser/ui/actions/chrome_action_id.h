@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/ui/actions/chrome_action_id.h b/chrome/browser/ui/actions/chrome_action_id.h
-index 1a6acad48b6ffcc49e77229d79ffb838681abfa8..a2b7ebd4fa34109e9165a0050af13d8406e384d0 100644
+index fb916f99899f5fdd7a429539b755e688fee62955..e13091705aef3142b82deffa2f7138e88682fd6a 100644
 --- a/chrome/browser/ui/actions/chrome_action_id.h
 +++ b/chrome/browser/ui/actions/chrome_action_id.h
-@@ -573,7 +573,9 @@
+@@ -511,7 +511,9 @@
    E(kActionSidePanelShowSideSearch) \
    E(kActionSidePanelShowMerchantTrust) \
    E(kActionSidePanelShowTabsFromOtherDevices, \

@@ -39,7 +39,6 @@ features:
       - chrome/app/chrome_command_ids.h
       - chrome/browser/ui/actions/chrome_action_id.h
       - chrome/browser/ui/browser_actions.cc
-      - chrome/browser/ui/browser.cc
       - chrome/browser/ui/browser_command_controller.cc
       # Shared keyboard shortcut infra (llm-chat + keyboard-shortcuts)
       - chrome/browser/global_keyboard_shortcuts_mac.mm
@@ -48,6 +47,11 @@ features:
       # Shared pinned button (pin-chat)
       - chrome/browser/ui/views/toolbar/pinned_action_toolbar_button.cc
 
+      # Chromium 155 moved the former browser.cc customizations here.
+      - "chrome/browser/ui/browser_web_contents_delegate/browser_web_contents_delegate.cc"
+      - "chrome/browser/ui/bookmarks/bookmark_bar_controller.cc"
+      - "chrome/browser/ui/browser_web_contents_delegate/BUILD.gn"
+      - "chrome/browser/ui/bookmarks/BUILD.gn"
   branding:
     description: "chore: browseros branding and identity"
     files:
@@ -170,6 +174,7 @@ features:
       - chrome/browser/ui/webui/settings/settings_ui.cc
       - tools/metrics/histograms/metadata/sql/histograms.xml
 
+      - "chrome/browser/ui/webui/settings/BUILD.gn"
   # ── LAYER 4: FEATURES ─────────────────────────────────────
 
   api:
@@ -195,7 +200,6 @@ features:
       - chrome/browser/ui/toasts/toast_controller.cc
       - chrome/browser/ui/toasts/toast_controller.h
       - chrome/browser/ui/toasts/toast_service.cc
-      - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_utils.cc
       - chrome/common/extensions/api/_api_features.json
       - chrome/common/extensions/api/_permission_features.json
       - chrome/common/extensions/api/api_sources.gni
@@ -208,6 +212,9 @@ features:
       - tools/metrics/histograms/metadata/extensions/enums.xml
       - tools/metrics/histograms/metadata/toasts/enums.xml
 
+      - "tools/metrics/histograms/metadata/toasts/histograms.xml"
+      - "tools/metrics/actions/actions.xml"
+      - "chrome/browser/ui/extensions/extension_side_panel_utils.cc"
   ota-updater:
     description: "feat: extensions ota updater"
     files:
@@ -220,6 +227,7 @@ features:
       - chrome/browser/extensions/updater/extension_updater.h
       - chrome/browser/ui/extensions/settings_overridden_params_providers.cc
 
+      - "chrome/browser/extensions/chrome_extension_system.cc"
   chrome-importer:
     description: "feat: chrome importer"
     files:
@@ -235,7 +243,6 @@ features:
       - chrome/browser/importer/profile_writer.cc
       - chrome/browser/importer/profile_writer.h
       - chrome/browser/resources/settings/people_page/import_data_browser_proxy.ts
-      - chrome/browser/resources/settings/people_page/import_data_dialog.html
       - chrome/browser/ui/webui/settings/import_data_handler.cc
       - chrome/common/importer/importer_bridge.h
       - chrome/common/importer/mock_importer_bridge.h
@@ -253,6 +260,8 @@ features:
       - components/user_data_importer/common/importer_data_types.h
       - components/user_data_importer/common/importer_type.h
 
+      - "chrome/browser/resources/settings/people_page/import_data_dialog.html.ts"
+      - "chrome/browser/resources/settings/people_page/import_data_dialog.ts"
   first-run:
     description: "feat: first run experience"
     files:
@@ -278,6 +287,7 @@ features:
       - chrome/common/webui_url_constants.h
       - tools/gritsettings/resource_ids.spec
 
+      - "chrome/browser/ui/views/profiles/BUILD.gn"
   llm-chat:
     description: "feat: llm chat side panel"
     files:
@@ -296,6 +306,7 @@ features:
       - chrome/browser/ui/views/side_panel/browseros_simple_page_extractor.h
       - chrome/browser/ui/views/side_panel/third_party_llm/
 
+      - "tools/metrics/histograms/metadata/browser/histograms.xml"
   pin-chat:
     description: "feat: pin browseros native panels"
     files:
@@ -318,8 +329,8 @@ features:
       - chrome/browser/extensions/extension_management.cc
       - chrome/browser/ui/toolbar/BUILD.gn
       - chrome/browser/ui/toolbar/toolbar_actions_model.cc
-      - chrome/browser/ui/views/side_panel/extensions/extension_side_panel_manager.cc
 
+      - "chrome/browser/ui/views/side_panel/extensions/extension_side_panel_action_item_util.cc"
   flags:
     description: "feat: browser flags"
     files:
@@ -336,7 +347,7 @@ features:
     description: "feat: vertical tab strip"
     files:
       - chrome/browser/ui/tabs/BUILD.gn
-      - chrome/browser/ui/tabs/features.cc
+      # Chromium 155 removed the kVerticalTabs feature gate; retain pref sync.
       - chrome/browser/ui/tabs/vertical_tab_strip_state_controller.cc
       - chrome/browser/ui/views/frame/layout/browser_view_tabbed_layout_impl.cc
 
@@ -456,7 +467,6 @@ features:
       - chrome/installer/setup/browseros_install_ui.cc
       - chrome/installer/setup/browseros_install_ui.h
       - chrome/installer/setup/setup_main.cc
-      - chrome/installer/util/util_constants.cc
       - chrome/installer/util/util_constants.h
 
   keychain-prompts:
@@ -476,6 +486,7 @@ features:
       - chrome/browser/ui/startup/startup_launch_infobar_delegate.h
       - chrome/browser/ui/views/session_restore_infobar/
 
+      - "chrome/browser/ui/infobars/browser_infobar_registry.cc"
   mac-passkeys:
     description: "feat: macOS passkey entitlements"
     files:

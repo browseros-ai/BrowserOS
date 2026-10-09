@@ -95,15 +95,25 @@ A fresh machine needs nothing outside this package:
 
 ```bash
 uv sync
-uv run browseros source ensure --root "$CHROMIUM_ROOT" --step checkout
-uv run browseros build --modules clean --chromium-src "$CHROMIUM_ROOT/src" -t release
-uv run browseros source ensure --root "$CHROMIUM_ROOT" --step sync
-uv run browseros build --profile nightly-ci --chromium-src "$CHROMIUM_ROOT/src"
+uv run browseros source ensure --root "$CHROMIUM_ROOT" --reset
+uv run browseros source clean-outputs --root "$CHROMIUM_ROOT" --all-products --arch x64
+uv run browseros build --profile release-ci --chromium-src "$CHROMIUM_ROOT/src" --arch x64
 ```
 
-Checkout and sync are split because `clean` must run between them: it deletes
-the hook-managed toolchains that sync then restores. On runners without
-WarpCache, `browseros source cache restore|save` handles the R2 checkout cache.
+The complete preparation command holds the checkout lock, fetches the exact
+missing pin, resets source and managed dependencies, then runs sync/hooks.
+Omit `--reset` to preserve local changes; conflicting checkout/sync operations
+fail without silently discarding work. `--step checkout` and `--step sync` remain
+partial-operation compatibility commands. Cache restore/save also hold the lock;
+archives exclude lock files. Hosted roots remain exclusive to their workflow job.
+
+macOS CI uses `source workspace` through `macos-chromium-workspace.sh`: it refreshes
+the persistent base once and holds its lock through every requested product copy.
+Per-product output/resource cleanup follows; `release-ci` and `nightly-macos`
+then skip source cleanup and provisioning. `source cleanup-workspaces` removes
+owned copy contents but retains small ownership markers and lock directories so
+waiting processes cannot acquire a replacement lock inode. Local release and
+explicit `--modules clean` retain their reset behavior.
 
 ## Concurrency
 

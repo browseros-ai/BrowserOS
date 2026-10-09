@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/ui/bookmarks/BUILD.gn b/chrome/browser/ui/bookmarks/BUILD.gn
+index b7e930f581cd7a5911d4f8ac164016f42deb7153..a1ae8f557633b13586d219f65d570645d6269dd2 100644
+--- a/chrome/browser/ui/bookmarks/BUILD.gn
++++ b/chrome/browser/ui/bookmarks/BUILD.gn
+@@ -75,6 +75,7 @@ source_set("impl") {
+     "//chrome/browser:browser_features",
+     "//chrome/browser:defaults",
+     "//chrome/browser/bookmarks",
++    "//chrome/browser/browseros/core:prefs",
+     "//chrome/browser/page_load_metrics",
+     "//chrome/browser/prefs",
+     "//chrome/browser/profiles:profile",

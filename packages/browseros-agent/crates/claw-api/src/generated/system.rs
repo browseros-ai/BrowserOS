@@ -12,18 +12,52 @@ use crate::models;
 use serde::{Deserialize, Serialize};
 use serde_repr::{Deserialize_repr, Serialize_repr};
 
+/// BrowserLink : The server's live connection to the browser it drives.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BrowserLink {
+    #[serde(rename = "connected")]
+    pub connected: bool,
+    /// Milliseconds since the link was lost, while the server reconnects. Absent when connected.
+    #[serde(rename = "downForMs", deserialize_with = "Option::deserialize")]
+    pub down_for_ms: Option<i64>,
+    /// Why the link was last lost, when known.
+    #[serde(rename = "lastError", deserialize_with = "Option::deserialize")]
+    pub last_error: Option<String>,
+}
+
+impl BrowserLink {
+    /// The server's live connection to the browser it drives.
+    pub fn new(
+        connected: bool,
+        down_for_ms: Option<i64>,
+        last_error: Option<String>,
+    ) -> BrowserLink {
+        BrowserLink {
+            connected,
+            down_for_ms,
+            last_error,
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct HealthResponse {
+    /// Reports only that this process is serving. It stays `ok` while the browser link is down, because the supervisor restarts the server on a non-200 and a restart cannot restore a link the operating system tore down. Read `browser` for whether agent tools can actually run.
     #[serde(rename = "status")]
     pub status: HealthResponseStatus,
+    #[serde(rename = "browser", skip_serializing_if = "Option::is_none")]
+    pub browser: Option<Box<models::BrowserLink>>,
 }
 
 impl HealthResponse {
     pub fn new(status: HealthResponseStatus) -> HealthResponse {
-        HealthResponse { status }
+        HealthResponse {
+            status,
+            browser: None,
+        }
     }
 }
-///
+/// Reports only that this process is serving. It stays `ok` while the browser link is down, because the supervisor restarts the server on a non-200 and a restart cannot restore a link the operating system tore down. Read `browser` for whether agent tools can actually run.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub enum HealthResponseStatus {
     #[serde(rename = "ok")]
@@ -38,6 +72,27 @@ impl Default for HealthResponseStatus {
 
 pub mod health_response {
     pub use super::HealthResponseStatus as Status;
+}
+
+/// SchemaStatus : How the data this server opened compares to the schema this build knows. When the database was migrated by a newer BrowserOS neo, the server runs read-forward on the columns it understands and reports the migrations it does not have, so the app can prompt the user to update BrowserOS neo to match its data.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SchemaStatus {
+    /// True when the database carries applied migrations this build does not contain.
+    #[serde(rename = "databaseAhead")]
+    pub database_ahead: bool,
+    /// Names of the applied migrations this build does not know. Empty unless databaseAhead is true.
+    #[serde(rename = "unknownMigrations")]
+    pub unknown_migrations: Vec<String>,
+}
+
+impl SchemaStatus {
+    /// How the data this server opened compares to the schema this build knows. When the database was migrated by a newer BrowserOS neo, the server runs read-forward on the columns it understands and reports the migrations it does not have, so the app can prompt the user to update BrowserOS neo to match its data.
+    pub fn new(database_ahead: bool, unknown_migrations: Vec<String>) -> SchemaStatus {
+        SchemaStatus {
+            database_ahead,
+            unknown_migrations,
+        }
+    }
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
@@ -154,6 +209,8 @@ pub struct SystemInfo {
     pub url: String,
     #[serde(rename = "capabilities", skip_serializing_if = "Option::is_none")]
     pub capabilities: Option<Box<models::SystemCapabilities>>,
+    #[serde(rename = "schema", skip_serializing_if = "Option::is_none")]
+    pub schema: Option<Box<models::SchemaStatus>>,
 }
 
 impl SystemInfo {
@@ -163,6 +220,7 @@ impl SystemInfo {
             version,
             url,
             capabilities: None,
+            schema: None,
         }
     }
 }

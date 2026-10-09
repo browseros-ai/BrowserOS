@@ -1,10 +1,10 @@
 diff --git a/chrome/install_static/BUILD.gn b/chrome/install_static/BUILD.gn
-index dc056db749d7a..786f7f699cc46 100644
+index d23e787c7134baafbb596593bc78119f4484dbe9..b70f81ec92337d7d153d1eb8b5d827573ded3131 100644
 --- a/chrome/install_static/BUILD.gn
 +++ b/chrome/install_static/BUILD.gn
-@@ -27,6 +27,7 @@ if (is_win) {
-     public_deps = [
+@@ -25,6 +25,7 @@ if (is_win) {
        ":buildflags",
+       "//base",
        "//build:branding_buildflags",
 +      "//chrome/browser/browseros:buildflags",
        "//chrome/chrome_elf:nt_registry",

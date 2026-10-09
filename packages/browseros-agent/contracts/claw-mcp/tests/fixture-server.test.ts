@@ -28,6 +28,7 @@ const EXPECTED_PAGES = [
   'snapshot-cursor-concurrency.html',
   'snapshot-frame-a.html',
   'snapshot-frame-b.html',
+  'snapshot-frame-deep.html',
   'snapshot-frame-grandchild.html',
   'snapshot-frame-tree.html',
   'upload.html',

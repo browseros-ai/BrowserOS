@@ -11,9 +11,9 @@ BrowserOS neo is two pieces that run together.
 | Project | What it is | Stack |
 |---|---|---|
 | [`apps/claw-app`](apps/claw-app/) | The cockpit. The new tab where you watch agents work, replay sessions, and manage connections | WXT + React extension, Tailwind v4, base-ui and Radix primitives, shadcn (base-vega), TanStack Query and Table, xyflow, Rive |
-| [`apps/claw-server-rust`](apps/claw-server-rust/) | The backend. The MCP endpoint agents connect to, plus the API behind the cockpit | Rust. axum for HTTP, sea-orm with migrations, rmcp for MCP, clap, posthog-rs |
+| [`apps/claw-server`](apps/claw-server/) | The backend. The MCP endpoint agents connect to, plus the API behind the cockpit | Rust. axum for HTTP, sea-orm with migrations, rmcp for MCP, clap, posthog-rs |
 
-`claw-server-rust` builds on shared crates in [`crates/`](crates/): `browseros-cdp` for Chrome DevTools Protocol bindings, `browseros-core` for primitives, `browseros-mcp` for the MCP server, `claw-api` for wire types, and `harness-integrations` for the managed AI coding harness integrations.
+`claw-server` builds on shared crates in [`crates/`](crates/): `browseros-cdp` for Chrome DevTools Protocol bindings, `browseros-core` for primitives, `browseros-mcp` for the MCP server, `claw-api` for wire types, and `harness-integrations` for the managed AI coding harness integrations.
 
 The wire types are generated on both sides. [`packages/claw-api`](packages/claw-api/) holds the TypeScript DTOs and [`packages/claw-api-client`](packages/claw-api-client/) the contract-typed HTTP client, both generated from the same contract as the Rust `claw-api` crate. Do not hand edit generated files; run `bun run codegen:claw-api` instead.
 
@@ -23,7 +23,7 @@ The wire types are generated on both sides. [`packages/claw-api`](packages/claw-
 |---|---|---|
 | **Bun** | The package manager and runtime. Version pinned in `package.json` | `curl -fsSL https://bun.sh/install \| bash` |
 | **Go** | The dev supervisor is a Go program compiled on every run | `brew install go` |
-| **Rust** | `claw-server-rust` is built and run with cargo | `brew install rustup && rustup-init` |
+| **Rust** | `claw-server` is built and run with cargo | `brew install rustup && rustup-init` |
 | **BrowserOS neo** | The supervisor launches the installed app | [Download](https://cdn.browseros.com/download/BrowserOS_neo.dmg) |
 | **Docker** | Only if you change the API contract. `codegen:claw-api` runs the generator in a pinned container | [Docker Desktop](https://www.docker.com/products/docker-desktop/) |
 
@@ -52,10 +52,10 @@ That starts three processes and launches the browser against them:
 ```
 apps/claw-app            wxt                        the cockpit, with hot reload
 apps/claw-app            bun run dev:web            the web preview
-apps/claw-server-rust    cargo run -p claw-server-rust
+apps/claw-server         cargo run -p claw-server
 ```
 
-A file watcher also tracks `apps/claw-server-rust/src`, its `Cargo.toml`, and its test fixtures, and restarts the Rust server whenever they change. The first cargo build takes a while; later ones are incremental.
+A file watcher also tracks `apps/claw-server/src`, its `Cargo.toml`, and its test fixtures, and restarts the Rust server whenever they change. The first cargo build takes a while; later ones are incremental.
 
 Stop everything with `bun run dev:stop`.
 
@@ -115,7 +115,7 @@ apps/
     components/          shared UI
     modules/             cross-cutting infrastructure
     lib/                 utilities
-  claw-server-rust/      Rust backend
+  claw-server/           Rust backend
     src/
     tests/
   claw-onboard/          first-run onboarding (Vite)

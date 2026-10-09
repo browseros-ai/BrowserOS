@@ -1,12 +1,12 @@
 diff --git a/chrome/browser/ui/tabs/BUILD.gn b/chrome/browser/ui/tabs/BUILD.gn
-index a77c8744156675b92ad013d5ddb63f37b66dfba2..21e8f8a5bd98bc4d3271d5925b3d211e60e9bdc3 100644
+index 3396b27000c3120dbe0c332293c16c0964f63d78..856fe0d1065a9caabeeaa97d4536bf97c9c8e042 100644
 --- a/chrome/browser/ui/tabs/BUILD.gn
 +++ b/chrome/browser/ui/tabs/BUILD.gn
-@@ -456,6 +456,7 @@ if (!is_android) {
-       "//chrome/browser/accessibility_annotator/content_annotator",
-       "//chrome/browser/actor",
+@@ -523,6 +523,7 @@ if (!is_android) {
        "//chrome/browser/actor/ui",
-+      "//chrome/browser/browseros/core:prefs",
+       "//chrome/browser/banners",
        "//chrome/browser/bookmarks",
++      "//chrome/browser/browseros/core:prefs",
        "//chrome/browser/collaboration/messaging",
        "//chrome/browser/commerce",
+       "//chrome/browser/commerce/in_stock_notification",

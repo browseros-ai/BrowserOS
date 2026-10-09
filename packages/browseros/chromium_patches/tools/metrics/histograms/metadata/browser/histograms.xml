@@ -1,0 +1,12 @@
+diff --git a/tools/metrics/histograms/metadata/browser/histograms.xml b/tools/metrics/histograms/metadata/browser/histograms.xml
+index 8c419ceeeb9dbaf083885a08f6c9aaf2b447a293..afc5f2b6ac5d14714f8d69040a0b86ab343ba21c 100644
+--- a/tools/metrics/histograms/metadata/browser/histograms.xml
++++ b/tools/metrics/histograms/metadata/browser/histograms.xml
+@@ -83,6 +83,7 @@ chromium-metrics-reviews@google.com.
+   <variant name="SideSearch" summary="side search"/>
+   <variant name="TabsFromOtherDevices" summary="tabs from other devices"/>
+   <variant name="TestTabScopedEntry" summary="test tab scoped entry"/>
++  <variant name="ThirdPartyLlm" summary="third-party LLM"/>
+   <variant name="WebView" summary="web view"/>
+ </variants>
+ 

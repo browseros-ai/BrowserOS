@@ -130,12 +130,15 @@ Profiles are saved switch sets in `profiles/`:
 
 | Profile | Used by | What it sets |
 | --- | --- | --- |
-| `release-ci` | `build-browseros.yml`, the reusable Linux/Windows lane | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
+| `release-ci` | `build-browseros.yml` and macOS release lanes | `preset: release`, `clean: false`, `provision: none` — the workflow provisions and caches Chromium itself |
 | `nightly-ci` | unsigned cloud nightlies | the same, plus `sign: false`, `upload: false` |
-| `nightly-macos` | both products in the signed family nightly | `preset: release`, `resource_mode: published` |
+| `nightly-macos` | both products in the signed family nightly | `preset: release`, `resource_mode: published`, `clean: false`, `provision: none` |
 
-`release-macos.yml` runs `--preset release` against the persistent checkout on
-the self-hosted Mac and receives source or published mode from its caller.
+`release-macos.yml` refreshes the infrastructure-owned Chromium base to the exact
+pin, then APFS-copies it into independent product workspaces while holding the
+base lock. Builds consume those copies through `release-ci`; a universal build
+keeps one copy across both architectures. The caller selects source or published
+resources. Ordinary local `--preset release` still cleans and provisions source.
 
 Deeper flag semantics — `--skip`, `--from`, `--gn-arg`, `modules:` profiles,
 ephemeral runners — live in [`docs/build-cli.md`](docs/build-cli.md).
@@ -293,12 +296,14 @@ its own package file:
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
 | BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
-| BrowserClaw server | `.../apps/claw-server-rust/Cargo.toml` | `release-claw-server.yml` | `claw-server-rust/v*` |
+| BrowserClaw server | `.../apps/claw-server/Cargo.toml` | `release-claw-server.yml` | `claw-server/v*` |
 | BrowserOS onboarding | `.../apps/app-onboard/package.json` | `release-app-onboard.yml` | `app-onboard/v*` |
 | BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
 
 BrowserClaw browser builds and server OTA both consume the server bundles
-published under the historical `claw-server-rust/prod-resources` key. Packaging
+published under the historical `claw-server-rust/prod-resources` key. The source
+package is `claw-server`; release records still use the `claw-server-rust` ID.
+Packaging
 normalizes the binary name to `browseros-claw-server` for browser compatibility.
 
 One dispatch-only family workflow builds both signed macOS nightlies on the

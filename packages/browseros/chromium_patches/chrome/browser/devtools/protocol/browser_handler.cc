@@ -1,8 +1,14 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e100bf4bb8 100644
+index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbdd620a2d6 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -8,18 +8,32 @@
+@@ -4,24 +4,39 @@
+ 
+ #include "chrome/browser/devtools/protocol/browser_handler.h"
+ 
++#include <algorithm>
+ #include <set>
++#include <utility>
  #include <vector>
  
  #include "base/functional/bind.h"
@@ -16,18 +22,19 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
  #include "chrome/browser/devtools/devtools_dock_tile.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/profiles/profile_manager.h"
-+#include "chrome/browser/ui/browser.h"
  #include "chrome/browser/ui/browser_commands.h"
 +#include "chrome/browser/ui/browser_tabstrip.h"
  #include "chrome/browser/ui/browser_window.h"
-+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
+ #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
  #include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
++#include "chrome/browser/ui/browser_window/public/create_browser_window.h"
  #include "chrome/browser/ui/exclusive_access/exclusive_access_context.h"
 +#include "chrome/browser/ui/tabs/tab_enums.h"
 +#include "chrome/browser/ui/tabs/tab_group_model.h"
  #include "chrome/browser/ui/tabs/tab_strip_model.h"
  #include "components/privacy_sandbox/privacy_sandbox_attestations/privacy_sandbox_attestations.h"
 +#include "components/sessions/content/session_tab_helper.h"
+ #include "components/sessions/core/session_id.h"
 +#include "components/tab_groups/tab_group_color.h"
 +#include "components/tab_groups/tab_group_id.h"
 +#include "components/tab_groups/tab_group_visual_data.h"
@@ -35,7 +42,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -33,6 +47,19 @@ using protocol::Response;
+@@ -35,6 +50,19 @@ using protocol::Response;
  
  namespace {
  
@@ -55,35 +62,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -49,18 +76,22 @@ BrowserWindow* GetBrowserWindow(int window_id) {
- std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
-     ui::BaseWindow* window) {
-   std::string window_state = "normal";
--  if (window->IsMinimized())
-+  if (window->IsMinimized()) {
-     window_state = "minimized";
--  if (window->IsMaximized())
-+  }
-+  if (window->IsMaximized()) {
-     window_state = "maximized";
--  if (window->IsFullscreen())
-+  }
-+  if (window->IsFullscreen()) {
-     window_state = "fullscreen";
-+  }
- 
-   gfx::Rect bounds;
--  if (window->IsMinimized())
-+  if (window->IsMinimized()) {
-     bounds = window->GetRestoredBounds();
--  else
-+  } else {
-     bounds = window->GetBounds();
-+  }
-   return protocol::Browser::Bounds::Create()
-       .SetLeft(bounds.x())
-       .SetTop(bounds.y())
-@@ -70,14 +101,406 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -76,6 +104,404 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -221,11 +200,38 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +  return info;
 +}
 +
++// A tab's contents, owning window, and valid strip index for synchronous use.
++// Tab mutations can invalidate the index; pinning returns its new location.
 +struct TabLookupResult {
 +  raw_ptr<content::WebContents> web_contents = nullptr;
 +  raw_ptr<BrowserWindowInterface> bwi = nullptr;
 +  int tab_index = -1;
 +};
++
++Response ResolveTabLocation(content::WebContents* wc, TabLookupResult* result) {
++  BrowserWindowInterface* found_bwi = nullptr;
++  int found_index = TabStripModel::kNoTab;
++  ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++      [wc, &found_bwi, &found_index](BrowserWindowInterface* bwi) {
++        TabStripModel* tab_strip = bwi->GetTabStripModel();
++        int index = tab_strip->GetIndexOfWebContents(wc);
++        if (tab_strip->ContainsIndex(index)) {
++          found_bwi = bwi;
++          found_index = index;
++          return false;
++        }
++        return true;
++      });
++
++  if (!found_bwi) {
++    return Response::ServerError("No tab with given id");
++  }
++
++  result->web_contents = wc;
++  result->bwi = found_bwi;
++  result->tab_index = found_index;
++  return Response::Success();
++}
 +
 +Response ResolveTabIdentifier(std::optional<std::string> target_id,
 +                              std::optional<int> tab_id,
@@ -249,28 +255,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +      return Response::ServerError("No web contents in the target");
 +    }
 +
-+    BrowserWindowInterface* found_bwi = nullptr;
-+    int found_index = -1;
-+    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-+        [wc, &found_bwi, &found_index](BrowserWindowInterface* bwi) {
-+          TabStripModel* tab_strip = bwi->GetTabStripModel();
-+          int idx = tab_strip->GetIndexOfWebContents(wc);
-+          if (idx != TabStripModel::kNoTab) {
-+            found_bwi = bwi;
-+            found_index = idx;
-+            return false;
-+          }
-+          return true;
-+        });
-+
-+    if (!found_bwi) {
-+      return Response::ServerError("No tab with given id");
-+    }
-+
-+    result->web_contents = wc;
-+    result->bwi = found_bwi;
-+    result->tab_index = found_index;
-+    return Response::Success();
++    return ResolveTabLocation(wc, result);
 +  }
 +
 +  // tab_id provided
@@ -482,28 +467,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
  }  // namespace
  
  BrowserHandler::BrowserHandler(protocol::UberDispatcher* dispatcher,
-                                const std::string& target_id)
-     : target_id_(target_id) {
--  // Dispatcher can be null in tests.
--  if (dispatcher)
-+  if (dispatcher) {
-     protocol::Browser::Dispatcher::wire(dispatcher, this);
-+  }
- }
- 
- BrowserHandler::~BrowserHandler() = default;
-@@ -88,8 +511,9 @@ Response BrowserHandler::GetWindowForTarget(
-     std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-   auto host =
-       content::DevToolsAgentHost::GetForId(target_id.value_or(target_id_));
--  if (!host)
-+  if (!host) {
-     return Response::ServerError("No target with given id");
-+  }
-   content::WebContents* web_contents = host->GetWebContents();
-   if (!web_contents) {
-     return Response::ServerError("No web contents in the target");
-@@ -118,12 +542,74 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -126,6 +552,67 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -571,26 +535,7 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-   BrowserWindow* window = GetBrowserWindow(window_id);
--  if (!window)
-+  if (!window) {
-     return Response::ServerError("Browser window not found");
-+  }
- 
-   *out_bounds = GetBrowserWindowBounds(window);
-   return Response::Success();
-@@ -138,8 +624,9 @@ Response BrowserHandler::SetWindowBounds(
-     int window_id,
-     std::unique_ptr<protocol::Browser::Bounds> window_bounds) {
-   BrowserWindow* window = GetBrowserWindow(window_id);
--  if (!window)
-+  if (!window) {
-     return Response::ServerError("Browser window not found");
-+  }
-   gfx::Rect bounds = window->GetBounds();
-   const bool set_bounds = window_bounds->HasLeft() || window_bounds->HasTop() ||
-                           window_bounds->HasWidth() ||
-@@ -295,3 +782,668 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -305,3 +792,672 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
@@ -647,30 +592,30 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +    type = ParseWindowType(window_type.value());
 +  }
 +
-+  Browser::CreateParams params(type, profile, true);
++  BrowserWindowCreateParams params(type, *profile, true);
 +  if (bounds) {
 +    params.initial_bounds =
 +        gfx::Rect(bounds->GetLeft(0), bounds->GetTop(0), bounds->GetWidth(0),
 +                  bounds->GetHeight(0));
 +  }
 +
-+  Browser* browser = Browser::Create(params);
++  // Desktop creation returns the initialized interface synchronously.
++  // Keep navigation and focus policy on that interface; Chromium owns
++  // the window lifetime and the concrete Browser implementation.
++  BrowserWindowInterface* bwi = CreateBrowserWindow(std::move(params));
++  if (!bwi) {
++    return Response::ServerError("Failed to create window");
++  }
 +
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
-+  chrome::AddTabAt(browser, navigate_url, -1, true);
++  chrome::AddTabAt(bwi, navigate_url, -1, true);
 +
 +  // Show() activates the window (and on macOS the whole app); when automation
 +  // must not steal focus the new window is shown behind the user's work.
 +  if (browseros::AutomationNeverStealsFocus(profile->GetPrefs())) {
-+    browser->window()->ShowInactive();
++    bwi->GetWindow()->ShowInactive();
 +  } else {
-+    browser->window()->Show();
-+  }
-+
-+  BrowserWindowInterface* bwi =
-+      GetBrowserWindowInterface(browser->session_id().id());
-+  if (!bwi) {
-+    return Response::ServerError("Failed to create window");
++    bwi->GetWindow()->Show();
 +  }
 +
 +  *out_window = BuildWindowInfo(bwi);
@@ -823,7 +768,6 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +    return Response::ServerError("No browser window available");
 +  }
 +
-+  Browser* browser = bwi->GetBrowserForMigrationOnly();
 +  GURL navigate_url = url.has_value() ? GURL(url.value()) : GURL();
 +  int insert_index = index.value_or(-1);
 +  // Default to a background tab: an agent opening pages must not switch the
@@ -832,19 +776,25 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +  bool foreground = !background.value_or(true);
 +
 +  content::WebContents* new_wc = chrome::AddAndReturnTabAt(
-+      browser, navigate_url, insert_index, foreground);
++      bwi, navigate_url, insert_index, foreground);
 +  if (!new_wc) {
 +    return Response::ServerError("Failed to create tab");
 +  }
 +
-+  TabStripModel* tab_strip = bwi->GetTabStripModel();
-+  int new_index = tab_strip->GetIndexOfWebContents(new_wc);
-+
-+  if (pinned.value_or(false) && new_index != TabStripModel::kNoTab) {
-+    new_index = tab_strip->SetTabPinned(new_index, true);
++  // Navigation can reroute a popup request into a normal window. Resolve the
++  // actual owner and a valid strip index before pinning or serializing the tab.
++  TabLookupResult lookup;
++  Response response = ResolveTabLocation(new_wc, &lookup);
++  if (!response.IsSuccess()) {
++    return response;
 +  }
 +
-+  *out_tab = BuildTabInfo(new_wc, bwi, new_index);
++  if (pinned.value_or(false)) {
++    lookup.tab_index =
++        lookup.bwi->GetTabStripModel()->SetTabPinned(lookup.tab_index, true);
++  }
++
++  *out_tab = BuildTabInfo(lookup.web_contents, lookup.bwi, lookup.tab_index);
 +  return Response::Success();
 +}
 +
@@ -942,9 +892,8 @@ index ccf5dd29d87387ffed251ea944406722a87c2997..c4d79a5695ad5fdffda5875b6f9506e1
 +    return response;
 +  }
 +
-+  Browser* browser = lookup.bwi->GetBrowserForMigrationOnly();
 +  content::WebContents* new_wc =
-+      chrome::DuplicateTabAt(browser, lookup.tab_index);
++      chrome::DuplicateTabAt(lookup.bwi, lookup.tab_index);
 +  if (!new_wc) {
 +    return Response::ServerError("Failed to duplicate tab");
 +  }

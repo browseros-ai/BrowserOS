@@ -4,8 +4,8 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * The feedback call invitation shown to the most active installations. The
- * server decides who is eligible and keeps an invitation open until dismissal;
- * this only asks and reports back.
+ * server decides who is eligible and snoozes the invitation for a few days
+ * after it is booked or declined; this only asks and reports back.
  */
 
 import type {
@@ -17,16 +17,30 @@ import { apiClient } from './client'
 
 const FEEDBACK_INVITATION_STALE_TIME_MS = 30_000
 
-export const useFeedbackInvitation = createQuery<FeedbackInvitation>({
+/**
+ * The server's answer, stamped with when it was asked for. An answer recorded
+ * after `requestedAt` may not be reflected in it, so the card fences on this
+ * rather than on when the response landed. Answers written straight into the
+ * cache after an outcome come from after the write and carry no stamp.
+ */
+export type StampedFeedbackInvitation = FeedbackInvitation & {
+  requestedAt?: number
+}
+
+export const useFeedbackInvitation = createQuery<StampedFeedbackInvitation>({
   queryKey: ['api', 'feedback', 'invitation'],
-  fetcher: async () => (await apiClient()).getFeedbackInvitation(),
+  fetcher: async () => {
+    const requestedAt = Date.now()
+    const invitation = await (await apiClient()).getFeedbackInvitation()
+    return { ...invitation, requestedAt }
+  },
   staleTime: FEEDBACK_INVITATION_STALE_TIME_MS,
   refetchOnMount: 'always',
 })
 
 // Mutations default to no retries. A lost outcome is not free here: the
-// impression would be counted again on the next cockpit load, and a declined
-// invitation would come back, because the server is the authority on both and
+// impression would be counted again on the next cockpit load, and a booked or
+// declined invitation would come back before its snooze, because the server is the authority on both and
 // never heard. Every outcome write is idempotent, so retrying is safe.
 export const useRecordFeedbackInvite = createMutation<
   FeedbackInvitation,

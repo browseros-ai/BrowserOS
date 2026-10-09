@@ -54,6 +54,7 @@ class ReleaseGoldenTest(unittest.TestCase):
             [
                 "clean",
                 "git_setup",
+                "windows_sdk",
                 "winsparkle_setup",
                 "download_resources",
                 "resources",
@@ -185,6 +186,7 @@ class CiGoldenTest(unittest.TestCase):
         self.assertEqual(
             plan(CI, "x64", "windows"),
             [
+                "windows_sdk",
                 "winsparkle_setup",
                 "download_resources",
                 "resources",
@@ -248,6 +250,7 @@ class DebugGoldenTest(unittest.TestCase):
             plan(Switches(preset="debug"), "x64", "windows"),
             [
                 "git_setup",
+                "windows_sdk",
                 "winsparkle_setup",
                 "download_resources",
                 "resources",
@@ -578,8 +581,8 @@ class ProfileTest(unittest.TestCase):
         )
         switches = load_profile(profile_path).switches.resolved()
 
-        self.assertTrue(switches.clean)
-        self.assertEqual("full", switches.provision)
+        self.assertFalse(switches.clean)
+        self.assertEqual("none", switches.provision)
         self.assertTrue(switches.download)
         self.assertTrue(switches.sign)
         self.assertTrue(switches.upload)

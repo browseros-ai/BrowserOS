@@ -1,0 +1,12 @@
+diff --git a/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn b/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
+index d69f5af470c00262e4c76cacc53ab4de483b2187..43e8ba5db10cd24ac62f1866a9fa71e1ed4f6854 100644
+--- a/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
++++ b/chrome/browser/ui/browser_web_contents_delegate/BUILD.gn
+@@ -18,6 +18,7 @@ if (!is_android) {
+       "//chrome/browser:repost_form_warning_controller",
+       "//chrome/browser/actor",
+       "//chrome/browser/background",
++      "//chrome/browser/browseros/core:prefs",
+       "//chrome/browser/content_settings",
+       "//chrome/browser/content_settings:content_settings_factory",
+       "//chrome/browser/custom_handlers",

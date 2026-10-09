@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/chrome_browser_application_mac.mm b/chrome/browser/chrome_browser_application_mac.mm
-index 6c6d72a7c25bf0a9600580eb58245af6afcf63a6..b0ad028e9d308abc532de221f9cf656fe2a68e71 100644
+index 823b03b27cc31d2535d748dcf79b3a1e78a3d7ca..8bdcd99ae6ac9367c0855b27b32533ce50f5dfea 100644
 --- a/chrome/browser/chrome_browser_application_mac.mm
 +++ b/chrome/browser/chrome_browser_application_mac.mm
-@@ -9,13 +9,16 @@
- #include "base/apple/call_with_eh_frame.h"
+@@ -10,13 +10,16 @@
+ #include "base/apple/foundation_util.h"
  #include "base/check.h"
  #include "base/command_line.h"
 +#include "base/logging.h"
@@ -19,7 +19,7 @@ index 6c6d72a7c25bf0a9600580eb58245af6afcf63a6..b0ad028e9d308abc532de221f9cf656f
  #include "chrome/browser/ui/cocoa/l10n_util.h"
  #include "chrome/common/chrome_switches.h"
  #include "components/crash/core/common/crash_key.h"
-@@ -56,6 +59,46 @@ void CancelTerminate() {
+@@ -57,6 +60,46 @@ void CancelTerminate() {
  
  namespace {
  
@@ -66,7 +66,7 @@ index 6c6d72a7c25bf0a9600580eb58245af6afcf63a6..b0ad028e9d308abc532de221f9cf656f
  // Calling -[NSEvent description] is rather slow to build up the event
  // description. The description is stored in a crash key to aid debugging, so
  // this helper function constructs a shorter, but still useful, description.
-@@ -192,6 +235,8 @@ - (void)finishLaunching {
+@@ -193,6 +236,8 @@ - (void)finishLaunching {
        base::mac::MacOSVersion() >= 14'00'00 &&
        base::FeatureList::IsEnabled(
            features::kSonomaAccessibilityActivationRefinements);
