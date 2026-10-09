@@ -141,7 +141,7 @@ fn entry_map(entry: Vec<(String, EntryValue)>) -> BTreeMap<String, EntryValue> {
     entry.into_iter().collect()
 }
 
-fn transform_key(name: &str, shape: StdioShape) -> String {
+pub(super) fn transform_key(name: &str, shape: StdioShape) -> String {
     match shape.key_transform {
         Some(KeyTransform::SimpleName) => name
             .to_ascii_lowercase()

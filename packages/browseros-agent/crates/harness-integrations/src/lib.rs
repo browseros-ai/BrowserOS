@@ -13,8 +13,9 @@ pub use mcp::{
     AgentInfo, AgentScope, AgentSurface, DisconnectInput, DisconnectSummary, InspectEntryInput,
     InspectedEntry, LinkInput, LinkSummary, ListLinksFilter, ListedLink, ManifestLinkEntry,
     ManifestServerEntry, McpManager, McpServer, McpServerSpec, MigrateServerInput,
-    MigrateServerSummary, RescanEntry, RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
-    detect_installed_agents, is_installed, resolve_agent_mcp_config_path, resolve_agent_surface,
+    MigrateServerSummary, ReconcileInput, ReconcileSummary, RescanEntry, RescanReport,
+    ServerManifest, UnlinkInput, UnlinkSummary, detect_installed_agents, is_installed,
+    resolve_agent_mcp_config_path, resolve_agent_surface,
 };
 pub use skills::{
     SkillEnvironment, SkillReconcileOutcome, SkillReconciler, SkillSpec, SkillWarning,

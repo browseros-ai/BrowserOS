@@ -1,6 +1,6 @@
 # BrowserOS Agent
 
-The agent platform behind both browsers. [BrowserOS neo](../../README.md) is `claw-app` plus `claw-server-rust`, and [BrowserOS](../../README.BrowserOS.md) is `app` plus `server`.
+The agent platform behind both browsers. [BrowserOS neo](../../README.md) is `claw-app` plus `claw-server`, and [BrowserOS](../../README.BrowserOS.md) is `app` plus `server`.
 
 ## Start here instead
 
@@ -103,8 +103,8 @@ The build preflights every selected target before compiling and repeats the inst
 **Uploads are the default.** Without `--ci` or `--no-upload`, a build pushes its zips to R2. Pass one of them for a local build.
 
 ```bash
-bun scripts/build/claw-server-rust.ts --target=all --ci        # all five, no R2 credentials needed
-bun scripts/build/claw-server-rust.ts --target=darwin-arm64 --no-upload    # one target, local only
+bun scripts/build/claw-server.ts --target=all --ci        # all five, no R2 credentials needed
+bun scripts/build/claw-server.ts --target=darwin-arm64 --no-upload    # one target, local only
 ```
 
 ## Focused test groups
