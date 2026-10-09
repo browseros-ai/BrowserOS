@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  mock,
+  spyOn,
+} from 'bun:test'
 import { parseHTML } from 'linkedom'
 import { act, type ComponentProps, createElement } from 'react'
 import type { Root } from 'react-dom/client'
@@ -13,11 +22,26 @@ const state: {
   telemetry: { data?: { distinctId: string }; isError: boolean }
   capturing: boolean
   tracked: Tracked[]
+  requests: { url: string; init?: RequestInit }[]
+  response: () => Promise<Response>
 } = {
   telemetry: { isError: false },
   capturing: true,
   tracked: [],
+  requests: [],
+  response: async () => Response.json({ status: 1 }),
 }
+
+const originalKey = process.env.VITE_CLAW_POSTHOG_KEY
+const originalHost = process.env.VITE_CLAW_POSTHOG_HOST
+process.env.VITE_CLAW_POSTHOG_KEY = 'test-project-key'
+process.env.VITE_CLAW_POSTHOG_HOST = 'https://posthog.example'
+afterAll(() => {
+  if (originalKey === undefined) delete process.env.VITE_CLAW_POSTHOG_KEY
+  else process.env.VITE_CLAW_POSTHOG_KEY = originalKey
+  if (originalHost === undefined) delete process.env.VITE_CLAW_POSTHOG_HOST
+  else process.env.VITE_CLAW_POSTHOG_HOST = originalHost
+})
 
 mock.module('@/modules/analytics/telemetry.hooks', () => ({
   useTelemetryState: () => state.telemetry,
@@ -36,7 +60,6 @@ mock.module('@/modules/analytics/posthog', () => ({
 mock.module('@/modules/analytics/events', () => ({
   AnalyticsEvent: {
     UltrafastWaitlistViewed: 'ultrafast_waitlist_viewed',
-    UltrafastWaitlistJoined: 'ultrafast_waitlist_joined',
   },
   track: (event: string, properties?: Record<string, unknown>) => {
     state.tracked.push({ event, properties })
@@ -89,11 +112,23 @@ function idsWithDifferentPrices(): [string, string] {
 
 let root: Root
 let container: HTMLElement
+let fetchMock: ReturnType<typeof spyOn<typeof globalThis, 'fetch'>>
 
 beforeEach(async () => {
   state.telemetry = { isError: false }
   state.capturing = true
   state.tracked = []
+  state.requests = []
+  state.response = async () => Response.json({ status: 1 })
+  fetchMock = spyOn(globalThis, 'fetch').mockImplementation(
+    Object.assign(
+      async (url: Parameters<typeof fetch>[0], init?: RequestInit) => {
+        state.requests.push({ url: String(url), init })
+        return state.response()
+      },
+      { preconnect: globalThis.fetch.preconnect },
+    ),
+  )
   captureStateListeners.clear()
   for (const key of Object.keys(storage)) delete storage[key]
 
@@ -134,6 +169,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   await act(async () => root.unmount())
+  fetchMock.mockRestore()
   for (const [name, descriptor] of globalDescriptors) {
     if (descriptor) Object.defineProperty(globalThis, name, descriptor)
     else Reflect.deleteProperty(globalThis, name)
@@ -184,7 +220,7 @@ async function submit(email: string) {
 const views = () =>
   state.tracked.filter((t) => t.event === 'ultrafast_waitlist_viewed')
 const joins = () =>
-  state.tracked.filter((t) => t.event === 'ultrafast_waitlist_joined')
+  state.requests.map(({ init }) => JSON.parse(String(init?.body)))
 
 describe('UltrafastWaitlist', () => {
   it('shows a loading state until the price is known', async () => {
@@ -234,14 +270,14 @@ describe('UltrafastWaitlist', () => {
     expect(container.textContent).not.toContain(`$${priceForId(second)}`)
   })
 
-  it('waits for capture before counting the view and allowing signup', async () => {
+  it('tests that signup stays available with usage analytics off', async () => {
     state.telemetry = { data: { distinctId: 'id-0' }, isError: false }
     state.capturing = false
     await render()
 
     expect(views()).toEqual([])
-    expect(input().disabled).toBe(true)
-    expect(container.textContent).toContain('usage analytics, which is off')
+    expect(input().disabled).toBe(false)
+    expect(container.textContent).not.toContain('usage analytics')
 
     await setCapturing(true)
     expect(views()).toHaveLength(1)
@@ -255,11 +291,20 @@ describe('UltrafastWaitlist', () => {
 
     expect(joins()).toEqual([
       {
+        api_key: 'test-project-key',
         event: 'ultrafast_waitlist_joined',
-        properties: { price_usd: priceForId('id-0'), email: 'ada@example.com' },
+        distinct_id: 'id-0',
+        properties: {
+          price_usd: priceForId('id-0'),
+          email: 'ada@example.com',
+          $process_person_profile: false,
+        },
       },
     ])
     expect(storage[JOINED_KEY]).toBe('true')
+    expect(state.requests[0]?.init?.credentials).toBe('omit')
+    expect(state.requests[0]?.init?.referrerPolicy).toBe('no-referrer')
+    expect(state.requests[0]?.init?.signal).toBeInstanceOf(AbortSignal)
     expect(container.textContent).toContain('on the list')
     expect(container.querySelector('form')).toBeNull()
   })
@@ -274,16 +319,95 @@ describe('UltrafastWaitlist', () => {
     expect(storage[JOINED_KEY]).toBeUndefined()
   })
 
-  it('does not remember a join when capture stopped before submit', async () => {
+  it('tests that an explicit signup is sent even when capture stops', async () => {
     state.telemetry = { data: { distinctId: 'id-0' }, isError: false }
     await render()
     // Capture stops without the page having re-rendered yet.
     state.capturing = false
     await submit('ada@example.com')
 
+    expect(joins()).toHaveLength(1)
+    expect(storage[JOINED_KEY]).toBe('true')
+    expect(state.capturing).toBe(false)
+  })
+
+  it('tests that opted-out users can submit without enabling analytics', async () => {
+    state.telemetry = { data: { distinctId: 'id-0' }, isError: false }
+    state.capturing = false
+    await render()
     expect(joins()).toEqual([])
+    await submit('ada@example.com')
+
+    expect(joins()[0]?.properties.email).toBe('ada@example.com')
+    expect(state.tracked).toEqual([])
+    expect(state.capturing).toBe(false)
+    expect(storage[JOINED_KEY]).toBe('true')
+  })
+
+  it('tests that confirmation waits for delivery and duplicate submits are ignored', async () => {
+    state.telemetry = { data: { distinctId: 'id-0' }, isError: false }
+    let accept!: (response: Response) => void
+    state.response = () =>
+      new Promise((resolve) => {
+        accept = resolve
+      })
+    await render()
+    await submit('ada@example.com')
+    await submit('ada@example.com')
+
+    expect(joins()).toHaveLength(1)
     expect(storage[JOINED_KEY]).toBeUndefined()
-    expect(container.querySelector('form')).not.toBeNull()
+    expect(input().disabled).toBe(true)
+    expect(container.textContent).toContain('Joining')
+    expect(container.textContent).not.toContain('on the list')
+
+    await act(async () => {
+      accept(Response.json({ status: 1 }))
+    })
+    expect(storage[JOINED_KEY]).toBe('true')
+    expect(container.textContent).toContain('on the list')
+  })
+
+  it.each(['http', 'network', 'timeout', 'rejected', 'invalid-response'])(
+    'tests that a %s failure leaves signup retryable',
+    async (failure) => {
+      state.telemetry = { data: { distinctId: 'id-0' }, isError: false }
+      state.response = async () => {
+        if (failure === 'network') throw new TypeError('Failed to fetch')
+        if (failure === 'timeout')
+          throw new DOMException('Timed out', 'TimeoutError')
+        if (failure === 'http')
+          return new Response('Unavailable', { status: 503 })
+        if (failure === 'rejected') return Response.json({ status: 0 })
+        return new Response('Not PostHog')
+      }
+      await render()
+      await submit('ada@example.com')
+
+      expect(storage[JOINED_KEY]).toBeUndefined()
+      expect(input().value).toBe('ada@example.com')
+      expect(input().disabled).toBe(false)
+      expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+        'try again',
+      )
+
+      state.response = async () => Response.json({ status: 1 })
+      await submit('ada@example.com')
+      expect(storage[JOINED_KEY]).toBe('true')
+      expect(container.textContent).toContain('on the list')
+    },
+  )
+
+  it('tests that signup uses the identity that determined the displayed price', async () => {
+    const [first, second] = idsWithDifferentPrices()
+    state.telemetry = { data: { distinctId: first }, isError: false }
+    await render()
+    state.telemetry = { data: { distinctId: second }, isError: false }
+    await render()
+    await submit('ada@example.com')
+
+    expect(joins()[0]?.distinct_id).toBe(first)
+    expect(joins()[0]?.properties.price_usd).toBe(priceForId(first))
   })
 
   it('picks up a join made in another tab', async () => {
@@ -311,7 +435,6 @@ describe('UltrafastWaitlistView', () => {
         createElement(UltrafastWaitlistView, {
           price,
           joined: false,
-          canJoin: true,
           onJoin: () => {},
         }),
       )

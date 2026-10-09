@@ -6,8 +6,8 @@
  * The cockpit's event catalog. Events are metadata about which screens
  * and controls get used; they never carry user content (no urls,
  * titles, prompts, tool i/o). `track` only accepts scalar properties.
- * The one exception is the email a reader submits to join the Ultrafast
- * waitlist, which they type in for exactly that purpose.
+ * Explicit Ultrafast email submissions use a separate request in
+ * screens/ultrafast/ultrafast-signup.ts, independent of usage analytics.
  */
 
 import { capture } from './posthog'
@@ -36,7 +36,6 @@ export const AnalyticsEvent = {
   ManualSetupCommandCopied: 'manual_setup_command_copied',
   UltrafastBannerClicked: 'ultrafast_banner_clicked',
   UltrafastWaitlistViewed: 'ultrafast_waitlist_viewed',
-  UltrafastWaitlistJoined: 'ultrafast_waitlist_joined',
 } as const
 
 export type AnalyticsEventName =

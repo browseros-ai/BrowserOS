@@ -9,9 +9,8 @@
  * identity PostHog uses, so every captured event for a user agrees on it
  * across tabs, reloads and cleared extension storage.
  *
- * There is deliberately no price without that UUID. Signups cannot be
- * captured without it anyway, and a stand-in price could differ from the
- * real one once the server answers.
+ * The UUID is available even when usage analytics is off. There is no
+ * stand-in price while it loads, which could change the offer mid-visit.
  */
 
 import { useState, useSyncExternalStore } from 'react'
@@ -35,7 +34,7 @@ export function priceForId(id: string): UltrafastPrice {
 export type UltrafastPriceState =
   | { status: 'loading' }
   | { status: 'unavailable' }
-  | { status: 'ready'; price: UltrafastPrice }
+  | { status: 'ready'; price: UltrafastPrice; distinctId: string }
 
 /**
  * The reader's price, pinned for the life of the page once known: the server
@@ -46,12 +45,15 @@ export type UltrafastPriceState =
 export function useUltrafastPrice(): UltrafastPriceState {
   const telemetry = useTelemetryState()
   const distinctId = telemetry.data?.distinctId
-  const [pinned, setPinned] = useState<UltrafastPrice | null>(null)
-  if (pinned !== null) return { status: 'ready', price: pinned }
+  const [pinned, setPinned] = useState<{
+    price: UltrafastPrice
+    distinctId: string
+  } | null>(null)
+  if (pinned !== null) return { status: 'ready', ...pinned }
   if (distinctId) {
     const price = priceForId(distinctId)
-    setPinned(price)
-    return { status: 'ready', price }
+    setPinned({ price, distinctId })
+    return { status: 'ready', price, distinctId }
   }
   return telemetry.isError ? { status: 'unavailable' } : { status: 'loading' }
 }

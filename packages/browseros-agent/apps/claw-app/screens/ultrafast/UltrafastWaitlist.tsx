@@ -7,10 +7,9 @@
  * Signups are the `ultrafast_waitlist_joined` event against
  * `ultrafast_waitlist_viewed`, split by the `price_usd` each reader was shown.
  *
- * The email the reader types is the one piece of user content the cockpit
- * sends, and only because they submitted it to join. It rides on the join
- * event rather than `identify()`: identity must stay the server's anonymous
- * UUID, and person profiles are off, so the event is where it is stored.
+ * Email is sent only on explicit submission, independently of usage analytics.
+ * Confirmation waits for PostHog to accept the event. Usage views still respect
+ * analytics consent, and signup never enables tracking or person profiles.
  */
 
 import { Check, Zap } from 'lucide-react'
@@ -34,6 +33,7 @@ import {
   useUltrafastJoined,
   useUltrafastPrice,
 } from './ultrafast-price'
+import { submitUltrafastSignup } from './ultrafast-signup'
 
 const PERKS = [
   'Faster clicks, typing, and navigation',
@@ -55,6 +55,9 @@ export function UltrafastWaitlist() {
   // Covers storage being unavailable, where the shared flag cannot be written.
   const [joinedHere, setJoinedHere] = useState(false)
   const joined = joinedAnywhere || joinedHere
+  const [pending, setPending] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const joining = useRef(false)
   const capturing = useSyncExternalStore(
     subscribeToCaptureState,
     isCapturing,
@@ -77,23 +80,33 @@ export function UltrafastWaitlist() {
     return <UltrafastWaitlistPending status={priceState.status} />
   }
 
-  const handleJoin = (email: string) => {
-    // Capture can stop between render and submit. A join remembered without
-    // its event would later report a view with already_joined and no join.
-    if (!isCapturing()) return
-    track(AnalyticsEvent.UltrafastWaitlistJoined, {
-      price_usd: priceState.price,
-      email,
-    })
-    rememberJoined()
-    setJoinedHere(true)
+  const handleJoin = async (email: string) => {
+    if (joined || joining.current) return
+    joining.current = true
+    setPending(true)
+    setError(null)
+    try {
+      await submitUltrafastSignup({
+        price: priceState.price,
+        distinctId: priceState.distinctId,
+        email,
+      })
+      rememberJoined()
+      setJoinedHere(true)
+    } catch {
+      setError("Couldn't save your signup. Please try again.")
+    } finally {
+      joining.current = false
+      setPending(false)
+    }
   }
 
   return (
     <UltrafastWaitlistView
       price={priceState.price}
       joined={joined}
-      canJoin={capturing}
+      pending={pending}
+      error={error}
       onJoin={handleJoin}
     />
   )
@@ -121,13 +134,14 @@ function UltrafastWaitlistPending({
 export function UltrafastWaitlistView({
   price,
   joined,
-  canJoin,
+  pending = false,
+  error = null,
   onJoin,
 }: {
   price: UltrafastPrice
   joined: boolean
-  /** False when analytics is off, since the signup could not be saved. */
-  canJoin: boolean
+  pending?: boolean
+  error?: string | null
   onJoin: (email: string) => void
 }) {
   const [value, setValue] = useState('')
@@ -135,6 +149,7 @@ export function UltrafastWaitlistView({
 
   const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (pending || joined) return
     const email = normalizeEmail(value)
     setInvalid(email === null)
     if (email) onJoin(email)
@@ -211,7 +226,7 @@ export function UltrafastWaitlistView({
                   aria-label="Email"
                   aria-invalid={invalid || undefined}
                   value={value}
-                  disabled={!canJoin}
+                  disabled={pending}
                   onChange={(event) => {
                     setValue(event.target.value)
                     setInvalid(false)
@@ -221,10 +236,10 @@ export function UltrafastWaitlistView({
                 <div className="flex w-full shrink-0 flex-col gap-2.5 sm:w-auto">
                   <Button
                     type="submit"
-                    disabled={!canJoin}
+                    disabled={pending}
                     className="h-[42px] rounded-md bg-cyanotype-blue px-4 text-[14px] text-on-cyanotype hover:bg-cyanotype-blue-hover"
                   >
-                    Request early access
+                    {pending ? 'Joining…' : 'Request early access'}
                   </Button>
                   <p className="text-center text-[12px] text-cyanotype-muted leading-[19px]">
                     No payment today.
@@ -236,10 +251,9 @@ export function UltrafastWaitlistView({
                   Enter a valid email address.
                 </p>
               )}
-              {!canJoin && (
-                <p className="text-[12px] text-cyanotype-soft">
-                  Signups are saved through usage analytics, which is off. Turn
-                  it on under Privacy in the sidebar to join.
+              {error && (
+                <p role="alert" className="text-[12px] text-destructive">
+                  {error}
                 </p>
               )}
             </form>
