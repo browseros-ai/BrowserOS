@@ -318,6 +318,14 @@ impl PageView {
             .is_some_and(|control| control.guard == guard)
     }
 
+    /// How much page text travels with a decision, in bytes.
+    ///
+    /// Irrelevant detail in the state measurably degrades the answer as well as
+    /// costing input tokens, so this is an accuracy measure as much as a cost
+    /// one. Applied where the view is built rather than left to each caller,
+    /// because the cost this design claims was measured with it applied.
+    pub const TEXT_BUDGET: usize = 1_500;
+
     /// Trims the text to a byte budget on a line boundary.
     ///
     /// Irrelevant detail in the state measurably degrades the answer, so this is

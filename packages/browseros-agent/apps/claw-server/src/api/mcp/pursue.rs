@@ -144,12 +144,12 @@ impl Driver for PageDriver {
             .await
             .map(|info| info.title)
             .unwrap_or_default();
-        Ok(PageView::from_snapshot(
-            snapshot.url,
-            title,
-            &snapshot.text,
-            &snapshot.refs,
-        ))
+        let mut view = PageView::from_snapshot(snapshot.url, title, &snapshot.text, &snapshot.refs);
+        // The measured cost of this design assumes a budgeted state. Applying
+        // it here rather than in each caller means a real run gets the same
+        // state a measurement does.
+        view.budget_text(PageView::TEXT_BUDGET);
+        Ok(view)
     }
 
     async fn act(&self, decision: &Decision) -> Result<bool, ActError> {
@@ -159,6 +159,28 @@ impl Driver for PageDriver {
                 decision.operation.as_str()
             )));
         };
+        // A key press carries no target: act sends the key to whatever has
+        // focus. So the chosen control is focused first, and a failure to focus
+        // stops the step rather than pressing a key at something else.
+        if decision.operation == Operation::Press
+            && let Some(reference) = decision.target.as_deref()
+        {
+            let focus = dispatch_tool_call(self.call_for(json!({
+                "page": self.page,
+                "kind": "focus",
+                "ref": reference,
+            })))
+            .await
+            .map_err(|error| ActError::Fatal(error.to_string()))?;
+            if focus.is_error.unwrap_or(false) {
+                let reason = first_text(&focus);
+                return Err(if covered_or_gone(&reason) {
+                    ActError::Stale(reason)
+                } else {
+                    ActError::Fatal(reason)
+                });
+            }
+        }
         let result = dispatch_tool_call(self.call_for(args))
             .await
             .map_err(|error| ActError::Fatal(error.to_string()))?;
@@ -171,7 +193,7 @@ impl Driver for PageDriver {
             if decision.operation == Operation::Select && !text.contains("covered") {
                 return Err(ActError::Fatal(text));
             }
-            if text.contains("covered") || text.contains("stale") || text.contains("No ref") {
+            if covered_or_gone(&text) {
                 return Err(ActError::Stale(text));
             }
             return Err(ActError::Fatal(text));
@@ -183,12 +205,17 @@ impl Driver for PageDriver {
                 held.push(notice);
             }
         }
-        Ok(changed_from(&text))
+        Ok(changed_from(&result))
     }
 
     async fn settle(&self) {
         tokio::time::sleep(SETTLE).await;
     }
+}
+
+/// Whether a failure is one another observation could clear.
+fn covered_or_gone(reason: &str) -> bool {
+    reason.contains("covered") || reason.contains("stale") || reason.contains("No ref")
 }
 
 fn first_text(result: &rmcp::model::CallToolResult) -> String {
@@ -201,10 +228,27 @@ fn first_text(result: &rmcp::model::CallToolResult) -> String {
 }
 
 /// Whether the act result says the page moved.
-fn changed_from(text: &str) -> bool {
-    text.contains("changed=true")
-        || text.contains("urlChanged")
-        || text.contains("\"changed\": true")
+///
+/// Read from the structured content, which is where the flag is. The rendered
+/// text carries a diff or the words "no change since last snapshot", and
+/// neither contains anything a search for a boolean would find: looking there
+/// reported every working action as unchanged, which stalled a run after three
+/// of them.
+fn changed_from(result: &rmcp::model::CallToolResult) -> bool {
+    let Some(structured) = result.structured_content.as_ref() else {
+        // No structured content means no diff was requested or none was
+        // produced. Treating that as unchanged is the safe reading: it counts
+        // toward the stall rather than claiming progress.
+        return false;
+    };
+    structured
+        .get("changed")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+        || structured
+            .get("urlChanged")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
 }
 
 /// Anything the dispatch said about pages the caller now owns.
