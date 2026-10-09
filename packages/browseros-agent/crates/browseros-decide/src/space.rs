@@ -190,9 +190,44 @@ impl ActionSpace {
         if with_values.is_empty() {
             return options;
         }
-        let share = (MAX_SELECT_OPTIONS / with_values.len()).max(1);
-        for candidate in with_values {
+        // Nothing is dropped when everything fits. Dividing the cap by the
+        // number of controls dropped values for no reason: two dropdowns of 110
+        // and 2 values gave each a share of 100, losing ten of the first even
+        // though all 112 fit.
+        let total: usize = with_values
+            .iter()
+            .map(|candidate| candidate.options.len())
+            .sum();
+        let share = if total <= MAX_SELECT_OPTIONS {
+            usize::MAX
+        } else {
+            // Over the cap, every control keeps a share so one long dropdown
+            // cannot crowd out the others, and the rest of the room is filled
+            // in relevance order below.
+            (MAX_SELECT_OPTIONS / with_values.len()).max(1)
+        };
+        for candidate in &with_values {
             for value in candidate.options.iter().take(share) {
+                if options.len() >= MAX_SELECT_OPTIONS {
+                    return options;
+                }
+                options.insert(
+                    format!("{}::{value}", candidate.reference),
+                    json!({
+                        "control": candidate.descriptor.get("control"),
+                        "sets_it_to": value,
+                    }),
+                );
+            }
+        }
+        // Any room left goes to the most relevant controls first, since the
+        // offered list arrives scored.
+        for candidate in &with_values {
+            for value in candidate
+                .options
+                .iter()
+                .skip(share.min(candidate.options.len()))
+            {
                 if options.len() >= MAX_SELECT_OPTIONS {
                     return options;
                 }
@@ -456,6 +491,41 @@ mod tests {
             options.keys().any(|key| key.starts_with("s2::")),
             "the short dropdown still appears: {:?}",
             options.keys().take(3).collect::<Vec<_>>()
+        );
+    }
+
+    /// Nothing is dropped when everything fits. Dividing the cap by the number
+    /// of controls lost values for no reason, and a goal naming one of them
+    /// then could not be answered.
+    #[test]
+    fn every_value_is_offered_when_they_all_fit() {
+        let mut long = control("s1", "combobox", "Capacity");
+        long.options = (0..110).map(|value| format!("{value} GB")).collect();
+        let mut short = control("s2", "combobox", "Sort by");
+        short.options = vec!["Price".to_string(), "Newest".to_string()];
+        let space = ActionSpace::build(&view_with(vec![long, short]), "pick a capacity", None);
+        let options = space.select_options();
+        assert_eq!(options.len(), 112, "all of them fit under the cap");
+        assert!(options.contains_key("s1::109 GB"), "including the last one");
+    }
+
+    /// Over the cap, the room left after each control's share goes to the most
+    /// relevant controls, so the cap is actually used rather than left short.
+    #[test]
+    fn the_cap_is_filled_when_the_values_do_not_fit() {
+        let controls = (0..4)
+            .map(|index| {
+                let mut select =
+                    control(&format!("s{index}"), "combobox", &format!("Filter {index}"));
+                select.options = (0..150).map(|value| format!("v{value}")).collect();
+                select
+            })
+            .collect();
+        let space = ActionSpace::build(&view_with(controls), "choose something", None);
+        assert_eq!(
+            space.select_options().len(),
+            MAX_SELECT_OPTIONS,
+            "the cap is used, not undershot"
         );
     }
 

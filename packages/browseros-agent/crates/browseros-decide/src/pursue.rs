@@ -192,6 +192,14 @@ pub async fn pursue<O: Oracle, D: Driver>(
     // offered when it is actually needed rather than on every step.
     let mut fallback_needed = false;
     let mut waits = 0;
+    // What the last decision could see. Every ending reports it, because a run
+    // that stalled after choosing from a capped list is exactly as worth
+    // explaining as one that gave up.
+    //
+    // Atomics rather than a plain pair: the closure below reads them while the
+    // loop writes them, and a Cell would make this future not Send.
+    let offered_seen = std::sync::atomic::AtomicUsize::new(0);
+    let omitted_seen = std::sync::atomic::AtomicUsize::new(0);
 
     let first = match driver.observe().await {
         Ok(view) => view,
@@ -218,8 +226,8 @@ pub async fn pursue<O: Oracle, D: Driver>(
         |status: Status, trail: Vec<Step>, view: &PageView, decisions: u32, input_tokens: u64| {
             Outcome {
                 status,
-                offered: 0,
-                omitted: 0,
+                offered: offered_seen.load(std::sync::atomic::Ordering::Relaxed),
+                omitted: omitted_seen.load(std::sync::atomic::Ordering::Relaxed),
                 offered_controls: Vec::new(),
                 terminal_confidence: None,
                 decisions,
@@ -242,6 +250,8 @@ pub async fn pursue<O: Oracle, D: Driver>(
         }
 
         let space = ActionSpace::build(&view, goal, last_acted.as_deref());
+        offered_seen.store(space.offered.len(), std::sync::atomic::Ordering::Relaxed);
+        omitted_seen.store(space.omitted, std::sync::atomic::Ordering::Relaxed);
         let operations = questions::available(&space, &view, fallback_needed);
         let built = questions::build(goal, &space, &operations);
         let state = questions::state(&view, &space, &recent);
@@ -337,8 +347,6 @@ pub async fn pursue<O: Oracle, D: Driver>(
                 // refusing every target. So this is the common route to "the
                 // caller should decide", and it carries the same context the
                 // escape path does.
-                outcome.offered = space.offered.len();
-                outcome.omitted = space.omitted;
                 outcome.offered_controls = offered_labels(&space);
                 return outcome;
             }
@@ -376,8 +384,6 @@ pub async fn pursue<O: Oracle, D: Driver>(
                     decisions,
                     input_tokens,
                 );
-                outcome.offered = space.offered.len();
-                outcome.omitted = space.omitted;
                 // Named so the caller can see what the decision was choosing
                 // between, which is the difference between "try scrolling" and
                 // "that control is not on this page".

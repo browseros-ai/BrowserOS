@@ -618,3 +618,28 @@ async fn a_completion_claim_with_a_working_read_back_is_accepted() {
     let outcome = pursue(&oracle, &fake, "Be finished", budget()).await;
     assert_eq!(outcome.status, Status::Satisfied);
 }
+
+/// Every ending reports what the last decision could see. Only the blocked and
+/// hand-back paths set it before, so a stalled or satisfied run reported zero
+/// controls offered even after choosing from a capped list, which the output
+/// schema declares as always present.
+#[tokio::test]
+async fn every_ending_reports_what_the_decision_could_see() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(false), Ok(false), Ok(false)]);
+    let stalled = pursue(&oracle, &fake, "Click apply", budget()).await;
+    assert_eq!(stalled.status, Status::Stalled);
+    assert_eq!(
+        stalled.offered, 1,
+        "a stalled run still says how much of the page it was choosing from"
+    );
+
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "DONE", 0.9)])]);
+    let fake = Fake::with_one_page(vec![]);
+    let satisfied = pursue(&oracle, &fake, "Be finished", budget()).await;
+    assert_eq!(satisfied.status, Status::Satisfied);
+    assert_eq!(satisfied.offered, 1, "and so does a satisfied one");
+}
