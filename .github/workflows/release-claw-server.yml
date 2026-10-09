@@ -6,6 +6,16 @@ on:
       - "claw-server/v*"
   workflow_dispatch:
     inputs:
+      windows_signing_trial:
+        description: "Private signing trial only: no version allocation, release, R2 writes or feed publication"
+        type: boolean
+        default: false
+      windows_signing_provider:
+        description: "Windows signing provider (SSL.com is the rollback default)"
+        required: false
+        type: choice
+        default: sslcom
+        options: [sslcom, azure]
       version:
         description: "Release version; allocated automatically when omitted"
         required: false
@@ -23,6 +33,11 @@ on:
         default: true
   workflow_call:
     inputs:
+      windows_signing_provider:
+        description: "Windows signing provider (SSL.com is the rollback default)"
+        required: false
+        type: string
+        default: sslcom
       mode:
         description: "Build a prepared release or finalize an existing one"
         required: false
@@ -89,8 +104,20 @@ concurrency:
   queue: max
 
 jobs:
+  signing-trial:
+    if: github.event_name == 'workflow_dispatch' && inputs.windows_signing_trial == true
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/trial-windows-server-signing.yml
+    with:
+      product: browserclaw
+      version: ${{ inputs.version }}
+      windows_signing_provider: ${{ inputs.windows_signing_provider || 'sslcom' }}
+    secrets: inherit
+
   prepare:
-    if: github.event_name != 'push' || github.event.deleted != true
+    if: inputs.windows_signing_trial != true && (github.event_name != 'push' || github.event.deleted != true)
     concurrency:
       group: release-component-allocation
       cancel-in-progress: false
@@ -117,12 +144,17 @@ jobs:
       - name: Validate lifecycle inputs
         id: validate
         env:
+          WINDOWS_SIGNING_PROVIDER: ${{ inputs.windows_signing_provider || 'sslcom' }}
           MODE: ${{ inputs.mode || 'build' }}
           REF: ${{ inputs.ref || '' }}
           STATE_OWNER: ${{ inputs.state_owner || 'component' }}
           VERSION: ${{ inputs.version || '' }}
         run: |
           set -euo pipefail
+          case "$WINDOWS_SIGNING_PROVIDER" in
+            sslcom|azure) ;;
+            *) echo "::error::Invalid Windows signing provider"; exit 1 ;;
+          esac
           if [ "$MODE" != "build" ] && [ "$MODE" != "finalize" ]; then
             echo "::error::mode must be build or finalize"
             exit 1
@@ -959,10 +991,12 @@ jobs:
       - finalize
     if: ${{ needs.finalize.result == 'success' && github.event_name != 'push' && inputs.publish_ota == true }}
     permissions:
+      id-token: write
       contents: write
       pull-requests: write
     uses: ./.github/workflows/publish-server-ota.yml
     with:
+      windows_signing_provider: ${{ inputs.windows_signing_provider || 'sslcom' }}
       product: browserclaw
       version: ${{ needs.prepare.outputs.version }}
       release_sha: ${{ needs.prepare.outputs.release_sha }}

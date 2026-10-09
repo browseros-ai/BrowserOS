@@ -76,6 +76,11 @@ class Step:
     requires: List[str] = []
     description: str = "No description provided"
 
+    @classmethod
+    def required_env(cls) -> Tuple[str, ...]:
+        """Resolve conditional prerequisites for both plan display and preflight."""
+        return cls.env
+
     def preflight(self, context) -> None:
         """
         Static plan-time checks, run for the WHOLE pipeline before step 1
