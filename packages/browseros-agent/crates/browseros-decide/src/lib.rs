@@ -6,6 +6,8 @@
 //! model answers narrow closed-set questions about a small state.
 
 pub mod client;
+pub mod relevance;
+pub mod space;
 pub mod view;
 
 pub use client::{Answer, Jev, JevError, Question, Response, Usage};
