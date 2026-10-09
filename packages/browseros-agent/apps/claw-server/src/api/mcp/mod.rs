@@ -1,3 +1,4 @@
+pub mod browse;
 pub mod dispatch;
 pub mod distill;
 pub mod effects;

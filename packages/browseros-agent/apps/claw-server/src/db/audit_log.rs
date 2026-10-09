@@ -64,6 +64,10 @@ pub struct RecordToolDispatchInput {
     pub parent_dispatch_id: Option<DispatchId>,
     /// Approximate semantic traffic into BrowserClaw: tool name plus compact arguments.
     pub tool_input_token_estimate: i64,
+    /// Tokens a decision provider charged for this dispatch. Zero for every tool
+    /// that calls no provider, which is all of them but goal-driven browsing.
+    pub decision_input_token_estimate: i64,
+    pub decision_output_token_estimate: i64,
     /// Approximate semantic content returned by BrowserClaw after result effects.
     pub tool_output_token_estimate: i64,
     /// Formula identity; version 0 is reserved for legacy or otherwise unmeasured rows.
@@ -147,6 +151,10 @@ pub struct TaskSummary {
     /// `tokens_measured`. `tokens_measured` is true iff the session has dispatches and every one
     /// carries token-estimator v1; legacy/unmeasured sessions leave it false and the sums at 0.
     pub tool_input_token_estimate: i64,
+    /// Tokens a decision provider charged for this dispatch. Zero for every tool
+    /// that calls no provider, which is all of them but goal-driven browsing.
+    pub decision_input_token_estimate: i64,
+    pub decision_output_token_estimate: i64,
     pub tool_output_token_estimate: i64,
     pub tokens_measured: bool,
     /// Agent-declared, PII-scrubbed summary of the task; None when never declared.
@@ -175,6 +183,8 @@ impl From<tasks::Model> for TaskSummary {
             cursor_id: model.cursor_id,
             has_screenshots: model.has_screenshots,
             tool_input_token_estimate: model.tool_input_token_estimate,
+            decision_input_token_estimate: model.decision_input_token_estimate,
+            decision_output_token_estimate: model.decision_output_token_estimate,
             tool_output_token_estimate: model.tool_output_token_estimate,
             tokens_measured: model.tokens_measured,
             task_summary: model.task_summary,
@@ -280,6 +290,8 @@ impl AuditLog {
             result_meta: Set(Some(input.result_meta)),
             duration_ms: Set(Some(input.duration_ms)),
             tool_input_token_estimate: Set(input.tool_input_token_estimate.max(0)),
+            decision_input_token_estimate: Set(input.decision_input_token_estimate.max(0)),
+            decision_output_token_estimate: Set(input.decision_output_token_estimate.max(0)),
             tool_output_token_estimate: Set(input.tool_output_token_estimate.max(0)),
             token_estimator_version: Set(input.token_estimator_version.max(0)),
             dispatch_id: Set(Some(input.dispatch_id.into_inner())),
@@ -810,6 +822,12 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
     let tool_output_token_estimate = dispatches.iter().fold(0i64, |total, row| {
         total.saturating_add(row.tool_output_token_estimate.max(0))
     });
+    let decision_input_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.decision_input_token_estimate.max(0))
+    });
+    let decision_output_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.decision_output_token_estimate.max(0))
+    });
     Tasks::insert(tasks::ActiveModel {
         session_id: Set(session_id.to_owned()),
         agent_id: Set(agent_id),
@@ -829,6 +847,8 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
         has_screenshots: Set(!screenshot_ids.is_empty()),
         tool_input_token_estimate: Set(tool_input_token_estimate),
         tool_output_token_estimate: Set(tool_output_token_estimate),
+        decision_input_token_estimate: Set(decision_input_token_estimate),
+        decision_output_token_estimate: Set(decision_output_token_estimate),
         tokens_measured: Set(tokens_measured),
         updated_at: Set(now_epoch_ms()),
         // Owned by name_session via set_task_summary, not by the recompute projection:
@@ -856,6 +876,8 @@ async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppRe
                 tasks::Column::HasScreenshots,
                 tasks::Column::ToolInputTokenEstimate,
                 tasks::Column::ToolOutputTokenEstimate,
+                tasks::Column::DecisionInputTokenEstimate,
+                tasks::Column::DecisionOutputTokenEstimate,
                 tasks::Column::TokensMeasured,
                 tasks::Column::UpdatedAt,
             ])
@@ -1067,6 +1089,8 @@ mod tests {
 
     fn dispatch(session_id: &str, url: &str, is_error: bool) -> RecordToolDispatchInput {
         RecordToolDispatchInput {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             agent_id: if session_id.starts_with("a") {
                 "agent-a"
             } else {
@@ -1389,6 +1413,57 @@ mod tests {
         assert!(task.tokens_measured);
         assert_eq!(task.tool_input_token_estimate, 68);
         assert_eq!(task.tool_output_token_estimate, 112);
+        Ok(())
+    }
+
+    /// The gap this closes: a goal-driven run paid a decision provider for
+    /// hundreds of thousands of tokens and the session recorded only its own
+    /// tool traffic, so it read as costing about as much as a session that
+    /// called no provider at all.
+    #[tokio::test]
+    async fn decision_token_estimates_persist_and_sum_apart_from_tool_traffic() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut browsing = dispatch("d1", "https://shop.example.com", false);
+        browsing.tool_input_token_estimate = 12;
+        browsing.tool_output_token_estimate = 34;
+        browsing.decision_input_token_estimate = 145_041;
+        browsing.decision_output_token_estimate = 12_825;
+        audit.record_tool_dispatch(browsing).await?;
+        // A tool that calls no provider contributes nothing to the decision total.
+        let mut plain = dispatch("d1", "https://shop.example.com/cart", false);
+        plain.tool_input_token_estimate = 5;
+        plain.tool_output_token_estimate = 7;
+        audit.record_tool_dispatch(plain).await?;
+
+        let task = audit
+            .get_task_summary("d1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(task.decision_input_token_estimate, 145_041);
+        assert_eq!(task.decision_output_token_estimate, 12_825);
+        // Never folded into the tool totals: a different payer, reported apart.
+        assert_eq!(task.tool_input_token_estimate, 17);
+        assert_eq!(task.tool_output_token_estimate, 41);
+        Ok(())
+    }
+
+    /// A session that never called a provider must report nothing rather than a
+    /// measured zero, so the two paths stay distinguishable in the audit.
+    #[tokio::test]
+    async fn a_session_that_called_no_provider_has_no_decision_tokens() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_tool_dispatch(dispatch("d2", "https://one.example.com", false))
+            .await?;
+        let task = audit
+            .get_task_summary("d2")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(task.decision_input_token_estimate, 0);
+        assert_eq!(task.decision_output_token_estimate, 0);
         Ok(())
     }
 

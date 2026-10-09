@@ -237,6 +237,7 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
         None => task.title.clone(),
     };
     let token_usage = contract_token_usage(&task);
+    let decision_token_usage = contract_decision_token_usage(&task);
     let mut summary = SessionSummary::new(
         task.session_id,
         task.slug,
@@ -257,6 +258,7 @@ async fn contract_summary(task: TaskSummary, live: Option<&Arc<Session>>) -> Ses
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary.token_usage = token_usage;
+    summary.decision_token_usage = decision_token_usage;
     summary
 }
 
@@ -271,6 +273,7 @@ fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary
         live,
     } = projection;
     let token_usage = contract_token_usage(&task);
+    let decision_token_usage = contract_decision_token_usage(&task);
     let mut summary = SessionSummary::new(
         task.session_id,
         task.slug,
@@ -291,6 +294,7 @@ fn contract_live_projection(projection: LiveSessionProjection) -> SessionSummary
     summary.ended_at = task.ended_at;
     summary.latest_screenshot_id = task.last_screenshot_dispatch_id;
     summary.token_usage = token_usage;
+    summary.decision_token_usage = decision_token_usage;
     summary.live = Some(Box::new(contract_live_state(live)));
     summary
 }
@@ -304,6 +308,23 @@ fn contract_token_usage(task: &TaskSummary) -> Option<Box<SessionTokenUsage>> {
     }
     let input = js_safe_token_estimate(task.tool_input_token_estimate);
     let output = js_safe_token_estimate(task.tool_output_token_estimate);
+    let total = js_safe_token_estimate(input.saturating_add(output));
+    Some(Box::new(SessionTokenUsage::new(input, output, total)))
+}
+
+/// What a decision provider charged, kept apart from the session's own tool
+/// traffic because it is a different payer. Absent when no dispatch called one,
+/// which is every session that never used goal-driven browsing: a zero here
+/// would read as a measured zero rather than as nothing to measure.
+fn contract_decision_token_usage(task: &TaskSummary) -> Option<Box<SessionTokenUsage>> {
+    if !task.tokens_measured {
+        return None;
+    }
+    let input = js_safe_token_estimate(task.decision_input_token_estimate);
+    let output = js_safe_token_estimate(task.decision_output_token_estimate);
+    if input == 0 && output == 0 {
+        return None;
+    }
     let total = js_safe_token_estimate(input.saturating_add(output));
     Some(Box::new(SessionTokenUsage::new(input, output, total)))
 }

@@ -5,6 +5,7 @@ import { CockpitShell } from '@/components/layout/CockpitShell'
 import { Analytics } from '@/modules/analytics/Analytics'
 import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
+import { FastMode } from '@/screens/fast-mode/FastMode'
 import { Mcp } from '@/screens/mcp/Mcp'
 import { Replay } from '@/screens/replay/Replay'
 import { SkillDetail } from '@/screens/skills/SkillDetail'
@@ -21,6 +22,7 @@ export function App() {
         <Route element={<CockpitShell />}>
           <Route path="/" element={<Cockpit />} />
           <Route path="/mcp" element={<Mcp />} />
+          <Route path="/fast-mode" element={<FastMode />} />
           <Route
             path="/diagnostics"
             element={

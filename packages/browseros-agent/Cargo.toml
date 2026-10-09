@@ -13,6 +13,7 @@ harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-mcp = { path = "crates/browseros-mcp" }
+browseros-policy = { path = "crates/browseros-policy" }
 claw-api = { path = "crates/claw-api" }
 
 tokio = { version = "1.52", features = ["rt-multi-thread", "macros", "net", "io-util", "time", "sync", "signal", "process", "fs"] }
@@ -43,6 +44,7 @@ posthog-rs = { version = "0.21", default-features = false, features = ["async-cl
 ress = "0.11"
 sentry = { version = "0.46", default-features = false, features = ["reqwest", "rustls"] }
 thiserror = "2"
+rig = { version = "0.43", features = ["typesafeai"] }
 anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

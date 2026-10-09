@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from 'bun:test'
 import { Harness } from '@browseros/claw-api'
 import {
   ApiResponseError,
+  apiErrorReason,
   buildSessionPreviewUrl,
   buildSessionScreenshotUrl,
   ClawApiClient,
@@ -285,7 +286,7 @@ describe('ClawApiClient', () => {
     expect(clone).not.toHaveBeenCalled()
   })
 
-  it('exposes all 18 facade operations', () => {
+  it('exposes all 23 facade operations', () => {
     const client = new ClawApiClient(baseUrl, {
       fetch: async () => Response.json({}),
     })
@@ -308,9 +309,14 @@ describe('ClawApiClient', () => {
       'listConnections',
       'connectHarness',
       'disconnectHarness',
+      'getJevMode',
+      'updateJevCredential',
+      'updateJevMode',
+      'updateJevBudgets',
+      'deleteJevCredential',
     ] as const
 
-    expect(methods).toHaveLength(18)
+    expect(methods).toHaveLength(23)
     for (const method of methods) expect(client[method]).toBeFunction()
   })
 })
@@ -340,5 +346,38 @@ describe('binary URL builders', () => {
         screenshotId: 17,
       }),
     ).toBe(`${baseUrl}/api/v1/sessions/session%20%2F%20one/screenshots/17`)
+  })
+})
+
+describe('apiErrorReason', () => {
+  it("returns the server's explanation when it sent one", async () => {
+    const error = new ApiResponseError(
+      Response.json(
+        { code: 'credential_rejected', message: 'Cannot authenticate.' },
+        { status: 400 },
+      ),
+    )
+    expect(await apiErrorReason(error)).toBe('Cannot authenticate.')
+    // The status-only message is still there for a generic caller.
+    expect(error.message).toContain('400')
+  })
+
+  it('returns null when there is nothing specific to say', async () => {
+    expect(
+      await apiErrorReason(
+        new ApiResponseError(new Response(null, { status: 500 })),
+      ),
+    ).toBeNull()
+    expect(
+      await apiErrorReason(
+        new ApiResponseError(new Response('not json', { status: 500 })),
+      ),
+    ).toBeNull()
+    expect(
+      await apiErrorReason(
+        new ApiResponseError(Response.json({}, { status: 400 })),
+      ),
+    ).toBeNull()
+    expect(await apiErrorReason(new Error('something else'))).toBeNull()
   })
 })

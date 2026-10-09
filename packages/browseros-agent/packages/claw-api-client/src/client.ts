@@ -9,6 +9,7 @@ import type {
   ConnectionList,
   FeedbackInvitation,
   HealthResponse,
+  JevModeState,
   RecordFeedbackInviteRequest,
   RecordingMetadata,
   ResolveHelpResponse,
@@ -138,6 +139,39 @@ export class ClawApiClient {
 
   async getTelemetry(): Promise<TelemetryState> {
     return this.unwrap(await this.client.GET('/api/v1/settings/telemetry'))
+  }
+
+  async getJevMode(): Promise<JevModeState> {
+    return this.unwrap(await this.client.GET('/api/v1/settings/jev-mode'))
+  }
+
+  /// Checked against the provider before it is stored, so a rejection comes
+  /// back as a 400 carrying the provider's own reason.
+  async updateJevCredential(body: {
+    credential: string
+  }): Promise<JevModeState> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/settings/jev-mode/credential', { body }),
+    )
+  }
+
+  async updateJevMode(body: { paused: boolean }): Promise<JevModeState> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/settings/jev-mode', { body }),
+    )
+  }
+
+  async updateJevBudgets(body: {
+    maxSteps: number
+    maxSeconds: number
+  }): Promise<JevModeState> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/settings/jev-mode/budgets', { body }),
+    )
+  }
+
+  async deleteJevCredential(): Promise<JevModeState> {
+    return this.unwrap(await this.client.DELETE('/api/v1/settings/jev-mode'))
   }
 
   async getAuditStorage(): Promise<AuditStorageState> {

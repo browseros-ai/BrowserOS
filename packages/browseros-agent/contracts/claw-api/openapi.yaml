@@ -24,6 +24,12 @@ paths:
     $ref: ./paths/feedback.yaml#/invitation
   /api/v1/settings/telemetry:
     $ref: ./paths/settings.yaml#/telemetry
+  /api/v1/settings/jev-mode:
+    $ref: ./paths/settings.yaml#/jevMode
+  /api/v1/settings/jev-mode/credential:
+    $ref: ./paths/settings.yaml#/jevModeCredential
+  /api/v1/settings/jev-mode/budgets:
+    $ref: ./paths/settings.yaml#/jevModeBudgets
   /api/v1/sessions:
     $ref: ./paths/sessions.yaml#/collection
   /api/v1/sessions/{sessionId}:
@@ -128,6 +134,16 @@ components:
       $ref: ./schemas/settings.yaml#/TelemetryState
     UpdateTelemetryRequest:
       $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
+    JevBudgets:
+      $ref: ./schemas/settings.yaml#/JevBudgets
+    JevModeState:
+      $ref: ./schemas/settings.yaml#/JevModeState
+    UpdateJevCredentialRequest:
+      $ref: ./schemas/settings.yaml#/UpdateJevCredentialRequest
+    UpdateJevModeRequest:
+      $ref: ./schemas/settings.yaml#/UpdateJevModeRequest
+    UpdateJevBudgetsRequest:
+      $ref: ./schemas/settings.yaml#/UpdateJevBudgetsRequest
     SessionStatus:
       $ref: ./schemas/sessions.yaml#/SessionStatus
     LiveSessionActivityState:

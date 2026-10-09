@@ -6,7 +6,7 @@
  * behaving identically; these cases are what says so.
  */
 import type { CaseContext, ContractCase } from './cases'
-import { expectError, expectOk } from './helpers'
+import { expectError, expectOk, refForLabel } from './helpers'
 
 type Surface = 'act' | 'run' | 'run-legacy'
 
@@ -16,10 +16,7 @@ async function fieldRef(
   label: string,
 ): Promise<string> {
   const snapshot = expectOk(await ctx.mcp.callTool('snapshot', { page }))
-  const line = snapshot.split('\n').find((line) => line.includes(`"${label}`))
-  const ref = line?.match(/\[ref=(e\d+)\]/)?.[1]
-  if (!ref) throw new Error(`No ref for ${label}`)
-  return ref
+  return refForLabel(snapshot, `"${label}`)
 }
 
 async function fill(
@@ -227,6 +224,8 @@ export const fillCases: ContractCase[] = [
         // Cross-site DOM access is blocked in the parent. The accessibility
         // snapshot independently exposes the child field's value.
         const snapshot = expectOk(await ctx.mcp.callTool('snapshot', { page }))
+        // Matched without the trailing space for the same reason `fieldRef`
+        // above does: the accessible name is `Text field`, not `Text field `.
         const filledLine = snapshot
           .split('\n')
           .find((line) => /textbox "Text field\s*"/.test(line))

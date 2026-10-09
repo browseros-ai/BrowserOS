@@ -153,6 +153,54 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/settings/jev-mode': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations['getJevMode']
+    put: operations['updateJevMode']
+    post?: never
+    delete: operations['deleteJevCredential']
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/settings/jev-mode/credential': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put: operations['updateJevCredential']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
+  '/api/v1/settings/jev-mode/budgets': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get?: never
+    put: operations['updateJevBudgets']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/sessions': {
     parameters: {
       query?: never
@@ -612,6 +660,42 @@ export interface components {
     UpdateTelemetryRequest: {
       consent: boolean
     }
+    JevBudgets: {
+      /**
+       * Format: int64
+       * @description Stop a run after this many actions.
+       */
+      maxSteps: number
+      /**
+       * Format: int64
+       * @description Stop a run after this many seconds.
+       */
+      maxSeconds: number
+    }
+    JevModeState: {
+      /** @description Whether a credential is stored. The credential itself is never returned. */
+      configured: boolean
+      /** @description Switched off by choice, with the credential kept. */
+      paused: boolean
+      /** @description Whether the goal-driven tool is advertised to connected agents. */
+      active: boolean
+      /** @description The stored credential's last characters, or empty when none is stored. */
+      fingerprint: string
+      budgets: components['schemas']['JevBudgets']
+    }
+    UpdateJevCredentialRequest: {
+      /** @description The credential to store. Validated with one real request before it is accepted. */
+      credential: string
+    }
+    UpdateJevModeRequest: {
+      paused: boolean
+    }
+    UpdateJevBudgetsRequest: {
+      /** Format: int64 */
+      maxSteps: number
+      /** Format: int64 */
+      maxSeconds: number
+    }
     /** @enum {string} */
     SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'
     /** @enum {string} */
@@ -681,6 +765,8 @@ export interface components {
       latestScreenshotId?: number
       /** @description Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions. */
       tokenUsage?: components['schemas']['SessionTokenUsage']
+      /** @description Estimated token consumption charged by a decision provider for this session, summed across all dispatches. A different payer from `tokenUsage`, which measures the session's own MCP tool traffic, so the two are reported apart and never added together. Present only when the session has dispatches, every one carries token-estimator v1, and at least one of them called a provider. */
+      decisionTokenUsage?: components['schemas']['SessionTokenUsage']
       /** @description Present only on summaries returned by an explicit `status=live` list query. */
       live?: components['schemas']['LiveSessionState']
     }
@@ -1373,6 +1459,126 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['TelemetryState']
+        }
+      }
+      400: components['responses']['BadRequest']
+      500: components['responses']['InternalError']
+    }
+  }
+  getJevMode: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Current goal-driven browsing state. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['JevModeState']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  updateJevMode: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateJevModeRequest']
+      }
+    }
+    responses: {
+      /** @description Updated state. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['JevModeState']
+        }
+      }
+      400: components['responses']['BadRequest']
+      500: components['responses']['InternalError']
+    }
+  }
+  deleteJevCredential: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description The credential was forgotten. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['JevModeState']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  updateJevCredential: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateJevCredentialRequest']
+      }
+    }
+    responses: {
+      /** @description The credential was checked against the provider and stored. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['JevModeState']
+        }
+      }
+      400: components['responses']['BadRequest']
+      500: components['responses']['InternalError']
+    }
+  }
+  updateJevBudgets: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateJevBudgetsRequest']
+      }
+    }
+    responses: {
+      /** @description Updated budgets. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['JevModeState']
         }
       }
       400: components['responses']['BadRequest']

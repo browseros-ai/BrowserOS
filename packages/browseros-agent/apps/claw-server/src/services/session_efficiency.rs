@@ -454,6 +454,8 @@ mod tests {
         estimator_version: i64,
     ) -> tool_dispatches::Model {
         tool_dispatches::Model {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             id,
             created_at: completed_at,
             agent_id: "agent".to_owned(),
@@ -581,6 +583,8 @@ mod tests {
         cancelled: bool,
     ) -> RecordToolDispatchInput {
         RecordToolDispatchInput {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             agent_id: "agent".to_owned(),
             slug: "agent".to_owned(),
             agent_label: "Agent".to_owned(),

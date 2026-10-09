@@ -435,6 +435,12 @@ export interface SessionSummary {
      */
     tokenUsage?: SessionTokenUsage;
     /**
+     * Estimated token consumption charged by a decision provider for this session, summed across all dispatches. A different payer from `tokenUsage`, which measures the session's own MCP tool traffic, so the two are reported apart and never added together. Present only when the session has dispatches, every one carries token-estimator v1, and at least one of them called a provider.
+     * @type {SessionTokenUsage}
+     * @memberof SessionSummary
+     */
+    decisionTokenUsage?: SessionTokenUsage;
+    /**
      * Present only on summaries returned by an explicit `status=live` list query.
      * @type {LiveSessionState}
      * @memberof SessionSummary

@@ -1908,6 +1908,8 @@ async fn record_session_with_dispatch(app: &TestApp, session: &Session) -> anyho
     app.state
         .audit_log
         .record_tool_dispatch(RecordToolDispatchInput {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             agent_id: session.convo_id().as_str().to_string(),
             slug: session.agent().slug().to_string(),
             agent_label: session.agent().label().to_string(),
@@ -2402,4 +2404,92 @@ fn tab_json(tab: &MockTab) -> Value {
         object.insert("groupId".to_string(), json!(group_id));
     }
     value
+}
+
+/// A visited web page must not be able to change goal-driven browsing. A
+/// browser fetch always carries `Origin`, and these routes are the only ones
+/// here where a replaced value hands another party's model control of the
+/// browser.
+#[tokio::test]
+async fn a_web_page_cannot_change_goal_driven_browsing() -> anyhow::Result<()> {
+    let app = test_app().await?;
+
+    for (method, uri, body) in [
+        ("GET", "/api/v1/settings/jev-mode", None),
+        (
+            "PUT",
+            "/api/v1/settings/jev-mode",
+            Some(json!({ "paused": true })),
+        ),
+        (
+            "PUT",
+            "/api/v1/settings/jev-mode/credential",
+            Some(json!({ "credential": "an-attacker-supplied-key" })),
+        ),
+        (
+            "PUT",
+            "/api/v1/settings/jev-mode/budgets",
+            Some(json!({ "maxSteps": 50, "maxSeconds": 120 })),
+        ),
+        ("DELETE", "/api/v1/settings/jev-mode", None),
+    ] {
+        let (status, _headers, _body) = request_json_with_headers(
+            &app.router,
+            method,
+            uri,
+            body.clone(),
+            &[(header::ORIGIN.as_str(), "https://evil.example")],
+        )
+        .await?;
+        assert_eq!(
+            status,
+            StatusCode::FORBIDDEN,
+            "{method} {uri} answered a page origin"
+        );
+    }
+
+    // And the mode is still off, so nothing was stored along the way.
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/settings/jev-mode", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["configured"], json!(false));
+    assert_eq!(body["active"], json!(false));
+    Ok(())
+}
+
+/// An out of range budget is refused rather than silently becoming the largest
+/// allowed run, which is what clamping an invalid value used to do.
+#[tokio::test]
+async fn an_out_of_range_budget_is_refused() -> anyhow::Result<()> {
+    let app = test_app().await?;
+
+    for body in [
+        json!({ "maxSteps": -1, "maxSeconds": 60 }),
+        json!({ "maxSteps": 10, "maxSeconds": -5 }),
+        json!({ "maxSteps": 100_000, "maxSeconds": 60 }),
+        json!({ "maxSteps": 10, "maxSeconds": 0 }),
+    ] {
+        let (status, answer) = request_json(
+            &app.router,
+            "PUT",
+            "/api/v1/settings/jev-mode/budgets",
+            Some(body.clone()),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "accepted {body}");
+        assert!(
+            answer["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("must be between")),
+            "the refusal should name the bounds: {answer}"
+        );
+    }
+
+    // The stored budgets are untouched by a refused request.
+    let (status, body) =
+        request_json(&app.router, "GET", "/api/v1/settings/jev-mode", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["budgets"]["maxSteps"], json!(24));
+    assert_eq!(body["budgets"]["maxSeconds"], json!(90));
+    Ok(())
 }

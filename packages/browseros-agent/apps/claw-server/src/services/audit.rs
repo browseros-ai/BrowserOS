@@ -573,6 +573,8 @@ mod tests {
 
     fn event(session_id: &str, tool_name: &str) -> AuditEvent {
         AuditEvent::without_preview(RecordToolDispatchInput {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             agent_id: "agent-session".to_string(),
             slug: "agent".to_string(),
             agent_label: "Agent".to_string(),

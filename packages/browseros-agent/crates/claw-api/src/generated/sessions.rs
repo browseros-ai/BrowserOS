@@ -360,6 +360,9 @@ pub struct SessionSummary {
     /// Estimated token consumption of this session's tool traffic, summed across all dispatches and refreshed live as they land. Present only when the session has dispatches and every one carries token-estimator v1; absent for legacy or otherwise unmeasured sessions.
     #[serde(rename = "tokenUsage", skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<Box<models::SessionTokenUsage>>,
+    /// Estimated token consumption charged by a decision provider for this session, summed across all dispatches. A different payer from `tokenUsage`, which measures the session's own MCP tool traffic, so the two are reported apart and never added together. Present only when the session has dispatches, every one carries token-estimator v1, and at least one of them called a provider.
+    #[serde(rename = "decisionTokenUsage", skip_serializing_if = "Option::is_none")]
+    pub decision_token_usage: Option<Box<models::SessionTokenUsage>>,
     /// Present only on summaries returned by an explicit `status=live` list query.
     #[serde(rename = "live", skip_serializing_if = "Option::is_none")]
     pub live: Option<Box<models::LiveSessionState>>,
@@ -397,6 +400,7 @@ impl SessionSummary {
             error_count,
             latest_screenshot_id: None,
             token_usage: None,
+            decision_token_usage: None,
             live: None,
         }
     }

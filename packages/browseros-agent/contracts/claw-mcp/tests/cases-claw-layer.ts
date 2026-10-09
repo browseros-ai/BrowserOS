@@ -10,7 +10,7 @@
  */
 
 import type { CaseContext, ContractCase } from './cases'
-import { apiGet, errorClass, expectOk, waitUntil } from './helpers'
+import { apiGet, errorClass, expectOk, refForLabel, waitUntil } from './helpers'
 import { textOf } from './mcp-client'
 
 const FENCE_OPEN = /\[UNTRUSTED_PAGE_CONTENT nonce=([0-9a-f]{16}) origin=/
@@ -217,11 +217,7 @@ export const clawLayerCases: ContractCase[] = [
     async run(ctx) {
       const page = await ctx.openPage(ctx.fixture('/form.html'))
       const snap = textOf(await ctx.mcp.callTool('snapshot', { page }))
-      const applyRef = snap
-        .split('\n')
-        .find((line) => line.includes('Apply'))
-        ?.match(/\[ref=(e\d+)\]/)?.[1]
-      if (!applyRef) throw new Error('no Apply ref for the auto-context act')
+      const applyRef = refForLabel(snap, 'Apply')
       const actText = textOf(
         await ctx.mcp.callTool('act', { page, kind: 'click', ref: applyRef }),
       )
@@ -244,11 +240,7 @@ export const clawLayerCases: ContractCase[] = [
       const consoleSnap = textOf(
         await ctx.mcp.callTool('snapshot', { page: consolePage }),
       )
-      const throwRef = consoleSnap
-        .split('\n')
-        .find((line) => line.includes('Throw error'))
-        ?.match(/\[ref=(e\d+)\]/)?.[1]
-      if (!throwRef) throw new Error('no Throw-error ref on console.html')
+      const throwRef = refForLabel(consoleSnap, 'Throw error')
       const throwAct = textOf(
         await ctx.mcp.callTool('act', {
           page: consolePage,

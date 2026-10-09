@@ -9,7 +9,8 @@ use serde_json::{Value, json};
 
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
-open a new page in the background (snapshot attached), or close one. \
+open a new page in the background (snapshot attached unless snapshot=false), \
+or close one. \
 Use the returned page id with snapshot/act/navigate. \
 action=\"list\" reports the tab group id of every grouped page. Record yours on \
 your first list of a task, before you need it. Ownership is per connection: every \
@@ -50,6 +51,12 @@ struct TabsArgs {
     /// to keep continuing work in the same group; omit it to use your own group.
     #[serde(default, rename = "groupId")]
     group_id: Option<String>,
+    /// Set false on action="new" to open the page without its snapshot. Use it
+    /// when you already know what you are going to do with the page, or will
+    /// snapshot it yourself: a search results page can run to hundreds of
+    /// elements and the snapshot is the largest part of the result.
+    #[serde(default, rename = "snapshot")]
+    snapshot: Option<bool>,
 }
 
 pub fn definition() -> crate::framework::ToolDef {
@@ -157,7 +164,9 @@ fn handler<'a>(
                 response.text(format!("opened page {}", page.0));
                 // Claw-server hooks key ownership/grouping off this "page" field.
                 response.data(json!({ "page": page.0 }));
-                response.include_snapshot(page.0);
+                if args.snapshot.unwrap_or(true) {
+                    response.include_snapshot(page.0);
+                }
                 return Ok(None);
             }
             TabsAction::Close => {
@@ -213,6 +222,25 @@ mod tests {
         assert_eq!(named.group_id.as_deref(), Some("ABC123"));
         let plain: TabsArgs = serde_json::from_value(json!({ "action": "new" }))?;
         assert_eq!(plain.group_id, None);
+        Ok(())
+    }
+
+    /// The snapshot is the largest part of a `new` result and was unavoidable.
+    /// Opting out has to be possible, and the default has to stay on: it is why
+    /// a caller can often answer from the open alone.
+    #[test]
+    fn the_snapshot_can_be_declined_and_defaults_to_on() -> anyhow::Result<()> {
+        let quiet: TabsArgs =
+            serde_json::from_value(json!({ "action": "new", "snapshot": false }))?;
+        assert_eq!(quiet.snapshot, Some(false));
+        assert!(!quiet.snapshot.unwrap_or(true));
+
+        let default: TabsArgs = serde_json::from_value(json!({ "action": "new" }))?;
+        assert_eq!(default.snapshot, None);
+        assert!(
+            default.snapshot.unwrap_or(true),
+            "omitting it must keep the snapshot"
+        );
         Ok(())
     }
 

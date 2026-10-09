@@ -252,12 +252,48 @@ pub async fn dispatch_tool_call(call: ToolCall) -> Result<CallToolResult, McpErr
     dispatch_tool_call_with(call, GUARDS, EFFECTS, OBSERVERS).await
 }
 
+/// The same pipeline, returning the tool's own result instead of the wire envelope.
+///
+/// The envelope drops structured content for every tool that advertises no output
+/// schema, which is correct for a client and wrong for a caller inside the server
+/// that needs a flag the tool computed. Reading the envelope instead of this cost
+/// the goal-driven loop its only feedback signal: `act` has no output schema, so
+/// its `changed` flag was stripped on the way out and every action read as a no-op.
+pub async fn dispatch_tool_call_in_process(call: ToolCall) -> Result<ToolResult, McpError> {
+    dispatch_tool_call_in_process_with(call, GUARDS, EFFECTS, OBSERVERS).await
+}
+
+async fn dispatch_tool_call_in_process_with(
+    call: ToolCall,
+    guards: &[ToolGuard],
+    effects: &[NamedToolEffect],
+    observers: &[NamedToolObserver],
+) -> Result<ToolResult, McpError> {
+    dispatch_pipeline(call, guards, effects, observers)
+        .await
+        .map(|(result, _)| result)
+}
+
 async fn dispatch_tool_call_with(
-    mut call: ToolCall,
+    call: ToolCall,
     guards: &[ToolGuard],
     effects: &[NamedToolEffect],
     observers: &[NamedToolObserver],
 ) -> Result<CallToolResult, McpError> {
+    let has_output_schema = call.tool().output_schema.is_some();
+    let (result, content_only) = dispatch_pipeline(call, guards, effects, observers).await?;
+    Ok(wire_result(result, has_output_schema && !content_only))
+}
+
+/// Runs the pipeline. The flag is set when the result is a dispatch-layer
+/// envelope rather than the tool's promised output, which must stay content-only
+/// even for a tool that advertises a schema.
+async fn dispatch_pipeline(
+    mut call: ToolCall,
+    guards: &[ToolGuard],
+    effects: &[NamedToolEffect],
+    observers: &[NamedToolObserver],
+) -> Result<(ToolResult, bool), McpError> {
     if let Some(identity) = &call.identity
         && !identity
             .session
@@ -338,7 +374,6 @@ async fn dispatch_tool_call_with(
     } else {
         (false, false)
     };
-    let has_output_schema = call.tool().output_schema.is_some();
     if teardown_before_finish && operator_stop_requested {
         let cancellation = operator_cancellation_result();
         call.dispatch_cancel.cancel();
@@ -346,11 +381,11 @@ async fn dispatch_tool_call_with(
         // The operator-cancellation envelope is a dispatch-layer error, not the tool's
         // promised output, so it must stay content-only even for schema-bearing tools;
         // forwarding its structured content would violate the tool's output_schema.
-        return Ok(wire_result(cancellation, false));
+        return Ok((cancellation, true));
     }
     call.dispatch_cancel.cancel();
     call.cancel.cancel();
-    result.map(|result| wire_result(result, has_output_schema))
+    result.map(|result| (result, false))
 }
 
 async fn run_guards(call: &ToolCall, guards: &[ToolGuard]) -> Option<ToolResult> {
@@ -1206,6 +1241,63 @@ mod tests {
             kept.structured_content,
             Some(json!({ "ok": true, "logs": [] }))
         );
+    }
+
+    /// Stands in for the diff an action produces, so the test does not need a browser.
+    fn navigated_effect(
+        _context: ToolEffectContext<'_>,
+    ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
+        Box::pin(async move {
+            Ok(Some(ToolResult::text(
+                "navigated",
+                Some(json!({ "changed": true, "urlChanged": true })),
+            )))
+        })
+    }
+
+    /// The regression this closes: `act` advertises no output schema, so the wire
+    /// envelope stripped the `changed` flag the goal-driven loop runs on, and every
+    /// action including a navigation read as a no-op. A caller inside the server has
+    /// to receive the tool's own result, not the client-facing envelope.
+    ///
+    /// Asserting through the real pipeline matters here. A test that hand-builds a
+    /// result with structured content present passes while the bug is live.
+    #[tokio::test]
+    async fn an_in_process_dispatch_keeps_structured_content_the_envelope_strips()
+    -> anyhow::Result<()> {
+        let effects = [NamedToolEffect {
+            name: "test_navigated",
+            run: navigated_effect,
+        }];
+        let args = json!({ "page": 1, "kind": "click", "ref": "e1" });
+
+        let call = crate::api::mcp::test_support::tool_call("act", args.clone()).await?;
+        assert!(
+            call.tool().output_schema.is_none(),
+            "this test only means something while act advertises no output schema"
+        );
+        let enveloped = dispatch_tool_call_with(call, &[], &effects, &[])
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(
+            enveloped.structured_content, None,
+            "a client gets content only, which is correct for a tool with no schema"
+        );
+
+        let in_process = dispatch_tool_call_in_process_with(
+            crate::api::mcp::test_support::tool_call("act", args).await?,
+            &[],
+            &effects,
+            &[],
+        )
+        .await
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(
+            in_process.structured_content,
+            Some(json!({ "changed": true, "urlChanged": true })),
+            "the flag the loop reads must survive an in-process dispatch"
+        );
+        Ok(())
     }
 
     #[test]

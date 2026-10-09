@@ -37,6 +37,27 @@ export function parsePageId(result: McpToolResult): number {
   return Number(match[1])
 }
 
+/**
+ * The ref of the first element whose snapshot line matches, skipping lines that
+ * match but carry no ref.
+ *
+ * A label can appear on a line of its own above the control it names, so the
+ * first matching line is not always the actionable one. Taking only the first
+ * match then yielded no ref and the case failed claiming the element was
+ * missing while it was on the next line. A trailing space in the needle is
+ * ignored, because whether an accessible name keeps one is the browser's
+ * choice and has changed.
+ */
+export function refForLabel(snapshot: string, label: string): string {
+  const wanted = label.replace(/\s+$/, '')
+  for (const line of snapshot.split('\n')) {
+    if (!line.includes(wanted)) continue
+    const ref = line.match(/\[ref=(e\d+)\]/)?.[1]
+    if (ref) return ref
+  }
+  throw new Error(`no ref for ${label} in:\n${snapshot.slice(0, 500)}`)
+}
+
 /** Condition-based waiting — the suite never sleeps blind. */
 export async function waitUntil(
   condition: () => Promise<boolean> | boolean,

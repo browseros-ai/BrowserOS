@@ -24,6 +24,8 @@ pub struct Model {
     /// `tokens_measured`; otherwise the session predates measurement and these are 0.
     pub tool_input_token_estimate: i64,
     pub tool_output_token_estimate: i64,
+    pub decision_input_token_estimate: i64,
+    pub decision_output_token_estimate: i64,
     /// True iff the session has dispatches and every one carries token-estimator v1.
     pub tokens_measured: bool,
     pub updated_at: i64,

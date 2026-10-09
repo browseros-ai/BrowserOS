@@ -484,6 +484,8 @@ async fn skill_create_namespaces_a_bare_name_under_neo() -> anyhow::Result<()> {
 
 fn dispatch(session_id: &str, tool: &str, is_error: bool) -> RecordToolDispatchInput {
     RecordToolDispatchInput {
+        decision_input_token_estimate: 0,
+        decision_output_token_estimate: 0,
         agent_id: "convo-run".to_string(),
         slug: "codex".to_string(),
         agent_label: "codex/inbox".to_string(),

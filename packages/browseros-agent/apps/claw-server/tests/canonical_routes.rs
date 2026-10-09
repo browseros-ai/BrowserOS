@@ -554,6 +554,8 @@ async fn seed_dispatch_with_estimates(
         .state
         .audit_log
         .record_tool_dispatch(RecordToolDispatchInput {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             agent_id: "codex-research-browserclaw".to_string(),
             slug: "codex".to_string(),
             agent_label: "Codex".to_string(),

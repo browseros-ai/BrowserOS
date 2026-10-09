@@ -323,6 +323,8 @@ mod tests {
 
     fn efficiency_dispatch(session_id: &str, agent_id: &str) -> RecordToolDispatchInput {
         RecordToolDispatchInput {
+            decision_input_token_estimate: 0,
+            decision_output_token_estimate: 0,
             agent_id: agent_id.to_string(),
             slug: "agent".to_string(),
             agent_label: "Agent".to_string(),

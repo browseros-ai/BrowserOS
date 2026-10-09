@@ -87,7 +87,86 @@ struct RenderContext<'a, 'b> {
     opts: &'b mut RenderOptions<'a>,
 }
 
+/// Longest label borrowed from discarded text, so a stray prose node cannot
+/// turn one line into a paragraph.
+const BORROWED_NAME_MAX: usize = 120;
+
+/// How far into a discarded subtree a label may be found. The observed markup
+/// is `label > div > text`, so two levels is the case that matters and a bound
+/// keeps a deep wrapper from pulling in a whole section.
+const BORROWED_NAME_MAX_DEPTH: usize = 3;
+
 impl RenderContext<'_, '_> {
+    /// Text from the part of a node's subtree the renderer is about to discard,
+    /// for a node the accessibility tree left unnamed.
+    ///
+    /// A facet rendered as a `visibility: hidden` checkbox behind a clickable
+    /// label has no accessible name. Its text is not a direct child either: the
+    /// markup is `label > div > text`, and that middle div is an unnamed generic
+    /// the renderer drops, so the text under it was lost with it. A real listing
+    /// page offered 99 such controls as identical nameless clickables with
+    /// nothing to choose between them.
+    ///
+    /// Descent stops at any node that will render on its own line, so a named
+    /// sibling's text is never stolen onto its parent.
+    /// Returns `None` when the text must not be borrowed at all, because a
+    /// descendant that renders already carries it as its own accessible name.
+    /// `<label>Name <input></label>` is that case: the label's text is the
+    /// textbox's name, so lifting it onto the label would print the same name
+    /// twice and leave a line that looks like the control but has no ref.
+    fn text_of_discarded_subtree(&self, node: &AxNode, depth: usize) -> Option<String> {
+        if depth >= BORROWED_NAME_MAX_DEPTH {
+            return Some(String::new());
+        }
+        let mut parts: Vec<String> = Vec::new();
+        for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
+            let Some(child) = self.by_id.get(child_id).copied() else {
+                continue;
+            };
+            let role = if child.ignored.unwrap_or(false) {
+                None
+            } else {
+                str_val(child.role.as_ref())
+            };
+            let name = str_val(child.name.as_ref()).unwrap_or_default();
+            let is_cursor_hit = child
+                .backend_dom_node_id
+                .and_then(|id| {
+                    self.opts
+                        .cursor_hits
+                        .as_ref()
+                        .map(|hits| hits.contains_key(&id))
+                })
+                .unwrap_or(false);
+            // A child that renders carries its own line. If it is named, that
+            // name is what this node's text was for, so there is nothing here
+            // to borrow.
+            if !is_dropped(role.as_deref(), &name, is_cursor_hit) {
+                if !name.trim().is_empty() {
+                    return None;
+                }
+                continue;
+            }
+            let text = name.trim();
+            if text.is_empty() {
+                parts.push(self.text_of_discarded_subtree(child, depth + 1)?);
+            } else {
+                parts.push(text.to_string());
+            }
+        }
+        let joined = parts
+            .iter()
+            .map(|part| part.trim())
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        Some(if joined.chars().count() > BORROWED_NAME_MAX {
+            joined.chars().take(BORROWED_NAME_MAX).collect()
+        } else {
+            joined
+        })
+    }
+
     fn visit(&mut self, node_id: &str, depth: usize) {
         let Some(node) = self.by_id.get(node_id).copied() else {
             return;
@@ -137,6 +216,16 @@ impl RenderContext<'_, '_> {
             return;
         }
 
+        // A control the accessibility tree left unnamed may still carry its
+        // label as text the renderer is about to discard. Borrowed only for
+        // display, and only after the drop decision above, so the set of
+        // rendered nodes is unchanged and nothing previously hidden appears.
+        let borrowed = if name.is_empty() {
+            self.text_of_discarded_subtree(node, 0).unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let name = if name.is_empty() { borrowed } else { name };
         let line = format_line(node, &role, &name, absolute_depth, self.opts);
         self.lines.push(line);
         for child_id in node.child_ids.as_deref().unwrap_or(&[]) {
@@ -402,6 +491,134 @@ mod tests {
         options: SnapshotOptions,
     ) -> String {
         apply_snapshot_options(&render(nodes, refs), options)
+    }
+
+    /// The gap this closes: a facet rendered as a `visibility: hidden` checkbox
+    /// behind a clickable label has no accessible name, and its label text sat
+    /// in a StaticText child that SKIP_ROLES discarded. A real page offered 99
+    /// such controls as identical nameless clickables, so nothing could choose
+    /// between them.
+    #[test]
+    fn an_unnamed_control_borrows_the_label_text_the_tree_would_discard() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "StaticText", &[]),
+        ];
+        nodes[2].name = Some(name("32 GB"));
+        nodes[1].backend_dom_node_id = Some(201);
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(
+            rendered.contains("LabelText \"32 GB\""),
+            "the label's own text has to name it: {rendered}"
+        );
+        assert!(
+            !rendered.contains("StaticText"),
+            "the text node itself stays skipped: {rendered}"
+        );
+    }
+
+    /// The real markup is `label > div > text`, with the middle div an unnamed
+    /// generic the renderer drops, so the label has to be reachable through it.
+    #[test]
+    fn a_label_is_found_through_a_dropped_wrapper() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3", "4"]),
+            ax("3", "generic", &[]),
+            ax("4", "generic", &["5"]),
+            ax("5", "StaticText", &[]),
+        ];
+        nodes[4].name = Some(name("32 GB"));
+        nodes[1].backend_dom_node_id = Some(301);
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(
+            rendered.contains("LabelText \"32 GB\""),
+            "the label text sits two levels down and must still be found: {rendered}"
+        );
+    }
+
+    /// A named descendant renders on its own line, so its text must not also be
+    /// pulled onto the unnamed parent.
+    #[test]
+    fn a_rendered_descendants_text_is_not_stolen() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3"]),
+            ax("3", "button", &[]),
+        ];
+        nodes[2].name = Some(name("Apply"));
+        nodes[1].backend_dom_node_id = Some(401);
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(rendered.contains("button \"Apply\""), "{rendered}");
+        assert!(
+            !rendered.contains("LabelText \"Apply\""),
+            "a rendered child keeps its own text: {rendered}"
+        );
+    }
+
+    /// The regression this closes, caught on the contract fixture rather than
+    /// in CI: `<label>Name <input></label>` has the label's text serving as the
+    /// textbox's accessible name. Borrowing it printed `LabelText "Name"` with
+    /// no ref immediately above `textbox "Name"`, and a helper that takes the
+    /// first line matching the label then found a line it could not act on.
+    #[test]
+    fn text_a_named_control_already_uses_is_not_borrowed() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "LabelText", &["3", "4"]),
+            ax("3", "StaticText", &[]),
+            ax("4", "textbox", &[]),
+        ];
+        nodes[2].name = Some(name("Name"));
+        nodes[3].name = Some(name("Name"));
+        nodes[3].backend_dom_node_id = Some(501);
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(rendered.contains("textbox \"Name\""), "{rendered}");
+        assert!(
+            !rendered.contains("LabelText \"Name\""),
+            "the label must not become a nameless decoy for its own field: {rendered}"
+        );
+    }
+
+    /// A named parent keeps its name, so a named parent never has a
+    /// child's text appended to it.
+    #[test]
+    fn a_named_control_does_not_borrow_anything() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "button", &["3"]),
+            ax("3", "StaticText", &[]),
+        ];
+        nodes[1].name = Some(name("Submit"));
+        nodes[2].name = Some(name("ignored"));
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(rendered.contains("button \"Submit\""), "{rendered}");
+        assert!(!rendered.contains("ignored"), "{rendered}");
+    }
+
+    /// Borrowing must not change which nodes are rendered. An unnamed generic
+    /// is dropped on its name being empty, and that decision is made before any
+    /// text is borrowed, so giving it a label must not resurrect it.
+    #[test]
+    fn borrowing_does_not_resurrect_a_dropped_node() {
+        let mut nodes = vec![
+            ax("1", "RootWebArea", &["2"]),
+            ax("2", "generic", &["3"]),
+            ax("3", "StaticText", &[]),
+        ];
+        nodes[2].name = Some(name("just prose"));
+
+        let rendered = render(&nodes, &mut RefMap::default());
+        assert!(
+            !rendered.contains("generic"),
+            "an unnamed, non-interactive generic stays dropped: {rendered}"
+        );
     }
 
     #[test]
