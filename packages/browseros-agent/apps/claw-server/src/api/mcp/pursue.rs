@@ -278,6 +278,21 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
             "Stopped making progress: {}. Continue with the page tools.",
             cause.describe(outcome.actions())
         ),
+        // Handing back after changing the page is not handing back from a
+        // standing start. Measured live: a run applied a facet filter at 0.93,
+        // the url gained `rh=p_n_g-1003405005111%3A30060745031`, and the
+        // hand-back then said none of the controls offered could advance the
+        // goal. True of the step it reached, false as a summary, because the
+        // reason nothing further could advance the goal was that the goal was
+        // already met.
+        Status::NeedsInput(reason) if outcome.changed() > 0 => format!(
+            "Stopped and handing back after changing the page: {reason}. {} of {} actions \
+             changed it, so check whether what the run already did was what you wanted before \
+             redoing anything. You decide what happens next: this run has one page and one \
+             goal, and you have the wider intent.",
+            outcome.changed(),
+            outcome.actions()
+        ),
         Status::NeedsInput(reason) => format!(
             "Stopped and handing back: {reason}. You decide what happens next: this run has one \
              page and one goal, and you have the wider intent. Options are to scroll or expand a \

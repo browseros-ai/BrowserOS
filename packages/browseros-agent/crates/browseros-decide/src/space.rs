@@ -364,6 +364,49 @@ mod tests {
         }
     }
 
+    /// The short-name bonus breaks ties and must not overturn a control that
+    /// matched the goal more times. Measured on a live results page: a goal
+    /// naming page 2 and the pagination ranked `link "Results"` above
+    /// `button "Go to next page, page 2"`, which then fell outside the offered
+    /// forty, and the run scrolled three times and stalled with the control it
+    /// needed never shown to it.
+    #[test]
+    fn more_matches_beats_a_shorter_name() {
+        let goal = "go to page 2 of the search results using the pagination at the bottom";
+        let pagination = control("e215", "button", "Go to next page, page 2");
+        let incidental = control("e2", "link", "Results");
+        let (strong, weak) = (
+            crate::relevance::score(goal, &pagination, None),
+            crate::relevance::score(goal, &incidental, None),
+        );
+        assert!(
+            strong > weak,
+            "the control the goal named scored {strong} and an incidental match scored {weak}"
+        );
+    }
+
+    /// And the bonus still does the job it was added for: a facet whose whole
+    /// name is what the goal named beats a verbose product title that merely
+    /// mentions it.
+    #[test]
+    fn a_short_exact_name_still_beats_a_verbose_title() {
+        let goal = "Narrow this RAM listing to the ADATA brand using the brand filter";
+        let facet = control("e32", "LabelText", "ADATA");
+        let product = control(
+            "e99",
+            "link",
+            "ADATA Laptop DDR5 8 GB (Single Channel) Laptop (AD5S56008G-S)",
+        );
+        let (strong, weak) = (
+            crate::relevance::score(goal, &facet, None),
+            crate::relevance::score(goal, &product, None),
+        );
+        assert!(
+            strong > weak,
+            "the facet scored {strong} and the product title scored {weak}"
+        );
+    }
+
     fn view_with(controls: Vec<Control>) -> PageView {
         PageView {
             url: "https://example.com".to_string(),

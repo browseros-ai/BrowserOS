@@ -57,6 +57,19 @@ impl Stuck {
             Self::NothingChanged => {
                 format!("{actions} action(s) ran and the page was the same afterwards each time")
             }
+            // A run that acted and then ran out is not a run that found nothing.
+            // Measured on a live facet panel, five times out of five: the run
+            // expanded a collapsed section at 0.98, the page changed, and it was
+            // then described as having found no control it was confident enough
+            // to use. The goal had asked for "checkbox options" and the rows
+            // render as labels, so the terminal check could never confirm and
+            // the run kept looking. Reasonable of it; unreasonable to then
+            // describe as having found nothing.
+            Self::NotConfident if actions > 0 => format!(
+                "it ran {actions} action(s), then could not find a further control it was \
+                 confident enough to use. Check whether what it already did was what you \
+                 wanted, because the goal may already be met"
+            ),
             Self::NotConfident => {
                 "it could not find a control it was confident enough to use".to_string()
             }

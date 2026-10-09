@@ -26,7 +26,7 @@ use crate::view::Control;
 /// Words too common to carry any signal about which control a goal means.
 const NOISE: &[&str] = &[
     "the", "a", "an", "and", "or", "to", "of", "in", "on", "for", "with", "by", "at", "is", "it",
-    "this", "that", "its", "so", "then", "from", "use", "using", "page", "site",
+    "this", "that", "its", "so", "then", "from", "use", "using", "site",
 ];
 
 /// Splits text into comparable words, lowercased, with noise and very short
@@ -96,8 +96,14 @@ pub fn score(goal: &str, control: &Control, last_acted: Option<&str>) -> i32 {
     // product titles above the brand facet, because each title shared two or
     // three words with the goal while the facet shared only its one. The facet
     // is the control the goal meant.
+    // Deliberately below the 10 a single shared word earns, so this breaks a
+    // tie and never overturns a control that matched the goal more times. At 12
+    // it would: for "go to page 2 ... using the pagination at the bottom",
+    // `button "Go to next page, page 2"` shares "page" twice and `link
+    // "Results"` shares one word, and the bonus alone was enough to put the
+    // incidental match first.
     if shared > 0 && name_words.len() <= 2 {
-        score += 12;
+        score += 8;
     }
 
     // A goal's value may name an option rather than the control, as "sort by
