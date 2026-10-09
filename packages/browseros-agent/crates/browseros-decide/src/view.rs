@@ -59,6 +59,14 @@ const EDITABLE_ROLES: &[&str] = &["textbox", "searchbox", "spinbutton", "combobo
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ControlState {
     pub checked: Option<bool>,
+    /// Some of a group is selected and some is not.
+    ///
+    /// Its own state rather than folded into `checked`, because the model is
+    /// documented as doing better with a named situation than a raw value, and
+    /// collapsing it to unchecked told the model "none of these are selected",
+    /// which is not what the page says. A goal of clearing the selection and a
+    /// goal of selecting everything then read identically.
+    pub indeterminate: bool,
     pub expanded: Option<bool>,
     pub selected: Option<bool>,
     pub disabled: bool,
@@ -75,7 +83,12 @@ impl ControlState {
         for property in node.properties.as_deref().unwrap_or(&[]) {
             let value = property.value.value.as_ref();
             match property.name.as_str() {
-                "checked" => state.checked = value.and_then(serde_json::Value::as_bool),
+                "checked" => match value {
+                    Some(serde_json::Value::String(mixed)) if mixed == "mixed" => {
+                        state.indeterminate = true;
+                    }
+                    other => state.checked = other.and_then(serde_json::Value::as_bool),
+                },
                 "expanded" => state.expanded = value.and_then(serde_json::Value::as_bool),
                 "selected" => state.selected = value.and_then(serde_json::Value::as_bool),
                 "disabled" => {
@@ -99,6 +112,9 @@ impl ControlState {
     /// "unchecked" carries more than `false` does.
     #[must_use]
     pub fn describe(&self) -> Option<String> {
+        if self.indeterminate {
+            return Some("partially selected: some of this group, not all".to_string());
+        }
         if let Some(checked) = self.checked {
             return Some(if checked { "checked" } else { "unchecked" }.to_string());
         }
@@ -256,6 +272,8 @@ impl PageView {
                 match word.as_str() {
                     "checked" => state.checked = Some(true),
                     "unchecked" => state.checked = Some(false),
+                    // The renderer's own word for the mixed case.
+                    "indeterminate" => state.indeterminate = true,
                     "expanded" => state.expanded = Some(true),
                     "collapsed" => state.expanded = Some(false),
                     "selected" => state.selected = Some(true),
@@ -266,7 +284,10 @@ impl PageView {
             }
             // The renderer prints only the true half of checked, so a checkbox
             // with no annotation is unticked rather than unknown.
-            if state.checked.is_none() && matches!(role.as_str(), "checkbox" | "radio" | "switch") {
+            if state.checked.is_none()
+                && !state.indeterminate
+                && matches!(role.as_str(), "checkbox" | "radio" | "switch")
+            {
                 state.checked = Some(false);
             }
             controls.push(Control {
@@ -424,6 +445,7 @@ fn guard_of(control: &Control) -> u64 {
     control.value.hash(&mut hasher);
     control.options.hash(&mut hasher);
     control.state.checked.hash(&mut hasher);
+    control.state.indeterminate.hash(&mut hasher);
     control.state.expanded.hash(&mut hasher);
     control.state.selected.hash(&mut hasher);
     control.state.disabled.hash(&mut hasher);
@@ -475,19 +497,51 @@ fn role_in(line: &str) -> Option<String> {
     )
 }
 
+/// Decodes the JSON string starting at `start`, which must be its opening
+/// quote, and reports where it ended.
+///
+/// The renderer writes names and values with `serde_json::to_string`, so they
+/// are JSON strings and have to be read as such. Scanning for the next quote
+/// character truncates anything containing one: an option named `Say "hi"`
+/// became `Say \`, and that truncated value could never match the real option
+/// when it was sent back as a select value.
+fn json_string_at(line: &str, start: usize) -> Option<(String, usize)> {
+    let bytes = line.as_bytes();
+    if bytes.get(start) != Some(&b'"') {
+        return None;
+    }
+    let mut index = start + 1;
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\\' => index += 2,
+            b'"' => {
+                let decoded = serde_json::from_str::<String>(line.get(start..=index)?).ok()?;
+                return Some((decoded, index + 1));
+            }
+            _ => index += 1,
+        }
+    }
+    None
+}
+
 /// The first quoted run on the line, which the renderer writes as the name.
 fn name_in(line: &str) -> Option<String> {
-    let start = line.find('"')? + 1;
-    let rest = &line[start..];
-    let end = rest.find('"')?;
-    Some(rest[..end].to_string())
+    let start = line.find('"')?;
+    json_string_at(line, start).map(|(name, _)| name)
 }
 
 /// The bracketed words, excluding the reference and the cursor hint, which are
 /// not states.
+///
+/// Scanned from after the name, so a name containing brackets cannot be read as
+/// a state. A control called `Filter [beta]` would otherwise contribute one.
 fn states_in(line: &str) -> Vec<String> {
     let mut states = Vec::new();
-    let mut rest = line;
+    let after_name = line
+        .find('"')
+        .and_then(|start| json_string_at(line, start).map(|(_, end)| end))
+        .unwrap_or(0);
+    let mut rest = line.get(after_name..).unwrap_or(line);
     while let Some(start) = rest.find('[') {
         rest = &rest[start + 1..];
         let Some(end) = rest.find(']') else { break };
@@ -501,12 +555,14 @@ fn states_in(line: &str) -> Vec<String> {
 }
 
 /// The quoted value the renderer writes after a colon.
+///
+/// Decoded as a JSON string for the same reason the name is: a value
+/// containing a quote or a backslash is otherwise read wrongly, and this one
+/// travels back to the browser as the thing to type or select.
 fn value_in(line: &str) -> Option<String> {
     let marker = line.rfind("]: \"").map(|index| index + 3);
     let start = marker.or_else(|| line.rfind(": \"").map(|index| index + 2))?;
-    let rest = line.get(start..)?.strip_prefix('"')?;
-    let end = rest.rfind('"')?;
-    Some(rest[..end].to_string())
+    json_string_at(line, start).map(|(value, _)| value)
 }
 
 /// The option lines nested directly under a control, which is how a select's
@@ -966,6 +1022,90 @@ mod tests {
         );
     }
 
+    /// The renderer writes names with serde_json, so a name containing a quote
+    /// arrives escaped and has to be decoded. Scanning for the next quote
+    /// truncated it, and the truncated value could never match the real option
+    /// when it was sent back as a select value.
+    #[test]
+    fn a_name_containing_a_quote_is_decoded_whole() {
+        let name = r#"Say "hi" to everyone"#;
+        let line = format!(
+            "  - option {} [ref=e5]",
+            serde_json::to_string(name).expect("quotes")
+        );
+        assert_eq!(name_in(&line).as_deref(), Some(name));
+    }
+
+    /// And a backslash, which the same scan would have mangled.
+    #[test]
+    fn a_name_containing_a_backslash_is_decoded_whole() {
+        let name = r"C:\Users\shared";
+        let line = format!(
+            "  - link {} [ref=e6]",
+            serde_json::to_string(name).expect("quotes")
+        );
+        assert_eq!(name_in(&line).as_deref(), Some(name));
+    }
+
+    /// A value travels back to the browser as the thing to type or select, so
+    /// it has to survive the round trip exactly.
+    #[test]
+    fn a_value_containing_a_quote_is_decoded_whole() {
+        let value = r#"ratio 16:9 "widescreen""#;
+        let line = format!(
+            "  - textbox \"Note\" [ref=e8]: {}",
+            serde_json::to_string(value).expect("quotes")
+        );
+        assert_eq!(value_in(&line).as_deref(), Some(value));
+    }
+
+    /// A select's values are what gets sent back, so an option with punctuation
+    /// has to come out of the snapshot intact or the select cannot be driven.
+    #[test]
+    fn a_select_option_with_a_quote_survives_the_snapshot() {
+        let option = r#"13" display"#;
+        let mut refs = RefMap::new();
+        refs.begin_snapshot();
+        let select = refs.mint(MintRef {
+            backend_node_id: 1,
+            role: "combobox",
+            name: "Size",
+            document_id: None,
+            frame_id: Some(&FrameId::from("f".to_string())),
+        });
+        let child = refs.mint(MintRef {
+            backend_node_id: 2,
+            role: "option",
+            name: option,
+            document_id: None,
+            frame_id: Some(&FrameId::from("f".to_string())),
+        });
+        let text = format!(
+            "- main\n  - combobox \"Size\" [ref={select}]\n    - option {} [ref={child}]",
+            serde_json::to_string(option).expect("quotes")
+        );
+        let view = PageView::from_snapshot("https://e.com", "T", &text, &refs);
+        let combobox = view
+            .controls
+            .iter()
+            .find(|control| control.name == "Size")
+            .expect("the select");
+        assert_eq!(
+            combobox.options,
+            vec![option.to_string()],
+            "the value is what gets sent back, so it has to be exact"
+        );
+    }
+
+    /// A name containing brackets must not be read as a state.
+    #[test]
+    fn brackets_inside_a_name_are_not_states() {
+        let line = r#"  - button "Filter [beta]" [disabled] [ref=e7]"#;
+        assert_eq!(name_in(line).as_deref(), Some("Filter [beta]"));
+        assert_eq!(states_in(line), vec!["disabled".to_string()]);
+        assert_eq!(reference_in(line), Some("e7"));
+    }
+
     /// A reference, a cursor hint and a state are all bracketed, and only one of
     /// them is a state.
     #[test]
@@ -996,6 +1136,77 @@ mod tests {
         ];
         assert_eq!(nested_options(&lines, 0), vec!["A"]);
         assert_eq!(nested_options(&lines, 2), vec!["B"]);
+    }
+
+    /// A mixed checkbox means some of a group is selected, not none. Collapsing
+    /// it to unchecked told the model nothing was selected, so a goal of
+    /// clearing the selection and a goal of selecting everything read the same.
+    #[test]
+    fn a_mixed_checkbox_is_neither_checked_nor_unchecked() {
+        let nodes = vec![with_property(
+            ax("1", 11, "checkbox", "All brands"),
+            "checked",
+            serde_json::Value::String("mixed".to_string()),
+        )];
+        let view = view_of(&nodes);
+        let control = &view.controls[0];
+        assert!(control.state.indeterminate);
+        assert_eq!(
+            control.state.checked, None,
+            "it is not a boolean, so it does not claim to be one"
+        );
+        assert!(
+            control
+                .state
+                .describe()
+                .is_some_and(|state| state.contains("partially")),
+            "and the model is told so in words: {:?}",
+            control.state.describe()
+        );
+    }
+
+    /// Ticking a partially selected parent is a real change, so its identity
+    /// has to move or the action would look like it did nothing.
+    #[test]
+    fn a_mixed_checkbox_has_its_own_identity() {
+        let mixed = view_of(&[with_property(
+            ax("1", 11, "checkbox", "All"),
+            "checked",
+            serde_json::Value::String("mixed".to_string()),
+        )]);
+        let ticked = view_of(&[with_property(
+            ax("1", 11, "checkbox", "All"),
+            "checked",
+            true.into(),
+        )]);
+        let unticked = view_of(&[with_property(
+            ax("1", 11, "checkbox", "All"),
+            "checked",
+            false.into(),
+        )]);
+        assert_ne!(mixed.controls[0].guard, ticked.controls[0].guard);
+        assert_ne!(mixed.controls[0].guard, unticked.controls[0].guard);
+    }
+
+    /// The renderer's own word for it is read back the same way.
+    #[test]
+    fn the_renderers_indeterminate_word_is_read_back() {
+        let mut refs = RefMap::new();
+        refs.begin_snapshot();
+        let minted = refs.mint(MintRef {
+            backend_node_id: 11,
+            role: "checkbox",
+            name: "All",
+            document_id: None,
+            frame_id: Some(&FrameId::from("f".to_string())),
+        });
+        let text = format!("- main\n  - checkbox \"All\" [indeterminate] [ref={minted}]");
+        let view = PageView::from_snapshot("https://e.com", "T", &text, &refs);
+        assert!(view.controls[0].state.indeterminate);
+        assert_eq!(
+            view.controls[0].state.checked, None,
+            "a mixed checkbox is not defaulted to unchecked"
+        );
     }
 
     #[test]

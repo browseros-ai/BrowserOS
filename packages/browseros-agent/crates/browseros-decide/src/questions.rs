@@ -122,9 +122,11 @@ pub fn available(space: &ActionSpace, view: &PageView, fallback_needed: bool) ->
                 "checkbox" | "radio" | "switch" | "menuitemcheckbox"
             );
             checkable
-                && view
-                    .control(&candidate.reference)
-                    .is_some_and(|control| control.state.checked != Some(already))
+                && view.control(&candidate.reference).is_some_and(|control| {
+                    // From a partial selection both ticking and unticking mean
+                    // something, so neither is ruled out.
+                    control.state.indeterminate || control.state.checked != Some(already)
+                })
         });
         if any_to_do {
             operations.push(operation);
