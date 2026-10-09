@@ -49,6 +49,13 @@ use uuid::Uuid;
 
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
+/// How often a tool-list watcher checks that its client is still there.
+///
+/// Only needed because a watch cannot wake on a disconnect. Long, because the
+/// cost of being slow is one parked task and the cost of being eager is a timer
+/// per connection.
+const TOOL_LIST_LIVENESS_CHECK: std::time::Duration = std::time::Duration::from_secs(60);
+
 const PURSUE_TOOL_NAME: &str = "pursue";
 const PURSUE_DESCRIPTION: &str = "Pursue one goal on a page you already own, deciding each step \
 here instead of returning every page to you. Pass the page id from tabs or navigate, and the goal \
@@ -1046,11 +1053,28 @@ impl ServerHandler for ClawMcpService {
         let mut visibility = self.state.jev_settings.visibility();
         let peer = context.peer.clone();
         tokio::spawn(async move {
-            while visibility.changed().await.is_ok() {
-                if peer.notify_tool_list_changed().await.is_err() {
-                    // The client is gone. Nothing to tell and nothing to log:
-                    // a disconnect is the ordinary end of this task.
-                    break;
+            // The watch alone cannot wake on a disconnect, so a client that
+            // leaves quietly would leave this task parked until the next
+            // visibility change. The liveness check bounds that to one tick
+            // rather than removing it: rmcp exposes whether the transport is
+            // closed but no future that completes when it closes.
+            let mut liveness = tokio::time::interval(TOOL_LIST_LIVENESS_CHECK);
+            liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    changed = visibility.changed() => {
+                        if changed.is_err() || peer.notify_tool_list_changed().await.is_err() {
+                            // The store is gone, or the client is. Either way
+                            // there is nobody to tell: an ordinary end, not an
+                            // error worth logging.
+                            break;
+                        }
+                    }
+                    _ = liveness.tick() => {
+                        if peer.is_transport_closed() {
+                            break;
+                        }
+                    }
                 }
             }
         });
