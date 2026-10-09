@@ -121,6 +121,23 @@ pub struct Step {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Outcome {
     pub status: Status,
+    /// How many controls the last decision could choose from, and how many were
+    /// held back by the cap. Reported on every ending, because how much of the
+    /// page was visible to a decision is part of judging its answer.
+    pub offered: usize,
+    pub omitted: usize,
+    /// The controls that were offered, when the run handed back because none of
+    /// them could advance the goal.
+    ///
+    /// Only populated then. It is what the caller needs to decide what to do
+    /// next, and carrying it on every ending would be noise.
+    pub offered_controls: Vec<String>,
+    /// The confidence behind a terminal answer, when one ended the run.
+    ///
+    /// Not gated on. A completion claim is a report rather than an action, so
+    /// the number travels to the caller to judge instead of being turned into a
+    /// refusal here, which would only send the run round again.
+    pub terminal_confidence: Option<f64>,
     /// Every decision asked for, including those that ended before acting.
     pub decisions: u32,
     pub trail: Vec<Step>,
@@ -177,6 +194,10 @@ pub async fn pursue<O: Oracle, D: Driver>(
         Err(error) => {
             return Outcome {
                 status: Status::Failed(error),
+                offered: 0,
+                omitted: 0,
+                offered_controls: Vec::new(),
+                terminal_confidence: None,
                 decisions,
                 trail,
                 url_before: String::new(),
@@ -193,6 +214,10 @@ pub async fn pursue<O: Oracle, D: Driver>(
         |status: Status, trail: Vec<Step>, view: &PageView, decisions: u32, input_tokens: u64| {
             Outcome {
                 status,
+                offered: 0,
+                omitted: 0,
+                offered_controls: Vec::new(),
+                terminal_confidence: None,
                 decisions,
                 trail,
                 url_before: url_before.clone(),
@@ -253,16 +278,29 @@ pub async fn pursue<O: Oracle, D: Driver>(
             let fresh = settled.is_fresh_for(view.fingerprint);
             view = settled;
             if decision.operation == Operation::Done && fresh {
-                return finish(Status::Satisfied, trail, &view, decisions, input_tokens);
+                let mut outcome = finish(Status::Satisfied, trail, &view, decisions, input_tokens);
+                outcome.terminal_confidence = Some(decision.operation_confidence);
+                return outcome;
             }
             if decision.operation == Operation::Blocked {
-                return finish(
+                let mut outcome = finish(
                     Status::Blocked("no offered operation could advance the goal".to_string()),
                     trail,
                     &view,
                     decisions,
                     input_tokens,
                 );
+                outcome.terminal_confidence = Some(decision.operation_confidence);
+                // Measured against the real model: when nothing on the page can
+                // advance the goal it answers BLOCKED at the operation, which is
+                // a more coherent answer than naming an operation and then
+                // refusing every target. So this is the common route to "the
+                // caller should decide", and it carries the same context the
+                // escape path does.
+                outcome.offered = space.offered.len();
+                outcome.omitted = space.omitted;
+                outcome.offered_controls = offered_labels(&space);
+                return outcome;
             }
             // Done on a page that moved: look again rather than assert.
             continue;
@@ -291,13 +329,22 @@ pub async fn pursue<O: Oracle, D: Driver>(
         match gate::verdict(&decision, target_name.as_deref()) {
             Verdict::Execute => {}
             Verdict::HandBack(reason) => {
-                return finish(
+                let mut outcome = finish(
                     Status::NeedsInput(reason),
                     trail,
                     &view,
                     decisions,
                     input_tokens,
                 );
+                outcome.offered = space.offered.len();
+                outcome.omitted = space.omitted;
+                // Named so the caller can see what the decision was choosing
+                // between, which is the difference between "try scrolling" and
+                // "that control is not on this page".
+                if decision.none_of_these {
+                    outcome.offered_controls = offered_labels(&space);
+                }
+                return outcome;
             }
             Verdict::Explore(reason) => {
                 // Exploring is only progress if there is somewhere to look.
@@ -424,6 +471,23 @@ async fn ask_with_retries<O: Oracle>(
 /// Re-observes, keeping the last view if the browser cannot answer.
 async fn refresh<D: Driver>(driver: &D, previous: &PageView) -> PageView {
     driver.observe().await.unwrap_or_else(|_| previous.clone())
+}
+
+/// The offered controls as the caller sees them, so a hand back says what the
+/// decision was choosing between rather than only that it could not choose.
+fn offered_labels(space: &ActionSpace) -> Vec<String> {
+    space
+        .offered
+        .iter()
+        .map(|candidate| {
+            candidate
+                .descriptor
+                .get("control")
+                .and_then(|value| value.as_str())
+                .unwrap_or(&candidate.reference)
+                .to_string()
+        })
+        .collect()
 }
 
 fn describe(decision: &Decision, target_name: &Option<String>, changed: bool) -> String {

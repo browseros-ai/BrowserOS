@@ -149,13 +149,20 @@ pub enum Verdict {
 
 /// Judges a decision against the bar its consequence sets.
 ///
+/// Terminal answers are not judged here. The published pattern gates whether to
+/// **act**, and a terminal answer is a report rather than an action; the
+/// reference implementation re-validates the page instead and states plainly
+/// that a completion claim is never independent evidence. So the confidence
+/// behind one travels out to the caller, which is the documented "ask for
+/// review" branch, and the loop does not refuse it.
+///
 /// The bar rises with what it costs to be wrong, which is the published
 /// guidance: a scroll and a submit do not deserve the same threshold.
 #[must_use]
 pub fn verdict(decision: &Decision, target_name: Option<&str>) -> Verdict {
     if decision.none_of_these {
-        return Verdict::Explore(
-            "the model said none of the offered controls can advance the goal".to_string(),
+        return Verdict::HandBack(
+            "none of the controls offered for this step can advance the goal".to_string(),
         );
     }
     if decision.operation == Operation::Fill {
@@ -267,16 +274,41 @@ mod tests {
         assert!((decision.confidence() - 0.41).abs() < f64::EPSILON);
     }
 
-    /// Choosing the escape option never executes: code looks further instead.
+    /// Choosing the escape option never executes, and it is not something to
+    /// explore around either: it is a question for the caller. This is a
+    /// server, and the agent on the other side has the wider intent, can scroll
+    /// or expand a facet with the granular tools, can restate the goal, or can
+    /// stop. The loop has none of that, and guessing on its behalf spent three
+    /// decisions for no action.
     #[test]
-    fn saying_none_of_these_explores_rather_than_acting() {
+    fn saying_none_of_these_hands_back_to_the_caller() {
         let response = response(&[
             (OPERATION, answer("CLICK", 0.99)),
             (CLICK_TARGET, answer(NONE_OF_THESE, 1.0)),
         ]);
         let decision = read(&response).expect("reads");
         assert!(decision.none_of_these);
-        assert!(matches!(verdict(&decision, None), Verdict::Explore(_)));
+        assert!(
+            matches!(verdict(&decision, None), Verdict::HandBack(_)),
+            "full confidence that nothing fits is still a hand back, not an action"
+        );
+    }
+
+    /// A low-confidence answer about a control the model did name is a
+    /// different situation, and still explores: there is something to look
+    /// closer at.
+    #[test]
+    fn a_named_but_unsure_target_still_explores() {
+        let response = response(&[
+            (OPERATION, answer("CLICK", 0.9)),
+            (CLICK_TARGET, answer("e4", 0.45)),
+        ]);
+        let decision = read(&response).expect("reads");
+        assert!(!decision.none_of_these);
+        assert!(matches!(
+            verdict(&decision, Some("Corsair")),
+            Verdict::Explore(_)
+        ));
     }
 
     /// A confident ordinary action runs.
