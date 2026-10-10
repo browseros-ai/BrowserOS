@@ -13,6 +13,7 @@ import {
 import { resolveCanonicalMcpEndpointUrl } from '@/modules/api/mcp-endpoint'
 import { ClaudeDesktopCard } from './ClaudeDesktopCard'
 import { ConnectionRow } from './ConnectionRow'
+import { FastModeCard } from './FastModeCard'
 import { HeroCard } from './HeroCard'
 import { ManualSetupCard } from './ManualSetupCard'
 
@@ -122,6 +123,7 @@ export function Mcp() {
           </div>
         )}
       </section>
+      <FastModeCard />
       <ClaudeDesktopCard />
       <ManualSetupCard endpointUrl={url} />
     </div>

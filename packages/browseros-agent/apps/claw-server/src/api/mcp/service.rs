@@ -49,6 +49,22 @@ use uuid::Uuid;
 
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
+/// How often a tool-list watcher checks that its client is still there.
+///
+/// Only needed because a watch cannot wake on a disconnect. Long, because the
+/// cost of being slow is one parked task and the cost of being eager is a timer
+/// per connection.
+const TOOL_LIST_LIVENESS_CHECK: std::time::Duration = std::time::Duration::from_secs(60);
+
+const PURSUE_TOOL_NAME: &str = "pursue";
+const PURSUE_DESCRIPTION: &str = "Pursue one goal on a page you already own, deciding each step \
+here instead of returning every page to you. Pass the page id from tabs or navigate, and the goal \
+stated as the whole outcome you want rather than one step. It can operate dropdowns, checkboxes \
+and keyboard controls, and it hands back when a step needs text you have to supply or when it is \
+not confident enough to act on something consequential. When none of the controls on the page can \
+advance the goal, it stops and tells you what it was choosing between, so you can scroll, expand a \
+filter, restate the goal, or stop.";
+
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
 const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
@@ -88,6 +104,7 @@ pub struct ClawMcpService {
     name_session_tool: Tool,
     save_skill_tool: Tool,
     mark_skill_run_tool: Tool,
+    pursue_tool: Tool,
     request_help_tool: Tool,
     await_help_tool: Tool,
     output_files: OutputFileAccess,
@@ -151,6 +168,7 @@ impl ClawMcpService {
             name_session_tool: name_session_tool(),
             save_skill_tool: save_skill_tool(),
             mark_skill_run_tool: mark_skill_run_tool(),
+            pursue_tool: pursue_tool(),
             request_help_tool: request_help_tool(),
             await_help_tool: await_help_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
@@ -185,6 +203,12 @@ impl ClawMcpService {
         tools.push(decorate(self.name_session_tool.clone()));
         tools.push(decorate(self.save_skill_tool.clone()));
         tools.push(decorate(self.mark_skill_run_tool.clone()));
+        // Advertised only when the mode is switched on. This is server state
+        // rather than per-connection state, so every connected client sees the
+        // same catalog at any moment.
+        if self.state.jev_settings.is_active() {
+            tools.push(decorate(self.pursue_tool.clone()));
+        }
         tools.push(decorate(self.request_help_tool.clone()));
         tools.push(decorate(self.await_help_tool.clone()));
         tools
@@ -341,6 +365,154 @@ impl ClawMcpService {
         finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
             .await
             .into_call_tool_result()
+    }
+
+    async fn call_pursue(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        let dispatch_id = DispatchId::new();
+        let dispatch_cancel = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_cancel.clone())
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserOS neo session is no longer live",
+            )]);
+        }
+        let started_at = StdInstant::now();
+        // An operator stopping the run, a client cancelling it, and the session
+        // ending all have to reach the loop, which checks between every step.
+        //
+        // The bridge is aborted when this scope ends. A run that finishes
+        // normally cancels neither watched token, so without that the task
+        // would sit waiting forever: one leaked task per call. Dropping the
+        // guard aborts it on every path out of here, which is more reliable
+        // than remembering to abort before each return.
+        let linked = CancellationToken::new();
+        let bridge = {
+            let child = linked.clone();
+            let operator = dispatch_cancel.clone();
+            let client = cancel.clone();
+            tokio::spawn(async move {
+                tokio::select! {
+                    () = operator.cancelled() => child.cancel(),
+                    () = client.cancelled() => child.cancel(),
+                }
+            })
+        };
+        let bridge = AbortOnDrop(bridge);
+        let result = self.run_pursue(started, raw_args, linked).await;
+        drop(bridge);
+        if let Err(error) = record_local_tool_dispatch(
+            &self.state,
+            LocalToolDispatch {
+                session: &started.session,
+                agent_label: &started.agent_label,
+                tool_name: PURSUE_TOOL_NAME,
+                raw_args,
+                result: &result,
+                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                dispatch_id: dispatch_id.clone(),
+            },
+        )
+        .await
+        {
+            warn!(error = %error, "local tool audit submission failed");
+        }
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    async fn run_pursue(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        cancel: CancellationToken,
+    ) -> ToolResult {
+        let Some(page) = raw_args
+            .get("page")
+            .and_then(Value::as_u64)
+            .and_then(|page| u32::try_from(page).ok())
+        else {
+            return ToolResult::error("pursue: page is required, from tabs or navigate.");
+        };
+        let Some(goal) = raw_args
+            .get("goal")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|goal| !goal.is_empty())
+        else {
+            return ToolResult::error(
+                "pursue: goal is required, stated as the whole outcome you want.",
+            );
+        };
+
+        // Read once, at the start. A credential removed between listing and
+        // calling has to say so and name the fallback, because the caller still
+        // has every granular tool.
+        let settings = self.state.jev_settings.get().await;
+        let Some(credential) = self.state.jev_settings.credential().await else {
+            return ToolResult::error(
+                "pursue: goal-driven browsing is off, so nothing was run. Use snapshot and act instead.",
+            );
+        };
+
+        // Budgets come from the cockpit rather than from constants here, so the
+        // card a user sets is the authority.
+        let max_steps = raw_args
+            .get("maxSteps")
+            .and_then(Value::as_u64)
+            .and_then(|steps| u32::try_from(steps).ok())
+            .unwrap_or(settings.budgets.max_steps);
+        let budget = browseros_decide::Budget {
+            max_steps,
+            max_seconds: u64::from(settings.budgets.max_seconds),
+        };
+
+        let ownership_key = started.session.convo_id().clone();
+        let default_tab_group_id = self
+            .state
+            .sessions
+            .ownership()
+            .tab_group_ref(&ownership_key)
+            .await;
+        let identity = crate::api::mcp::dispatch::ToolIdentity {
+            session: started.session.clone(),
+            agent: started.session.agent().clone(),
+            ownership_key,
+            agent_label: started.agent_label.clone(),
+        };
+
+        let Some(browser_session) = self.state.browser.session().await else {
+            return ToolResult::error(
+                "pursue: the browser is not connected, so nothing was run. Start BrowserOS neo and check the cockpit.",
+            );
+        };
+        let Some(driver) = crate::api::mcp::pursue::PageDriver::new(
+            browser_session,
+            page,
+            self.catalog.clone(),
+            identity.session.id().clone(),
+            identity,
+            default_tab_group_id,
+            self.state.clone(),
+            self.output_files.clone(),
+            cancel,
+        ) else {
+            return ToolResult::error("pursue: the act tool is missing from the catalog.");
+        };
+
+        let jev = browseros_decide::Jev::new(credential.expose());
+        let outcome = browseros_decide::pursue(&jev, &driver, goal, budget).await;
+        let (text, structured) =
+            crate::api::mcp::pursue::render(goal, driver.page(), &outcome, &driver.notices());
+        ToolResult::text(text, Some(structured))
     }
 
     async fn call_mark_skill_run(
@@ -874,6 +1046,38 @@ impl ServerHandler for ClawMcpService {
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
         self.learn_session_from_notification(&context).await;
+        // The tool list changes when the decision credential is added, paused
+        // or forgotten, and this server advertises that it notifies clients of
+        // that. It has to actually do so, or a client that listed tools at
+        // connect would never discover the tool.
+        let mut visibility = self.state.jev_settings.visibility();
+        let peer = context.peer.clone();
+        tokio::spawn(async move {
+            // The watch alone cannot wake on a disconnect, so a client that
+            // leaves quietly would leave this task parked until the next
+            // visibility change. The liveness check bounds that to one tick
+            // rather than removing it: rmcp exposes whether the transport is
+            // closed but no future that completes when it closes.
+            let mut liveness = tokio::time::interval(TOOL_LIST_LIVENESS_CHECK);
+            liveness.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tokio::select! {
+                    changed = visibility.changed() => {
+                        if changed.is_err() || peer.notify_tool_list_changed().await.is_err() {
+                            // The store is gone, or the client is. Either way
+                            // there is nobody to tell: an ordinary end, not an
+                            // error worth logging.
+                            break;
+                        }
+                    }
+                    _ = liveness.tick() => {
+                        if peer.is_transport_closed() {
+                            break;
+                        }
+                    }
+                }
+            }
+        });
     }
 
     fn list_tools(
@@ -920,6 +1124,9 @@ impl ServerHandler for ClawMcpService {
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(with_session_arg(self.mark_skill_run_tool.clone()));
         }
+        if name == PURSUE_TOOL_NAME && self.state.jev_settings.is_active() {
+            return Some(with_session_arg(self.pursue_tool.clone()));
+        }
         self.find_tool_index(name)
             .map(|index| with_session_arg(self.catalog[index].to_mcp_tool()))
     }
@@ -932,12 +1139,14 @@ impl ServerHandler for ClawMcpService {
         let is_name_session = request.name == NAME_SESSION_TOOL_NAME;
         let is_save_skill = request.name == SAVE_SKILL_TOOL_NAME;
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
+        let is_pursue = request.name == PURSUE_TOOL_NAME && self.state.jev_settings.is_active();
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
             && !is_save_skill
             && !is_mark_skill_run
+            && !is_pursue
             && !is_request_help
             && !is_await_help
             && tool_index.is_none()
@@ -1000,6 +1209,10 @@ impl ServerHandler for ClawMcpService {
             Ok(self.call_save_skill(&started, &raw_args).await)
         } else if is_mark_skill_run {
             Ok(self.call_mark_skill_run(&started, &raw_args).await)
+        } else if is_pursue {
+            Ok(self
+                .call_pursue(&started, &raw_args, context.ct.clone())
+                .await)
         } else if is_request_help {
             Ok(self
                 .call_request_human_help(&started, &raw_args, context.ct.clone())
@@ -1237,6 +1450,121 @@ fn mark_skill_run_tool() -> Tool {
             .destructive(false)
             .idempotent(true),
     )
+}
+
+/// Aborts a spawned task when it goes out of scope.
+///
+/// Used for the cancellation bridge, which waits on tokens that a normally
+/// finished run never fires. Without this it would outlive every call.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+fn pursue_tool() -> Tool {
+    let Value::Object(input_schema) = json!({
+        "type": "object",
+        "properties": {
+            "page": {
+                "type": "integer",
+                "description": "The page to work on, from tabs or navigate. It is already yours, and it stays yours."
+            },
+            "goal": {
+                "type": "string",
+                "description": "The whole outcome you want, for instance \"sort these results by price, lowest first, and narrow them to the Corsair brand\". Not a single step."
+            },
+            "maxSteps": {
+                "type": "integer",
+                "description": "Stop after this many actions. Defaults to the budget set in the cockpit."
+            }
+        },
+        "required": ["page", "goal"]
+    }) else {
+        unreachable!();
+    };
+    let Value::Object(output_schema) = pursue_output_schema() else {
+        unreachable!();
+    };
+    Tool::new(PURSUE_TOOL_NAME, PURSUE_DESCRIPTION, input_schema)
+        .with_raw_output_schema(Arc::new(output_schema))
+        .with_annotations(
+            ToolAnnotations::with_title("Pursue a goal")
+                .read_only(false)
+                .destructive(false)
+                .idempotent(false)
+                .open_world(true),
+        )
+}
+
+/// What a run promises its caller.
+///
+/// Declared rather than left implicit, because the wire envelope drops
+/// structured content from a tool that ships it without a schema, and this
+/// result is the whole reason for calling the tool.
+fn pursue_output_schema() -> Value {
+    let count = json!({ "type": "integer", "minimum": 0 });
+    json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "status", "page", "url", "urlBefore", "title", "decisions", "actions",
+            "actionsThatChangedThePage", "inputTokens", "controlsOffered",
+            "controlsHeldBack", "offeredControls", "trail"
+        ],
+        "properties": {
+            "status": {
+                "type": "string",
+                "enum": [
+                    "satisfied", "blocked", "stalled", "needs_input",
+                    "out_of_budget", "stopped", "failed"
+                ]
+            },
+            "page": count.clone(),
+            "url": { "type": "string" },
+            "urlBefore": { "type": "string" },
+            "title": { "type": "string" },
+            "decisions": count.clone(),
+            "actions": count.clone(),
+            "actionsThatChangedThePage": count.clone(),
+            "inputTokens": count.clone(),
+            "controlsOffered": count.clone(),
+            "controlsHeldBack": count.clone(),
+            "offeredControls": {
+                "type": "array",
+                "items": { "type": "string" },
+                "description": "What the last decision was choosing between, when it reported that none of them could advance the goal."
+            },
+            "stoppedBecause": {
+                "type": ["string", "null"],
+                "enum": ["nothing_changed", "not_confident", "control_kept_moving", "browser_kept_failing", "only_waiting", null],
+                "description": "Why the run stopped making progress, when it stopped for that reason. Each one calls for a different response, so this is a word to branch on rather than a sentence to read."
+            },
+            "terminalConfidence": {
+                "type": ["number", "null"],
+                "minimum": 0,
+                "description": "How sure the run was when it claimed the goal was done or blocked. Reported rather than acted on: a claim is not evidence, and you decide whether to verify it."
+            },
+            "trail": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["operation", "pageChanged", "confidence", "url"],
+                    "properties": {
+                        "operation": { "type": "string" },
+                        "target": { "type": ["string", "null"] },
+                        "value": { "type": ["string", "null"] },
+                        "confidence": { "type": "number", "minimum": 0 },
+                        "pageChanged": { "type": "boolean" },
+                        "url": { "type": "string" }
+                    }
+                }
+            }
+        }
+    })
 }
 
 fn request_help_tool() -> Tool {

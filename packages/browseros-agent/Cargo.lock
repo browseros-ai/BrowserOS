@@ -346,6 +346,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "browseros-decide"
+version = "0.1.0"
+dependencies = [
+ "browseros-core",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "browseros-mcp"
 version = "0.1.0"
 dependencies = [
@@ -493,6 +505,7 @@ dependencies = [
  "base64 0.22.1",
  "browseros-cdp",
  "browseros-core",
+ "browseros-decide",
  "browseros-mcp",
  "clap",
  "claw-api",
