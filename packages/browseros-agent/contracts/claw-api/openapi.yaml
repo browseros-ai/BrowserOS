@@ -24,6 +24,8 @@ paths:
     $ref: ./paths/feedback.yaml#/invitation
   /api/v1/settings/telemetry:
     $ref: ./paths/settings.yaml#/telemetry
+  /api/v1/settings/agent:
+    $ref: ./paths/settings.yaml#/agent
   /api/v1/sessions:
     $ref: ./paths/sessions.yaml#/collection
   /api/v1/sessions/{sessionId}:
@@ -128,6 +130,10 @@ components:
       $ref: ./schemas/settings.yaml#/TelemetryState
     UpdateTelemetryRequest:
       $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
+    AgentSettings:
+      $ref: ./schemas/settings.yaml#/AgentSettings
+    UpdateAgentSettingsRequest:
+      $ref: ./schemas/settings.yaml#/UpdateAgentSettingsRequest
     SessionStatus:
       $ref: ./schemas/sessions.yaml#/SessionStatus
     LiveSessionActivityState:

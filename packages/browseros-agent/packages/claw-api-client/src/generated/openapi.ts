@@ -153,6 +153,22 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/settings/agent': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations['getAgentSettings']
+    put: operations['updateAgentSettings']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/sessions': {
     parameters: {
       query?: never
@@ -611,6 +627,12 @@ export interface components {
     }
     UpdateTelemetryRequest: {
       consent: boolean
+    }
+    AgentSettings: {
+      humanHelpEnabled: boolean
+    }
+    UpdateAgentSettingsRequest: {
+      humanHelpEnabled: boolean
     }
     /** @enum {string} */
     SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'
@@ -1373,6 +1395,53 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['TelemetryState']
+        }
+      }
+      400: components['responses']['BadRequest']
+      500: components['responses']['InternalError']
+    }
+  }
+  getAgentSettings: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Current agent tool settings. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['AgentSettings']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  updateAgentSettings: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['UpdateAgentSettingsRequest']
+      }
+    }
+    responses: {
+      /** @description Updated agent tool settings. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['AgentSettings']
         }
       }
       400: components['responses']['BadRequest']

@@ -29,3 +29,34 @@ telemetry:
         $ref: ../responses.yaml#/BadRequest
       '500':
         $ref: ../responses.yaml#/InternalError
+agent:
+  get:
+    operationId: getAgentSettings
+    responses:
+      '200':
+        description: Current agent tool settings.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/AgentSettings
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  put:
+    operationId: updateAgentSettings
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/settings.yaml#/UpdateAgentSettingsRequest
+    responses:
+      '200':
+        description: Updated agent tool settings.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/AgentSettings
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError

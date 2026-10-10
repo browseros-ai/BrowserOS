@@ -121,6 +121,32 @@ describe('ClawApiClient', () => {
     )
   })
 
+  it('reads and updates agent settings on the exact route', async () => {
+    const requests: Request[] = []
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        return Response.json({ humanHelpEnabled: false })
+      },
+    })
+
+    await expect(client.getAgentSettings()).resolves.toEqual({
+      humanHelpEnabled: false,
+    })
+    await expect(
+      client.updateAgentSettings({ humanHelpEnabled: false }),
+    ).resolves.toEqual({ humanHelpEnabled: false })
+    expect(requests.map((request) => request.method)).toEqual(['GET', 'PUT'])
+    for (const request of requests) {
+      expect(new URL(request.url).pathname).toBe('/api/v1/settings/agent')
+    }
+    await expect(requests[1]?.text()).resolves.toBe(
+      '{"humanHelpEnabled":false}',
+    )
+  })
+
   it('maps contract operations across JSON, NDJSON, text, blob, path, query, and headers', async () => {
     const requests: RecordedRequest[] = []
     const receivers: unknown[] = []
