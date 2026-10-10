@@ -1997,6 +1997,96 @@ async fn audit_retention_round_trips_and_validates() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn get_agent_settings(app: &TestApp) -> anyhow::Result<(StatusCode, Vec<u8>)> {
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/settings/agent",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    Ok((status, bytes))
+}
+
+async fn put_agent_settings(
+    app: &TestApp,
+    body: impl Into<Body>,
+) -> anyhow::Result<(StatusCode, Vec<u8>)> {
+    let (status, _, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/agent",
+        Some("application/json"),
+        body,
+    )
+    .await?;
+    Ok((status, bytes))
+}
+
+#[tokio::test]
+async fn tests_that_agent_settings_offer_human_help_by_default() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, bytes) = get_agent_settings(&app).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "humanHelpEnabled": true }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_turning_human_help_off_is_saved_and_read_back() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, bytes) =
+        put_agent_settings(&app, json!({ "humanHelpEnabled": false }).to_string()).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "humanHelpEnabled": false }));
+
+    let (status, bytes) = get_agent_settings(&app).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "humanHelpEnabled": false }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_non_boolean_human_help_setting_is_rejected() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    for body in [
+        json!({ "humanHelpEnabled": "no" }).to_string(),
+        json!({}).to_string(),
+        "not json".to_string(),
+    ] {
+        let (status, bytes) = put_agent_settings(&app, body.clone()).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        let error = json_body(&bytes)?;
+        assert_eq!(error["code"], "invalid_request", "{body}");
+        assert_eq!(
+            error["message"], "humanHelpEnabled must be a boolean",
+            "{body}"
+        );
+    }
+
+    let (_, bytes) = get_agent_settings(&app).await?;
+    assert_eq!(json_body(&bytes)?, json!({ "humanHelpEnabled": true }));
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_a_failed_agent_settings_save_is_a_500_and_changes_nothing() -> anyhow::Result<()>
+{
+    let app = test_app().await?;
+    // A directory where the settings file belongs makes the save fail.
+    std::fs::create_dir(app.state.config.browserclaw_dir.join("agent-settings.json"))?;
+
+    let (status, bytes) =
+        put_agent_settings(&app, json!({ "humanHelpEnabled": false }).to_string()).await?;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(json_body(&bytes)?["code"], "internal_error");
+
+    let (_, bytes) = get_agent_settings(&app).await?;
+    assert_eq!(json_body(&bytes)?, json!({ "humanHelpEnabled": true }));
+    Ok(())
+}
+
 #[tokio::test]
 async fn audit_cleanup_runs_and_returns_usage() -> anyhow::Result<()> {
     let app = test_app().await?;

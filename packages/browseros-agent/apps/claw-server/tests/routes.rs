@@ -484,6 +484,95 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
 
 // Send actual stateless wire requests, not typed handler calls. rmcp extracts
 // metadata during decoding, and each request must carry its own protocol signals.
+/// The cockpit switch and MCP share one setting: turning it off over HTTP is what the next
+/// initialize, tools/list, and tools/call see.
+#[tokio::test]
+async fn tests_that_turning_human_help_off_over_http_reaches_mcp_agents() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/agent",
+        Some(json!({ "humanHelpEnabled": false })),
+        &[],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK, "settings body: {body:?}");
+
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "Codex", "version": "1.0" }
+        }
+    });
+    let (status, headers, body) =
+        request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
+    assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
+    let instructions = body["result"]["instructions"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing instructions"))?;
+    assert!(instructions.contains("stop and tell\nthe user in your chat what you need"));
+    assert!(!instructions.contains("request_human_help"));
+    let session_id = headers
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string)
+        .ok_or_else(|| anyhow::anyhow!("missing mcp-session-id"))?;
+    send_initialized(&app.router, &session_id).await?;
+    wait_for_session_registration(&app, &session_id).await?;
+
+    let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(list),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    let listed: Vec<&str> = body["result"]["tools"]
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("tools not array"))?
+        .iter()
+        .filter_map(|tool| tool["name"].as_str())
+        .collect();
+    assert!(listed.contains(&"run"), "{listed:?}");
+    assert!(!listed.contains(&"request_human_help"), "{listed:?}");
+    assert!(!listed.contains(&"await_human_help"), "{listed:?}");
+
+    let ask = json!({
+        "jsonrpc": "2.0",
+        "id": 3,
+        "method": "tools/call",
+        "params": {
+            "name": "request_human_help",
+            "arguments": { "reason": "Enter the code" }
+        }
+    });
+    let (status, _headers, body) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(ask),
+        &[("mcp-session-id", &session_id)],
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"]["isError"], true, "call body: {body:?}");
+    assert!(
+        body["result"]["content"][0]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("turned off")),
+        "call body: {body:?}"
+    );
+    Ok(())
+}
+
 async fn stateless_mcp_request(
     router: &Router,
     method: &str,
