@@ -8,11 +8,12 @@ use crate::{
         effects::tab_groups::apply_agent_tab_group_title,
         naming::{normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
-        prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
+        prompt::mcp_instructions,
     },
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
     services::{
+        agent_settings::HumanHelp,
         cockpit::LiveSessionFilters,
         help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
         sessions::{RetirementCause, Session},
@@ -850,7 +851,7 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(BROWSERCLAW_MCP_INSTRUCTIONS)
+            .with_instructions(mcp_instructions(HumanHelp::On))
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -2210,7 +2211,7 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(BROWSERCLAW_MCP_INSTRUCTIONS)
+            Some(mcp_instructions(HumanHelp::On).as_str())
         );
         let instructions = info
             .instructions
