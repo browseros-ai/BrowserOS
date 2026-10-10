@@ -1,0 +1,65 @@
+---
+title: "Custom ACP Agents"
+description: "Run any ACP-compatible coding agent — hmharness, opencode, Hermes, pi and friends — inside the BrowserOS assistant panel"
+---
+
+The assistant panel ships with built-in agents (Codex, Claude Code). It can also run **any third-party coding agent that speaks the Agent Client Protocol (ACP)** — the same open protocol used by Zed and other editors. The agent keeps its own model config and tools; BrowserOS provides the chat UI, the browser, and Allow/Reject permission prompts for gated actions.
+
+<Note>
+The agent you add must speak ACP over stdio (ndjson JSON-RPC 2.0). Many popular coding agents ship an `acp` or `acp-serve` subcommand — check your agent's docs.
+</Note>
+
+## Adding an agent
+
+1. Open **Settings → AI & Agents** and find the **Custom ACP agent** card.
+2. Click **Add**. The form has **two fields**:
+   - **Name** — whatever you want to see in the model picker (e.g. `my-agent`).
+   - **Command** — **the entire command line, including all arguments, as one single line.** There is no separate arguments field.
+3. Save. The agent now appears in the assistant panel's agent picker and can be set as the default.
+
+### The one-line rule
+
+The most common setup failure is splitting the command:
+
+| Command field | Works? |
+|---|---|
+| `my-agent serve --stdio` | ✅ |
+| `my-agent` (arguments pasted into the working-directory box) | ❌ `Unable to start the ACP agent.` |
+
+If you see **"Unable to start the ACP agent."**, the command line is almost certainly malformed — re-enter it as a single line.
+
+## Windows notes
+
+- **Use absolute paths.** The agent process is spawned through a minimal `cmd.exe` wrapper; per-user PATH shims (nvm, mise, scoop shims) are not guaranteed to resolve. For example:
+
+  ```
+  C:\Users\me\AppData\Local\mise\shims\node.exe C:\tools\my-agent\main.js acp-serve
+  ```
+
+  not just `node C:\tools\my-agent\main.js acp-serve`.
+
+- If your agent is a `.cmd` shim, point at the underlying real executable when possible.
+
+## What BrowserOS sends your agent
+
+If you are **authoring** an agent (or debugging one), here is the host-side dialect observed on the wire (BrowserOS 0.50.x):
+
+- ndjson JSON-RPC 2.0 over stdio: `initialize` (protocolVersion 1), then per conversation `session/new` or `session/resume`.
+- **`session/resume`** is a BrowserOS extension — the standard ACP method is `session/load`. Answering `{ sessionId }` works for both.
+- Every prompt is prefixed with a `## Browser Context` block (Window/Tab IDs of the conversation's workspace) and an instruction to open new content in **new tabs**.
+- `mcpServers` params carry the host browser MCP over http with an internal lease header.
+- Declaring `agentCapabilities.loadSession: true` (plus `sessionCapabilities`) lets the host reconnect a prior conversation.
+
+## Known behavior: workspace windows
+
+Each **new agent connection** is provisioned a workspace window (a window with a fresh new tab). The host may start a fresh connection when the browser context changes, which can accumulate windows for agents that are re-spawned per message — see [#2846](https://github.com/browseros-ai/BrowserOS/issues/2846) for the tracking issue and fix. Agent authors can mitigate by keeping the process long-lived and implementing `session/resume`.
+
+## Worked example: hmharness
+
+[hmharness](https://github.com/swsgbl/hmharness) is an open-source coding agent focused on the HarmonyOS development lifecycle (ACP server: `acp-serve`):
+
+1. Install and configure hmharness (its own model/provider config lives in `~/.hmharness`).
+2. Add a Custom ACP agent with:
+   - Name: `hmharness`
+   - Command: `node C:\path\to\@hmharness\cli\dist\main.js acp-serve` (absolute paths on Windows)
+3. Pick **hmharness** in the assistant panel and chat as usual — thinking blocks, tool calls and Allow/Reject permission cards all render natively.
