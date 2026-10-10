@@ -77,6 +77,9 @@ const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
 const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
 const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
 const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
+/// For an agent whose cached tool list still offers request_human_help after the user turned
+/// human help off.
+const HUMAN_HELP_OFF_MESSAGE: &str = "Human help is turned off in BrowserOS neo settings. Do not wait for a human here: stop and tell the user in your chat what you need.";
 /// How long each wait call blocks before returning a `waiting` status. Short enough to stay under
 /// any reasonable client tool-call timeout so an agent that cannot hold a long call just re-calls.
 const HELP_WAIT_CHUNK: std::time::Duration = std::time::Duration::from_secs(75);
@@ -186,8 +189,10 @@ impl ClawMcpService {
         tools.push(decorate(self.name_session_tool.clone()));
         tools.push(decorate(self.save_skill_tool.clone()));
         tools.push(decorate(self.mark_skill_run_tool.clone()));
-        tools.push(decorate(self.request_help_tool.clone()));
-        tools.push(decorate(self.await_help_tool.clone()));
+        if self.state.agent_settings.human_help() == HumanHelp::On {
+            tools.push(decorate(self.request_help_tool.clone()));
+            tools.push(decorate(self.await_help_tool.clone()));
+        }
         tools
     }
 
@@ -409,6 +414,13 @@ impl ClawMcpService {
         raw_args: &Value,
         request_ct: CancellationToken,
     ) -> CallToolResult {
+        // Only new asks are refused: a request opened before the switch flipped still resolves
+        // through await_human_help, so no waiting agent is stranded.
+        if self.state.agent_settings.human_help() == HumanHelp::Off {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                HUMAN_HELP_OFF_MESSAGE,
+            )]);
+        }
         let Some(reason) = raw_args
             .get("reason")
             .and_then(Value::as_str)
@@ -851,7 +863,7 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(mcp_instructions(HumanHelp::On))
+            .with_instructions(mcp_instructions(self.state.agent_settings.human_help()))
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -2464,6 +2476,167 @@ mod tests {
             assert_eq!(annotations.read_only_hint, Some(read_only));
             assert_eq!(annotations.destructive_hint, Some(false));
         }
+        Ok(())
+    }
+
+    fn tool_names(service: &ClawMcpService, declare_agent_name: bool) -> Vec<String> {
+        service
+            .listed_tools(declare_agent_name)
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect()
+    }
+
+    fn status_of(result: &CallToolResult) -> Option<&str> {
+        result
+            .structured_content
+            .as_ref()
+            .and_then(|structured| structured.get("status"))
+            .and_then(Value::as_str)
+    }
+
+    /// The service is built before the switch flips, so the change has to reach the next
+    /// tools/list without a reconnect. Every other tool stays listed.
+    #[tokio::test]
+    async fn tests_that_turning_human_help_off_hides_both_help_tools() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        call.state
+            .agent_settings
+            .set_human_help(HumanHelp::Off)
+            .await?;
+
+        let mut expected = service
+            .catalog
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<Vec<_>>();
+        expected.push(NAME_SESSION_TOOL_NAME.to_string());
+        expected.push(SAVE_SKILL_TOOL_NAME.to_string());
+        expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
+        for declare_agent_name in [false, true] {
+            assert_eq!(tool_names(&service, declare_agent_name), expected);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_turning_human_help_off_swaps_the_instructions() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        call.state
+            .agent_settings
+            .set_human_help(HumanHelp::Off)
+            .await?;
+
+        assert_eq!(
+            service.get_info().instructions.as_deref(),
+            Some(mcp_instructions(HumanHelp::Off).as_str())
+        );
+        Ok(())
+    }
+
+    /// An agent with a cached tool list is turned away before its arguments are read, and no
+    /// request reaches the cockpit.
+    #[tokio::test]
+    async fn tests_that_request_human_help_is_refused_while_human_help_is_off() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        call.state
+            .agent_settings
+            .set_human_help(HumanHelp::Off)
+            .await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-off"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        // An ended call token keeps a regression from waiting a whole chunk on a human.
+        let call_ended = CancellationToken::new();
+        call_ended.cancel();
+
+        for raw_args in [json!({ "reason": "Enter the code" }), json!({})] {
+            let result = service
+                .call_request_human_help(&started, &raw_args, call_ended.clone())
+                .await;
+            assert_eq!(result.is_error, Some(true), "{raw_args}");
+            assert_eq!(
+                text_of(&result),
+                "Human help is turned off in BrowserOS neo settings. Do not wait for a human here: stop and tell the user in your chat what you need.",
+                "{raw_args}"
+            );
+        }
+        assert!(call.state.help.get(started.session.id()).await.is_none());
+        Ok(())
+    }
+
+    /// Only new asks are refused: an agent already waiting when the switch flips keeps its
+    /// request, and the human's hand-back still reaches it.
+    #[tokio::test]
+    async fn tests_that_a_request_opened_while_on_still_resolves_after_turning_off()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-flipped"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let session_id = started.session.id().clone();
+        // An ended call token returns the first wait chunk at once and leaves the request open.
+        let call_ended = CancellationToken::new();
+        call_ended.cancel();
+        let opened = service
+            .call_request_human_help(&started, &json!({ "reason": "Enter the code" }), call_ended)
+            .await;
+        assert_eq!(status_of(&opened), Some("waiting"));
+
+        call.state
+            .agent_settings
+            .set_human_help(HumanHelp::Off)
+            .await?;
+        assert!(
+            call.state
+                .help
+                .resolve(&session_id, Some("code entered".to_string()))
+                .await
+        );
+        let result = service
+            .call_await_human_help(&started, CancellationToken::new())
+            .await;
+
+        assert_eq!(status_of(&result), Some("resolved"));
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|structured| structured.get("note"))
+                .and_then(Value::as_str),
+            Some("code entered")
+        );
+        assert!(call.state.help.get(&session_id).await.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_turning_human_help_back_on_restores_tools_and_instructions()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let before = (tool_names(&service, false), service.get_info().instructions);
+
+        call.state
+            .agent_settings
+            .set_human_help(HumanHelp::Off)
+            .await?;
+        call.state
+            .agent_settings
+            .set_human_help(HumanHelp::On)
+            .await?;
+
+        assert_eq!(
+            (tool_names(&service, false), service.get_info().instructions),
+            before
+        );
         Ok(())
     }
 
