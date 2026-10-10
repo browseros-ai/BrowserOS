@@ -388,9 +388,17 @@ function isAcpUserMessage(
 
 /**
  * Fingerprint of everything in a policy that genuinely requires a new agent
- * process. The MCP lease header is excluded on purpose: it changes whenever
- * the browser context does, and restarting the agent for a fresh capability
- * token makes a custom agent re-open its workspace window on every message.
+ * process. MCP headers are excluded because a browser-context change rewrites
+ * them without invalidating the lease, and restarting the agent for that alone
+ * makes a custom agent re-open its workspace window on every message.
+ *
+ * `browserToolLeaseToken` rides along in the spread instead of the stripped
+ * headers, and it must stay in the fingerprint: ChatService refreshes a lease
+ * in place when only the browser context changes, so the token is stable there,
+ * but it re-mints — and revokes the previous token — when the agent or the
+ * read-only mode changes. Reusing a session across a re-mint would leave the
+ * revoked token in the provider's MCP config, where the provider has no way to
+ * update it, and every browser tool call would then fail lease admission.
  */
 function policyFingerprint(policy: AcpAgentPolicy): string {
   return JSON.stringify({
