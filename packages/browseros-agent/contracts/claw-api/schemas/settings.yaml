@@ -16,3 +16,21 @@ UpdateTelemetryRequest:
   properties:
     consent:
       type: boolean
+AgentSettings:
+  type: object
+  description: User settings for the tools BrowserOS neo offers to agents.
+  additionalProperties: false
+  required: [humanHelpEnabled]
+  properties:
+    humanHelpEnabled:
+      type: boolean
+      description: >-
+        Whether agents are offered request_human_help and await_human_help. When false, agents
+        are told to report a block in their own chat instead.
+UpdateAgentSettingsRequest:
+  type: object
+  additionalProperties: false
+  required: [humanHelpEnabled]
+  properties:
+    humanHelpEnabled:
+      type: boolean
