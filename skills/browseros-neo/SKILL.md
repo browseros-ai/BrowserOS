@@ -62,6 +62,8 @@ Derive the page you work on inside the same script that uses it. When you do car
 
 When you hit something only a person can do (a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make), call `request_human_help` with a short `reason` and an optional `resumeHint` for what you will do after. It blocks for a short while and returns a status. While the status is `waiting`, call `await_human_help` again and do nothing else on the page; stop waiting only once the status is `resolved` (a human handed control back, continue the task), `cancelled`, or `timed_out`. The cockpit shows your request so a human can take over the tab and hand control back. Do not keep retrying the block on your own.
 
+If `request_human_help` is not among your tools, the user turned human help off: stop and tell them in your chat what you need.
+
 ## Failure
 
 This skill may be installed before your agent is connected. If BrowserOS neo's MCP tools are unavailable, open its MCP connections page and connect your agent, or copy the endpoint from Manual Setup into your agent's MCP settings. Then refresh its MCP connections or start a new session. The skill alone does not provide browser tools.
