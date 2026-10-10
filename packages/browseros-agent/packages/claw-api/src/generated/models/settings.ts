@@ -15,6 +15,20 @@
 /**
  *
  * @export
+ * @interface AgentSettings
+ */
+export interface AgentSettings {
+    /**
+     *
+     * @type {boolean}
+     * @memberof AgentSettings
+     */
+    humanHelpEnabled: boolean;
+}
+
+/**
+ *
+ * @export
  * @interface TelemetryState
  */
 export interface TelemetryState {
@@ -36,6 +50,20 @@ export interface TelemetryState {
      * @memberof TelemetryState
      */
     consent: boolean;
+}
+
+/**
+ *
+ * @export
+ * @interface UpdateAgentSettingsRequest
+ */
+export interface UpdateAgentSettingsRequest {
+    /**
+     *
+     * @type {boolean}
+     * @memberof UpdateAgentSettingsRequest
+     */
+    humanHelpEnabled: boolean;
 }
 
 /**

@@ -16,3 +16,17 @@ UpdateTelemetryRequest:
   properties:
     consent:
       type: boolean
+AgentSettings:
+  type: object
+  additionalProperties: false
+  required: [humanHelpEnabled]
+  properties:
+    humanHelpEnabled:
+      type: boolean
+UpdateAgentSettingsRequest:
+  type: object
+  additionalProperties: false
+  required: [humanHelpEnabled]
+  properties:
+    humanHelpEnabled:
+      type: boolean

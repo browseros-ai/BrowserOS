@@ -8,7 +8,7 @@ use crate::{
         effects::tab_groups::apply_agent_tab_group_title,
         naming::{normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
-        prompt::BROWSERCLAW_MCP_INSTRUCTIONS,
+        prompt::mcp_instructions,
     },
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
@@ -75,6 +75,8 @@ const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of 
 const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
 const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
 const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
+/// Returned to agents that cached the tool list before the user turned human help off.
+const HELP_DISABLED_MESSAGE: &str = "Human help is turned off in BrowserOS neo settings. Do not wait for a human here: stop and tell the user in your chat what you need.";
 const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
 /// How long each wait call blocks before returning a `waiting` status. Short enough to stay under
 /// any reasonable client tool-call timeout so an agent that cannot hold a long call just re-calls.
@@ -185,8 +187,10 @@ impl ClawMcpService {
         tools.push(decorate(self.name_session_tool.clone()));
         tools.push(decorate(self.save_skill_tool.clone()));
         tools.push(decorate(self.mark_skill_run_tool.clone()));
-        tools.push(decorate(self.request_help_tool.clone()));
-        tools.push(decorate(self.await_help_tool.clone()));
+        if self.state.agent_settings.human_help_enabled() {
+            tools.push(decorate(self.request_help_tool.clone()));
+            tools.push(decorate(self.await_help_tool.clone()));
+        }
         tools
     }
 
@@ -408,6 +412,12 @@ impl ClawMcpService {
         raw_args: &Value,
         request_ct: CancellationToken,
     ) -> CallToolResult {
+        // An already-open request keeps working through await_human_help; only new asks are refused.
+        if !self.state.agent_settings.human_help_enabled() {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                HELP_DISABLED_MESSAGE,
+            )]);
+        }
         let Some(reason) = raw_args
             .get("reason")
             .and_then(Value::as_str)
@@ -850,7 +860,9 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(BROWSERCLAW_MCP_INSTRUCTIONS)
+            .with_instructions(mcp_instructions(
+                self.state.agent_settings.human_help_enabled(),
+            ))
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -2210,7 +2222,7 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(BROWSERCLAW_MCP_INSTRUCTIONS)
+            Some(mcp_instructions(true).as_str())
         );
         let instructions = info
             .instructions
@@ -2339,6 +2351,46 @@ mod tests {
         assert!(names.contains(&"mark_skill_run".to_string()));
         assert!(names.contains(&"request_human_help".to_string()));
         assert!(names.contains(&"await_human_help".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disabling_human_help_hides_tools_prompt_and_refuses_new_requests() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        call.state
+            .agent_settings
+            .set(crate::services::agent_settings::AgentSettings {
+                human_help_enabled: false,
+            })
+            .await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let names: Vec<String> = service
+            .listed_tools(false)
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        assert!(!names.contains(&REQUEST_HELP_TOOL_NAME.to_string()));
+        assert!(!names.contains(&AWAIT_HELP_TOOL_NAME.to_string()));
+        assert_eq!(
+            service.get_info().instructions.as_deref(),
+            Some(mcp_instructions(false).as_str())
+        );
+
+        let started = service
+            .ensure_session_started(SessionId::new("mcp-help-disabled"))
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let result = service
+            .call_request_human_help(
+                &started,
+                &json!({ "reason": "Enter the code" }),
+                CancellationToken::new(),
+            )
+            .await;
+        assert_eq!(result.is_error, Some(true));
+        assert!(text_of(&result).contains("turned off"));
+        assert!(call.state.help.get(started.session.id()).await.is_none());
         Ok(())
     }
 

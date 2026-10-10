@@ -12,6 +12,18 @@ use crate::models;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentSettings {
+    #[serde(rename = "humanHelpEnabled")]
+    pub human_help_enabled: bool,
+}
+
+impl AgentSettings {
+    pub fn new(human_help_enabled: bool) -> AgentSettings {
+        AgentSettings { human_help_enabled }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TelemetryState {
     #[serde(rename = "distinctId")]
     pub distinct_id: String,
@@ -28,6 +40,18 @@ impl TelemetryState {
             enabled,
             consent,
         }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateAgentSettingsRequest {
+    #[serde(rename = "humanHelpEnabled")]
+    pub human_help_enabled: bool,
+}
+
+impl UpdateAgentSettingsRequest {
+    pub fn new(human_help_enabled: bool) -> UpdateAgentSettingsRequest {
+        UpdateAgentSettingsRequest { human_help_enabled }
     }
 }
 

@@ -1998,6 +1998,56 @@ async fn audit_retention_round_trips_and_validates() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn agent_settings_round_trip_and_validate() -> anyhow::Result<()> {
+    let app = test_app().await?;
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/settings/agent",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "humanHelpEnabled": true }));
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/agent",
+        Some("application/json"),
+        Body::from(json!({ "humanHelpEnabled": false }).to_string()),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?, json!({ "humanHelpEnabled": false }));
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "GET",
+        "/api/v1/settings/agent",
+        None,
+        Body::empty(),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json_body(&bytes)?["humanHelpEnabled"], false);
+
+    let (status, _, bytes) = request(
+        &app.router,
+        "PUT",
+        "/api/v1/settings/agent",
+        Some("application/json"),
+        Body::from(json!({ "humanHelpEnabled": "no" }).to_string()),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(json_body(&bytes)?["code"], "invalid_request");
+    Ok(())
+}
+
+#[tokio::test]
 async fn audit_cleanup_runs_and_returns_usage() -> anyhow::Result<()> {
     let app = test_app().await?;
     let (status, _, bytes) = request(
