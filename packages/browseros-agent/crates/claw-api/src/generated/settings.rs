@@ -11,6 +11,21 @@
 use crate::models;
 use serde::{Deserialize, Serialize};
 
+/// AgentSettings : User settings for the tools BrowserOS neo offers to agents.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentSettings {
+    /// Whether agents are offered request_human_help and await_human_help. When false, agents are told to report a block in their own chat instead.
+    #[serde(rename = "humanHelpEnabled")]
+    pub human_help_enabled: bool,
+}
+
+impl AgentSettings {
+    /// User settings for the tools BrowserOS neo offers to agents.
+    pub fn new(human_help_enabled: bool) -> AgentSettings {
+        AgentSettings { human_help_enabled }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TelemetryState {
     #[serde(rename = "distinctId")]
@@ -28,6 +43,18 @@ impl TelemetryState {
             enabled,
             consent,
         }
+    }
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UpdateAgentSettingsRequest {
+    #[serde(rename = "humanHelpEnabled")]
+    pub human_help_enabled: bool,
+}
+
+impl UpdateAgentSettingsRequest {
+    pub fn new(human_help_enabled: bool) -> UpdateAgentSettingsRequest {
+        UpdateAgentSettingsRequest { human_help_enabled }
     }
 }
 

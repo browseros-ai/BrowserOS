@@ -36,6 +36,7 @@ export const AnalyticsEvent = {
   ManualSetupCommandCopied: 'manual_setup_command_copied',
   UltrafastBannerClicked: 'ultrafast_banner_clicked',
   UltrafastWaitlistViewed: 'ultrafast_waitlist_viewed',
+  HumanHelpToggled: 'human_help_toggled',
 } as const
 
 export type AnalyticsEventName =

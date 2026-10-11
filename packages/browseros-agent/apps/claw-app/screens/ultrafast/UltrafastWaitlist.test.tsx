@@ -429,7 +429,7 @@ describe('UltrafastWaitlist', () => {
 
 describe('UltrafastWaitlistView', () => {
   it.each([9, 19] as const)(
-    'renders the $%i price, form, and launch note',
+    'tests that the $%i card shows the price and form without a payment note',
     (price) => {
       const html = renderToStaticMarkup(
         createElement(UltrafastWaitlistView, {
@@ -441,7 +441,7 @@ describe('UltrafastWaitlistView', () => {
       expect(html).toContain(`$${price}`)
       expect(html).toContain('/month')
       expect(html).toContain('Request early access</button>')
-      expect(html).toContain('No payment today.')
+      expect(html).not.toContain('No payment today.')
     },
   )
 })

@@ -1,4 +1,10 @@
-import { LayoutDashboard, PlugZap, Repeat, ScrollText } from 'lucide-react'
+import {
+  LayoutDashboard,
+  PlugZap,
+  Repeat,
+  ScrollText,
+  Settings,
+} from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { NavLink, useLocation } from 'react-router'
 import {
@@ -23,6 +29,7 @@ const navItems: NavItem[] = [
   { name: 'MCP', to: '/mcp', icon: PlugZap },
   { name: 'Skills', to: '/skills', icon: Repeat },
   { name: 'Audit', to: '/audit', icon: ScrollText },
+  { name: 'Settings', to: '/settings', icon: Settings },
 ]
 
 function isNavItemActive(item: NavItem, pathname: string): boolean {

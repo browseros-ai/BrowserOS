@@ -1,4 +1,5 @@
 import type {
+  AgentSettings,
   AppendRecordingEventsResponse,
   AuditCleanupResult,
   AuditRetention,
@@ -25,6 +26,7 @@ import type {
   SkillUpdate,
   SystemInfo,
   TelemetryState,
+  UpdateAgentSettingsRequest,
 } from '@browseros/claw-api'
 import createClient, { type Client } from 'openapi-fetch'
 import { ApiResponseError } from './errors'
@@ -138,6 +140,18 @@ export class ClawApiClient {
 
   async getTelemetry(): Promise<TelemetryState> {
     return this.unwrap(await this.client.GET('/api/v1/settings/telemetry'))
+  }
+
+  async getAgentSettings(): Promise<AgentSettings> {
+    return this.unwrap(await this.client.GET('/api/v1/settings/agent'))
+  }
+
+  async updateAgentSettings(
+    body: UpdateAgentSettingsRequest,
+  ): Promise<AgentSettings> {
+    return this.unwrap(
+      await this.client.PUT('/api/v1/settings/agent', { body }),
+    )
   }
 
   async getAuditStorage(): Promise<AuditStorageState> {

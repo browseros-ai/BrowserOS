@@ -9,6 +9,7 @@ use crate::{
     error::{AppError, AppResult},
     runtime::ShutdownHandle,
     services::{
+        agent_settings::AgentSettingsStore,
         audit::AuditWorker,
         browser::{BrowserService, TabRegistry},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
@@ -34,6 +35,7 @@ pub struct AppState {
     pub audit_log: Arc<AuditLog>,
     pub audit_worker: Arc<AuditWorker>,
     pub audit_settings: Arc<crate::services::audit_settings::AuditSettingsStore>,
+    pub agent_settings: Arc<AgentSettingsStore>,
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
     pub recording_ingest: Arc<RecordingIngestService>,
@@ -82,6 +84,7 @@ impl AppState {
         let audit_settings = Arc::new(
             crate::services::audit_settings::AuditSettingsStore::new(&config.browserclaw_dir).await,
         );
+        let agent_settings = Arc::new(AgentSettingsStore::load(store.clone()).await);
         let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
         let recording_index = Arc::new(RecordingIndex::new(database.clone()));
         session_tabs.release_all_open().await?;
@@ -193,6 +196,7 @@ impl AppState {
             audit_log,
             audit_worker,
             audit_settings,
+            agent_settings,
             session_tabs,
             recordings,
             recording_ingest,

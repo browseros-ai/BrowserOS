@@ -241,9 +241,6 @@ export function UltrafastWaitlistView({
                   >
                     {pending ? 'Joining…' : 'Request early access'}
                   </Button>
-                  <p className="text-center text-[12px] text-cyanotype-muted leading-[19px]">
-                    No payment today.
-                  </p>
                 </div>
               </div>
               {invalid && (
