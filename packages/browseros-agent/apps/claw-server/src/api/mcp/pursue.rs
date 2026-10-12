@@ -816,7 +816,7 @@ mod tests {
     /// caller that answers the whole form in one call saves a park for each of
     /// the others and loses nothing by ignoring them.
     #[test]
-    fn a_whole_form_is_offered_in_one_ask() {
+    fn a_whole_form_is_offered_in_one_ask() -> anyhow::Result<()> {
         let (text, structured) = render(
             "book a flight",
             3,
@@ -827,7 +827,7 @@ mod tests {
 
         let asks = structured["needsInput"]
             .as_array()
-            .expect("needsInput is a list");
+            .ok_or_else(|| anyhow::anyhow!("needsInput is a list"))?;
         assert_eq!(asks.len(), 3);
         assert_eq!(asks[0]["asked"], true, "the one it stopped on comes first");
         assert_eq!(asks[1]["asked"], false);
@@ -841,6 +841,7 @@ mod tests {
         assert!(text.contains("combobox \"Where to?\" (e24)"), "{text}");
         assert!(text.contains("textbox \"Departure\" (e31)"), "{text}");
         assert!(text.contains("will not stop for them later"), "{text}");
+        Ok(())
     }
 
     /// And a single-field ask says nothing about other fields, because there
