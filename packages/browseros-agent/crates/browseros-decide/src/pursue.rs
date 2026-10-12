@@ -695,11 +695,12 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 };
                 run.asks += 1;
                 let pending = Pending::Text {
-                    reference,
                     control: control_label(&space, decision.target.as_deref()),
                     confidence: decision.target_confidence.unwrap_or(0.0),
                     guard: chosen_guard,
                     asking,
+                    others: other_empty_fields(&space, &view, &reference),
+                    reference,
                 };
                 if run.asks > ASK_LIMIT {
                     // A field that will not hold still would ask forever, and
@@ -1171,6 +1172,40 @@ fn offered_labels(space: &ActionSpace) -> Vec<String> {
                 .and_then(|value| value.as_str())
                 .unwrap_or(&candidate.reference)
                 .to_string()
+        })
+        .collect()
+}
+
+/// The other empty fields the decision could see.
+///
+/// Reported alongside the one it asked about so a caller can answer a whole
+/// form in one round trip. Filling one field does not change which field the
+/// next one is, so there is nothing speculative about naming them.
+///
+/// Bounded by the offered set, which the relevance ranking and the candidate
+/// cap already limit, so the list the caller sees is bounded by the same thing
+/// that bounds what the model sees.
+fn other_empty_fields(space: &ActionSpace, view: &PageView, chosen: &str) -> Vec<(String, String)> {
+    space
+        .offered
+        .iter()
+        .filter(|candidate| candidate.reference != chosen)
+        .filter(|candidate| {
+            view.control(&candidate.reference).is_some_and(|control| {
+                control.state.editable
+                    && control
+                        .value
+                        .as_deref()
+                        .unwrap_or_default()
+                        .trim()
+                        .is_empty()
+            })
+        })
+        .map(|candidate| {
+            (
+                candidate.reference.clone(),
+                control_label(space, Some(&candidate.reference)),
+            )
         })
         .collect()
 }

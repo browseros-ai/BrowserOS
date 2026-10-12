@@ -1885,17 +1885,21 @@ fn pursue_output_schema() -> Value {
                 "description": "What the last decision was choosing between, when it reported that none of them could advance the goal."
             },
             "needsInput": {
-                "type": ["object", "null"],
-                "additionalProperties": false,
-                "required": ["kind", "ref", "control", "why"],
-                "properties": {
-                    "kind": { "type": "string", "enum": ["text"] },
-                    "ref": { "type": "string", "description": "Pass this as the key in `provide`." },
-                    "control": { "type": "string", "description": "The control as a snapshot would show it, e.g. combobox \"Where from?\"." },
-                    "confidence": { "type": ["number", "null"], "description": "How sure the run was that this is the right field. A low number is your cue to look at the field before answering." },
-                    "why": { "type": "string" }
+                "type": ["array", "null"],
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["kind", "ref", "control", "asked", "why"],
+                    "properties": {
+                        "kind": { "type": "string", "enum": ["text"] },
+                        "ref": { "type": "string", "description": "Pass this as the key in `provide`." },
+                        "control": { "type": "string", "description": "The control as a snapshot would show it, e.g. combobox \"Where from?\"." },
+                        "confidence": { "type": ["number", "null"], "description": "How sure the run was that this is the right field, for the one it asked about. Null for the others. A low number is your cue to look at the field before answering." },
+                        "asked": { "type": "boolean", "description": "True for the field the run stopped on. False for the other empty fields it could see, which you may answer in the same call." },
+                        "why": { "type": "string" }
+                    }
                 },
-                "description": "The one value the run is waiting for, when status is needs_value."
+                "description": "The values the run is waiting for, when status is needs_value. The first entry is the field it stopped on; any others are empty fields on the same page. Answer as many as you can in one `provide` and it will not stop for them later."
             },
             "openedPages": {
                 "type": "array",
@@ -2685,6 +2689,7 @@ mod tests {
                 confidence: 0.9,
                 guard: None,
                 asking: Asking::FirstTime,
+                others: Vec::new(),
             }),
             Status::OutOfBudget,
             Status::Stopped,

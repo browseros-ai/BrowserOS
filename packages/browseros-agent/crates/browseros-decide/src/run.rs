@@ -149,6 +149,13 @@ pub enum Pending {
         /// can be bound to the control that was asked about.
         guard: Option<u64>,
         asking: Asking,
+        /// Other empty fields the decision could see, as reference and label.
+        ///
+        /// Carried so one round trip can answer a whole form. Filling one field
+        /// does not change which field the next one is, so a caller that
+        /// answers several at once saves a park for each of them, and a caller
+        /// that answers only the one asked about loses nothing.
+        others: Vec<(String, String)>,
     },
 }
 

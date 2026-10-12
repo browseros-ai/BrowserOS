@@ -426,7 +426,7 @@ pub fn render(
              typing it into something else. If you know values this run may need, pass them \
              as `values` next time and it will not stop to ask. If {control} is not the \
              field you meant, start a fresh run instead: the list below is what it was \
-             choosing between.",
+             choosing between.{}",
             match asking {
                 Asking::FirstTime => String::new(),
                 Asking::FieldChanged =>
@@ -436,6 +436,7 @@ pub fn render(
             },
             continue_argument(handle),
             outcome.actions(),
+            other_fields_line(&outcome.status),
         ),
         // Handing back after changing the page is not handing back from a
         // standing start. Measured live: a run applied a facet filter at 0.93,
@@ -582,6 +583,28 @@ fn continue_argument(handle: Option<&str>) -> String {
     handle.map_or_else(String::new, |handle| format!(", continue: \"{handle}\""))
 }
 
+/// What to add when the run could see other empty fields.
+///
+/// Answering them now costs the caller one line and saves a park each, since
+/// filling one field does not change which field the next one is.
+fn other_fields_line(status: &Status) -> String {
+    let Status::NeedsValue(Pending::Text { others, .. }) = status else {
+        return String::new();
+    };
+    if others.is_empty() {
+        return String::new();
+    }
+    let named = others
+        .iter()
+        .map(|(reference, control)| format!("{control} ({reference})"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "\nIt can also see these empty fields, which it has not asked about yet: {named}. \
+         Answer any of them in the same `provide` and it will not stop for them later."
+    )
+}
+
 /// The value the run is waiting for, as something a caller can branch on rather
 /// than a sentence it has to read.
 fn needs_input(status: &Status) -> Option<Value> {
@@ -590,16 +613,21 @@ fn needs_input(status: &Status) -> Option<Value> {
         control,
         confidence,
         asking,
+        others,
         ..
     }) = status
     else {
         return None;
     };
-    Some(json!({
+    // A list rather than one field, so a caller can answer a whole form in one
+    // round trip. The one it asked about comes first; the rest are the other
+    // empty fields the same decision could see.
+    let mut asks = vec![json!({
         "kind": "text",
         "ref": reference,
         "control": control,
         "confidence": confidence,
+        "asked": true,
         "why": match asking {
             Asking::FirstTime =>
                 "the run chose to type here, and this model does not generate text",
@@ -607,7 +635,19 @@ fn needs_input(status: &Status) -> Option<Value> {
                 "you answered this already, but the field changed before the text could be \
                  typed, so that answer was discarded",
         },
-    }))
+    })];
+    asks.extend(others.iter().map(|(reference, control)| {
+        json!({
+            "kind": "text",
+            "ref": reference,
+            "control": control,
+            "confidence": Value::Null,
+            "asked": false,
+            "why": "another empty field on this page, not asked about yet. Answer it now and \
+                    the run will not stop for it later",
+        })
+    }));
+    Some(Value::Array(asks))
 }
 
 /// Reads a terminal confidence for a caller, saying plainly when there is none
@@ -680,6 +720,21 @@ mod tests {
             confidence: 0.97,
             guard: Some(7),
             asking,
+            others: Vec::new(),
+        })
+    }
+
+    fn asking_for_a_whole_form() -> Status {
+        Status::NeedsValue(Pending::Text {
+            reference: "e18".to_string(),
+            control: "combobox \"Where from?\"".to_string(),
+            confidence: 0.97,
+            guard: Some(7),
+            asking: Asking::FirstTime,
+            others: vec![
+                ("e24".to_string(), "combobox \"Where to?\"".to_string()),
+                ("e31".to_string(), "textbox \"Departure\"".to_string()),
+            ],
         })
     }
 
@@ -713,9 +768,10 @@ mod tests {
 
         assert_eq!(structured["status"], "needs_value");
         assert_eq!(structured["continueWith"], "ctn-01J");
-        assert_eq!(structured["needsInput"]["ref"], "e18");
-        assert_eq!(structured["needsInput"]["kind"], "text");
-        assert_eq!(structured["needsInput"]["confidence"], 0.97);
+        assert_eq!(structured["needsInput"][0]["ref"], "e18");
+        assert_eq!(structured["needsInput"][0]["kind"], "text");
+        assert_eq!(structured["needsInput"][0]["confidence"], 0.97);
+        assert_eq!(structured["needsInput"][0]["asked"], true);
     }
 
     /// A second ask for the same field is not the same event as the first, and
@@ -733,7 +789,7 @@ mod tests {
 
         assert!(text.contains("discarded"), "{text}");
         assert!(
-            structured["needsInput"]["why"]
+            structured["needsInput"][0]["why"]
                 .as_str()
                 .is_some_and(|why| why.contains("discarded")),
             "{structured}"
@@ -754,6 +810,53 @@ mod tests {
 
         assert!(!text.contains("continue:"), "{text}");
         assert_eq!(structured["continueWith"], serde_json::Value::Null);
+    }
+
+    /// Filling one field does not change which field the next one is, so a
+    /// caller that answers the whole form in one call saves a park for each of
+    /// the others and loses nothing by ignoring them.
+    #[test]
+    fn a_whole_form_is_offered_in_one_ask() {
+        let (text, structured) = render(
+            "book a flight",
+            3,
+            &outcome(asking_for_a_whole_form()),
+            &[],
+            Some("ctn-01J"),
+        );
+
+        let asks = structured["needsInput"]
+            .as_array()
+            .expect("needsInput is a list");
+        assert_eq!(asks.len(), 3);
+        assert_eq!(asks[0]["asked"], true, "the one it stopped on comes first");
+        assert_eq!(asks[1]["asked"], false);
+        assert_eq!(asks[1]["ref"], "e24");
+        assert_eq!(
+            asks[1]["confidence"],
+            serde_json::Value::Null,
+            "it never judged the fields it did not ask about"
+        );
+
+        assert!(text.contains("combobox \"Where to?\" (e24)"), "{text}");
+        assert!(text.contains("textbox \"Departure\" (e31)"), "{text}");
+        assert!(text.contains("will not stop for them later"), "{text}");
+    }
+
+    /// And a single-field ask says nothing about other fields, because there
+    /// are none.
+    #[test]
+    fn one_field_does_not_mention_others() {
+        let (text, structured) = render(
+            "set the origin",
+            3,
+            &outcome(asking_for_text(Asking::FirstTime)),
+            &[],
+            Some("ctn-01J"),
+        );
+
+        assert_eq!(structured["needsInput"].as_array().map(Vec::len), Some(1));
+        assert!(!text.contains("empty fields"), "{text}");
     }
 
     /// Two different endings wear the out-of-budget label and they need
