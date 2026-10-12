@@ -88,7 +88,7 @@ impl ActionSpace {
         let unnamed_slots = MIN_OFFERED_UNNAMED.min(total.saturating_sub(named));
         let named_slots = MAX_OFFERED.saturating_sub(unnamed_slots);
 
-        let mut offered = Vec::new();
+        let mut offered: Vec<Candidate> = Vec::new();
         let mut taken_named = 0;
         let mut taken_unnamed = 0;
         for (_, control) in scored {
@@ -99,12 +99,28 @@ impl ActionSpace {
             if !is_named && taken_unnamed >= unnamed_slots {
                 continue;
             }
+            let candidate = candidate_of(control);
+            // A duplicate is worse than an omission. Confidence is measured
+            // against an even split, so two options the model cannot tell apart
+            // divide the probability mass between them and neither can clear
+            // its bar: four identical listings on a live search page produced a
+            // run that refused to open any of them, and a caller that had said
+            // the colours were equivalent.
+            //
+            // The first survivor is kept, which is page order, and page order
+            // is what "the first one" means.
+            if offered
+                .iter()
+                .any(|kept| kept.descriptor == candidate.descriptor)
+            {
+                continue;
+            }
             if is_named {
                 taken_named += 1;
             } else {
                 taken_unnamed += 1;
             }
-            offered.push(candidate_of(control));
+            offered.push(candidate);
             if offered.len() >= MAX_OFFERED {
                 break;
             }
@@ -418,6 +434,45 @@ mod tests {
         }
     }
 
+    /// Measured on a live Flipkart search page: four listings whose names,
+    /// roles and states were byte identical, which split the confidence between
+    /// them so none could clear its bar. The run refused to open any, and the
+    /// caller had already said the colour variants were equivalent.
+    #[test]
+    fn options_the_model_cannot_tell_apart_are_offered_once() {
+        let view = view_with(vec![
+            control("e1", "link", "SONY WH-1000XM5 Wireless Noise Cancellation"),
+            control("e2", "link", "SONY WH-1000XM5 Wireless Noise Cancellation"),
+            control("e3", "link", "SONY WH-1000XM5 Wireless Noise Cancellation"),
+            control("e4", "link", "SONY WF-1000XM5 Truly Wireless Earbuds"),
+        ]);
+        let space = ActionSpace::build(&view, "open the first WH-1000XM5 listing", None);
+
+        assert_eq!(space.offered.len(), 2, "three became one, plus the earbuds");
+        assert_eq!(
+            space.offered[0].reference, "e1",
+            "the first survivor is page order, which is what \"the first one\" means"
+        );
+        assert_eq!(
+            space.omitted, 2,
+            "and the ones left out are still counted, so the caller knows"
+        );
+    }
+
+    /// Controls that merely share a name are still distinguishable by their
+    /// state, so they are not duplicates and both are offered.
+    #[test]
+    fn controls_that_differ_in_state_are_both_offered() {
+        let mut ticked = control("e1", "checkbox", "Sony");
+        ticked.state.checked = Some(true);
+        let mut unticked = control("e2", "checkbox", "Sony");
+        unticked.state.checked = Some(false);
+        let view = view_with(vec![ticked, unticked]);
+
+        let space = ActionSpace::build(&view, "tick Sony", None);
+        assert_eq!(space.offered.len(), 2);
+    }
+
     /// The escape option is always offered, because the list provably may not
     /// cover what the goal needs: the cap drops candidates, and the control may
     /// simply not be on this page yet.
@@ -515,7 +570,12 @@ mod tests {
             .collect();
         for index in 0..10 {
             let mut unnamed = control(&format!("u{index}"), "combobox", "");
-            unnamed.options = vec!["one".to_string()];
+            // Distinct values, because real unnamed controls are distinct: a
+            // facet panel's nameless comboboxes hold different options. Ten
+            // byte-identical ones would be collapsed to one by the duplicate
+            // rule, which is correct for them and would hide the floor this
+            // test is about.
+            unnamed.options = vec![format!("option {index}")];
             controls.push(unnamed);
         }
         let space = ActionSpace::build(&view_with(controls), "pick one", None);
