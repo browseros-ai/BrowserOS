@@ -384,7 +384,7 @@ fn label_before<'a>(goal: &'a str, at: &str) -> Option<&'a str> {
     let offset = goal.find(at)?;
     let before = goal[..offset]
         .trim_end()
-        .trim_end_matches(|c: char| c == ':' || c == '=');
+        .trim_end_matches([':', '=']);
     // Walked backwards rather than taken from one position, because the word
     // immediately before a value is usually a preposition: "set the postcode to
     // 600042" has its answer two words back.
