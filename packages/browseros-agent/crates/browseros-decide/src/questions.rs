@@ -46,6 +46,7 @@ pub const PRESS_KEY: &str = "press_key";
 pub const FILL_TARGET: &str = "fill_target";
 pub const DESTINATION: &str = "destination";
 pub const FILL_VALUE: &str = "fill_value";
+pub const GOAL_MET: &str = "goal_met";
 
 /// Roles each targeted operation can act on. Narrowing a head's options is
 /// both cheaper, since every head repeats its list as input tokens, and more
@@ -218,6 +219,31 @@ pub fn build(
                     )
                 })
                 .collect(),
+        },
+    );
+
+    // Asked on every step, and read by nobody but the caller. A Noul costs
+    // input tokens and almost no time, since questions in one request are
+    // evaluated in parallel against a single read of the state, and it answers
+    // the question a caller most often has to spend its own round trip on:
+    // whether the run already finished.
+    //
+    // Reported, never acted on. A completion claim is not evidence, and this
+    // one is weaker than the DONE operation it sits beside: DONE is chosen
+    // against competing alternatives, where this has none to lose to. The loop
+    // does not read it.
+    questions.insert(
+        GOAL_MET.to_string(),
+        Question::Noul {
+            instructions: json!({
+                "goal": goal,
+                "question": format!("Is every requirement of the goal already visibly satisfied on `{PAGE}` as it is now?"),
+                "rules": RULES,
+            }),
+            criteria: Some(json!({
+                "true": "every requirement of the goal is already satisfied on this page",
+                "false": "something the goal asks for is still missing or unset",
+            })),
         },
     );
 

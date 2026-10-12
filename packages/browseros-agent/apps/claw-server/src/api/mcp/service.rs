@@ -1920,6 +1920,11 @@ fn pursue_output_schema() -> Value {
                 },
                 "description": "Pages this run opened beside itself, for a destination you marked newTab. The run kept working on the page you gave it, so these are yours to pursue separately."
             },
+            "goalMetBelief": {
+                "type": ["number", "null"],
+                "minimum": 0,
+                "description": "How likely the last decision thought the goal was already satisfied, as a probability where 0.5 means it had no idea. Reported, never acted on: the run can stop for one reason while believing the goal is met, and that disagreement is worth checking before you redo anything. It is a belief and not evidence."
+            },
             "unlabelledImages": {
                 "type": "integer",
                 "minimum": 0,
@@ -2715,6 +2720,7 @@ mod tests {
                 url_after: String::new(),
                 title: String::new(),
                 input_tokens: 0,
+                goal_met: None,
                 unlabelled_images: 0,
                 opened: Vec::new(),
                 resume: None,

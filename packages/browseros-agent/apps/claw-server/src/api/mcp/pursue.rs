@@ -33,6 +33,13 @@ pub struct Ask {
     pub control: String,
 }
 
+/// How sure the model has to be that the goal is already met before the result
+/// mentions it.
+///
+/// High, because this is the one number here the loop never gates on and so
+/// the one most likely to be read as more than it is. Below this it is noise.
+const GOAL_MET_WORTH_SAYING: f64 = 0.85;
+
 /// How long to let a page settle after an input.
 ///
 /// In code rather than by asking the model to wait: a wait decision costs a
@@ -529,6 +536,20 @@ pub fn render(
             }
         ));
     }
+    // The question a caller most often spends a round trip of its own on. Said
+    // only when the run did not claim the goal, because that is the case where
+    // the two disagree and the disagreement is the useful part.
+    if let Some(belief) = outcome.goal_met
+        && belief >= GOAL_MET_WORTH_SAYING
+        && !matches!(outcome.status, Status::Satisfied)
+    {
+        lines.push(format!(
+            "worth checking before you redo anything: it also judged the goal already \
+             satisfied, at {belief:.2}, while stopping for the reason above. That is a belief \
+             and not evidence, and the loop did not act on it, but it is often right that what \
+             was already done was what you wanted."
+        ));
+    }
     // Said either way. A caller that cannot tell whether an image is coming
     // takes its own, and five times in one measured session it did exactly
     // that: a screenshot call immediately before a pursue that attached one.
@@ -577,6 +598,7 @@ pub fn render(
             "url": page.url,
         })).collect::<Vec<_>>(),
         "unlabelledImages": outcome.unlabelled_images,
+        "goalMetBelief": outcome.goal_met,
         "navigations": outcome.trail.iter().filter(|step| matches!(
             step.operation,
             browseros_decide::Operation::GoTo | browseros_decide::Operation::GoBack
@@ -744,6 +766,7 @@ mod tests {
             url_after: "https://example.com/".to_string(),
             title: "Example".to_string(),
             input_tokens: 2012,
+            goal_met: None,
             unlabelled_images: 0,
             opened: Vec::new(),
             resume: None,
@@ -1048,6 +1071,46 @@ mod tests {
             without.contains("screenshot=\"on_handback\""),
             "and it names the cheaper way to get one: {without}"
         );
+    }
+
+    /// The question a caller most often spends a round trip of its own on. Said
+    /// only where the two disagree, because the disagreement is the useful
+    /// part: a run that stalled while believing the goal was met has often
+    /// already done what was wanted.
+    #[test]
+    fn a_run_that_believes_it_is_done_says_so_while_stopping() {
+        let mut ended = outcome(Status::Stalled(browseros_decide::Stuck::NotConfident));
+        ended.goal_met = Some(0.93);
+        let (text, structured) = render("sort by price", 3, &ended, &[], None, false);
+
+        assert!(
+            text.contains("worth checking before you redo anything"),
+            "{text}"
+        );
+        assert!(text.contains("0.93"), "{text}");
+        assert!(
+            text.contains("belief and not evidence"),
+            "it must not read as a verdict: {text}"
+        );
+        assert_eq!(structured["goalMetBelief"], 0.93);
+    }
+
+    /// Below the bar it is noise, and on a satisfied run it is redundant.
+    #[test]
+    fn a_weak_or_redundant_belief_is_not_mentioned() {
+        let mut weak = outcome(Status::Stalled(browseros_decide::Stuck::NotConfident));
+        weak.goal_met = Some(0.55);
+        let (text, structured) = render("sort by price", 3, &weak, &[], None, false);
+        assert!(!text.contains("worth checking"), "{text}");
+        assert_eq!(
+            structured["goalMetBelief"], 0.55,
+            "the number still travels, for a caller that wants it"
+        );
+
+        let mut done = outcome(Status::Satisfied);
+        done.goal_met = Some(0.99);
+        let (text, _) = render("sort by price", 3, &done, &[], None, false);
+        assert!(!text.contains("worth checking"), "{text}");
     }
 
     #[test]

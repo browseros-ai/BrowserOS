@@ -7,8 +7,8 @@
 use crate::client::Response;
 use crate::operations::{Consequence, Operation};
 use crate::questions::{
-    CHECK_TARGET, CLICK_TARGET, DESTINATION, FILL_TARGET, FILL_VALUE, OPERATION, PRESS_KEY,
-    PRESS_TARGET, SELECT_VALUE, UNCHECK_TARGET,
+    CHECK_TARGET, CLICK_TARGET, DESTINATION, FILL_TARGET, FILL_VALUE, GOAL_MET, OPERATION,
+    PRESS_KEY, PRESS_TARGET, SELECT_VALUE, UNCHECK_TARGET,
 };
 use crate::space::{ActionSpace, NONE_OF_THESE};
 
@@ -34,6 +34,14 @@ pub struct Decision {
     pub key_confidence: Option<f64>,
     /// True when the model said none of the offered controls will do.
     pub none_of_these: bool,
+    /// How likely the model thought the goal was already satisfied, as a
+    /// probability rather than a confidence: a Noul near 0.5 means uncertain.
+    ///
+    /// Carried for the caller and read by nothing in the loop. A completion
+    /// claim is not evidence, and this one is weaker than the DONE operation it
+    /// sits beside, because DONE is chosen against competing alternatives and
+    /// this has none to lose to.
+    pub goal_met: Option<f64>,
     pub input_tokens: u64,
 }
 
@@ -82,6 +90,7 @@ impl Decision {
             key: None,
             key_confidence: None,
             none_of_these: false,
+            goal_met: None,
             input_tokens: 0,
         }
     }
@@ -176,6 +185,10 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
         key: None,
         key_confidence: None,
         none_of_these: false,
+        goal_met: response
+            .answers
+            .get(GOAL_MET)
+            .and_then(|answer| answer.noul),
         input_tokens: response.usage.input_tokens,
     };
 

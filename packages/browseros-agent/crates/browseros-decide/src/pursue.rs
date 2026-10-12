@@ -264,6 +264,13 @@ pub struct Outcome {
     pub url_after: String,
     pub title: String,
     pub input_tokens: u64,
+    /// What the last decision believed about whether the goal was already
+    /// satisfied, as a probability.
+    ///
+    /// Reported so a caller does not have to spend a round trip of its own
+    /// asking. Never acted on here: a run that stalled while believing the goal
+    /// was met is still a stall, and the caller is the party that can check.
+    pub goal_met: Option<f64>,
     /// Images on the last page observed that carry no accessible name.
     ///
     /// Reported rather than acted on. This loop reads an accessibility tree, so
@@ -369,6 +376,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 url_after: String::new(),
                 title: String::new(),
                 input_tokens: run.input_tokens,
+                goal_met: None,
                 unlabelled_images: 0,
                 opened: Vec::new(),
                 resume: None,
@@ -519,6 +527,8 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 );
             }
         };
+
+        run.goal_met = decision.goal_met;
 
         // An operation this step did not offer cannot have been read off the
         // question, so it is not acted on. Until navigation existed every
@@ -1097,6 +1107,7 @@ fn end(
         url_after: view.url.clone(),
         title: view.title.clone(),
         input_tokens: run.input_tokens,
+        goal_met: run.goal_met,
         unlabelled_images: view.unlabelled_images,
         opened: opened.to_vec(),
         resume: None,

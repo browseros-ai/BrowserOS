@@ -68,6 +68,9 @@ pub struct Run {
     pub navigations: u32,
     /// Text the caller has supplied, by control reference.
     pub supplied: BTreeMap<String, Supplied>,
+    /// What the most recent decision believed about whether the goal was
+    /// already satisfied. Carried for the caller, read by nothing in the loop.
+    pub goal_met: Option<f64>,
     /// How many times this run has asked the caller for a value.
     ///
     /// Bounded, because a field that will not hold still would otherwise ask
@@ -197,6 +200,7 @@ impl Run {
             travelled: Vec::new(),
             navigations: 0,
             supplied: BTreeMap::new(),
+            goal_met: None,
             asks: 0,
             pending: None,
         }
