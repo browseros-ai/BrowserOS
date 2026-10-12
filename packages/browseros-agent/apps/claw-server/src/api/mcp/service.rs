@@ -60,10 +60,13 @@ const PURSUE_TOOL_NAME: &str = "pursue";
 const PURSUE_DESCRIPTION: &str = "Pursue one goal on a page you already own, deciding each step \
 here instead of returning every page to you. Pass the page id from tabs or navigate, and the goal \
 stated as the whole outcome you want rather than one step. It can operate dropdowns, checkboxes \
-and keyboard controls, and it hands back when a step needs text you have to supply or when it is \
-not confident enough to act on something consequential. When none of the controls on the page can \
-advance the goal, it stops and tells you what it was choosing between, so you can scroll, expand a \
-filter, restate the goal, or stop.";
+and keyboard controls, and it is not confident enough to act on something consequential without \
+saying so. When a step needs text, it stops and names the field: answer with the same call plus \
+`continue` and `provide` and the run carries on from where it was, keeping its actions and its \
+budget, rather than working everything out again. The same handle continues a run that stopped at \
+its step limit, with a higher maxSteps. When none of the controls on the page can advance the \
+goal, it stops and tells you what it was choosing between, so you can scroll, expand a filter, \
+restate the goal, or stop.";
 
 const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
@@ -453,6 +456,37 @@ impl ClawMcpService {
             );
         };
 
+        let continuing = raw_args
+            .get("continue")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|handle| !handle.is_empty());
+        // Only strings. A number or an object here would be a caller mistake,
+        // and typing the JSON rendering of one into a field is worse than
+        // saying so.
+        let supplied: Vec<(String, String)> = match raw_args.get("provide") {
+            Some(Value::Object(given)) => {
+                let mut pairs = Vec::with_capacity(given.len());
+                for (reference, value) in given {
+                    let Some(text) = value.as_str() else {
+                        return ToolResult::error(format!(
+                            "pursue: provide[{reference}] has to be a string, which is what gets \
+                             typed into the field."
+                        ));
+                    };
+                    pairs.push((reference.clone(), text.to_string()));
+                }
+                pairs
+            }
+            Some(Value::Null) | None => Vec::new(),
+            Some(_) => {
+                return ToolResult::error(
+                    "pursue: provide has to be an object of ref to text, e.g. \
+                     {\"e18\": \"Bengaluru\"}.",
+                );
+            }
+        };
+
         // Read once, at the start. A credential removed between listing and
         // calling has to say so and name the fallback, because the caller still
         // has every granular tool.
@@ -508,10 +542,57 @@ impl ClawMcpService {
             return ToolResult::error("pursue: the act tool is missing from the catalog.");
         };
 
+        // A resume is the same run, so its trail, its counters and the time it
+        // has already spent all travel with it. Only the budget comes from this
+        // call, so a caller can raise a step limit the run stopped at.
+        let mut run = match continuing {
+            Some(handle) => {
+                match self
+                    .state
+                    .continuations
+                    .redeem(started.session.id(), page, handle)
+                    .await
+                {
+                    Ok(parked) => parked.run,
+                    Err(refused) => return ToolResult::error(continuation_refusal(refused)),
+                }
+            }
+            None => browseros_decide::Run::new(goal, budget),
+        };
+        run.budget = budget;
+        if run.goal != goal {
+            // The goal is what every question is asked against, so a resume
+            // under a different goal is a different pursuit wearing an old
+            // run's trail.
+            return ToolResult::error(
+                "pursue: that continuation was for a different goal. Pass the same goal to \
+                 carry a run on, or omit `continue` to start a new run.",
+            );
+        }
+        for (reference, text) in supplied {
+            run.supply(reference, text);
+        }
+
         let jev = browseros_decide::Jev::new(credential.expose());
-        let outcome = browseros_decide::pursue(&jev, &driver, goal, budget).await;
-        let (text, structured) =
-            crate::api::mcp::pursue::render(goal, driver.page(), &outcome, &driver.notices());
+        let outcome = browseros_decide::advance(&jev, &driver, run).await;
+        // Parked before rendering, because the render prints the handle as part
+        // of the literal next call.
+        let handle = match &outcome.resume {
+            Some(run) => Some(
+                self.state
+                    .continuations
+                    .park(started.session.id(), page, run.clone())
+                    .await,
+            ),
+            None => None,
+        };
+        let (text, structured) = crate::api::mcp::pursue::render(
+            goal,
+            driver.page(),
+            &outcome,
+            &driver.notices(),
+            handle.as_deref(),
+        );
         ToolResult::text(text, Some(structured))
     }
 
@@ -1494,7 +1575,16 @@ fn pursue_tool() -> Tool {
             },
             "maxSteps": {
                 "type": "integer",
-                "description": "Stop after this many actions. Defaults to the budget set in the cockpit."
+                "description": "Stop after this many actions. Counts the whole run, including actions an earlier call in the same run already took. Defaults to the budget set in the cockpit."
+            },
+            "continue": {
+                "type": "string",
+                "description": "The continueWith handle from a previous pursue result. Pass it with the same page and goal to carry that run on from where it stopped, keeping its actions, its trail and its budget, instead of starting a new run that works everything out again. Single use, expires after ten minutes, and only valid for the browser session and page that produced it."
+            },
+            "provide": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Text for the fields a previous result asked for, keyed by the ref it named, e.g. {\"e18\": \"Bengaluru\"}. Never put a password, API key, token, or card number here: the text is typed into the page and recorded with the call like any other argument. For a secret, use request_human_help so a person enters it in the browser instead."
             }
         },
         "required": ["page", "goal"]
@@ -1552,6 +1642,23 @@ fn pursue_output_schema() -> Value {
                 "type": "array",
                 "items": { "type": "string" },
                 "description": "What the last decision was choosing between, when it reported that none of them could advance the goal."
+            },
+            "needsInput": {
+                "type": ["object", "null"],
+                "additionalProperties": false,
+                "required": ["kind", "ref", "control", "why"],
+                "properties": {
+                    "kind": { "type": "string", "enum": ["text"] },
+                    "ref": { "type": "string", "description": "Pass this as the key in `provide`." },
+                    "control": { "type": "string", "description": "The control as a snapshot would show it, e.g. combobox \"Where from?\"." },
+                    "confidence": { "type": ["number", "null"], "description": "How sure the run was that this is the right field. A low number is your cue to look at the field before answering." },
+                    "why": { "type": "string" }
+                },
+                "description": "The one value the run is waiting for, when status is needs_value."
+            },
+            "continueWith": {
+                "type": ["string", "null"],
+                "description": "Pass this as `continue` on the next call to carry this run on. Present when the run can be continued, which is needs_value and a run that stopped at its step limit."
             },
             "stoppedBecause": {
                 "type": ["string", "null"],
@@ -1864,6 +1971,27 @@ fn session_was_stopped() -> McpError {
     )
 }
 
+/// What to tell a caller whose continuation was refused.
+///
+/// Each one names the next move, because an error a caller cannot act on just
+/// becomes a different way to spend a call. Follows the wording of the stopped
+/// session message for the same reason.
+fn continuation_refusal(refused: crate::services::continuations::Refused) -> String {
+    use crate::services::continuations::Refused;
+    match refused {
+        Refused::Unknown | Refused::Expired => "pursue: that continuation has expired or was \
+             already used. Call pursue again with page and goal to start a fresh run, and do not \
+             resend this handle."
+            .to_string(),
+        Refused::OtherSession => "pursue: that continuation belongs to a different browser \
+             session. Call pursue again with page and goal to start a fresh run."
+            .to_string(),
+        Refused::OtherPage => "pursue: that continuation was parked on a different page. Pass \
+             the page it was parked on, or omit `continue` to start a new run on this one."
+            .to_string(),
+    }
+}
+
 fn attach_session_handle(
     result: Result<CallToolResult, McpError>,
     handle: Option<SessionId>,
@@ -1988,6 +2116,98 @@ mod tests {
 
     /// Read from the wire shape the specification prints, not from a builder, so
     /// the thing under test is what a client actually sends.
+    /// The schema says `additionalProperties: false`, so a key the render emits
+    /// and the schema has forgotten is a wire-level breakage rather than a
+    /// cosmetic one, and this is the only thing that would catch it.
+    #[test]
+    fn the_output_schema_covers_every_key_the_render_emits() -> anyhow::Result<()> {
+        use browseros_decide::pursue::{Outcome, Status};
+        use browseros_decide::run::{Asking, Pending};
+
+        let declared = super::pursue_output_schema();
+        let properties = declared["properties"]
+            .as_object()
+            .ok_or_else(|| anyhow::anyhow!("the output schema declares properties"))?;
+
+        // Every ending, because they do not all emit the same keys.
+        let endings = [
+            Status::Satisfied,
+            Status::Blocked("nothing could advance it".to_string()),
+            Status::Stalled(browseros_decide::Stuck::NothingChanged),
+            Status::NeedsInput("the page could not be read back".to_string()),
+            Status::NeedsValue(Pending::Text {
+                reference: "e18".to_string(),
+                control: "combobox".to_string(),
+                confidence: 0.9,
+                guard: None,
+                asking: Asking::FirstTime,
+            }),
+            Status::OutOfBudget,
+            Status::Stopped,
+            Status::Failed("the browser is not connected".to_string()),
+        ];
+
+        for status in endings {
+            let outcome = Outcome {
+                status,
+                offered: 1,
+                omitted: 0,
+                offered_controls: Vec::new(),
+                terminal_confidence: Some(0.9),
+                decisions: 1,
+                trail: Vec::new(),
+                url_before: String::new(),
+                url_after: String::new(),
+                title: String::new(),
+                input_tokens: 0,
+                resume: None,
+            };
+            let (_, structured) =
+                crate::api::mcp::pursue::render("a goal", 1, &outcome, &[], Some("ctn-01J"));
+            let emitted = structured
+                .as_object()
+                .ok_or_else(|| anyhow::anyhow!("the render emits an object"))?;
+            for key in emitted.keys() {
+                assert!(
+                    properties.contains_key(key),
+                    "the render emits {key}, which the output schema does not declare"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Both new arguments are offered and neither is required, so a caller that
+    /// never continues a run sees no change at all.
+    #[test]
+    fn the_pursue_schema_offers_continue_and_provide_without_requiring_them() -> anyhow::Result<()>
+    {
+        let schema = Value::Object(super::pursue_tool().input_schema.as_ref().clone());
+
+        assert_eq!(schema["properties"]["continue"]["type"], json!("string"));
+        assert_eq!(schema["properties"]["provide"]["type"], json!("object"));
+        assert_eq!(
+            schema["properties"]["provide"]["additionalProperties"]["type"],
+            json!("string"),
+            "the values are the text that gets typed, so they are strings"
+        );
+        let required = schema["required"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("the input schema lists its required fields"))?;
+        assert!(!required.contains(&json!("continue")));
+        assert!(!required.contains(&json!("provide")));
+
+        // The one thing this description has to carry. A fill types the value
+        // into the page and the call is recorded with its arguments, so a
+        // caller must not be invited to put a secret here.
+        let provide = schema["properties"]["provide"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(provide.contains("Never put a password"), "{provide}");
+        assert!(provide.contains("request_human_help"), "{provide}");
+        Ok(())
+    }
+
     #[test]
     fn capability_words_name_what_a_peer_declared() -> anyhow::Result<()> {
         let read = |value: Value| -> anyhow::Result<String> {

@@ -260,8 +260,19 @@ fn notices_in(text: &str) -> Vec<String> {
 /// it started on, the url it ended on, and how many of its actions changed the
 /// page. A caller can check that against its goal, which it cannot do with a
 /// status alone.
+///
+/// `handle` is the continuation this run was parked under, when it parked. It
+/// is printed as part of the literal next call rather than described, because a
+/// caller that has to assemble the call from prose mostly starts a new run
+/// instead.
 #[must_use]
-pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (String, Value) {
+pub fn render(
+    goal: &str,
+    page: u32,
+    outcome: &Outcome,
+    notices: &[String],
+    handle: Option<&str>,
+) -> (String, Value) {
     let mut lines = Vec::new();
     lines.push(match &outcome.status {
         Status::Satisfied => format!(
@@ -286,17 +297,20 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
             asking,
             ..
         }) => format!(
-            "Stopped and handing back for one value: it chose to type into {control} \
-             ({reference}) at confidence {confidence:.2}, and it does not generate text.{} \
-             {} of {} actions changed the page so far.",
+            "Needs one value: it chose to type into {control} ({reference}) at confidence \
+             {confidence:.2}, and it does not generate text.{}\nAnswer with one call:\n  \
+             pursue(page: {page}, goal: <the same goal>{}, provide: {{ \"{reference}\": \
+             \"<the text>\" }})\nThat carries this run on with its {} action(s) and its \
+             budget intact, rather than starting again. If {control} is not the field you \
+             meant, start a fresh run instead: the list below is what it was choosing between.",
             match asking {
                 Asking::FirstTime => String::new(),
-                Asking::FieldChanged => " You answered this already, but the field changed \
-                                         before the text could be typed, so the answer was not \
-                                         used."
-                    .to_string(),
+                Asking::FieldChanged =>
+                    " You answered this already, but the field changed before the text could be \
+                     typed, so that answer was discarded."
+                        .to_string(),
             },
-            outcome.changed(),
+            continue_argument(handle),
             outcome.actions(),
         ),
         // Handing back after changing the page is not handing back from a
@@ -319,10 +333,24 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
              page and one goal, and you have the wider intent. Options are to scroll or expand a \
              facet with snapshot and act, restate the goal, or stop."
         ),
-        Status::OutOfBudget => {
-            "Stopped at the run's budget without finishing. Call pursue again to continue."
-                .to_string()
-        }
+        // Two different endings wear this label, and they need opposite advice.
+        // A run out of steps is handed back and can be continued with a higher
+        // limit; a run out of time cannot be continued at all, because nothing
+        // gives it more.
+        Status::OutOfBudget if handle.is_some() => format!(
+            "Stopped at its step limit of {} without finishing. Carry it on with one call:\n  \
+             pursue(page: {page}, goal: <the same goal>{}, maxSteps: {})\nmaxSteps counts the \
+             whole run, so it has to be higher than the {} actions already taken or the next \
+             call ends where this one did.",
+            outcome.actions(),
+            continue_argument(handle),
+            outcome.actions() * 2,
+            outcome.actions(),
+        ),
+        Status::OutOfBudget => "Stopped at the run's time limit without finishing. Start a fresh \
+             run: the time a run has spent travels with it, so continuing this one would end \
+             the moment it started."
+            .to_string(),
         Status::Stopped => "Stopped by the operator. The page is where it was left.".to_string(),
         Status::Failed(reason) => format!(
             "Stopped: {reason}. The page tools still work, so continue with snapshot and act."
@@ -378,6 +406,8 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
         "controlsHeldBack": outcome.omitted,
         "offeredControls": outcome.offered_controls,
         "terminalConfidence": outcome.terminal_confidence,
+        "needsInput": needs_input(&outcome.status),
+        "continueWith": handle,
         "trail": outcome.trail.iter().map(|step| json!({
             "operation": step.operation.as_str(),
             "target": step.target,
@@ -388,6 +418,43 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
         })).collect::<Vec<_>>(),
     });
     (lines.join("\n"), structured)
+}
+
+/// The `continue` argument for the next call, printed only when there is a
+/// handle to print.
+///
+/// A run can park without one if the store refused to hold it, and telling the
+/// caller to pass a handle it does not have is worse than telling it nothing.
+fn continue_argument(handle: Option<&str>) -> String {
+    handle.map_or_else(String::new, |handle| format!(", continue: \"{handle}\""))
+}
+
+/// The value the run is waiting for, as something a caller can branch on rather
+/// than a sentence it has to read.
+fn needs_input(status: &Status) -> Option<Value> {
+    let Status::NeedsValue(Pending::Text {
+        reference,
+        control,
+        confidence,
+        asking,
+        ..
+    }) = status
+    else {
+        return None;
+    };
+    Some(json!({
+        "kind": "text",
+        "ref": reference,
+        "control": control,
+        "confidence": confidence,
+        "why": match asking {
+            Asking::FirstTime =>
+                "the run chose to type here, and this model does not generate text",
+            Asking::FieldChanged =>
+                "you answered this already, but the field changed before the text could be \
+                 typed, so that answer was discarded",
+        },
+    }))
 }
 
 /// Reads a terminal confidence for a caller, saying plainly when there is none
@@ -429,8 +496,139 @@ fn status_name(status: &Status) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::covered_or_gone;
+    use super::{covered_or_gone, render};
     use browseros_core::{CoreError, Ref};
+    use browseros_decide::pursue::{Outcome, Status};
+    use browseros_decide::run::{Asking, Pending};
+
+    fn outcome(status: Status) -> Outcome {
+        Outcome {
+            status,
+            offered: 4,
+            omitted: 0,
+            offered_controls: vec!["textbox \"Search\"".to_string()],
+            terminal_confidence: None,
+            decisions: 1,
+            trail: Vec::new(),
+            url_before: "https://example.com/".to_string(),
+            url_after: "https://example.com/".to_string(),
+            title: "Example".to_string(),
+            input_tokens: 2012,
+            resume: None,
+        }
+    }
+
+    fn asking_for_text(asking: Asking) -> Status {
+        Status::NeedsValue(Pending::Text {
+            reference: "e18".to_string(),
+            control: "combobox \"Where from?\"".to_string(),
+            confidence: 0.97,
+            guard: Some(7),
+            asking,
+        })
+    }
+
+    /// The four things this line has to do, learned from the hand-backs this
+    /// loop has already got wrong: name the field, show the confidence so a bad
+    /// choice is visible, print the literal next call, and say what to do
+    /// instead if the field is wrong.
+    #[test]
+    fn an_ask_for_text_prints_the_next_call() {
+        let (text, structured) = render(
+            "set the origin to Bengaluru",
+            3,
+            &outcome(asking_for_text(Asking::FirstTime)),
+            &[],
+            Some("ctn-01J"),
+        );
+
+        assert!(text.contains("combobox \"Where from?\""), "{text}");
+        assert!(text.contains("0.97"), "{text}");
+        assert!(text.contains("continue: \"ctn-01J\""), "{text}");
+        assert!(text.contains("provide: { \"e18\": "), "{text}");
+        assert!(text.contains("start a fresh run"), "{text}");
+
+        assert_eq!(structured["status"], "needs_value");
+        assert_eq!(structured["continueWith"], "ctn-01J");
+        assert_eq!(structured["needsInput"]["ref"], "e18");
+        assert_eq!(structured["needsInput"]["kind"], "text");
+        assert_eq!(structured["needsInput"]["confidence"], 0.97);
+    }
+
+    /// A second ask for the same field is not the same event as the first, and
+    /// a caller told only "needs text" twice has no way to know its answer was
+    /// received and then discarded.
+    #[test]
+    fn a_second_ask_says_the_answer_was_discarded() {
+        let (text, structured) = render(
+            "set the origin to Bengaluru",
+            3,
+            &outcome(asking_for_text(Asking::FieldChanged)),
+            &[],
+            Some("ctn-01J"),
+        );
+
+        assert!(text.contains("discarded"), "{text}");
+        assert!(
+            structured["needsInput"]["why"]
+                .as_str()
+                .is_some_and(|why| why.contains("discarded")),
+            "{structured}"
+        );
+    }
+
+    /// Without a handle there is nothing to print, and telling a caller to pass
+    /// one it does not have is worse than telling it nothing.
+    #[test]
+    fn an_ask_without_a_handle_does_not_invent_one() {
+        let (text, structured) = render(
+            "set the origin to Bengaluru",
+            3,
+            &outcome(asking_for_text(Asking::FirstTime)),
+            &[],
+            None,
+        );
+
+        assert!(!text.contains("continue:"), "{text}");
+        assert_eq!(structured["continueWith"], serde_json::Value::Null);
+    }
+
+    /// Two different endings wear the out-of-budget label and they need
+    /// opposite advice. maxSteps counts the whole run, so a caller that resends
+    /// the same limit gets a call that ends where the last one did.
+    #[test]
+    fn a_run_out_of_steps_says_to_raise_the_limit() {
+        let mut ended = outcome(Status::OutOfBudget);
+        ended.trail = vec![step(), step()];
+        let (text, _) = render("sort by price", 3, &ended, &[], Some("ctn-01J"));
+
+        assert!(text.contains("step limit"), "{text}");
+        assert!(text.contains("maxSteps: 4"), "{text}");
+        assert!(text.contains("continue: \"ctn-01J\""), "{text}");
+    }
+
+    #[test]
+    fn a_run_out_of_time_does_not_invite_a_continuation() {
+        let (text, structured) =
+            render("sort by price", 3, &outcome(Status::OutOfBudget), &[], None);
+
+        assert!(text.contains("time limit"), "{text}");
+        assert!(text.contains("Start a fresh run"), "{text}");
+        assert!(!text.contains("continue:"), "{text}");
+        assert_eq!(structured["continueWith"], serde_json::Value::Null);
+    }
+
+    fn step() -> browseros_decide::Step {
+        browseros_decide::Step {
+            operation: browseros_decide::Operation::Click,
+            target: Some("e1".to_string()),
+            value: None,
+            confidence: 0.95,
+            page_changed: true,
+            url_after: "https://example.com/".to_string(),
+            input_tokens: 1000,
+        }
+    }
 
     /// The wordings this has to recognise come from the browser's own error
     /// type, so they are built from it rather than copied into a string here
