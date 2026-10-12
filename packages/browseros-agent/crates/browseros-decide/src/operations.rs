@@ -23,6 +23,12 @@ pub enum Operation {
     Fill,
     ScrollDown,
     ScrollUp,
+    /// Moves to one of the destinations the caller authored. Never a url this
+    /// model invented: it chooses a label from a closed set.
+    GoTo,
+    /// Reverses the run's own last move. Offered only once the run has moved,
+    /// so it can never reverse off the page the caller handed it.
+    GoBack,
     Wait,
     Done,
     Blocked,
@@ -88,6 +94,8 @@ impl Operation {
             Self::Fill => "FILL",
             Self::ScrollDown => "SCROLL_DOWN",
             Self::ScrollUp => "SCROLL_UP",
+            Self::GoTo => "GO_TO",
+            Self::GoBack => "GO_BACK",
             Self::Wait => "WAIT",
             Self::Done => "DONE",
             Self::Blocked => "BLOCKED",
@@ -107,6 +115,8 @@ impl Operation {
             "FILL" => Self::Fill,
             "SCROLL_DOWN" => Self::ScrollDown,
             "SCROLL_UP" => Self::ScrollUp,
+            "GO_TO" => Self::GoTo,
+            "GO_BACK" => Self::GoBack,
             "WAIT" => Self::Wait,
             "DONE" => Self::Done,
             "BLOCKED" => Self::Blocked,
@@ -138,6 +148,11 @@ impl Operation {
             }
             Self::ScrollDown => "Scroll down to bring more of the page into view.",
             Self::ScrollUp => "Scroll up to bring earlier content back into view.",
+            Self::GoTo => {
+                "Move to one of the pages listed for this goal. Choose this when what the goal \
+                 needs is not on this page at all."
+            }
+            Self::GoBack => "Return to the page this run was on before it last moved.",
             Self::Wait => {
                 "Wait for the page to finish updating. Choose this only if nothing else can progress."
             }
@@ -148,13 +163,24 @@ impl Operation {
         }
     }
 
-    /// Whether this operation needs a target control.
+    /// Whether this operation aims at a control on the page.
+    ///
+    /// Distinct from `needs_target`, which also covers the operation that aims
+    /// at something the caller named rather than something in the snapshot. The
+    /// freshness check before acting reads this one, because a destination has
+    /// no guard to compare and is not on the page at all.
     #[must_use]
-    pub fn needs_target(self) -> bool {
+    pub fn needs_control(self) -> bool {
         matches!(
             self,
             Self::Click | Self::Select | Self::Check | Self::Uncheck | Self::Press | Self::Fill
         )
+    }
+
+    /// Whether this operation needs something chosen alongside it.
+    #[must_use]
+    pub fn needs_target(self) -> bool {
+        self.needs_control() || self == Self::GoTo
     }
 
     /// Whether this operation ends the run without touching the page.
@@ -171,6 +197,12 @@ impl Operation {
     pub fn consequence(self, target_name: Option<&str>) -> Consequence {
         if matches!(self, Self::ScrollDown | Self::ScrollUp | Self::Wait) {
             return Consequence::Low;
+        }
+        // Leaving the page is the one thing in this vocabulary that looking
+        // again cannot undo, so it is rated by what it is rather than by what
+        // it is called.
+        if matches!(self, Self::GoTo | Self::GoBack) {
+            return Consequence::High;
         }
         let name = target_name.unwrap_or_default().to_lowercase();
         if HIGH_STAKES.iter().any(|word| name.contains(word)) {
@@ -190,6 +222,9 @@ impl Operation {
             Self::Press => "press",
             Self::Fill => "fill",
             Self::ScrollDown | Self::ScrollUp => "scroll",
+            // These reach the browser through navigate and tabs instead, so the
+            // driver has a method for them rather than an act kind.
+            Self::GoTo | Self::GoBack => return None,
             Self::Wait | Self::Done | Self::Blocked => return None,
         })
     }
@@ -245,6 +280,34 @@ mod tests {
         assert!(Operation::Done.act_kind().is_none());
     }
 
+    /// Moving does not go through act, so the property that keeps "adding an
+    /// operation is a vocabulary change" honest is different for it: the driver
+    /// has a method, and the test above must not be read as saying every
+    /// operation reaches the browser the same way.
+    #[test]
+    fn moving_does_not_go_through_the_act_tool() {
+        assert!(Operation::GoTo.act_kind().is_none());
+        assert!(Operation::GoBack.act_kind().is_none());
+        assert!(!Operation::GoTo.needs_control());
+        assert!(
+            Operation::GoTo.needs_target(),
+            "it still chooses between the destinations the caller listed"
+        );
+        assert!(!Operation::GoBack.needs_target());
+    }
+
+    /// Looking again cannot undo leaving the page, so it is rated by what it is
+    /// rather than by what it is called.
+    #[test]
+    fn moving_is_always_high_stakes() {
+        assert_eq!(Operation::GoTo.consequence(None), Consequence::High);
+        assert_eq!(
+            Operation::GoTo.consequence(Some("page 2 of the results")),
+            Consequence::High
+        );
+        assert_eq!(Operation::GoBack.consequence(None), Consequence::High);
+    }
+
     #[test]
     fn operation_names_round_trip() {
         for operation in [
@@ -256,6 +319,8 @@ mod tests {
             Operation::Fill,
             Operation::ScrollDown,
             Operation::ScrollUp,
+            Operation::GoTo,
+            Operation::GoBack,
             Operation::Wait,
             Operation::Done,
             Operation::Blocked,

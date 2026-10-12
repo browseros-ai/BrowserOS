@@ -44,6 +44,20 @@ pub struct Run {
     /// An option rather than an empty string, so a resumed run can tell "not
     /// observed yet" from "observed, and this is what it said".
     pub url_before: Option<String>,
+    /// Where the caller said this run may go. Empty means it stays put.
+    pub destinations: Vec<Destination>,
+    /// Destinations already used, by label.
+    ///
+    /// Not offered again: a destination that has been visited cannot advance
+    /// the goal a second time, and a new-tab destination leaves this page
+    /// unchanged, so without this the model could spend its whole budget
+    /// opening the same tab.
+    pub travelled: Vec<String>,
+    /// How many times this run has moved.
+    ///
+    /// Going back is offered only above zero, so the loop can never reverse off
+    /// the page the caller handed it.
+    pub navigations: u32,
     /// Text the caller has supplied, by control reference.
     pub supplied: BTreeMap<String, Supplied>,
     /// How many times this run has asked the caller for a value.
@@ -54,6 +68,25 @@ pub struct Run {
     pub asks: u32,
     /// What the run is waiting for, when it parked.
     pub pending: Option<Pending>,
+}
+
+/// One page the caller said this run may move to.
+///
+/// Authored by the caller, never by the model: a url is open-ended text and
+/// this model does not generate. Choosing between labels is a closed set, which
+/// is the one shape it is good at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Destination {
+    /// What this page is, in the words the goal would use.
+    pub label: String,
+    pub url: String,
+    /// Open it in a background tab in the caller's tab group and leave this
+    /// page where it is.
+    ///
+    /// The caller's choice rather than the model's, so the decision about
+    /// whether leaving the page is acceptable stays with the party that knows
+    /// the wider intent.
+    pub new_tab: bool,
 }
 
 /// Text the caller gave for one control, and what that control looked like
@@ -125,6 +158,9 @@ impl Run {
             last_acted: None,
             fallback_needed: false,
             url_before: None,
+            destinations: Vec::new(),
+            travelled: Vec::new(),
+            navigations: 0,
             supplied: BTreeMap::new(),
             asks: 0,
             pending: None,
@@ -191,5 +227,28 @@ impl Run {
     /// question rather than the same stale one.
     pub fn forget(&mut self, reference: &str) {
         self.supplied.remove(reference);
+    }
+}
+
+impl Run {
+    /// The destinations still worth offering, with the key each is chosen by.
+    ///
+    /// Keyed by position rather than by label, because a label is caller text
+    /// and an option id has to be something the model can return exactly.
+    #[must_use]
+    pub fn unvisited(&self) -> Vec<(String, &Destination)> {
+        self.destinations
+            .iter()
+            .enumerate()
+            .filter(|(_, destination)| !self.travelled.contains(&destination.label))
+            .map(|(index, destination)| (format!("d{index}"), destination))
+            .collect()
+    }
+
+    /// The destination behind an option id the model returned.
+    #[must_use]
+    pub fn destination(&self, key: &str) -> Option<&Destination> {
+        let index = key.strip_prefix('d')?.parse::<usize>().ok()?;
+        self.destinations.get(index)
     }
 }

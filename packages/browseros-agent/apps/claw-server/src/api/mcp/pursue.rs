@@ -14,7 +14,7 @@ use browseros_core::{
 };
 use browseros_decide::gate::Decision;
 use browseros_decide::operations::Operation;
-use browseros_decide::pursue::{ActError, Driver, Outcome, Status};
+use browseros_decide::pursue::{ActError, Arrival, Driver, Journey, Outcome, Status};
 use browseros_decide::run::{Asking, Pending};
 use browseros_decide::view::PageView;
 use browseros_mcp::{OutputFileAccess, ToolDef};
@@ -36,6 +36,8 @@ pub struct PageDriver {
     session: Arc<BrowserSession>,
     page: u32,
     act_index: usize,
+    navigate_index: usize,
+    tabs_index: usize,
     catalog: Arc<Vec<ToolDef>>,
     session_id: SessionId,
     identity: ToolIdentity,
@@ -60,10 +62,17 @@ impl PageDriver {
         cancel: CancellationToken,
     ) -> Option<Self> {
         let act_index = catalog.iter().position(|tool| tool.name == "act")?;
+        // Moving reaches the browser through the same two tools a connected
+        // agent uses, so a destination gets the same guards, effects and audit
+        // record as anything else.
+        let navigate_index = catalog.iter().position(|tool| tool.name == "navigate")?;
+        let tabs_index = catalog.iter().position(|tool| tool.name == "tabs")?;
         Some(Self {
             session,
             page,
             act_index,
+            navigate_index,
+            tabs_index,
             catalog,
             session_id,
             identity,
@@ -107,6 +116,10 @@ impl PageDriver {
     }
 
     fn call_for(&self, args: Value) -> ToolCall {
+        self.call_to(self.act_index, args)
+    }
+
+    fn call_to(&self, index: usize, args: Value) -> ToolCall {
         // Child tokens, not clones. A clone shares one cancellation state, and
         // dispatch cancels the token it was given on every completion path
         // including success, so a clone of the run's own token would be
@@ -115,7 +128,7 @@ impl PageDriver {
         // never the other way round, which is the direction wanted here.
         ToolCall::new(
             self.catalog.clone(),
-            self.act_index,
+            index,
             args,
             self.session_id.clone(),
             Some(self.identity.clone()),
@@ -218,6 +231,82 @@ impl Driver for PageDriver {
     async fn settle(&self) {
         tokio::time::sleep(SETTLE).await;
     }
+
+    async fn travel(&self, journey: &Journey) -> Result<Arrival, ActError> {
+        let new_tab = matches!(journey, Journey::To(destination) if destination.new_tab);
+        let call = match journey {
+            Journey::To(destination) if destination.new_tab => {
+                // The group id is not optional. Without it a new tab lands
+                // outside the caller's tab group, which is the signal the
+                // caller uses to keep its own work together.
+                let mut args = json!({ "action": "new", "url": destination.url });
+                if let Some(group) = &self.default_tab_group_id {
+                    args["groupId"] = json!(group);
+                }
+                self.call_to(self.tabs_index, args)
+            }
+            Journey::To(destination) => self.call_to(
+                self.navigate_index,
+                json!({ "page": self.page, "action": "url", "url": destination.url }),
+            ),
+            Journey::Back => self.call_to(
+                self.navigate_index,
+                json!({ "page": self.page, "action": "back" }),
+            ),
+        };
+        let result = dispatch_tool_call(call)
+            .await
+            .map_err(|error| ActError::Fatal(error.to_string()))?;
+        if result.is_error.unwrap_or(false) {
+            // Never stale. A navigation whose completion is unknown must not be
+            // attempted twice: the first may already have left the page.
+            return Err(ActError::Fatal(first_text(&result)));
+        }
+        let text = first_text(&result);
+        for notice in notices_in(&text) {
+            if let Ok(mut held) = self.notices.lock()
+                && !held.contains(&notice)
+            {
+                held.push(notice);
+            }
+        }
+        let opened = if new_tab { opened_page(&text) } else { None };
+        let url = match journey {
+            // A page that has just been opened may still report about:blank, so
+            // the url the caller asked for is the better answer than whatever
+            // the tab happens to say in the same millisecond.
+            Journey::To(destination) if destination.new_tab => destination.url.clone(),
+            _ => self
+                .session
+                .pages
+                .get_info(PageId(self.page))
+                .await
+                .map(|info| info.url)
+                .unwrap_or_default(),
+        };
+        Ok(Arrival {
+            page: self.page,
+            url,
+            opened,
+        })
+    }
+}
+
+/// The page id a new tab was opened as.
+///
+/// Read from the text, not from structured content, because the dispatch strips
+/// structured content from every tool without an output schema and `tabs` has
+/// none. Reading it from there was wrong twice before in this file, in both
+/// directions, so the wording is pinned by a test instead of trusted.
+fn opened_page(text: &str) -> Option<u32> {
+    text.lines()
+        .filter_map(|line| line.trim().strip_prefix("opened page "))
+        .filter_map(|rest| {
+            rest.split_whitespace()
+                .next()
+                .and_then(|word| word.parse::<u32>().ok())
+        })
+        .find(|page| *page >= 1)
 }
 
 /// Whether a failure is one another observation could clear.
@@ -384,6 +473,16 @@ pub fn render(
         outcome.actions(),
         outcome.input_tokens,
     ));
+    if !outcome.opened.is_empty() {
+        lines.push(
+            "it opened these beside the page it was working on, and they are yours to pursue \
+             separately:"
+                .to_string(),
+        );
+        for page in &outcome.opened {
+            lines.push(format!("  page {} {}", page.page, page.url));
+        }
+    }
     if !notices.is_empty() {
         lines.push("about the pages used:".to_string());
         for notice in notices {
@@ -408,6 +507,14 @@ pub fn render(
         "terminalConfidence": outcome.terminal_confidence,
         "needsInput": needs_input(&outcome.status),
         "continueWith": handle,
+        "openedPages": outcome.opened.iter().map(|page| json!({
+            "page": page.page,
+            "url": page.url,
+        })).collect::<Vec<_>>(),
+        "navigations": outcome.trail.iter().filter(|step| matches!(
+            step.operation,
+            browseros_decide::Operation::GoTo | browseros_decide::Operation::GoBack
+        )).count(),
         "trail": outcome.trail.iter().map(|step| json!({
             "operation": step.operation.as_str(),
             "target": step.target,
@@ -496,7 +603,7 @@ fn status_name(status: &Status) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{covered_or_gone, render};
+    use super::{covered_or_gone, opened_page, render};
     use browseros_core::{CoreError, Ref};
     use browseros_decide::pursue::{Outcome, Status};
     use browseros_decide::run::{Asking, Pending};
@@ -514,6 +621,7 @@ mod tests {
             url_after: "https://example.com/".to_string(),
             title: "Example".to_string(),
             input_tokens: 2012,
+            opened: Vec::new(),
             resume: None,
         }
     }
@@ -618,6 +726,44 @@ mod tests {
         assert_eq!(structured["continueWith"], serde_json::Value::Null);
     }
 
+    /// A new tab leaves the run where it was, so the caller has to be told what
+    /// exists now rather than being moved onto it.
+    #[test]
+    fn a_page_the_run_opened_is_reported_as_the_callers_to_pursue() {
+        let mut ended = outcome(Status::Satisfied);
+        ended.opened = vec![browseros_decide::OpenedPage {
+            page: 7,
+            url: "https://example.com/deals".to_string(),
+        }];
+        let (text, structured) = render("open the deals page", 3, &ended, &[], None);
+
+        assert!(text.contains("page 7 https://example.com/deals"), "{text}");
+        assert!(text.contains("yours to pursue separately"), "{text}");
+        assert_eq!(structured["openedPages"][0]["page"], 7);
+    }
+
+    #[test]
+    fn moves_are_counted_for_the_caller() {
+        let mut ended = outcome(Status::Satisfied);
+        ended.trail = vec![step(), move_step(), move_step()];
+        let (_, structured) = render("show page 2", 3, &ended, &[], None);
+
+        assert_eq!(structured["navigations"], 2);
+        assert_eq!(structured["actions"], 3);
+    }
+
+    fn move_step() -> browseros_decide::Step {
+        browseros_decide::Step {
+            operation: browseros_decide::Operation::GoTo,
+            target: Some("page 2 of the results".to_string()),
+            value: None,
+            confidence: 0.95,
+            page_changed: true,
+            url_after: "https://example.com/?page=2".to_string(),
+            input_tokens: 1000,
+        }
+    }
+
     fn step() -> browseros_decide::Step {
         browseros_decide::Step {
             operation: browseros_decide::Operation::Click,
@@ -628,6 +774,25 @@ mod tests {
             url_after: "https://example.com/".to_string(),
             input_tokens: 1000,
         }
+    }
+
+    /// The dispatch strips structured content from every tool without an
+    /// output schema, and `tabs` has none, so the page id can only come from
+    /// the text. That makes the wording load-bearing, and this pins it: see
+    /// `tabs.rs`, which prints `opened page {id}`.
+    #[test]
+    fn the_page_a_new_tab_opened_is_read_from_what_tabs_prints() {
+        assert_eq!(opened_page("opened page 7"), Some(7));
+        assert_eq!(
+            opened_page("some preamble\nopened page 12\nand a snapshot after it"),
+            Some(12)
+        );
+        assert_eq!(opened_page("  opened page 3  "), Some(3));
+
+        assert_eq!(opened_page("closed page 7"), None);
+        assert_eq!(opened_page("opened page none"), None);
+        assert_eq!(opened_page("opened page 0"), None, "page ids start at one");
+        assert_eq!(opened_page(""), None);
     }
 
     /// The wordings this has to recognise come from the browser's own error

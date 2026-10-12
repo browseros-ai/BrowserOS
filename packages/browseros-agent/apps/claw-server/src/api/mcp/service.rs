@@ -61,7 +61,8 @@ const PURSUE_DESCRIPTION: &str = "Pursue one goal on a page you already own, dec
 here instead of returning every page to you. Pass the page id from tabs or navigate, and the goal \
 stated as the whole outcome you want rather than one step. It can operate dropdowns, checkboxes \
 and keyboard controls, and it is not confident enough to act on something consequential without \
-saying so. When a step needs text, it stops and names the field: answer with the same call plus \
+saying so. Pass `destinations` if the goal may need another page: it picks one by label and never \
+invents a url. When a step needs text, it stops and names the field: answer with the same call plus \
 `continue` and `provide` and the run carries on from where it was, keeping its actions and its \
 budget, rather than working everything out again. The same handle continues a run that stopped at \
 its step limit, with a higher maxSteps. When none of the controls on the page can advance the \
@@ -487,6 +488,42 @@ impl ClawMcpService {
             }
         };
 
+        let destinations = match raw_args.get("destinations") {
+            Some(Value::Array(listed)) => {
+                let mut parsed = Vec::with_capacity(listed.len());
+                for entry in listed {
+                    let label = entry.get("label").and_then(Value::as_str).map(str::trim);
+                    let url = entry.get("url").and_then(Value::as_str).map(str::trim);
+                    let (Some(label), Some(url)) = (label, url) else {
+                        return ToolResult::error(
+                            "pursue: every destination needs a label and a url, e.g. \
+                             {\"label\": \"page 2 of the results\", \"url\": \"https://...\"}.",
+                        );
+                    };
+                    if label.is_empty() || url.is_empty() {
+                        return ToolResult::error(
+                            "pursue: a destination's label and url cannot be empty.",
+                        );
+                    }
+                    parsed.push(browseros_decide::Destination {
+                        label: label.to_string(),
+                        url: url.to_string(),
+                        new_tab: entry
+                            .get("newTab")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    });
+                }
+                parsed
+            }
+            Some(Value::Null) | None => Vec::new(),
+            Some(_) => {
+                return ToolResult::error(
+                    "pursue: destinations has to be an array of {label, url} objects.",
+                );
+            }
+        };
+
         // Read once, at the start. A credential removed between listing and
         // calling has to say so and name the fallback, because the caller still
         // has every granular tool.
@@ -571,6 +608,12 @@ impl ClawMcpService {
         }
         for (reference, text) in supplied {
             run.supply(reference, text);
+        }
+        // Replaced rather than merged on a resume: the list is the caller's
+        // current intent about where this run may go, and a destination it has
+        // dropped should stop being on offer.
+        if !destinations.is_empty() || continuing.is_none() {
+            run.destinations = destinations;
         }
 
         let jev = browseros_decide::Jev::new(credential.expose());
@@ -1581,6 +1624,21 @@ fn pursue_tool() -> Tool {
                 "type": "string",
                 "description": "The continueWith handle from a previous pursue result. Pass it with the same page and goal to carry that run on from where it stopped, keeping its actions, its trail and its budget, instead of starting a new run that works everything out again. Single use, expires after ten minutes, and only valid for the browser session and page that produced it."
             },
+            "destinations": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["label", "url"],
+                    "properties": {
+                        "label": { "type": "string", "description": "What this page is, in the words your goal uses, e.g. \"page 2 of the results\"." },
+                        "url": { "type": "string" },
+                        "newTab": { "type": "boolean", "description": "Open it in a background tab in your tab group and leave this page where it is. Defaults to false, which moves this page." }
+                    }
+                },
+                "description": "Pages this run may move to. It picks one by label and never invents a url, so moving stays inside the set you wrote. Leave it out and the run stays on the page you gave it. It will move at most three times."
+            },
             "provide": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
@@ -1655,6 +1713,24 @@ fn pursue_output_schema() -> Value {
                     "why": { "type": "string" }
                 },
                 "description": "The one value the run is waiting for, when status is needs_value."
+            },
+            "openedPages": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": ["page", "url"],
+                    "properties": {
+                        "page": { "type": "integer", "minimum": 1 },
+                        "url": { "type": "string" }
+                    }
+                },
+                "description": "Pages this run opened beside itself, for a destination you marked newTab. The run kept working on the page you gave it, so these are yours to pursue separately."
+            },
+            "navigations": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "How many times the run moved. It stops being offered the chance after three."
             },
             "continueWith": {
                 "type": ["string", "null"],
@@ -2160,6 +2236,7 @@ mod tests {
                 url_after: String::new(),
                 title: String::new(),
                 input_tokens: 0,
+                opened: Vec::new(),
                 resume: None,
             };
             let (_, structured) =
@@ -2196,6 +2273,15 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("the input schema lists its required fields"))?;
         assert!(!required.contains(&json!("continue")));
         assert!(!required.contains(&json!("provide")));
+
+        assert_eq!(schema["properties"]["destinations"]["type"], json!("array"));
+        assert_eq!(
+            schema["properties"]["destinations"]["maxItems"],
+            json!(20),
+            "confidence is measured against an even split, so a long list \
+             collapses the statistic the gate depends on"
+        );
+        assert!(!required.contains(&json!("destinations")));
 
         // The one thing this description has to carry. A fill types the value
         // into the page and the call is recorded with its arguments, so a

@@ -111,8 +111,8 @@ async fn remaining_checks(jev: &Jev, failures: &mut u32) {
     let goal = "Open the sort dropdown using the keyboard, because a click is blocked";
     let space = ActionSpace::build(&page, goal, None);
     // Press is offered once something has refused a click, which is this case.
-    let operations = questions::available(&space, &page, true);
-    let built = questions::build(goal, &space, &operations);
+    let operations = questions::available(&space, &page, true, Default::default());
+    let built = questions::build(goal, &space, &operations, Default::default());
     let state = questions::state(&page, &space, &[]);
     match jev.ask(&state, &built).await {
         Ok(response) => {
@@ -160,8 +160,8 @@ async fn remaining_checks(jev: &Jev, failures: &mut u32) {
         println!("  FAILED: the model would be told nothing is selected");
         *failures += 1;
     }
-    let operations = questions::available(&space, &page, false);
-    let built = questions::build(goal, &space, &operations);
+    let operations = questions::available(&space, &page, false, Default::default());
+    let built = questions::build(goal, &space, &operations, Default::default());
     let state = questions::state(&page, &space, &[]);
     match jev.ask(&state, &built).await {
         Ok(response) => {
@@ -214,8 +214,13 @@ async fn main() {
     println!("\nblocker 1: does a real completion claim carry its confidence?");
     let done = cart("Item added to your cart. Your order is complete.");
     let space = ActionSpace::build(&done, "Confirm the item is in the cart", None);
-    let operations = questions::available(&space, &done, false);
-    let built = questions::build("Confirm the item is in the cart", &space, &operations);
+    let operations = questions::available(&space, &done, false, Default::default());
+    let built = questions::build(
+        "Confirm the item is in the cart",
+        &space,
+        &operations,
+        Default::default(),
+    );
     let state = questions::state(&done, &space, &[]);
     match jev.ask(&state, &built).await {
         Ok(response) => {
@@ -244,8 +249,8 @@ async fn main() {
     let page = cart("Your cart is empty.");
     let goal = "Tick the Corsair brand filter checkbox in the left sidebar";
     let space = ActionSpace::build(&page, goal, None);
-    let operations = questions::available(&space, &page, false);
-    let built = questions::build(goal, &space, &operations);
+    let operations = questions::available(&space, &page, false, Default::default());
+    let built = questions::build(goal, &space, &operations, Default::default());
     let state = questions::state(&page, &space, &[]);
     match jev.ask(&state, &built).await {
         Ok(response) => {

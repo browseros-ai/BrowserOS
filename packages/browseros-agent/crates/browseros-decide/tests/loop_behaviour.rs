@@ -12,9 +12,11 @@ use std::sync::Mutex;
 use browseros_decide::client::{Answer, JevError, Question, Response, Usage};
 use browseros_decide::gate::Decision;
 use browseros_decide::operations::Operation;
-use browseros_decide::pursue::{ActError, Budget, Driver, Oracle, Status, Stuck, advance, pursue};
+use browseros_decide::pursue::{
+    ActError, Arrival, Budget, Driver, Journey, Oracle, Status, Stuck, advance, pursue,
+};
 use browseros_decide::questions::{CLICK_TARGET, OPERATION, SELECT_VALUE};
-use browseros_decide::run::{Asking, Pending, Run};
+use browseros_decide::run::{Asking, Destination, Pending, Run};
 use browseros_decide::view::{Control, ControlState, PageView};
 
 fn control(reference: &str, role: &str, name: &str) -> Control {
@@ -91,6 +93,9 @@ struct Fake {
     acts: Mutex<Vec<Result<(), ActError>>>,
     pages: Mutex<Vec<PageView>>,
     settles: Mutex<u32>,
+    /// Every journey asked for, in order, so a test can say where the run went
+    /// rather than only that it went somewhere.
+    journeys: Mutex<Vec<Journey>>,
     /// Observations succeed this many times, then fail the way a closed tab
     /// does. Counted rather than flagged, so the first view can be built and
     /// only the read-back fails, which is the case worth testing.
@@ -117,6 +122,7 @@ impl Fake {
                 pages
             }),
             settles: Mutex::new(0),
+            journeys: Mutex::new(Vec::new()),
             blind_after: std::sync::atomic::AtomicU32::new(u32::MAX),
             observed: std::sync::atomic::AtomicU32::new(0),
             moves_on_act: std::sync::atomic::AtomicBool::new(false),
@@ -144,6 +150,10 @@ impl Fake {
 
     fn settles(&self) -> u32 {
         *self.settles.lock().expect("the counter")
+    }
+
+    fn journeys(&self) -> Vec<Journey> {
+        self.journeys.lock().expect("the journeys").clone()
     }
 }
 
@@ -199,6 +209,28 @@ impl Driver for Fake {
     async fn settle(&self) {
         *self.settles.lock().expect("the counter") += 1;
     }
+
+    async fn travel(&self, journey: &Journey) -> Result<Arrival, ActError> {
+        self.journeys
+            .lock()
+            .expect("the journeys")
+            .push(journey.clone());
+        let new_tab = matches!(journey, Journey::To(destination) if destination.new_tab);
+        if !new_tab {
+            // A same-tab move changes the page, the way a real one does.
+            self.version
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let url = match journey {
+            Journey::To(destination) => destination.url.clone(),
+            Journey::Back => "https://example.com/?v=1".to_string(),
+        };
+        Ok(Arrival {
+            page: 1,
+            url,
+            opened: new_tab.then_some(7),
+        })
+    }
 }
 
 fn budget() -> Budget {
@@ -242,9 +274,19 @@ async fn an_uncertain_mutation_ends_the_run_rather_than_retrying() {
         (OPERATION, "SELECT", 0.98),
         (SELECT_VALUE, "e1::Price", 0.98),
     ])]);
-    let fake = Fake::with_one_page(vec![Err(ActError::Fatal(
-        "the dropdown's result was not confirmed".to_string(),
-    ))]);
+    // A page that actually has the dropdown, because the loop only acts on an
+    // operation the step offered, and a select is offered only when something
+    // on the page has values to set.
+    let mut sorter = control("e1", "combobox", "Sort by");
+    sorter.options = vec!["Price".to_string(), "Relevance".to_string()];
+    let mut view = page(1);
+    view.controls = vec![sorter];
+    let fake = Fake::new(
+        vec![Err(ActError::Fatal(
+            "the dropdown's result was not confirmed".to_string(),
+        ))],
+        vec![view],
+    );
     let outcome = pursue(&oracle, &fake, "Sort by price", budget()).await;
     assert_eq!(
         outcome.status,
@@ -1090,4 +1132,207 @@ async fn a_resumed_run_reports_the_url_it_originally_started_on() {
 
     assert_eq!(second.url_before, "https://example.com/?v=1");
     assert_eq!(second.url_after, "https://example.com/?v=2");
+}
+
+fn destination(label: &str, new_tab: bool) -> Destination {
+    Destination {
+        label: label.to_string(),
+        url: format!("https://example.com/{label}"),
+        new_tab,
+    }
+}
+
+fn wants_to_move() -> Scripted {
+    Scripted::new(vec![says(&[
+        (OPERATION, "GO_TO", 0.95),
+        ("destination", "d0", 0.95),
+    ])])
+}
+
+/// A url is open-ended text and this model does not generate. Choosing between
+/// labels the caller wrote is a closed set, which is the one shape it is good
+/// at, so navigation is offered only when the caller has authored somewhere to
+/// go.
+#[tokio::test]
+async fn moving_is_not_offered_without_destinations() {
+    let fake = Fake::with_one_page(vec![Ok(())]);
+    let outcome = pursue(&wants_to_move(), &fake, "show page 2", budget()).await;
+
+    assert!(
+        fake.journeys().is_empty(),
+        "nothing moved, because nothing was on offer"
+    );
+    assert_eq!(outcome.actions(), 0);
+}
+
+#[tokio::test]
+async fn a_destination_the_caller_authored_is_moved_to() {
+    let mut run = Run::new("show page 2", budget());
+    run.destinations = vec![destination("page 2 of the results", false)];
+
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = advance(&wants_to_move(), &fake, run).await;
+
+    assert_eq!(
+        fake.journeys(),
+        vec![Journey::To(destination("page 2 of the results", false))]
+    );
+    let step = &outcome.trail[0];
+    assert_eq!(step.operation, Operation::GoTo);
+    assert_eq!(step.target.as_deref(), Some("page 2 of the results"));
+    assert!(step.page_changed, "a move in the same tab changes the page");
+}
+
+/// The caller decides whether leaving the page is acceptable, because it is the
+/// party that knows the wider intent. A new tab keeps the run where it was, so
+/// the one-page story holds and the caller is told what exists now.
+#[tokio::test]
+async fn a_new_tab_destination_leaves_the_run_where_it_was() {
+    let mut run = Run::new("open the deals page", budget());
+    run.destinations = vec![destination("the deals page", true)];
+
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = advance(&wants_to_move(), &fake, run).await;
+
+    assert_eq!(outcome.opened.len(), 1);
+    assert_eq!(outcome.opened[0].page, 7);
+    assert_eq!(outcome.url_after, "https://example.com/?v=1");
+    assert!(
+        !outcome.trail[0].page_changed,
+        "this page really did not change, and saying otherwise would be a nicer lie"
+    );
+}
+
+/// A destination that has been visited cannot advance the goal a second time,
+/// and a new-tab destination leaves this page unchanged, so without this the
+/// model could spend a whole budget opening one tab.
+#[tokio::test]
+async fn a_destination_is_not_offered_twice() {
+    let mut run = Run::new("open the deals page", budget());
+    run.destinations = vec![destination("the deals page", true)];
+    run.travelled = vec!["the deals page".to_string()];
+
+    let fake = Fake::with_one_page(vec![Ok(())]);
+    let outcome = advance(&wants_to_move(), &fake, run).await;
+
+    assert!(fake.journeys().is_empty());
+    assert_eq!(outcome.actions(), 0);
+}
+
+/// Going back is offered only once the run has moved, so it can never reverse
+/// off the page the caller handed it.
+#[tokio::test]
+async fn going_back_is_not_offered_before_the_run_has_moved() {
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "GO_BACK", 0.95)])]);
+    let fake = Fake::with_one_page(vec![Ok(())]);
+    let outcome = pursue(&oracle, &fake, "go back", budget()).await;
+
+    assert!(fake.journeys().is_empty());
+    assert_eq!(outcome.actions(), 0);
+}
+
+#[tokio::test]
+async fn going_back_is_offered_once_the_run_has_moved() {
+    let mut run = Run::new("go back", budget());
+    run.navigations = 1;
+
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "GO_BACK", 0.95)])]);
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(fake.journeys(), vec![Journey::Back]);
+    assert_eq!(outcome.trail[0].operation, Operation::GoBack);
+}
+
+/// Leaving the page is the one thing in this vocabulary that looking again
+/// cannot undo, so it is rated high and judged at the high bar.
+#[tokio::test]
+async fn a_move_below_the_high_bar_does_not_happen() {
+    let mut run = Run::new("show page 2", budget());
+    run.destinations = vec![destination("page 2 of the results", false)];
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "GO_TO", 0.80),
+        ("destination", "d0", 0.80),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(())]);
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert!(fake.journeys().is_empty(), "0.80 is under the 0.85 bar");
+    assert_eq!(outcome.actions(), 0);
+}
+
+/// The url costs many tokens and says nothing a Choice can use. The label costs
+/// a few and is what the goal is phrased in.
+#[test]
+fn a_destination_question_never_carries_a_url() {
+    let view = page(1);
+    let space = browseros_decide::space::ActionSpace::build(&view, "show page 2", None);
+    let destinations = [destination("page 2 of the results", false)];
+    let offered: Vec<(String, &Destination)> = vec![("d0".to_string(), &destinations[0])];
+    let travel = browseros_decide::questions::Travel {
+        offered: &offered,
+        can_return: false,
+    };
+    let operations = browseros_decide::questions::available(&space, &view, false, travel);
+    let built = browseros_decide::questions::build("show page 2", &space, &operations, travel);
+
+    let rendered = serde_json::to_string(&built).expect("the questions serialise");
+    assert!(rendered.contains("page 2 of the results"));
+    assert!(
+        !rendered.contains("https://"),
+        "the url must not travel to the model: {rendered}"
+    );
+}
+
+/// Every move is high consequence and cannot be undone by looking again, so a
+/// run with no limit on them is a crawler rather than one goal on one page.
+#[tokio::test]
+async fn a_run_stops_being_offered_moves_once_it_has_made_enough() {
+    let mut run = Run::new("show page 2", budget());
+    run.destinations = vec![destination("page 2 of the results", false)];
+    run.navigations = browseros_decide::pursue::NAVIGATION_LIMIT;
+
+    let fake = Fake::with_one_page(vec![Ok(())]);
+    let outcome = advance(&wants_to_move(), &fake, run).await;
+
+    assert!(fake.journeys().is_empty());
+    assert_eq!(outcome.actions(), 0);
+}
+
+/// Going back twice in a row is an oscillation rather than progress for a run
+/// with one goal, and the page keeps changing so the stall counter would never
+/// catch it.
+#[tokio::test]
+async fn going_back_is_not_offered_twice_in_a_row() {
+    let mut run = Run::new("go back", budget());
+    run.navigations = 1;
+
+    let oracle = Scripted::new(vec![says(&[(OPERATION, "GO_BACK", 0.95)])]);
+    let fake = Fake::with_one_page(vec![]);
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(
+        fake.journeys(),
+        vec![Journey::Back],
+        "once, and then not again"
+    );
+    assert_eq!(outcome.trail.len(), 1);
+}
+
+/// An operation the step did not offer cannot have been read off the question.
+/// Obeying it is how a run with a used-up destination list would reverse off
+/// the page the caller handed over.
+#[tokio::test]
+async fn an_operation_that_was_not_offered_is_not_acted_on() {
+    // Nothing editable on the page, so FILL is never on the list.
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e1", 0.99),
+    ])]);
+    let fake = Fake::with_one_page(vec![Ok(())]);
+    let outcome = pursue(&oracle, &fake, "type something", budget()).await;
+
+    assert_eq!(outcome.actions(), 0);
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
 }

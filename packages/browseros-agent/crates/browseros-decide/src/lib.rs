@@ -18,6 +18,9 @@ pub mod view;
 pub use client::{Answer, Jev, JevError, Question, Response, Usage};
 pub use gate::{Decision, Verdict, Weakest, read, verdict};
 pub use operations::{Consequence, Operation};
-pub use pursue::{ActError, Budget, Driver, Oracle, Outcome, Status, Step, Stuck, advance, pursue};
-pub use run::Run;
+pub use pursue::{
+    ActError, Arrival, Budget, Driver, Journey, OpenedPage, Oracle, Outcome, Status, Step, Stuck,
+    advance, pursue,
+};
+pub use run::{Destination, Run};
 pub use view::{Control, ControlState, PageView};

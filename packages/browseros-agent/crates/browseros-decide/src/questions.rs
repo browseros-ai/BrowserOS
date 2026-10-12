@@ -13,8 +13,28 @@ use serde_json::{Value, json};
 
 use crate::client::Question;
 use crate::operations::{Operation, PRESS_KEYS};
+use crate::run::Destination;
 use crate::space::{ActionSpace, NONE_OF_THESE};
 use crate::view::PageView;
+
+/// How many destinations one question may offer.
+///
+/// The same reasoning as the candidate cap: confidence is measured against an
+/// even split, so a long list collapses the statistic the gate depends on.
+pub const MAX_DESTINATIONS: usize = 20;
+
+/// Where the caller said this run may go, as the question builder needs it.
+///
+/// A parameter rather than a field read off the run, so the question builder
+/// stays a pure function of a page and a goal and can be driven from a
+/// measurement harness.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Travel<'a> {
+    /// The destinations still worth offering, with the key each is chosen by.
+    pub offered: &'a [(String, &'a Destination)],
+    /// Whether the run has moved, and so has somewhere to go back to.
+    pub can_return: bool,
+}
 
 pub const OPERATION: &str = "operation";
 pub const CLICK_TARGET: &str = "click_target";
@@ -24,6 +44,7 @@ pub const UNCHECK_TARGET: &str = "uncheck_target";
 pub const PRESS_TARGET: &str = "press_target";
 pub const PRESS_KEY: &str = "press_key";
 pub const FILL_TARGET: &str = "fill_target";
+pub const DESTINATION: &str = "destination";
 
 /// Roles each targeted operation can act on. Narrowing a head's options is
 /// both cheaper, since every head repeats its list as input tokens, and more
@@ -97,7 +118,12 @@ pub fn state(view: &PageView, space: &ActionSpace, recent: &[String]) -> Value {
 /// refused, since an option that cannot be acted on still competes for the
 /// answer.
 #[must_use]
-pub fn available(space: &ActionSpace, view: &PageView, fallback_needed: bool) -> Vec<Operation> {
+pub fn available(
+    space: &ActionSpace,
+    view: &PageView,
+    fallback_needed: bool,
+    travel: Travel<'_>,
+) -> Vec<Operation> {
     let mut operations = vec![Operation::Done, Operation::Blocked, Operation::Wait];
     let has =
         |predicate: &dyn Fn(&crate::space::Candidate) -> bool| space.offered.iter().any(predicate);
@@ -150,6 +176,14 @@ pub fn available(space: &ActionSpace, view: &PageView, fallback_needed: bool) ->
         operations.push(Operation::ScrollDown);
         operations.push(Operation::ScrollUp);
     }
+    // Offered only when the caller listed somewhere to go, so a run with no
+    // destinations is never asked a question it cannot answer.
+    if !travel.offered.is_empty() {
+        operations.push(Operation::GoTo);
+    }
+    if travel.can_return {
+        operations.push(Operation::GoBack);
+    }
     operations.sort_unstable();
     operations.dedup();
     operations
@@ -161,6 +195,7 @@ pub fn build(
     goal: &str,
     space: &ActionSpace,
     operations: &[Operation],
+    travel: Travel<'_>,
 ) -> BTreeMap<String, Question> {
     let mut questions = BTreeMap::new();
 
@@ -239,6 +274,33 @@ pub fn build(
                 },
             );
         }
+    }
+
+    // The label travels and the url does not. A label costs a few tokens and is
+    // what the goal is phrased in; a url costs many and says nothing a Choice
+    // can use.
+    if operations.contains(&Operation::GoTo) {
+        let mut criteria: BTreeMap<String, Value> = travel
+            .offered
+            .iter()
+            .take(MAX_DESTINATIONS)
+            .map(|(key, destination)| (key.clone(), json!({ "destination": destination.label })))
+            .collect();
+        criteria.insert(
+            NONE_OF_THESE.to_string(),
+            json!({ "destination": "none of these pages advances the goal" }),
+        );
+        questions.insert(
+            DESTINATION.to_string(),
+            Question::Choice {
+                instructions: json!({
+                    "goal": goal,
+                    "question": "Assume the next operation is to move to another page. Which of these should it be?",
+                    "rules": RULES,
+                }),
+                criteria,
+            },
+        );
     }
 
     if operations.contains(&Operation::Press) {

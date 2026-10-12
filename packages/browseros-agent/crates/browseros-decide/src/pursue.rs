@@ -17,7 +17,7 @@ use crate::client::{Jev, JevError, MAX_RETRIES, Question};
 use crate::gate::{self, Decision, Verdict};
 use crate::operations::Operation;
 use crate::questions;
-use crate::run::{Asking, Pending, Run};
+use crate::run::{Asking, Destination, Pending, Run};
 use crate::space::ActionSpace;
 use crate::view::PageView;
 use std::time::Duration;
@@ -28,6 +28,12 @@ pub const STALL_LIMIT: u32 = 3;
 /// How many times a stale decision may be retried before giving up. A page that
 /// changes under every decision is not one this can finish.
 pub const STALE_RETRIES: u32 = 3;
+
+/// How many times a run may move before it stops being offered the chance.
+///
+/// Every move is high consequence and cannot be undone by looking again, and a
+/// run with no limit on them is a crawler rather than one goal on one page.
+pub const NAVIGATION_LIMIT: u32 = 3;
 
 /// How many times a run may ask the caller for a value before it stops asking.
 ///
@@ -158,6 +164,38 @@ pub trait Driver {
     /// Settles the page after an input, in code rather than by spending a
     /// decision on a wait.
     fn settle(&self) -> impl Future<Output = ()>;
+
+    /// Moves the run, or opens a destination beside it.
+    ///
+    /// Separate from `act` because moving does not go through the act tool: it
+    /// reaches the browser through navigate and tabs, which the server already
+    /// ships.
+    fn travel(&self, journey: &Journey) -> impl Future<Output = Result<Arrival, ActError>>;
+}
+
+/// Where a run is being asked to go.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Journey {
+    To(Destination),
+    Back,
+}
+
+/// Where the run ended up.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Arrival {
+    /// The page the run is working on now, which is the page it was already on
+    /// unless the destination asked for a new tab.
+    pub page: u32,
+    pub url: String,
+    /// The page that was opened, when one was.
+    pub opened: Option<u32>,
+}
+
+/// A page this run opened beside itself.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OpenedPage {
+    pub page: u32,
+    pub url: String,
 }
 
 /// How a run ended.
@@ -226,6 +264,10 @@ pub struct Outcome {
     pub url_after: String,
     pub title: String,
     pub input_tokens: u64,
+    /// Pages this run opened beside itself, when a destination asked for a new
+    /// tab. The run keeps working where it was, so the caller is told what
+    /// exists now rather than being moved.
+    pub opened: Vec<OpenedPage>,
     /// The run itself, when this ending can be continued.
     ///
     /// Set on the endings where the caller can answer something and carry on,
@@ -287,6 +329,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
     // in a struct there is no such closure.
     let mut offered = 0usize;
     let mut omitted = 0usize;
+    let mut opened: Vec<OpenedPage> = Vec::new();
 
     let first = match driver.observe().await {
         Ok(view) => view,
@@ -304,6 +347,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 url_after: String::new(),
                 title: String::new(),
                 input_tokens: run.input_tokens,
+                opened: Vec::new(),
                 resume: None,
             };
         }
@@ -318,7 +362,15 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
 
     loop {
         if driver.stopped() {
-            return end(&mut run, &started, Status::Stopped, &view, offered, omitted);
+            return end(
+                &mut run,
+                &started,
+                Status::Stopped,
+                &view,
+                offered,
+                omitted,
+                &opened,
+            );
         }
         let out_of_steps = run.trail.len() >= run.budget.max_steps as usize;
         if out_of_steps || (run.spent + started.elapsed()).as_secs() >= run.budget.max_seconds {
@@ -329,6 +381,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 &view,
                 offered,
                 omitted,
+                &opened,
             );
             // A run out of steps can be continued, because the caller can raise
             // the step limit on the next call. A run out of time cannot: the
@@ -345,8 +398,26 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         let space = ActionSpace::build(&view, &goal, run.last_acted.as_deref());
         offered = space.offered.len();
         omitted = space.omitted;
-        let operations = questions::available(&space, &view, run.fallback_needed);
-        let built = questions::build(&goal, &space, &operations);
+        let moving_still_allowed = run.navigations < NAVIGATION_LIMIT;
+        let unvisited = if moving_still_allowed {
+            run.unvisited()
+        } else {
+            Vec::new()
+        };
+        let travel = questions::Travel {
+            offered: &unvisited,
+            // Going back twice in a row is an oscillation rather than progress
+            // for a run with one goal, so the undo is offered for a move and
+            // not for itself.
+            can_return: moving_still_allowed
+                && run.navigations > 0
+                && run
+                    .trail
+                    .last()
+                    .is_none_or(|step| step.operation != Operation::GoBack),
+        };
+        let operations = questions::available(&space, &view, run.fallback_needed, travel);
+        let built = questions::build(&goal, &space, &operations, travel);
         let state = questions::state(&view, &space, &run.recent);
 
         run.decisions += 1;
@@ -366,6 +437,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 &view,
                 offered,
                 omitted,
+                &opened,
             );
         }
         let response = match ask_with_retries(oracle, &state, &built, ask_budget).await {
@@ -378,6 +450,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
             }
         };
@@ -386,7 +459,15 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         // Checked again after the answer: the request may have taken the rest of
         // the run's time, and acting past the limit is what the limit forbids.
         if driver.stopped() {
-            return end(&mut run, &started, Status::Stopped, &view, offered, omitted);
+            return end(
+                &mut run,
+                &started,
+                Status::Stopped,
+                &view,
+                offered,
+                omitted,
+                &opened,
+            );
         }
         if (run.spent + started.elapsed()).as_secs() >= run.budget.max_seconds {
             return end(
@@ -396,6 +477,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 &view,
                 offered,
                 omitted,
+                &opened,
             );
         }
 
@@ -409,9 +491,34 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
             }
         };
+
+        // An operation this step did not offer cannot have been read off the
+        // question, so it is not acted on. Until navigation existed every
+        // operation was offered on every step and this could not arise; now a
+        // destination list that has been used up, or a run that has not moved
+        // yet, makes it reachable, and obeying it would reverse off the page
+        // the caller handed over.
+        if !operations.contains(&decision.operation) {
+            run.declined += 1;
+            if run.declined >= STALL_LIMIT {
+                let outcome = end(
+                    &mut run,
+                    &started,
+                    Status::Stalled(Stuck::NotConfident),
+                    &view,
+                    offered,
+                    omitted,
+                    &opened,
+                );
+                return stuck(&space, outcome);
+            }
+            view = refresh(driver, &view).await;
+            continue;
+        }
 
         // A terminal answer is checked against the page before it is accepted.
         // The model looked at a page; if that page has moved since, its verdict
@@ -435,6 +542,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                 }
             };
@@ -448,6 +556,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
                 outcome.terminal_confidence = Some(decision.operation_confidence);
                 return outcome;
@@ -460,6 +569,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
                 outcome.terminal_confidence = Some(decision.operation_confidence);
                 // Measured against the real model: when nothing on the page can
@@ -495,6 +605,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
             }
             driver.settle().await;
@@ -509,6 +620,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         let chosen_guard = decision
             .target
             .as_deref()
+            .filter(|_| decision.operation.needs_control())
             .and_then(|reference| space.candidate(reference).map(|candidate| candidate.guard));
         let supplied = decision
             .target
@@ -537,6 +649,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                 };
                 let asking = if run.answer_went_stale(&reference, chosen_guard) {
@@ -571,6 +684,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                 }
                 run.pending = Some(pending.clone());
@@ -581,6 +695,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
                 // What it was choosing between, so a caller told the wrong
                 // field was picked can see the alternatives it had.
@@ -595,6 +710,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
                 // Named so the caller can see what the decision was choosing
                 // between, which is the difference between "try scrolling" and
@@ -614,6 +730,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                 }
                 run.declined += 1;
@@ -625,6 +742,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                     return stuck(&space, outcome);
                 }
@@ -642,7 +760,11 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         // Narrow on purpose: a live page changes constantly in places that have
         // nothing to do with the chosen control, and refusing to act on any of
         // that would never finish anything.
-        if let Some(reference) = decision.target.as_deref() {
+        if let Some(reference) = decision
+            .target
+            .as_deref()
+            .filter(|_| decision.operation.needs_control())
+        {
             let guard = space.candidate(reference).map(|candidate| candidate.guard);
             let settled = match driver.observe().await {
                 Ok(settled) => settled,
@@ -654,6 +776,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                 }
             };
@@ -669,11 +792,112 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                     return stuck(&space, outcome);
                 }
                 continue;
             }
+        }
+
+        if matches!(decision.operation, Operation::GoTo | Operation::GoBack) {
+            let journey = match decision.operation {
+                Operation::GoBack => Journey::Back,
+                _ => {
+                    let Some(destination) = decision
+                        .target
+                        .as_deref()
+                        .and_then(|key| run.destination(key))
+                        .cloned()
+                    else {
+                        // The model returned a key for a destination the caller
+                        // did not author, which is not a page anyone can open.
+                        return end(
+                            &mut run,
+                            &started,
+                            Status::Failed(
+                                "it chose a destination that was not on the list".to_string(),
+                            ),
+                            &view,
+                            offered,
+                            omitted,
+                            &opened,
+                        );
+                    };
+                    Journey::To(destination)
+                }
+            };
+            let before = view.fingerprint;
+            let arrival = match driver.travel(&journey).await {
+                Ok(arrival) => arrival,
+                // Moving is not retried. A navigation whose completion is
+                // unknown must not be attempted twice: the page may already
+                // have changed under the first one.
+                Err(ActError::Stale(reason) | ActError::Fatal(reason)) => {
+                    return end(
+                        &mut run,
+                        &started,
+                        Status::Failed(reason),
+                        &view,
+                        offered,
+                        omitted,
+                        &opened,
+                    );
+                }
+            };
+            run.navigations += 1;
+            let label = match &journey {
+                Journey::To(destination) => {
+                    run.travelled.push(destination.label.clone());
+                    destination.label.clone()
+                }
+                Journey::Back => "back".to_string(),
+            };
+            if let Some(page) = arrival.opened {
+                opened.push(OpenedPage {
+                    page,
+                    url: arrival.url.clone(),
+                });
+            }
+            driver.settle().await;
+            view = refresh(driver, &view).await;
+            // A new tab leaves this page exactly as it was, so this reports
+            // false, and the stall counter is what stops a run that keeps
+            // opening tabs instead of advancing the goal it was given.
+            let changed = !view.is_fresh_for(before);
+            run.recent
+                .push(format!("GO_TO {label}: {}", moved_text(changed)));
+            if run.recent.len() > 5 {
+                run.recent.remove(0);
+            }
+            run.last_acted = None;
+            run.trail.push(Step {
+                operation: decision.operation,
+                target: Some(label),
+                value: None,
+                confidence: decision.confidence(),
+                page_changed: changed,
+                url_after: view.url.clone(),
+                input_tokens: decision.input_tokens,
+            });
+            if changed {
+                run.unchanged = 0;
+            } else {
+                run.unchanged += 1;
+                if run.unchanged >= STALL_LIMIT {
+                    let outcome = end(
+                        &mut run,
+                        &started,
+                        Status::Stalled(Stuck::NothingChanged),
+                        &view,
+                        offered,
+                        omitted,
+                        &opened,
+                    );
+                    return stuck(&space, outcome);
+                }
+            }
+            continue;
         }
 
         let before = view.fingerprint;
@@ -692,6 +916,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &view,
                         offered,
                         omitted,
+                        &opened,
                     );
                     return stuck(&space, outcome);
                 }
@@ -706,6 +931,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
             }
         };
@@ -748,6 +974,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     &view,
                     offered,
                     omitted,
+                    &opened,
                 );
                 return stuck(&space, outcome);
             }
@@ -768,6 +995,7 @@ fn end(
     view: &PageView,
     offered: usize,
     omitted: usize,
+    opened: &[OpenedPage],
 ) -> Outcome {
     run.spent += started.elapsed();
     Outcome {
@@ -785,6 +1013,7 @@ fn end(
         url_after: view.url.clone(),
         title: view.title.clone(),
         input_tokens: run.input_tokens,
+        opened: opened.to_vec(),
         resume: None,
     }
 }
@@ -884,6 +1113,16 @@ fn control_label(space: &ActionSpace, reference: Option<&str>) -> String {
         .to_string()
 }
 
+/// The one phrase both the act path and the move path use to say what a step
+/// did, so the recent-actions list never describes the same outcome two ways.
+fn moved_text(changed: bool) -> &'static str {
+    if changed {
+        "the page changed"
+    } else {
+        "nothing changed"
+    }
+}
+
 fn describe(decision: &Decision, target_name: &Option<String>, changed: bool) -> String {
     let what = target_name
         .clone()
@@ -897,10 +1136,6 @@ fn describe(decision: &Decision, target_name: &Option<String>, changed: bool) ->
     format!(
         "{} {what}{value}: {}",
         decision.operation.as_str(),
-        if changed {
-            "the page changed"
-        } else {
-            "nothing changed"
-        }
+        moved_text(changed)
     )
 }

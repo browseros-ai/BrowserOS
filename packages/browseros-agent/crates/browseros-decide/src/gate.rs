@@ -7,8 +7,8 @@
 use crate::client::Response;
 use crate::operations::{Consequence, Operation};
 use crate::questions::{
-    CHECK_TARGET, CLICK_TARGET, FILL_TARGET, OPERATION, PRESS_KEY, PRESS_TARGET, SELECT_VALUE,
-    UNCHECK_TARGET,
+    CHECK_TARGET, CLICK_TARGET, DESTINATION, FILL_TARGET, OPERATION, PRESS_KEY, PRESS_TARGET,
+    SELECT_VALUE, UNCHECK_TARGET,
 };
 use crate::space::{ActionSpace, NONE_OF_THESE};
 
@@ -157,6 +157,9 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
 
     let target_id = match operation {
         Operation::Click => Some(CLICK_TARGET),
+        // The destination key, not a control reference. The loop resolves it
+        // against what the caller authored.
+        Operation::GoTo => Some(DESTINATION),
         Operation::Check => Some(CHECK_TARGET),
         Operation::Uncheck => Some(UNCHECK_TARGET),
         Operation::Press => Some(PRESS_TARGET),
