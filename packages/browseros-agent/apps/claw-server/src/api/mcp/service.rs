@@ -43,7 +43,7 @@ use std::{
 };
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tracing::warn;
+use tracing::{debug, warn};
 use ulid::Ulid;
 use uuid::Uuid;
 
@@ -1179,6 +1179,18 @@ impl ServerHandler for ClawMcpService {
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
             && session_id_from_extensions(&context.extensions).is_none();
+        // What a peer actually negotiated and declared, which decides whether any
+        // 2026-07-28-only path is worth taking for it. Read from the request rather
+        // than assumed, because the two are not the same: a client can negotiate the
+        // newer revision and still declare nothing.
+        debug!(
+            tool = %request.name,
+            protocol = protocol_version_from_extensions(&context.extensions)
+                .map_or_else(|| "unknown".to_string(), |version| version.to_string()),
+            transport_session = session_id_from_extensions(&context.extensions).is_some(),
+            capabilities = %declared_client_capabilities(&context),
+            "mcp peer"
+        );
         let (started, session_handle) = if modern {
             // rmcp extracts wire _meta into RequestContext during decoding;
             // typed request.meta is empty even when the client supplied it.
@@ -1888,6 +1900,48 @@ fn attach_session_handle(
     })
 }
 
+/// The client capabilities a modern peer declared on this request, as a short word
+/// list for a log line.
+///
+/// Per-request rather than per-connection: 2026-07-28 carries them in
+/// `_meta.io.modelcontextprotocol/clientCapabilities` on every request, so there is
+/// no handshake to read them from and no reason to cache them.
+fn declared_client_capabilities(context: &RequestContext<RoleServer>) -> String {
+    capability_words(context.meta.client_capabilities().as_ref())
+}
+
+/// The pure half of the above, so the wording can be tested from the wire shape
+/// a client actually sends.
+fn capability_words(capabilities: Option<&rmcp::model::ClientCapabilities>) -> String {
+    let Some(capabilities) = capabilities else {
+        return "none".to_string();
+    };
+    let mut named = Vec::new();
+    if let Some(elicitation) = &capabilities.elicitation {
+        if elicitation.form.is_some() {
+            named.push("elicitation.form");
+        }
+        if elicitation.url.is_some() {
+            named.push("elicitation.url");
+        }
+        // The spec treats an empty elicitation object as form mode, so a peer that
+        // declares the capability and names no mode still supports one.
+        if elicitation.form.is_none() && elicitation.url.is_none() {
+            named.push("elicitation.form");
+        }
+    }
+    if capabilities.sampling.is_some() {
+        named.push("sampling");
+    }
+    if capabilities.roots.is_some() {
+        named.push("roots");
+    }
+    if named.is_empty() {
+        return "declared, none usable".to_string();
+    }
+    named.join(",")
+}
+
 fn session_id_from_extensions(extensions: &rmcp::model::Extensions) -> Option<SessionId> {
     extensions
         .get::<axum::http::request::Parts>()
@@ -1927,6 +1981,29 @@ mod tests {
     use crate::identity::ConversationIdentity;
     use rmcp::handler::server::ServerHandler;
     use serde_json::json;
+
+    /// Read from the wire shape the specification prints, not from a builder, so
+    /// the thing under test is what a client actually sends.
+    #[test]
+    fn capability_words_name_what_a_peer_declared() {
+        let read = |value: Value| -> String {
+            let capabilities: rmcp::model::ClientCapabilities =
+                serde_json::from_value(value).expect("client capabilities");
+            super::capability_words(Some(&capabilities))
+        };
+
+        assert_eq!(super::capability_words(None), "none");
+        assert_eq!(
+            read(json!({ "elicitation": { "form": {}, "url": {} } })),
+            "elicitation.form,elicitation.url"
+        );
+        // The specification is explicit that an empty capabilities object is
+        // equivalent to declaring form mode only, so a peer that names no mode
+        // still supports one and must not be read as supporting nothing.
+        assert_eq!(read(json!({ "elicitation": {} })), "elicitation.form");
+        assert_eq!(read(json!({ "sampling": {} })), "sampling");
+        assert_eq!(read(json!({})), "declared, none usable");
+    }
 
     #[test]
     fn supported_protocol_versions_includes_modern_and_legacy() {
