@@ -320,12 +320,8 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         if driver.stopped() {
             return end(&mut run, &started, Status::Stopped, &view, offered, omitted);
         }
-        if run.trail.len() >= run.budget.max_steps as usize
-            || (run.spent + started.elapsed()).as_secs() >= run.budget.max_seconds
-        {
-            // Resumable on purpose. The caller is already told to call pursue
-            // again to continue, and until the run became a value that sentence
-            // started the whole thing over.
+        let out_of_steps = run.trail.len() >= run.budget.max_steps as usize;
+        if out_of_steps || (run.spent + started.elapsed()).as_secs() >= run.budget.max_seconds {
             let outcome = end(
                 &mut run,
                 &started,
@@ -334,7 +330,16 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 offered,
                 omitted,
             );
-            return park(run, outcome);
+            // A run out of steps can be continued, because the caller can raise
+            // the step limit on the next call. A run out of time cannot: the
+            // time it has spent travels with it and there is no argument that
+            // gives it more, so handing it back would invite a call that ends
+            // the moment it starts.
+            return if out_of_steps {
+                park(run, outcome)
+            } else {
+                outcome
+            };
         }
 
         let space = ActionSpace::build(&view, &goal, run.last_acted.as_deref());
@@ -353,7 +358,8 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             .saturating_sub(run.spent + started.elapsed());
         let ask_budget = run_left.min(crate::client::DEFAULT_TIMEOUT);
         if ask_budget.is_zero() {
-            let outcome = end(
+            // Out of time, not out of steps, so not resumable: see above.
+            return end(
                 &mut run,
                 &started,
                 Status::OutOfBudget,
@@ -361,7 +367,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 offered,
                 omitted,
             );
-            return park(run, outcome);
         }
         let response = match ask_with_retries(oracle, &state, &built, ask_budget).await {
             Ok(response) => response,
@@ -384,7 +389,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             return end(&mut run, &started, Status::Stopped, &view, offered, omitted);
         }
         if (run.spent + started.elapsed()).as_secs() >= run.budget.max_seconds {
-            let outcome = end(
+            return end(
                 &mut run,
                 &started,
                 Status::OutOfBudget,
@@ -392,7 +397,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 offered,
                 omitted,
             );
-            return park(run, outcome);
         }
 
         let mut decision = match gate::read(&response) {

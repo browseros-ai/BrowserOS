@@ -1065,6 +1065,11 @@ async fn a_resumed_run_spends_the_time_the_first_call_used() {
         0,
         "a run that has already spent its time must not act once more per call"
     );
+    assert!(
+        outcome.resume.is_none(),
+        "and it is not offered back, because no argument gives a run more time: \
+         handing it back would invite a call that ends the moment it starts"
+    );
 }
 
 /// What the caller is judging is the whole pursuit, so the url it started on is
