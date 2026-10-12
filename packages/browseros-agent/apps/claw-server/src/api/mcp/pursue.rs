@@ -421,8 +421,12 @@ pub fn render(
              {confidence:.2}, and it does not generate text.{}\nAnswer with one call:\n  \
              pursue(page: {page}, goal: <the same goal>{}, provide: {{ \"{reference}\": \
              \"<the text>\" }})\nThat carries this run on with its {} action(s) and its \
-             budget intact, rather than starting again. If {control} is not the field you \
-             meant, start a fresh run instead: the list below is what it was choosing between.",
+             budget intact, rather than starting again, and it re-reads the page and checks \
+             {reference} has not changed before typing, discarding your answer rather than \
+             typing it into something else. If you know values this run may need, pass them \
+             as `values` next time and it will not stop to ask. If {control} is not the \
+             field you meant, start a fresh run instead: the list below is what it was \
+             choosing between.",
             match asking {
                 Asking::FirstTime => String::new(),
                 Asking::FieldChanged =>
@@ -698,6 +702,14 @@ mod tests {
         assert!(text.contains("continue: \"ctn-01J\""), "{text}");
         assert!(text.contains("provide: { \"e18\": "), "{text}");
         assert!(text.contains("start a fresh run"), "{text}");
+        // The true reason answering beats typing it yourself, and the only
+        // claim here that the code actually backs: the run re-reads the page
+        // and compares the control's guard before it types.
+        assert!(text.contains("has not changed before typing"), "{text}");
+        assert!(
+            text.contains("pass them as `values`"),
+            "a caller told once never has to be asked again: {text}"
+        );
 
         assert_eq!(structured["status"], "needs_value");
         assert_eq!(structured["continueWith"], "ctn-01J");
