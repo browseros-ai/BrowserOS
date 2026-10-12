@@ -287,6 +287,46 @@ mod tests {
         }
     }
 
+    /// The handle working is not the point. What the caller is buying is the run
+    /// coming back whole, because the whole reason this exists is that the
+    /// alternative re-derives everything from nothing.
+    #[tokio::test]
+    async fn the_run_comes_back_whole() -> anyhow::Result<()> {
+        let mut parked = run();
+        parked.trail.push(browseros_decide::Step {
+            operation: browseros_decide::Operation::Click,
+            target: Some("e4".to_string()),
+            value: None,
+            confidence: 0.93,
+            page_changed: true,
+            url_after: "https://example.com/?sort=price".to_string(),
+            input_tokens: 2100,
+        });
+        parked.decisions = 2;
+        parked.input_tokens = 4200;
+        parked.spent = Duration::from_secs(9);
+        parked.url_before = Some("https://example.com/".to_string());
+        parked.navigations = 1;
+        parked.travelled = vec!["page 2 of the results".to_string()];
+        parked.supply("e18", "Bengaluru");
+        let expected = parked.clone();
+
+        let store = ContinuationStore::default();
+        let handle = store.park(&session("a"), 3, parked).await;
+        let back = store
+            .redeem(&session("a"), 3, &handle)
+            .await
+            .map_err(|refused| anyhow::anyhow!("refused: {refused:?}"))?;
+
+        assert_eq!(back.page, 3);
+        assert_eq!(
+            back.run, expected,
+            "the trail, the counters, the time already spent and the answers all \
+             have to survive, or the resumed run pays for them again"
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn a_session_that_ended_leaves_nothing_behind() {
         let store = ContinuationStore::default();
