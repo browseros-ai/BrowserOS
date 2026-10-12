@@ -17,6 +17,7 @@ use crate::client::{Jev, JevError, MAX_RETRIES, Question};
 use crate::gate::{self, Decision, Verdict};
 use crate::operations::Operation;
 use crate::questions;
+use crate::run::Run;
 use crate::space::ActionSpace;
 use crate::view::PageView;
 use std::time::Duration;
@@ -212,6 +213,13 @@ pub struct Outcome {
     pub url_after: String,
     pub title: String,
     pub input_tokens: u64,
+    /// The run itself, when this ending can be continued.
+    ///
+    /// Set on the endings where the caller can answer something and carry on,
+    /// and on nothing else: a stall, a block and a failure are judgements
+    /// rather than missing values, so handing the run back for those would
+    /// invite a caller to retry something that already decided it was done.
+    pub resume: Option<Run>,
 }
 
 impl Outcome {
@@ -231,7 +239,7 @@ impl Outcome {
 
 /// Limits on one run, which come from the user's settings rather than from
 /// constants here.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Budget {
     pub max_steps: u32,
     pub max_seconds: u64,
@@ -244,128 +252,146 @@ pub async fn pursue<O: Oracle, D: Driver>(
     goal: &str,
     budget: Budget,
 ) -> Outcome {
+    advance(oracle, driver, Run::new(goal, budget)).await
+}
+
+/// Advances a run, whether it is new or resumed from an earlier call.
+///
+/// Code owns the control flow here, as it did when this was `pursue` with every
+/// counter in a local. The only change is where the state lives: in the run, so
+/// an ending can be continued instead of only reported.
+pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run) -> Outcome {
     let started = std::time::Instant::now();
-    let mut trail = Vec::new();
-    let mut recent: Vec<String> = Vec::new();
-    let mut decisions = 0;
-    let mut input_tokens = 0;
-    // A counter each, because they are different situations with different
-    // answers: three refusals to act is not three actions that did nothing, and
-    // one shared budget meant whichever came first spent the other's.
-    let mut unchanged = 0;
-    let mut declined = 0;
-    let mut moved = 0;
-    let mut refused = 0;
-    let mut last_acted: Option<String> = None;
-    // Set once a control has refused a click, so the keyboard fallback is
-    // offered when it is actually needed rather than on every step.
-    let mut fallback_needed = false;
-    let mut waits = 0;
+    // Borrowed from the run once, so the loop can hold `&mut run` without
+    // fighting a live borrow of a field it never writes.
+    let goal = run.goal.clone();
     // What the last decision could see. Every ending reports it, because a run
     // that stalled after choosing from a capped list is exactly as worth
     // explaining as one that gave up.
     //
-    // Atomics rather than a plain pair: the closure below reads them while the
-    // loop writes them, and a Cell would make this future not Send.
-    let offered_seen = std::sync::atomic::AtomicUsize::new(0);
-    let omitted_seen = std::sync::atomic::AtomicUsize::new(0);
+    // Plain counters now: these were atomics only because the closure that
+    // built an outcome read them while the loop wrote them, and with the state
+    // in a struct there is no such closure.
+    let mut offered = 0usize;
+    let mut omitted = 0usize;
 
     let first = match driver.observe().await {
         Ok(view) => view,
         Err(error) => {
+            run.spent += started.elapsed();
             return Outcome {
                 status: Status::Failed(error),
                 offered: 0,
                 omitted: 0,
                 offered_controls: Vec::new(),
                 terminal_confidence: None,
-                decisions,
-                trail,
-                url_before: String::new(),
+                decisions: run.decisions,
+                trail: run.trail.clone(),
+                url_before: run.started_at(),
                 url_after: String::new(),
                 title: String::new(),
-                input_tokens,
+                input_tokens: run.input_tokens,
+                resume: None,
             };
         }
     };
-    let url_before = first.url.clone();
+    // Only on the first call. A resumed run reports the url it originally
+    // started on rather than the one it was resumed from, because the caller is
+    // judging the whole pursuit against its goal.
+    if run.url_before.is_none() {
+        run.url_before = Some(first.url.clone());
+    }
     let mut view = first;
-
-    let finish =
-        |status: Status, trail: Vec<Step>, view: &PageView, decisions: u32, input_tokens: u64| {
-            Outcome {
-                status,
-                offered: offered_seen.load(std::sync::atomic::Ordering::Relaxed),
-                omitted: omitted_seen.load(std::sync::atomic::Ordering::Relaxed),
-                offered_controls: Vec::new(),
-                terminal_confidence: None,
-                decisions,
-                trail,
-                url_before: url_before.clone(),
-                url_after: view.url.clone(),
-                title: view.title.clone(),
-                input_tokens,
-            }
-        };
 
     loop {
         if driver.stopped() {
-            return finish(Status::Stopped, trail, &view, decisions, input_tokens);
+            return end(&mut run, &started, Status::Stopped, &view, offered, omitted);
         }
-        if trail.len() >= budget.max_steps as usize
-            || started.elapsed().as_secs() >= budget.max_seconds
+        if run.trail.len() >= run.budget.max_steps as usize
+            || (run.spent + started.elapsed()).as_secs() >= run.budget.max_seconds
         {
-            return finish(Status::OutOfBudget, trail, &view, decisions, input_tokens);
+            // Resumable on purpose. The caller is already told to call pursue
+            // again to continue, and until the run became a value that sentence
+            // started the whole thing over.
+            let outcome = end(
+                &mut run,
+                &started,
+                Status::OutOfBudget,
+                &view,
+                offered,
+                omitted,
+            );
+            return park(run, outcome);
         }
 
-        let space = ActionSpace::build(&view, goal, last_acted.as_deref());
-        offered_seen.store(space.offered.len(), std::sync::atomic::Ordering::Relaxed);
-        omitted_seen.store(space.omitted, std::sync::atomic::Ordering::Relaxed);
-        let operations = questions::available(&space, &view, fallback_needed);
-        let built = questions::build(goal, &space, &operations);
-        let state = questions::state(&view, &space, &recent);
+        let space = ActionSpace::build(&view, &goal, run.last_acted.as_deref());
+        offered = space.offered.len();
+        omitted = space.omitted;
+        let operations = questions::available(&space, &view, run.fallback_needed);
+        let built = questions::build(&goal, &space, &operations);
+        let state = questions::state(&view, &space, &run.recent);
 
-        decisions += 1;
+        run.decisions += 1;
         // The smaller of the published default and what the run has left, so a
-        // slow provider cannot carry a run past the user's own limit.
-        let elapsed = started.elapsed();
-        let run_left = Duration::from_secs(budget.max_seconds).saturating_sub(elapsed);
+        // slow provider cannot carry a run past the user's own limit. What the
+        // run has left counts every call that has advanced it, not just this
+        // one.
+        let run_left = Duration::from_secs(run.budget.max_seconds)
+            .saturating_sub(run.spent + started.elapsed());
         let ask_budget = run_left.min(crate::client::DEFAULT_TIMEOUT);
         if ask_budget.is_zero() {
-            return finish(Status::OutOfBudget, trail, &view, decisions, input_tokens);
+            let outcome = end(
+                &mut run,
+                &started,
+                Status::OutOfBudget,
+                &view,
+                offered,
+                omitted,
+            );
+            return park(run, outcome);
         }
         let response = match ask_with_retries(oracle, &state, &built, ask_budget).await {
             Ok(response) => response,
             Err(error) => {
-                return finish(
+                return end(
+                    &mut run,
+                    &started,
                     Status::Failed(error.to_string()),
-                    trail,
                     &view,
-                    decisions,
-                    input_tokens,
+                    offered,
+                    omitted,
                 );
             }
         };
-        input_tokens += response.usage.input_tokens;
+        run.input_tokens += response.usage.input_tokens;
 
         // Checked again after the answer: the request may have taken the rest of
         // the run's time, and acting past the limit is what the limit forbids.
         if driver.stopped() {
-            return finish(Status::Stopped, trail, &view, decisions, input_tokens);
+            return end(&mut run, &started, Status::Stopped, &view, offered, omitted);
         }
-        if started.elapsed().as_secs() >= budget.max_seconds {
-            return finish(Status::OutOfBudget, trail, &view, decisions, input_tokens);
+        if (run.spent + started.elapsed()).as_secs() >= run.budget.max_seconds {
+            let outcome = end(
+                &mut run,
+                &started,
+                Status::OutOfBudget,
+                &view,
+                offered,
+                omitted,
+            );
+            return park(run, outcome);
         }
 
         let decision = match gate::read(&response) {
             Ok(decision) => decision,
             Err(error) => {
-                return finish(
+                return end(
+                    &mut run,
+                    &started,
                     Status::Failed(error.to_string()),
-                    trail,
                     &view,
-                    decisions,
-                    input_tokens,
+                    offered,
+                    omitted,
                 );
             }
         };
@@ -381,33 +407,42 @@ pub async fn pursue<O: Oracle, D: Driver>(
             let settled = match driver.observe().await {
                 Ok(settled) => settled,
                 Err(error) => {
-                    return finish(
+                    return end(
+                        &mut run,
+                        &started,
                         Status::NeedsInput(format!(
                             "the run answered {} but the page could not be read back to check it: \
                              {error}. Nothing is confirmed; look at the page yourself",
                             decision.operation.as_str()
                         )),
-                        trail,
                         &view,
-                        decisions,
-                        input_tokens,
+                        offered,
+                        omitted,
                     );
                 }
             };
             let fresh = settled.is_fresh_for(view.fingerprint);
             view = settled;
             if decision.operation == Operation::Done && fresh {
-                let mut outcome = finish(Status::Satisfied, trail, &view, decisions, input_tokens);
+                let mut outcome = end(
+                    &mut run,
+                    &started,
+                    Status::Satisfied,
+                    &view,
+                    offered,
+                    omitted,
+                );
                 outcome.terminal_confidence = Some(decision.operation_confidence);
                 return outcome;
             }
             if decision.operation == Operation::Blocked {
-                let mut outcome = finish(
+                let mut outcome = end(
+                    &mut run,
+                    &started,
                     Status::Blocked("no offered operation could advance the goal".to_string()),
-                    trail,
                     &view,
-                    decisions,
-                    input_tokens,
+                    offered,
+                    omitted,
                 );
                 outcome.terminal_confidence = Some(decision.operation_confidence);
                 // Measured against the real model: when nothing on the page can
@@ -434,14 +469,15 @@ pub async fn pursue<O: Oracle, D: Driver>(
         // wait as an action, so a model that keeps waiting runs out of
         // decisions rather than appearing to make progress.
         if decision.operation == Operation::Wait {
-            waits += 1;
-            if waits > WAIT_LIMIT {
-                return finish(
+            run.waits += 1;
+            if run.waits > WAIT_LIMIT {
+                return end(
+                    &mut run,
+                    &started,
                     Status::Stalled(Stuck::OnlyWaiting),
-                    trail,
                     &view,
-                    decisions,
-                    input_tokens,
+                    offered,
+                    omitted,
                 );
             }
             driver.settle().await;
@@ -452,12 +488,13 @@ pub async fn pursue<O: Oracle, D: Driver>(
         match gate::verdict(&decision, target_name.as_deref()) {
             Verdict::Execute => {}
             Verdict::HandBack(reason) => {
-                let mut outcome = finish(
+                let mut outcome = end(
+                    &mut run,
+                    &started,
                     Status::NeedsInput(reason),
-                    trail,
                     &view,
-                    decisions,
-                    input_tokens,
+                    offered,
+                    omitted,
                 );
                 // Named so the caller can see what the decision was choosing
                 // between, which is the difference between "try scrolling" and
@@ -470,26 +507,26 @@ pub async fn pursue<O: Oracle, D: Driver>(
             Verdict::Explore(reason) => {
                 // Exploring is only progress if there is somewhere to look.
                 if space.omitted == 0 && view.text.is_empty() {
-                    return finish(
+                    return end(
+                        &mut run,
+                        &started,
                         Status::Blocked(reason),
-                        trail,
                         &view,
-                        decisions,
-                        input_tokens,
+                        offered,
+                        omitted,
                     );
                 }
-                declined += 1;
-                if declined >= STALL_LIMIT {
-                    return stuck(
-                        &space,
-                        finish(
-                            Status::Stalled(Stuck::NotConfident),
-                            trail,
-                            &view,
-                            decisions,
-                            input_tokens,
-                        ),
+                run.declined += 1;
+                if run.declined >= STALL_LIMIT {
+                    let outcome = end(
+                        &mut run,
+                        &started,
+                        Status::Stalled(Stuck::NotConfident),
+                        &view,
+                        offered,
+                        omitted,
                     );
+                    return stuck(&space, outcome);
                 }
                 view = refresh(driver, &view).await;
                 continue;
@@ -510,24 +547,30 @@ pub async fn pursue<O: Oracle, D: Driver>(
             let settled = match driver.observe().await {
                 Ok(settled) => settled,
                 Err(error) => {
-                    return finish(Status::Failed(error), trail, &view, decisions, input_tokens);
+                    return end(
+                        &mut run,
+                        &started,
+                        Status::Failed(error),
+                        &view,
+                        offered,
+                        omitted,
+                    );
                 }
             };
             let still_there = guard.is_some_and(|guard| settled.control_is_fresh(reference, guard));
             view = settled;
             if !still_there {
-                moved += 1;
-                if moved >= STALL_LIMIT {
-                    return stuck(
-                        &space,
-                        finish(
-                            Status::Stalled(Stuck::ControlKeptMoving),
-                            trail,
-                            &view,
-                            decisions,
-                            input_tokens,
-                        ),
+                run.moved += 1;
+                if run.moved >= STALL_LIMIT {
+                    let outcome = end(
+                        &mut run,
+                        &started,
+                        Status::Stalled(Stuck::ControlKeptMoving),
+                        &view,
+                        offered,
+                        omitted,
                     );
+                    return stuck(&space, outcome);
                 }
                 continue;
             }
@@ -538,31 +581,31 @@ pub async fn pursue<O: Oracle, D: Driver>(
             Ok(()) => {}
             Err(ActError::Stale(reason)) => {
                 if reason.contains("covered") {
-                    fallback_needed = true;
+                    run.fallback_needed = true;
                 }
-                refused += 1;
-                if refused > STALE_RETRIES {
-                    return stuck(
-                        &space,
-                        finish(
-                            Status::Stalled(Stuck::BrowserKeptFailing),
-                            trail,
-                            &view,
-                            decisions,
-                            input_tokens,
-                        ),
+                run.refused += 1;
+                if run.refused > STALE_RETRIES {
+                    let outcome = end(
+                        &mut run,
+                        &started,
+                        Status::Stalled(Stuck::BrowserKeptFailing),
+                        &view,
+                        offered,
+                        omitted,
                     );
+                    return stuck(&space, outcome);
                 }
                 view = refresh(driver, &view).await;
                 continue;
             }
             Err(ActError::Fatal(reason)) => {
-                return finish(
+                return end(
+                    &mut run,
+                    &started,
                     Status::Failed(reason),
-                    trail,
                     &view,
-                    decisions,
-                    input_tokens,
+                    offered,
+                    omitted,
                 );
             }
         };
@@ -576,12 +619,12 @@ pub async fn pursue<O: Oracle, D: Driver>(
         // without an output schema.
         let changed = !view.is_fresh_for(before);
 
-        recent.push(describe(&decision, &target_name, changed));
-        if recent.len() > 5 {
-            recent.remove(0);
+        run.recent.push(describe(&decision, &target_name, changed));
+        if run.recent.len() > 5 {
+            run.recent.remove(0);
         }
-        last_acted = decision.target.clone();
-        trail.push(Step {
+        run.last_acted = decision.target.clone();
+        run.trail.push(Step {
             operation: decision.operation,
             target: decision.target.clone(),
             value: decision.value.clone(),
@@ -594,23 +637,62 @@ pub async fn pursue<O: Oracle, D: Driver>(
         // Only a step that changed nothing counts toward the stall. A wait is
         // not an action here, so it cannot be one of the three.
         if changed {
-            unchanged = 0;
+            run.unchanged = 0;
         } else {
-            unchanged += 1;
-            if unchanged >= STALL_LIMIT {
-                return stuck(
-                    &space,
-                    finish(
-                        Status::Stalled(Stuck::NothingChanged),
-                        trail,
-                        &view,
-                        decisions,
-                        input_tokens,
-                    ),
+            run.unchanged += 1;
+            if run.unchanged >= STALL_LIMIT {
+                let outcome = end(
+                    &mut run,
+                    &started,
+                    Status::Stalled(Stuck::NothingChanged),
+                    &view,
+                    offered,
+                    omitted,
                 );
+                return stuck(&space, outcome);
             }
         }
     }
+}
+
+/// Builds the outcome for an ending, and records the time the run has now
+/// spent in total.
+///
+/// Every exit goes through here, so no path can forget to add its own elapsed
+/// time: a run that parked without recording it would hand the caller a fresh
+/// time allowance on every answer.
+fn end(
+    run: &mut Run,
+    started: &std::time::Instant,
+    status: Status,
+    view: &PageView,
+    offered: usize,
+    omitted: usize,
+) -> Outcome {
+    run.spent += started.elapsed();
+    Outcome {
+        status,
+        offered,
+        omitted,
+        offered_controls: Vec::new(),
+        terminal_confidence: None,
+        decisions: run.decisions,
+        // Cloned rather than moved, because the run outlives this outcome when
+        // the ending is resumable and both sides need the trail: the caller to
+        // judge what happened, the run to continue it.
+        trail: run.trail.clone(),
+        url_before: run.started_at(),
+        url_after: view.url.clone(),
+        title: view.title.clone(),
+        input_tokens: run.input_tokens,
+        resume: None,
+    }
+}
+
+/// Attaches the run itself, so the caller can continue it.
+fn park(run: Run, mut outcome: Outcome) -> Outcome {
+    outcome.resume = Some(run);
+    outcome
 }
 
 /// Retries only what retrying can fix, inside a budget.

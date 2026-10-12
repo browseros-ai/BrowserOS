@@ -11,8 +11,9 @@ use std::sync::Mutex;
 
 use browseros_decide::client::{Answer, JevError, Question, Response, Usage};
 use browseros_decide::gate::Decision;
-use browseros_decide::pursue::{ActError, Budget, Driver, Oracle, Status, Stuck, pursue};
+use browseros_decide::pursue::{ActError, Budget, Driver, Oracle, Status, Stuck, advance, pursue};
 use browseros_decide::questions::{CLICK_TARGET, OPERATION, SELECT_VALUE};
+use browseros_decide::run::Run;
 use browseros_decide::view::{Control, ControlState, PageView};
 
 fn control(reference: &str, role: &str, name: &str) -> Control {
@@ -832,4 +833,142 @@ async fn a_stall_says_what_it_was_choosing_between() {
             .iter()
             .any(|control| control.contains("Apply"))
     );
+}
+
+/// A click that acts once and then runs out of steps, which is the shape every
+/// continuation test below starts from.
+fn one_click() -> Scripted {
+    Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])])
+}
+
+fn one_step() -> Budget {
+    Budget {
+        max_steps: 1,
+        max_seconds: 30,
+    }
+}
+
+/// The caller is told to call pursue again to continue, and until the run
+/// became a value that sentence started the whole thing over: a fresh
+/// observation, a fresh ranking, and a first decision spent re-deciding what
+/// the previous call already knew.
+#[tokio::test]
+async fn running_out_of_budget_hands_the_run_back() {
+    let outcome = pursue(
+        &one_click(),
+        &Fake::with_one_page(vec![Ok(())]),
+        "apply",
+        one_step(),
+    )
+    .await;
+
+    assert_eq!(outcome.status, Status::OutOfBudget);
+    assert_eq!(outcome.actions(), 1);
+    assert!(
+        outcome.resume.is_some(),
+        "an ending the caller is invited to continue has to carry the run"
+    );
+}
+
+/// The endings that are judgements rather than missing values. Handing the run
+/// back for these would invite a caller to retry a decision that has already
+/// been made three times.
+#[tokio::test]
+async fn a_stall_is_not_resumable() {
+    let outcome = pursue(
+        &one_click(),
+        &Fake::with_one_page(vec![Ok(()), Ok(()), Ok(())]),
+        "apply",
+        budget(),
+    )
+    .await;
+
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NothingChanged));
+    assert!(outcome.resume.is_none());
+}
+
+#[tokio::test]
+async fn a_resumed_run_keeps_the_trail_it_already_had() {
+    let first = pursue(
+        &one_click(),
+        &Fake::with_one_page(vec![Ok(())]),
+        "apply",
+        one_step(),
+    )
+    .await;
+    let run = first.resume.expect("out of budget is resumable");
+    assert_eq!(run.trail.len(), 1);
+
+    let second = advance(&one_click(), &Fake::with_one_page(vec![Ok(())]), run).await;
+
+    assert_eq!(
+        second.trail.len(),
+        1,
+        "the resumed run reports the step the first call took, not a fresh start"
+    );
+    assert_eq!(second.decisions, 1, "and the decisions it already paid for");
+}
+
+/// The step budget is the whole run's, not each call's. Without this a caller
+/// could resume forever and never reach a limit.
+#[tokio::test]
+async fn a_resumed_run_counts_the_steps_the_first_call_took() {
+    let first = pursue(
+        &one_click(),
+        &Fake::with_one_page(vec![Ok(())]),
+        "apply",
+        one_step(),
+    )
+    .await;
+    let run = first.resume.expect("resumable");
+
+    let second = advance(&one_click(), &Fake::with_one_page(vec![Ok(())]), run).await;
+
+    assert_eq!(second.status, Status::OutOfBudget);
+    assert_eq!(
+        second.actions(),
+        1,
+        "the one action is the first call's; the resumed call took none"
+    );
+    assert!(second.resume.is_some());
+}
+
+/// The time budget is the whole run's too. An Instant cannot cross a call, so
+/// the run carries the total and each call adds its own elapsed time to it.
+#[tokio::test]
+async fn a_resumed_run_spends_the_time_the_first_call_used() {
+    let mut run = Run::new("apply", budget());
+    run.spent = std::time::Duration::from_secs(budget().max_seconds);
+
+    let outcome = advance(&one_click(), &Fake::with_one_page(vec![Ok(())]), run).await;
+
+    assert_eq!(outcome.status, Status::OutOfBudget);
+    assert_eq!(
+        outcome.actions(),
+        0,
+        "a run that has already spent its time must not act once more per call"
+    );
+}
+
+/// What the caller is judging is the whole pursuit, so the url it started on is
+/// the first call's and not the one a later call happened to resume from.
+#[tokio::test]
+async fn a_resumed_run_reports_the_url_it_originally_started_on() {
+    let first = pursue(
+        &one_click(),
+        &Fake::with_one_page(vec![Ok(())]).moving_once(),
+        "apply",
+        one_step(),
+    )
+    .await;
+    let run = first.resume.expect("resumable");
+    assert_eq!(first.url_before, "https://example.com/?v=1");
+
+    let second = advance(&one_click(), &Fake::new(vec![Ok(())], vec![page(2)]), run).await;
+
+    assert_eq!(second.url_before, "https://example.com/?v=1");
+    assert_eq!(second.url_after, "https://example.com/?v=2");
 }
