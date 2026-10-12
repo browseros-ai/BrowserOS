@@ -990,6 +990,10 @@ impl Drop for ClawMcpService {
             let Some(session_id) = session_id else {
                 return;
             };
+            // A parked run belongs to the session that parked it, and a handle
+            // is refused for any other, so once the session is gone the entry
+            // can never be redeemed again.
+            state.continuations.forget_session(&session_id).await;
             if let Err(error) = state
                 .sessions
                 .remove(&session_id, "closed", Some("transport closed"))

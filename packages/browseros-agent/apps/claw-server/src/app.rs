@@ -57,6 +57,7 @@ pub struct AppState {
     pub visuals: Arc<SessionVisualService>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
+    pub continuations: Arc<crate::services::continuations::ContinuationStore>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
@@ -220,6 +221,7 @@ impl AppState {
             visuals,
             cockpit,
             help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
+            continuations: Arc::new(crate::services::continuations::ContinuationStore::default()),
             extension_updates: Arc::default(),
             shutdown: ShutdownHandle::new(),
             migration,
