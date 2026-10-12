@@ -1727,6 +1727,11 @@ fn pursue_output_schema() -> Value {
                 },
                 "description": "Pages this run opened beside itself, for a destination you marked newTab. The run kept working on the page you gave it, so these are yours to pursue separately."
             },
+            "unlabelledImages": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Images on the page with no accessible name. A run here reads the accessibility tree, so whatever those pictures say is invisible to it. If the goal depends on them, take a screenshot of the page yourself."
+            },
             "navigations": {
                 "type": "integer",
                 "minimum": 0,
@@ -2236,6 +2241,7 @@ mod tests {
                 url_after: String::new(),
                 title: String::new(),
                 input_tokens: 0,
+                unlabelled_images: 0,
                 opened: Vec::new(),
                 resume: None,
             };

@@ -184,6 +184,18 @@ pub struct PageView {
     pub controls: Vec<Control>,
     /// Covers the whole page. A decision is made against one of these.
     pub fingerprint: u64,
+    /// Images on the page carrying no accessible name.
+    ///
+    /// This model reads an accessibility tree, so an image with no name says
+    /// nothing to it at all: whatever that picture conveys is invisible to
+    /// every decision made here. Counted rather than acted on, because the
+    /// caller already has eyes and already owns the screenshot tool for this
+    /// page, and an image attached to every hand-back would spend its context
+    /// whether or not it asked.
+    ///
+    /// Counted over the whole snapshot, before the text budget trims it, since
+    /// the question is what the page contains and not what happened to fit.
+    pub unlabelled_images: usize,
 }
 
 impl PageView {
@@ -243,6 +255,10 @@ impl PageView {
             text: text.into(),
             controls,
             fingerprint: 0,
+            // The typed path has no rendered lines to scan, and the nodes it
+            // does have are only the referenced ones, so this is reported as
+            // unknown rather than guessed at.
+            unlabelled_images: 0,
         };
         view.budget_text(Self::TEXT_BUDGET);
         view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
@@ -334,6 +350,7 @@ impl PageView {
             text: text.to_string(),
             controls,
             fingerprint: 0,
+            unlabelled_images: unlabelled_images(&lines),
         };
         // Budget before fingerprinting, so the hash covers the text that
         // travels to the model and not the whole document.
@@ -362,6 +379,7 @@ impl PageView {
             text: text.to_string(),
             controls,
             fingerprint: 0,
+            unlabelled_images: unlabelled_images(&text.lines().collect::<Vec<_>>()),
         };
         view.budget_text(Self::TEXT_BUDGET);
         view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
@@ -511,6 +529,20 @@ fn reference_in(line: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+/// How many images on the page carry no accessible name.
+///
+/// An image with a name has already told the accessibility tree what it is. One
+/// without is a picture that only a reader with eyes can use, and counting them
+/// is the cheapest honest way to say "some of this page is not in the tree you
+/// are reading".
+fn unlabelled_images(lines: &[&str]) -> usize {
+    lines
+        .iter()
+        .filter(|line| matches!(role_in(line).as_deref(), Some("image" | "img")))
+        .filter(|line| name_in(line).is_none_or(|name| name.trim().is_empty()))
+        .count()
+}
+
 fn role_in(line: &str) -> Option<String> {
     let rest = line.trim_start().strip_prefix("- ")?;
     Some(
@@ -610,6 +642,56 @@ fn nested_options(lines: &[&str], index: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    /// The renderer writes one line per node as `- role "name" [ref=eN]`, and
+    /// omits the quoted name when there is none, so an unnamed image is a line
+    /// with a role and nothing else. Built in that format rather than from a
+    /// live page, because the format is what this reads.
+    #[test]
+    fn images_without_a_name_are_counted() {
+        let text = "- image \"Corsair K70 keyboard\"\n\
+                    - image\n\
+                    - img\n\
+                    - image \"\"\n\
+                    - button \"Apply\" [ref=e1]\n\
+                    - imagemap \"not an image role\"";
+        let view = super::PageView::from_snapshot(
+            "https://example.com",
+            "Example",
+            text,
+            &browseros_core::snapshot::RefMap::default(),
+        );
+
+        assert_eq!(
+            view.unlabelled_images, 3,
+            "the two bare roles and the empty name, not the named one and not \
+             a role that merely starts with the same letters"
+        );
+    }
+
+    /// The question is what the page contains, not what happened to fit inside
+    /// the text that travels to the model.
+    #[test]
+    fn the_image_count_is_taken_before_the_text_budget() {
+        let filler = "- paragraph \"x\"\n".repeat(400);
+        let text = format!("{filler}- image\n- image");
+        let view = super::PageView::from_snapshot(
+            "https://example.com",
+            "Example",
+            &text,
+            &browseros_core::snapshot::RefMap::default(),
+        );
+
+        assert!(
+            view.text.len() <= super::PageView::TEXT_BUDGET,
+            "the text really was trimmed"
+        );
+        assert!(
+            !view.text.contains("- image"),
+            "and the images really did fall outside it"
+        );
+        assert_eq!(view.unlabelled_images, 2);
+    }
+
     use super::*;
     use browseros_core::snapshot::{AxProperty, AxValue};
     use browseros_core::{FrameId, snapshot::refs::MintRef};

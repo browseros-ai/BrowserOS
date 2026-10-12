@@ -264,6 +264,12 @@ pub struct Outcome {
     pub url_after: String,
     pub title: String,
     pub input_tokens: u64,
+    /// Images on the last page observed that carry no accessible name.
+    ///
+    /// Reported rather than acted on. This loop reads an accessibility tree, so
+    /// an unnamed image says nothing to it, and the caller is the party with
+    /// eyes and with the screenshot tool for this page.
+    pub unlabelled_images: usize,
     /// Pages this run opened beside itself, when a destination asked for a new
     /// tab. The run keeps working where it was, so the caller is told what
     /// exists now rather than being moved.
@@ -347,6 +353,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 url_after: String::new(),
                 title: String::new(),
                 input_tokens: run.input_tokens,
+                unlabelled_images: 0,
                 opened: Vec::new(),
                 resume: None,
             };
@@ -1013,6 +1020,7 @@ fn end(
         url_after: view.url.clone(),
         title: view.title.clone(),
         input_tokens: run.input_tokens,
+        unlabelled_images: view.unlabelled_images,
         opened: opened.to_vec(),
         resume: None,
     }

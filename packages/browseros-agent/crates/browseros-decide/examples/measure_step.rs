@@ -63,6 +63,7 @@ fn listing(results: usize, text_bytes: usize) -> PageView {
         text: "Brand\nCorsair\nKingston\n".repeat(text_bytes / 24),
         controls,
         fingerprint: 1,
+        unlabelled_images: 0,
     }
 }
 

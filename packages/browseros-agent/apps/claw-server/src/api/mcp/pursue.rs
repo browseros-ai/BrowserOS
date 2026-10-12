@@ -473,6 +473,16 @@ pub fn render(
         outcome.actions(),
         outcome.input_tokens,
     ));
+    // Said only when the run did not finish. On a satisfied run it would be
+    // noise: whatever the pictures say, the goal was met without them.
+    if outcome.unlabelled_images > 0 && !matches!(outcome.status, Status::Satisfied) {
+        lines.push(format!(
+            "what it could not read: {} image(s) on this page carry no accessible name, so \
+             whatever they say is invisible to a run that reads the accessibility tree. Take a \
+             screenshot of page {page} if the goal depends on them.",
+            outcome.unlabelled_images
+        ));
+    }
     if !outcome.opened.is_empty() {
         lines.push(
             "it opened these beside the page it was working on, and they are yours to pursue \
@@ -511,6 +521,7 @@ pub fn render(
             "page": page.page,
             "url": page.url,
         })).collect::<Vec<_>>(),
+        "unlabelledImages": outcome.unlabelled_images,
         "navigations": outcome.trail.iter().filter(|step| matches!(
             step.operation,
             browseros_decide::Operation::GoTo | browseros_decide::Operation::GoBack
@@ -621,6 +632,7 @@ mod tests {
             url_after: "https://example.com/".to_string(),
             title: "Example".to_string(),
             input_tokens: 2012,
+            unlabelled_images: 0,
             opened: Vec::new(),
             resume: None,
         }
@@ -740,6 +752,35 @@ mod tests {
         assert!(text.contains("page 7 https://example.com/deals"), "{text}");
         assert!(text.contains("yours to pursue separately"), "{text}");
         assert_eq!(structured["openedPages"][0]["page"], 7);
+    }
+
+    /// The caller has eyes and already owns the screenshot tool for this page,
+    /// so the run says what it could not read rather than spending the
+    /// caller's context on an image it did not ask for.
+    #[test]
+    fn a_page_of_pictures_says_what_it_could_not_read() {
+        let mut ended = outcome(Status::Stalled(browseros_decide::Stuck::NotConfident));
+        ended.unlabelled_images = 14;
+        let (text, structured) = render("find the best deal", 3, &ended, &[], None);
+
+        assert!(text.contains("14 image(s)"), "{text}");
+        assert!(text.contains("Take a screenshot of page 3"), "{text}");
+        assert_eq!(structured["unlabelledImages"], 14);
+    }
+
+    /// On a satisfied run it is noise: whatever the pictures said, the goal was
+    /// met without them.
+    #[test]
+    fn a_satisfied_run_does_not_mention_the_pictures() {
+        let mut ended = outcome(Status::Satisfied);
+        ended.unlabelled_images = 14;
+        let (text, structured) = render("find the best deal", 3, &ended, &[], None);
+
+        assert!(!text.contains("image(s)"), "{text}");
+        assert_eq!(
+            structured["unlabelledImages"], 14,
+            "the count still travels, for a caller that wants to check"
+        );
     }
 
     #[test]

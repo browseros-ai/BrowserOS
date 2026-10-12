@@ -58,6 +58,7 @@ fn listing_page() -> PageView {
         text: "Brand\nCorsair\nKingston\nCrucial\nResults for 32gb ddr5".to_string(),
         controls,
         fingerprint: 1,
+        unlabelled_images: 0,
     }
 }
 

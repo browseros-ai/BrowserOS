@@ -164,6 +164,7 @@ fn page(fingerprint: u64) -> PageView {
         text: "visible text".to_string(),
         controls: vec![control("e1", "button", "Apply")],
         fingerprint,
+        unlabelled_images: 0,
     }
 }
 

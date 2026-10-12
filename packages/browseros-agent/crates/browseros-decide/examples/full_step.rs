@@ -55,6 +55,7 @@ fn page() -> PageView {
             control("e40", "button", "Place your order"),
         ],
         fingerprint: 1,
+        unlabelled_images: 0,
     }
 }
 
