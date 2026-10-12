@@ -1494,3 +1494,44 @@ fn the_value_head_is_absent_without_values() {
         "the name is the hint the model judges by"
     );
 }
+
+/// The whole point of mining the goal: a run whose caller passed nothing still
+/// types, because the caller's intent carried the value.
+#[tokio::test]
+async fn a_value_named_by_the_goal_is_typed_without_the_caller_passing_it() {
+    let run = Run::new("set the delivery pincode to 600042", budget());
+    assert!(run.values.is_empty(), "the caller passed nothing");
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e2", 0.99),
+        ("fill_value", "v00", 0.99),
+    ])]);
+    let fake = Fake::new(vec![Ok(())], vec![page_with_a_search_box()]).moving_once();
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(outcome.actions(), 1, "got {:?}", outcome.status);
+    assert_eq!(outcome.trail[0].value.as_deref(), Some("600042"));
+}
+
+/// An explicit value outranks a guessed one, because option order biases the
+/// answer and the caller knows better than the scanner.
+#[tokio::test]
+async fn an_explicit_value_is_offered_before_a_mined_one() {
+    let mut run = Run::new("set the delivery pincode to 600042", budget());
+    run.values = vec![NamedValue::new("pincode", "560001")];
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e2", 0.99),
+        ("fill_value", "v00", 0.99),
+    ])]);
+    let fake = Fake::new(vec![Ok(())], vec![page_with_a_search_box()]).moving_once();
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(
+        outcome.trail[0].value.as_deref(),
+        Some("560001"),
+        "v00 is the caller's, and the goal's 600042 comes after it"
+    );
+}

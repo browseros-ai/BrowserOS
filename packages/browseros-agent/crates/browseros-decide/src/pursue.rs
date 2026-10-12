@@ -326,6 +326,16 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
     // Borrowed from the run once, so the loop can hold `&mut run` without
     // fighting a live borrow of a field it never writes.
     let goal = run.goal.clone();
+    // The caller's intent usually contains the value already, so a goal that
+    // names one is read for it rather than parked on. Appended after anything
+    // the caller passed, because option order biases the answer and an explicit
+    // value should outrank a guessed one. Deduplicated, so resuming a run does
+    // not grow the list.
+    for mined in crate::run::values_in_goal(&goal) {
+        if !run.values.iter().any(|value| value.text == mined.text) {
+            run.values.push(mined);
+        }
+    }
     // What the last decision could see. Every ending reports it, because a run
     // that stalled after choosing from a capped list is exactly as worth
     // explaining as one that gave up.

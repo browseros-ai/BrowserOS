@@ -312,3 +312,166 @@ impl Run {
         self.values.get(index)
     }
 }
+
+/// How many values a goal may contribute.
+///
+/// The caller's own values come first and these fill what is left, so this only
+/// bounds the guessing.
+pub const MAX_MINED_VALUES: usize = 6;
+
+/// The shortest digit run worth offering as a value.
+///
+/// Three or fewer catches quantities, prices and ordinals that mostly belong in
+/// prose rather than in a field, and a page with a quantity box is better
+/// served by the caller naming it.
+const MIN_DIGITS: usize = 4;
+
+/// Values a goal names, for a caller that did not pass any.
+///
+/// The caller's intent usually contains the string already: "set the delivery
+/// pincode to 600042" carries its own answer. Extraction is a lexical job with
+/// a right answer, and literal scanning is one of this model's documented weak
+/// spots, so code does the finding and the model only does the choosing.
+///
+/// Deliberately narrow. A goal with nothing that looks like a value yields
+/// nothing, which leaves the run exactly as it was before this existed.
+#[must_use]
+pub fn values_in_goal(goal: &str) -> Vec<NamedValue> {
+    let mut found: Vec<NamedValue> = Vec::new();
+    let mut push = |name: &str, text: &str| {
+        let text = text.trim();
+        if text.is_empty()
+            || found.len() >= MAX_MINED_VALUES
+            || found.iter().any(|value| value.text == text)
+        {
+            return;
+        }
+        found.push(NamedValue::new(name, text));
+    };
+
+    for (open, close) in [('"', '"'), ('\'', '\'')] {
+        let mut rest = goal;
+        while let Some(start) = rest.find(open) {
+            let after = &rest[start + open.len_utf8()..];
+            let Some(end) = after.find(close) else { break };
+            push(
+                label_before(goal, &rest[start..]).unwrap_or("quoted"),
+                &after[..end],
+            );
+            rest = &after[end + close.len_utf8()..];
+        }
+    }
+
+    for word in goal.split(|c: char| c.is_whitespace() || matches!(c, ',' | ';' | '.')) {
+        let bare = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '-');
+        if bare.is_empty() {
+            continue;
+        }
+        let digits = bare.chars().filter(char::is_ascii_digit).count();
+        let letters = bare.chars().filter(|c| c.is_alphabetic()).count();
+        if letters == 0 && digits >= MIN_DIGITS {
+            push(label_before(goal, bare).unwrap_or("number"), bare);
+        } else if digits > 0 && letters > 0 && bare.contains('-') && bare.len() >= 5 {
+            push("model number", bare);
+        }
+    }
+    found
+}
+
+/// The word just before a value in the goal, which is usually what the value
+/// is: "pincode 600042" names itself.
+fn label_before<'a>(goal: &'a str, at: &str) -> Option<&'a str> {
+    let offset = goal.find(at)?;
+    let before = goal[..offset]
+        .trim_end()
+        .trim_end_matches(|c: char| c == ':' || c == '=');
+    // Walked backwards rather than taken from one position, because the word
+    // immediately before a value is usually a preposition: "set the postcode to
+    // 600042" has its answer two words back.
+    const EMPTY: &[&str] = &[
+        "to", "the", "is", "a", "an", "of", "for", "into", "in", "with", "and", "at", "as", "be",
+        "set", "under", "over", "below", "above", "this", "that",
+    ];
+    before
+        .rsplit(|c: char| c.is_whitespace())
+        .filter(|word| !word.is_empty())
+        .take(3)
+        .map(|word| word.trim_matches(|c: char| !c.is_alphanumeric()))
+        .find(|word| word.len() >= 2 && !EMPTY.contains(&word.to_lowercase().as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The real goals from the session that prompted this, both of which
+    /// carried their own answer and both of which parked anyway.
+    #[test]
+    fn the_goals_that_parked_carry_their_own_values() {
+        let found = values_in_goal(
+            "On Flipkart, search for \"Sony WH-1000XM5\" wireless headphones and open the \
+             product page",
+        );
+        assert!(
+            found.iter().any(|value| value.text == "Sony WH-1000XM5"),
+            "{found:?}"
+        );
+
+        let found = values_in_goal(
+            "On this Flipkart product page, set the delivery location to pincode 600042",
+        );
+        let pin = found
+            .iter()
+            .find(|value| value.text == "600042")
+            .expect("the pincode");
+        assert_eq!(pin.name, "pincode", "the goal names its own value");
+    }
+
+    /// A goal with nothing that looks like a value leaves the run exactly as it
+    /// was before this existed.
+    #[test]
+    fn a_goal_with_no_values_yields_none() {
+        assert!(
+            values_in_goal(
+                "sort these results by price, lowest first, and narrow them to the Corsair brand"
+            )
+            .is_empty()
+        );
+        assert!(values_in_goal("switch to the Cheapest tab").is_empty());
+    }
+
+    /// Short digit runs are quantities and ordinals that mostly belong in prose.
+    /// A page with a quantity box is better served by the caller naming it.
+    #[test]
+    fn short_numbers_are_left_alone() {
+        assert!(values_in_goal("set the quantity to 3").is_empty());
+        assert!(values_in_goal("open page 2 of the results").is_empty());
+    }
+
+    #[test]
+    fn a_model_number_is_recognised_without_quotes() {
+        let found = values_in_goal("find the WH-1000XM5 headphones");
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].text, "WH-1000XM5");
+        assert_eq!(found[0].name, "model number");
+    }
+
+    /// Words that say nothing about what a value is do not become its name.
+    #[test]
+    fn a_filler_word_is_not_used_as_a_name() {
+        let found = values_in_goal("change the postcode to 600042");
+        assert_eq!(found[0].name, "postcode", "not \"to\"");
+    }
+
+    #[test]
+    fn the_same_value_is_not_offered_twice() {
+        let found = values_in_goal("set pincode 600042 and confirm pincode 600042");
+        assert_eq!(found.len(), 1);
+    }
+
+    #[test]
+    fn the_guessing_is_bounded() {
+        let goal = "codes 1111 2222 3333 4444 5555 6666 7777 8888 9999";
+        assert!(values_in_goal(goal).len() <= MAX_MINED_VALUES);
+    }
+}
