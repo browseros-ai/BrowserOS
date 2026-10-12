@@ -14,7 +14,7 @@
 use std::collections::BTreeMap;
 
 use crate::client::{Jev, JevError, MAX_RETRIES, Question};
-use crate::gate::{self, Decision, Verdict};
+use crate::gate::{self, Decision, Handback, Verdict};
 use crate::operations::Operation;
 use crate::questions;
 use crate::run::{Asking, Destination, Pending, Run};
@@ -211,9 +211,12 @@ pub enum Status {
     Blocked(String),
     /// The run stopped making progress, with the reason it stopped.
     Stalled(Stuck),
-    /// The caller has to supply something before this can continue, and the
-    /// run cannot be continued: it is a judgement rather than a missing value.
-    NeedsInput(String),
+    /// The run went back to the caller, with the reason it did.
+    ///
+    /// The word travels beside the sentence because a caller branches on
+    /// structured content, and a status alone told it only that something went
+    /// wrong.
+    NeedsInput(Handback, String),
     /// The run needs one value from the caller and can carry on once it has it.
     NeedsValue(Pending),
     /// The step or time budget ran out.
@@ -568,11 +571,15 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     return end(
                         &mut run,
                         &started,
-                        Status::NeedsInput(format!(
-                            "the run answered {} but the page could not be read back to check it: \
-                             {error}. Nothing is confirmed; look at the page yourself",
-                            decision.operation.as_str()
-                        )),
+                        Status::NeedsInput(
+                            Handback::Unverifiable,
+                            format!(
+                                "the run answered {} but the page could not be read back to \
+                                 check it: {error}. Nothing is confirmed; look at the page \
+                                 yourself",
+                                decision.operation.as_str()
+                            ),
+                        ),
                         &view,
                         offered,
                         omitted,
@@ -686,19 +693,24 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     decision.value = supplied;
                 }
             }
-            Verdict::HandBack(reason) if decision.operation == Operation::Fill => {
+            Verdict::HandBack(cause, reason) if decision.operation == Operation::Fill => {
                 let Some(reference) = decision.target.clone() else {
                     // A fill with no target is not a question anyone can
-                    // answer, so it is reported rather than asked.
-                    return end(
+                    // answer, so it is reported rather than asked. It still
+                    // says what it was choosing between and still offers to be
+                    // carried on: a live caller got this ending twice with an
+                    // empty control list and no handle, from a decision that
+                    // had forty controls in front of it.
+                    let outcome = end(
                         &mut run,
                         &started,
-                        Status::NeedsInput(reason),
+                        Status::NeedsInput(cause, reason),
                         &view,
                         offered,
                         omitted,
                         &opened,
                     );
+                    return park(run, stuck(&space, outcome));
                 };
                 let asking = if run.answer_went_stale(&reference, chosen_guard) {
                     // The caller answered and the field moved before the text
@@ -726,6 +738,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         &mut run,
                         &started,
                         Status::NeedsInput(
+                            Handback::AskedTooOften,
                             "it asked for text three times and the field changed under every \
                              answer, so it has stopped asking. Look at the page yourself"
                                 .to_string(),
@@ -751,23 +764,23 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 outcome.offered_controls = offered_labels(&space);
                 return park(run, outcome);
             }
-            Verdict::HandBack(reason) => {
-                let mut outcome = end(
+            Verdict::HandBack(cause, reason) => {
+                let outcome = end(
                     &mut run,
                     &started,
-                    Status::NeedsInput(reason),
+                    Status::NeedsInput(cause, reason),
                     &view,
                     offered,
                     omitted,
                     &opened,
                 );
-                // Named so the caller can see what the decision was choosing
-                // between, which is the difference between "try scrolling" and
-                // "that control is not on this page".
-                if decision.none_of_these {
-                    outcome.offered_controls = offered_labels(&space);
-                }
-                return outcome;
+                // Said on every hand-back, not only when the model took the
+                // escape option. A consequential action short of its bar was
+                // chosen from the same list, and a caller told only that the
+                // run stopped cannot tell "try scrolling" from "that control is
+                // not on this page". Measured live: a caller got this with an
+                // empty list from a decision over forty controls.
+                return park(run, stuck(&space, outcome));
             }
             Verdict::Explore(reason) => {
                 // Exploring is only progress if there is somewhere to look.

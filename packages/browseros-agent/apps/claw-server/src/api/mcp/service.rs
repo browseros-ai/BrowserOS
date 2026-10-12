@@ -1941,8 +1941,8 @@ fn pursue_output_schema() -> Value {
             },
             "stoppedBecause": {
                 "type": ["string", "null"],
-                "enum": ["nothing_changed", "not_confident", "control_kept_moving", "browser_kept_failing", "only_waiting", null],
-                "description": "Why the run stopped making progress, when it stopped for that reason. Each one calls for a different response, so this is a word to branch on rather than a sentence to read."
+                "enum": ["nothing_changed", "not_confident", "control_kept_moving", "browser_kept_failing", "only_waiting", "nothing_offered", "too_risky_to_guess", "no_field_named", "asked_too_often", "unverifiable", null],
+                "description": "Why the run stopped, when it stopped for a reason worth branching on. The first five are failures to make progress; the rest are hand-backs: nothing_offered means no control on the page could advance the goal, too_risky_to_guess means a consequential action was short of its bar, no_field_named means it chose to type but named no field, asked_too_often means a field kept changing under your answers, unverifiable means a completion claim could not be checked. A word to branch on rather than a sentence to read."
             },
             "terminalConfidence": {
                 "type": ["number", "null"],
@@ -2693,7 +2693,10 @@ mod tests {
             Status::Satisfied,
             Status::Blocked("nothing could advance it".to_string()),
             Status::Stalled(browseros_decide::Stuck::NothingChanged),
-            Status::NeedsInput("the page could not be read back".to_string()),
+            Status::NeedsInput(
+                browseros_decide::Handback::Unverifiable,
+                "the page could not be read back".to_string(),
+            ),
             Status::NeedsValue(Pending::Text {
                 reference: "e18".to_string(),
                 control: "combobox".to_string(),

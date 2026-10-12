@@ -444,7 +444,7 @@ async fn a_field_that_never_holds_still_stops_being_asked_about() {
     let outcome = advance(&wants_to_type(), &fake, run).await;
 
     assert!(
-        matches!(outcome.status, Status::NeedsInput(_)),
+        matches!(outcome.status, Status::NeedsInput(..)),
         "got {:?}",
         outcome.status
     );
@@ -727,7 +727,7 @@ async fn the_escape_answer_hands_back_with_what_it_was_choosing_between() {
     let outcome = pursue(&oracle, &fake, "Tick a filter that is not here", budget()).await;
 
     assert!(
-        matches!(outcome.status, Status::NeedsInput(_)),
+        matches!(outcome.status, Status::NeedsInput(..)),
         "got {:?}",
         outcome.status
     );
@@ -836,7 +836,11 @@ async fn a_completion_claim_is_not_confirmed_from_a_failed_observation() {
         "nothing was read back, so nothing is confirmed"
     );
     assert!(
-        matches!(outcome.status, Status::NeedsInput(ref reason) if reason.contains("could not be read back")),
+        matches!(
+            outcome.status,
+            Status::NeedsInput(browseros_decide::Handback::Unverifiable, ref reason)
+                if reason.contains("could not be read back")
+        ),
         "and it says why, rather than reporting a failure: {:?}",
         outcome.status
     );
@@ -1673,4 +1677,34 @@ async fn a_page_that_moved_on_its_own_is_asked_again_without_scrolling() {
         "nothing was forced: the page was moving by itself"
     );
     assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
+}
+
+/// Reproduces what a live run on a Flipkart search page returned: status
+/// needs_input with no field named, no handle, and an empty offeredControls,
+/// from a decision that had 40 controls in front of it.
+///
+/// The model chose to type and then said none of the offered controls was the
+/// field. The none-of-these branch hands back, the fill arm catches it because
+/// the operation is FILL, finds no target, and reports a bare hand-back. The
+/// arm for every other operation attaches what it was choosing between; this
+/// one lost it.
+#[tokio::test]
+async fn a_fill_that_names_no_control_still_says_what_it_saw() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "none_of_these", 0.99),
+    ])]);
+    let fake = Fake::new(vec![], vec![page_with_a_search_box()]);
+    let outcome = pursue(&oracle, &fake, "type the reference somewhere", budget()).await;
+
+    assert!(
+        matches!(outcome.status, Status::NeedsInput(..)),
+        "got {:?}",
+        outcome.status
+    );
+    assert!(
+        !outcome.offered_controls.is_empty(),
+        "it had controls in front of it and said nothing about them, which is what \
+         a live caller saw: offeredControls was empty on a decision over 40 controls"
+    );
 }

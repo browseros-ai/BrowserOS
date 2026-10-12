@@ -281,7 +281,7 @@ async fn main() {
             } else {
                 let verdict = gate::verdict(&decision, target_name.as_deref(), None);
                 println!("  verdict: {verdict:?}");
-                if !matches!(verdict, Verdict::HandBack(_)) {
+                if !matches!(verdict, Verdict::HandBack(..)) {
                     println!("  NOTE: it chose to act, so this page did not reach the escape path");
                 }
             }

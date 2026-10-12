@@ -455,18 +455,20 @@ pub fn render(
         // goal. True of the step it reached, false as a summary, because the
         // reason nothing further could advance the goal was that the goal was
         // already met.
-        Status::NeedsInput(reason) if outcome.changed() > 0 => format!(
+        Status::NeedsInput(_, reason) if outcome.changed() > 0 => format!(
             "Stopped and handing back after changing the page: {reason}. {} of {} actions \
              changed it, so check whether what the run already did was what you wanted before \
              redoing anything. You decide what happens next: this run has one page and one \
-             goal, and you have the wider intent.",
+             goal, and you have the wider intent.{}",
             outcome.changed(),
-            outcome.actions()
+            outcome.actions(),
+            carry_on_line(handle, page),
         ),
-        Status::NeedsInput(reason) => format!(
+        Status::NeedsInput(_, reason) => format!(
             "Stopped and handing back: {reason}. You decide what happens next: this run has one \
              page and one goal, and you have the wider intent. Options are to scroll or expand a \
-             facet with snapshot and act, restate the goal, or stop."
+             facet with snapshot and act, restate the goal, or stop.{}",
+            carry_on_line(handle, page),
         ),
         // Two different endings wear this label, and they need opposite advice.
         // A run out of steps is handed back and can be continued with a higher
@@ -729,6 +731,11 @@ fn stopped_because(status: &Status) -> Option<&'static str> {
             browseros_decide::Stuck::BrowserKeptFailing => "browser_kept_failing",
             browseros_decide::Stuck::OnlyWaiting => "only_waiting",
         }),
+        // A hand-back has a reason too, and until now it travelled only as
+        // prose. Measured live: a caller read `needs_input` out of the
+        // structured result with every other field null or empty, and had
+        // nothing to branch on.
+        Status::NeedsInput(cause, _) => Some(cause.as_str()),
         _ => None,
     }
 }
@@ -738,7 +745,7 @@ fn status_name(status: &Status) -> &'static str {
         Status::Satisfied => "satisfied",
         Status::Blocked(_) => "blocked",
         Status::Stalled(_) => "stalled",
-        Status::NeedsInput(_) => "needs_input",
+        Status::NeedsInput(..) => "needs_input",
         Status::NeedsValue(_) => "needs_value",
         Status::OutOfBudget => "out_of_budget",
         Status::Stopped => "stopped",
@@ -971,6 +978,61 @@ mod tests {
 
         assert!(!text.contains("continue:"), "{text}");
         assert_eq!(structured["continueWith"], serde_json::Value::Null);
+    }
+
+    /// A live caller read this ending out of the structured result and found
+    /// status needs_input with needsInput null, continueWith null,
+    /// offeredControls empty and stoppedBecause null, from a decision that had
+    /// forty controls in front of it. It had nothing to act on and said so.
+    #[test]
+    fn a_hand_back_is_not_a_dead_end_in_the_structured_result() -> anyhow::Result<()> {
+        let mut ended = outcome(Status::NeedsInput(
+            browseros_decide::Handback::NothingOffered,
+            "none of the controls offered for this step can advance the goal".to_string(),
+        ));
+        ended.offered_controls = vec![
+            "button \"Add to cart\"".to_string(),
+            "link \"SONY WH-1000XM5\"".to_string(),
+        ];
+        let (text, structured) = render("open the listing", 2, &ended, &[], Some("ctn-01J"), false);
+
+        assert_eq!(
+            structured["status"],
+            "needs_value".replace("value", "input")
+        );
+        assert_eq!(
+            structured["stoppedBecause"], "nothing_offered",
+            "a word to branch on, where before there was null"
+        );
+        assert_eq!(
+            structured["offeredControls"]
+                .as_array()
+                .map(Vec::len)
+                .unwrap_or_default(),
+            2,
+            "and what it was choosing between"
+        );
+        assert_eq!(structured["continueWith"], "ctn-01J");
+        assert!(text.contains("continue: \"ctn-01J\""), "{text}");
+        Ok(())
+    }
+
+    /// Every hand-back reason gets its own word, so a caller can tell a
+    /// consequential refusal from a page with nothing on it.
+    #[test]
+    fn each_hand_back_reason_has_a_word() {
+        use browseros_decide::Handback;
+        for (cause, word) in [
+            (Handback::NothingOffered, "nothing_offered"),
+            (Handback::TooRiskyToGuess, "too_risky_to_guess"),
+            (Handback::NoFieldNamed, "no_field_named"),
+            (Handback::AskedTooOften, "asked_too_often"),
+            (Handback::Unverifiable, "unverifiable"),
+        ] {
+            let ended = outcome(Status::NeedsInput(cause, "because".to_string()));
+            let (_, structured) = render("a goal", 2, &ended, &[], None, false);
+            assert_eq!(structured["stoppedBecause"], word);
+        }
     }
 
     /// Two different endings wear the out-of-budget label and they need

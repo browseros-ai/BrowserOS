@@ -264,6 +264,42 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
     Ok(decision)
 }
 
+/// Why a decision went back to the caller.
+///
+/// Named rather than left as prose, for the same reason `Stuck` is: the caller
+/// branches on structured content, and a status of `needs_input` with nothing
+/// beside it tells it only that something went wrong. Measured on a live run,
+/// that is exactly what a caller got twice in one errand.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Handback {
+    /// None of the controls offered for this step can advance the goal.
+    NothingOffered,
+    /// A consequential action was short of the bar its consequence sets, and
+    /// looking at more of the page does not make a submit any safer.
+    TooRiskyToGuess,
+    /// It chose to type but named no field, so there is no question to ask.
+    NoFieldNamed,
+    /// It asked for text until the limit and the field kept changing.
+    AskedTooOften,
+    /// A completion claim could not be checked, because the page could not be
+    /// read back.
+    Unverifiable,
+}
+
+impl Handback {
+    /// A short word a caller can branch on.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::NothingOffered => "nothing_offered",
+            Self::TooRiskyToGuess => "too_risky_to_guess",
+            Self::NoFieldNamed => "no_field_named",
+            Self::AskedTooOften => "asked_too_often",
+            Self::Unverifiable => "unverifiable",
+        }
+    }
+}
+
 /// What code should do about a decision.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verdict {
@@ -271,8 +307,8 @@ pub enum Verdict {
     Execute,
     /// Look at more of the page, then decide again.
     Explore(String),
-    /// Return to the caller, saying what is needed.
-    HandBack(String),
+    /// Return to the caller, saying what is needed and why.
+    HandBack(Handback, String),
 }
 
 /// Judges a decision against the bar its consequence sets.
@@ -296,11 +332,13 @@ pub enum Verdict {
 pub fn verdict(decision: &Decision, target_name: Option<&str>, text: Option<&str>) -> Verdict {
     if decision.none_of_these {
         return Verdict::HandBack(
+            Handback::NothingOffered,
             "none of the controls offered for this step can advance the goal".to_string(),
         );
     }
     if decision.operation == Operation::Fill && text.is_none() {
         return Verdict::HandBack(
+            Handback::NoFieldNamed,
             "this step needs text typed into a field, which the caller supplies".to_string(),
         );
     }
@@ -319,14 +357,17 @@ pub fn verdict(decision: &Decision, target_name: Option<&str>, text: Option<&str
     // is handed back rather than explored: looking at more of the page does not
     // make a submit any safer.
     if consequence == Consequence::High {
-        return Verdict::HandBack(format!(
-            "{} on {:?} needs confidence {:.2} and had {confidence:.2}; the least certain \
+        return Verdict::HandBack(
+            Handback::TooRiskyToGuess,
+            format!(
+                "{} on {:?} needs confidence {:.2} and had {confidence:.2}; the least certain \
              judgement was {}",
-            decision.operation.as_str(),
-            target_name.unwrap_or("an unnamed control"),
-            consequence.bar(),
-            weakest.as_str()
-        ));
+                decision.operation.as_str(),
+                target_name.unwrap_or("an unnamed control"),
+                consequence.bar(),
+                weakest.as_str()
+            ),
+        );
     }
     Verdict::Explore(format!(
         "{} had confidence {confidence:.2}, under the {:.2} this needs; the least certain \
@@ -427,7 +468,7 @@ mod tests {
         let decision = read(&response).expect("reads");
         assert!(decision.none_of_these);
         assert!(
-            matches!(verdict(&decision, None, None), Verdict::HandBack(_)),
+            matches!(verdict(&decision, None, None), Verdict::HandBack(..)),
             "full confidence that nothing fits is still a hand back, not an action"
         );
     }
@@ -490,7 +531,7 @@ mod tests {
         assert!(
             matches!(
                 verdict(&decision, Some("Place your order"), None),
-                Verdict::HandBack(_)
+                Verdict::HandBack(..)
             ),
             "a high-stakes action short of its bar is handed back, because looking at more of \
              the page does not make a submit safer"
@@ -525,7 +566,7 @@ mod tests {
         let decision = read(&response).expect("reads");
         assert!(matches!(
             verdict(&decision, Some("Search"), None),
-            Verdict::HandBack(_)
+            Verdict::HandBack(..)
         ));
     }
 
@@ -573,7 +614,7 @@ mod tests {
         let decision = read(&response).expect("reads");
         assert!(matches!(
             verdict(&decision, Some("Confirm payment"), Some("4111")),
-            Verdict::HandBack(_)
+            Verdict::HandBack(..)
         ));
     }
 
@@ -610,7 +651,7 @@ mod tests {
         ]);
         let decision = read(&response).expect("reads");
         match verdict(&decision, Some("Place your order"), None) {
-            Verdict::HandBack(reason) => assert!(
+            Verdict::HandBack(_, reason) => assert!(
                 reason.contains("which key to press"),
                 "the reason says which judgement was weak: {reason}"
             ),
