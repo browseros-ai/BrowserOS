@@ -423,8 +423,9 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     .last()
                     .is_none_or(|step| step.operation != Operation::GoBack),
         };
+        let offered_values = run.value_options();
         let operations = questions::available(&space, &view, run.fallback_needed, travel);
-        let built = questions::build(&goal, &space, &operations, travel);
+        let built = questions::build(&goal, &space, &operations, travel, &offered_values);
         let state = questions::state(&view, &space, &run.recent);
 
         run.decisions += 1;
@@ -629,19 +630,33 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             .as_deref()
             .filter(|_| decision.operation.needs_control())
             .and_then(|reference| space.candidate(reference).map(|candidate| candidate.guard));
-        let supplied = decision
+        // Two places text can come from, and the caller's own answer wins. It
+        // answered a question about this exact control, where the model only
+        // matched a value to a field it chose.
+        let answered = decision
             .target
             .as_deref()
             .and_then(|reference| run.text_for(reference, chosen_guard))
             .map(str::to_string);
+        let matched = decision
+            .value
+            .as_deref()
+            .filter(|_| decision.operation == Operation::Fill)
+            .and_then(|key| run.value(key))
+            .map(|value| value.text.clone());
+        if answered.is_some() {
+            // The caller's answer was not a judgement, so there is no
+            // confidence for the gate to weigh against it.
+            decision.value_confidence = None;
+        }
+        let supplied = answered.or(matched);
 
         match gate::verdict(&decision, target_name.as_deref(), supplied.as_deref()) {
             Verdict::Execute => {
                 if decision.operation == Operation::Fill {
-                    // The only operation whose argument comes from outside the
-                    // model. `args_for` already forwards this to the act tool
-                    // as `value`, so nothing downstream has to know where it
-                    // came from.
+                    // Resolved from an option id to the text itself, which is
+                    // what the act tool takes. Nothing downstream has to know
+                    // whether the caller named it or the model matched it.
                     decision.value = supplied;
                 }
             }

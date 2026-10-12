@@ -85,7 +85,7 @@ async fn main() {
         view.budget_text(1_500);
         let space = ActionSpace::build(&view, goal, None);
         let operations = questions::available(&space, &view, false, Default::default());
-        let built = questions::build(goal, &space, &operations, Default::default());
+        let built = questions::build(goal, &space, &operations, Default::default(), &[]);
         let state = questions::state(&view, &space, &[]);
 
         match jev.ask(&state, &built).await {

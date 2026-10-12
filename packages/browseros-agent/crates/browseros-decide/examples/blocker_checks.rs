@@ -112,7 +112,7 @@ async fn remaining_checks(jev: &Jev, failures: &mut u32) {
     let space = ActionSpace::build(&page, goal, None);
     // Press is offered once something has refused a click, which is this case.
     let operations = questions::available(&space, &page, true, Default::default());
-    let built = questions::build(goal, &space, &operations, Default::default());
+    let built = questions::build(goal, &space, &operations, Default::default(), &[]);
     let state = questions::state(&page, &space, &[]);
     match jev.ask(&state, &built).await {
         Ok(response) => {
@@ -161,7 +161,7 @@ async fn remaining_checks(jev: &Jev, failures: &mut u32) {
         *failures += 1;
     }
     let operations = questions::available(&space, &page, false, Default::default());
-    let built = questions::build(goal, &space, &operations, Default::default());
+    let built = questions::build(goal, &space, &operations, Default::default(), &[]);
     let state = questions::state(&page, &space, &[]);
     match jev.ask(&state, &built).await {
         Ok(response) => {
@@ -220,6 +220,7 @@ async fn main() {
         &space,
         &operations,
         Default::default(),
+        &[],
     );
     let state = questions::state(&done, &space, &[]);
     match jev.ask(&state, &built).await {
@@ -250,7 +251,7 @@ async fn main() {
     let goal = "Tick the Corsair brand filter checkbox in the left sidebar";
     let space = ActionSpace::build(&page, goal, None);
     let operations = questions::available(&space, &page, false, Default::default());
-    let built = questions::build(goal, &space, &operations, Default::default());
+    let built = questions::build(goal, &space, &operations, Default::default(), &[]);
     let state = questions::state(&page, &space, &[]);
     match jev.ask(&state, &built).await {
         Ok(response) => {

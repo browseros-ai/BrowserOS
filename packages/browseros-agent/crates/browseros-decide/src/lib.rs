@@ -22,5 +22,5 @@ pub use pursue::{
     ActError, Arrival, Budget, Driver, Journey, OpenedPage, Oracle, Outcome, Status, Step, Stuck,
     advance, pursue,
 };
-pub use run::{Destination, Run};
+pub use run::{Destination, NamedValue, Run};
 pub use view::{Control, ControlState, PageView};

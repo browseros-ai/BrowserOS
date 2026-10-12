@@ -527,6 +527,35 @@ impl ClawMcpService {
             }
         };
 
+        let values = match raw_args.get("values") {
+            Some(Value::Object(given)) => {
+                let mut named = Vec::with_capacity(given.len());
+                for (name, value) in given {
+                    let Some(text) = value.as_str().map(str::trim).filter(|t| !t.is_empty()) else {
+                        return (
+                            ToolResult::error(format!(
+                                "pursue: values[{name}] has to be a non-empty string, which is \
+                                 what gets typed into the field."
+                            )),
+                            None,
+                        );
+                    };
+                    named.push(browseros_decide::NamedValue::new(name.clone(), text));
+                }
+                named
+            }
+            Some(Value::Null) | None => Vec::new(),
+            Some(_) => {
+                return (
+                    ToolResult::error(
+                        "pursue: values has to be an object of name to text, e.g. \
+                         {\"pincode\": \"600042\"}.",
+                    ),
+                    None,
+                );
+            }
+        };
+
         let destinations = match raw_args.get("destinations") {
             Some(Value::Array(listed)) => {
                 let mut parsed = Vec::with_capacity(listed.len());
@@ -673,9 +702,12 @@ impl ClawMcpService {
         }
         // Replaced rather than merged on a resume: the list is the caller's
         // current intent about where this run may go, and a destination it has
-        // dropped should stop being on offer.
+        // dropped should stop being on offer. Values travel the same way.
         if !destinations.is_empty() || continuing.is_none() {
             run.destinations = destinations;
+        }
+        if !values.is_empty() || continuing.is_none() {
+            run.values = values;
         }
 
         let jev = browseros_decide::Jev::new(credential.expose());
@@ -1774,6 +1806,11 @@ fn pursue_tool() -> Tool {
                     }
                 },
                 "description": "Pages this run may move to. It picks one by label and never invents a url, so moving stays inside the set you wrote. Leave it out and the run stays on the page you gave it. It will move at most three times."
+            },
+            "values": {
+                "type": "object",
+                "additionalProperties": { "type": "string" },
+                "description": "Values this run may type, named by what they are, e.g. {\"pincode\": \"600042\", \"search term\": \"Sony WH-1000XM5\"}. It picks which one belongs in a field it chose and never invents a string, so passing what you already know means it does not have to stop and ask you for it. Never put a password, API key, token, or card number here: the text is typed into the page and recorded with the call like any other argument."
             },
             "ask": {
                 "type": "string",

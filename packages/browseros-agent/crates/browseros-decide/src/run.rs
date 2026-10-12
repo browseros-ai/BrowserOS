@@ -44,6 +44,14 @@ pub struct Run {
     /// An option rather than an empty string, so a resumed run can tell "not
     /// observed yet" from "observed, and this is what it said".
     pub url_before: Option<String>,
+    /// Values the caller has made available for typing, in the order they
+    /// should be offered.
+    ///
+    /// The model cannot produce a string, but choosing which of a few given
+    /// strings belongs in a field is a closed set, which is the one thing it
+    /// does. So a caller that already holds the value never has to be asked
+    /// for it.
+    pub values: Vec<NamedValue>,
     /// Where the caller said this run may go. Empty means it stays put.
     pub destinations: Vec<Destination>,
     /// Destinations already used, by label.
@@ -68,6 +76,25 @@ pub struct Run {
     pub asks: u32,
     /// What the run is waiting for, when it parked.
     pub pending: Option<Pending>,
+}
+
+/// A value the caller has made available for typing into a field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedValue {
+    /// What it is, which is the hint the model judges by: `pincode`, `search
+    /// term`, `quoted text`. Never shown to the page, only to the model.
+    pub name: String,
+    pub text: String,
+}
+
+impl NamedValue {
+    #[must_use]
+    pub fn new(name: impl Into<String>, text: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            text: text.into(),
+        }
+    }
 }
 
 /// One page the caller said this run may move to.
@@ -158,6 +185,7 @@ impl Run {
             last_acted: None,
             fallback_needed: false,
             url_before: None,
+            values: Vec::new(),
             destinations: Vec::new(),
             travelled: Vec::new(),
             navigations: 0,
@@ -250,5 +278,37 @@ impl Run {
     pub fn destination(&self, key: &str) -> Option<&Destination> {
         let index = key.strip_prefix('d')?.parse::<usize>().ok()?;
         self.destinations.get(index)
+    }
+}
+
+/// How many values one question may offer.
+///
+/// Small on purpose. Confidence is measured against an even split, and the
+/// caller rarely has more than a handful of values that could belong in one
+/// field, so a long list would weaken the statistic the gate reads without
+/// covering any real case.
+pub const MAX_VALUES: usize = 12;
+
+impl Run {
+    /// The values as a question's options, keyed so the sort order the wire
+    /// imposes is the order they were given in.
+    ///
+    /// Zero padded because option order biases the answer and a plain `v10`
+    /// would sort between `v1` and `v2`.
+    #[must_use]
+    pub fn value_options(&self) -> Vec<(String, &NamedValue)> {
+        self.values
+            .iter()
+            .take(MAX_VALUES)
+            .enumerate()
+            .map(|(index, value)| (format!("v{index:02}"), value))
+            .collect()
+    }
+
+    /// The value behind an option id the model returned.
+    #[must_use]
+    pub fn value(&self, key: &str) -> Option<&NamedValue> {
+        let index = key.strip_prefix('v')?.parse::<usize>().ok()?;
+        self.values.get(index)
     }
 }

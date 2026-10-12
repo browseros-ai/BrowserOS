@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::client::Question;
 use crate::operations::{Operation, PRESS_KEYS};
-use crate::run::Destination;
+use crate::run::{Destination, NamedValue};
 use crate::space::{ActionSpace, NONE_OF_THESE};
 use crate::view::PageView;
 
@@ -45,6 +45,7 @@ pub const PRESS_TARGET: &str = "press_target";
 pub const PRESS_KEY: &str = "press_key";
 pub const FILL_TARGET: &str = "fill_target";
 pub const DESTINATION: &str = "destination";
+pub const FILL_VALUE: &str = "fill_value";
 
 /// Roles each targeted operation can act on. Narrowing a head's options is
 /// both cheaper, since every head repeats its list as input tokens, and more
@@ -196,6 +197,7 @@ pub fn build(
     space: &ActionSpace,
     operations: &[Operation],
     travel: Travel<'_>,
+    values: &[(String, &NamedValue)],
 ) -> BTreeMap<String, Question> {
     let mut questions = BTreeMap::new();
 
@@ -274,6 +276,40 @@ pub fn build(
                 },
             );
         }
+    }
+
+    // Which of the caller's values goes in the field, asked beside the question
+    // of which field it is. The model cannot write a string; picking one of a
+    // few given strings is a closed set, which is what it is for.
+    //
+    // Speculative like every other argument head, so it costs input tokens and
+    // almost no time: questions in one request are evaluated in parallel
+    // against a single read of the state.
+    if operations.contains(&Operation::Fill) && !values.is_empty() {
+        let mut criteria: BTreeMap<String, Value> = values
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.clone(),
+                    json!({ "value": value.text, "called": value.name }),
+                )
+            })
+            .collect();
+        criteria.insert(
+            NONE_OF_THESE.to_string(),
+            json!({ "value": "none of these values belongs in that field" }),
+        );
+        questions.insert(
+            FILL_VALUE.to_string(),
+            Question::Choice {
+                instructions: json!({
+                    "goal": goal,
+                    "question": "Assume the next operation is to type into a field. Which of these values should be typed into it?",
+                    "rules": RULES,
+                }),
+                criteria,
+            },
+        );
     }
 
     // The label travels and the url does not. A label costs a few tokens and is

@@ -16,7 +16,7 @@ use browseros_decide::pursue::{
     ActError, Arrival, Budget, Driver, Journey, Oracle, Status, Stuck, advance, pursue,
 };
 use browseros_decide::questions::{CLICK_TARGET, OPERATION, SELECT_VALUE};
-use browseros_decide::run::{Asking, Destination, Pending, Run};
+use browseros_decide::run::{Asking, Destination, NamedValue, Pending, Run};
 use browseros_decide::view::{Control, ControlState, PageView};
 
 fn control(reference: &str, role: &str, name: &str) -> Control {
@@ -1276,7 +1276,7 @@ fn a_destination_question_never_carries_a_url() {
         can_return: false,
     };
     let operations = browseros_decide::questions::available(&space, &view, false, travel);
-    let built = browseros_decide::questions::build("show page 2", &space, &operations, travel);
+    let built = browseros_decide::questions::build("show page 2", &space, &operations, travel, &[]);
 
     let rendered = serde_json::to_string(&built).expect("the questions serialise");
     assert!(rendered.contains("page 2 of the results"));
@@ -1336,4 +1336,161 @@ async fn an_operation_that_was_not_offered_is_not_acted_on() {
 
     assert_eq!(outcome.actions(), 0);
     assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
+}
+
+/// The model cannot write a string, but choosing which of a few given strings
+/// belongs in a field is a closed set, which is the one thing it does. So a
+/// caller that already holds the value is never asked for it.
+#[tokio::test]
+async fn a_value_the_caller_offered_is_typed_without_asking() {
+    let mut run = Run::new("set the delivery pincode to 600042", budget());
+    run.values = vec![NamedValue::new("pincode", "600042")];
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e2", 0.99),
+        ("fill_value", "v00", 0.99),
+    ])]);
+    let fake = Fake::new(vec![Ok(())], vec![page_with_a_search_box()]).moving_once();
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(
+        outcome.actions(),
+        1,
+        "it typed, rather than parking: {:?}",
+        outcome.status
+    );
+    let step = &outcome.trail[0];
+    assert_eq!(step.operation, Operation::Fill);
+    assert_eq!(
+        step.value.as_deref(),
+        Some("600042"),
+        "the option id resolves to the caller's text, not to the id"
+    );
+    assert!(
+        outcome.resume.is_none(),
+        "nothing to continue: it did not park"
+    );
+}
+
+/// The escape option is on this head like every other, and taking it means the
+/// run still has to ask.
+#[tokio::test]
+async fn a_value_the_model_declines_still_parks() {
+    let mut run = Run::new("set the delivery pincode to 600042", budget());
+    run.values = vec![NamedValue::new("quantity", "2")];
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e2", 0.99),
+        ("fill_value", "none_of_these", 0.99),
+    ])]);
+    let fake = Fake::new(vec![], vec![page_with_a_search_box()]);
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert!(
+        matches!(outcome.status, Status::NeedsValue(_)),
+        "got {:?}",
+        outcome.status
+    );
+    assert_eq!(outcome.actions(), 0);
+}
+
+/// Typing the quantity into the pincode box is as wrong as typing into the
+/// wrong box, so the value is an argument the bar applies to.
+#[tokio::test]
+async fn a_value_matched_without_confidence_is_not_typed() {
+    let mut run = Run::new("set the delivery pincode to 600042", budget());
+    run.values = vec![NamedValue::new("pincode", "600042")];
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e2", 0.99),
+        ("fill_value", "v00", 0.40),
+    ])]);
+    let fake = Fake::new(vec![Ok(())], vec![page_with_a_search_box()]);
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(
+        outcome.actions(),
+        0,
+        "0.40 is under the bar, so nothing was typed: {:?}",
+        outcome.status
+    );
+}
+
+/// The caller answered a question about this exact control. The model only
+/// matched a value to a field it chose, so the answer wins.
+#[tokio::test]
+async fn the_callers_own_answer_beats_the_models_match() {
+    let mut run = Run::new("set the delivery pincode to 600042", budget());
+    run.values = vec![NamedValue::new("guess", "560001")];
+    run.supply("e2", "600042");
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e2", 0.99),
+        ("fill_value", "v00", 0.99),
+    ])]);
+    let fake = Fake::new(vec![Ok(())], vec![page_with_a_search_box()]).moving_once();
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(outcome.trail[0].value.as_deref(), Some("600042"));
+}
+
+/// The id travels, not the text, so a model naming a value nobody offered
+/// resolves to nothing rather than to a string it invented.
+#[tokio::test]
+async fn a_value_nobody_offered_resolves_to_nothing() {
+    let mut run = Run::new("set the delivery pincode to 600042", budget());
+    run.values = vec![NamedValue::new("pincode", "600042")];
+
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "FILL", 0.99),
+        ("fill_target", "e2", 0.99),
+        ("fill_value", "v99", 0.99),
+    ])]);
+    let fake = Fake::new(vec![Ok(())], vec![page_with_a_search_box()]);
+    let outcome = advance(&oracle, &fake, run).await;
+
+    assert_eq!(outcome.actions(), 0);
+    assert!(
+        matches!(outcome.status, Status::NeedsValue(_)),
+        "got {:?}",
+        outcome.status
+    );
+}
+
+/// The head is only asked when there is something to ask about, so a run with
+/// no values sends the request it always sent.
+#[test]
+fn the_value_head_is_absent_without_values() {
+    let view = page_with_a_search_box();
+    let space = browseros_decide::space::ActionSpace::build(&view, "type something", None);
+    let operations = vec![Operation::Fill];
+    let without = browseros_decide::questions::build(
+        "type something",
+        &space,
+        &operations,
+        Default::default(),
+        &[],
+    );
+    assert!(!without.contains_key("fill_value"));
+
+    let value = NamedValue::new("pincode", "600042");
+    let offered = vec![("v00".to_string(), &value)];
+    let with = browseros_decide::questions::build(
+        "type something",
+        &space,
+        &operations,
+        Default::default(),
+        &offered,
+    );
+    assert!(with.contains_key("fill_value"));
+    let rendered = serde_json::to_string(&with).expect("serialises");
+    assert!(rendered.contains("600042"));
+    assert!(
+        rendered.contains("pincode"),
+        "the name is the hint the model judges by"
+    );
 }

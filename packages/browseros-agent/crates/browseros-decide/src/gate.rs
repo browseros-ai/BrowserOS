@@ -7,8 +7,8 @@
 use crate::client::Response;
 use crate::operations::{Consequence, Operation};
 use crate::questions::{
-    CHECK_TARGET, CLICK_TARGET, DESTINATION, FILL_TARGET, OPERATION, PRESS_KEY, PRESS_TARGET,
-    SELECT_VALUE, UNCHECK_TARGET,
+    CHECK_TARGET, CLICK_TARGET, DESTINATION, FILL_TARGET, FILL_VALUE, OPERATION, PRESS_KEY,
+    PRESS_TARGET, SELECT_VALUE, UNCHECK_TARGET,
 };
 use crate::space::{ActionSpace, NONE_OF_THESE};
 
@@ -20,8 +20,15 @@ pub struct Decision {
     /// The chosen control, for an operation that aims at one.
     pub target: Option<String>,
     pub target_confidence: Option<f64>,
-    /// The value, for a select.
+    /// The value, for a select, or for a fill the model matched to one of the
+    /// caller's values.
     pub value: Option<String>,
+    /// How sure the model was about the value, when it chose one.
+    ///
+    /// `None` when the value did not come from a judgement: a select carries
+    /// its control and value as one option, so the target confidence already
+    /// covers it, and a value the caller supplied by name was never judged.
+    pub value_confidence: Option<f64>,
     /// The key, for a press.
     pub key: Option<String>,
     pub key_confidence: Option<f64>,
@@ -39,6 +46,7 @@ pub enum Weakest {
     Operation,
     Target,
     Key,
+    Value,
 }
 
 impl Weakest {
@@ -48,6 +56,7 @@ impl Weakest {
             Self::Operation => "which operation to use",
             Self::Target => "which control to use it on",
             Self::Key => "which key to press",
+            Self::Value => "which value to type",
         }
     }
 }
@@ -90,6 +99,14 @@ impl Decision {
                 weakest = (Weakest::Key, key);
             }
         }
+        // A value the model matched to a field is an argument the execution
+        // depends on exactly as much as the field is. Typing the quantity into
+        // the pincode box is as wrong as typing into the wrong box.
+        if let Some(value) = self.value_confidence
+            && value < weakest.1
+        {
+            weakest = (Weakest::Value, value);
+        }
         weakest
     }
 }
@@ -131,6 +148,7 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
         target: None,
         target_confidence: None,
         value: None,
+        value_confidence: None,
         key: None,
         key_confidence: None,
         none_of_these: false,
@@ -177,6 +195,23 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
             decision.none_of_these = true;
         } else {
             decision.target = Some(chosen.to_string());
+        }
+    }
+
+    // Only read for a fill, and only when the head was asked at all: a run with
+    // no values offered has no value question in the request.
+    if operation == Operation::Fill
+        && let Some(answer) = response.answers.get(FILL_VALUE)
+    {
+        let chosen = answer.choice.as_deref().unwrap_or(NONE_OF_THESE);
+        if chosen != NONE_OF_THESE {
+            // Carried as the option id rather than the text, because the text
+            // belongs to the caller and the loop resolves the id against what
+            // the caller actually gave. A model returning an id for a value
+            // nobody offered then resolves to nothing rather than to a string
+            // it invented.
+            decision.value = Some(chosen.to_string());
+            decision.value_confidence = answer.confidence;
         }
     }
 
