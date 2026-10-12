@@ -488,6 +488,16 @@ impl ClawMcpService {
             }
         };
 
+        let wants_shot = match raw_args.get("screenshot").and_then(Value::as_str) {
+            None | Some("never") => false,
+            Some("on_handback") => true,
+            Some(other) => {
+                return ToolResult::error(format!(
+                    "pursue: screenshot has to be \"never\" or \"on_handback\", not \"{other}\"."
+                ));
+            }
+        };
+
         let destinations = match raw_args.get("destinations") {
             Some(Value::Array(listed)) => {
                 let mut parsed = Vec::with_capacity(listed.len());
@@ -636,7 +646,20 @@ impl ClawMcpService {
             &driver.notices(),
             handle.as_deref(),
         );
-        ToolResult::text(text, Some(structured))
+        let mut result = ToolResult::text(text, Some(structured));
+        // Only on a run that did not satisfy its goal, and only when asked. A
+        // satisfied run has nothing a picture would add, and an image nobody
+        // asked for spends the caller's context either way.
+        if wants_shot
+            && !matches!(
+                outcome.status,
+                browseros_decide::Status::Satisfied | browseros_decide::Status::Stopped
+            )
+            && let Some(image) = driver.look().await
+        {
+            result.content.push(image);
+        }
+        result
     }
 
     async fn call_mark_skill_run(
@@ -1639,6 +1662,11 @@ fn pursue_tool() -> Tool {
                 },
                 "description": "Pages this run may move to. It picks one by label and never invents a url, so moving stays inside the set you wrote. Leave it out and the run stays on the page you gave it. It will move at most three times."
             },
+            "screenshot": {
+                "type": "string",
+                "enum": ["never", "on_handback"],
+                "description": "Attach a picture of the page when the run hands back without satisfying the goal. Defaults to never, because an image costs you about a thousand tokens of context. Ask for it when unlabelledImages on a previous result told you the page says things the accessibility tree does not."
+            },
             "provide": {
                 "type": "object",
                 "additionalProperties": { "type": "string" },
@@ -2279,6 +2307,19 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("the input schema lists its required fields"))?;
         assert!(!required.contains(&json!("continue")));
         assert!(!required.contains(&json!("provide")));
+
+        assert_eq!(
+            schema["properties"]["screenshot"]["enum"],
+            json!(["never", "on_handback"])
+        );
+        assert!(!required.contains(&json!("screenshot")));
+        let shot = schema["properties"]["screenshot"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            shot.contains("Defaults to never"),
+            "an image nobody asked for spends the caller's context: {shot}"
+        );
 
         assert_eq!(schema["properties"]["destinations"]["type"], json!("array"));
         assert_eq!(

@@ -38,6 +38,7 @@ pub struct PageDriver {
     act_index: usize,
     navigate_index: usize,
     tabs_index: usize,
+    screenshot_index: usize,
     catalog: Arc<Vec<ToolDef>>,
     session_id: SessionId,
     identity: ToolIdentity,
@@ -67,12 +68,14 @@ impl PageDriver {
         // record as anything else.
         let navigate_index = catalog.iter().position(|tool| tool.name == "navigate")?;
         let tabs_index = catalog.iter().position(|tool| tool.name == "tabs")?;
+        let screenshot_index = catalog.iter().position(|tool| tool.name == "screenshot")?;
         Some(Self {
             session,
             page,
             act_index,
             navigate_index,
             tabs_index,
+            screenshot_index,
             catalog,
             session_id,
             identity,
@@ -93,6 +96,26 @@ impl PageDriver {
             .lock()
             .map(|held| held.clone())
             .unwrap_or_default()
+    }
+
+    /// A picture of the page, for a caller that asked for one.
+    ///
+    /// Not part of the driver trait: the loop has no use for an image, because
+    /// the model it asks reads an accessibility tree. This is for the caller,
+    /// which has eyes, and it goes down the same dispatch path as everything
+    /// else so the capture is recorded like any other tool call.
+    pub async fn look(&self) -> Option<rmcp::model::ContentBlock> {
+        let result =
+            dispatch_tool_call(self.call_to(self.screenshot_index, json!({ "page": self.page })))
+                .await
+                .ok()?;
+        if result.is_error.unwrap_or(false) {
+            return None;
+        }
+        result
+            .content
+            .into_iter()
+            .find(|block| block.as_image().is_some())
     }
 
     /// Builds the arguments for one operation.
