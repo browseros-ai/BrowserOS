@@ -45,7 +45,65 @@ pub struct Run {
     /// observed yet" from "observed, and this is what it said".
     pub url_before: Option<String>,
     /// Text the caller has supplied, by control reference.
-    pub supplied: BTreeMap<String, String>,
+    pub supplied: BTreeMap<String, Supplied>,
+    /// How many times this run has asked the caller for a value.
+    ///
+    /// Bounded, because a field that will not hold still would otherwise ask
+    /// forever: each ask costs the caller a round trip and takes no action, so
+    /// nothing else in the loop would stop it.
+    pub asks: u32,
+    /// What the run is waiting for, when it parked.
+    pub pending: Option<Pending>,
+}
+
+/// Text the caller gave for one control, and what that control looked like
+/// when the run asked for it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Supplied {
+    pub text: String,
+    /// The control's guard at the moment the run asked.
+    ///
+    /// Checked before the text is typed. A reference is only a handle into a
+    /// snapshot, so after the page moves the same `e18` can denote a different
+    /// control, and typing the caller's text into it would be the one harm this
+    /// whole exchange exists to avoid. `None` means the caller volunteered text
+    /// for a control the run never asked about, so there is no baseline to
+    /// check and none is enforced.
+    pub guard: Option<u64>,
+}
+
+/// What a parked run is waiting for.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pending {
+    /// A value for a field the model chose and the gate would otherwise have
+    /// filled.
+    Text {
+        reference: String,
+        /// The control as the caller would see it in a snapshot, in the same
+        /// words the offered-controls list uses.
+        control: String,
+        /// How sure the run was that this is the right field. A low number is
+        /// the caller's cue to look at the field before answering.
+        confidence: f64,
+        /// The control's guard at the moment of the ask, carried so the answer
+        /// can be bound to the control that was asked about.
+        guard: Option<u64>,
+        asking: Asking,
+    },
+}
+
+/// Why the run is asking.
+///
+/// A second ask for the same field is not the same event as the first, and a
+/// caller that is told only "needs text" twice has no way to tell that its
+/// answer was received and then discarded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Asking {
+    /// The run chose to type here and does not generate text.
+    FirstTime,
+    /// The caller answered, but the field changed before the text could be
+    /// typed, so the answer was not used.
+    FieldChanged,
 }
 
 impl Run {
@@ -68,6 +126,8 @@ impl Run {
             fallback_needed: false,
             url_before: None,
             supplied: BTreeMap::new(),
+            asks: 0,
+            pending: None,
         }
     }
 
@@ -77,15 +137,59 @@ impl Run {
         self.url_before.clone().unwrap_or_default()
     }
 
-    /// The text the caller has supplied for one control, if any.
+    /// The text the caller supplied for one control, if the control is still
+    /// the one the run asked about.
+    ///
+    /// `guard_now` is the control's guard on the page as it is at this moment.
+    /// A mismatch returns `None`, which is the same answer as having no text at
+    /// all, and the loop asks again rather than typing into something else.
     #[must_use]
-    pub fn text_for(&self, reference: &str) -> Option<&str> {
-        self.supplied.get(reference).map(String::as_str)
+    pub fn text_for(&self, reference: &str, guard_now: Option<u64>) -> Option<&str> {
+        let supplied = self.supplied.get(reference)?;
+        match supplied.guard {
+            Some(asked) if Some(asked) != guard_now => None,
+            _ => Some(supplied.text.as_str()),
+        }
     }
 
-    /// Records text the caller supplied. Replaces an earlier answer for the
-    /// same control, because the newer one is the caller's current intent.
+    /// Whether the caller answered for this control but the control has since
+    /// changed, which is a different thing to tell them than "I need text".
+    #[must_use]
+    pub fn answer_went_stale(&self, reference: &str, guard_now: Option<u64>) -> bool {
+        self.supplied
+            .get(reference)
+            .and_then(|supplied| supplied.guard)
+            .is_some_and(|asked| Some(asked) != guard_now)
+    }
+
+    /// Records text the caller supplied.
+    ///
+    /// Replaces an earlier answer for the same control, because the newer one
+    /// is the caller's current intent. The guard comes from what the run was
+    /// parked on, so an answer to a question the run asked is checked and an
+    /// answer the caller volunteered is not.
     pub fn supply(&mut self, reference: impl Into<String>, text: impl Into<String>) {
-        self.supplied.insert(reference.into(), text.into());
+        let reference = reference.into();
+        let guard = match &self.pending {
+            Some(Pending::Text {
+                reference: asked,
+                guard,
+                ..
+            }) if *asked == reference => *guard,
+            _ => None,
+        };
+        self.supplied.insert(
+            reference,
+            Supplied {
+                text: text.into(),
+                guard,
+            },
+        );
+    }
+
+    /// Forgets an answer the loop could not use, so the next ask is a fresh
+    /// question rather than the same stale one.
+    pub fn forget(&mut self, reference: &str) {
+        self.supplied.remove(reference);
     }
 }

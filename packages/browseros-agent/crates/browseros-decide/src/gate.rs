@@ -211,14 +211,20 @@ pub enum Verdict {
 ///
 /// The bar rises with what it costs to be wrong, which is the published
 /// guidance: a scroll and a submit do not deserve the same threshold.
+///
+/// `text` is what the caller has already supplied for the chosen control, if
+/// anything. With text in hand a fill is judged like any other operation rather
+/// than refused: it is the one operation whose argument comes from outside, and
+/// refusing it even when the argument has arrived is what made the hand-back a
+/// dead end.
 #[must_use]
-pub fn verdict(decision: &Decision, target_name: Option<&str>) -> Verdict {
+pub fn verdict(decision: &Decision, target_name: Option<&str>, text: Option<&str>) -> Verdict {
     if decision.none_of_these {
         return Verdict::HandBack(
             "none of the controls offered for this step can advance the goal".to_string(),
         );
     }
-    if decision.operation == Operation::Fill {
+    if decision.operation == Operation::Fill && text.is_none() {
         return Verdict::HandBack(
             "this step needs text typed into a field, which the caller supplies".to_string(),
         );
@@ -346,7 +352,7 @@ mod tests {
         let decision = read(&response).expect("reads");
         assert!(decision.none_of_these);
         assert!(
-            matches!(verdict(&decision, None), Verdict::HandBack(_)),
+            matches!(verdict(&decision, None, None), Verdict::HandBack(_)),
             "full confidence that nothing fits is still a hand back, not an action"
         );
     }
@@ -363,7 +369,7 @@ mod tests {
         let decision = read(&response).expect("reads");
         assert!(!decision.none_of_these);
         assert!(matches!(
-            verdict(&decision, Some("Corsair")),
+            verdict(&decision, Some("Corsair"), None),
             Verdict::Explore(_)
         ));
     }
@@ -376,7 +382,7 @@ mod tests {
             (CHECK_TARGET, answer("e9", 0.9)),
         ]);
         let decision = read(&response).expect("reads");
-        assert_eq!(verdict(&decision, Some("Corsair")), Verdict::Execute);
+        assert_eq!(verdict(&decision, Some("Corsair"), None), Verdict::Execute);
     }
 
     /// Under its bar, an ordinary action is not run.
@@ -388,7 +394,7 @@ mod tests {
         ]);
         let decision = read(&response).expect("reads");
         assert!(matches!(
-            verdict(&decision, Some("Corsair")),
+            verdict(&decision, Some("Corsair"), None),
             Verdict::Explore(_)
         ));
     }
@@ -403,12 +409,12 @@ mod tests {
         ]);
         let decision = read(&response).expect("reads");
         assert_eq!(
-            verdict(&decision, Some("Corsair brand filter")),
+            verdict(&decision, Some("Corsair brand filter"), None),
             Verdict::Execute
         );
         assert!(
             matches!(
-                verdict(&decision, Some("Place your order")),
+                verdict(&decision, Some("Place your order"), None),
                 Verdict::HandBack(_)
             ),
             "a high-stakes action short of its bar is handed back, because looking at more of \
@@ -420,7 +426,7 @@ mod tests {
     #[test]
     fn scrolling_clears_a_lower_bar_than_clicking() {
         let scroll = read(&response(&[(OPERATION, answer("SCROLL_DOWN", 0.65))])).expect("reads");
-        assert_eq!(verdict(&scroll, None), Verdict::Execute);
+        assert_eq!(verdict(&scroll, None, None), Verdict::Execute);
 
         let click = read(&response(&[
             (OPERATION, answer("CLICK", 0.65)),
@@ -428,22 +434,70 @@ mod tests {
         ]))
         .expect("reads");
         assert!(matches!(
-            verdict(&click, Some("Corsair")),
+            verdict(&click, Some("Corsair"), None),
             Verdict::Explore(_)
         ));
     }
 
-    /// Typing is handed back whatever the confidence: the caller owns the text,
-    /// because this model is not trained to generate it.
+    /// Typing with nothing to type is handed back whatever the confidence: the
+    /// caller owns the text, because this model is not trained to generate it.
     #[test]
-    fn typing_is_always_handed_back() {
+    fn typing_without_text_is_handed_back() {
         let response = response(&[
             (OPERATION, answer("FILL", 1.0)),
             (FILL_TARGET, answer("e5", 1.0)),
         ]);
         let decision = read(&response).expect("reads");
         assert!(matches!(
-            verdict(&decision, Some("Search")),
+            verdict(&decision, Some("Search"), None),
+            Verdict::HandBack(_)
+        ));
+    }
+
+    /// Once the caller has supplied the text, a fill is an operation like any
+    /// other. Refusing it even then is what made the hand-back a dead end.
+    #[test]
+    fn typing_with_text_is_executed() {
+        let response = response(&[
+            (OPERATION, answer("FILL", 0.95)),
+            (FILL_TARGET, answer("e5", 0.95)),
+        ]);
+        let decision = read(&response).expect("reads");
+        assert_eq!(
+            verdict(&decision, Some("Search"), Some("Bengaluru")),
+            Verdict::Execute
+        );
+    }
+
+    /// The caller's text does not buy the field a pass. A string typed into a
+    /// field the model picked at 0.40 is worse than a hand-back, because the
+    /// hand-back is reversible and the keystrokes are not.
+    #[test]
+    fn typing_into_a_field_chosen_without_confidence_is_not_executed() {
+        let response = response(&[
+            (OPERATION, answer("FILL", 0.99)),
+            (FILL_TARGET, answer("e5", 0.40)),
+        ]);
+        let decision = read(&response).expect("reads");
+        assert!(
+            !matches!(
+                verdict(&decision, Some("Search"), Some("Bengaluru")),
+                Verdict::Execute
+            ),
+            "the target bar applies to a fill exactly as it does to a click"
+        );
+    }
+
+    /// And a high-stakes field keeps the high bar with text in hand.
+    #[test]
+    fn typing_into_a_high_stakes_field_keeps_the_high_bar() {
+        let response = response(&[
+            (OPERATION, answer("FILL", 0.80)),
+            (FILL_TARGET, answer("e5", 0.80)),
+        ]);
+        let decision = read(&response).expect("reads");
+        assert!(matches!(
+            verdict(&decision, Some("Confirm payment"), Some("4111")),
             Verdict::HandBack(_)
         ));
     }
@@ -462,7 +516,10 @@ mod tests {
         assert!((decision.confidence() - 0.31).abs() < f64::EPSILON);
         assert_eq!(decision.weakest().0, Weakest::Key);
         assert!(
-            matches!(verdict(&decision, Some("Sort by")), Verdict::Explore(_)),
+            matches!(
+                verdict(&decision, Some("Sort by"), None),
+                Verdict::Explore(_)
+            ),
             "it does not execute"
         );
     }
@@ -477,7 +534,7 @@ mod tests {
             (PRESS_KEY, answer("Enter", 0.20)),
         ]);
         let decision = read(&response).expect("reads");
-        match verdict(&decision, Some("Place your order")) {
+        match verdict(&decision, Some("Place your order"), None) {
             Verdict::HandBack(reason) => assert!(
                 reason.contains("which key to press"),
                 "the reason says which judgement was weak: {reason}"
@@ -498,7 +555,7 @@ mod tests {
         let decision = read(&response).expect("reads");
         assert!((decision.confidence() - 0.9).abs() < f64::EPSILON);
         assert_eq!(decision.weakest().0, Weakest::Target);
-        assert_eq!(verdict(&decision, Some("Corsair")), Verdict::Execute);
+        assert_eq!(verdict(&decision, Some("Corsair"), None), Verdict::Execute);
     }
 
     /// A Choice always carries a confidence and only a Noul does not, so one
@@ -515,7 +572,7 @@ mod tests {
         let decision = read(&response).expect("reads");
         assert!(decision.confidence().abs() < f64::EPSILON);
         assert!(matches!(
-            verdict(&decision, Some("Corsair")),
+            verdict(&decision, Some("Corsair"), None),
             Verdict::Explore(_)
         ));
     }

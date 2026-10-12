@@ -273,7 +273,7 @@ async fn main() {
                 );
                 println!("  not consulted: a terminal answer is a report, not an action.");
             } else {
-                let verdict = gate::verdict(&decision, target_name.as_deref());
+                let verdict = gate::verdict(&decision, target_name.as_deref(), None);
                 println!("  verdict: {verdict:?}");
                 if !matches!(verdict, Verdict::HandBack(_)) {
                     println!("  NOTE: it chose to act, so this page did not reach the escape path");

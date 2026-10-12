@@ -86,7 +86,7 @@ async fn step(jev: &Jev, goal: &str, expect: Operation) {
                 .as_deref()
                 .and_then(|reference| view.control(reference))
                 .map(|control| control.name.clone());
-            let verdict = gate::verdict(&decision, target_name.as_deref());
+            let verdict = gate::verdict(&decision, target_name.as_deref(), None);
             println!(
                 "  chose {:<12} target {:<6} value {:<22} confidence {:.2}  input {}",
                 decision.operation.as_str(),

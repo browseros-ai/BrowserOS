@@ -15,6 +15,7 @@ use browseros_core::{
 use browseros_decide::gate::Decision;
 use browseros_decide::operations::Operation;
 use browseros_decide::pursue::{ActError, Driver, Outcome, Status};
+use browseros_decide::run::{Asking, Pending};
 use browseros_decide::view::PageView;
 use browseros_mcp::{OutputFileAccess, ToolDef};
 use serde_json::{Value, json};
@@ -278,6 +279,26 @@ pub fn render(goal: &str, page: u32, outcome: &Outcome, notices: &[String]) -> (
             "Stopped making progress: {}. Continue with the page tools.",
             cause.describe(outcome.actions())
         ),
+        Status::NeedsValue(Pending::Text {
+            reference,
+            control,
+            confidence,
+            asking,
+            ..
+        }) => format!(
+            "Stopped and handing back for one value: it chose to type into {control} \
+             ({reference}) at confidence {confidence:.2}, and it does not generate text.{} \
+             {} of {} actions changed the page so far.",
+            match asking {
+                Asking::FirstTime => String::new(),
+                Asking::FieldChanged => " You answered this already, but the field changed \
+                                         before the text could be typed, so the answer was not \
+                                         used."
+                    .to_string(),
+            },
+            outcome.changed(),
+            outcome.actions(),
+        ),
         // Handing back after changing the page is not handing back from a
         // standing start. Measured live: a run applied a facet filter at 0.93,
         // the url gained `rh=p_n_g-1003405005111%3A30060745031`, and the
@@ -399,6 +420,7 @@ fn status_name(status: &Status) -> &'static str {
         Status::Blocked(_) => "blocked",
         Status::Stalled(_) => "stalled",
         Status::NeedsInput(_) => "needs_input",
+        Status::NeedsValue(_) => "needs_value",
         Status::OutOfBudget => "out_of_budget",
         Status::Stopped => "stopped",
         Status::Failed(_) => "failed",

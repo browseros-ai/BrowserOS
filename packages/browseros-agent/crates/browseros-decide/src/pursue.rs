@@ -17,7 +17,7 @@ use crate::client::{Jev, JevError, MAX_RETRIES, Question};
 use crate::gate::{self, Decision, Verdict};
 use crate::operations::Operation;
 use crate::questions;
-use crate::run::Run;
+use crate::run::{Asking, Pending, Run};
 use crate::space::ActionSpace;
 use crate::view::PageView;
 use std::time::Duration;
@@ -28,6 +28,13 @@ pub const STALL_LIMIT: u32 = 3;
 /// How many times a stale decision may be retried before giving up. A page that
 /// changes under every decision is not one this can finish.
 pub const STALE_RETRIES: u32 = 3;
+
+/// How many times a run may ask the caller for a value before it stops asking.
+///
+/// An ask takes no action, so neither the step budget nor the stall counters
+/// bound it. A field that changes under every answer would otherwise trade
+/// round trips with the caller indefinitely.
+pub const ASK_LIMIT: u32 = 3;
 
 /// Why a run gave up making progress.
 ///
@@ -154,7 +161,10 @@ pub trait Driver {
 }
 
 /// How a run ended.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// No `Eq`: an ask carries the confidence behind the field it chose, and that
+/// number is worth more to the caller than the trait is to this enum.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Status {
     /// The model said every requirement was met, on a page that had not moved
     /// since it looked.
@@ -163,8 +173,11 @@ pub enum Status {
     Blocked(String),
     /// The run stopped making progress, with the reason it stopped.
     Stalled(Stuck),
-    /// The caller has to supply something before this can continue.
+    /// The caller has to supply something before this can continue, and the
+    /// run cannot be continued: it is a judgement rather than a missing value.
     NeedsInput(String),
+    /// The run needs one value from the caller and can carry on once it has it.
+    NeedsValue(Pending),
     /// The step or time budget ran out.
     OutOfBudget,
     /// Cancelled.
@@ -382,7 +395,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             return park(run, outcome);
         }
 
-        let decision = match gate::read(&response) {
+        let mut decision = match gate::read(&response) {
             Ok(decision) => decision,
             Err(error) => {
                 return end(
@@ -485,8 +498,91 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             continue;
         }
 
-        match gate::verdict(&decision, target_name.as_deref()) {
-            Verdict::Execute => {}
+        // A reference is a handle into one snapshot, so the guard is what ties
+        // the caller's answer to the control it was asked about. Read from the
+        // candidate set the decision was made from, which is the same place the
+        // freshness check below reads it.
+        let chosen_guard = decision
+            .target
+            .as_deref()
+            .and_then(|reference| space.candidate(reference).map(|candidate| candidate.guard));
+        let supplied = decision
+            .target
+            .as_deref()
+            .and_then(|reference| run.text_for(reference, chosen_guard))
+            .map(str::to_string);
+
+        match gate::verdict(&decision, target_name.as_deref(), supplied.as_deref()) {
+            Verdict::Execute => {
+                if decision.operation == Operation::Fill {
+                    // The only operation whose argument comes from outside the
+                    // model. `args_for` already forwards this to the act tool
+                    // as `value`, so nothing downstream has to know where it
+                    // came from.
+                    decision.value = supplied;
+                }
+            }
+            Verdict::HandBack(reason) if decision.operation == Operation::Fill => {
+                let Some(reference) = decision.target.clone() else {
+                    // A fill with no target is not a question anyone can
+                    // answer, so it is reported rather than asked.
+                    return end(
+                        &mut run,
+                        &started,
+                        Status::NeedsInput(reason),
+                        &view,
+                        offered,
+                        omitted,
+                    );
+                };
+                let asking = if run.answer_went_stale(&reference, chosen_guard) {
+                    // The caller answered and the field moved before the text
+                    // could be typed. Forget the answer, because it was bound
+                    // to a control that is no longer there, and say so.
+                    run.forget(&reference);
+                    Asking::FieldChanged
+                } else {
+                    Asking::FirstTime
+                };
+                run.asks += 1;
+                let pending = Pending::Text {
+                    reference,
+                    control: control_label(&space, decision.target.as_deref()),
+                    confidence: decision.target_confidence.unwrap_or(0.0),
+                    guard: chosen_guard,
+                    asking,
+                };
+                if run.asks > ASK_LIMIT {
+                    // A field that will not hold still would ask forever, and
+                    // every ask costs the caller a round trip while taking no
+                    // action, so nothing else in the loop would stop it.
+                    return end(
+                        &mut run,
+                        &started,
+                        Status::NeedsInput(
+                            "it asked for text three times and the field changed under every \
+                             answer, so it has stopped asking. Look at the page yourself"
+                                .to_string(),
+                        ),
+                        &view,
+                        offered,
+                        omitted,
+                    );
+                }
+                run.pending = Some(pending.clone());
+                let mut outcome = end(
+                    &mut run,
+                    &started,
+                    Status::NeedsValue(pending),
+                    &view,
+                    offered,
+                    omitted,
+                );
+                // What it was choosing between, so a caller told the wrong
+                // field was picked can see the alternatives it had.
+                outcome.offered_controls = offered_labels(&space);
+                return park(run, outcome);
+            }
             Verdict::HandBack(reason) => {
                 let mut outcome = end(
                     &mut run,
@@ -767,6 +863,21 @@ fn offered_labels(space: &ActionSpace) -> Vec<String> {
                 .to_string()
         })
         .collect()
+}
+
+/// One offered control as the caller sees it, in the same words the
+/// offered-controls list uses, so a question and a list never disagree about
+/// what something is called.
+fn control_label(space: &ActionSpace, reference: Option<&str>) -> String {
+    let Some(reference) = reference else {
+        return "an unnamed control".to_string();
+    };
+    space
+        .candidate(reference)
+        .and_then(|candidate| candidate.descriptor.get("control"))
+        .and_then(|value| value.as_str())
+        .unwrap_or(reference)
+        .to_string()
 }
 
 fn describe(decision: &Decision, target_name: &Option<String>, changed: bool) -> String {

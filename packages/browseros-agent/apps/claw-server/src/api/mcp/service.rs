@@ -1530,7 +1530,7 @@ fn pursue_output_schema() -> Value {
             "status": {
                 "type": "string",
                 "enum": [
-                    "satisfied", "blocked", "stalled", "needs_input",
+                    "satisfied", "blocked", "stalled", "needs_input", "needs_value",
                     "out_of_budget", "stopped", "failed"
                 ]
             },
@@ -1985,24 +1985,24 @@ mod tests {
     /// Read from the wire shape the specification prints, not from a builder, so
     /// the thing under test is what a client actually sends.
     #[test]
-    fn capability_words_name_what_a_peer_declared() {
-        let read = |value: Value| -> String {
-            let capabilities: rmcp::model::ClientCapabilities =
-                serde_json::from_value(value).expect("client capabilities");
-            super::capability_words(Some(&capabilities))
+    fn capability_words_name_what_a_peer_declared() -> anyhow::Result<()> {
+        let read = |value: Value| -> anyhow::Result<String> {
+            let capabilities: rmcp::model::ClientCapabilities = serde_json::from_value(value)?;
+            Ok(super::capability_words(Some(&capabilities)))
         };
 
         assert_eq!(super::capability_words(None), "none");
         assert_eq!(
-            read(json!({ "elicitation": { "form": {}, "url": {} } })),
+            read(json!({ "elicitation": { "form": {}, "url": {} } }))?,
             "elicitation.form,elicitation.url"
         );
         // The specification is explicit that an empty capabilities object is
         // equivalent to declaring form mode only, so a peer that names no mode
         // still supports one and must not be read as supporting nothing.
-        assert_eq!(read(json!({ "elicitation": {} })), "elicitation.form");
-        assert_eq!(read(json!({ "sampling": {} })), "sampling");
-        assert_eq!(read(json!({})), "declared, none usable");
+        assert_eq!(read(json!({ "elicitation": {} }))?, "elicitation.form");
+        assert_eq!(read(json!({ "sampling": {} }))?, "sampling");
+        assert_eq!(read(json!({}))?, "declared, none usable");
+        Ok(())
     }
 
     #[test]

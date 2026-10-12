@@ -11,9 +11,10 @@ use std::sync::Mutex;
 
 use browseros_decide::client::{Answer, JevError, Question, Response, Usage};
 use browseros_decide::gate::Decision;
+use browseros_decide::operations::Operation;
 use browseros_decide::pursue::{ActError, Budget, Driver, Oracle, Status, Stuck, advance, pursue};
 use browseros_decide::questions::{CLICK_TARGET, OPERATION, SELECT_VALUE};
-use browseros_decide::run::Run;
+use browseros_decide::run::{Asking, Pending, Run};
 use browseros_decide::view::{Control, ControlState, PageView};
 
 fn control(reference: &str, role: &str, name: &str) -> Control {
@@ -274,27 +275,140 @@ async fn three_actions_that_change_nothing_stop_the_run() {
     );
 }
 
-/// A goal needing typed text is handed back, not guessed at. This model is not
-/// trained to generate text, so inventing a value would be the wrong fix.
-#[tokio::test]
-async fn a_goal_needing_text_is_handed_back() {
+/// A page with one search box, which is the smallest shape that reaches a fill.
+fn page_with_a_search_box() -> PageView {
     let mut field = control("e2", "textbox", "Search");
     field.state.editable = true;
     let mut view = page(1);
     view.controls.push(field);
+    view
+}
 
-    let oracle = Scripted::new(vec![says(&[
+fn wants_to_type() -> Scripted {
+    Scripted::new(vec![says(&[
         (OPERATION, "FILL", 0.99),
         ("fill_target", "e2", 0.99),
-    ])]);
-    let fake = Fake::new(vec![], vec![view]);
-    let outcome = pursue(&oracle, &fake, "Search for 32GB DDR5", budget()).await;
+    ])])
+}
+
+/// A goal needing typed text is asked about, not guessed at. This model is not
+/// trained to generate text, so inventing a value would be the wrong fix.
+///
+/// The ask names the field, because the caller has to know what it is answering
+/// about: a sentence saying only that text is needed left it to read prose and
+/// then start again.
+#[tokio::test]
+async fn a_goal_needing_text_asks_for_it_and_names_the_field() {
+    let fake = Fake::new(vec![], vec![page_with_a_search_box()]);
+    let outcome = pursue(&wants_to_type(), &fake, "Search for 32GB DDR5", budget()).await;
+
+    let Status::NeedsValue(Pending::Text {
+        reference,
+        control,
+        confidence,
+        asking,
+        ..
+    }) = &outcome.status
+    else {
+        panic!("got {:?}", outcome.status);
+    };
+    assert_eq!(reference, "e2");
+    assert_eq!(control, "textbox \"Search\"");
+    assert!((confidence - 0.99).abs() < f64::EPSILON);
+    assert_eq!(*asking, Asking::FirstTime);
+    assert_eq!(outcome.actions(), 0, "nothing was typed");
+    assert!(
+        outcome.resume.is_some(),
+        "an ask the caller can answer has to carry the run"
+    );
+    assert!(
+        !outcome.offered_controls.is_empty(),
+        "and what it was choosing between, in case it chose the wrong field"
+    );
+}
+
+/// The answer arrives and the run carries on. Before this the caller had to
+/// start a new run, which observed, ranked and decided from nothing.
+#[tokio::test]
+async fn an_answered_run_types_the_text_and_continues() {
+    let asked = pursue(
+        &wants_to_type(),
+        &Fake::new(vec![], vec![page_with_a_search_box()]),
+        "Search for 32GB DDR5",
+        budget(),
+    )
+    .await;
+    let mut run = asked.resume.expect("an ask is resumable");
+    run.supply("e2", "32GB DDR5");
+
+    let fake = Fake::new(vec![Ok(())], vec![page_with_a_search_box()]).moving_once();
+    let outcome = advance(&wants_to_type(), &fake, run).await;
+
+    assert_eq!(outcome.actions(), 1, "the field was filled");
+    let step = &outcome.trail[0];
+    assert_eq!(step.operation, Operation::Fill);
+    assert_eq!(step.target.as_deref(), Some("e2"));
+    assert_eq!(
+        step.value.as_deref(),
+        Some("32GB DDR5"),
+        "the caller's text is what reaches the browser"
+    );
+    assert!(step.page_changed);
+}
+
+/// A reference is a handle into one snapshot. After the page moves the same
+/// `e2` can denote a different control, and typing the caller's text into it is
+/// the one harm this whole exchange exists to avoid.
+#[tokio::test]
+async fn an_answer_is_not_typed_into_a_control_that_changed() {
+    let asked = pursue(
+        &wants_to_type(),
+        &Fake::new(vec![], vec![page_with_a_search_box()]),
+        "Search for 32GB DDR5",
+        budget(),
+    )
+    .await;
+    let mut run = asked.resume.expect("resumable");
+    run.supply("e2", "32GB DDR5");
+
+    // Same reference, different control behind it.
+    let mut moved = page_with_a_search_box();
+    moved.controls[1].guard = 99;
+    let fake = Fake::new(vec![Ok(())], vec![moved]);
+    let outcome = advance(&wants_to_type(), &fake, run).await;
+
+    assert_eq!(outcome.actions(), 0, "nothing was typed into it");
+    let Status::NeedsValue(Pending::Text { asking, .. }) = &outcome.status else {
+        panic!("got {:?}", outcome.status);
+    };
+    assert_eq!(
+        *asking,
+        Asking::FieldChanged,
+        "and the caller is told its answer was received and then discarded, \
+         which is not the same event as the first ask"
+    );
+}
+
+/// An ask takes no action, so neither the step budget nor the stall counters
+/// bound it. Without a limit of its own a field that changes under every answer
+/// would trade round trips with the caller forever.
+#[tokio::test]
+async fn a_field_that_never_holds_still_stops_being_asked_about() {
+    let mut run = Run::new("Search for 32GB DDR5", budget());
+    run.asks = browseros_decide::pursue::ASK_LIMIT;
+
+    let fake = Fake::new(vec![], vec![page_with_a_search_box()]);
+    let outcome = advance(&wants_to_type(), &fake, run).await;
+
     assert!(
         matches!(outcome.status, Status::NeedsInput(_)),
         "got {:?}",
         outcome.status
     );
-    assert_eq!(outcome.actions(), 0, "nothing was typed");
+    assert!(
+        outcome.resume.is_none(),
+        "it has stopped asking, so it must not invite another answer"
+    );
 }
 
 /// A terminal answer is checked against the page before it is believed. The
