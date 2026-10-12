@@ -66,6 +66,26 @@ impl Consequence {
 /// generated string and this model does not generate.
 pub const PRESS_KEYS: &[&str] = &["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp", "Space"];
 
+/// Whether a control's name says that getting it wrong is expensive.
+///
+/// Matched on whole words, not substrings. Substring matching read "Noise
+/// Cancellation" as a cancel and so rated every Sony WH-1000XM5 listing on a
+/// search page as high consequence, which raised the bar to 0.85 and made the
+/// run refuse to open any of them. Measured live: forty offered controls, a
+/// hand-back saying the action was too risky to guess, and nothing bought or
+/// cancelled anywhere near it.
+///
+/// The same mistake was waiting in "marketplace" and "recorder" for "place"
+/// and "order", which appear on ordinary shopping pages constantly.
+fn names_something_expensive(name: &str) -> bool {
+    name.split(|c: char| !c.is_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .any(|word| {
+            let word = word.to_lowercase();
+            HIGH_STAKES.contains(&word.as_str())
+        })
+}
+
 /// Words in a control's name that mean getting it wrong is expensive.
 const HIGH_STAKES: &[&str] = &[
     "submit",
@@ -204,8 +224,7 @@ impl Operation {
         if matches!(self, Self::GoTo | Self::GoBack) {
             return Consequence::High;
         }
-        let name = target_name.unwrap_or_default().to_lowercase();
-        if HIGH_STAKES.iter().any(|word| name.contains(word)) {
+        if names_something_expensive(target_name.unwrap_or_default()) {
             return Consequence::High;
         }
         Consequence::Medium
@@ -328,6 +347,53 @@ mod tests {
             assert_eq!(Operation::parse(operation.as_str()), Some(operation));
         }
         assert_eq!(Operation::parse("NONSENSE"), None);
+    }
+
+    /// The misfire that was found live. A product name is not a cancel button,
+    /// and reading it as one raised the bar to 0.85 and made the run refuse to
+    /// open any listing on a search page.
+    #[test]
+    fn a_product_name_is_not_a_high_stakes_control() {
+        for name in [
+            "SONY WH-1000XM5 Wireless Noise Cancellation with AI Noise Reduction Bluetooth",
+            "Noise Cancelling Headphones",
+            "Marketplace",
+            "Sony ICD-PX470 Voice Recorder",
+            "Repayment schedule",
+            "Displacement sensor",
+            "Removable cover",
+        ] {
+            assert_eq!(
+                Operation::Click.consequence(Some(name)),
+                Consequence::Medium,
+                "{name} is not a submit"
+            );
+        }
+    }
+
+    /// And the words that really do mean it still do, whatever their case or
+    /// punctuation.
+    #[test]
+    fn a_consequential_control_is_still_recognised() {
+        for name in [
+            "Place your order",
+            "Buy now",
+            "PAY NOW",
+            "Checkout",
+            "Delete account",
+            "Confirm",
+            "Cancel subscription",
+            "Submit application",
+            "Remove item",
+            "Send message",
+            "Subscribe",
+        ] {
+            assert_eq!(
+                Operation::Click.consequence(Some(name)),
+                Consequence::High,
+                "{name} is expensive to get wrong"
+            );
+        }
     }
 
     /// Scrolling costs a round trip; clicking changes the page; clicking
