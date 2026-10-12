@@ -1030,11 +1030,12 @@ async fn running_out_of_budget_hands_the_run_back() {
     );
 }
 
-/// The endings that are judgements rather than missing values. Handing the run
-/// back for these would invite a caller to retry a decision that has already
-/// been made three times.
+/// A stall is a judgement, and for a while that was the argument for not
+/// handing the run back. Measured on a live session, withholding it cost six
+/// hand-written goal restatements in one errand, each reciting page state the
+/// run already held. So it is offered, and the counters are what keep it safe.
 #[tokio::test]
-async fn a_stall_is_not_resumable() {
+async fn a_stall_is_resumable() {
     let outcome = pursue(
         &one_click(),
         &Fake::with_one_page(vec![Ok(()), Ok(()), Ok(())]),
@@ -1044,6 +1045,54 @@ async fn a_stall_is_not_resumable() {
     .await;
 
     assert_eq!(outcome.status, Status::Stalled(Stuck::NothingChanged));
+    let run = outcome.resume.expect("a stall can be carried on");
+    assert_eq!(
+        run.unchanged,
+        browseros_decide::pursue::STALL_LIMIT,
+        "the counter travels, so a resumed stall does not get a fresh three attempts"
+    );
+}
+
+/// The resumed run reaches the limit on its first unproductive action rather
+/// than starting the count again, which is what stops a caller looping on it.
+#[tokio::test]
+async fn a_resumed_stall_stalls_again_immediately() {
+    let first = pursue(
+        &one_click(),
+        &Fake::with_one_page(vec![Ok(()), Ok(()), Ok(())]),
+        "apply",
+        budget(),
+    )
+    .await;
+    let run = first.resume.expect("resumable");
+
+    let second = advance(&one_click(), &Fake::with_one_page(vec![Ok(())]), run).await;
+
+    assert_eq!(second.status, Status::Stalled(Stuck::NothingChanged));
+    assert_eq!(
+        second.actions(),
+        4,
+        "one more action than the three the first call took, not three more"
+    );
+}
+
+/// A failure and an operator stop have nothing to carry on from.
+#[tokio::test]
+async fn a_failure_is_not_resumable() {
+    let oracle = Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.95),
+        (CLICK_TARGET, "e1", 0.95),
+    ])]);
+    let fake = Fake::with_one_page(vec![Err(ActError::Fatal(
+        "the browser is gone".to_string(),
+    ))]);
+    let outcome = pursue(&oracle, &fake, "apply", budget()).await;
+
+    assert!(
+        matches!(outcome.status, Status::Failed(_)),
+        "got {:?}",
+        outcome.status
+    );
     assert!(outcome.resume.is_none());
 }
 
@@ -1368,8 +1417,9 @@ async fn a_value_the_caller_offered_is_typed_without_asking() {
         "the option id resolves to the caller's text, not to the id"
     );
     assert!(
-        outcome.resume.is_none(),
-        "nothing to continue: it did not park"
+        !matches!(outcome.status, Status::NeedsValue(_)),
+        "it did not stop to ask: {:?}",
+        outcome.status
     );
 }
 

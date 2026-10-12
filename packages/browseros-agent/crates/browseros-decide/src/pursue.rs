@@ -276,10 +276,16 @@ pub struct Outcome {
     pub opened: Vec<OpenedPage>,
     /// The run itself, when this ending can be continued.
     ///
-    /// Set on the endings where the caller can answer something and carry on,
-    /// and on nothing else: a stall, a block and a failure are judgements
-    /// rather than missing values, so handing the run back for those would
-    /// invite a caller to retry something that already decided it was done.
+    /// Set wherever continuing is meaningful: a value was needed, the step
+    /// limit was reached, or the run stopped on a judgement the caller can
+    /// change the circumstances of. Measured on a live session, withholding it
+    /// from a stall and a block cost six hand-written goal restatements in one
+    /// errand, each reciting page state the run already held.
+    ///
+    /// Not set on a failure or an operator stop, where there is nothing to
+    /// carry on from. Resuming a judgement is safe because the counters travel
+    /// with the run, so a resumed stall that stalls again reaches the limit
+    /// immediately rather than getting a fresh three attempts.
     pub resume: Option<Run>,
 }
 
@@ -532,7 +538,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     omitted,
                     &opened,
                 );
-                return stuck(&space, outcome);
+                return park(run, stuck(&space, outcome));
             }
             view = refresh(driver, &view).await;
             continue;
@@ -597,7 +603,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 // caller should decide", and it carries the same context the
                 // escape path does.
                 outcome.offered_controls = offered_labels(&space);
-                return outcome;
+                return park(run, outcome);
             }
             // Done on a page that moved: look again rather than assert.
             continue;
@@ -756,7 +762,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             Verdict::Explore(reason) => {
                 // Exploring is only progress if there is somewhere to look.
                 if space.omitted == 0 && view.text.is_empty() {
-                    return end(
+                    let outcome = end(
                         &mut run,
                         &started,
                         Status::Blocked(reason),
@@ -765,6 +771,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         omitted,
                         &opened,
                     );
+                    return park(run, stuck(&space, outcome));
                 }
                 run.declined += 1;
                 if run.declined >= STALL_LIMIT {
@@ -777,7 +784,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         omitted,
                         &opened,
                     );
-                    return stuck(&space, outcome);
+                    return park(run, stuck(&space, outcome));
                 }
                 let before = view.fingerprint;
                 view = refresh(driver, &view).await;
@@ -805,7 +812,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                             omitted,
                             &opened,
                         );
-                        return stuck(&space, outcome);
+                        return park(run, stuck(&space, outcome));
                     }
                     // Recorded, because it happened to the page and the step
                     // budget is a budget of things that happened to the page.
@@ -871,7 +878,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         omitted,
                         &opened,
                     );
-                    return stuck(&space, outcome);
+                    return park(run, stuck(&space, outcome));
                 }
                 continue;
             }
@@ -971,7 +978,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         omitted,
                         &opened,
                     );
-                    return stuck(&space, outcome);
+                    return park(run, stuck(&space, outcome));
                 }
             }
             continue;
@@ -995,7 +1002,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         omitted,
                         &opened,
                     );
-                    return stuck(&space, outcome);
+                    return park(run, stuck(&space, outcome));
                 }
                 view = refresh(driver, &view).await;
                 continue;
@@ -1053,7 +1060,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     omitted,
                     &opened,
                 );
-                return stuck(&space, outcome);
+                return park(run, stuck(&space, outcome));
             }
         }
     }

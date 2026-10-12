@@ -403,12 +403,14 @@ pub fn render(
         ),
         Status::Blocked(reason) => format!(
             "Stopped: {reason}, at confidence {}. The page tools still work, so continue with \
-             snapshot and act.",
-            confidence_text(outcome.terminal_confidence)
+             snapshot and act.{}",
+            confidence_text(outcome.terminal_confidence),
+            carry_on_line(handle, page),
         ),
         Status::Stalled(cause) => format!(
-            "Stopped making progress: {}. Continue with the page tools.",
-            cause.describe(outcome.actions())
+            "Stopped making progress: {}. Continue with the page tools.{}",
+            cause.describe(outcome.actions()),
+            carry_on_line(handle, page),
         ),
         Status::NeedsValue(Pending::Text {
             reference,
@@ -581,6 +583,24 @@ pub fn render(
 /// caller to pass a handle it does not have is worse than telling it nothing.
 fn continue_argument(handle: Option<&str>) -> String {
     handle.map_or_else(String::new, |handle| format!(", continue: \"{handle}\""))
+}
+
+/// What to add when a run stopped on a judgement it could be carried past.
+///
+/// The run's trail is the state, so changing the circumstances and passing the
+/// handle back beats restating the goal. Measured on a live session, without
+/// this the caller rewrote its goal six times in one errand, the last two
+/// versions reciting page state the run already held.
+fn carry_on_line(handle: Option<&str>, page: u32) -> String {
+    let Some(handle) = handle else {
+        return String::new();
+    };
+    format!(
+        "\nIf you change something here, for instance by dismissing a popup or scrolling, carry \
+         this same run on rather than restating the goal:\n  pursue(page: {page}, goal: <the \
+         same goal>, continue: \"{handle}\")\nIt keeps its actions and its counters, so it stops \
+         again quickly if nothing really changed."
+    )
 }
 
 /// What to add when the run could see other empty fields.
@@ -858,6 +878,40 @@ mod tests {
 
         assert_eq!(structured["needsInput"].as_array().map(Vec::len), Some(1));
         assert!(!text.contains("empty fields"), "{text}");
+    }
+
+    /// The run's trail is the state, so a caller that changes the circumstances
+    /// can carry the same run on instead of restating the goal. Without this,
+    /// one measured errand rewrote its goal six times, the last two versions
+    /// reciting page state the run already held.
+    #[test]
+    fn a_stall_offers_to_be_carried_on() {
+        let ended = outcome(Status::Stalled(browseros_decide::Stuck::NotConfident));
+        let (text, structured) = render("set delivery to 600042", 5, &ended, &[], Some("ctn-01J"));
+
+        assert!(text.contains("continue: \"ctn-01J\""), "{text}");
+        assert!(text.contains("rather than restating the goal"), "{text}");
+        assert!(text.contains("stops again quickly"), "{text}");
+        assert_eq!(structured["continueWith"], "ctn-01J");
+    }
+
+    #[test]
+    fn a_block_offers_to_be_carried_on() {
+        let ended = outcome(Status::Blocked("nothing could advance it".to_string()));
+        let (text, _) = render("set delivery to 600042", 5, &ended, &[], Some("ctn-01J"));
+
+        assert!(text.contains("continue: \"ctn-01J\""), "{text}");
+    }
+
+    /// A failure has nothing to carry on from, so it must not pretend
+    /// otherwise.
+    #[test]
+    fn a_failure_does_not_offer_to_be_carried_on() {
+        let ended = outcome(Status::Failed("the browser is not connected".to_string()));
+        let (text, structured) = render("set delivery to 600042", 5, &ended, &[], None);
+
+        assert!(!text.contains("continue:"), "{text}");
+        assert_eq!(structured["continueWith"], serde_json::Value::Null);
     }
 
     /// Two different endings wear the out-of-budget label and they need
