@@ -741,24 +741,30 @@ impl ClawMcpService {
             }),
             _ => None,
         };
+        // Captured before rendering, because the result has to say whether an
+        // image is attached and that is only knowable once the capture either
+        // worked or did not. Only on a run that did not satisfy its goal, and
+        // only when asked: a satisfied run has nothing a picture would add, and
+        // an image nobody asked for spends the caller's context either way.
+        let shot = if wants_shot
+            && !matches!(
+                outcome.status,
+                browseros_decide::Status::Satisfied | browseros_decide::Status::Stopped
+            ) {
+            driver.look().await
+        } else {
+            None
+        };
         let (text, structured) = crate::api::mcp::pursue::render(
             goal,
             driver.page(),
             &outcome,
             &driver.notices(),
             handle.as_deref(),
+            shot.is_some(),
         );
         let mut result = ToolResult::text(text, Some(structured));
-        // Only on a run that did not satisfy its goal, and only when asked. A
-        // satisfied run has nothing a picture would add, and an image nobody
-        // asked for spends the caller's context either way.
-        if wants_shot
-            && !matches!(
-                outcome.status,
-                browseros_decide::Status::Satisfied | browseros_decide::Status::Stopped
-            )
-            && let Some(image) = driver.look().await
-        {
+        if let Some(image) = shot {
             result.content.push(image);
         }
         (result, ask)
@@ -2714,7 +2720,7 @@ mod tests {
                 resume: None,
             };
             let (_, structured) =
-                crate::api::mcp::pursue::render("a goal", 1, &outcome, &[], Some("ctn-01J"));
+                crate::api::mcp::pursue::render("a goal", 1, &outcome, &[], Some("ctn-01J"), false);
             let emitted = structured
                 .as_object()
                 .ok_or_else(|| anyhow::anyhow!("the render emits an object"))?;

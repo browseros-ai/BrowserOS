@@ -392,6 +392,7 @@ pub fn render(
     outcome: &Outcome,
     notices: &[String],
     handle: Option<&str>,
+    shot_attached: bool,
 ) -> (String, Value) {
     let mut lines = Vec::new();
     lines.push(match &outcome.status {
@@ -516,9 +517,25 @@ pub fn render(
     if outcome.unlabelled_images > 0 && !matches!(outcome.status, Status::Satisfied) {
         lines.push(format!(
             "what it could not read: {} image(s) on this page carry no accessible name, so \
-             whatever they say is invisible to a run that reads the accessibility tree. Take a \
-             screenshot of page {page} if the goal depends on them.",
-            outcome.unlabelled_images
+             whatever they say is invisible to a run that reads the accessibility tree.{}",
+            outcome.unlabelled_images,
+            if shot_attached {
+                String::new()
+            } else {
+                format!(
+                    " Take a screenshot of page {page} if the goal depends on them, or ask \
+                         for one with screenshot=\"on_handback\"."
+                )
+            }
+        ));
+    }
+    // Said either way. A caller that cannot tell whether an image is coming
+    // takes its own, and five times in one measured session it did exactly
+    // that: a screenshot call immediately before a pursue that attached one.
+    if shot_attached {
+        lines.push(format!(
+            "a screenshot of page {page} is attached to this result, so you do not need to take \
+             one."
         ));
     }
     if !outcome.opened.is_empty() {
@@ -770,6 +787,7 @@ mod tests {
             &outcome(asking_for_text(Asking::FirstTime)),
             &[],
             Some("ctn-01J"),
+            false,
         );
 
         assert!(text.contains("combobox \"Where from?\""), "{text}");
@@ -805,6 +823,7 @@ mod tests {
             &outcome(asking_for_text(Asking::FieldChanged)),
             &[],
             Some("ctn-01J"),
+            false,
         );
 
         assert!(text.contains("discarded"), "{text}");
@@ -826,6 +845,7 @@ mod tests {
             &outcome(asking_for_text(Asking::FirstTime)),
             &[],
             None,
+            false,
         );
 
         assert!(!text.contains("continue:"), "{text}");
@@ -843,6 +863,7 @@ mod tests {
             &outcome(asking_for_a_whole_form()),
             &[],
             Some("ctn-01J"),
+            false,
         );
 
         let asks = structured["needsInput"]
@@ -874,6 +895,7 @@ mod tests {
             &outcome(asking_for_text(Asking::FirstTime)),
             &[],
             Some("ctn-01J"),
+            false,
         );
 
         assert_eq!(structured["needsInput"].as_array().map(Vec::len), Some(1));
@@ -887,7 +909,14 @@ mod tests {
     #[test]
     fn a_stall_offers_to_be_carried_on() {
         let ended = outcome(Status::Stalled(browseros_decide::Stuck::NotConfident));
-        let (text, structured) = render("set delivery to 600042", 5, &ended, &[], Some("ctn-01J"));
+        let (text, structured) = render(
+            "set delivery to 600042",
+            5,
+            &ended,
+            &[],
+            Some("ctn-01J"),
+            false,
+        );
 
         assert!(text.contains("continue: \"ctn-01J\""), "{text}");
         assert!(text.contains("rather than restating the goal"), "{text}");
@@ -898,7 +927,14 @@ mod tests {
     #[test]
     fn a_block_offers_to_be_carried_on() {
         let ended = outcome(Status::Blocked("nothing could advance it".to_string()));
-        let (text, _) = render("set delivery to 600042", 5, &ended, &[], Some("ctn-01J"));
+        let (text, _) = render(
+            "set delivery to 600042",
+            5,
+            &ended,
+            &[],
+            Some("ctn-01J"),
+            false,
+        );
 
         assert!(text.contains("continue: \"ctn-01J\""), "{text}");
     }
@@ -908,7 +944,7 @@ mod tests {
     #[test]
     fn a_failure_does_not_offer_to_be_carried_on() {
         let ended = outcome(Status::Failed("the browser is not connected".to_string()));
-        let (text, structured) = render("set delivery to 600042", 5, &ended, &[], None);
+        let (text, structured) = render("set delivery to 600042", 5, &ended, &[], None, false);
 
         assert!(!text.contains("continue:"), "{text}");
         assert_eq!(structured["continueWith"], serde_json::Value::Null);
@@ -921,7 +957,7 @@ mod tests {
     fn a_run_out_of_steps_says_to_raise_the_limit() {
         let mut ended = outcome(Status::OutOfBudget);
         ended.trail = vec![step(), step()];
-        let (text, _) = render("sort by price", 3, &ended, &[], Some("ctn-01J"));
+        let (text, _) = render("sort by price", 3, &ended, &[], Some("ctn-01J"), false);
 
         assert!(text.contains("step limit"), "{text}");
         assert!(text.contains("maxSteps: 4"), "{text}");
@@ -930,8 +966,14 @@ mod tests {
 
     #[test]
     fn a_run_out_of_time_does_not_invite_a_continuation() {
-        let (text, structured) =
-            render("sort by price", 3, &outcome(Status::OutOfBudget), &[], None);
+        let (text, structured) = render(
+            "sort by price",
+            3,
+            &outcome(Status::OutOfBudget),
+            &[],
+            None,
+            false,
+        );
 
         assert!(text.contains("time limit"), "{text}");
         assert!(text.contains("Start a fresh run"), "{text}");
@@ -948,7 +990,7 @@ mod tests {
             page: 7,
             url: "https://example.com/deals".to_string(),
         }];
-        let (text, structured) = render("open the deals page", 3, &ended, &[], None);
+        let (text, structured) = render("open the deals page", 3, &ended, &[], None, false);
 
         assert!(text.contains("page 7 https://example.com/deals"), "{text}");
         assert!(text.contains("yours to pursue separately"), "{text}");
@@ -962,7 +1004,7 @@ mod tests {
     fn a_page_of_pictures_says_what_it_could_not_read() {
         let mut ended = outcome(Status::Stalled(browseros_decide::Stuck::NotConfident));
         ended.unlabelled_images = 14;
-        let (text, structured) = render("find the best deal", 3, &ended, &[], None);
+        let (text, structured) = render("find the best deal", 3, &ended, &[], None, false);
 
         assert!(text.contains("14 image(s)"), "{text}");
         assert!(text.contains("Take a screenshot of page 3"), "{text}");
@@ -975,7 +1017,7 @@ mod tests {
     fn a_satisfied_run_does_not_mention_the_pictures() {
         let mut ended = outcome(Status::Satisfied);
         ended.unlabelled_images = 14;
-        let (text, structured) = render("find the best deal", 3, &ended, &[], None);
+        let (text, structured) = render("find the best deal", 3, &ended, &[], None, false);
 
         assert!(!text.contains("image(s)"), "{text}");
         assert_eq!(
@@ -984,11 +1026,35 @@ mod tests {
         );
     }
 
+    /// A caller that cannot tell whether an image is coming takes its own, and
+    /// five times in one measured session it did exactly that: a screenshot
+    /// call immediately before a pursue that attached one.
+    #[test]
+    fn an_attached_image_is_announced() {
+        let mut ended = outcome(Status::Stalled(browseros_decide::Stuck::NotConfident));
+        ended.unlabelled_images = 14;
+
+        let (with, _) = render("find the best deal", 3, &ended, &[], None, true);
+        assert!(with.contains("is attached to this result"), "{with}");
+        assert!(
+            !with.contains("Take a screenshot"),
+            "it must not ask for what it just supplied: {with}"
+        );
+
+        let (without, _) = render("find the best deal", 3, &ended, &[], None, false);
+        assert!(!without.contains("is attached"), "{without}");
+        assert!(without.contains("Take a screenshot of page 3"), "{without}");
+        assert!(
+            without.contains("screenshot=\"on_handback\""),
+            "and it names the cheaper way to get one: {without}"
+        );
+    }
+
     #[test]
     fn moves_are_counted_for_the_caller() {
         let mut ended = outcome(Status::Satisfied);
         ended.trail = vec![step(), move_step(), move_step()];
-        let (_, structured) = render("show page 2", 3, &ended, &[], None);
+        let (_, structured) = render("show page 2", 3, &ended, &[], None, false);
 
         assert_eq!(structured["navigations"], 2);
         assert_eq!(structured["actions"], 3);
