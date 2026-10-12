@@ -62,6 +62,30 @@ impl Weakest {
 }
 
 impl Decision {
+    /// A scroll the code chose rather than the model.
+    ///
+    /// Used when a decision was declined for want of confidence and the page
+    /// has not moved: asking the identical question against the identical state
+    /// would return the identical answer, so the honest response is to change
+    /// what the next decision can see.
+    #[must_use]
+    pub fn scroll_down() -> Self {
+        Self {
+            operation: Operation::ScrollDown,
+            // Not a judgement, so it carries no uncertainty for the gate to
+            // weigh. The gate is not consulted for it either.
+            operation_confidence: 1.0,
+            target: None,
+            target_confidence: None,
+            value: None,
+            value_confidence: None,
+            key: None,
+            key_confidence: None,
+            none_of_these: false,
+            input_tokens: 0,
+        }
+    }
+
     /// The confidence the gate judges: the least certain judgement the
     /// execution depends on.
     ///

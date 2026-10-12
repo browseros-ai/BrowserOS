@@ -778,7 +778,51 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     );
                     return stuck(&space, outcome);
                 }
+                let before = view.fingerprint;
                 view = refresh(driver, &view).await;
+                if view.is_fresh_for(before) {
+                    // The same state produces the same questions and so the
+                    // same answer. This verdict is named for looking at more of
+                    // the page, and until now it honoured that by looking at
+                    // the same page again, which spent a request to learn
+                    // nothing. Measured on a live page: three decisions, no
+                    // actions, 8,691 input tokens, two thirds of it waste.
+                    //
+                    // So change what the next decision can see, or stop.
+                    let scrolled = driver.act(&Decision::scroll_down()).await.is_ok();
+                    if scrolled {
+                        driver.settle().await;
+                        view = refresh(driver, &view).await;
+                    }
+                    if !scrolled || view.is_fresh_for(before) {
+                        let outcome = end(
+                            &mut run,
+                            &started,
+                            Status::Stalled(Stuck::NotConfident),
+                            &view,
+                            offered,
+                            omitted,
+                            &opened,
+                        );
+                        return stuck(&space, outcome);
+                    }
+                    // Recorded, because it happened to the page and the step
+                    // budget is a budget of things that happened to the page.
+                    run.trail.push(Step {
+                        operation: Operation::ScrollDown,
+                        target: None,
+                        value: None,
+                        confidence: 1.0,
+                        page_changed: true,
+                        url_after: view.url.clone(),
+                        input_tokens: 0,
+                    });
+                    run.recent
+                        .push("SCROLL_DOWN the page: the page changed".to_string());
+                    if run.recent.len() > 5 {
+                        run.recent.remove(0);
+                    }
+                }
                 continue;
             }
         }

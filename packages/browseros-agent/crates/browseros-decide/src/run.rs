@@ -382,9 +382,7 @@ pub fn values_in_goal(goal: &str) -> Vec<NamedValue> {
 /// is: "pincode 600042" names itself.
 fn label_before<'a>(goal: &'a str, at: &str) -> Option<&'a str> {
     let offset = goal.find(at)?;
-    let before = goal[..offset]
-        .trim_end()
-        .trim_end_matches([':', '=']);
+    let before = goal[..offset].trim_end().trim_end_matches([':', '=']);
     // Walked backwards rather than taken from one position, because the word
     // immediately before a value is usually a preposition: "set the postcode to
     // 600042" has its answer two words back.

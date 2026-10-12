@@ -1535,3 +1535,92 @@ async fn an_explicit_value_is_offered_before_a_mined_one() {
         "v00 is the caller's, and the goal's 600042 comes after it"
     );
 }
+
+/// A page with text to scroll but nothing worth clicking, which is the shape
+/// that used to burn three decisions to learn nothing.
+fn page_with_nothing_confident() -> PageView {
+    let mut view = page(1);
+    view.text = "a long page of prose with nothing actionable in it".to_string();
+    view
+}
+
+fn declines() -> Scripted {
+    // Over the floor so it is not a refusal, under the 0.75 a click needs.
+    Scripted::new(vec![says(&[
+        (OPERATION, "CLICK", 0.65),
+        (CLICK_TARGET, "e1", 0.65),
+    ])])
+}
+
+/// The identical state produces the identical questions and so the identical
+/// answer. Measured on a live page before this: three decisions, no actions,
+/// 8,691 input tokens, two thirds of it spent learning nothing.
+#[tokio::test]
+async fn an_unchanged_page_is_never_asked_the_same_question_twice() {
+    // Acting fails, so the scroll cannot change anything either, and the run
+    // has to stop rather than ask again.
+    let fake = Fake::new(
+        vec![Err(ActError::Fatal("nothing to scroll".to_string()))],
+        vec![page_with_nothing_confident()],
+    );
+    let outcome = pursue(&declines(), &fake, "click the thing", budget()).await;
+
+    assert_eq!(
+        outcome.decisions, 1,
+        "one decision, not three: the second would have been the first again"
+    );
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
+    assert!(
+        !outcome.offered_controls.is_empty(),
+        "and it says what it saw"
+    );
+}
+
+/// This verdict is named for looking at more of the page, and until now it
+/// honoured that by looking at the same page again.
+#[tokio::test]
+async fn a_declined_decision_scrolls_rather_than_re_reading() {
+    // Acting succeeds and moves the page, so the scroll is real progress and
+    // the run gets a genuinely different question next time.
+    let fake = Fake::new(vec![Ok(())], vec![page_with_nothing_confident()]).moving_once();
+    let outcome = pursue(&declines(), &fake, "click the thing", budget()).await;
+
+    assert!(
+        outcome
+            .trail
+            .iter()
+            .any(|step| step.operation == Operation::ScrollDown),
+        "it scrolled: {:?}",
+        outcome.trail
+    );
+    assert!(
+        outcome.decisions >= 2,
+        "and then asked again, against a page that had moved"
+    );
+}
+
+/// A page that really did change under the decision is a different state, so
+/// asking again is not a repeat and the scroll is not needed.
+#[tokio::test]
+async fn a_page_that_moved_on_its_own_is_asked_again_without_scrolling() {
+    let fake = Fake::new(
+        vec![Ok(())],
+        vec![
+            page_with_nothing_confident(),
+            page(2),
+            page(3),
+            page(4),
+            page(5),
+        ],
+    );
+    let outcome = pursue(&declines(), &fake, "click the thing", budget()).await;
+
+    assert!(
+        !outcome
+            .trail
+            .iter()
+            .any(|step| step.operation == Operation::ScrollDown),
+        "nothing was forced: the page was moving by itself"
+    );
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
+}
