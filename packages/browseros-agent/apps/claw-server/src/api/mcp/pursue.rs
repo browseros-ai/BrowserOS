@@ -25,6 +25,14 @@ use crate::AppState;
 use crate::api::mcp::dispatch::{ToolCall, ToolIdentity, dispatch_tool_call};
 use crate::ids::SessionId;
 
+/// A parked run and the one field it is waiting for, for a caller that asked
+/// for the user to be asked rather than itself.
+pub struct Ask {
+    pub handle: String,
+    pub reference: String,
+    pub control: String,
+}
+
 /// How long to let a page settle after an input.
 ///
 /// In code rather than by asking the model to wait: a wait decision costs a

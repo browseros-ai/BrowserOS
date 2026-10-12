@@ -26,8 +26,9 @@ use rmcp::{
     handler::server::ServerHandler,
     model::{
         CacheScope, CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
-        Implementation, InitializeRequestParams, InitializeResult, JsonObject, ListToolsResult,
-        MetaObject, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
+        ElicitRequest, ElicitRequestParams, Implementation, InitializeRequestParams,
+        InitializeResult, InputRequest, InputRequests, InputRequiredResult, JsonObject,
+        ListToolsResult, MetaObject, PaginatedRequestParams, ProtocolVersion, ServerCapabilities,
         SubscriptionFilter, Tool, ToolAnnotations,
     },
     service::{NotificationContext, RequestContext},
@@ -376,7 +377,8 @@ impl ClawMcpService {
         started: &StartedSession,
         raw_args: &Value,
         cancel: CancellationToken,
-    ) -> CallToolResult {
+        may_elicit: bool,
+    ) -> (CallToolResult, Option<InputRequiredResult>) {
         let dispatch_id = DispatchId::new();
         let dispatch_cancel = CancellationToken::new();
         if !started
@@ -384,9 +386,12 @@ impl ClawMcpService {
             .try_register_dispatch(dispatch_id.clone(), dispatch_cancel.clone())
             .await
         {
-            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
-                "BrowserOS neo session is no longer live",
-            )]);
+            return (
+                CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                    "BrowserOS neo session is no longer live",
+                )]),
+                None,
+            );
         }
         let started_at = StdInstant::now();
         // An operator stopping the run, a client cancelling it, and the session
@@ -410,8 +415,16 @@ impl ClawMcpService {
             })
         };
         let bridge = AbortOnDrop(bridge);
-        let result = self.run_pursue(started, raw_args, linked).await;
+        let (result, ask) = self.run_pursue(started, raw_args, linked).await;
         drop(bridge);
+        let goal = raw_args
+            .get("goal")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let elicit = ask
+            .filter(|_| may_elicit)
+            .and_then(|ask| elicit_for(&ask, &goal));
         if let Err(error) = record_local_tool_dispatch(
             &self.state,
             LocalToolDispatch {
@@ -428,9 +441,10 @@ impl ClawMcpService {
         {
             warn!(error = %error, "local tool audit submission failed");
         }
-        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+        let result = finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
             .await
-            .into_call_tool_result()
+            .into_call_tool_result();
+        (result, elicit)
     }
 
     async fn run_pursue(
@@ -438,13 +452,16 @@ impl ClawMcpService {
         started: &StartedSession,
         raw_args: &Value,
         cancel: CancellationToken,
-    ) -> ToolResult {
+    ) -> (ToolResult, Option<crate::api::mcp::pursue::Ask>) {
         let Some(page) = raw_args
             .get("page")
             .and_then(Value::as_u64)
             .and_then(|page| u32::try_from(page).ok())
         else {
-            return ToolResult::error("pursue: page is required, from tabs or navigate.");
+            return (
+                ToolResult::error("pursue: page is required, from tabs or navigate."),
+                None,
+            );
         };
         let Some(goal) = raw_args
             .get("goal")
@@ -452,8 +469,11 @@ impl ClawMcpService {
             .map(str::trim)
             .filter(|goal| !goal.is_empty())
         else {
-            return ToolResult::error(
-                "pursue: goal is required, stated as the whole outcome you want.",
+            return (
+                ToolResult::error(
+                    "pursue: goal is required, stated as the whole outcome you want.",
+                ),
+                None,
             );
         };
 
@@ -470,10 +490,13 @@ impl ClawMcpService {
                 let mut pairs = Vec::with_capacity(given.len());
                 for (reference, value) in given {
                     let Some(text) = value.as_str() else {
-                        return ToolResult::error(format!(
-                            "pursue: provide[{reference}] has to be a string, which is what gets \
+                        return (
+                            ToolResult::error(format!(
+                                "pursue: provide[{reference}] has to be a string, which is what gets \
                              typed into the field."
-                        ));
+                            )),
+                            None,
+                        );
                     };
                     pairs.push((reference.clone(), text.to_string()));
                 }
@@ -481,9 +504,12 @@ impl ClawMcpService {
             }
             Some(Value::Null) | None => Vec::new(),
             Some(_) => {
-                return ToolResult::error(
-                    "pursue: provide has to be an object of ref to text, e.g. \
+                return (
+                    ToolResult::error(
+                        "pursue: provide has to be an object of ref to text, e.g. \
                      {\"e18\": \"Bengaluru\"}.",
+                    ),
+                    None,
                 );
             }
         };
@@ -492,9 +518,12 @@ impl ClawMcpService {
             None | Some("never") => false,
             Some("on_handback") => true,
             Some(other) => {
-                return ToolResult::error(format!(
-                    "pursue: screenshot has to be \"never\" or \"on_handback\", not \"{other}\"."
-                ));
+                return (
+                    ToolResult::error(format!(
+                        "pursue: screenshot has to be \"never\" or \"on_handback\", not \"{other}\"."
+                    )),
+                    None,
+                );
             }
         };
 
@@ -505,14 +534,20 @@ impl ClawMcpService {
                     let label = entry.get("label").and_then(Value::as_str).map(str::trim);
                     let url = entry.get("url").and_then(Value::as_str).map(str::trim);
                     let (Some(label), Some(url)) = (label, url) else {
-                        return ToolResult::error(
-                            "pursue: every destination needs a label and a url, e.g. \
+                        return (
+                            ToolResult::error(
+                                "pursue: every destination needs a label and a url, e.g. \
                              {\"label\": \"page 2 of the results\", \"url\": \"https://...\"}.",
+                            ),
+                            None,
                         );
                     };
                     if label.is_empty() || url.is_empty() {
-                        return ToolResult::error(
-                            "pursue: a destination's label and url cannot be empty.",
+                        return (
+                            ToolResult::error(
+                                "pursue: a destination's label and url cannot be empty.",
+                            ),
+                            None,
                         );
                     }
                     parsed.push(browseros_decide::Destination {
@@ -528,8 +563,11 @@ impl ClawMcpService {
             }
             Some(Value::Null) | None => Vec::new(),
             Some(_) => {
-                return ToolResult::error(
-                    "pursue: destinations has to be an array of {label, url} objects.",
+                return (
+                    ToolResult::error(
+                        "pursue: destinations has to be an array of {label, url} objects.",
+                    ),
+                    None,
                 );
             }
         };
@@ -539,8 +577,11 @@ impl ClawMcpService {
         // has every granular tool.
         let settings = self.state.jev_settings.get().await;
         let Some(credential) = self.state.jev_settings.credential().await else {
-            return ToolResult::error(
-                "pursue: goal-driven browsing is off, so nothing was run. Use snapshot and act instead.",
+            return (
+                ToolResult::error(
+                    "pursue: goal-driven browsing is off, so nothing was run. Use snapshot and act instead.",
+                ),
+                None,
             );
         };
 
@@ -571,8 +612,11 @@ impl ClawMcpService {
         };
 
         let Some(browser_session) = self.state.browser.session().await else {
-            return ToolResult::error(
-                "pursue: the browser is not connected, so nothing was run. Start BrowserOS neo and check the cockpit.",
+            return (
+                ToolResult::error(
+                    "pursue: the browser is not connected, so nothing was run. Start BrowserOS neo and check the cockpit.",
+                ),
+                None,
             );
         };
         let Some(driver) = crate::api::mcp::pursue::PageDriver::new(
@@ -586,7 +630,10 @@ impl ClawMcpService {
             self.output_files.clone(),
             cancel,
         ) else {
-            return ToolResult::error("pursue: the act tool is missing from the catalog.");
+            return (
+                ToolResult::error("pursue: the act tool is missing from the catalog."),
+                None,
+            );
         };
 
         // A resume is the same run, so its trail, its counters and the time it
@@ -601,7 +648,9 @@ impl ClawMcpService {
                     .await
                 {
                     Ok(parked) => parked.run,
-                    Err(refused) => return ToolResult::error(continuation_refusal(refused)),
+                    Err(refused) => {
+                        return (ToolResult::error(continuation_refusal(refused)), None);
+                    }
                 }
             }
             None => browseros_decide::Run::new(goal, budget),
@@ -611,9 +660,12 @@ impl ClawMcpService {
             // The goal is what every question is asked against, so a resume
             // under a different goal is a different pursuit wearing an old
             // run's trail.
-            return ToolResult::error(
-                "pursue: that continuation was for a different goal. Pass the same goal to \
+            return (
+                ToolResult::error(
+                    "pursue: that continuation was for a different goal. Pass the same goal to \
                  carry a run on, or omit `continue` to start a new run.",
+                ),
+                None,
             );
         }
         for (reference, text) in supplied {
@@ -639,6 +691,24 @@ impl ClawMcpService {
             ),
             None => None,
         };
+        // Only a run waiting for one value can be asked about through the
+        // protocol. A run out of steps is also resumable, but there is no
+        // question to put to a person about it.
+        let ask = match (&outcome.status, &handle) {
+            (
+                browseros_decide::Status::NeedsValue(browseros_decide::run::Pending::Text {
+                    reference,
+                    control,
+                    ..
+                }),
+                Some(handle),
+            ) => Some(crate::api::mcp::pursue::Ask {
+                handle: handle.clone(),
+                reference: reference.clone(),
+                control: control.clone(),
+            }),
+            _ => None,
+        };
         let (text, structured) = crate::api::mcp::pursue::render(
             goal,
             driver.page(),
@@ -659,7 +729,7 @@ impl ClawMcpService {
         {
             result.content.push(image);
         }
-        result
+        (result, ask)
     }
 
     async fn call_mark_skill_run(
@@ -1326,6 +1396,10 @@ impl ServerHandler for ClawMcpService {
             map.remove("session");
             map.remove(AGENT_NAME_ARG);
         }
+        // Read before the branch below, because the retry of a parked run
+        // carries its answer here rather than in the arguments.
+        let request_state = request.request_state.clone();
+        let input_responses = request.input_responses.clone();
         let presented_handle = provided_handle.clone();
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
@@ -1366,6 +1440,30 @@ impl ServerHandler for ClawMcpService {
         let tool_started_at = tokio::time::Instant::now();
         let tool_name = request.name.to_string();
 
+        // The modern retry of a parked run arrives as requestState plus
+        // inputResponses. Translated into the arguments the ordinary path
+        // already takes, so the two eras differ in delivery and nothing
+        // downstream has to know which one a call came from.
+        let answers_accepted = if is_pursue {
+            adopt_input_responses(
+                &mut raw_args,
+                request_state.as_deref(),
+                input_responses.as_ref(),
+            )
+        } else {
+            true
+        };
+        let may_elicit = is_pursue
+            && answers_accepted
+            && may_elicit(
+                context.protocol_version(),
+                context.meta.client_capabilities().as_ref(),
+                raw_args.get("ask").and_then(Value::as_str) == Some("user"),
+                presented_handle.is_some()
+                    || session_id_from_extensions(&context.extensions).is_some(),
+            );
+        let mut elicit = None;
+
         let result = if is_name_session {
             Ok(self.call_name_session(&started, &raw_args).await)
         } else if is_save_skill {
@@ -1373,9 +1471,11 @@ impl ServerHandler for ClawMcpService {
         } else if is_mark_skill_run {
             Ok(self.call_mark_skill_run(&started, &raw_args).await)
         } else if is_pursue {
-            Ok(self
-                .call_pursue(&started, &raw_args, context.ct.clone())
-                .await)
+            let (result, asked) = self
+                .call_pursue(&started, &raw_args, context.ct.clone(), may_elicit)
+                .await;
+            elicit = asked;
+            Ok(result)
         } else if is_request_help {
             Ok(self
                 .call_request_human_help(&started, &raw_args, context.ct.clone())
@@ -1433,7 +1533,20 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
-        attach_session_handle(finished, session_handle, presented_handle).map(Into::into)
+        let attached = attach_session_handle(finished, session_handle.clone(), presented_handle)?;
+        let Some(mut elicit) = elicit else {
+            return Ok(attached.into());
+        };
+        // An InputRequiredResult has no content, so the handle can only ride in
+        // `_meta`. Best effort: the gate above already required the caller to
+        // have session continuity for exactly this reason.
+        if let Some(handle) = session_handle {
+            elicit.meta.get_or_insert_with(MetaObject::new).insert(
+                SESSION_META_KEY.to_string(),
+                Value::String(handle.to_string()),
+            );
+        }
+        Ok(CallToolResponse::InputRequired(elicit))
     }
 }
 
@@ -1661,6 +1774,11 @@ fn pursue_tool() -> Tool {
                     }
                 },
                 "description": "Pages this run may move to. It picks one by label and never invents a url, so moving stays inside the set you wrote. Leave it out and the run stays on the page you gave it. It will move at most three times."
+            },
+            "ask": {
+                "type": "string",
+                "enum": ["caller", "user"],
+                "description": "Who should supply a value the run needs. Defaults to caller, which means you: the result names the field and you answer it with continue and provide. Pass user to have your client ask the person at the keyboard instead, which only works on clients that support elicitation; if yours does not, the result comes back to you as usual. Never use this for a secret: use request_human_help, which hands the person the browser tab."
             },
             "screenshot": {
                 "type": "string",
@@ -2080,6 +2198,130 @@ fn session_was_stopped() -> McpError {
     )
 }
 
+/// Whether this call may answer with an `InputRequiredResult` asking the user.
+///
+/// Four conditions, and all of them matter.
+///
+/// The revision is read from what was negotiated, which is what the SDK's own
+/// gate reads: sending one to an older peer becomes a protocol error that fails
+/// the whole call. The server's `modern` flag is not the same test, because it
+/// also requires the absence of a transport session id, so a 2026-07-28 client
+/// that has one would be misjudged.
+///
+/// The capability has to be declared, because the specification says a server
+/// **MUST NOT** send an input request a client has not declared support for.
+///
+/// The caller has to have asked for the user. Elicitation reaches the person at
+/// the keyboard, not the agent that called this tool, so it is the wrong
+/// channel unless that is what was wanted.
+///
+/// And the retry has to be able to land in this session. An `InputRequiredResult`
+/// has no content, so it cannot carry the session handle line that a stateless
+/// caller learns its handle from, and a retry in a fresh session would have its
+/// continuation refused.
+fn may_elicit(
+    negotiated: Option<ProtocolVersion>,
+    capabilities: Option<&rmcp::model::ClientCapabilities>,
+    asked_for_the_user: bool,
+    session_continuity: bool,
+) -> bool {
+    asked_for_the_user
+        && session_continuity
+        && negotiated.is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+        && capabilities.is_some_and(|capabilities| {
+            capabilities
+                .elicitation
+                .as_ref()
+                .is_some_and(|elicitation| {
+                    // An empty elicitation object means form mode, per the spec's
+                    // backwards-compatibility note.
+                    elicitation.form.is_some() || elicitation.url.is_none()
+                })
+        })
+}
+
+/// The elicitation for one field, and the parked run it continues.
+///
+/// The key in `inputRequests` is the control reference, so the answer comes
+/// back under the same name the `provide` argument would have used and the two
+/// paths converge before anything reads them.
+fn elicit_for(ask: &crate::api::mcp::pursue::Ask, goal: &str) -> Option<InputRequiredResult> {
+    // A schema this shape cannot fail to build, but failing closed costs
+    // nothing: the caller gets the ordinary result and the question in it.
+    let schema = rmcp::model::ElicitationSchemaBuilder::new()
+        .required_string_property("value", |property| {
+            property.description(format!("Text for {}", ask.control))
+        })
+        .build()
+        .ok()?;
+    let mut requests = InputRequests::new();
+    requests.insert(
+        ask.reference.clone(),
+        InputRequest::Elicitation(ElicitRequest::new(
+            ElicitRequestParams::FormElicitationParams {
+                meta: None,
+                message: format!(
+                    "BrowserOS neo is working towards \"{goal}\" and needs the text for \
+                     {} to continue.",
+                    ask.control
+                ),
+                requested_schema: schema,
+            },
+        )),
+    );
+    Some(InputRequiredResult::new(
+        Some(requests),
+        Some(ask.handle.clone()),
+    ))
+}
+
+/// Turns an MRTR retry into the arguments the ordinary path already takes.
+///
+/// The two eras differ in delivery and not in what is being asked, so the
+/// modern retry is translated into `continue` and `provide` and nothing
+/// downstream has to know which era it came from.
+///
+/// Returns false when the user declined or cancelled. The specification
+/// requires a server to handle that, and asking again immediately would just
+/// trade round trips, so the next result is the ordinary one and the agent that
+/// called the tool sees the question instead.
+fn adopt_input_responses(
+    raw_args: &mut Value,
+    request_state: Option<&str>,
+    answers: Option<&rmcp::model::InputResponses>,
+) -> bool {
+    if let (Some(state), Value::Object(map)) = (request_state, &mut *raw_args) {
+        map.insert("continue".to_string(), Value::String(state.to_string()));
+    }
+    let Some(answers) = answers else {
+        return true;
+    };
+    let mut provided = JsonObject::new();
+    let mut all_accepted = true;
+    for (reference, answer) in answers {
+        if answer.get("action").and_then(Value::as_str) != Some("accept") {
+            all_accepted = false;
+            continue;
+        }
+        if let Some(text) = answer
+            .pointer("/content/value")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+        {
+            provided.insert(reference.clone(), Value::String(text.to_string()));
+        } else {
+            all_accepted = false;
+        }
+    }
+    if let Value::Object(map) = raw_args
+        && !provided.is_empty()
+    {
+        map.insert("provide".to_string(), Value::Object(provided));
+    }
+    all_accepted
+}
+
 /// What to tell a caller whose continuation was refused.
 ///
 /// Each one names the next move, because an error a caller cannot act on just
@@ -2225,6 +2467,162 @@ mod tests {
 
     /// Read from the wire shape the specification prints, not from a builder, so
     /// the thing under test is what a client actually sends.
+    /// rmcp turns an InputRequiredResult sent to a peer below 2026-07-28 into a
+    /// protocol error, which fails the whole tool call rather than degrading,
+    /// so this gate is the thing standing between a legacy client and a broken
+    /// pursue. Its four conditions are checked one at a time.
+    #[test]
+    fn input_required_is_withheld_unless_every_condition_holds() -> anyhow::Result<()> {
+        let form: rmcp::model::ClientCapabilities =
+            serde_json::from_value(json!({ "elicitation": { "form": {} } }))?;
+        let nothing: rmcp::model::ClientCapabilities = serde_json::from_value(json!({}))?;
+
+        assert!(
+            super::may_elicit(Some(ProtocolVersion::V_2026_07_28), Some(&form), true, true),
+            "the one case where it is allowed"
+        );
+
+        for (reason, allowed) in [
+            (
+                "a legacy peer, which rmcp would turn into a failed call",
+                super::may_elicit(Some(ProtocolVersion::V_2025_11_25), Some(&form), true, true),
+            ),
+            (
+                "no negotiated version at all",
+                super::may_elicit(None, Some(&form), true, true),
+            ),
+            (
+                "a peer that declared nothing, which the spec forbids asking",
+                super::may_elicit(
+                    Some(ProtocolVersion::V_2026_07_28),
+                    Some(&nothing),
+                    true,
+                    true,
+                ),
+            ),
+            (
+                "no declaration on this request",
+                super::may_elicit(Some(ProtocolVersion::V_2026_07_28), None, true, true),
+            ),
+            (
+                "the caller wants the answer itself, not the person",
+                super::may_elicit(
+                    Some(ProtocolVersion::V_2026_07_28),
+                    Some(&form),
+                    false,
+                    true,
+                ),
+            ),
+            (
+                "no session continuity, so the retry would land somewhere else",
+                super::may_elicit(
+                    Some(ProtocolVersion::V_2026_07_28),
+                    Some(&form),
+                    true,
+                    false,
+                ),
+            ),
+        ] {
+            assert!(!allowed, "it must be withheld when {reason}");
+        }
+        Ok(())
+    }
+
+    /// The two eras differ in delivery and not in what is being asked, so a
+    /// modern retry is translated into the arguments the ordinary path takes.
+    #[test]
+    fn a_modern_retry_becomes_the_ordinary_arguments() -> anyhow::Result<()> {
+        let answers: rmcp::model::InputResponses = serde_json::from_value(json!({
+            "e18": { "action": "accept", "content": { "value": "Bengaluru" } }
+        }))?;
+        let mut raw_args = json!({ "page": 3, "goal": "set the origin" });
+
+        let accepted = super::adopt_input_responses(&mut raw_args, Some("ctn-01J"), Some(&answers));
+
+        assert!(accepted);
+        assert_eq!(raw_args["continue"], "ctn-01J");
+        assert_eq!(raw_args["provide"]["e18"], "Bengaluru");
+        Ok(())
+    }
+
+    /// The specification requires a server to handle a user who declines or
+    /// cancels. Asking again immediately would just trade round trips, so the
+    /// next result is the ordinary one and the agent that called the tool sees
+    /// the question instead.
+    #[test]
+    fn a_declined_elicitation_stops_the_asking() -> anyhow::Result<()> {
+        for refusal in [
+            json!({ "action": "decline" }),
+            json!({ "action": "cancel" }),
+        ] {
+            let answers: rmcp::model::InputResponses =
+                serde_json::from_value(json!({ "e18": refusal }))?;
+            let mut raw_args = json!({ "page": 3, "goal": "set the origin" });
+
+            let accepted =
+                super::adopt_input_responses(&mut raw_args, Some("ctn-01J"), Some(&answers));
+
+            assert!(!accepted);
+            assert_eq!(
+                raw_args["continue"], "ctn-01J",
+                "the run is still carried on, so it can report honestly"
+            );
+            assert!(raw_args.get("provide").is_none());
+        }
+        Ok(())
+    }
+
+    /// An accept with nothing in it is not an answer.
+    #[test]
+    fn an_empty_accept_is_not_treated_as_an_answer() -> anyhow::Result<()> {
+        let answers: rmcp::model::InputResponses = serde_json::from_value(json!({
+            "e18": { "action": "accept", "content": { "value": "   " } }
+        }))?;
+        let mut raw_args = json!({ "page": 3, "goal": "set the origin" });
+
+        let accepted = super::adopt_input_responses(&mut raw_args, Some("ctn-01J"), Some(&answers));
+
+        assert!(!accepted);
+        assert!(raw_args.get("provide").is_none());
+        Ok(())
+    }
+
+    /// The key is the control reference, so an answer comes back under the same
+    /// name the ordinary `provide` argument would have used and the two paths
+    /// converge before anything reads them.
+    #[test]
+    fn the_elicitation_is_keyed_by_the_control_it_asks_about() -> anyhow::Result<()> {
+        let ask = crate::api::mcp::pursue::Ask {
+            handle: "ctn-01J".to_string(),
+            reference: "e18".to_string(),
+            control: "combobox \"Where from?\"".to_string(),
+        };
+
+        let result = super::elicit_for(&ask, "set the origin to Bengaluru")
+            .ok_or_else(|| anyhow::anyhow!("a one-string schema builds"))?;
+        let wire = serde_json::to_value(&result)?;
+
+        assert_eq!(wire["resultType"], "input_required");
+        assert_eq!(
+            wire["requestState"], "ctn-01J",
+            "the handle is the state, and it carries nothing else"
+        );
+        let request = &wire["inputRequests"]["e18"];
+        assert_eq!(request["method"], "elicitation/create");
+        assert_eq!(request["params"]["mode"], "form");
+        assert_eq!(
+            request["params"]["requestedSchema"]["required"],
+            json!(["value"])
+        );
+        assert!(
+            request["params"]["message"]
+                .as_str()
+                .is_some_and(|message| message.contains("Where from?")),
+            "{request}"
+        );
+        Ok(())
+    }
+
     /// The schema says `additionalProperties: false`, so a key the render emits
     /// and the schema has forgotten is a wire-level breakage rather than a
     /// cosmetic one, and this is the only thing that would catch it.
@@ -2307,6 +2705,24 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("the input schema lists its required fields"))?;
         assert!(!required.contains(&json!("continue")));
         assert!(!required.contains(&json!("provide")));
+
+        assert_eq!(
+            schema["properties"]["ask"]["enum"],
+            json!(["caller", "user"])
+        );
+        assert!(!required.contains(&json!("ask")));
+        let who = schema["properties"]["ask"]["description"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(
+            who.contains("Defaults to caller"),
+            "elicitation reaches the person, not the agent, so asking the \
+             caller has to be the default: {who}"
+        );
+        assert!(
+            who.contains("request_human_help"),
+            "and a secret has to be pointed somewhere else: {who}"
+        );
 
         assert_eq!(
             schema["properties"]["screenshot"]["enum"],
