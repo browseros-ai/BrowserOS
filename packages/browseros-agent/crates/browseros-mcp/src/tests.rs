@@ -243,6 +243,15 @@ impl CdpConnection for HarnessConnection {
                         }
                     }
                 })),
+                "Page.getLayoutMetrics" => Ok(json!({
+                    "layoutViewport": {
+                        "pageX": 10, "pageY": 14, "clientWidth": 2880, "clientHeight": 3600
+                    },
+                    "cssLayoutViewport": {
+                        "pageX": 5, "pageY": 7, "clientWidth": 1440, "clientHeight": 1800
+                    }
+                })),
+                "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
                 "Accessibility.getFullAXTree" => {
                     assert_eq!(params, json!({}));
                     Ok(json!({ "nodes": snapshot_nodes() }))
@@ -913,6 +922,92 @@ async fn retired_window_activate_action_is_rejected() {
     .unwrap_or_else(|err| panic!("execute should return a tool result: {err}"));
     assert!(result.is_error);
     assert!(result_text(&result).starts_with("Invalid arguments for windows:"));
+}
+
+#[tokio::test]
+async fn screenshot_caps_only_supplied_css_dimensions_without_resizing_the_page() {
+    for (options, scale) in [
+        (json!({}), 1.0),
+        (json!({ "size": {} }), 1.0),
+        (
+            json!({ "size": { "width": 1024, "height": 768 } }),
+            768.0 / 1800.0,
+        ),
+        (json!({ "size": { "width": 1024 } }), 1024.0 / 1440.0),
+        (json!({ "size": { "height": 768 } }), 768.0 / 1800.0),
+        (json!({ "size": { "width": 4096, "height": 4096 } }), 1.0),
+    ] {
+        let (ctx, connection, page) = harness_ctx().await;
+        let mut args = options;
+        args["page"] = json!(page);
+        let result = execute_tool(&tool_by_name("screenshot"), args.clone(), &ctx)
+            .await
+            .unwrap_or_else(|err| panic!("screenshot should return a tool result: {err}"));
+        assert!(!result.is_error, "{args}: {}", result_text(&result));
+        let calls = connection.calls();
+        let capture = calls
+            .iter()
+            .find(|call| call.method == "Page.captureScreenshot")
+            .unwrap_or_else(|| panic!("missing capture for {args}"));
+        assert_eq!(
+            capture.params["clip"],
+            json!({
+                "x": 5.0, "y": 7.0, "width": 1440.0, "height": 1800.0, "scale": scale
+            }),
+            "{args}"
+        );
+        assert!(
+            !calls
+                .iter()
+                .any(|call| call.method.starts_with("Emulation."))
+        );
+    }
+}
+
+#[tokio::test]
+async fn screenshot_full_page_ignores_size_and_viewport_metrics() {
+    let (ctx, connection, page) = harness_ctx().await;
+    let result = execute_tool(
+        &tool_by_name("screenshot"),
+        json!({
+            "page": page, "fullPage": true, "size": { "width": 1 }
+        }),
+        &ctx,
+    )
+    .await
+    .unwrap_or_else(|err| panic!("full page capture failed: {err}"));
+    assert!(!result.is_error, "{}", result_text(&result));
+    let calls = connection.calls();
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.method == "Page.getLayoutMetrics")
+    );
+    let capture = calls
+        .iter()
+        .find(|call| call.method == "Page.captureScreenshot")
+        .unwrap_or_else(|| panic!("missing full page capture"));
+    assert_eq!(capture.params["captureBeyondViewport"], json!(true));
+    assert!(capture.params.get("clip").is_none());
+}
+
+#[tokio::test]
+async fn screenshot_rejects_invalid_supplied_dimensions_before_browser_access() {
+    for size in [
+        json!({ "width": 0 }),
+        json!({ "height": 4097 }),
+        json!({ "width": 1.5 }),
+    ] {
+        let result = execute_tool(
+            &tool_by_name("screenshot"),
+            json!({ "page": 1, "size": size }),
+            &fake_ctx(),
+        )
+        .await
+        .unwrap_or_else(|err| panic!("validation should return a tool result: {err}"));
+        assert!(result.is_error);
+        assert!(result_text(&result).contains("Invalid arguments"));
+    }
 }
 
 #[tokio::test]

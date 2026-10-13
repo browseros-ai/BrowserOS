@@ -180,7 +180,7 @@ describe('registerBrowserTools', () => {
           y: 7,
           width: 2048,
           height: 1536,
-          scale: 0.5,
+          scale: 1,
         },
       },
       {
