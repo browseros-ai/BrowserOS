@@ -21,6 +21,7 @@ pub mod kind;
 pub mod offer;
 pub mod pursue;
 pub mod questions;
+pub mod report;
 pub mod run;
 pub mod relevance;
 pub mod space;
