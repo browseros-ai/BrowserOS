@@ -5,6 +5,7 @@ pub mod guards;
 pub mod helper_runtime;
 pub mod naming;
 pub mod observers;
+pub mod pursue;
 mod prompt;
 pub mod script_hook;
 mod service;
