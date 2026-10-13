@@ -272,24 +272,50 @@ impl ClawMcpService {
         raw_args: &Value,
         client_cancel: CancellationToken,
     ) -> CallToolResult {
-        let fail = |said: String| CallToolResult::error(vec![rmcp::model::ContentBlock::text(said)]);
+        // Registered and recorded like any other local tool. Without this the run
+        // is invisible in the audit: its inner actions appear as though the
+        // caller made them directly, and the one call that explains them does
+        // not appear at all. Measured the hard way, on a session where pursue
+        // ran twice and the timeline showed eight bare acts.
+        let dispatch_id = DispatchId::new();
+        let dispatch_registration = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_registration)
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserOS neo session is no longer live",
+            )]);
+        }
+        let started_at = StdInstant::now();
 
         let Some(token) = pursue_credential() else {
-            return fail("this server has no credential for the decision model".to_string());
+            return self
+                .refuse_pursue(started, raw_args, "this server has no credential for the decision model".to_string(), started_at, &dispatch_id)
+                .await;
         };
         let Some(page) = raw_args.get("page").and_then(Value::as_u64) else {
-            return fail("pursue needs the page to work on".to_string());
+            return self
+                .refuse_pursue(started, raw_args, "pursue needs the page to work on".to_string(), started_at, &dispatch_id)
+                .await;
         };
         let Some(goal) = raw_args.get("goal").and_then(Value::as_str) else {
-            return fail("pursue needs a goal".to_string());
+            return self
+                .refuse_pursue(started, raw_args, "pursue needs a goal".to_string(), started_at, &dispatch_id)
+                .await;
         };
         if goal.trim().is_empty() {
-            return fail("the goal was empty".to_string());
+            return self
+                .refuse_pursue(started, raw_args, "the goal was empty".to_string(), started_at, &dispatch_id)
+                .await;
         }
 
         let browser_session = self.state.browser.session().await;
         let Some(browser_session) = browser_session else {
-            return fail("no browser is connected".to_string());
+            return self
+                .refuse_pursue(started, raw_args, "no browser is connected".to_string(), started_at, &dispatch_id)
+                .await;
         };
         let ownership_key = started.session.convo_id().clone();
         let default_tab_group_id = self
@@ -322,7 +348,9 @@ impl ClawMcpService {
             self.output_files.clone(),
             cancel,
         ) else {
-            return fail("this browser does not offer the act tool".to_string());
+            return self
+                .refuse_pursue(started, raw_args, "this browser does not offer the act tool".to_string(), started_at, &dispatch_id)
+                .await;
         };
 
         let offered = browseros_decide::run::Offered {
@@ -383,7 +411,64 @@ impl ClawMcpService {
             told.url,
         ));
 
-        CallToolResult::success(vec![rmcp::model::ContentBlock::text(said.join("\n"))])
+        let result = ToolResult::text(said.join("\n"), None);
+        self.record_pursue(started, raw_args, &result, started_at, &dispatch_id)
+            .await;
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    /// A refusal that still appears in the audit.
+    ///
+    /// A run that never started is the one most worth seeing, because the
+    /// caller is about to try again and the reason is the only thing that would
+    /// stop it.
+    async fn refuse_pursue(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        said: String,
+        started_at: StdInstant,
+        dispatch_id: &DispatchId,
+    ) -> CallToolResult {
+        let result = ToolResult {
+            content: vec![rmcp::model::ContentBlock::text(said)],
+            is_error: true,
+            structured_content: None,
+        };
+        self.record_pursue(started, raw_args, &result, started_at, dispatch_id)
+            .await;
+        finish_local_dispatch(started.session.as_ref(), dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    /// Puts one pursue run in the audit, beside the actions it took.
+    async fn record_pursue(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        result: &ToolResult,
+        started_at: StdInstant,
+        dispatch_id: &DispatchId,
+    ) {
+        if let Err(error) = record_local_tool_dispatch(
+            &self.state,
+            LocalToolDispatch {
+                session: &started.session,
+                agent_label: &started.agent_label,
+                tool_name: PURSUE_TOOL_NAME,
+                raw_args,
+                result,
+                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                dispatch_id: dispatch_id.clone(),
+            },
+        )
+        .await
+        {
+            warn!(error = %error, "local tool audit submission failed");
+        }
     }
 
     async fn call_name_session(
