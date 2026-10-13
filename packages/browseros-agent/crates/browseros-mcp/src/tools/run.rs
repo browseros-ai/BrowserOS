@@ -861,7 +861,14 @@ impl BrowserBridge {
         tokio::select! {
             biased;
             result = self.control.race(future) => result.map(Some),
-            () = dialog => Ok(None),
+            () = dialog => {
+                // The dialog race cancels the action future before its guarded
+                // handle returns. Re-admit before exposing global page signals.
+                if self.ctx.browser.binding().is_some() {
+                    self.control.race(self.ctx.browser.page(page_id.clone())).await?;
+                }
+                Ok(None)
+            },
         }
     }
 

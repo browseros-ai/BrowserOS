@@ -169,6 +169,13 @@ impl ToolResponse {
         action: PostAction,
         ctx: &ToolCtx,
     ) -> ToolExecResult<()> {
+        // Settling is advisory and can stop on an admission error. Re-admit
+        // before reading global dialog signals or starting the actual readback.
+        if ctx.browser.binding().is_some()
+            && let Some(page) = action.page()
+        {
+            ctx.browser.page(PageId(page)).await?;
+        }
         match action {
             PostAction::Snapshot { page } => {
                 self.throw_if_dialog_open(ctx, page)?;

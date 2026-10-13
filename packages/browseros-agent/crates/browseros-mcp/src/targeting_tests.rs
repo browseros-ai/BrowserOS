@@ -4,7 +4,7 @@
 use crate::{
     BrowserMcpService, BrowserToolDefaults, BrowserToolOptions, InnerCallHook, InnerCallRecord,
     StaticTargetStore, TargetStore, ToolCtx, ToolResult, catalog, execute_tool,
-    output_file::create_browser_output_file_access,
+    output_file::create_browser_output_file_access, response::ToolResponse,
 };
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
@@ -811,6 +811,64 @@ async fn static_store_serializes_revisions_and_clear_does_not_reuse_them() -> an
     assert!(store.get().await.map_err(anyhow::Error::msg)?.is_none());
     let next: TargetBinding = store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
     assert_eq!(next.revision, 4);
+    Ok(())
+}
+
+#[tokio::test]
+async fn stale_response_readback_does_not_expose_global_dialog_text() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let page = session
+        .pages
+        .list()
+        .await?
+        .into_iter()
+        .find(|page| page.tab_id.0 == 102)
+        .ok_or_else(|| anyhow::anyhow!("fixture page missing"))?
+        .page_id;
+    let store = Arc::new(StaticTargetStore::new());
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let captured = ctx(session.clone(), store).await?;
+
+    // Signals are shared infrastructure: losing admission must not drain or
+    // disclose an existing dialog through an advisory response readback.
+    let signal_session = SessionId::from("readback-signal-session");
+    session
+        .page_signals
+        .attach_page(page.clone(), signal_session.clone());
+    connection.events.send(CdpEvent {
+        method: "Page.javascriptDialogOpening".to_string(),
+        params: json!({ "type": "confirm", "message": "private dialog content" }),
+        session_id: Some(signal_session),
+    })?;
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while session.page_signals.pending_dialog(&page).is_none() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    connection.change(|state| {
+        state
+            .profiles
+            .retain(|profile| profile["browserProfileId"] != "eng");
+    });
+
+    let mut response = ToolResponse::new();
+    response.include_snapshot(page.0);
+    let result = response
+        .build_for_session(&captured, Some(page.clone()))
+        .await?
+        .into_tool_result();
+    let output = text(&result);
+    assert!(output.contains("unavailable"), "{output}");
+    assert!(!output.contains("private dialog content"), "{output}");
+    assert!(session.page_signals.pending_dialog(&page).is_some());
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Accessibility.getFullAXTree")
+    );
     Ok(())
 }
 
