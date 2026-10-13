@@ -13,3 +13,5 @@
 //!   client      the endpoint
 //!   gate        whether the answer is sure enough to act on
 //! ```
+
+pub mod client;
