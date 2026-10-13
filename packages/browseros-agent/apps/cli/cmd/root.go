@@ -125,12 +125,11 @@ const usageTemplate = `{{helpHeader "Usage:"}}{{if .Runnable}}
 `
 
 var rootCmd = &cobra.Command{
-	Use:           "browseros-cli",
-	Short:         "Browser control CLI for BrowserOS",
-	Long:          "browseros-cli — command-line interface for controlling BrowserOS via MCP",
-	SilenceUsage:  true,
-	SilenceErrors: true,
-	Run:           runRoot,
+	Use:          "browseros-cli",
+	Short:        "Browser control CLI for BrowserOS",
+	Long:         "browseros-cli — command-line interface for controlling BrowserOS via MCP",
+	SilenceUsage: true,
+	Run:          runRoot,
 }
 
 // runRoot prints the agent guide to stdout for `--llm-txt`, otherwise grouped help.
