@@ -9,7 +9,7 @@ MCP server and AI agent loop powering BrowserOS browser automation. This is the 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
 │                         MCP Clients                                  │
-│           (Agent UI, Claude Code, Gemini CLI, browseros-cli)         │
+│                 (Agent UI, Claude Code, Gemini CLI)                  │
 └──────────────────────────────────────────────────────────────────────┘
                                 │
                                 │ HTTP / SSE / StreamableHTTP

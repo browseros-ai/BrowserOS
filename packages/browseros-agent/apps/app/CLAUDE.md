@@ -33,7 +33,7 @@ apps/app/
 |  `- *.content*     Page/content integrations
 |- components/       Shared UI, including generated shadcn-style primitives
 |- generated/graphql GraphQL codegen output
-|- lib/              Auth, GraphQL, metrics, Sentry, BrowserOS clients, state
+|- lib/              Auth, GraphQL, metrics, Sentry, BrowserOS API clients, state
 |- schema/           Default GraphQL schema input
 `- wxt.config.ts     Manifest and WXT/Vite config
 ```

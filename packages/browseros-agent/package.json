@@ -44,7 +44,6 @@
     "test:rust": "cargo test --workspace",
     "lint:rust": "cargo clippy --workspace --all-targets -- -D warnings",
     "fmt:rust": "cargo fmt --all --check",
-    "upload:cli-installers": "bun scripts/build/cli.ts",
     "start:server:test": "bun run build:server:test && set -a && . .env.development && set +a && dist/prod/server/.tmp/binaries/browseros-server-darwin-arm64 --config config.dev.json",
     "build:claw-onboard": "bun run --filter @browseros/claw-onboard build",
     "build:claw-onboard:resources": "FORCE_COLOR=1 bun scripts/build/claw-onboard.ts",
