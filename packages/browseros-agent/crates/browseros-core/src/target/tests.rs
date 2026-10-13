@@ -33,6 +33,7 @@ struct Fixture {
     replace_on_attach: VecDeque<String>,
     context_after_send: Option<String>,
     move_on_window_read: Option<(usize, i64, i64)>,
+    move_group_on_tab_read: Option<(usize, i64)>,
 }
 struct Native {
     state: Mutex<Fixture>,
@@ -97,6 +98,7 @@ impl Native {
                 replace_on_attach: VecDeque::new(),
                 context_after_send: None,
                 move_on_window_read: None,
+                move_group_on_tab_read: None,
             }),
         })
     }
@@ -287,6 +289,20 @@ impl Native {
                 }
             } else {
                 state.move_on_window_read = Some((remaining - 1, tab_id, destination));
+            }
+        }
+        if method == "Browser.getTabInfo"
+            && let Some((remaining, destination)) = state.move_group_on_tab_read.take()
+        {
+            if remaining == 1 {
+                state.groups[0]["windowId"] = json!(destination);
+                for tab in &mut state.tabs {
+                    if tab["groupId"] == "eng-group" {
+                        tab["windowId"] = json!(destination);
+                    }
+                }
+            } else {
+                state.move_group_on_tab_read = Some((remaining - 1, destination));
             }
         }
         if !matches!(
@@ -1286,5 +1302,34 @@ async fn navigation_load_wait_rechecks_scope_before_dialog_readback() -> TestRes
             .map(|dialog| dialog.message),
         Some("moved-tab-secret".into())
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn group_drag_during_final_tab_read_is_rejected_before_close_dispatch() -> TestResult {
+    let native = Native::new();
+    let scoped = view(
+        native.clone(),
+        Some(WindowSelection::Pinned {
+            window_id: WindowId(11),
+        }),
+    )
+    .await;
+    // The third read is the final tab check. Its reply describes the old owner, while the
+    // group is dragged during that handoff; only a later group inventory sees the new window.
+    native.lock().move_group_on_tab_read = Some((3, 12));
+    let result = scoped
+        .cdp(
+            "Browser.closeTabGroup",
+            json!({"groupId":"eng-group"}),
+            None,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(CoreError::Target(TargetError::GroupOutOfScope(_)))
+    ));
+    assert!(native.calls("Browser.closeTabGroup").is_empty());
+    assert_eq!(native.lock().groups[0]["windowId"], 12);
     Ok(())
 }

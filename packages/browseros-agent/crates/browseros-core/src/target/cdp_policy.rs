@@ -414,25 +414,6 @@ impl BrowserView {
                 return Err(TargetError::WindowOutOfScope(*id).into());
             }
         }
-        if !admission.groups.is_empty() {
-            let current = self
-                .session
-                .cdp("Browser.getTabGroups", json!({}), None)
-                .await?;
-            for expected in &admission.groups {
-                let id = expected["groupId"].as_str().unwrap_or_default();
-                let unchanged = current["groups"].as_array().is_some_and(|groups| {
-                    groups.iter().any(|group| {
-                        group["groupId"] == id
-                            && group["windowId"] == expected["windowId"]
-                            && group["tabIds"] == expected["tabIds"]
-                    })
-                });
-                if !unchanged {
-                    return Err(TargetError::GroupOutOfScope(id.into()).into());
-                }
-            }
-        }
         let mut checked = BTreeSet::new();
         for expected in &admission.tabs {
             if !checked.insert(expected.page_id.clone()) {
@@ -465,6 +446,27 @@ impl BrowserView {
                         group["groupId"].as_str().unwrap_or_default().into(),
                     )
                     .into());
+                }
+            }
+        }
+        // Group operations can affect every member. Re-read the member set after the final
+        // tab handoff, otherwise a concurrent group drag/edit could expand or relocate it.
+        if !admission.groups.is_empty() {
+            let current = self
+                .session
+                .cdp("Browser.getTabGroups", json!({}), None)
+                .await?;
+            for expected in &admission.groups {
+                let id = expected["groupId"].as_str().unwrap_or_default();
+                let unchanged = current["groups"].as_array().is_some_and(|groups| {
+                    groups.iter().any(|group| {
+                        group["groupId"] == id
+                            && group["windowId"] == expected["windowId"]
+                            && group["tabIds"] == expected["tabIds"]
+                    })
+                });
+                if !unchanged {
+                    return Err(TargetError::GroupOutOfScope(id.into()).into());
                 }
             }
         }
