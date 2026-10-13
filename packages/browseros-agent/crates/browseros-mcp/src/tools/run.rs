@@ -903,8 +903,14 @@ impl BrowserBridge {
                     return Err("pages.newPage: hidden is no longer supported".to_string());
                 }
                 let window_id = optional_i64_field(opts, "windowId")?.map(WindowId);
-                let tab_group_id = optional_string_field(opts, "tabGroupId")?
-                    .or_else(|| self.ctx.defaults.default_tab_group_id.clone());
+                let tab_group_id = self
+                    .control
+                    .race(super::page_creation::tab_group_for_creation(
+                        &self.ctx,
+                        optional_string_field(opts, "tabGroupId")?,
+                        window_id,
+                    ))
+                    .await?;
                 let page_id = self
                     .control
                     .race(self.ctx.browser.new_page(

@@ -130,6 +130,9 @@ fn handler<'a>(
                 )
             }
             TabsAction::New => {
+                let tab_group_id =
+                    super::page_creation::tab_group_for_creation(ctx, args.group_id.clone(), None)
+                        .await?;
                 let page = ctx
                     .browser
                     .new_page(
@@ -140,10 +143,7 @@ fn handler<'a>(
                             background: Some(true),
                             window_id: None,
                             browser_context_id: None,
-                            tab_group_id: args
-                                .group_id
-                                .clone()
-                                .or_else(|| ctx.defaults.default_tab_group_id.clone()),
+                            tab_group_id,
                         },
                     )
                     .await?;

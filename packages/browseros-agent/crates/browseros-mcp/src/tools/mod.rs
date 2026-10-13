@@ -10,6 +10,7 @@ pub mod evaluate;
 pub mod grep;
 pub mod history;
 pub mod navigate;
+mod page_creation;
 pub mod pdf;
 pub mod read;
 pub mod run;

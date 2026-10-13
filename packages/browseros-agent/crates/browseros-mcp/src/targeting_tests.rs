@@ -9,7 +9,7 @@ use crate::{
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
     BrowserProfileId, BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId,
-    TargetBinding, TargetIntent,
+    TargetBinding, TargetIntent, WindowId, WindowSelection, pages::NewPageOptions,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -31,6 +31,7 @@ struct NativeFixture {
     profiles: Vec<Value>,
     windows: Vec<Value>,
     tabs: Vec<Value>,
+    groups: Vec<Value>,
     calls: Vec<Call>,
 }
 
@@ -64,6 +65,12 @@ fn tab(id: i64, window: i64, profile: &str) -> Value {
         "browserContextId": "legacy-label-must-not-route" })
 }
 
+fn grouped_tab(id: i64, window: i64, profile: &str, group: &str) -> Value {
+    let mut tab = tab(id, window, profile);
+    tab["groupId"] = json!(group);
+    tab
+}
+
 impl FixtureConnection {
     fn new() -> Arc<Self> {
         let (events, _) = broadcast::channel(64);
@@ -86,9 +93,13 @@ impl FixtureConnection {
                 ],
                 tabs: vec![
                     tab(101, 10, "eng"),
-                    tab(102, 20, "eng"),
+                    grouped_tab(102, 20, "eng", "group-eng"),
                     tab(103, 30, "eng"),
-                    tab(201, 90, "sales"),
+                    grouped_tab(201, 90, "sales", "group-sales"),
+                ],
+                groups: vec![
+                    json!({ "groupId": "group-eng", "windowId": 20, "title": "eng", "color": "blue", "collapsed": false, "tabIds": [102] }),
+                    json!({ "groupId": "group-sales", "windowId": 90, "title": "sales", "color": "red", "collapsed": false, "tabIds": [201] }),
                 ],
                 calls: Vec::new(),
             }),
@@ -199,10 +210,47 @@ impl FixtureConnection {
                 state.tabs.push(created.clone());
                 Ok(json!({ "tab": created }))
             }
-            "Browser.getTabGroups" => Ok(json!({ "groups": [
-                { "groupId": "group-eng", "windowId": 20, "title": "eng", "color": "blue", "collapsed": false, "tabIds": [102] },
-                { "groupId": "group-sales", "windowId": 90, "title": "sales", "color": "red", "collapsed": false, "tabIds": [201] }
-            ] })),
+            "Browser.getTabGroups" => Ok(json!({ "groups": state.groups })),
+            "Browser.addTabsToGroup" => {
+                let group_id = params["groupId"].as_str().unwrap_or_default();
+                let tab_ids = params["tabIds"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_i64)
+                    .collect::<Vec<_>>();
+                let Some(group) = state
+                    .groups
+                    .iter_mut()
+                    .find(|group| group["groupId"] == group_id)
+                else {
+                    return Err(CdpError::Protocol {
+                        code: -32000,
+                        message: "group missing".to_string(),
+                    });
+                };
+                let members = group["tabIds"]
+                    .as_array_mut()
+                    .ok_or_else(|| CdpError::Protocol {
+                        code: -1,
+                        message: "fixture group members missing".to_string(),
+                    })?;
+                for id in &tab_ids {
+                    if !members.contains(&json!(id)) {
+                        members.push(json!(id));
+                    }
+                }
+                let updated_group = group.clone();
+                for tab in &mut state.tabs {
+                    if tab["tabId"]
+                        .as_i64()
+                        .is_some_and(|id| tab_ids.contains(&id))
+                    {
+                        tab["groupId"] = json!(group_id);
+                    }
+                }
+                Ok(json!({ "group": updated_group }))
+            }
             "History.getRecent" => Ok(json!({ "entries": [] })),
             "Storage.getCookies" => {
                 Ok(json!({ "cookies": [], "routedContext": params.get("browserContextId") }))
@@ -701,7 +749,7 @@ async fn management_recovers_closed_pin_and_deleted_profile_without_admitting_ol
 }
 
 #[tokio::test]
-async fn bound_raw_policy_and_wrong_window_group_defaults_fail_before_dispatch()
+async fn bound_raw_policy_and_explicit_window_group_conflicts_fail_before_dispatch()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
     let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
@@ -714,7 +762,7 @@ async fn bound_raw_policy_and_wrong_window_group_defaults_fail_before_dispatch()
         .0;
     let store = Arc::new(StaticTargetStore::new());
     store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
-    let mut captured = ctx(session.clone(), store.clone()).await?;
+    let captured = ctx(session.clone(), store.clone()).await?;
     for code in [
         "return await browser.cdp('Target.attachToTarget', { targetId: 'forbidden' });".to_string(),
         format!(
@@ -737,8 +785,12 @@ async fn bound_raw_policy_and_wrong_window_group_defaults_fail_before_dispatch()
     )
     .await?;
     assert!(wrong.is_error && text(&wrong).contains("window_out_of_scope"));
-    captured.defaults.default_tab_group_id = Some("group-sales".to_string());
-    let grouped = call(&captured, "tabs", json!({ "action": "new" })).await?;
+    let grouped = call(
+        &captured,
+        "tabs",
+        json!({ "action": "new", "groupId": "group-sales" }),
+    )
+    .await?;
     assert!(
         grouped.is_error && text(&grouped).contains("group_out_of_scope"),
         "{}",
@@ -759,6 +811,162 @@ async fn bound_raw_policy_and_wrong_window_group_defaults_fail_before_dispatch()
     assert!(connection.calls().iter().any(
         |call| call.method == "Target.attachToTarget" && call.params["targetId"] == "forbidden"
     ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn script_creation_default_group_does_not_restrict_explicit_working_window()
+-> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let store = Arc::new(StaticTargetStore::new());
+    let mut selected = intent("eng");
+    selected.window = Some(WindowSelection::Working {
+        window_id: WindowId(20),
+    });
+    store.set(selected).await.map_err(anyhow::Error::msg)?;
+    let mut captured = ctx(session, store).await?;
+    captured.defaults.default_tab_group_id = Some("group-eng".to_string());
+
+    // This is the production core guard, not a mocked group rejection. It must
+    // keep rejecting an explicit A group for B while MCP drops inherited A.
+    let rejected = captured
+        .browser
+        .new_page(
+            "https://eng.example.test/guard",
+            NewPageOptions {
+                window_id: Some(WindowId(10)),
+                tab_group_id: Some("group-eng".to_string()),
+                ..NewPageOptions::default()
+            },
+        )
+        .await;
+    assert!(rejected.is_err_and(|error| error.to_string().contains("group_out_of_scope")));
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Browser.createTab")
+    );
+
+    data(call(&captured, "run", json!({ "code": "return await browser.pages.newPage('https://eng.example.test/window-b', { windowId: 10 });" })).await?)?;
+    let calls = connection.calls();
+    let created = calls
+        .iter()
+        .filter(|call| call.method == "Browser.createTab")
+        .collect::<Vec<_>>();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].params["windowId"], json!(10));
+    assert_eq!(created[0].params["browserContextId"], json!("context-eng"));
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.method == "Browser.addTabsToGroup")
+    );
+
+    let explicit = call(&captured, "run", json!({ "code": "return await browser.pages.newPage('https://eng.example.test/conflict', { windowId: 10, tabGroupId: 'group-eng' });" })).await?;
+    assert!(
+        explicit.is_error && text(&explicit).contains("group_out_of_scope"),
+        "{}",
+        text(&explicit)
+    );
+    assert_eq!(
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "Browser.createTab")
+            .count(),
+        1
+    );
+
+    data(call(&captured, "run", json!({ "code": "return await browser.pages.newPage('https://eng.example.test/window-a');" })).await?)?;
+    assert!(connection.calls().iter().any(
+        |call| call.method == "Browser.addTabsToGroup" && call.params["groupId"] == "group-eng"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn granular_creation_default_group_checks_its_actual_window() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let store = Arc::new(StaticTargetStore::new());
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let mut captured = ctx(session, store).await?;
+    captured.defaults.default_tab_group_id = Some("group-eng".to_string());
+    assert_eq!(
+        captured
+            .browser
+            .scope()?
+            .and_then(|scope| scope.placement_window),
+        Some(WindowId(20))
+    );
+
+    // A default can move after capture. Consult its actual native window;
+    // comparing only the requested window to the old placement is insufficient.
+    connection.change(|state| {
+        state.groups[0]["windowId"] = json!(10);
+        state
+            .tabs
+            .iter_mut()
+            .find(|tab| tab["tabId"] == 102)
+            .unwrap_or_else(|| panic!("grouped tab missing"))["windowId"] = json!(10);
+    });
+    data(
+        call(
+            &captured,
+            "tabs",
+            json!({ "action": "new", "url": "https://eng.example.test/granular" }),
+        )
+        .await?,
+    )?;
+    let calls = connection.calls();
+    let created = calls
+        .iter()
+        .filter(|call| call.method == "Browser.createTab")
+        .collect::<Vec<_>>();
+    assert_eq!(created.len(), 1);
+    assert_eq!(created[0].params["windowId"], json!(20));
+    assert!(
+        !calls
+            .iter()
+            .any(|call| call.method == "Browser.addTabsToGroup")
+    );
+
+    let explicit = call(
+        &captured,
+        "tabs",
+        json!({ "action": "new", "groupId": "group-eng" }),
+    )
+    .await?;
+    assert!(
+        explicit.is_error && text(&explicit).contains("group_out_of_scope"),
+        "{}",
+        text(&explicit)
+    );
+    assert_eq!(
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "Browser.createTab")
+            .count(),
+        1
+    );
+
+    data(call(&captured, "run", json!({ "code": "return await browser.pages.newPage('https://eng.example.test/moved-group', { windowId: 10 });" })).await?)?;
+    assert!(connection.calls().iter().any(
+        |call| call.method == "Browser.addTabsToGroup" && call.params["groupId"] == "group-eng"
+    ));
+
+    captured.defaults.default_tab_group_id = Some("group-sales".to_string());
+    data(call(&captured, "tabs", json!({ "action": "new" })).await?)?;
+    assert!(
+        !connection
+            .calls()
+            .iter()
+            .any(|call| call.method == "Browser.addTabsToGroup"
+                && call.params["groupId"] == "group-sales")
+    );
     Ok(())
 }
 
