@@ -10,6 +10,8 @@ import { apiGet, waitUntil } from './helpers'
 const EXPECTED_TOOLS = [
   'act',
   'await_human_help',
+  'browser_profiles',
+  'browser_target',
   'diff',
   'download',
   'evaluate',
