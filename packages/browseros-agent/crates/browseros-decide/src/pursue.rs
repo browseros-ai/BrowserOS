@@ -352,6 +352,25 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             }
         }
 
+        // Acting twice in a row on the same control is not progress, whatever
+        // the page says about it. A live errand typed the caller's value into
+        // the same search box six times over, and on every look the box already
+        // held that value, so the control's own state is not enough to stop it.
+        if decision.aims_at_a_control() && run.aiming_again_at(decision.target.as_deref()) {
+            // Spends a step even though nothing was run. The decision was paid
+            // for, and without this the guard is unbounded: a run whose control
+            // is already retired would set it aside again forever.
+            run.spent += 1;
+            run.last_acted = decision.target.clone();
+            run.retire_last();
+            run.remember(format!(
+                "aimed at {} twice running, so it is set aside",
+                decision.target.as_deref().unwrap_or("a control")
+            ));
+            last = Some(view);
+            continue;
+        }
+
         run.spent += 1;
         run.last_acted = decision.target.clone();
         let before = view.fingerprint;

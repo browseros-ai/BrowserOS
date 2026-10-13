@@ -54,6 +54,13 @@ pub struct Run {
     /// The control the last action aimed at, so an unmoved page knows what to
     /// retire.
     pub last_acted: Option<String>,
+    /// The control the run is about to aim at for a second time running.
+    ///
+    /// Acting twice in a row on the same control is not progress. A live errand
+    /// typed the caller's value into the same search box six times, seeing the
+    /// box already hold that value on every look, so the value being visible is
+    /// not enough on its own.
+    pub repeating: Option<String>,
     /// Consecutive steps that left the page as it was.
     pub unchanged: u32,
     /// Consecutive decisions the gate declined.
@@ -89,6 +96,7 @@ impl Run {
             recent: Vec::new(),
             retired: Vec::new(),
             last_acted: None,
+            repeating: None,
             unchanged: 0,
             declined: 0,
             navigations: 0,
@@ -117,6 +125,19 @@ impl Run {
         }
         self.retired.push(reference);
         true
+    }
+
+    /// Whether this is the second time running that the run would aim here.
+    ///
+    /// Records the aim either way, so the caller can act on the answer.
+    pub fn aiming_again_at(&mut self, target: Option<&str>) -> bool {
+        let Some(target) = target else {
+            self.repeating = None;
+            return false;
+        };
+        let again = self.repeating.as_deref() == Some(target);
+        self.repeating = Some(target.to_string());
+        again
     }
 
     /// Records something the run did, for the next decision to read.
@@ -153,6 +174,29 @@ mod tests {
         let mut run = Run::new("x", Budget::default());
         assert!(!run.retire_last());
         assert!(run.retired.is_empty());
+    }
+
+    #[test]
+    fn aiming_at_the_same_control_twice_running_is_noticed() {
+        let mut run = Run::new("x", Budget::default());
+        assert!(!run.aiming_again_at(Some("e1")), "the first time is fine");
+        assert!(run.aiming_again_at(Some("e1")), "the second is not");
+    }
+
+    #[test]
+    fn aiming_somewhere_else_in_between_clears_it() {
+        let mut run = Run::new("x", Budget::default());
+        run.aiming_again_at(Some("e1"));
+        run.aiming_again_at(Some("e2"));
+        assert!(!run.aiming_again_at(Some("e1")), "not twice in a row");
+    }
+
+    #[test]
+    fn a_move_with_no_target_clears_the_repeat() {
+        let mut run = Run::new("x", Budget::default());
+        run.aiming_again_at(Some("e1"));
+        assert!(!run.aiming_again_at(None), "scrolling is not aiming");
+        assert!(!run.aiming_again_at(Some("e1")));
     }
 
     #[test]

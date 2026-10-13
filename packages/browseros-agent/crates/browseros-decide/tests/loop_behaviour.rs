@@ -262,7 +262,9 @@ async fn a_run_that_cannot_retire_anything_still_stops_rather_than_looping() {
         ("act_how", choice("CLICK", 0.95)),
         ("target", choice("e1", 0.93)),
     ];
-    let oracle = Scripted::new(vec![turn.clone(), turn.clone(), turn.clone(), turn]);
+    // Generously more script than the run should need, so running out is not
+    // what stops it.
+    let oracle = Scripted::new(vec![turn.clone(); 40]);
 
     let outcome = advance(&oracle, &driver, run_for("open the only link")).await;
 
@@ -271,7 +273,11 @@ async fn a_run_that_cannot_retire_anything_still_stops_rather_than_looping() {
         "ended as {:?}",
         outcome.status
     );
-    assert!(outcome.decisions <= 4, "it did not spin");
+    assert!(
+        outcome.decisions <= Budget::default().max_steps + 2,
+        "it asked {} times, which is not bounded by the budget",
+        outcome.decisions
+    );
 }
 
 /// The Hacker News case. Asked for a number printed on the page, the old
