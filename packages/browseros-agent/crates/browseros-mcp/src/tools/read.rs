@@ -85,14 +85,13 @@ fn handler<'a>(
     Box::pin(async move {
         let args: ReadArgs = parse_args(raw)?;
         let origin = ctx
-            .session
-            .pages
-            .get_info(PageId(args.page))
-            .await
+            .browser
+            .refresh_page(PageId(args.page))
+            .await?
             .map(|info| info.url)
             .unwrap_or_else(|| "unknown".to_string());
         if matches!(args.format, ReadFormat::Console) {
-            let entries = ctx.session.page_signals.console_entries(&PageId(args.page));
+            let entries = ctx.browser.signals().console_entries(&PageId(args.page));
             let text = if entries.is_empty() {
                 "(no console errors or warnings)".to_string()
             } else {
@@ -114,7 +113,7 @@ fn handler<'a>(
         if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
             return Ok(Some(result));
         }
-        let page = ctx.session.pages.get_session(PageId(args.page)).await?;
+        let page = ctx.browser.page_session(PageId(args.page)).await?;
         let expression = expression_for(&args)?;
         let result: EvaluateResult = page
             .session

@@ -10,17 +10,20 @@ pub mod framework;
 pub mod output_file;
 pub mod response;
 pub mod service;
+mod settle;
 pub mod token_estimate;
 pub mod tools;
 pub mod trust_boundary;
 
 #[cfg(test)]
+mod targeting_tests;
+#[cfg(test)]
 mod tests;
 
 pub use framework::{
     BrowserToolDefaults, BrowserToolOptions, InnerCallHook, InnerCallRecord, OutputFileAccess,
-    ToolCtx, ToolDef, ToolMetadata, ToolResult, catalog, execute_tool, extract_page_id,
-    result_page_id,
+    StaticTargetStore, TargetStore, ToolCtx, ToolDef, ToolMetadata, ToolResult, catalog,
+    execute_tool, extract_page_id, result_page_id,
 };
 pub use service::{
     BROWSER_MCP_INSTRUCTIONS, BrowserMcpService, BrowserMcpServiceOptions, BrowserSessionProvider,

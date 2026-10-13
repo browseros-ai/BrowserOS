@@ -1,7 +1,7 @@
 //! Tool registry and execution framework for BrowserOS MCP tools.
 
 use crate::{response::ToolResponse, tools};
-use browseros_core::{BrowserSession, CoreError, PageId, WindowId};
+use browseros_core::{BrowserView, CoreError, PageId, TargetBinding, TargetIntent, WindowId};
 use futures_util::future::BoxFuture;
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool, ToolAnnotations};
 use schemars::{JsonSchema, generate::SchemaSettings};
@@ -32,9 +32,76 @@ pub struct HelperSource {
     pub source: String,
 }
 
+/// Host-owned logical binding for one task. The host persists intent; tools only
+/// resolve native identities and request changes. Existing views never read this
+/// store again, so rebinding affects only subsequently admitted requests.
+pub trait TargetStore: Send + Sync {
+    fn get(&self) -> BoxFuture<'_, Result<Option<TargetBinding>, String>>;
+    /// Saves intent before returning and assigns a monotonically increasing revision.
+    fn set(&self, intent: TargetIntent) -> BoxFuture<'_, Result<TargetBinding, String>>;
+    /// Releases intent without closing windows, unloading profiles, or resetting revisions.
+    fn clear(&self) -> BoxFuture<'_, Result<(), String>>;
+}
+
+/// In-memory task binding for one standalone MCP service. Keeping the revision
+/// beside the optional binding prevents clear/reselect from reusing an old generation.
+#[derive(Default)]
+pub struct StaticTargetStore {
+    state: Mutex<StaticTargetState>,
+}
+
+#[derive(Default)]
+struct StaticTargetState {
+    binding: Option<TargetBinding>,
+    revision: u64,
+}
+
+impl StaticTargetStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl TargetStore for StaticTargetStore {
+    fn get(&self) -> BoxFuture<'_, Result<Option<TargetBinding>, String>> {
+        Box::pin(async move { Ok(self.state.lock().await.binding.clone()) })
+    }
+
+    fn set(&self, intent: TargetIntent) -> BoxFuture<'_, Result<TargetBinding, String>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            let revision = state
+                .revision
+                .checked_add(1)
+                .ok_or("target revision exhausted")?;
+            let binding = TargetBinding { intent, revision };
+            state.revision = revision;
+            state.binding = Some(binding.clone());
+            Ok(binding)
+        })
+    }
+
+    fn clear(&self) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            let revision = state
+                .revision
+                .checked_add(1)
+                .ok_or("target revision exhausted")?;
+            state.revision = revision;
+            state.binding = None;
+            Ok(())
+        })
+    }
+}
+
+/// Browser execution dependencies for one admitted request. Hosts capture the
+/// view before constructing this value; nested tools must reuse it unchanged.
 #[derive(Clone)]
 pub struct BrowserToolOptions {
-    pub session: Arc<BrowserSession>,
+    pub browser: BrowserView,
+    pub target: Option<Arc<dyn TargetStore>>,
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
@@ -46,9 +113,12 @@ pub struct BrowserToolOptions {
     pub preloaded_helpers: Vec<HelperSource>,
 }
 
+/// One request's execution view plus host capabilities. Cloning it preserves
+/// capture through scripts, nested tool dispatch, and delayed response work.
 #[derive(Clone)]
 pub struct ToolCtx {
-    pub session: Arc<BrowserSession>,
+    pub browser: BrowserView,
+    pub target: Option<Arc<dyn TargetStore>>,
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
@@ -62,7 +132,8 @@ impl ToolCtx {
     #[must_use]
     pub fn new(options: BrowserToolOptions) -> Self {
         Self {
-            session: options.session,
+            browser: options.browser,
+            target: options.target,
             defaults: options.defaults,
             cancel: options.cancel,
             output_files: options.output_files,
@@ -195,6 +266,8 @@ pub struct ToolMetadata {
     /// uses it for page signals; the claw-server host uses it for pre-dispatch snapshots,
     /// ownership guards, audit records, and tab-activity effects.
     pub accepts_page_arg: bool,
+    /// Management can recover a stale binding and therefore bypasses view admission.
+    pub manages_target: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -295,6 +368,19 @@ pub async fn execute_tool(
 ) -> ToolExecResult<ToolResult> {
     ctx.throw_if_cancelled()?;
     let primary_page = extract_page_id(def.metadata.accepts_page_arg, &raw_args).map(PageId);
+    // Reject before invoking a handler or exposing page signals. Management is
+    // intentionally admitted even when the captured profile or strict pin is gone.
+    if !def.metadata.manages_target {
+        if let Some(err) = ctx.browser.admission_error() {
+            return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));
+        }
+        if let Some(page) = &primary_page
+            && let Err(err) = ctx.browser.page(page.clone()).await
+        {
+            return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));
+        }
+    }
+    ctx.throw_if_cancelled()?;
     let mut response = ToolResponse::new();
     match (def.handler)(raw_args, ctx, &mut response).await {
         Ok(Some(result)) => response.append_result(result),
@@ -312,7 +398,7 @@ pub async fn execute_tool(
     ctx.throw_if_cancelled()?;
 
     if let Some(page_id) = structured_page_id(result.structured_content.as_ref())
-        && let Some(tab_id) = ctx.session.pages.get_tab_id(PageId(page_id)).await
+        && let Some(tab_id) = ctx.browser.tab_id_of(PageId(page_id)).await
     {
         result.metadata_tab_id = Some(tab_id.0);
     }
@@ -321,8 +407,8 @@ pub async fn execute_tool(
 
 #[must_use]
 pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> {
-    ctx.session
-        .page_signals
+    ctx.browser
+        .signals()
         .pending_dialog_line(&page)
         .map(ToolResult::error)
 }
@@ -657,6 +743,9 @@ pub fn page_json(page: &browseros_core::pages::PageInfo) -> Value {
         }
         if let Some(group_id) = &page.group_id {
             object.insert("groupId".to_string(), json!(group_id));
+        }
+        if let Some(profile_id) = &page.browser_profile_id {
+            object.insert("browserProfileId".to_string(), json!(profile_id));
         }
     }
     value

@@ -19,7 +19,11 @@ pages then keep going to that group instead of a second one being started for th
 same task, and the tabs already in it read as yours again. If you no longer have \
 the id, find it in the listing: after a reconnect your tabs read as another \
 agent's, and your group is titled with your own name as <yourName>/<task>. Only \
-action=\"new\" reclaims; groupId is ignored on the other actions.";
+action=\"new\" reclaims; groupId is ignored on the other actions. \
+When browser_target is bound, listings and page operations include only normal \
+windows of that regular profile. OAuth/window.open popups return page_out_of_scope; \
+use explicit browser_target clear for browser-wide work. With no normal window, \
+use separate windows create after browser_profiles load; tabs new never creates one.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -65,7 +69,7 @@ pub fn definition() -> crate::framework::ToolDef {
 /// a transient CDP problem never produces a misleading note.
 async fn group_is_open(ctx: &ToolCtx, group_id: &str) -> bool {
     let Ok(result) = ctx
-        .session
+        .browser
         .cdp("Browser.getTabGroups", json!({}), None)
         .await
     else {
@@ -91,7 +95,7 @@ fn handler<'a>(
         let args: TabsArgs = parse_args(raw)?;
         let result = match args.action {
             TabsAction::List => {
-                let pages = ctx.session.pages.list().await?;
+                let pages = ctx.browser.list_pages().await?.pages;
                 let lines = pages.iter().map(format_page_line).collect::<Vec<_>>();
                 text_result(
                     if lines.is_empty() {
@@ -100,19 +104,24 @@ fn handler<'a>(
                         lines.join("\n")
                     },
                     Some(json!({
-                        "pages": pages.iter().map(|page| json!({
-                            "page": page.page_id.0,
-                            "url": page.url,
-                            "title": page.title,
-                            // The group is how an agent names the work it is
-                            // continuing, so it has to survive into the result.
-                            "groupId": page.group_id,
-                        })).collect::<Vec<_>>()
+                        "pages": pages.iter().map(|page| {
+                            let mut value = json!({
+                                "page": page.page_id.0,
+                                "url": page.url,
+                                "title": page.title,
+                                // The group identifies work continued after reconnect.
+                                "groupId": page.group_id,
+                            });
+                            if let Some(profile) = &page.browser_profile_id {
+                                value["browserProfileId"] = json!(profile);
+                            }
+                            value
+                        }).collect::<Vec<_>>()
                     })),
                 )
             }
             TabsAction::Active => {
-                let Some(page) = ctx.session.pages.get_active().await? else {
+                let Some(page) = ctx.browser.active_page().await? else {
                     return Ok(Some(error_result("tabs active: no active page found.")));
                 };
                 text_result(
@@ -122,15 +131,15 @@ fn handler<'a>(
             }
             TabsAction::New => {
                 let page = ctx
-                    .session
-                    .pages
+                    .browser
                     .new_page(
                         args.url.as_deref().unwrap_or("about:blank"),
                         NewPageOptions {
                             // Never foreground: focus decisions belong to the user
                             // (cockpit Watch), not to the agent.
                             background: Some(true),
-                            window_id: ctx.defaults.default_window_id.clone(),
+                            window_id: None,
+                            browser_context_id: None,
                             tab_group_id: args
                                 .group_id
                                 .clone()
@@ -142,7 +151,8 @@ fn handler<'a>(
                 // ignored, which produced the very outcome the group argument
                 // exists to avoid: the page continues in the session's own
                 // group while the agent believes it rejoined an earlier one.
-                // Said rather than refused, so a wrong id still opens a page.
+                // The unbound legacy path keeps its advisory. A bound view has
+                // already rejected an out-of-scope/mismatched group before creation.
                 if let Some(requested) = args.group_id.as_deref()
                     && !group_is_open(ctx, requested).await
                 {
@@ -151,20 +161,20 @@ fn handler<'a>(
                     // a placement that has not happened yet.
                     response.text(format!(
                         "note: tab group {requested} is not open, so page {} was not added to it and will go to your own group. List tab groups to find the id you meant.",
-                        page.0
+                        page.page_id.0
                     ));
                 }
-                response.text(format!("opened page {}", page.0));
+                response.text(format!("opened page {}", page.page_id.0));
                 // Claw-server hooks key ownership/grouping off this "page" field.
-                response.data(json!({ "page": page.0 }));
-                response.include_snapshot(page.0);
+                response.data(json!({ "page": page.page_id.0 }));
+                response.include_snapshot(page.page_id.0);
                 return Ok(None);
             }
             TabsAction::Close => {
                 let Some(page) = args.page else {
                     return Ok(Some(error_result("tabs close: page is required.")));
                 };
-                ctx.session.pages.close(PageId(page)).await?;
+                ctx.browser.close_page(PageId(page)).await?;
                 text_result(format!("closed page {page}"), Some(json!({ "page": page })))
             }
         };

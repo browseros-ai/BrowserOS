@@ -107,11 +107,11 @@ fn handler<'a>(
             clip: None,
         };
         if !full_page {
-            let page = ctx.session.pages.get_session(PageId(args.page)).await?;
+            let page = ctx.browser.page_session(PageId(args.page)).await?;
             options.clip =
                 Some(build_screenshot_clip(&page.session, &args.size.unwrap_or_default()).await?);
         }
-        let result = ctx.session.screenshot(PageId(args.page), options).await?;
+        let result = ctx.browser.screenshot(PageId(args.page), options).await?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&result.data)
             .map(|bytes| bytes.len())

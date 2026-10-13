@@ -14,7 +14,7 @@ use crate::{
 };
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, SessionId,
     snapshot::{AxNode, AxValue, SnapshotDiff},
 };
 use futures_util::future::BoxFuture;
@@ -88,7 +88,7 @@ fn fake_session() -> Arc<BrowserSession> {
     )
 }
 
-fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
+pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
     BrowserMcpServiceOptions {
         name: "browseros-mcp-test".to_string(),
         title: "BrowserOS MCP Test".to_string(),
@@ -108,7 +108,8 @@ fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
 
 fn fake_ctx() -> ToolCtx {
     ToolCtx::new(BrowserToolOptions {
-        session: fake_session(),
+        browser: BrowserView::unbound(fake_session(), None),
+        target: None,
         defaults: BrowserToolDefaults::default(),
         cancel: CancellationToken::new(),
         output_files: create_browser_output_file_access(),
@@ -391,7 +392,8 @@ async fn harness_ctx() -> (ToolCtx, Arc<HarnessConnection>, u32) {
         .unwrap_or_else(|err| panic!("harness should attach page session: {err}"));
     (
         ToolCtx::new(BrowserToolOptions {
-            session,
+            browser: BrowserView::unbound(session, None),
+            target: None,
             defaults: BrowserToolDefaults::default(),
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
@@ -436,6 +438,8 @@ fn catalog_order_matches_typescript_registry() {
     assert_eq!(
         names,
         vec![
+            "browser_profiles",
+            "browser_target",
             "tabs",
             "tab_groups",
             "history",
@@ -466,6 +470,8 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
     assert_eq!(
         flags,
         vec![
+            ("browser_profiles", false),
+            ("browser_target", false),
             ("tabs", true),
             ("tab_groups", false),
             ("history", false),
@@ -639,8 +645,9 @@ async fn service_capabilities_and_instructions_match_contract() {
 
 #[tokio::test]
 async fn service_structured_content_gate_matches_typescript_contract() {
-    let (ctx, _connection, _page) = harness_ctx().await;
-    let included = BrowserMcpService::new(service_options(ctx.session.clone()));
+    let (_ctx, connection, _page) = harness_ctx().await;
+    let session = BrowserSession::new(connection, BrowserSessionHooks::default());
+    let included = BrowserMcpService::new(service_options(session.clone()));
     let included_tabs = included
         .call_tool_for_testing(
             "tabs",
@@ -651,7 +658,7 @@ async fn service_structured_content_gate_matches_typescript_contract() {
         .unwrap_or_else(|err| panic!("tabs should be registered: {err}"));
     assert!(included_tabs.structured_content.is_some());
 
-    let mut hidden_options = service_options(ctx.session.clone());
+    let mut hidden_options = service_options(session);
     hidden_options.include_structured_content = Some(false);
     let hidden = BrowserMcpService::new(hidden_options);
     let hidden_tabs = hidden
@@ -960,8 +967,8 @@ async fn snapshot_fails_fast_when_dialog_is_open() {
         Some("session-1"),
     );
     eventually(|| {
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .pending_dialog_line(&PageId(page))
             .is_some()
     })
@@ -997,8 +1004,8 @@ async fn act_dialog_accept_sends_cdp_and_clears_pending_dialog() {
         Some("session-1"),
     );
     eventually(|| {
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .pending_dialog_line(&PageId(page))
             .is_some()
     })
@@ -1015,8 +1022,8 @@ async fn act_dialog_accept_sends_cdp_and_clears_pending_dialog() {
 
     assert!(!result.is_error);
     assert!(
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .pending_dialog(&PageId(page))
             .is_none()
     );
@@ -1092,14 +1099,7 @@ async fn read_console_returns_captured_ring() {
         }),
         Some("session-1"),
     );
-    eventually(|| {
-        ctx.session
-            .page_signals
-            .console_entries(&PageId(page))
-            .len()
-            == 2
-    })
-    .await;
+    eventually(|| ctx.browser.signals().console_entries(&PageId(page)).len() == 2).await;
 
     let read = tool_by_name("read");
     let result = execute_tool(&read, json!({ "page": page, "format": "console" }), &ctx)

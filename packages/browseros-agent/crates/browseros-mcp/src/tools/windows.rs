@@ -7,7 +7,7 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const DESCRIPTION: &str = "Manage browser windows: list, create, or close windows.";
+const DESCRIPTION: &str = "Manage browser windows: list, create, or close. This is separate from browser_profiles discovery/loading and browser_target task selection. Bound calls include normal windows of the selected regular profile only. create requires a loaded profile and opens an inactive normal window; a strict pin rejects creation with pinned_window_restricts. Without a binding, existing browser-wide behavior applies.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -47,16 +47,20 @@ fn handler<'a>(
         let args: WindowsArgs = parse_args(raw)?;
         let result = match args.action {
             WindowsAction::List => {
-                let windows = ctx.session.windows.list().await?;
+                let windows = ctx.browser.list_windows().await?;
                 text_result(
                     format_window_list(&windows),
                     Some(json!({ "action": "list", "windows": windows, "count": windows.len() })),
                 )
             }
             WindowsAction::Create => {
-                let window = ctx.session.windows.create().await?;
+                let window = ctx.browser.create_window().await?;
                 text_result(
-                    format!("created window {}", window.window_id),
+                    format!(
+                        "created window {}{}",
+                        window.window_id,
+                        profile_suffix(&window)
+                    ),
                     Some(json!({ "action": "create", "window": window })),
                 )
             }
@@ -64,7 +68,7 @@ fn handler<'a>(
                 let Some(window_id) = args.window_id else {
                     return Ok(Some(error_result("windows close: windowId is required.")));
                 };
-                ctx.session.windows.close(WindowId(window_id)).await?;
+                ctx.browser.close_window(WindowId(window_id)).await?;
                 text_result(
                     format!("closed window {window_id}"),
                     Some(json!({ "action": "close", "windowId": window_id })),
@@ -93,10 +97,25 @@ fn format_window_list(windows: &[browseros_core::windows::WindowInfo]) -> String
         } else {
             format!(" [{}]", markers.join(", "))
         };
+        let profile = profile_suffix(window);
         lines.push(format!(
-            "Window {} ({}, {} tabs){suffix}",
+            "Window {} ({}, {} tabs{profile}){suffix}",
             window.window_id, window.window_type, window.tab_count
         ));
     }
     lines.join("\n")
+}
+
+fn profile_suffix(window: &browseros_core::windows::WindowInfo) -> String {
+    // Window metadata is native protocol JSON; never interpret the legacy
+    // browserContextId label as the saved-profile identity.
+    serde_json::to_value(window)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("browserProfileId")
+                .and_then(Value::as_str)
+                .map(|id| format!(", profile {id}"))
+        })
+        .unwrap_or_default()
 }

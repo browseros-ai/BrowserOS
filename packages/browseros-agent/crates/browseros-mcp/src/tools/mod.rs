@@ -2,6 +2,8 @@ use crate::framework::{ToolDef, ToolMetadata, input_schema, output_schema};
 use rmcp::model::ToolAnnotations;
 
 pub mod act;
+pub mod browser_profiles;
+pub mod browser_target;
 pub mod diff;
 pub mod download;
 pub mod evaluate;
@@ -22,6 +24,8 @@ pub mod windows;
 #[must_use]
 pub fn catalog() -> Vec<ToolDef> {
     vec![
+        browser_profiles::definition(),
+        browser_target::definition(),
         tabs::definition(),
         tab_groups::definition(),
         history::definition(),
@@ -93,6 +97,7 @@ where
 
 fn metadata_for_tool(name: &str) -> ToolMetadata {
     ToolMetadata {
+        manages_target: matches!(name, "browser_target" | "browser_profiles"),
         accepts_page_arg: matches!(
             name,
             "tabs"

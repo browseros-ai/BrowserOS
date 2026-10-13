@@ -101,7 +101,7 @@ fn handler<'a>(
         if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
             return Ok(Some(result));
         }
-        let page = ctx.session.pages.get_session(PageId(args.page)).await?;
+        let page = ctx.browser.page_session(PageId(args.page)).await?;
         let timeout = clamp_timeout(args.timeout, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS);
         let result: EvaluateResult = page
             .session
@@ -131,10 +131,9 @@ fn handler<'a>(
                 .unwrap_or_else(|| "undefined".to_string()),
         };
         let origin = ctx
-            .session
-            .pages
-            .get_info(PageId(args.page))
-            .await
+            .browser
+            .refresh_page(PageId(args.page))
+            .await?
             .map(|info| info.url)
             .unwrap_or_else(|| "unknown".to_string());
         let inline_limit = resolve_inline_limit(args.max_chars);
