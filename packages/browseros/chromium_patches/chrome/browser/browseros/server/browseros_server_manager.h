@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..90e762a1e5410d01408a36ea74518e6dee7d27cb
+index 0000000000000000000000000000000000000000..0389d3faefb96bf4c1f6ab7d5f4fb5cf0bb4f29e
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,243 @@
+@@ -0,0 +1,246 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -147,9 +147,7 @@ index 0000000000000000000000000000000000000000..90e762a1e5410d01408a36ea74518e6d
 +  // Supervision. Every launched-installation failure funnels into OnStrike(),
 +  // which restarts it and, after kMaxStrikes, switches installation. See the
 +  // policy comment in the .cc.
-+  // |was_healthy| means the failed process had passed a health check, so it
-+  // relaunches without kRelaunchDelay.
-+  void OnStrike(std::string_view reason, bool was_healthy);
++  void OnStrike(std::string_view reason);
 +  void SwitchAwayFromLaunchedInstallation(std::string_view reason);
 +  void RelaunchAfterFailure(base::TimeDelta delay);
 +  void ScheduleRelaunch(base::TimeDelta delay);
@@ -219,8 +217,13 @@ index 0000000000000000000000000000000000000000..90e762a1e5410d01408a36ea74518e6d
 +  bool version_io_pending_ = false;
 +  uint64_t process_generation_ = 0;
 +
-+  // Failures of the launched installation since its last passing health check.
++  // Failures of the launched installation since it was last stably healthy.
 +  int strikes_ = 0;
++  // Installations that ran out of strikes in a row; a full set means every
++  // option failed and the next relaunch waits.
++  int failed_installations_ = 0;
++  // When the current process first passed a health check; null until then.
++  base::TimeTicks healthy_since_;
 +  int consecutive_health_failures_ = 0;
 +  bool advance_port_on_restart_ = false;
 +  // "<event>:<version>" keys already reported this session.

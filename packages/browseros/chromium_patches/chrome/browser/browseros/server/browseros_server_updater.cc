@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..b999d001d072de86d5dbc7f4dc6b9a41ac2da85e
+index 0000000000000000000000000000000000000000..776dee2e279693e201cd9387e2b158b273186a68
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
 @@ -0,0 +1,662 @@
@@ -347,9 +347,9 @@ index 0000000000000000000000000000000000000000..b999d001d072de86d5dbc7f4dc6b9a41
 +    return;
 +  }
 +
-+  // The same build already failed supervision here. Wait for a newer release
-+  // rather than re-downloading it every interval; if the bundled server can't
-+  // serve either, the manager readmits it from disk.
++  // The same build already failed supervision this session. Wait for a newer
++  // release rather than re-fetching it every poll; the next browser launch
++  // retries it, and the manager readmits it sooner if bundled can't serve.
 +  const base::Version& rejected = version_store_->rejected_version();
 +  if (rejected.IsValid() && item->version == rejected) {
 +    LOG(INFO) << "browseros: Skipping rejected server version "

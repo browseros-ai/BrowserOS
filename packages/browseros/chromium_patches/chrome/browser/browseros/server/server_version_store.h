@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/server_version_store.h b/chrome/browser/browseros/server/server_version_store.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..ebe2af595c03ca4a441387fb9514d7152593a4c4
+index 0000000000000000000000000000000000000000..be6ac747f34ecfe74c89b916d708cbe1f05687fa
 --- /dev/null
 +++ b/chrome/browser/browseros/server/server_version_store.h
 @@ -0,0 +1,103 @@
@@ -63,13 +63,13 @@ index 0000000000000000000000000000000000000000..ebe2af595c03ca4a441387fb9514d715
 +  // version.
 +  void RemoveInvalidVersion(const base::Version& version);
 +
-+  // Takes a downloaded version out of selection after it failed under
-+  // supervision, and persists that across restarts. Its files are kept: the
-+  // rejected build may already have migrated user data past what the bundled
-+  // server can open, and then it is the only binary that can still serve.
-+  void MarkRejected(const base::Version& version);
-+  // Readmits a rejected version, e.g. when the bundled server cannot serve.
-+  void ClearRejected();
++  // A downloaded version that failed under supervision. GetBestAvailable()
++  // skips it for the rest of this session, but its files are kept: it may have
++  // migrated user data past what the bundled server can open, and then it is
++  // the only binary that can still serve. An invalid version readmits it.
++  void set_rejected_version(const base::Version& version) {
++    rejected_ = version;
++  }
 +  const base::Version& rejected_version() const { return rejected_; }
 +
 +  // The ready download even if rejected. Supervision falls back to it when the

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a55f31635
+index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b47402c111779
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1566 @@
+@@ -0,0 +1,1552 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -123,40 +123,42 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +
 +// Supervision policy
 +// -----------------
-+// Every failure of the launched installation is a strike: a non-zero exit, no
-+// health before kStartupGracePeriod, a failed launch, or
-+// kMaxConsecutiveHealthCheckFailures missed checks while running. A strike
-+// restarts the same installation: at once if it had been healthy (a crash or
-+// hang), otherwise after kRelaunchDelay. Any passing health check clears
-+// strikes, so a server that hangs once a day never builds toward a fallback.
-+// After kMaxStrikes:
++// Any failure of the launched installation is a strike: an exit we did not
++// cause, no health before kStartupGracePeriod, a failed launch, or
++// kMaxConsecutiveHealthCheckFailures missed checks. A strike relaunches the
++// same installation at once. After kMaxStrikes, supervision switches:
 +//
-+//   downloaded --(reject, files kept)--> bundled
-+//   bundled ----(readmit newest download)--> downloaded, or bundled again
++//   downloaded --(reject for this session, files kept)--> bundled
++//   bundled ----(readmit the download, if any)----------> downloaded
 +//
-+// Supervision never gives up, and the updater runs independently of health, so
-+// a newer download can always rescue an installation where nothing local can
-+// serve (e.g. the bundled server cannot open data a rejected build migrated).
++// Strikes reset only once a server stays healthy for kStableWindow, so one
++// that passes a check and then crashes still builds toward a fallback. When
++// every installation has run out of strikes in a row, the next relaunch waits
++// kFailedCycleDelay so broken binaries cannot spin. Supervision never gives up,
++// and the updater runs independently of health, so a newer download can rescue
++// an install where nothing local can serve (e.g. a bundled server too old for
++// data a rejected build already migrated).
 +
 +// Bounds startup from launch to first passing health check.
 +constexpr base::TimeDelta kStartupGracePeriod = base::Seconds(30);
-+// Missed checks in a row before a running server is restarted. Silence says
-+// the process is stuck, not that the binary is bad, so this only costs a strike.
++// Missed checks in a row before a running server takes a strike.
 +constexpr int kMaxConsecutiveHealthCheckFailures = 3;
-+// Strikes an installation may take, with no passing health check in between,
-+// before supervision switches installation.
++// Strikes an installation may take before supervision switches installation.
 +constexpr int kMaxStrikes = 3;
-+// Fixed delay before relaunching a server that never became healthy. A single
-+// local process needs no backoff, only enough spacing that a binary which
-+// cannot start does not spin. A server that was healthy relaunches at once: it
-+// cannot spin, because a relaunch that fails before health takes this delay.
-+constexpr base::TimeDelta kRelaunchDelay = base::Seconds(30);
++// How long a server must stay healthy before its strikes are forgiven.
++constexpr base::TimeDelta kStableWindow = base::Seconds(30);
++// Pause before retrying once every installation has failed in a row.
++constexpr base::TimeDelta kFailedCycleDelay = base::Seconds(30);
 +
-+constexpr int kExitCodeSuccess = 0;
 +constexpr int kExitCodePortConflict = 2;
 +
 +std::string VersionString(const base::Version& version) {
 +  return version.IsValid() ? version.GetString() : "unknown";
++}
++
++std::string Describe(const browseros::ServerInstallation& installation) {
++  return base::StrCat({installation.downloaded ? "downloaded " : "bundled ",
++                       VersionString(installation.version)});
 +}
 +
 +int GetPortOverrideFromCommandLine(base::CommandLine* command_line,
@@ -757,10 +759,12 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  if (!started_ || launch_in_progress_ || termination_in_progress_) {
 +    return;
 +  }
++  // Health earned by a previous process must not forgive this one's strikes.
++  healthy_since_ = base::TimeTicks();
 +  ServerLaunchConfig config = BuildLaunchConfig();
 +  if (config.paths.execution.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
-+    OnStrike("launch_failed", /*was_healthy=*/false);
++    OnStrike("launch_failed");
 +    return;
 +  }
 +
@@ -819,7 +823,7 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  if (!process_.IsValid()) {
 +    LOG(ERROR) << "browseros: Failed to launch "
 +               << GetManagedServerDescriptor().log_name;
-+    OnStrike("launch_failed", /*was_healthy=*/false);
++    OnStrike("launch_failed");
 +    return;
 +  }
 +
@@ -970,25 +974,12 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  process_.Close();
 +  ClearRunningInstallation();
 +
-+  if (exit_code == kExitCodeSuccess && !was_starting) {
-+    is_restarting_ = false;
-+    return;
-+  }
++  // Our own terminations never reach here (termination_in_progress_), so any
++  // exit is a failure, including a clean exit after someone else's SIGTERM.
 +  if (exit_code == kExitCodePortConflict) {
-+    // A taken port says nothing about the binary: relaunch at once on the next
-+    // port without a strike. Bypasses RestartBrowserOSProcess() so an OTA
-+    // activation in flight (is_updating_) still completes on the new port.
 +    advance_port_on_restart_ = true;
-+    is_restarting_ = true;
-+    TerminateBrowserOSProcess(
-+        base::BindOnce(&BrowserOSServerManager::ContinueRestartAfterTerminate,
-+                       weak_factory_.GetWeakPtr()));
-+    return;
 +  }
-+
-+  // A binary can pass --version yet fail during real initialization.
-+  OnStrike(was_starting ? "startup_exit" : "crash",
-+           /*was_healthy=*/!was_starting);
++  OnStrike(was_starting ? "startup_exit" : "crash");
 +}
 +
 +void BrowserOSServerManager::CheckServerHealth() {
@@ -1034,9 +1025,9 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  }
 +  if (success) {
 +    consecutive_health_failures_ = 0;
-+    strikes_ = 0;
 +    if (!running_installation_ && launched_installation_) {
 +      running_installation_ = launched_installation_;
++      healthy_since_ = base::TimeTicks::Now();
 +      startup_health_retry_timer_.Stop();
 +      startup_health_deadline_timer_.Stop();
 +      is_restarting_ = false;
@@ -1072,7 +1063,7 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +
 +  if (++consecutive_health_failures_ >= kMaxConsecutiveHealthCheckFailures) {
 +    consecutive_health_failures_ = 0;
-+    OnStrike("health_check", /*was_healthy=*/true);
++    OnStrike("health_check");
 +  }
 +}
 +
@@ -1082,29 +1073,38 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  }
 +  LOG(ERROR)
 +      << "browseros: Server did not become healthy before startup deadline";
-+  OnStrike("startup_deadline", /*was_healthy=*/false);
++  OnStrike("startup_deadline");
 +}
 +
-+void BrowserOSServerManager::OnStrike(std::string_view reason,
-+                                      bool was_healthy) {
++void BrowserOSServerManager::OnStrike(std::string_view reason) {
 +  if (!started_ || !version_store_) {
 +    return;
++  }
++  if (!healthy_since_.is_null() &&
++      base::TimeTicks::Now() - healthy_since_ >= kStableWindow) {
++    strikes_ = 0;
++    failed_installations_ = 0;
 +  }
 +  ++strikes_;
 +  LOG(WARNING) << "browseros: Strike " << strikes_ << "/" << kMaxStrikes
 +               << " (" << reason << ") against "
-+               << (launched_installation_ && launched_installation_->downloaded
-+                       ? "downloaded"
-+                       : "bundled")
-+               << " server "
-+               << (launched_installation_
-+                       ? VersionString(launched_installation_->version)
-+                       : "unknown");
++               << (launched_installation_ ? Describe(*launched_installation_)
++                                          : "unknown")
++               << " server";
++
++  base::TimeDelta delay;
 +  if (strikes_ >= kMaxStrikes) {
 +    strikes_ = 0;
 +    SwitchAwayFromLaunchedInstallation(reason);
++    const int installations = version_store_->fallback_download() ? 2 : 1;
++    if (++failed_installations_ >= installations) {
++      LOG(ERROR) << "browseros: Every server installation failed; retrying in "
++                 << kFailedCycleDelay.InSeconds() << "s";
++      failed_installations_ = 0;
++      delay = kFailedCycleDelay;
++    }
 +  }
-+  RelaunchAfterFailure(was_healthy ? base::TimeDelta() : kRelaunchDelay);
++  RelaunchAfterFailure(delay);
 +}
 +
 +void BrowserOSServerManager::InvalidateDownloadedServer() {
@@ -1114,7 +1114,7 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  }
 +  strikes_ = 0;
 +  SwitchAwayFromLaunchedInstallation("invalidated");
-+  RelaunchAfterFailure(kRelaunchDelay);
++  RelaunchAfterFailure(base::TimeDelta());
 +}
 +
 +void BrowserOSServerManager::SwitchAwayFromLaunchedInstallation(
@@ -1122,21 +1122,18 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  if (!launched_installation_) {
 +    return;
 +  }
-+  // Selection is the store's job: the relaunch asks GetBestAvailable(), which
-+  // reflects the rejection state set here.
++  // The relaunch asks GetBestAvailable(), so switching only updates rejection.
 +  const ServerInstallation failed = *launched_installation_;
-+  const ServerInstallation& bundled = version_store_->GetBundled();
++  base::DictValue properties;
++  properties.Set("version", VersionString(failed.version));
++  properties.Set("reason", reason);
++
 +  if (failed.downloaded) {
-+    LOG(WARNING) << "browseros: Rejecting server "
-+                 << VersionString(failed.version) << " after " << kMaxStrikes
-+                 << " strikes; falling back to bundled "
-+                 << VersionString(bundled.version);
-+    version_store_->MarkRejected(failed.version);
-+    base::DictValue properties;
-+    properties.Set("version", VersionString(failed.version));
-+    properties.Set("bundled_version", VersionString(bundled.version));
-+    properties.Set("reason", reason);
-+    properties.Set("strikes", kMaxStrikes);
++    LOG(WARNING) << "browseros: Rejecting " << Describe(failed)
++                 << " server for this session; falling back to bundled";
++    version_store_->set_rejected_version(failed.version);
++    properties.Set("bundled_version",
++                   VersionString(version_store_->GetBundled().version));
 +    LogSupervisionEvent("server.ota.rejected", failed.version,
 +                        std::move(properties));
 +    return;
@@ -1144,27 +1141,15 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +
 +  // The bundled server cannot serve either. A newer download that fails
 +  // sometimes beats an old binary that never starts, and it is the only way
-+  // back when a rejected build already migrated user data past the bundle.
-+  const std::optional<ServerInstallation>& fallback =
++  // back when that download already migrated user data past the bundle.
++  // Readmitting also lets the updater re-fetch it if its files are gone.
++  LOG(ERROR) << "browseros: Bundled server out of strikes; readmitting the "
++                "downloaded server";
++  version_store_->set_rejected_version(base::Version());
++  const std::optional<ServerInstallation>& download =
 +      version_store_->fallback_download();
-+  if (fallback) {
-+    LOG(WARNING) << "browseros: Bundled server out of strikes; retrying "
-+                 << "downloaded server " << VersionString(fallback->version);
-+  } else {
-+    LOG(ERROR) << "browseros: Bundled server out of strikes and no download "
-+               << "available; retrying until an update lands";
-+  }
-+  // Clearing also lets the updater fetch the rejected build again if its files
-+  // are gone; the alternative is a sidecar with nothing it can run.
-+  version_store_->ClearRejected();
-+  base::DictValue properties;
-+  properties.Set("version", VersionString(failed.version));
-+  properties.Set("reason", reason);
-+  properties.Set("strikes", kMaxStrikes);
-+  properties.Set("has_download", fallback.has_value());
-+  if (fallback) {
-+    properties.Set("download_version", VersionString(fallback->version));
-+  }
++  properties.Set("download_version",
++                 download ? VersionString(download->version) : "none");
 +  LogSupervisionEvent("server.bundled.failed", failed.version,
 +                      std::move(properties));
 +}
@@ -1376,6 +1361,7 @@ index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a
 +  LOG(INFO) << "browseros: No healthy server; activating ready version "
 +            << target.version.GetString() << " now";
 +  strikes_ = 0;
++  failed_installations_ = 0;
 +  relaunch_timer_.Stop();
 +  next_installation_.reset();
 +  is_restarting_ = true;

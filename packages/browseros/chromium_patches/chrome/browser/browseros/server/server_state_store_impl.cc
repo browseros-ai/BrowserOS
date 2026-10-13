@@ -1,16 +1,14 @@
 diff --git a/chrome/browser/browseros/server/server_state_store_impl.cc b/chrome/browser/browseros/server/server_state_store_impl.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..8a79155f24ef4e664614ca72b9521b2071932869
+index 0000000000000000000000000000000000000000..daec0858421976c7817879e11ad3efbce57850c5
 --- /dev/null
 +++ b/chrome/browser/browseros/server/server_state_store_impl.cc
-@@ -0,0 +1,385 @@
+@@ -0,0 +1,330 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
 +
 +#include "chrome/browser/browseros/server/server_state_store_impl.h"
-+
-+#include <string>
 +
 +#include "base/check.h"
 +#include "base/command_line.h"
@@ -201,72 +199,52 @@ index 0000000000000000000000000000000000000000..8a79155f24ef4e664614ca72b9521b20
 +}
 +
 +void ServerVersionStore::Initialize(base::OnceClosure callback) {
-+  struct LocalState {
-+    ServerInstallation bundled;
-+    std::optional<ServerInstallation> ready;
-+    base::Version rejected;
-+  };
++  using Installations =
++      std::pair<ServerInstallation, std::optional<ServerInstallation>>;
 +  task_runner_->PostTaskAndReplyWithResult(
 +      FROM_HERE,
 +      base::BindOnce(
 +          [](base::FilePath execution_dir, base::FilePath binary_name,
-+             ServerInstallation bundled) -> LocalState {
-+            LocalState state;
++             ServerInstallation bundled) -> Installations {
 +            bundled.version = ProbeServerVersion(bundled.executable);
-+            state.bundled = bundled;
-+            state.rejected = ReadReadyVersion(execution_dir.AppendASCII(
-+                browseros_server::kRejectedVersionFileName));
 +            const base::FilePath marker = execution_dir.AppendASCII(
 +                browseros_server::kCurrentVersionFileName);
 +            base::Version version = ReadReadyVersion(marker);
 +            if (!version.IsValid()) {
 +              base::DeleteFile(marker);
-+              return state;
++              return {bundled, std::nullopt};
 +            }
 +            // A browser upgrade may supersede the downloaded copy. Do not run
 +            // an obsolete binary just to discover a version we already know.
 +            if (bundled.version.IsValid() && version <= bundled.version) {
 +              base::DeleteFile(marker);
-+              return state;
++              return {bundled, std::nullopt};
 +            }
 +            ServerInstallation ready =
 +                DownloadedInstallation(execution_dir, binary_name, version);
-+            if (!base::PathExists(ready.executable)) {
-+              LOG(WARNING) << "browseros: Ready server " << version.GetString()
-+                           << " is missing its executable";
-+              RemoveRejectedVersion(execution_dir, version);
-+              return state;
-+            }
-+            // Only a definite answer condemns the binary. A probe that times
-+            // out or fails to run is common on a cold start (login items, disk
-+            // contention, first-run scans), and deleting the only binary that
-+            // can open already-migrated data over it strands the sidecar on an
-+            // older bundled server. The launch's own strikes decide instead.
++            // Only a missing binary or a wrong version condemns it. A probe
++            // that times out or fails is common on a cold start, and deleting
++            // over it can strand the sidecar on a bundled server too old for
++            // the user's data. The launch's own strikes decide instead.
 +            const base::Version actual = ProbeServerVersion(ready.executable);
-+            if (actual.IsValid() && actual != version) {
-+              LOG(WARNING) << "browseros: Rejecting ready server "
-+                           << version.GetString() << " that reports "
-+                           << actual.GetString();
++            if (!base::PathExists(ready.executable) ||
++                (actual.IsValid() && actual != version)) {
++              LOG(WARNING) << "browseros: Rejecting invalid ready server "
++                           << version.GetString();
 +              RemoveRejectedVersion(execution_dir, version);
-+              return state;
++              return {bundled, std::nullopt};
 +            }
-+            if (!actual.IsValid()) {
-+              LOG(WARNING) << "browseros: Could not confirm ready server "
-+                           << version.GetString() << "; launching it anyway";
-+            }
-+            state.ready = std::move(ready);
-+            return state;
++            return {bundled, ready};
 +          },
 +          execution_dir_, binary_name_, bundled_),
 +      base::BindOnce(
 +          [](base::WeakPtr<ServerVersionStore> store,
-+             base::OnceClosure callback, LocalState state) {
++             base::OnceClosure callback, Installations installations) {
 +            if (!store) {
 +              return;
 +            }
-+            store->bundled_ = std::move(state.bundled);
-+            store->ready_ = std::move(state.ready);
-+            store->rejected_ = std::move(state.rejected);
++            store->bundled_ = std::move(installations.first);
++            store->ready_ = std::move(installations.second);
 +            store->initialized_ = true;
 +            std::move(callback).Run();
 +          },
@@ -334,39 +312,6 @@ index 0000000000000000000000000000000000000000..8a79155f24ef4e664614ca72b9521b20
 +  }
 +  task_runner_->PostTask(FROM_HERE, base::BindOnce(&RemoveRejectedVersion,
 +                                                   execution_dir_, version));
-+}
-+
-+void ServerVersionStore::MarkRejected(const base::Version& version) {
-+  if (!version.IsValid()) {
-+    return;
-+  }
-+  rejected_ = version;
-+  // Posted to the file sequence so it orders after marker publication; the
-+  // in-memory value already governs selection for this session.
-+  task_runner_->PostTask(
-+      FROM_HERE,
-+      base::BindOnce(
-+          [](base::FilePath execution_dir, std::string version) {
-+            base::CreateDirectory(execution_dir);
-+            base::ImportantFileWriter::WriteFileAtomically(
-+                execution_dir.AppendASCII(
-+                    browseros_server::kRejectedVersionFileName),
-+                version);
-+          },
-+          execution_dir_, version.GetString()));
-+}
-+
-+void ServerVersionStore::ClearRejected() {
-+  if (!rejected_.IsValid()) {
-+    return;
-+  }
-+  rejected_ = base::Version();
-+  task_runner_->PostTask(
-+      FROM_HERE,
-+      base::BindOnce(
-+          [](base::FilePath marker) { base::DeleteFile(marker); },
-+          execution_dir_.AppendASCII(
-+              browseros_server::kRejectedVersionFileName)));
 +}
 +
 +base::FilePath ServerVersionStore::GetVersionsDir() const {
