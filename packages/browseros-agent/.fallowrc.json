@@ -37,7 +37,6 @@
     "**/tmp/**",
     ".scripts/**",
     "apps/app/schema/**",
-    "apps/cli/**",
     "apps/app/assets/**",
     "apps/app/generated/**",
     "apps/app/public/**",

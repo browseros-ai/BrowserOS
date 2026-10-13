@@ -1,6 +1,6 @@
 # BrowserOS Agent contributor ground rules
 
-A Bun-workspaces monorepo for the BrowserOS MCP server, agent extension UI, CLI, and shared packages.
+A Bun-workspaces monorepo for the BrowserOS MCP server, agent extension UI, and shared packages.
 
 ## Before you push
 
@@ -33,4 +33,3 @@ bun run test
 
 - For server-specific guidance, see `apps/server/CLAUDE.md`.
 - For extension/app UI specifics, see `apps/app/CLAUDE.md`.
-- For the BrowserOS CLI (Go module — Go idioms, not the TS rules above), see `apps/cli/CLAUDE.md`.
