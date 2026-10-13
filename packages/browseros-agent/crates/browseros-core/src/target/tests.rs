@@ -1823,3 +1823,126 @@ async fn transports_without_atomic_epoch_support_fail_without_value_or_raw_dispa
     );
     Ok(())
 }
+
+async fn creation_receipt_before_handoff(bound: bool) -> TestResult {
+    let native = Native::new();
+    let base = if bound {
+        view(
+            native.clone(),
+            Some(WindowSelection::Working {
+                window_id: WindowId(11),
+            }),
+        )
+        .await
+    } else {
+        BrowserView::unbound(
+            BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+            Some(WindowId(11)),
+        )
+    };
+    // The hook's view clone may predate creation. Receipt ownership must be shared by those
+    // clones, while registry reconciliation remains global and can rebind the reusable ID.
+    let delayed_view = base.clone();
+    let created = base
+        .new_page("https://creation-receipt.test", NewPageOptions::default())
+        .await?;
+    let created_id = created.page_id.clone();
+    let started = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let callback_started = started.clone();
+    let callback_release = release.clone();
+    let delayed = tokio::spawn(async move {
+        // Models the ownership/response await BEFORE Claw reads get_info and derives its
+        // capability. Keeping another early registry read would not protect this interval.
+        callback_started.notify_one();
+        callback_release.notified().await;
+        let supplied = delayed_view
+            .session
+            .pages
+            .get_info(created_id.clone())
+            .await
+            .ok_or(CoreError::UnknownPage(created_id))?;
+        let derived = delayed_view.with_expected_created_page(&supplied)?;
+        derived
+            .cdp(
+                "Browser.updateTabGroup",
+                json!({"groupId":"eng-group","title":"pending title"}),
+                None,
+            )
+            .await?;
+        derived
+            .cdp(
+                "Browser.addTabsToGroup",
+                json!({"groupId":"eng-group","tabIds":[supplied.tab_id.0]}),
+                None,
+            )
+            .await?;
+        Ok::<_, CoreError>(())
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(1), started.notified()).await?;
+    {
+        let mut state = native.lock();
+        let tab = state
+            .tabs
+            .iter_mut()
+            .find(|tab| tab["tabId"] == created.tab_id.0)
+            .ok_or("created native tab missing")?;
+        tab["targetId"] = json!("replacement-before-created-page-capture");
+    }
+    base.session.pages.list().await?;
+    let rebound = base
+        .session
+        .pages
+        .get_info(created.page_id.clone())
+        .await
+        .ok_or("reconciled page missing")?;
+    assert_eq!(rebound.page_id, created.page_id);
+    assert_eq!(rebound.tab_id, created.tab_id);
+    assert_eq!(rebound.window_id, created.window_id);
+    assert_ne!(rebound.target_id, created.target_id);
+    release.notify_one();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(1), delayed).await??;
+    assert!(
+        matches!(
+            result,
+            Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+        ),
+        "bound={bound}: {result:?}; title writes={}",
+        native.calls("Browser.updateTabGroup").len()
+    );
+    assert!(native.calls("Browser.updateTabGroup").is_empty());
+    assert!(native.calls("Browser.addTabsToGroup").is_empty());
+
+    // Rejection must not overwrite the receipt with the supplied replacement snapshot.
+    {
+        let mut state = native.lock();
+        let tab = state
+            .tabs
+            .iter_mut()
+            .find(|tab| tab["tabId"] == created.tab_id.0)
+            .ok_or("created native tab missing")?;
+        tab["targetId"] = json!(created.target_id.as_str());
+    }
+    base.session.pages.list().await?;
+    let original = base
+        .session
+        .pages
+        .get_info(created.page_id.clone())
+        .await
+        .ok_or("original page missing")?;
+    assert!(
+        base.clone().with_expected_created_page(&original).is_ok(),
+        "receipt was overwritten after rejection"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_creation_receipt_rejects_reconciliation_before_handoff_capture() -> TestResult {
+    creation_receipt_before_handoff(true).await
+}
+
+#[tokio::test]
+async fn unbound_creation_receipt_rejects_reconciliation_before_handoff_capture() -> TestResult {
+    creation_receipt_before_handoff(false).await
+}
