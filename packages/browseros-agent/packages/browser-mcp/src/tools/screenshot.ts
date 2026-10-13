@@ -6,12 +6,11 @@ import { defineTool } from './framework'
 
 const DEFAULT_SCREENSHOT_FORMAT = 'jpeg'
 const DEFAULT_SCREENSHOT_QUALITY = 80
-const DEFAULT_SCREENSHOT_SIZE = { width: 1024, height: 768 } as const
 const screenshotFormat = z.enum(['jpeg', 'png', 'webp'])
 const screenshotSize = z
   .object({
-    width: z.number().int().positive().max(4096).default(1024),
-    height: z.number().int().positive().max(4096).default(768),
+    width: z.number().int().positive().max(4096).optional(),
+    height: z.number().int().positive().max(4096).optional(),
   })
   .strict()
 
@@ -26,18 +25,21 @@ function screenshotQuality(format: ScreenshotFormat, quality?: number) {
 /** Builds a viewport clip that fits the capture within the requested target size. */
 async function buildScreenshotClip(
   session: ProtocolApi,
-  target: ScreenshotSize,
+  target?: ScreenshotSize,
 ): Promise<Viewport> {
   const metrics = await session.Page.getLayoutMetrics()
   const viewport = metrics.cssLayoutViewport ?? metrics.layoutViewport
-  const scale =
-    viewport.clientWidth > 0 && viewport.clientHeight > 0
-      ? Math.min(
-          1,
-          target.width / viewport.clientWidth,
-          target.height / viewport.clientHeight,
-        )
-      : 1
+  // Capture the user's CSS viewport without resizing the page. No default cap
+  // means scale 1 preserves native device density (2x on Retina).
+  const scale = Math.min(
+    1,
+    target?.width !== undefined && viewport.clientWidth > 0
+      ? target.width / viewport.clientWidth
+      : 1,
+    target?.height !== undefined && viewport.clientHeight > 0
+      ? target.height / viewport.clientHeight
+      : 1,
+  )
 
   return {
     x: viewport.pageX,
@@ -51,7 +53,7 @@ async function buildScreenshotClip(
 export const screenshot = defineTool({
   name: 'screenshot',
   description:
-    'Capture a screenshot of the page, returned inline. Defaults to JPEG quality 80 around 1024x768; prefer snapshot for structure/actions.',
+    'Capture a screenshot of the page, returned inline. Defaults to JPEG quality 80 at the current CSS viewport, with native device pixel density; prefer snapshot for structure/actions.',
   input: z
     .object({
       page: z.number().int(),
@@ -59,7 +61,9 @@ export const screenshot = defineTool({
       quality: z.number().int().min(0).max(100).optional(),
       size: screenshotSize
         .optional()
-        .describe('Max viewport capture size. Defaults to 1024x768.'),
+        .describe(
+          'Max viewport size in CSS pixels, preserving aspect ratio without upscaling. No cap by default; omitted width or height is unconstrained. Ignored for fullPage.',
+        ),
       fullPage: z.boolean().optional().describe('Capture beyond the viewport.'),
       annotate: z
         .boolean()
@@ -81,10 +85,7 @@ export const screenshot = defineTool({
     if (quality !== undefined) captureOptions.quality = quality
     if (!fullPage) {
       const { session } = await ctx.session.pages.getSession(args.page)
-      captureOptions.clip = await buildScreenshotClip(
-        session,
-        args.size ?? DEFAULT_SCREENSHOT_SIZE,
-      )
+      captureOptions.clip = await buildScreenshotClip(session, args.size)
     }
 
     const result = await ctx.session.screenshot(args.page, captureOptions)
