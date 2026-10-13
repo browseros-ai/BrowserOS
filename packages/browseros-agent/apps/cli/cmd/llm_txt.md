@@ -48,7 +48,7 @@ browseros-cli -p "$page" close                   # close a tab
 ## Observe the page
 
 ```bash
-browseros-cli -p $p snapshot -i        # interactive elements only (best default); -c compact, -d N max depth
+browseros-cli -p $p snapshot -i        # interactive elements only (best default); -d N caps tree depth
 browseros-cli -p $p read               # page as markdown (--text = plain, --links = links only)
 browseros-cli -p $p read --selector "#main"     # scope to CSS (also --viewport, --include-links, --images)
 browseros-cli -p $p grep "Sign in"     # search the snapshot/accessibility tree; keeps output small

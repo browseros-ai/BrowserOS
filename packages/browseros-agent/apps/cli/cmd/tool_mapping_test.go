@@ -137,6 +137,20 @@ func TestCompactToolMappings(t *testing.T) {
 				"limit":   5,
 			},
 		},
+		{
+			name: "snapshot defaults",
+			got:  snapshotToolArgs(7, false, 0),
+			want: map[string]any{"page": 7},
+		},
+		{
+			name: "snapshot interactive with depth",
+			got:  snapshotToolArgs(7, true, 3),
+			want: map[string]any{
+				"page":  7,
+				"mode":  "interactive",
+				"depth": 3,
+			},
+		},
 	}
 
 	for _, tt := range tests {
