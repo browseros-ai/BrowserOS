@@ -422,15 +422,27 @@ mod tests {
         let selected = bindings
             .set(&old, intent("process-lifetime-handle"))
             .await?;
+        assert_eq!(bindings.inherit(&old, &new).await?, Some(selected));
+        let latest = bindings.set(&new, intent("ops")).await?;
         bindings.remember_group(&old, "G1").await?;
+        // Advance the retention clock beyond any 30-day horizon, first while the
+        // task is bound and again after Stop. Neither state may become unknown.
         assert_eq!(bindings.sweep(i64::MAX).await?, 0);
-        bindings.correlate_group(&new, "G1").await?;
-        assert_eq!(bindings.get(&new).await, Some(selected));
-        bindings.forget(&new).await?;
         drop(bindings);
+        let retained = TargetBindings::load(store.clone()).await?;
+        assert_eq!(retained.get(&old).await, Some(latest.clone()));
+        assert_eq!(retained.get(&new).await, Some(latest.clone()));
+        assert_eq!(retained.current_session(&old).await, Some(new.clone()));
+        let reconnect = SessionId::new("reconnect");
+        retained.correlate_group(&reconnect, "G1").await?;
+        assert_eq!(retained.get(&reconnect).await, Some(latest));
+        retained.forget(&new).await?;
+        assert_eq!(retained.sweep(i64::MAX).await?, 0);
+        drop(retained);
         let restarted = TargetBindings::load(store).await?;
         assert!(restarted.is_stopped(&old).await);
         assert!(restarted.is_stopped(&new).await);
+        assert!(restarted.is_stopped(&reconnect).await);
         assert!(
             restarted
                 .inherit(&old, &SessionId::new("third"))
