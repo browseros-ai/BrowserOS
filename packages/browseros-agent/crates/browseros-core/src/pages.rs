@@ -116,7 +116,7 @@ impl PageManager {
                     if existing.target_id != target_id {
                         stale_target = Some(existing.target_id.clone());
                     }
-                    let prior_window = existing.window_id.clone();
+                    let prior_window = existing.window_id;
                     *existing = page_info_from_tab(page_id.clone(), tab, prior_window);
                 }
                 if let Some(stale_target) = stale_target {
@@ -208,6 +208,26 @@ impl PageManager {
             .values()
             .find(|page| &page.target_id == target)
             .cloned()
+    }
+
+    /// Synchronous signal reads use only the last reconciled inventory, never initiate CDP.
+    /// A busy registry fails closed; browser operations still perform fresh async admission.
+    pub(crate) fn admitted_cached(
+        &self,
+        page: &PageId,
+        scope: &crate::CapturedScope,
+        windows: &BTreeSet<WindowId>,
+    ) -> bool {
+        self.state
+            .try_lock()
+            .ok()
+            .and_then(|state| state.pages.get(page).cloned())
+            .is_some_and(|page| {
+                page.browser_profile_id.as_ref() == Some(&scope.profile.browser_profile_id)
+                    && scope.context_id.is_some()
+                    && page.live_browser_context_id == scope.context_id
+                    && page.window_id.is_some_and(|id| windows.contains(&id))
+            })
     }
 
     pub async fn get_info(&self, page_id: PageId) -> Option<PageInfo> {
@@ -308,8 +328,7 @@ impl PageManager {
             .await;
         match refreshed {
             Ok(result) => {
-                let updated =
-                    page_info_from_tab(page_id.clone(), result.tab, info.window_id.clone());
+                let updated = page_info_from_tab(page_id.clone(), result.tab, info.window_id);
                 let mut state = self.state.lock().await;
                 let Some(current) = state.pages.get(&page_id) else {
                     return Ok(None);
@@ -405,6 +424,30 @@ impl PageManager {
         if tab.url.is_empty() {
             tab.url = url.to_string();
         }
+        state.pages.insert(
+            page_id.clone(),
+            page_info_from_tab(page_id.clone(), tab, None),
+        );
+        state.agent_created.insert(page_id.clone());
+        Ok(page_id)
+    }
+
+    /// Registers the actual native create result, preserving an ID a concurrent global list
+    /// may already have allocated. Only this seam marks the page as agent-created for focus emulation.
+    pub(crate) async fn adopt_created(&self, raw: Value, url: &str) -> Result<PageId, CoreError> {
+        let mut tab: NativeTab =
+            serde_json::from_value(raw).map_err(|err| CoreError::Message(err.to_string()))?;
+        if tab.url.is_empty() {
+            tab.url = url.to_string();
+        }
+        let mut state = self.state.lock().await;
+        let existing = find_by_target(&state.pages, &TargetId(tab.target_id.clone()))
+            .or_else(|| find_by_tab(&state.pages, TabId(tab.tab_id)));
+        let page_id = existing.unwrap_or_else(|| {
+            let id = PageId(state.next_page_id);
+            state.next_page_id += 1;
+            id
+        });
         state.pages.insert(
             page_id.clone(),
             page_info_from_tab(page_id.clone(), tab, None),
@@ -569,7 +612,7 @@ impl PageManager {
             .await
             .pages
             .get(&page_id)
-            .and_then(|info| info.window_id.clone());
+            .and_then(|info| info.window_id);
         let updated = page_info_from_tab(page_id.clone(), tab, prior_window);
         self.state
             .lock()
@@ -595,13 +638,21 @@ pub struct MovePageOptions {
 }
 
 // Keep the full native reply: generated types on an older protocol snapshot discard the new
-// identity fields. Flattening a sidecar lets core admit pages before protocol sync is integrated.
-#[derive(Deserialize)]
+// identity fields. Parsing the same JSON into a sidecar works before and after protocol sync.
 struct NativeTab {
-    #[serde(flatten)]
     tab: browser::TabInfo,
-    #[serde(flatten)]
     meta: ProfileMeta,
+}
+impl<'de> Deserialize<'de> for NativeTab {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Value::deserialize(deserializer)?;
+        // Deserialize twice from the same raw reply. Two serde(flatten) fields would consume
+        // identity keys in the generated type after protocol sync, leaving the sidecar empty.
+        Ok(Self {
+            tab: serde_json::from_value(raw.clone()).map_err(serde::de::Error::custom)?,
+            meta: serde_json::from_value(raw).map_err(serde::de::Error::custom)?,
+        })
+    }
 }
 impl std::ops::Deref for NativeTab {
     type Target = browser::TabInfo;
@@ -635,7 +686,15 @@ fn page_info_from_tab(page_id: PageId, tab: NativeTab, prior_window: Option<Wind
         is_loading: tab.is_loading,
         load_progress: tab.load_progress,
         is_pinned: tab.is_pinned,
-        window_id: tab.window_id.map(WindowId).or(prior_window),
+        window_id: tab.window_id.map(WindowId).or_else(|| {
+            // Older unbound binaries omit ownership. New metadata must never borrow stale
+            // placement: a bound page needs an actual owning window from this native reply.
+            if meta.browser_profile_id.is_none() && meta.live_browser_context_id.is_none() {
+                prior_window
+            } else {
+                None
+            }
+        }),
         index: tab.index,
         group_id: tab.group_id,
         browser_profile_id: meta.browser_profile_id,

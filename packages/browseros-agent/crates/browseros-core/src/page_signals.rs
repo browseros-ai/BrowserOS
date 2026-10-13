@@ -120,9 +120,13 @@ struct SignalsState {
     pages: HashMap<PageId, PageSignalState>,
 }
 
+type SignalAdmission = Arc<dyn Fn(&PageId) -> bool + Send + Sync>;
+
+/// Shared page events, optionally projected through a view's cached admission predicate.
 pub struct PageSignals {
     cdp: Arc<dyn CdpConnection>,
-    state: Mutex<SignalsState>,
+    state: Arc<Mutex<SignalsState>>,
+    scope: Option<SignalAdmission>,
 }
 
 impl PageSignals {
@@ -130,13 +134,30 @@ impl PageSignals {
     pub fn new(cdp: Arc<dyn CdpConnection>) -> Arc<Self> {
         let signals = Arc::new(Self {
             cdp,
-            state: Mutex::new(SignalsState::default()),
+            state: Arc::new(Mutex::new(SignalsState::default())),
+            scope: None,
         });
         Self::spawn_event_listener(signals.clone());
         signals
     }
 
+    /// Read-only projection over the global event cache. Task tools can inspect admitted
+    /// pages but cannot rewrite session ownership or trigger infrastructure alert handling.
+    pub(crate) fn scoped(source: &Arc<Self>, scope: SignalAdmission) -> Arc<Self> {
+        Arc::new(Self {
+            cdp: source.cdp.clone(),
+            state: source.state.clone(),
+            scope: Some(scope),
+        })
+    }
+    fn allowed(&self, page: &PageId) -> bool {
+        self.scope.as_ref().is_none_or(|scope| scope(page))
+    }
+
     pub fn attach_page(&self, page_id: PageId, session_id: SessionId) {
+        if self.scope.is_some() {
+            return;
+        }
         let mut state = self.state();
         state
             .pages
@@ -147,6 +168,9 @@ impl PageSignals {
     }
 
     pub fn detach_session(&self, session_id: &SessionId) {
+        if self.scope.is_some() {
+            return;
+        }
         let mut state = self.state();
         let Some(page_id) = state.sessions.remove(session_id) else {
             return;
@@ -157,6 +181,9 @@ impl PageSignals {
     }
 
     pub fn forget_page(&self, page_id: &PageId) {
+        if self.scope.is_some() {
+            return;
+        }
         let mut state = self.state();
         state.sessions.retain(|_, existing| existing != page_id);
         state.pages.remove(page_id);
@@ -164,6 +191,9 @@ impl PageSignals {
 
     #[must_use]
     pub fn pending_dialog(&self, page_id: &PageId) -> Option<PageDialog> {
+        if !self.allowed(page_id) {
+            return None;
+        }
         self.state()
             .pages
             .get(page_id)
@@ -177,6 +207,9 @@ impl PageSignals {
     }
 
     pub fn clear_dialog(&self, page_id: &PageId) {
+        if self.scope.is_some() {
+            return;
+        }
         if let Some(page) = self.state().pages.get_mut(page_id) {
             page.pending_dialog = None;
         }
@@ -184,6 +217,9 @@ impl PageSignals {
 
     #[must_use]
     pub fn console_mark(&self, page_id: &PageId) -> u64 {
+        if !self.allowed(page_id) {
+            return 0;
+        }
         self.state()
             .pages
             .get(page_id)
@@ -193,6 +229,9 @@ impl PageSignals {
 
     #[must_use]
     pub fn console_entries(&self, page_id: &PageId) -> Vec<ConsoleEntry> {
+        if !self.allowed(page_id) {
+            return Vec::new();
+        }
         self.state()
             .pages
             .get(page_id)
@@ -202,6 +241,9 @@ impl PageSignals {
 
     #[must_use]
     pub fn console_entries_since(&self, page_id: &PageId, sequence: u64) -> Vec<ConsoleEntry> {
+        if !self.allowed(page_id) {
+            return Vec::new();
+        }
         self.state()
             .pages
             .get(page_id)
@@ -216,6 +258,9 @@ impl PageSignals {
     }
 
     pub fn take_alert_note_lines(&self, page_id: &PageId) -> Vec<String> {
+        if !self.allowed(page_id) {
+            return Vec::new();
+        }
         let mut state = self.state();
         let Some(page) = state.pages.get_mut(page_id) else {
             return Vec::new();

@@ -157,7 +157,7 @@ impl Observer {
         cross_process: bool,
         context: &CaptureContext,
     ) -> Result<AcquiredFrame, CoreError> {
-        let target = self
+        let mut target = self
             .frames
             .resolve_frame_target(
                 self.page_id.clone(),
@@ -166,6 +166,11 @@ impl Observer {
                 cross_process,
             )
             .await?;
+        if let Some(access) = &self.access {
+            target.session = access
+                .frame_session(target.session, frame_id.clone())
+                .await?;
+        }
         let runtime_document_id = if target.cursor_uses_session_default {
             None
         } else {

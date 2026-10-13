@@ -132,15 +132,21 @@ impl Browser {
         let screenshot = session
             .send::<_, CaptureScreenshotResult>("Page.captureScreenshot", Value::Object(params))
             .await?;
-        let dpr = session
+        let dpr_result = session
             .send::<_, EvaluateResult>(
                 "Runtime.evaluate",
-                json!({ "expression": "window.devicePixelRatio", "returnByValue": true }),
+                json!({"expression":"window.devicePixelRatio","returnByValue":true}),
             )
-            .await
-            .ok()
-            .and_then(|result| result.result.value.and_then(|value| value.as_f64()))
-            .unwrap_or(1.0);
+            .await;
+        // DPR is advisory for an unbound transport failure, but a target admission error must
+        // invalidate the whole capture instead of publishing bytes from an expired capability.
+        let dpr = match dpr_result {
+            Err(error @ CoreError::Target(_)) => return Err(error),
+            result => result
+                .ok()
+                .and_then(|result| result.result.value.and_then(|value| value.as_f64()))
+                .unwrap_or(1.0),
+        };
         Ok(BrowserScreenshot {
             data: screenshot.data,
             mime_type: format!("image/{}", format.as_str()),

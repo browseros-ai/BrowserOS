@@ -140,6 +140,23 @@ impl FrameRegistry {
         })
     }
 
+    /// Scoped observer sessions verify both page-tree ownership and this live endpoint mapping.
+    /// Frame IDs alone survive navigations and cannot authorize a retained OOPIF session.
+    pub(crate) async fn frame_session_matches(&self, frame: &FrameId, session: &SessionId) -> bool {
+        self.clear_sessions_from_prior_connection().await;
+        self.oopif_sessions
+            .lock()
+            .await
+            .get(frame)
+            .is_some_and(|id| id == session)
+            || self
+                .same_process_sessions
+                .lock()
+                .await
+                .get(frame)
+                .is_some_and(|id| id == session)
+    }
+
     async fn clear_sessions_from_prior_connection(&self) {
         let current_epoch = self.cdp.connection_epoch();
         let mut cached_epoch = self.connection_epoch.lock().await;

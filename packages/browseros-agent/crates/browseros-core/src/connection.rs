@@ -82,6 +82,17 @@ impl CdpConnection for CdpClient {
 pub struct ProtocolSession {
     connection: Arc<dyn CdpConnection>,
     session_id: Option<SessionId>,
+    admission: Option<Arc<dyn ProtocolAdmission>>,
+}
+
+/// Private capability carried by sessions returned from a bound view. It brackets every send,
+/// so caching a handle or resolving an OOPIF cannot bypass the capture after an async handoff.
+pub(crate) trait ProtocolAdmission: Send + Sync {
+    fn check<'a>(
+        &'a self,
+        method: &'a str,
+        params: &'a Value,
+    ) -> BoxFuture<'a, Result<(), CoreError>>;
 }
 
 impl fmt::Debug for ProtocolSession {
@@ -98,6 +109,7 @@ impl ProtocolSession {
         Self {
             connection,
             session_id: None,
+            admission: None,
         }
     }
 
@@ -106,6 +118,7 @@ impl ProtocolSession {
         Self {
             connection,
             session_id: Some(session_id),
+            admission: None,
         }
     }
 
@@ -119,6 +132,11 @@ impl ProtocolSession {
         self.session_id == other.session_id
     }
 
+    pub(crate) fn with_admission(mut self, admission: Arc<dyn ProtocolAdmission>) -> Self {
+        self.admission = Some(admission);
+        self
+    }
+
     pub async fn send<P, R>(&self, method: &str, params: P) -> Result<R, CoreError>
     where
         P: Serialize,
@@ -126,18 +144,22 @@ impl ProtocolSession {
     {
         let value =
             serde_json::to_value(params).map_err(|err| CoreError::Message(err.to_string()))?;
-        let response = self
-            .connection
-            .send(method, value, self.session_id.as_ref())
-            .await?;
+        let response = self.send_value(method, value).await?;
         serde_json::from_value(response).map_err(|err| CoreError::Message(err.to_string()))
     }
 
     pub async fn send_value(&self, method: &str, params: Value) -> Result<Value, CoreError> {
-        self.connection
-            .send(method, params, self.session_id.as_ref())
-            .await
-            .map_err(CoreError::from)
+        if let Some(admission) = &self.admission {
+            admission.check(method, &params).await?;
+        }
+        let response = self
+            .connection
+            .send(method, params.clone(), self.session_id.as_ref())
+            .await?;
+        if let Some(admission) = &self.admission {
+            admission.check(method, &params).await?;
+        }
+        Ok(response)
     }
 
     pub async fn send_raw_json(
@@ -145,6 +167,13 @@ impl ProtocolSession {
         method: &str,
         params_json: &str,
     ) -> Result<String, CoreError> {
+        if self.admission.is_some() {
+            let params = serde_json::from_str(params_json)
+                .map_err(|err| CoreError::Message(err.to_string()))?;
+            let result = self.send_value(method, params).await?;
+            return serde_json::to_string(&result)
+                .map_err(|err| CoreError::Message(err.to_string()));
+        }
         self.connection
             .send_raw_json(method, params_json, self.session_id.as_ref())
             .await
