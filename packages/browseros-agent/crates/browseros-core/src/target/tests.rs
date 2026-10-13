@@ -34,6 +34,7 @@ struct Fixture {
     context_after_send: Option<String>,
     move_on_window_read: Option<(usize, i64, i64)>,
     move_group_on_tab_read: Option<(usize, i64)>,
+    epoch_after_profiles: bool,
 }
 struct Native {
     state: Mutex<Fixture>,
@@ -99,6 +100,7 @@ impl Native {
                 context_after_send: None,
                 move_on_window_read: None,
                 move_group_on_tab_read: None,
+                epoch_after_profiles: false,
             }),
         })
     }
@@ -394,6 +396,12 @@ impl CdpConnection for Native {
                     .as_str()
                     .is_some_and(|id| id.starts_with("worker-"));
             let result = self.reply(method, params, session);
+            if method == "Browser.getProfiles" {
+                let invalidate_epoch = std::mem::take(&mut self.lock().epoch_after_profiles);
+                if invalidate_epoch {
+                    self.epoch.fetch_add(1, Ordering::SeqCst);
+                }
+            }
             if worker_attach {
                 let hold = self
                     .attach_hold
@@ -926,13 +934,29 @@ async fn unloaded_capture_can_load_but_only_a_new_capture_can_execute() -> TestR
     );
     code(
         scoped
+            .cdp("Storage.getCookies", json!({}), None)
+            .await
+            .err()
+            .ok_or("in-run load admitted cookie read")?,
+        "profile_not_loaded",
+    );
+    let captured = scoped.scope()?.ok_or("bound scope missing")?;
+    assert!(!captured.profile.loaded);
+    assert!(captured.context_id.is_none());
+    assert!(native.calls("Storage.getCookies").is_empty());
+    code(
+        scoped
             .create_window()
             .await
             .err()
             .ok_or("old unloaded capture refreshed")?,
-        "profile_gone",
+        "profile_not_loaded",
     );
     let loaded = view(native.clone(), None).await;
+    assert_eq!(
+        loaded.cdp("Storage.getCookies", json!({}), None).await?["routedContext"],
+        "live-eng"
+    );
     code(
         loaded
             .new_page("about:blank", NewPageOptions::default())
@@ -960,6 +984,50 @@ async fn unloaded_capture_can_load_but_only_a_new_capture_can_execute() -> TestR
             .window_id,
         Some(WindowId(window.window_id))
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn unloaded_capture_prioritizes_missing_identity_and_epoch_over_not_loaded() -> TestResult {
+    for invalidation in [
+        "missing",
+        "directory",
+        "epoch_before",
+        "epoch_during_catalog",
+    ] {
+        let native = Native::new();
+        native.lock().profiles[0] = profile("eng", false);
+        let scoped = view(native.clone(), None).await;
+        scoped.load_profile(&BrowserProfileId("eng".into())).await?;
+        match invalidation {
+            "missing" => native
+                .lock()
+                .profiles
+                .retain(|profile| profile["browserProfileId"] != "eng"),
+            "directory" => native.lock().profiles[0]["directory"] = json!("reused-directory"),
+            "epoch_before" => native.epoch.store(2, Ordering::SeqCst),
+            // The catalog still returns this saved identity, but the awaited reply belongs
+            // to a new connection. That invalidation must outrank the unloaded capture.
+            "epoch_during_catalog" => native.lock().epoch_after_profiles = true,
+            _ => unreachable!(),
+        }
+        let result = scoped.cdp("Storage.getCookies", json!({}), None).await;
+        assert!(
+            matches!(result, Err(CoreError::Target(TargetError::ProfileGone(id))) if id == BrowserProfileId("eng".into())),
+            "{invalidation}"
+        );
+        assert!(
+            native.calls("Storage.getCookies").is_empty(),
+            "{invalidation}"
+        );
+        assert!(
+            scoped
+                .scope()?
+                .ok_or("bound scope missing")?
+                .context_id
+                .is_none()
+        );
+    }
     Ok(())
 }
 #[tokio::test]

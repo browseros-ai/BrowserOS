@@ -474,11 +474,21 @@ impl BrowserView {
                     && profile.directory == scope.binding.intent.directory
             })
             .ok_or_else(|| TargetError::ProfileGone(scope.profile.browser_profile_id.clone()))?;
+        // Catalog discovery is an async handoff. A restart invalidates the saved identity
+        // even when its returned handle/directory happen to match an unloaded capture.
+        self.check_epoch(scope)?;
         // Live identity is never refreshed in place. Even a successful load in this run requires
         // a fresh call to capture the new context; old sessions cannot start using it silently.
         if current.browser_context_id != scope.context_id || current.loaded != scope.profile.loaded
         {
-            return Err(TargetError::ProfileGone(scope.profile.browser_profile_id.clone()).into());
+            // Loading does not remove the saved profile: this call still lacks a captured
+            // live context. Preserve that recovery error instead of misclassifying it as gone.
+            let error = if !scope.profile.loaded && scope.context_id.is_none() {
+                TargetError::ProfileNotLoaded(scope.profile.browser_profile_id.clone())
+            } else {
+                TargetError::ProfileGone(scope.profile.browser_profile_id.clone())
+            };
+            return Err(error.into());
         }
         let windows = self.read_windows().await?;
         if let Some(pin) = scope.pin()
