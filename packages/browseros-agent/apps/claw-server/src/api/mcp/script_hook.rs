@@ -20,8 +20,9 @@ use tracing::warn;
 /// effects. Core enforces scope; this hook reproduces what the host effects would have
 /// done: it notes whose tab each primitive touched, records each primitive as a child
 /// audit row linked to the script dispatch, and (on page creation) claims and
-/// groups the page exactly as a `tabs new` would. It holds the script's own
-/// `ToolCall` so it can reuse the effect helpers with the same inputs.
+/// groups the page exactly as a `tabs new` would. Explicit group tools share the
+/// detached grouper's mutex for that inner operation, without locking a whole
+/// script. It holds the script's own `ToolCall` to retain the same captured view.
 pub struct ScriptInnerCallHook {
     call: ToolCall,
 }
@@ -38,6 +39,23 @@ impl ScriptInnerCallHook {
 }
 
 impl InnerCallHook for ScriptInnerCallHook {
+    fn acquire_tool_guard<'a>(
+        &'a self,
+        tool_name: &'a str,
+        args: &'a Value,
+    ) -> BoxFuture<'a, Result<Option<Box<dyn Send>>, String>> {
+        Box::pin(async move {
+            // MCP retains this opaque RAII guard through handler and readback,
+            // then drops it before child auditing. The mutex supplies ordering;
+            // it never replaces the immutable BrowserView's deep scope guards.
+            self.call
+                .acquire_group_operation_guard(tool_name, args)
+                .await
+                .map(|guard| guard.map(|guard| Box::new(guard) as Box<dyn Send>))
+                .map_err(|()| "cancelled".to_string())
+        })
+    }
+
     fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             let Some(page) = page else {

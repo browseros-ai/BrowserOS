@@ -166,6 +166,43 @@ impl ToolCall {
     pub fn tool_named(&self, name: &str) -> Option<&ToolDef> {
         self.catalog.iter().find(|tool| tool.name == name)
     }
+
+    /// Orders explicit group mutations with detached creation and lifecycle work.
+    /// An owned guard can cross the script host seam without borrowing its caller;
+    /// the captured BrowserView still supplies all identity/epoch admission.
+    pub(crate) async fn acquire_group_operation_guard(
+        &self,
+        tool_name: &str,
+        args: &Value,
+    ) -> Result<Option<tokio::sync::OwnedMutexGuard<()>>, ()> {
+        let Some(identity) = &self.identity else {
+            return Ok(None);
+        };
+        if tool_name != "tab_groups"
+            || !matches!(
+                args.get("action").and_then(Value::as_str),
+                Some("create" | "update" | "ungroup" | "move" | "close")
+            )
+        {
+            return Ok(None);
+        }
+        let acquire = async {
+            self.state
+                .sessions
+                .ownership()
+                .group_operation_lock(&identity.ownership_key)
+                .await
+                .lock_owned()
+                .await
+        };
+        // Cancellation covers both lock lookup and queueing. Stop/client tokens
+        // are linked into this call, so no queued mutation may escape either.
+        tokio::select! {
+            biased;
+            () = self.cancel.cancelled() => Err(()),
+            guard = acquire => Ok(Some(guard)),
+        }
+    }
 }
 
 pub type ToolGuard = for<'a> fn(&'a ToolCall) -> BoxFuture<'a, Option<ToolResult>>;
@@ -481,7 +518,19 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 inner_call_hook,
                 preloaded_helpers,
             });
-            match execute_tool(call.tool(), call.raw_args.clone(), &ctx).await {
+            // A tab group is destroyed when its last page is reparented. Explicit
+            // placement must share the detached grouper's conversation lock, so a
+            // callback cannot erase a group after we return its successful ID.
+            let execution = async {
+                // `run` acquires per inner tool through ScriptInnerCallHook,
+                // never for the whole script or for unrelated primitives.
+                let _guard = call
+                    .acquire_group_operation_guard(call.tool().name, &call.raw_args)
+                    .await
+                    .map_err(|()| browseros_mcp::framework::ToolError::Cancelled)?;
+                execute_tool(call.tool(), call.raw_args.clone(), &ctx).await
+            };
+            match execution.await {
                 Ok(result) => result,
                 Err(browseros_mcp::framework::ToolError::Cancelled) => {
                     ToolResult::error(format!("{} failed: cancelled", call.tool().name))
@@ -627,6 +676,588 @@ pub fn linked_cancel_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn deferred_grouping_preserves_explicit_group_update() -> anyhow::Result<()> {
+        assert_deferred_grouping_preserves_explicit_group("update", true).await
+    }
+
+    #[tokio::test]
+    async fn deferred_grouping_preserves_explicit_group_close() -> anyhow::Result<()> {
+        assert_deferred_grouping_preserves_explicit_group("close", true).await
+    }
+
+    #[tokio::test]
+    async fn deferred_grouping_preserves_completed_explicit_group_update() -> anyhow::Result<()> {
+        assert_deferred_grouping_preserves_explicit_group("update", false).await
+    }
+
+    #[tokio::test]
+    async fn deferred_grouping_preserves_completed_explicit_group_close() -> anyhow::Result<()> {
+        assert_deferred_grouping_preserves_explicit_group("close", false).await
+    }
+
+    async fn assert_deferred_grouping_preserves_explicit_group(
+        action: &str,
+        grouping_first: bool,
+    ) -> anyhow::Result<()> {
+        use crate::{
+            api::mcp::test_support::{ProfileConnection, tool_call},
+            services::sessions::{ScopedGroupKey, TabGroup},
+        };
+        use browseros_core::{
+            BrowserSessionHooks, WindowId, pages::NewPageOptions, target::BrowserView,
+        };
+        use std::{sync::atomic::Ordering, task::Poll};
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::unbound(browser, None));
+        let page = call
+            .view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("view missing"))?
+            .new_page(
+                "https://synthetic.test/explicit-group",
+                NewPageOptions::default(),
+            )
+            .await?;
+        let created = effects::tab_groups::created_page(&call, page.page_id.0).await;
+        assert!(created.is_some());
+        let key = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        // A preceding case closed the last tab of the remembered session group.
+        // Its native lookup awaits while this new page still has no group.
+        ownership
+            .remember_scoped_group(
+                &key,
+                ScopedGroupKey {
+                    browser_profile_id: None,
+                    window_id: WindowId(2),
+                    revision: None,
+                },
+                TabGroup {
+                    group_ref: Some("previous-closed-group".into()),
+                    window_id: Some(WindowId(2)),
+                    ..TabGroup::default()
+                },
+            )
+            .await;
+        let mut explicit = call.clone();
+        explicit.tool_index = explicit
+            .catalog
+            .iter()
+            .position(|tool| tool.name == "tab_groups")
+            .ok_or_else(|| anyhow::anyhow!("tab_groups missing"))?;
+        explicit.flags = ToolFlags::default();
+        explicit.raw_args =
+            json!({"action":"create", "pages":[page.page_id.0], "title":"before-update"});
+        let created = if grouping_first {
+            native.pause_group_lookup.store(true, Ordering::SeqCst);
+            let entered = native.group_lookup_entered.notified();
+            let grouping = tokio::spawn(effects::tab_groups::run_tab_group_work(
+                call.clone(),
+                created,
+            ));
+            tokio::time::timeout(std::time::Duration::from_secs(3), entered).await?;
+            let mut create = Box::pin(execute_with_cancellation(&explicit));
+            // Poll the actual Claw execution seam. Without mutual exclusion, the
+            // explicit native group is published before the older callback resumes.
+            let first = futures_util::poll!(create.as_mut());
+            native.group_lookup_release.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(3), grouping).await??;
+            match first {
+                Poll::Ready(result) => result,
+                Poll::Pending => {
+                    tokio::time::timeout(std::time::Duration::from_secs(3), create).await?
+                }
+            }
+        } else {
+            // The creation receipt predates the explicit placement. A queued
+            // callback must use the current group once it acquires the lock.
+            let result = execute_with_cancellation(&explicit).await;
+            effects::tab_groups::run_tab_group_work(call, created).await;
+            result
+        };
+        let DispatchExecution::Completed(created) = created else {
+            anyhow::bail!("creation cancelled")
+        };
+        assert!(
+            !created.result.is_error,
+            "{:?}",
+            dispatch_error_text(&created.result)
+        );
+        let id = created
+            .result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value["group"]["groupId"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("explicit group id missing"))?
+            .to_string();
+        explicit.raw_args = if action == "update" {
+            json!({"action":"update", "groupId":id, "title":"after-update", "color":"green", "collapsed":true})
+        } else {
+            json!({"action":"close", "groupId":id})
+        };
+        let DispatchExecution::Completed(result) = execute_with_cancellation(&explicit).await
+        else {
+            anyhow::bail!("mutation cancelled")
+        };
+        assert!(
+            !result.result.is_error,
+            "explicit group {action} failed: {:?}",
+            dispatch_error_text(&result.result)
+        );
+        if action == "update" {
+            let groups = native.groups.lock().unwrap_or_else(|p| p.into_inner());
+            let group = groups
+                .iter()
+                .find(|group| group["groupId"] == id)
+                .ok_or_else(|| anyhow::anyhow!("explicit group vanished"))?;
+            assert_eq!(group["title"], "after-update");
+            assert_eq!(group["color"], "green");
+            assert_eq!(group["collapsed"], true);
+            assert_eq!(group["tabIds"], json!([page.tab_id.0]));
+        } else {
+            assert!(
+                !native
+                    .groups
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .iter()
+                    .any(|group| group["groupId"] == id)
+            );
+            assert!(
+                !native
+                    .tabs
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .iter()
+                    .any(|tab| tab["tabId"] == page.tab_id.0)
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn deferred_grouping_observes_new_native_group_during_lookup() -> anyhow::Result<()> {
+        use crate::{
+            api::mcp::test_support::{ProfileConnection, tool_call},
+            services::sessions::{ScopedGroupKey, TabGroup},
+        };
+        use browseros_core::{
+            BrowserSessionHooks, WindowId, pages::NewPageOptions, target::BrowserView,
+        };
+        use std::sync::atomic::Ordering;
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::unbound(browser, None));
+        let view = call
+            .view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("view missing"))?;
+        let original = view
+            .new_page(
+                "https://synthetic.test/native-placement",
+                NewPageOptions::default(),
+            )
+            .await?;
+        let created = effects::tab_groups::created_page(&call, original.page_id.0).await;
+        let key = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        call.state
+            .sessions
+            .ownership()
+            .remember_scoped_group(
+                &key,
+                ScopedGroupKey {
+                    browser_profile_id: None,
+                    window_id: WindowId(2),
+                    revision: None,
+                },
+                TabGroup {
+                    group_ref: Some("previous-closed-group".into()),
+                    window_id: Some(WindowId(2)),
+                    ..TabGroup::default()
+                },
+            )
+            .await;
+        native.pause_group_lookup.store(true, Ordering::SeqCst);
+        let entered = native.group_lookup_entered.notified();
+        let grouping = tokio::spawn(effects::tab_groups::run_tab_group_work(
+            call.clone(),
+            created,
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(3), entered).await?;
+        // Another native actor does not participate in the host mutex. Group
+        // membership may change during lookup without changing creation identity.
+        let explicit = view
+            .cdp(
+                "Browser.createTabGroup",
+                json!({"tabIds":[original.tab_id.0], "title":"explicit"}),
+                None,
+            )
+            .await?;
+        let group_id = explicit["group"]["groupId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("explicit group missing"))?;
+        native.group_lookup_release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(3), grouping).await??;
+        let current = view.page(original.page_id.clone()).await?;
+        assert_eq!(current.target_id, original.target_id);
+        assert_eq!(current.tab_id, original.tab_id);
+        assert_eq!(current.window_id, original.window_id);
+        assert_eq!(
+            current.group_id.as_deref(),
+            Some(group_id),
+            "newer explicit native placement was overwritten"
+        );
+        let calls = native.calls.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|(method, _)| method == "Browser.createTabGroup")
+                .count(),
+            1
+        );
+        assert!(!calls.iter().any(|(method, _)| matches!(
+            method.as_str(),
+            "Browser.addTabsToGroup" | "Browser.updateTabGroup"
+        )));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_group_wait_honors_client_cancellation() -> anyhow::Result<()> {
+        assert_explicit_group_wait_honors_client_cancellation(false).await
+    }
+
+    #[tokio::test]
+    async fn run_explicit_group_wait_honors_client_cancellation() -> anyhow::Result<()> {
+        assert_explicit_group_wait_honors_client_cancellation(true).await
+    }
+
+    async fn queued_group_call(
+        script: bool,
+    ) -> anyhow::Result<(
+        ToolCall,
+        Arc<crate::api::mcp::test_support::ProfileConnection>,
+    )> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use browseros_core::{BrowserSessionHooks, target::BrowserView};
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = if script {
+            tool_call(
+                "run",
+                json!({"code":"return await browser.tabGroups({action:'create',pages:[1]});"}),
+            )
+            .await?
+        } else {
+            tool_call("tab_groups", json!({"action":"create", "pages":[1]})).await?
+        };
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::unbound(browser, None));
+        Ok((call, native))
+    }
+
+    async fn assert_explicit_group_wait_honors_client_cancellation(
+        script: bool,
+    ) -> anyhow::Result<()> {
+        let (call, native) = queued_group_call(script).await?;
+        let key = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        let lock = ownership.group_operation_lock(&key).await;
+        let _busy = lock.lock().await;
+        let mut work = Box::pin(execute_with_cancellation(&call));
+        assert!(futures_util::poll!(work.as_mut()).is_pending());
+        call.client_cancel.cancel();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), work).await?;
+        assert!(matches!(result, DispatchExecution::ProtocolCancelled));
+        assert!(
+            !native
+                .calls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .any(|(method, _)| method.contains("TabGroup"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_group_wait_honors_operator_stop() -> anyhow::Result<()> {
+        assert_explicit_group_wait_honors_operator_stop(false).await
+    }
+
+    #[tokio::test]
+    async fn run_explicit_group_wait_honors_operator_stop() -> anyhow::Result<()> {
+        assert_explicit_group_wait_honors_operator_stop(true).await
+    }
+
+    async fn assert_explicit_group_wait_honors_operator_stop(script: bool) -> anyhow::Result<()> {
+        let (call, native) = queued_group_call(script).await?;
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let session = identity.session.clone();
+        let lock = call
+            .state
+            .sessions
+            .ownership()
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let busy = lock.lock().await;
+        // Register the real dispatch token so the manager's Stop transition owns
+        // cancellation and waits for this queued call's completion/audit handoff.
+        assert!(
+            session
+                .try_register_dispatch(call.dispatch_id.clone(), call.dispatch_cancel.clone())
+                .await
+        );
+        let mut work = Box::pin(execute_with_cancellation(&call));
+        assert!(futures_util::poll!(work.as_mut()).is_pending());
+        let sessions = call.state.sessions.clone();
+        let session_id = call.session_id.clone();
+        let stop = tokio::spawn(async move { sessions.cancel_by_session(&session_id).await });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            call.dispatch_cancel.cancelled(),
+        )
+        .await?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(3), work).await?;
+        let DispatchExecution::Completed(outcome) = result else {
+            anyhow::bail!("operator Stop became protocol cancellation")
+        };
+        assert!(outcome.cancelled);
+        assert_eq!(
+            dispatch_error_text(&outcome.result).as_deref(),
+            Some(CANCELLATION_REASON)
+        );
+        assert!(
+            !native
+                .calls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .any(|(method, _)| method.contains("TabGroup"))
+        );
+        assert!(!session.finish_dispatch(&call.dispatch_id).await);
+        drop(busy);
+        assert_eq!(
+            tokio::time::timeout(std::time::Duration::from_secs(3), stop).await???,
+            Some(1)
+        );
+        assert!(session.operator_stop_requested());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_group_listing_and_unrelated_tools_do_not_wait_for_group_mutation()
+    -> anyhow::Result<()> {
+        let (mut call, native) = queued_group_call(true).await?;
+        let key = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let lock = call
+            .state
+            .sessions
+            .ownership()
+            .group_operation_lock(&key)
+            .await;
+        let _busy = lock.lock().await;
+        // The optional host seam must be per mutation, not a whole-run lock.
+        // Read-only groups and unrelated windows remain usable while it is busy.
+        call.raw_args = json!({"code":"return {groups:await browser.tabGroups({action:'list'}),windows:await browser.windows({action:'list'})};"});
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(3),
+            execute_with_cancellation(&call),
+        )
+        .await?;
+        let DispatchExecution::Completed(outcome) = result else {
+            anyhow::bail!("script cancelled")
+        };
+        assert!(
+            !outcome.result.is_error,
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        let value = outcome
+            .result
+            .structured_content
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("script readback missing"))?;
+        assert_eq!(value["value"]["groups"]["groups"], json!([]));
+        assert_eq!(
+            value["value"]["windows"]["windows"]
+                .as_array()
+                .map(Vec::len),
+            Some(3)
+        );
+        assert!(
+            !native
+                .calls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .any(|(method, _)| {
+                    matches!(
+                        method.as_str(),
+                        "Browser.createTabGroup"
+                            | "Browser.addTabsToGroup"
+                            | "Browser.updateTabGroup"
+                            | "Browser.closeTabGroup"
+                    )
+                })
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_deferred_grouping_preserves_explicit_group_update() -> anyhow::Result<()> {
+        assert_run_deferred_grouping_preserves_explicit_group("update").await
+    }
+
+    #[tokio::test]
+    async fn run_deferred_grouping_preserves_explicit_group_close() -> anyhow::Result<()> {
+        assert_run_deferred_grouping_preserves_explicit_group("close").await
+    }
+
+    async fn assert_run_deferred_grouping_preserves_explicit_group(
+        action: &str,
+    ) -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use browseros_core::{BrowserSessionHooks, pages::NewPageOptions, target::BrowserView};
+        use std::{sync::atomic::Ordering, task::Poll};
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::unbound(browser, None));
+        let page = call
+            .view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("view missing"))?
+            .new_page(
+                "https://synthetic.test/script-group",
+                NewPageOptions::default(),
+            )
+            .await?;
+        let created = effects::tab_groups::created_page(&call, page.page_id.0).await;
+        assert!(created.is_some());
+        // Unlike the lookup test, this callback has finished ALL fresh reads.
+        // Pause its native write: a script must share ordering with this callback,
+        // not merely rely on another advisory membership read before dispatch.
+        native.pause_group_create.store(true, Ordering::SeqCst);
+        let entered = native.group_create_entered.notified();
+        let grouping = tokio::spawn(effects::tab_groups::run_tab_group_work(
+            call.clone(),
+            created,
+        ));
+        tokio::time::timeout(std::time::Duration::from_secs(3), entered).await?;
+        let mut script = call.clone();
+        script.tool_index = script
+            .catalog
+            .iter()
+            .position(|tool| tool.name == "run")
+            .ok_or_else(|| anyhow::anyhow!("run missing"))?;
+        script.flags = ToolFlags::default();
+        script.raw_args = json!({"code":format!(
+            "return await browser.tabGroups({{action:'create',pages:[{}],title:'script-explicit'}});",
+            page.page_id.0
+        )});
+        let result = {
+            let mut work = Box::pin(execute_with_cancellation(&script));
+            let first = futures_util::poll!(work.as_mut());
+            native.group_create_release.notify_one();
+            tokio::time::timeout(std::time::Duration::from_secs(3), grouping).await??;
+            match first {
+                Poll::Ready(result) => result,
+                Poll::Pending => {
+                    tokio::time::timeout(std::time::Duration::from_secs(3), work).await?
+                }
+            }
+        };
+        let DispatchExecution::Completed(outcome) = result else {
+            anyhow::bail!("script cancelled")
+        };
+        assert!(
+            !outcome.result.is_error,
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        let group_id = outcome
+            .result
+            .structured_content
+            .as_ref()
+            .and_then(|value| value["value"]["group"]["groupId"].as_str())
+            .ok_or_else(|| anyhow::anyhow!("script group id missing"))?;
+        let mut mutation = script.clone();
+        mutation.tool_index = mutation
+            .catalog
+            .iter()
+            .position(|tool| tool.name == "tab_groups")
+            .ok_or_else(|| anyhow::anyhow!("tab_groups missing"))?;
+        mutation.raw_args = if action == "update" {
+            json!({"action":"update", "groupId":group_id, "title":"script-after", "color":"green"})
+        } else {
+            json!({"action":"close", "groupId":group_id})
+        };
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&mutation).await
+        else {
+            anyhow::bail!("mutation cancelled")
+        };
+        assert!(
+            !outcome.result.is_error,
+            "script's explicit group {action} failed: {:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        if action == "update" {
+            let groups = native.groups.lock().unwrap_or_else(|p| p.into_inner());
+            let group = groups
+                .iter()
+                .find(|group| group["groupId"] == group_id)
+                .ok_or_else(|| anyhow::anyhow!("script group vanished"))?;
+            assert_eq!(group["title"], "script-after");
+            assert_eq!(group["color"], "green");
+            assert_eq!(group["tabIds"], json!([page.tab_id.0]));
+        } else {
+            assert!(
+                !native
+                    .tabs
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .iter()
+                    .any(|tab| tab["tabId"] == page.tab_id.0)
+            );
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn stale_binding_blocks_execution_while_management_recovers() -> anyhow::Result<()> {

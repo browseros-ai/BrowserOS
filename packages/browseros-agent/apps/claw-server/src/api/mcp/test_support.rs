@@ -92,11 +92,17 @@ pub(crate) struct ProfileConnection {
     dispatch_epoch: std::sync::Mutex<u64>,
     pub fail_inventory: std::sync::atomic::AtomicBool,
     pub group_created: tokio::sync::Notify,
+    next_group_id: std::sync::atomic::AtomicU64,
     /// Pause a native group lookup after the callback has admitted the original
     /// page, so tests can replace its target across that awaited handoff.
     pub pause_group_lookup: std::sync::atomic::AtomicBool,
     pub group_lookup_entered: tokio::sync::Notify,
     pub group_lookup_release: tokio::sync::Notify,
+    /// Pause a grouping write after its guarded reads, before native publication.
+    /// This separates fresh admission from ordering with a tool-backed script.
+    pub pause_group_create: std::sync::atomic::AtomicBool,
+    pub group_create_entered: tokio::sync::Notify,
+    pub group_create_release: tokio::sync::Notify,
     /// Response settling runs after new_page returns but before Claw effects
     /// capture the page. Pause this handoff to reconcile a replacement there.
     pub pause_response_evaluation: std::sync::atomic::AtomicBool,
@@ -128,9 +134,13 @@ impl ProfileConnection {
             dispatch_epoch: std::sync::Mutex::new(1),
             fail_inventory: std::sync::atomic::AtomicBool::new(false),
             group_created: tokio::sync::Notify::new(),
+            next_group_id: std::sync::atomic::AtomicU64::new(1),
             pause_group_lookup: std::sync::atomic::AtomicBool::new(false),
             group_lookup_entered: tokio::sync::Notify::new(),
             group_lookup_release: tokio::sync::Notify::new(),
+            pause_group_create: std::sync::atomic::AtomicBool::new(false),
+            group_create_entered: tokio::sync::Notify::new(),
+            group_create_release: tokio::sync::Notify::new(),
             pause_response_evaluation: std::sync::atomic::AtomicBool::new(false),
             response_evaluation_entered: tokio::sync::Notify::new(),
             response_evaluation_release: tokio::sync::Notify::new(),
@@ -162,6 +172,12 @@ impl ProfileConnection {
             {
                 self.group_lookup_entered.notify_one();
                 self.group_lookup_release.notified().await;
+            }
+            if method == "Browser.createTabGroup"
+                && self.pause_group_create.swap(false, Ordering::SeqCst)
+            {
+                self.group_create_entered.notify_one();
+                self.group_create_release.notified().await;
             }
             if method == "Runtime.evaluate"
                 && self.pause_response_evaluation.swap(false, Ordering::SeqCst)
@@ -246,8 +262,36 @@ impl ProfileConnection {
                         .and_then(|tab| tab["windowId"].as_i64())
                         .ok_or_else(|| error("tab missing"))?;
                     let mut groups = self.groups.lock().unwrap_or_else(|p| p.into_inner());
+                    let destination = if method == "Browser.createTabGroup" {
+                        format!("G{}", self.next_group_id.fetch_add(1, Ordering::SeqCst))
+                    } else {
+                        params["groupId"]
+                            .as_str()
+                            .ok_or_else(|| error("groupId required"))?
+                            .to_string()
+                    };
+                    if method == "Browser.addTabsToGroup"
+                        && !groups.iter().any(|group| group["groupId"] == destination)
+                    {
+                        return Err(error("Tab group not found"));
+                    }
+                    // Native grouping moves membership. Moving the last tab also
+                    // destroys its previous group, so stale returned IDs must fail.
+                    for group in groups
+                        .iter_mut()
+                        .filter(|group| group["groupId"] != destination)
+                    {
+                        if let Some(members) = group["tabIds"].as_array_mut() {
+                            members.retain(|member| !tab_ids.contains(member));
+                        }
+                    }
+                    groups.retain(|group| {
+                        group["tabIds"]
+                            .as_array()
+                            .is_some_and(|members| !members.is_empty())
+                    });
                     let group = if method == "Browser.createTabGroup" {
-                        let group = json!({"groupId":format!("G{}", groups.len()+1), "windowId":window,
+                        let group = json!({"groupId":destination, "windowId":window,
                             "title":params.get("title").and_then(Value::as_str).unwrap_or_default(), "color":"grey", "collapsed":false, "tabIds":tab_ids});
                         groups.push(group.clone());
                         group
@@ -255,9 +299,13 @@ impl ProfileConnection {
                         let group = groups
                             .iter_mut()
                             .find(|group| group["groupId"] == params["groupId"])
-                            .ok_or_else(|| error("group missing"))?;
+                            .ok_or_else(|| error("Tab group not found"))?;
                         if let Some(members) = group["tabIds"].as_array_mut() {
-                            members.extend(tab_ids.iter().cloned());
+                            for id in tab_ids {
+                                if !members.contains(id) {
+                                    members.push(id.clone());
+                                }
+                            }
                         }
                         group.clone()
                     };
@@ -276,7 +324,7 @@ impl ProfileConnection {
                     let group = groups
                         .iter_mut()
                         .find(|group| group["groupId"] == params["groupId"])
-                        .ok_or_else(|| error("group missing"))?;
+                        .ok_or_else(|| error("Tab group not found"))?;
                     for field in ["title", "color", "collapsed"] {
                         if let Some(value) = params.get(field) {
                             group[field] = value.clone();
@@ -285,10 +333,17 @@ impl ProfileConnection {
                     Ok(json!({"group":group.clone()}))
                 }
                 "Browser.closeTabGroup" => {
-                    self.groups
-                        .lock()
-                        .unwrap_or_else(|p| p.into_inner())
-                        .retain(|group| group["groupId"] != params["groupId"]);
+                    let mut tabs = self.tabs.lock().unwrap_or_else(|p| p.into_inner());
+                    let mut groups = self.groups.lock().unwrap_or_else(|p| p.into_inner());
+                    let group = groups
+                        .iter()
+                        .find(|group| group["groupId"] == params["groupId"])
+                        .ok_or_else(|| error("Tab group not found"))?;
+                    let members = group["tabIds"]
+                        .as_array()
+                        .ok_or_else(|| error("tabIds missing"))?;
+                    tabs.retain(|tab| !members.contains(&tab["tabId"]));
+                    groups.retain(|group| group["groupId"] != params["groupId"]);
                     Ok(json!({}))
                 }
                 "Target.detachFromTarget" => Ok(json!({})),

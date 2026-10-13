@@ -371,7 +371,7 @@ async fn ensure_captured_tab_group(
     };
     // Re-admit the actual page before delayed mutation. Closing/replacing the
     // context or dragging the tab must fail the captured view, never reroute it.
-    let Ok(page) = browser.page(PageId(created.page_id)).await else {
+    let Ok(mut page) = browser.page(PageId(created.page_id)).await else {
         return;
     };
     let Some(window_id) = captured.page.window_id else {
@@ -421,6 +421,23 @@ async fn ensure_captured_tab_group(
             saved = None;
         }
     }
+    // Group membership is mutable presentation/placement, not creation identity.
+    // A native actor can place this page while group discovery awaits, outside
+    // our conversation mutex. Refresh through the SAME deep capability before
+    // choosing a destination; never erase a newer explicit group or ungrouping.
+    let Ok(current) = browser.page(PageId(created.page_id)).await else {
+        return;
+    };
+    if current.window_id != Some(window_id) {
+        return;
+    }
+    if current.group_id != page.group_id {
+        if current.group_id.is_none() {
+            return;
+        }
+        saved = None;
+    }
+    page = current;
     if let Some(group) = saved
         && let Some(group_id) = group.group_ref
     {
