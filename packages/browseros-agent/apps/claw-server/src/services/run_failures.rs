@@ -68,12 +68,18 @@ pub struct SentrySink {
 }
 
 impl SentrySink {
-    /// Returns `None` when no DSN is configured, which is the case for every developer
-    /// build unless one is supplied deliberately.
+    /// Returns `None` when the DSN does not parse, so a malformed one downgrades to the
+    /// local log rather than to a client that silently drops everything.
     #[must_use]
     pub fn new(dsn: &str) -> Option<Self> {
         let options = sentry::ClientOptions {
             dsn: dsn.parse().ok(),
+            // `Client::from_config` installs no transport of its own. That default comes
+            // from `sentry::init` / `apply_defaults`, which are bypassed here on purpose:
+            // they also read ambient env (`SENTRY_DSN`, proxies, `SSL_VERIFY`) and attach
+            // integrations. Without this factory the client holds a valid DSN, reports
+            // itself disabled, and no event ever leaves the process.
+            transport: Some(Arc::new(sentry::transports::DefaultTransportFactory)),
             // Never let Sentry infer anything about the machine or the user.
             send_default_pii: false,
             attach_stacktrace: false,
@@ -191,12 +197,21 @@ impl RunFailureReporter {
             .filter(|value| !value.trim().is_empty())
             .or_else(|| BUILD_SENTRY_DSN.map(str::to_string))
             .filter(|value| !value.trim().is_empty());
-        let sink = match dsn.as_deref().and_then(SentrySink::new) {
+        let sentry = dsn.as_deref().and_then(|dsn| {
+            let sink = SentrySink::new(dsn);
+            if sink.is_none() {
+                // A DSN that yields no client is a misbuilt release, not a developer
+                // build, and must not read as the routine "no DSN" case below.
+                tracing::warn!("Sentry DSN is configured but unusable; run failures stay local");
+            }
+            sink
+        });
+        let sink = match sentry {
             Some(sentry) => Some(Box::new(sentry) as Box<dyn RunFailureSink>),
             None => {
                 tracing::info!(
                     directory = %log_dir.display(),
-                    "no Sentry DSN configured; run failures will be written to {}",
+                    "run failures are not sent to Sentry; writing them to {}",
                     FileSink::FILENAME_PREFIX
                 );
                 FileSink::new(log_dir).map(|sink| Box::new(sink) as Box<dyn RunFailureSink>)
@@ -461,6 +476,69 @@ await browser.upload(3, { path: '/Users/amara/Desktop/passport.pdf' });";
         assert_eq!(duration_bucket(619), "short");
         assert_eq!(duration_bucket(5_000), "medium");
         assert_eq!(duration_bucket(30_003), "at_cap");
+    }
+}
+
+#[cfg(test)]
+mod sentry_sink_tests {
+    use super::*;
+    use std::{
+        io::{Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+        time::Duration,
+    };
+
+    /// Stands in for the Sentry ingest endpoint: accepts one connection, answers 200, and
+    /// hands back the request line it saw. Returns a DSN that points at it.
+    fn fake_ingest() -> anyhow::Result<(String, mpsc::Receiver<String>)> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let dsn = format!("http://public@{}/1", listener.local_addr()?);
+        let (seen, requests) = mpsc::channel();
+        std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut head = [0_u8; 1024];
+            let read = stream.read(&mut head).unwrap_or(0);
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}");
+            let request_line = String::from_utf8_lossy(&head[..read])
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            let _ = seen.send(request_line);
+        });
+        Ok((dsn, requests))
+    }
+
+    /// Asserts on bytes that reached the wire rather than on the client's own view of
+    /// itself. A client can hold a perfectly valid DSN and still drop every event, which
+    /// is invisible from inside the process: the only symptom is an empty Sentry project.
+    #[test]
+    fn a_configured_dsn_puts_an_envelope_on_the_wire() -> anyhow::Result<()> {
+        let (dsn, requests) = fake_ingest()?;
+        let sink = SentrySink::new(&dsn)
+            .ok_or_else(|| anyhow::anyhow!("a valid DSN must yield a client that can send"))?;
+
+        sink.send(
+            RunFailureEvent {
+                script_fingerprint: "await browser.nav(<num>).goto(<str>);".to_string(),
+                error_label: "timeout".to_string(),
+                duration_bucket: "at_cap",
+                install_id: "11111111-2222-3333-4444-555555555555".to_string(),
+            },
+            Delivery::Sent,
+        );
+
+        let request_line = requests.recv_timeout(Duration::from_secs(10))?;
+        assert_eq!(request_line, "POST /api/1/envelope/ HTTP/1.1");
+        Ok(())
+    }
+
+    #[test]
+    fn an_unparseable_dsn_yields_no_sink() {
+        assert!(SentrySink::new("not a dsn").is_none());
     }
 }
 
