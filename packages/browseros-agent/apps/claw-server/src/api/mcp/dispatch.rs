@@ -41,6 +41,14 @@ pub struct ToolIdentity {
     pub agent_label: String,
 }
 
+/// Creation-time identity and dispatch capability for detached grouping. The view
+/// retains the original transport epoch even when the creating call was unbound.
+#[derive(Clone)]
+pub(crate) struct CreatedPageCapture {
+    pub page: PageInfo,
+    pub view: BrowserView,
+}
+
 #[derive(Clone)]
 pub struct ToolCall {
     catalog: Arc<Vec<ToolDef>>,
@@ -75,10 +83,10 @@ pub struct ToolCall {
     /// from its arguments the way it is for a granular tool. The script hook records what
     /// the script actually touched, and `effects::page_ownership_notice` reports it.
     pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
-    /// Incarnations observed at creation, before detached grouping. PageId can survive
-    /// native target replacement, so a late effect must not group its replacement tab.
+    /// Original snapshots and deep dispatch guards, captured before detached grouping.
+    /// A reusable PageId must never let a later callback adopt its replacement tab.
     pub(crate) created_page_snapshots:
-        Arc<tokio::sync::Mutex<std::collections::BTreeMap<u32, PageInfo>>>,
+        Arc<tokio::sync::Mutex<std::collections::BTreeMap<u32, CreatedPageCapture>>>,
 }
 
 impl ToolCall {

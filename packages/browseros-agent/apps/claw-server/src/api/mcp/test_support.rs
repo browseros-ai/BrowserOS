@@ -88,8 +88,15 @@ pub(crate) struct ProfileConnection {
     pub tabs: std::sync::Mutex<Vec<Value>>,
     pub groups: std::sync::Mutex<Vec<Value>>,
     pub calls: std::sync::Mutex<Vec<(String, Value)>>,
+    // Epoch selection and recorded publication share this lock with reconnect.
+    dispatch_epoch: std::sync::Mutex<u64>,
     pub fail_inventory: std::sync::atomic::AtomicBool,
     pub group_created: tokio::sync::Notify,
+    /// Pause a native group lookup after the callback has admitted the original
+    /// page, so tests can replace its target across that awaited handoff.
+    pub pause_group_lookup: std::sync::atomic::AtomicBool,
+    pub group_lookup_entered: tokio::sync::Notify,
+    pub group_lookup_release: tokio::sync::Notify,
 }
 
 impl ProfileConnection {
@@ -113,45 +120,26 @@ impl ProfileConnection {
             ]),
             groups: std::sync::Mutex::new(Vec::new()),
             calls: std::sync::Mutex::new(Vec::new()),
+            dispatch_epoch: std::sync::Mutex::new(1),
             fail_inventory: std::sync::atomic::AtomicBool::new(false),
             group_created: tokio::sync::Notify::new(),
+            pause_group_lookup: std::sync::atomic::AtomicBool::new(false),
+            group_lookup_entered: tokio::sync::Notify::new(),
+            group_lookup_release: tokio::sync::Notify::new(),
         })
     }
 
-    fn window(id: i64, profile: &str) -> Value {
-        serde_json::json!({"windowId":id, "windowType":"normal", "bounds":{}, "isActive":id == 2,
-            "isVisible":true, "tabCount":1, "browserProfileId":profile, "liveBrowserContextId":format!("ctx-{profile}")})
+    pub(crate) fn reconnect(&self) {
+        let mut epoch = self
+            .dispatch_epoch
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        *epoch += 1;
     }
 
-    fn tab(id: i64, window: i64, profile: &str) -> Value {
-        serde_json::json!({"tabId":id, "targetId":format!("T{id}"), "url":format!("https://synthetic.test/{id}"),
-            "title":format!("Tab {id}"), "isActive":true, "isLoading":false, "loadProgress":1.0,
-            "isPinned":false, "isHidden":false, "windowId":window, "index":0,
-            "browserProfileId":profile, "liveBrowserContextId":format!("ctx-{profile}")})
-    }
-
-    pub(crate) fn binding(
-        profile: &str,
-        revision: u64,
-        window: i64,
-    ) -> browseros_core::TargetBinding {
-        browseros_core::TargetBinding {
-            intent: browseros_core::TargetIntent {
-                browser_profile_id: browseros_core::BrowserProfileId::from(profile.to_string()),
-                directory: format!("Synthetic-{profile}"),
-                name: profile.to_string(),
-                window: Some(browseros_core::WindowSelection::Working {
-                    window_id: browseros_core::WindowId(window),
-                }),
-            },
-            revision,
-        }
-    }
-}
-
-impl browseros_core::CdpConnection for ProfileConnection {
-    fn send<'a>(
+    fn dispatch<'a>(
         &'a self,
+        expected_epoch: Option<u64>,
         method: &'a str,
         params: Value,
         _session: Option<&'a browseros_core::SessionId>,
@@ -159,10 +147,32 @@ impl browseros_core::CdpConnection for ProfileConnection {
         Box::pin(async move {
             use serde_json::json;
             use std::sync::atomic::Ordering;
-            self.calls
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .push((method.into(), params.clone()));
+            // A paused fixture send has not yet been published. Recheck under
+            // the reconnect boundary after release, before recording any dispatch.
+            if method == "Browser.getTabGroups"
+                && self.pause_group_lookup.swap(false, Ordering::SeqCst)
+            {
+                self.group_lookup_entered.notify_one();
+                self.group_lookup_release.notified().await;
+            }
+            {
+                let epoch = self
+                    .dispatch_epoch
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner());
+                if let Some(expected) = expected_epoch
+                    && expected != *epoch
+                {
+                    return Err(browseros_cdp::CdpError::ConnectionEpochChanged {
+                        expected,
+                        actual: *epoch,
+                    });
+                }
+                self.calls
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .push((method.into(), params.clone()));
+            }
             let error = |message: &str| browseros_cdp::CdpError::Protocol {
                 code: -1,
                 message: message.into(),
@@ -273,6 +283,57 @@ impl browseros_core::CdpConnection for ProfileConnection {
         })
     }
 
+    fn window(id: i64, profile: &str) -> Value {
+        serde_json::json!({"windowId":id, "windowType":"normal", "bounds":{}, "isActive":id == 2,
+            "isVisible":true, "tabCount":1, "browserProfileId":profile, "liveBrowserContextId":format!("ctx-{profile}")})
+    }
+
+    fn tab(id: i64, window: i64, profile: &str) -> Value {
+        serde_json::json!({"tabId":id, "targetId":format!("T{id}"), "url":format!("https://synthetic.test/{id}"),
+            "title":format!("Tab {id}"), "isActive":true, "isLoading":false, "loadProgress":1.0,
+            "isPinned":false, "isHidden":false, "windowId":window, "index":0,
+            "browserProfileId":profile, "liveBrowserContextId":format!("ctx-{profile}")})
+    }
+
+    pub(crate) fn binding(
+        profile: &str,
+        revision: u64,
+        window: i64,
+    ) -> browseros_core::TargetBinding {
+        browseros_core::TargetBinding {
+            intent: browseros_core::TargetIntent {
+                browser_profile_id: browseros_core::BrowserProfileId::from(profile.to_string()),
+                directory: format!("Synthetic-{profile}"),
+                name: profile.to_string(),
+                window: Some(browseros_core::WindowSelection::Working {
+                    window_id: browseros_core::WindowId(window),
+                }),
+            },
+            revision,
+        }
+    }
+}
+
+impl browseros_core::CdpConnection for ProfileConnection {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a browseros_core::SessionId>,
+    ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+        self.dispatch(None, method, params, session)
+    }
+
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a browseros_core::SessionId>,
+    ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+        self.dispatch(Some(expected_epoch), method, params, session)
+    }
+
     fn send_raw_json<'a>(
         &'a self,
         method: &'a str,
@@ -289,6 +350,26 @@ impl browseros_core::CdpConnection for ProfileConnection {
             Ok(self.send(method, value, session).await?.to_string())
         })
     }
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: &'a str,
+        session: Option<&'a browseros_core::SessionId>,
+    ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+        Box::pin(async move {
+            let value = serde_json::from_str(params).map_err(|error| {
+                browseros_cdp::CdpError::Protocol {
+                    code: -1,
+                    message: error.to_string(),
+                }
+            })?;
+            Ok(self
+                .dispatch(Some(expected_epoch), method, value, session)
+                .await?
+                .to_string())
+        })
+    }
     fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
         self.events.subscribe()
     }
@@ -296,6 +377,9 @@ impl browseros_core::CdpConnection for ProfileConnection {
         true
     }
     fn connection_epoch(&self) -> u64 {
-        1
+        *self
+            .dispatch_epoch
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
     }
 }

@@ -199,10 +199,15 @@ impl InnerCallHook for ScriptInnerCallHook {
             .await;
             // Ensure the agent's tab group and place the page in it. Detached so
             // browser grouping does not block the script, matching the effect.
-            // Snapshot the actual owning window before spawning. The cloned ToolCall
-            // carries the run's immutable view through this delayed effect.
-            let created = tab_groups::created_page(&self.call, page_id).await;
-            tokio::spawn(tab_groups::run_tab_group_work(self.call.clone(), created));
+            // Retain the created incarnation and its guarded view before spawning,
+            // including the original epoch for an unbound run. Missing metadata
+            // skips this cosmetic effect rather than dispatching without a guard.
+            if let Some(created) = tab_groups::created_page(&self.call, page_id).await {
+                tokio::spawn(tab_groups::run_tab_group_work(
+                    self.call.clone(),
+                    Some(created),
+                ));
+            }
         })
     }
 
@@ -331,10 +336,28 @@ mod tests {
         fn send<'a>(
             &'a self,
             method: &'a str,
+            params: Value,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            self.send_at_epoch(1, method, params, session)
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
             _params: Value,
             _session: Option<&'a CdpSessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
+                // This fixture's epoch is immutable; validation and any synchronous
+                // recorded publication cannot be separated by a reconnect.
+                if expected_epoch != 1 {
+                    return Err(browseros_cdp::CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
                 match method {
                     "Browser.getTabs" => Ok(json!({ "tabs": [{
                         "tabId": 11, "targetId": "target-a", "url": "https://example.com",
@@ -354,6 +377,27 @@ mod tests {
             _session: Option<&'a CdpSessionId>,
         ) -> BoxFuture<'a, Result<String, CdpError>> {
             Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params_json: &'a str,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+            Box::pin(async move {
+                let params = serde_json::from_str(params_json).map_err(|error| {
+                    browseros_cdp::CdpError::Protocol {
+                        code: -1,
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(self
+                    .send_at_epoch(expected_epoch, method, params, session)
+                    .await?
+                    .to_string())
+            })
         }
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
