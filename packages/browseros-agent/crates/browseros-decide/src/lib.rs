@@ -18,4 +18,5 @@ pub mod client;
 pub mod kind;
 pub mod relevance;
 pub mod space;
+pub mod vocabulary;
 pub mod view;
