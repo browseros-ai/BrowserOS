@@ -143,6 +143,20 @@ impl PageDriver {
         self.reach.missing()
     }
 
+    /// One tool call, with tokens whose lifetimes are its own.
+    ///
+    /// The three token slots are not interchangeable, and passing one token into
+    /// all three is a run-ending bug rather than a tidy shortcut. `dispatch_tool_call`
+    /// ends every call by cancelling both the dispatch token and the call token,
+    /// so a loop that hands over its own long-lived token gets that token
+    /// cancelled by its first action and reports itself finished before its
+    /// second decision. Measured in the wild: every pursue run ended after
+    /// exactly one decision.
+    ///
+    /// So each call gets a fresh dispatch token and a fresh child of the run's
+    /// token. A child dies when its parent does, which is what cancellation
+    /// needs, and cancelling a child leaves the parent alone, which is what the
+    /// loop needs.
     fn call_to(&self, index: usize, args: Value) -> ToolCall {
         ToolCall::new(
             Arc::clone(&self.catalog),
@@ -151,9 +165,9 @@ impl PageDriver {
             self.session_id.clone(),
             Some(self.identity.clone()),
             Some(Arc::clone(&self.session)),
+            self.cancel.child_token(),
             self.cancel.clone(),
-            self.cancel.clone(),
-            self.cancel.clone(),
+            CancellationToken::new(),
             self.default_tab_group_id.clone(),
             self.state.clone(),
             self.output_files.clone(),
@@ -513,6 +527,34 @@ mod tests {
     /// Gone and covered are one case. A retry clears neither, and treating "is
     /// covered by" as retryable is what let a run spend four attempts on one
     /// control while an overlay sat on top of it.
+    /// The bug that ended every run after one decision.
+    ///
+    /// Dispatch cancels the call token when a call finishes. If that token is
+    /// the run's own, the run is over after its first action.
+    #[test]
+    fn a_finished_call_does_not_end_the_run_that_made_it() {
+        let run_token = CancellationToken::new();
+
+        // What dispatch does at the end of every call, to both tokens it owns.
+        let per_call = run_token.child_token();
+        per_call.cancel();
+        CancellationToken::new().cancel();
+
+        assert!(
+            !run_token.is_cancelled(),
+            "the loop must still be alive after one of its own actions"
+        );
+    }
+
+    /// And cancelling the run still stops anything it is in the middle of.
+    #[test]
+    fn cancelling_the_run_cancels_a_call_in_flight() {
+        let run_token = CancellationToken::new();
+        let per_call = run_token.child_token();
+        run_token.cancel();
+        assert!(per_call.is_cancelled());
+    }
+
     #[test]
     fn a_covered_control_reads_the_same_as_a_vanished_one() {
         assert!(covered_or_gone("ref e12 is covered by <div class=\"overlay\">"));

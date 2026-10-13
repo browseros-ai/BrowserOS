@@ -86,6 +86,15 @@ pub enum Status {
     NeedsInput(Handback, String),
     /// The step or time budget ran out.
     BudgetSpent,
+    /// Something outside the run stopped it: the caller, the session, or the
+    /// browser going away.
+    ///
+    /// Its own ending rather than folded into the budget, because the two need
+    /// opposite responses and reading one as the other cost a day. A run that
+    /// was cancelled after no steps reported "ran out of steps before the goal
+    /// was met", which is not true of anything and should have been impossible
+    /// to say.
+    Cancelled,
     /// The run answered a question about the page and stopped, which is what a
     /// report is for.
     Answered,
@@ -101,6 +110,7 @@ impl Status {
             Self::Stalled(stuck) => stuck.as_str(),
             Self::NeedsInput(handback, _) => handback.as_str(),
             Self::BudgetSpent => "budget_spent",
+            Self::Cancelled => "cancelled",
             Self::Answered => "answered",
         }
     }
@@ -171,7 +181,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
 
     loop {
         if driver.stopped() {
-            return end(&run, Status::BudgetSpent, last, &space, trail, None, goal_met);
+            return end(&run, Status::Cancelled, last, &space, trail, None, goal_met);
         }
         if run.out_of_steps() || started.elapsed().as_secs() >= run.budget.max_seconds {
             return end(&run, Status::BudgetSpent, last, &space, trail, None, goal_met);

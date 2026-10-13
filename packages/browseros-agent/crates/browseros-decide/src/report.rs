@@ -118,6 +118,9 @@ fn said(outcome: &Outcome, actions: usize, changed: usize) -> String {
         Status::BudgetSpent => {
             format!("{did}{moved}, and ran out of steps before the goal was met.")
         }
+        Status::Cancelled => format!(
+            "{did}{moved}, then something outside the run stopped it before the goal was met."
+        ),
     }
 }
 
@@ -255,6 +258,20 @@ mod tests {
             told.status, "budget_spent",
             "a confident claim does not change how the run ended"
         );
+    }
+
+    /// Being stopped from outside is not the same as running out of steps, and
+    /// saying so plainly is what would have made a day of diagnosis an hour.
+    #[test]
+    fn being_cancelled_does_not_read_as_running_out_of_steps() {
+        let told = tell(&outcome(Status::Cancelled, vec![]));
+        assert_eq!(told.status, "cancelled");
+        assert!(
+            !told.said.contains("ran out of steps"),
+            "a run that took no steps cannot have run out of them: {}",
+            told.said
+        );
+        assert!(told.said.contains("stopped it"), "{}", told.said);
     }
 
     #[test]

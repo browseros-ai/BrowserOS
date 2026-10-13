@@ -122,6 +122,8 @@ parse it. It cannot return \"312\" on its own.
 you, and the sentence says what it needs.
  - `not_confident`, `nothing_changed`, `budget_spent`: it stopped making \
 progress. The sentence says what it tried.
+ - `cancelled`: something outside the run stopped it. Not the same as running \
+out of steps, and worth retrying.
 
 WHAT THE RESULT TELLS YOU. `actions` is what it ran and `changed` is how many \
 of those moved the page; the two differing is the signal that something is not \
