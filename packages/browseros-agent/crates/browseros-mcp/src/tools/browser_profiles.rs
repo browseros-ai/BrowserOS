@@ -28,7 +28,12 @@ struct ProfilesArgs {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<ProfilesArgs>("browser_profiles", DESCRIPTION, None, handler)
+    super::def_with_output::<ProfilesArgs, super::target_output_schema::ProfilesOutput>(
+        "browser_profiles",
+        DESCRIPTION,
+        None,
+        handler,
+    )
 }
 
 fn handler<'a>(

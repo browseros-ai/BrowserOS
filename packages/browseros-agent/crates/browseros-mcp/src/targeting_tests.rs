@@ -470,6 +470,146 @@ fn data(result: ToolResult) -> anyhow::Result<Value> {
 }
 
 #[tokio::test]
+async fn target_output_schema_preserves_full_readback_through_content_gate() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let mut options = super::tests::service_options(session);
+    // Hosts suppress legacy structured responses on the wire. Declared output
+    // schemas are the existing exception that must retain management readbacks.
+    options.include_structured_content = Some(false);
+    let service = BrowserMcpService::new(options);
+    let call = |name: &'static str, args: Value| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    let get = call("browser_target", json!({})).await?;
+    assert_eq!(get.is_error, Some(false));
+    assert_eq!(
+        get.structured_content,
+        Some(json!({ "action": "get", "bound": false }))
+    );
+
+    let initial =
+        json!({ "browserProfileId": "eng", "name": "eng", "directory": "eng", "revision": 1 });
+    let selected = call("browser_target", json!({ "action": "set", "name": "eng" })).await?;
+    assert_eq!(
+        selected.structured_content,
+        Some(json!({ "action": "set", "binding": initial }))
+    );
+    let working = json!({ "browserProfileId": "eng", "name": "eng", "directory": "eng", "revision": 2, "window": { "mode": "working", "windowId": 10 } });
+    let changed = call(
+        "browser_target",
+        json!({ "action": "set_window", "windowId": 10 }),
+    )
+    .await?;
+    assert_eq!(
+        changed.structured_content,
+        Some(json!({ "action": "set_window", "binding": working, "previous": initial }))
+    );
+    let get = call("browser_target", json!({})).await?;
+    assert_eq!(get.is_error, Some(false));
+    assert_eq!(
+        get.structured_content,
+        Some(json!({ "action": "get", "bound": true, "binding": working,
+        "status": { "profile": profile("eng", "eng", true), "windows": [10, 20], "placementWindowId": 10, "error": null } }))
+    );
+
+    let pinned = json!({ "browserProfileId": "eng", "name": "eng", "directory": "eng", "revision": 3, "window": { "mode": "pinned", "windowId": 20 } });
+    let changed = call(
+        "browser_target",
+        json!({ "action": "set_window", "windowId": 20, "strict": true }),
+    )
+    .await?;
+    assert_eq!(
+        changed.structured_content,
+        Some(json!({ "action": "set_window", "binding": pinned, "previous": working }))
+    );
+    let get = call("browser_target", json!({})).await?;
+    assert_eq!(
+        get.structured_content,
+        Some(json!({ "action": "get", "bound": true, "binding": pinned,
+        "status": { "profile": profile("eng", "eng", true), "windows": [10, 20], "placementWindowId": 20, "error": null } }))
+    );
+
+    let cleared_window =
+        json!({ "browserProfileId": "eng", "name": "eng", "directory": "eng", "revision": 4 });
+    let cleared = call("browser_target", json!({ "action": "clear_window" })).await?;
+    assert_eq!(
+        cleared.structured_content,
+        Some(json!({ "action": "clear_window", "binding": cleared_window, "previous": pinned }))
+    );
+    let tabs = call("tabs", json!({ "action": "list" })).await?;
+    assert_eq!(tabs.is_error, Some(false));
+    assert!(tabs.structured_content.is_none());
+    let cleared = call("browser_target", json!({ "action": "clear" })).await?;
+    assert_eq!(
+        cleared.structured_content,
+        Some(json!({ "action": "clear", "bound": false }))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn profiles_output_schema_preserves_descriptors_and_load_outcomes() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let mut options = super::tests::service_options(session);
+    options.include_structured_content = Some(false);
+    let service = BrowserMcpService::new(options);
+    let call = |name: &'static str, args: Value| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    let listed = call("browser_profiles", json!({})).await?;
+    assert_eq!(listed.is_error, Some(false));
+    assert_eq!(
+        listed.structured_content,
+        Some(json!({ "action": "list", "profiles": [
+        profile("eng", "eng", true), profile("sales", "sales", true), profile("closed", "closed", false),
+        profile("duplicate-1", "duplicate", false), profile("duplicate-2", "duplicate", false)
+    ] }))
+    );
+    let selected = call(
+        "browser_target",
+        json!({ "action": "set", "name": "closed" }),
+    )
+    .await?;
+    let before = selected
+        .structured_content
+        .ok_or_else(|| anyhow::anyhow!("selection missing"))?["binding"]
+        .clone();
+    let listed = call("browser_profiles", json!({})).await?;
+    let listed = listed
+        .structured_content
+        .ok_or_else(|| anyhow::anyhow!("profile list missing"))?;
+    assert_eq!(listed["boundBrowserProfileId"], "closed");
+    assert_eq!(listed["profiles"][2], profile("closed", "closed", false));
+    let loaded = call("browser_profiles", json!({ "action": "load" })).await?;
+    assert_eq!(
+        loaded.structured_content,
+        Some(
+            json!({ "action": "load", "profile": profile("closed", "closed", true), "loaded": true })
+        )
+    );
+    let loaded = call("browser_profiles", json!({ "action": "load" })).await?;
+    assert_eq!(
+        loaded.structured_content,
+        Some(
+            json!({ "action": "load", "profile": profile("closed", "closed", true), "loaded": false })
+        )
+    );
+    let get = call("browser_target", json!({})).await?;
+    assert_eq!(
+        get.structured_content
+            .ok_or_else(|| anyhow::anyhow!("readback missing"))?["binding"],
+        before
+    );
+    assert!(!connection.calls().iter().any(|call| matches!(
+        call.method.as_str(),
+        "Browser.createWindow" | "Browser.createTab"
+    )));
+    Ok(())
+}
+
+#[tokio::test]
 async fn standalone_selection_load_and_window_creation_are_separate_and_persist()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();

@@ -620,6 +620,95 @@ fn run_has_compat_output_schema() {
     }
 }
 
+#[test]
+fn only_targeting_tools_and_run_advertise_output_schemas() {
+    let advertised = catalog()
+        .into_iter()
+        .filter(|tool| tool.output_schema.is_some())
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+    assert_eq!(advertised, ["browser_profiles", "browser_target", "run"]);
+}
+
+#[test]
+fn targeting_output_schemas_describe_native_identity_binding_and_status() {
+    let schema = |name| {
+        let tool = catalog()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        Value::Object(
+            tool.output_schema
+                .unwrap_or_else(|| panic!("missing output schema {name}"))
+                .as_ref()
+                .clone(),
+        )
+    };
+    let profiles = schema("browser_profiles");
+    let target = schema("browser_target");
+    for output in [&profiles, &target] {
+        assert_eq!(output["type"], "object");
+    }
+    let descriptor = &profiles["oneOf"][0]["properties"]["profiles"]["items"];
+    assert_eq!(
+        descriptor["required"],
+        json!(["browserProfileId", "name", "directory", "loaded"])
+    );
+    for field in ["browserProfileId", "name", "directory", "browserContextId"] {
+        assert_eq!(descriptor["properties"][field]["type"], "string");
+    }
+    assert_eq!(descriptor["properties"]["loaded"]["type"], "boolean");
+    assert_eq!(
+        profiles["oneOf"][0]["properties"]["boundBrowserProfileId"]["type"],
+        "string"
+    );
+    assert_eq!(profiles["oneOf"][1]["properties"]["profile"], *descriptor);
+    assert_eq!(
+        profiles["oneOf"][1]["required"],
+        json!(["action", "profile", "loaded"])
+    );
+
+    let readback = &target["oneOf"][0]["properties"];
+    let binding = &readback["binding"];
+    assert_eq!(
+        binding["required"],
+        json!(["browserProfileId", "name", "directory", "revision"])
+    );
+    assert_eq!(binding["properties"]["revision"]["type"], "integer");
+    assert_eq!(
+        binding["properties"]["window"]["properties"]["mode"]["enum"],
+        json!(["working", "pinned"])
+    );
+    assert_eq!(
+        binding["properties"]["window"]["required"],
+        json!(["mode", "windowId"])
+    );
+    assert_eq!(
+        binding["properties"]["window"]["properties"]["windowId"]["type"],
+        "integer"
+    );
+    let status = &readback["status"];
+    assert_eq!(
+        status["required"],
+        json!(["profile", "windows", "placementWindowId", "error"])
+    );
+    assert_eq!(
+        status["properties"]["profile"]["anyOf"],
+        json!([descriptor, { "type": "null" }])
+    );
+    assert_eq!(status["properties"]["windows"]["items"]["type"], "integer");
+    assert_eq!(
+        status["properties"]["placementWindowId"]["type"],
+        json!(["integer", "null"])
+    );
+    assert_eq!(
+        status["properties"]["error"]["type"],
+        json!(["string", "null"])
+    );
+    assert_eq!(target["oneOf"][1]["properties"]["binding"], *binding);
+    assert_eq!(target["oneOf"][1]["properties"]["previous"], *binding);
+}
+
 #[tokio::test]
 async fn service_capabilities_and_instructions_match_contract() {
     let service = BrowserMcpService::new(service_options(fake_session()));

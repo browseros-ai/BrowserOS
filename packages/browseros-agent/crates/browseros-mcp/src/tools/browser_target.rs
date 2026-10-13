@@ -43,7 +43,12 @@ struct TargetArgs {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<TargetArgs>("browser_target", DESCRIPTION, None, handler)
+    super::def_with_output::<TargetArgs, super::target_output_schema::TargetOutput>(
+        "browser_target",
+        DESCRIPTION,
+        None,
+        handler,
+    )
 }
 
 pub(super) fn target_store(ctx: &ToolCtx) -> ToolExecResult<&Arc<dyn TargetStore>> {

@@ -18,6 +18,7 @@ pub mod screenshot;
 pub mod snapshot;
 pub mod tab_groups;
 pub mod tabs;
+mod target_output_schema;
 pub mod upload;
 pub mod wait;
 pub mod windows;
