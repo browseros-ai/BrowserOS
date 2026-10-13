@@ -483,7 +483,7 @@ await browser.upload(3, { path: '/Users/amara/Desktop/passport.pdf' });";
 mod sentry_sink_tests {
     use super::*;
     use std::{
-        io::{Read, Write},
+        io::{BufRead, BufReader, Write},
         net::TcpListener,
         sync::mpsc,
         time::Duration,
@@ -499,15 +499,13 @@ mod sentry_sink_tests {
             let Ok((mut stream, _)) = listener.accept() else {
                 return;
             };
-            let mut head = [0_u8; 1024];
-            let read = stream.read(&mut head).unwrap_or(0);
+            // One `read` may return only part of the request line, so read through the
+            // first newline. The timeout keeps a stalled client from parking this thread.
+            let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
+            let mut request_line = String::new();
+            let _ = BufReader::new(&stream).read_line(&mut request_line);
             let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}");
-            let request_line = String::from_utf8_lossy(&head[..read])
-                .lines()
-                .next()
-                .unwrap_or_default()
-                .to_string();
-            let _ = seen.send(request_line);
+            let _ = seen.send(request_line.trim_end().to_string());
         });
         Ok((dsn, requests))
     }
