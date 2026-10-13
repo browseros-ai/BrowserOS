@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..54630f07a4767b9cc877f0f183cb3147f29ebbef
+index 0000000000000000000000000000000000000000..b999d001d072de86d5dbc7f4dc6b9a41ac2da85e
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,663 @@
+@@ -0,0 +1,662 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -354,8 +354,7 @@ index 0000000000000000000000000000000000000000..54630f07a4767b9cc877f0f183cb3147
 +  if (rejected.IsValid() && item->version == rejected) {
 +    LOG(INFO) << "browseros: Skipping rejected server version "
 +              << rejected.GetString();
-+    if (reported_skipped_version_ != rejected) {
-+      reported_skipped_version_ = rejected;
++    if (reported_skipped_versions_.insert(rejected).second) {
 +      base::DictValue props;
 +      props.Set("version", rejected.GetString());
 +      browseros_metrics::BrowserOSMetrics::Log("server.ota.skipped_rejected",
@@ -635,8 +634,8 @@ index 0000000000000000000000000000000000000000..54630f07a4767b9cc877f0f183cb3147
 +          versions_dir, kMaxVersionsToKeep, manager_->GetRunningVersion(),
 +          // Protect the ready download even when rejected: it is the fallback
 +          // when the bundled server cannot serve.
-+          version_store_->GetFallbackDownload()
-+              ? version_store_->GetFallbackDownload()->version
++          version_store_->fallback_download()
++              ? version_store_->fallback_download()->version
 +              : version_store_->GetBestAvailable().version));
 +}
 +

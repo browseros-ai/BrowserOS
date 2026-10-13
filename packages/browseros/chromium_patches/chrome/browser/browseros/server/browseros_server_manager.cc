@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..42889bc0bf1b76932fad2acc68aa0c1cc4441e71
+index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc69160a64
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
 @@ -0,0 +1,1561 @@
@@ -757,7 +757,7 @@ index 0000000000000000000000000000000000000000..42889bc0bf1b76932fad2acc68aa0c1c
 +  ServerLaunchConfig config = BuildLaunchConfig();
 +  if (config.paths.execution.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
-+    Stop();
++    OnStrike("launch_failed");
 +    return;
 +  }
 +
@@ -1141,7 +1141,7 @@ index 0000000000000000000000000000000000000000..42889bc0bf1b76932fad2acc68aa0c1c
 +  // sometimes beats an old binary that never starts, and it is the only way
 +  // back when a rejected build already migrated user data past the bundle.
 +  const std::optional<ServerInstallation>& fallback =
-+      version_store_->GetFallbackDownload();
++      version_store_->fallback_download();
 +  if (fallback) {
 +    LOG(WARNING) << "browseros: Bundled server out of strikes; retrying "
 +                 << "downloaded server " << VersionString(fallback->version);

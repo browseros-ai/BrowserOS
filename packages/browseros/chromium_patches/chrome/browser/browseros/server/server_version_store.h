@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/server_version_store.h b/chrome/browser/browseros/server/server_version_store.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..3862a6451d87fb07a72419df4db70c51a1961c0c
+index 0000000000000000000000000000000000000000..ebe2af595c03ca4a441387fb9514d7152593a4c4
 --- /dev/null
 +++ b/chrome/browser/browseros/server/server_version_store.h
 @@ -0,0 +1,103 @@
@@ -74,7 +74,7 @@ index 0000000000000000000000000000000000000000..3862a6451d87fb07a72419df4db70c51
 +
 +  // The ready download even if rejected. Supervision falls back to it when the
 +  // bundled server is out of strikes too.
-+  const std::optional<ServerInstallation>& GetFallbackDownload() const {
++  const std::optional<ServerInstallation>& fallback_download() const {
 +    return ready_;
 +  }
 +
