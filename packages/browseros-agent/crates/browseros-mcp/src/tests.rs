@@ -88,6 +88,43 @@ fn fake_session() -> Arc<BrowserSession> {
     )
 }
 
+/// Fixed-epoch fixtures cannot reconnect between this check and dispatch. A transport that
+/// replaces its epoch must instead check and publish under its replacement/state lock.
+pub(crate) fn check_fixed_fixture_epoch(expected: u64, actual: u64) -> Result<(), CdpError> {
+    if expected != actual {
+        return Err(CdpError::ConnectionEpochChanged { expected, actual });
+    }
+    Ok(())
+}
+
+/// Resolve exactly one native selector against retained tab metadata. Origin checks must see
+/// the actual create reply, including its window, rather than a synthesized default tab.
+pub(crate) fn select_fixture_tab(tabs: &[Value], params: &Value) -> Result<Value, CdpError> {
+    let (field, value) = match (params.get("tabId"), params.get("targetId")) {
+        (Some(_), Some(_)) => {
+            return Err(CdpError::Protocol {
+                code: -32602,
+                message: "Specify either targetId or tabId, not both".into(),
+            });
+        }
+        (Some(value), None) => ("tabId", value),
+        (None, Some(value)) => ("targetId", value),
+        (None, None) => {
+            return Err(CdpError::Protocol {
+                code: -32602,
+                message: "Missing tab selector".into(),
+            });
+        }
+    };
+    tabs.iter()
+        .find(|tab| tab.get(field) == Some(value))
+        .cloned()
+        .ok_or_else(|| CdpError::Protocol {
+            code: -1,
+            message: format!("Unknown fixture tab: {params}"),
+        })
+}
+
 pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
     BrowserMcpServiceOptions {
         name: "browseros-mcp-test".to_string(),
@@ -125,9 +162,11 @@ struct HarnessCall {
     session: Option<SessionId>,
 }
 
+/// Tool fixture whose transport epoch is immutable; guarded dispatch still validates callers.
 struct HarnessConnection {
     sender: broadcast::Sender<CdpEvent>,
     calls: Mutex<Vec<HarnessCall>>,
+    created_tab: Mutex<Option<Value>>,
     emit_console_on_input: AtomicBool,
 }
 
@@ -137,6 +176,7 @@ impl HarnessConnection {
         Arc::new(Self {
             sender,
             calls: Mutex::new(Vec::new()),
+            created_tab: Mutex::new(None),
             emit_console_on_input: AtomicBool::new(false),
         })
     }
@@ -159,6 +199,19 @@ impl HarnessConnection {
     fn enable_console_on_input(&self) {
         self.emit_console_on_input.store(true, Ordering::SeqCst);
     }
+
+    fn tabs(&self) -> Vec<Value> {
+        let mut tabs = vec![harness_tab()];
+        if let Some(tab) = self
+            .created_tab
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        {
+            tabs.push(tab);
+        }
+        tabs
+    }
 }
 
 impl CdpConnection for HarnessConnection {
@@ -178,16 +231,31 @@ impl CdpConnection for HarnessConnection {
                     session: session.cloned(),
                 });
             match method {
-                "Browser.getTabs" => Ok(json!({ "tabs": [harness_tab()] })),
-                "Browser.getTabInfo" => {
-                    let tab = if params.get("tabId").and_then(Value::as_i64) == Some(202) {
-                        new_harness_tab()
-                    } else {
-                        harness_tab()
-                    };
+                "Browser.getTabs" => Ok(json!({ "tabs": self.tabs() })),
+                "Browser.getTabInfo" => Ok(json!({
+                    "tab": select_fixture_tab(&self.tabs(), &params)?
+                })),
+                "Browser.createTab" => {
+                    let mut tab = new_harness_tab();
+                    tab["url"] = params
+                        .get("url")
+                        .cloned()
+                        .unwrap_or_else(|| json!("about:blank"));
+                    tab["windowId"] = params.get("windowId").cloned().unwrap_or_else(|| json!(1));
+                    tab["isActive"] = json!(
+                        !params
+                            .get("background")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    );
+                    // The native reply remains authoritative through guarded readiness,
+                    // snapshot attachment and later inventory reconciliation.
+                    *self
+                        .created_tab
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tab.clone());
                     Ok(json!({ "tab": tab }))
                 }
-                "Browser.createTab" => Ok(json!({ "tab": new_harness_tab() })),
                 "History.getRecent" => {
                     if params.get("maxResults") == Some(&json!(2)) {
                         Ok(json!({
@@ -281,14 +349,41 @@ impl CdpConnection for HarnessConnection {
     fn send_raw_json<'a>(
         &'a self,
         method: &'a str,
-        _params_json: &'a str,
-        _session: Option<&'a SessionId>,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         Box::pin(async move {
-            Err(CdpError::Protocol {
-                code: -1,
-                message: format!("unexpected harness raw call: {method}"),
-            })
+            let params = serde_json::from_str(params_json).map_err(|err| CdpError::Protocol {
+                code: -32602,
+                message: err.to_string(),
+            })?;
+            Ok(self.send(method, params, session).await?.to_string())
+        })
+    }
+
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(async move {
+            check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+            self.send(method, params, session).await
+        })
+    }
+
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async move {
+            check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+            self.send_raw_json(method, params_json, session).await
         })
     }
 
@@ -303,6 +398,69 @@ impl CdpConnection for HarnessConnection {
     fn connection_epoch(&self) -> u64 {
         1
     }
+}
+
+#[tokio::test]
+async fn legacy_fixture_epoch_dispatch_preserves_created_identity() -> anyhow::Result<()> {
+    let connection = HarnessConnection::new();
+    let epoch = connection.connection_epoch();
+    let params = json!({
+        "url": "https://fixture-created.example/",
+        "windowId": 88,
+        "background": true
+    });
+    let raw_params = params.to_string();
+    let decoded = connection.send_at_epoch(epoch + 1, "Browser.createTab", params.clone(), None);
+    let raw = connection.send_raw_json_at_epoch(epoch + 1, "Browser.createTab", &raw_params, None);
+    for result in [decoded.await.map(|_| ()), raw.await.map(|_| ())] {
+        assert!(matches!(
+            result,
+            Err(CdpError::ConnectionEpochChanged {
+                expected: 2,
+                actual: 1
+            })
+        ));
+    }
+    assert!(connection.calls().is_empty());
+    assert_eq!(
+        connection.send("Browser.getTabs", json!({}), None).await?["tabs"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+
+    let created = connection
+        .send_at_epoch(epoch, "Browser.createTab", params, None)
+        .await?["tab"]
+        .clone();
+    assert_eq!(created["url"], json!("https://fixture-created.example/"));
+    assert_eq!(created["windowId"], json!(88));
+    assert_eq!(created["isActive"], json!(false));
+    let selector = json!({ "targetId": created["targetId"] });
+    let readback = connection
+        .send_raw_json_at_epoch(epoch, "Browser.getTabInfo", &selector.to_string(), None)
+        .await?;
+    assert_eq!(serde_json::from_str::<Value>(&readback)?["tab"], created);
+    let inventory = connection
+        .send_at_epoch(epoch, "Browser.getTabs", json!({}), None)
+        .await?;
+    assert!(
+        inventory["tabs"]
+            .as_array()
+            .is_some_and(|tabs| tabs.contains(&created))
+    );
+    assert!(matches!(
+        connection
+            .send_at_epoch(
+                epoch,
+                "Browser.getTabInfo",
+                json!({ "tabId": created["tabId"], "targetId": created["targetId"] }),
+                None,
+            )
+            .await,
+        Err(CdpError::Protocol { code: -32602, .. })
+    ));
+    Ok(())
 }
 
 fn harness_tab() -> Value {

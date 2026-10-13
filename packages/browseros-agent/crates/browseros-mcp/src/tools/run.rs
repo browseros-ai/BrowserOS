@@ -1618,6 +1618,7 @@ mod tests {
     use crate::{
         framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, execute_tool},
         output_file::create_browser_output_file_access,
+        tests::{check_fixed_fixture_epoch, select_fixture_tab},
     };
     use browseros_cdp::{CdpError, CdpEvent};
     use browseros_core::{
@@ -1628,6 +1629,7 @@ mod tests {
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
+    /// Script fixture with an immutable transport epoch, including guarded creation readbacks.
     struct RunFakeConnection {
         sender: broadcast::Sender<CdpEvent>,
         state: Arc<Mutex<RunFakeState>>,
@@ -1637,6 +1639,7 @@ mod tests {
     struct RunFakeState {
         create_tab_params: Vec<Value>,
         add_group_params: Vec<Value>,
+        created_tab: Option<Value>,
     }
 
     impl RunFakeConnection {
@@ -1662,6 +1665,27 @@ mod tests {
                 .unwrap_or_default()
         }
 
+        fn tabs(&self) -> Vec<Value> {
+            let mut tabs = vec![fake_tab_json(
+                7,
+                "target-7",
+                "https://example.com",
+                "Example",
+                1,
+                0,
+            )];
+            if let Some(tab) = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .created_tab
+                .clone()
+            {
+                tabs.push(tab);
+            }
+            tabs
+        }
+
         fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
             let _ = self.sender.send(CdpEvent {
                 method: method.to_string(),
@@ -1681,37 +1705,40 @@ mod tests {
             let state = self.state.clone();
             Box::pin(async move {
                 match method {
-                    "Browser.getTabs" => Ok(json!({
-                        "tabs": [fake_tab_json(7, "target-7", "https://example.com", "Example", 1, 0)]
-                    })),
+                    "Browser.getTabs" => Ok(json!({ "tabs": self.tabs() })),
                     "Browser.getWindows" => Ok(json!({ "windows": [] })),
                     "Browser.hang" => {
                         futures_util::future::pending::<Result<Value, CdpError>>().await
                     }
                     "Browser.createTab" => {
-                        if let Ok(mut state) = state.lock() {
-                            state.create_tab_params.push(params.clone());
-                        }
-                        Ok(json!({
-                            "tab": fake_tab_json(
-                                9,
-                                "target-9",
-                                params.get("url").and_then(Value::as_str).unwrap_or("about:blank"),
-                                "Created",
-                                params.get("windowId").and_then(Value::as_i64).unwrap_or(1),
-                                1
-                            )
-                        }))
-                    }
-                    "Browser.getTabInfo" => {
-                        let tab_id = params.get("tabId").and_then(Value::as_i64).unwrap_or(7);
-                        let tab = if tab_id == 9 {
-                            fake_tab_json(9, "target-9", "https://new.example", "Created", 42, 1)
-                        } else {
-                            fake_tab_json(7, "target-7", "https://example.com", "Example", 1, 0)
-                        };
+                        let mut tab = fake_tab_json(
+                            9,
+                            "target-9",
+                            params
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .unwrap_or("about:blank"),
+                            "Created",
+                            params.get("windowId").and_then(Value::as_i64).unwrap_or(1),
+                            1,
+                        );
+                        tab["isActive"] = json!(
+                            !params
+                                .get("background")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                        );
+                        let mut state = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state.create_tab_params.push(params);
+                        // Origin/readiness reads and inventory use this exact create reply.
+                        state.created_tab = Some(tab.clone());
                         Ok(json!({ "tab": tab }))
                     }
+                    "Browser.getTabInfo" => Ok(json!({
+                        "tab": select_fixture_tab(&self.tabs(), &params)?
+                    })),
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-target-7" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -1721,23 +1748,38 @@ mod tests {
                     | "Target.setAutoAttach"
                     | "Page.reload" => Ok(json!({})),
                     "Browser.addTabsToGroup" => {
-                        if let Ok(mut state) = state.lock() {
-                            state.add_group_params.push(params.clone());
-                        }
+                        let group_id = params
+                            .get("groupId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("group-1");
+                        let tab_ids = params.get("tabIds").cloned().unwrap_or_else(|| json!([]));
+                        let mut state = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state.add_group_params.push(params.clone());
+                        let tab = state
+                            .created_tab
+                            .as_mut()
+                            .filter(|tab| {
+                                tab_ids
+                                    .as_array()
+                                    .is_some_and(|ids| ids.contains(&tab["tabId"]))
+                            })
+                            .ok_or_else(|| CdpError::Protocol {
+                                code: -1,
+                                message: format!("Unknown created fixture tab: {tab_ids}"),
+                            })?;
+                        // These placement cases use groups in the created tab's actual window.
+                        // Successful grouping changes membership without moving its identity.
+                        tab["groupId"] = json!(group_id);
                         Ok(json!({
                             "group": {
-                                "groupId": params
-                                    .get("groupId")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("group-1"),
-                                "windowId": 42,
+                                "groupId": group_id,
+                                "windowId": tab["windowId"],
                                 "title": "group",
                                 "color": "blue",
                                 "collapsed": false,
-                                "tabIds": params
-                                    .get("tabIds")
-                                    .cloned()
-                                    .unwrap_or_else(|| json!([]))
+                                "tabIds": tab_ids
                             }
                         }))
                     }
@@ -1752,17 +1794,48 @@ mod tests {
         fn send_raw_json<'a>(
             &'a self,
             method: &'a str,
-            _params_json: &'a str,
-            _session: Option<&'a SessionId>,
+            params_json: &'a str,
+            session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<String, CdpError>> {
             Box::pin(async move {
                 match method {
                     "Runtime.evaluate" => Ok(json!({ "result": { "value": 3 } }).to_string()),
-                    _ => Err(CdpError::Protocol {
-                        code: -1,
-                        message: format!("unexpected fake CDP raw call: {method}"),
-                    }),
+                    _ => {
+                        let params = serde_json::from_str(params_json).map_err(|err| {
+                            CdpError::Protocol {
+                                code: -32602,
+                                message: err.to_string(),
+                            }
+                        })?;
+                        Ok(self.send(method, params, session).await?.to_string())
+                    }
                 }
+            })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+                self.send(method, params, session).await
+            })
+        }
+
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params_json: &'a str,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async move {
+                check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+                self.send_raw_json(method, params_json, session).await
             })
         }
 
@@ -1810,6 +1883,82 @@ mod tests {
                 timeout_message: Arc::from("run: timed out"),
             },
         }
+    }
+
+    #[tokio::test]
+    async fn legacy_fixture_epoch_dispatch_preserves_created_identity() -> anyhow::Result<()> {
+        let connection = RunFakeConnection::new();
+        let epoch = connection.connection_epoch();
+        let params = json!({
+            "url": "https://fixture-created.example/",
+            "windowId": 88,
+            "background": true
+        });
+        let raw_params = params.to_string();
+        let decoded =
+            connection.send_at_epoch(epoch + 1, "Browser.createTab", params.clone(), None);
+        let raw =
+            connection.send_raw_json_at_epoch(epoch + 1, "Browser.createTab", &raw_params, None);
+        for result in [decoded.await.map(|_| ()), raw.await.map(|_| ())] {
+            assert!(matches!(
+                result,
+                Err(CdpError::ConnectionEpochChanged {
+                    expected: 2,
+                    actual: 1
+                })
+            ));
+        }
+        assert!(connection.create_tab_params().is_empty());
+        assert_eq!(
+            connection.send("Browser.getTabs", json!({}), None).await?["tabs"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let created = connection
+            .send_at_epoch(epoch, "Browser.createTab", params, None)
+            .await?["tab"]
+            .clone();
+        assert_eq!(created["url"], json!("https://fixture-created.example/"));
+        assert_eq!(created["windowId"], json!(88));
+        assert_eq!(created["isActive"], json!(false));
+        let group = connection
+            .send_at_epoch(
+                epoch,
+                "Browser.addTabsToGroup",
+                json!({ "groupId": "fixture-group", "tabIds": [created["tabId"]] }),
+                None,
+            )
+            .await?;
+        assert_eq!(group["group"]["windowId"], json!(88));
+        let selector = json!({ "targetId": created["targetId"] });
+        let readback = connection
+            .send_raw_json_at_epoch(epoch, "Browser.getTabInfo", &selector.to_string(), None)
+            .await?;
+        let mut grouped = created;
+        grouped["groupId"] = json!("fixture-group");
+        assert_eq!(serde_json::from_str::<Value>(&readback)?["tab"], grouped);
+        let inventory = connection
+            .send_at_epoch(epoch, "Browser.getTabs", json!({}), None)
+            .await?;
+        assert!(
+            inventory["tabs"]
+                .as_array()
+                .is_some_and(|tabs| tabs.contains(&grouped))
+        );
+        assert!(matches!(
+            connection
+                .send_at_epoch(
+                    epoch,
+                    "Browser.getTabInfo",
+                    json!({ "tabId": grouped["tabId"], "targetId": grouped["targetId"] }),
+                    None,
+                )
+                .await,
+            Err(CdpError::Protocol { code: -32602, .. })
+        ));
+        Ok(())
     }
 
     #[tokio::test]
