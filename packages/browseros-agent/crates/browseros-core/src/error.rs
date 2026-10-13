@@ -1,4 +1,4 @@
-use crate::{PageId, Ref};
+use crate::{BrowserProfileId, PageId, Ref, WindowId, profiles::ProfileCandidate};
 use browseros_cdp::CdpError;
 use std::fmt;
 
@@ -59,8 +59,53 @@ pub enum CoreError {
     },
     #[error(transparent)]
     Cdp(#[from] CdpError),
+    #[error(transparent)]
+    Target(#[from] TargetError),
     #[error("{0}")]
     Message(String),
+}
+
+/// Stable recovery codes shared by Rust callers and the task host. Explicit scope failures
+/// reveal only the requested handle, never metadata from a different profile.
+#[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
+pub enum TargetError {
+    #[error("target_scope_unsupported_native: native profile targeting is unavailable")]
+    UnsupportedNative,
+    #[error("profile_not_found: {0}")]
+    ProfileNotFound(String),
+    #[error("profile_ambiguous: {name}; select a browserProfileId from {candidates:?}")]
+    ProfileAmbiguous {
+        name: String,
+        candidates: Vec<ProfileCandidate>,
+    },
+    #[error("profile_gone: {0}; reselect or clear the target")]
+    ProfileGone(BrowserProfileId),
+    #[error("profile_not_loaded: {0}; use browser_profiles load")]
+    ProfileNotLoaded(BrowserProfileId),
+    #[error("profile_load_failed: {0}")]
+    ProfileLoadFailed(String),
+    #[error("no_profile_window: {0}; use windows create")]
+    NoProfileWindow(BrowserProfileId),
+    #[error("pinned_window_closed: {0}; clear or change the window selection")]
+    PinnedWindowClosed(WindowId),
+    #[error("pinned_window_restricts: clear the strict pin before creating a window")]
+    PinnedRestricts,
+    #[error("window_ineligible: {0}")]
+    WindowIneligible(WindowId),
+    #[error("window_out_of_scope: {0}")]
+    WindowOutOfScope(WindowId),
+    #[error("page_out_of_scope: {0}")]
+    PageOutOfScope(PageId),
+    #[error("group_out_of_scope: {0}")]
+    GroupOutOfScope(String),
+    #[error("page_target_changed: {0}; retry the call")]
+    PageTargetChanged(PageId),
+    #[error("target_scope_unsupported: {method}")]
+    CdpUnsupported { method: String },
+    #[error("not_bound: select a browser target first")]
+    NotBound,
+    #[error("target_change_in_run: rebind between calls")]
+    ChangeInRun,
 }
 
 impl CoreError {

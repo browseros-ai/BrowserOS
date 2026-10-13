@@ -1,13 +1,17 @@
 use crate::{
-    CoreError, PageId, ProtocolSession, SessionId, TabId, TargetId, WindowId,
+    BrowserContextId, BrowserProfileId, CoreError, PageId, ProtocolSession, SessionId, TabId,
+    TargetError, TargetId, WindowId,
     connection::{CdpConnection, EXCLUDED_URL_PREFIXES},
+    profiles::ProfileMeta,
+    target::PageAdmission,
     timeouts,
 };
 use browseros_cdp::{browser, target};
 use futures_util::future::BoxFuture;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 use tokio::{sync::Mutex, time::sleep};
@@ -40,6 +44,8 @@ pub struct PageInfo {
     pub window_id: Option<WindowId>,
     pub index: Option<i64>,
     pub group_id: Option<String>,
+    pub browser_profile_id: Option<BrowserProfileId>,
+    pub live_browser_context_id: Option<BrowserContextId>,
 }
 
 #[derive(Debug, Clone)]
@@ -85,7 +91,7 @@ impl PageManager {
     pub async fn list(&self) -> Result<Vec<PageInfo>, CoreError> {
         self.ensure_connected().await?;
         let root = ProtocolSession::root(self.cdp.clone());
-        let result: browser::GetTabsResult = root.send("Browser.getTabs", json!({})).await?;
+        let result: NativeTabs = root.send("Browser.getTabs", json!({})).await?;
         let tabs = result
             .tabs
             .into_iter()
@@ -149,6 +155,59 @@ impl PageManager {
             }
         }
         Ok(pages)
+    }
+
+    /// Snapshot only: callers must first reconcile the complete native inventory. A view must
+    /// never prune global page ownership using only its projected response.
+    pub async fn known_page_ids(&self) -> BTreeSet<PageId> {
+        self.state.lock().await.pages.keys().cloned().collect()
+    }
+
+    /// Admission brackets attachment because PageId survives replacement of a tab's TargetId.
+    /// Retry one replacement, then fail rather than attach an unadmitted incarnation.
+    pub async fn get_session_admitted(
+        &self,
+        page_id: PageId,
+        admission: &dyn PageAdmission,
+    ) -> Result<PageSession, CoreError> {
+        for _ in 0..2 {
+            let before = self
+                .refresh(page_id.clone())
+                .await?
+                .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
+            admission.admit(&before)?;
+            let session_id = self
+                .attach(before.target_id.clone(), page_id.clone())
+                .await?;
+            let after = self
+                .refresh(page_id.clone())
+                .await?
+                .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
+            if before.target_id != after.target_id {
+                continue;
+            }
+            admission.admit(&after)?;
+            return Ok(PageSession {
+                target_id: after.target_id,
+                session_id: session_id.clone(),
+                session: ProtocolSession::for_session(self.cdp.clone(), session_id),
+                url: after.url,
+            });
+        }
+        Err(TargetError::PageTargetChanged(page_id).into())
+    }
+
+    pub(crate) async fn page_for_session(&self, session: &SessionId) -> Option<PageInfo> {
+        let state = self.state.lock().await;
+        let target = state
+            .sessions
+            .iter()
+            .find_map(|(target, id)| (id == session).then_some(target))?;
+        state
+            .pages
+            .values()
+            .find(|page| &page.target_id == target)
+            .cloned()
     }
 
     pub async fn get_info(&self, page_id: PageId) -> Option<PageInfo> {
@@ -245,10 +304,7 @@ impl PageManager {
         };
         let root = ProtocolSession::root(self.cdp.clone());
         let refreshed = root
-            .send::<_, browser::GetTabInfoResult>(
-                "Browser.getTabInfo",
-                json!({ "tabId": info.tab_id.0 }),
-            )
+            .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": info.tab_id.0 }))
             .await;
         match refreshed {
             Ok(result) => {
@@ -295,13 +351,16 @@ impl PageManager {
         let root = ProtocolSession::root(self.cdp.clone());
         let mut params = serde_json::Map::new();
         params.insert("url".to_string(), Value::String(url.to_string()));
+        if let Some(context) = opts.browser_context_id {
+            params.insert("browserContextId".to_string(), Value::String(context.0));
+        }
         if let Some(background) = opts.background {
             params.insert("background".to_string(), Value::Bool(background));
         }
         if let Some(window_id) = opts.window_id {
             params.insert("windowId".to_string(), Value::from(window_id.0));
         }
-        let created: browser::CreateTabResult = root
+        let created: NativeTabReply = root
             .send("Browser.createTab", Value::Object(params))
             .await?;
         let tab_id = created.tab.tab_id;
@@ -309,10 +368,7 @@ impl PageManager {
         let mut tab = None;
         for _attempt in 0..timeouts::NEW_PAGE_READY_ATTEMPTS {
             let result = root
-                .send::<_, browser::GetTabInfoResult>(
-                    "Browser.getTabInfo",
-                    json!({ "tabId": tab_id }),
-                )
+                .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
                 .await;
             if let Ok(result) = result {
                 let ready = !result.tab.is_loading || result.tab.load_progress >= 1.0;
@@ -336,10 +392,7 @@ impl PageManager {
             if let Err(err) = result {
                 warn!("failed to add new page to default tab group: {err}");
             } else if let Ok(result) = root
-                .send::<_, browser::GetTabInfoResult>(
-                    "Browser.getTabInfo",
-                    json!({ "tabId": tab_id }),
-                )
+                .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
                 .await
             {
                 tab = result.tab;
@@ -395,7 +448,7 @@ impl PageManager {
             .await?
             .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
         let root = ProtocolSession::root(self.cdp.clone());
-        let result: browser::MoveTabResult = root
+        let result: NativeTabReply = root
             .send(
                 "Browser.moveTab",
                 json!({
@@ -508,7 +561,7 @@ impl PageManager {
     async fn update_from_tab(
         &self,
         page_id: PageId,
-        tab: browser::TabInfo,
+        tab: NativeTab,
     ) -> Result<PageInfo, CoreError> {
         let prior_window = self
             .state
@@ -529,6 +582,7 @@ impl PageManager {
 
 #[derive(Debug, Clone, Default)]
 pub struct NewPageOptions {
+    pub browser_context_id: Option<BrowserContextId>,
     pub background: Option<bool>,
     pub window_id: Option<WindowId>,
     pub tab_group_id: Option<String>,
@@ -540,11 +594,37 @@ pub struct MovePageOptions {
     pub index: Option<i64>,
 }
 
-fn page_info_from_tab(
-    page_id: PageId,
+// Keep the full native reply: generated types on an older protocol snapshot discard the new
+// identity fields. Flattening a sidecar lets core admit pages before protocol sync is integrated.
+#[derive(Deserialize)]
+struct NativeTab {
+    #[serde(flatten)]
     tab: browser::TabInfo,
-    prior_window: Option<WindowId>,
-) -> PageInfo {
+    #[serde(flatten)]
+    meta: ProfileMeta,
+}
+impl std::ops::Deref for NativeTab {
+    type Target = browser::TabInfo;
+    fn deref(&self) -> &Self::Target {
+        &self.tab
+    }
+}
+impl std::ops::DerefMut for NativeTab {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tab
+    }
+}
+#[derive(Deserialize)]
+struct NativeTabs {
+    tabs: Vec<NativeTab>,
+}
+#[derive(Deserialize)]
+struct NativeTabReply {
+    tab: NativeTab,
+}
+
+fn page_info_from_tab(page_id: PageId, tab: NativeTab, prior_window: Option<WindowId>) -> PageInfo {
+    let NativeTab { tab, meta } = tab;
     PageInfo {
         page_id,
         target_id: TargetId(tab.target_id),
@@ -558,6 +638,8 @@ fn page_info_from_tab(
         window_id: tab.window_id.map(WindowId).or(prior_window),
         index: tab.index,
         group_id: tab.group_id,
+        browser_profile_id: meta.browser_profile_id,
+        live_browser_context_id: meta.live_browser_context_id,
     }
 }
 
