@@ -16,11 +16,12 @@ use crate::{
         agent_settings::HumanHelp,
         cockpit::LiveSessionFilters,
         help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
-        sessions::{RetirementCause, Session},
+        sessions::{ClawTargetStore, RetirementCause, Session},
         skills::{CreateSkill, SkillOrigin},
     },
 };
-use browseros_mcp::{OutputFileAccess, ToolDef, ToolResult, catalog};
+use browseros_core::target::BrowserView;
+use browseros_mcp::{OutputFileAccess, TargetStore, ToolDef, ToolResult, catalog};
 use claw_api::models::HelpRequestKind;
 use rmcp::{
     ErrorData as McpError, RoleServer,
@@ -67,7 +68,7 @@ const AGENT_NAME_ARG: &str = "agentName";
 // they do not have and away from the tab group id, which is the signal that works
 // for them. Naming the alternative here matters because this text is read at the
 // moment an agent is deciding how to keep continuity.
-pub const SESSION_ARG_DESCRIPTION: &str = "Opaque session handle for this browser session. You receive one only if your client connects without its own transport session id: then the server returns it in every tool result's `_meta` under the key `com.browseros.neo/session` and as a line in the result text, and you pass it back as this `session` argument on every later call to stay in the same browser session. If you never see one, this argument does nothing for you, and your continuity across a remade connection is your tab group id instead: read it from tabs action=\"list\" and pass it as groupId on tabs action=\"new\". Omit this argument on your first call, and again if the server tells you this session was stopped or is no longer active; resending a dead handle will not revive it.";
+pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session` and in result text. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your client application: claude, codex, cursor, opencode, antigravity, vscode, or zed. For another application, use its short product name. Put your task name in name_session, not here. BrowserOS prefers recognized MCP client metadata for the visible prefix; this fallback is used when that metadata does not identify a known product.";
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
@@ -611,11 +612,28 @@ impl ClawMcpService {
         });
 
         if lifecycle.started {
-            if let Some(session) = self.state.sessions.lookup(&session_id).await {
+            if let Some(session) = self.state.sessions.lookup(&session_id).await
+                && !self.state.targets.is_stopped(&session_id).await
+            {
                 return Ok(started_session_from(session, &client));
             }
-            // The session this connection was working in is gone: stopped from the cockpit,
-            // or swept. Say so once, so the stop is honoured and the agent has something to
+            let stopped = self.state.targets.is_stopped(&session_id).await
+                || self.state.sessions.retirement_of(&session_id).await
+                    == Some(RetirementCause::Cancelled);
+            if !stopped {
+                // An idle/transport successor is still the same task. Inherit before
+                // admission, even if native restart will make its saved handle stale.
+                let (started, replacement) = self
+                    .succeed_retired_session(
+                        &session_id,
+                        SessionClient::resolve(Some(client), None),
+                    )
+                    .await?;
+                lifecycle.session_id = Some(replacement);
+                return Ok(started);
+            }
+            // The session this connection was working in was stopped. Say so once,
+            // so the stop is honoured and the agent has something to
             // tell the user, then let the next call start a new session on the same
             // connection. Refusing every time leaves the agent with nowhere to go, since the
             // handle it would otherwise drop is the transport session itself.
@@ -643,6 +661,14 @@ impl ClawMcpService {
             return Ok(started);
         }
 
+        if self.state.targets.is_stopped(&session_id).await {
+            // The transport handle survived a Claw restart but the task was stopped.
+            // Report Stop once, then permit a separately minted, uncorrelated task.
+            lifecycle.started = true;
+            lifecycle.stop_reported = true;
+            return Err(session_was_stopped());
+        }
+
         let started = self
             .start_session_in_store(session_id, SessionClient::resolve(Some(client), None))
             .await?;
@@ -650,9 +676,9 @@ impl ClawMcpService {
         Ok(started)
     }
 
-    /// Modern stateless path. Reuses a live server-minted handle; any absent or
-    /// unrecognized handle mints a fresh server-generated handle rather than being
-    /// honored, so a caller cannot choose or seed a session id and concurrent calls
+    /// Modern stateless path. Reuses a live server-minted handle or resolves its
+    /// canonical successor. Unrecognized handles get server-generated successors,
+    /// so a caller cannot choose or seed a session id and concurrent calls
     /// never mint the same id. Does not touch `self.lifecycle`, so the per-request
     /// service `Drop` never reaps it; idle sweeping owns cleanup.
     ///
@@ -661,7 +687,8 @@ impl ClawMcpService {
     /// the user stopped refuses, because the right answer to "stop" is not to quietly
     /// start again elsewhere. A handle that ended on its own redirects to a single
     /// remembered successor, because nobody asked for it to end and failing would be
-    /// hostile. Only a handle with no history left mints freely.
+    /// hostile. Persistent intent/aliases survive expiration of live session history;
+    /// only an uncorrelated task starts unbound.
     ///
     /// The redirect exists because the fix cannot rely on the agent adopting the handle it
     /// is handed back: the server already returns a fresh handle on every call, and agents
@@ -673,6 +700,25 @@ impl ClawMcpService {
         client: Option<ClientInfo>,
     ) -> Result<(StartedSession, SessionId), McpError> {
         let client = SessionClient::resolve(client, declared);
+        if let Some(handle) = &provided {
+            if self.state.targets.is_stopped(handle).await {
+                return Err(session_was_stopped());
+            }
+            // Persisted aliases remain authoritative after the in-memory retirement
+            // table expires. A rebind through a successor is visible to old handles.
+            if let Some(current) = self.state.targets.current_session(handle).await
+                && let Some(session) = self.state.sessions.lookup(&current).await
+            {
+                let agent_label = session.agent().label().to_string();
+                return Ok((
+                    StartedSession {
+                        session,
+                        agent_label,
+                    },
+                    current,
+                ));
+            }
+        }
         if let Some(handle) = provided.clone()
             && let Some(session) = self.state.sessions.lookup(&handle).await
         {
@@ -702,8 +748,8 @@ impl ClawMcpService {
         }
         // Everything else resolves to one stable substitute: a handle whose session ended
         // on its own, and equally a handle this server has no memory of. The second case is
-        // the common one and used to be the worst: both maps are in memory, so a restart
-        // makes every handle its agents are holding unrecognised at once, and an agent that
+        // the common one and used to be the worst: live maps are in memory, so a restart
+        // removes every handle its agents are holding from those maps, and an agent that
         // keeps presenting one gets a new session, and a new tab, on every call.
         self.succeed_retired_session(&handle, client).await
     }
@@ -728,6 +774,7 @@ impl ClawMcpService {
         if let Some(existing) = self.state.sessions.replacement_of(retired).await
             && let Some(session) = self.state.sessions.lookup(&existing).await
         {
+            self.inherit_target(retired, &existing).await?;
             let agent_label = session.agent().label().to_string();
             return Ok((
                 StartedSession {
@@ -744,12 +791,14 @@ impl ClawMcpService {
             .adopt_replacement(retired, mine_handle.clone())
             .await;
         if winner == mine_handle {
+            self.inherit_target(retired, &mine_handle).await?;
             return Ok((mine, mine_handle));
         }
         // The winner inserted its session before it adopted, and adoption is serialized, so
         // a winner that is still live is visible here. One that is not was torn down in the
         // gap; keep mine rather than chase a chain of tombstones.
         let Some(session) = self.state.sessions.lookup(&winner).await else {
+            self.inherit_target(retired, &mine_handle).await?;
             return Ok((mine, mine_handle));
         };
         if let Err(error) = self
@@ -761,6 +810,7 @@ impl ClawMcpService {
             warn!(error = %error, "discarding a superseded replacement session failed");
         }
         let agent_label = session.agent().label().to_string();
+        self.inherit_target(retired, &winner).await?;
         Ok((
             StartedSession {
                 session,
@@ -768,6 +818,17 @@ impl ClawMcpService {
             },
             winner,
         ))
+    }
+
+    async fn inherit_target(&self, from: &SessionId, to: &SessionId) -> Result<(), McpError> {
+        self.state
+            .targets
+            .inherit(from, to)
+            .await
+            .map_err(|error| {
+                McpError::invalid_request(format!("task target recovery failed: {error}"), None)
+            })?;
+        Ok(())
     }
 
     async fn mint_session(
@@ -1001,6 +1062,24 @@ impl ServerHandler for ClawMcpService {
         } else {
             (self.learn_session_from_request(&context).await?, None)
         };
+        if let Some(group) = raw_args
+            .get("groupId")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|group| !group.is_empty())
+            && request.name == "tabs"
+            && raw_args.get("action").and_then(Value::as_str) == Some("new")
+        {
+            // Legacy reconnects already carry groupId. Recover its task intent before
+            // capture and mutation; a late grouping effect is too late to route safely.
+            // Match the effect's trimming so it cannot adopt a known group only after
+            // an uncorrelated, globally routed tab has already been created.
+            self.state
+                .targets
+                .correlate_group(started.session.id(), group)
+                .await
+                .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
+        }
         started.session.touch(tokio::time::Instant::now()).await;
         started.session.mark_used();
         let concurrent_used_sessions = self.state.sessions.used_count().await.max(1);
@@ -1026,13 +1105,35 @@ impl ServerHandler for ClawMcpService {
                 unreachable!("catalog tool was validated before session resolution");
             };
             let browser_session = self.state.browser.session().await;
-            let ownership_key = started.session.convo_id().clone();
-            let default_tab_group_id = self
+            let binding = self
                 .state
-                .sessions
-                .ownership()
-                .tab_group_ref(&ownership_key)
-                .await;
+                .targets
+                .binding_for_execution(started.session.id())
+                .await
+                .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
+            let view = match &browser_session {
+                Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
+                None => None,
+            };
+            let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
+                bindings: self.state.targets.clone(),
+                session: started.session.id().clone(),
+            });
+            let ownership_key = started.session.convo_id().clone();
+            let ownership = self.state.sessions.ownership();
+            let default_tab_group_id = match view.as_ref().map(BrowserView::scope) {
+                Some(Ok(Some(scope))) => ownership
+                    .group_for_capture(
+                        &ownership_key,
+                        &scope.binding.intent.browser_profile_id,
+                        scope.placement_window,
+                        scope.binding.revision,
+                    )
+                    .await
+                    .and_then(|group| group.group_ref),
+                Some(Err(_)) => None,
+                _ => ownership.tab_group_ref(&ownership_key).await,
+            };
             let dispatch_cancel = CancellationToken::new();
             let cancel = linked_cancel_token(
                 started.session.child_token(),
@@ -1052,6 +1153,8 @@ impl ServerHandler for ClawMcpService {
                 started.session.id().clone(),
                 Some(identity),
                 browser_session,
+                view,
+                target_store,
                 cancel,
                 context.ct.clone(),
                 dispatch_cancel,
@@ -1612,6 +1715,155 @@ mod tests {
     use crate::identity::ConversationIdentity;
     use rmcp::handler::server::ServerHandler;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn targeted_successors_and_old_aliases_keep_latest_intent_after_restart()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let call = tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let (_, old) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let eng = call
+            .state
+            .targets
+            .set(&old, ProfileConnection::binding("eng", 1, 1).intent)
+            .await?;
+        call.state
+            .sessions
+            .remove(&old, "closed", Some("transport closed"))
+            .await?;
+        let (_, successor) = service
+            .resolve_modern_session(Some(old.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(call.state.targets.get(&successor).await, Some(eng));
+        let ops = call
+            .state
+            .targets
+            .set(&successor, ProfileConnection::binding("ops", 2, 2).intent)
+            .await?;
+        let (_, old_alias_result) = service
+            .resolve_modern_session(Some(old.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(old_alias_result, successor);
+        assert_eq!(call.state.targets.get(&old).await, Some(ops.clone()));
+        call.state.targets.sweep(i64::MAX).await?;
+        let restarted = AppState::new_with_home(
+            call.state.config.clone(),
+            call.state
+                .config
+                .browserclaw_dir
+                .join("synthetic-restart-home"),
+        )
+        .await?;
+        let service = ClawMcpService::new(restarted.clone());
+        let (_, after_restart) = service
+            .resolve_modern_session(Some(old.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_ne!(after_restart, old);
+        assert_eq!(restarted.targets.get(&after_restart).await, Some(ops));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn targeted_stop_refuses_every_alias_after_restart() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let call = tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let (_, old) = service
+            .resolve_modern_session(None, None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state
+            .targets
+            .set(&old, ProfileConnection::binding("eng", 1, 1).intent)
+            .await?;
+        call.state
+            .sessions
+            .remove(&old, "closed", Some("idle timeout"))
+            .await?;
+        let (_, successor) = service
+            .resolve_modern_session(Some(old.clone()), None, None)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        call.state.sessions.cancel_by_session(&successor).await?;
+        let restarted = AppState::new_with_home(
+            call.state.config.clone(),
+            call.state
+                .config
+                .browserclaw_dir
+                .join("synthetic-restart-home"),
+        )
+        .await?;
+        let service = ClawMcpService::new(restarted.clone());
+        for handle in [old, successor] {
+            let error = service
+                .resolve_modern_session(Some(handle), None, None)
+                .await
+                .err()
+                .ok_or_else(|| anyhow::anyhow!("stopped task resumed"))?;
+            assert!(error.message.contains("was stopped"), "{error:?}");
+        }
+        assert_eq!(restarted.sessions.count().await, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn legacy_idle_successor_inherits_target_but_stop_starts_a_separate_task()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let call = tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state.clone());
+        let transport = SessionId::new("synthetic-legacy-transport");
+        let first = service
+            .ensure_session_started(transport.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        let selected = call
+            .state
+            .targets
+            .set(
+                first.session.id(),
+                ProfileConnection::binding("eng", 1, 1).intent,
+            )
+            .await?;
+        call.state
+            .sessions
+            .remove(first.session.id(), "closed", Some("idle timeout"))
+            .await?;
+        let next = service
+            .ensure_session_started(transport.clone())
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_ne!(first.session.id(), next.session.id());
+        assert_eq!(
+            call.state.targets.get(next.session.id()).await,
+            Some(selected)
+        );
+        call.state
+            .sessions
+            .cancel_by_session(next.session.id())
+            .await?;
+        assert!(
+            service
+                .ensure_session_started(transport.clone())
+                .await
+                .is_err()
+        );
+        let new_task = service
+            .ensure_session_started(transport)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_ne!(new_task.session.id(), next.session.id());
+        assert_eq!(call.state.targets.get(new_task.session.id()).await, None);
+        assert!(call.state.targets.is_stopped(first.session.id()).await);
+        Ok(())
+    }
 
     #[test]
     fn supported_protocol_versions_includes_modern_and_legacy() {

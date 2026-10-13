@@ -16,8 +16,8 @@ use serde_json::Value;
 use tracing::warn;
 
 /// Host hook a `run`/`execute` script invokes around each browser primitive.
-/// A script drives the shared browser session directly, bypassing the pipeline
-/// guards and effects, so this hook reproduces what those effects would have
+/// A script uses the captured BrowserView directly, bypassing the outer pipeline
+/// effects. Core enforces scope; this hook reproduces what the host effects would have
 /// done: it notes whose tab each primitive touched, records each primitive as a child
 /// audit row linked to the script dispatch, and (on page creation) claims and
 /// groups the page exactly as a `tabs new` would. It holds the script's own
@@ -199,10 +199,10 @@ impl InnerCallHook for ScriptInnerCallHook {
             .await;
             // Ensure the agent's tab group and place the page in it. Detached so
             // browser grouping does not block the script, matching the effect.
-            tokio::spawn(tab_groups::run_tab_group_work(
-                self.call.clone(),
-                Some(page_id),
-            ));
+            // Snapshot the actual owning window before spawning. The cloned ToolCall
+            // carries the run's immutable view through this delayed effect.
+            let created = tab_groups::created_page(&self.call, page_id).await;
+            tokio::spawn(tab_groups::run_tab_group_work(self.call.clone(), created));
         })
     }
 
@@ -226,8 +226,10 @@ impl InnerCallHook for ScriptInnerCallHook {
 
     fn resolve_host<'a>(&'a self, page: u32) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move {
-            let browser = self.call.browser_session.as_ref()?;
-            let info = browser.pages.get_info(PageId(page)).await?;
+            // Helper selection is visible to the script, so it admits the requested
+            // page through the same capture as all browser primitives.
+            let browser = self.call.view.as_ref()?;
+            let info = browser.page(PageId(page)).await.ok()?;
             helpers::host_bucket(&info.url)
         })
     }

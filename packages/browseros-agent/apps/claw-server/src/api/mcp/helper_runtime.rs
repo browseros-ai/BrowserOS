@@ -9,7 +9,7 @@ use crate::{
     ids::ConvoId,
     services::helpers::{self, HelperMeta},
 };
-use browseros_core::BrowserSession;
+use browseros_core::target::BrowserView;
 use browseros_mcp::{ToolResult, framework::HelperSource};
 use futures_util::future::BoxFuture;
 use rmcp::model::ContentBlock;
@@ -43,14 +43,14 @@ pub(crate) fn helper_info_json(meta: &HelperMeta, now: i64) -> Value {
 pub(crate) async fn preload_helpers(
     state: &AppState,
     caller: &ConvoId,
-    session: &BrowserSession,
+    browser: &BrowserView,
 ) -> Vec<HelperSource> {
     let dir = &state.config.browserclaw_dir;
     if !helpers::has_any_helpers(dir) {
         return Vec::new();
     }
     let mut sources = Vec::new();
-    for host in owned_tab_hosts(state, caller, session).await {
+    for host in owned_tab_hosts(state, caller, browser).await {
         for meta in helpers::list_helper_meta(dir, &host) {
             if let Some(source) = helpers::read_helper_source(dir, &host, &meta.name) {
                 sources.push(HelperSource {
@@ -63,15 +63,21 @@ pub(crate) async fn preload_helpers(
     sources
 }
 
-/// The distinct host buckets of the tabs this agent owns.
+/// The distinct host buckets of owned tabs visible to this call. Ownership can span
+/// earlier profile selections, so helper discovery also needs the captured projection.
 pub(crate) async fn owned_tab_hosts(
     state: &AppState,
     caller: &ConvoId,
-    session: &BrowserSession,
+    browser: &BrowserView,
 ) -> BTreeSet<String> {
     let ownership = state.sessions.ownership();
     let mut hosts = BTreeSet::new();
-    for page in session.pages.list().await.unwrap_or_default() {
+    let pages = browser
+        .list_pages()
+        .await
+        .map(|listing| listing.pages)
+        .unwrap_or_default();
+    for page in pages {
         if ownership.owner_of_page(&page.page_id).await.as_ref() != Some(caller) {
             continue;
         }
@@ -95,16 +101,14 @@ pub fn discovery(
         {
             return Ok(None);
         }
-        let (Some(identity), Some(session)) =
-            (&context.call.identity, &context.call.browser_session)
-        else {
+        let (Some(identity), Some(browser)) = (&context.call.identity, &context.call.view) else {
             return Ok(None);
         };
         let dir = &context.call.state.config.browserclaw_dir;
         if !helpers::has_any_helpers(dir) {
             return Ok(None);
         }
-        let hosts = owned_tab_hosts(&context.call.state, &identity.ownership_key, session).await;
+        let hosts = owned_tab_hosts(&context.call.state, &identity.ownership_key, browser).await;
         let available = available_for_hosts(dir, &hosts, now_epoch_ms());
         if available.is_empty() {
             return Ok(None);
@@ -208,6 +212,43 @@ pub(crate) fn available_for_hosts(
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[tokio::test]
+    async fn helper_discovery_projects_owned_tabs_through_captured_profile() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use browseros_core::{BrowserSession, BrowserSessionHooks, PageId};
+        let call = tool_call("run", json!({"code":"return 1"})).await?;
+        let transport = ProfileConnection::new();
+        {
+            let mut tabs = transport.tabs.lock().unwrap_or_else(|p| p.into_inner());
+            tabs[0]["url"] = json!("https://eng.synthetic.invalid/");
+            tabs[1]["url"] = json!("https://ops.synthetic.invalid/");
+        }
+        let browser = BrowserSession::new(transport, BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let caller = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership.claim_page(caller.clone(), PageId(1)).await;
+        ownership.claim_page(caller.clone(), PageId(2)).await;
+        let view =
+            BrowserView::capture(browser, Some(ProfileConnection::binding("eng", 1, 1)), None)
+                .await;
+        assert!(
+            view.admission_error().is_none(),
+            "{:?}",
+            view.admission_error()
+        );
+        assert_eq!(
+            owned_tab_hosts(&call.state, &caller, &view).await,
+            BTreeSet::from(["eng.synthetic.invalid".to_string()])
+        );
+        Ok(())
+    }
 
     fn meta(name: &str, host: &str, last_verified: i64, candidate: bool) -> HelperMeta {
         HelperMeta {

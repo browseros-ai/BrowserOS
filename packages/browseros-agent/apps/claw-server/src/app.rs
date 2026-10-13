@@ -20,7 +20,7 @@ use crate::{
         replay::ReplayService,
         screenshots::ScreenshotService,
         session_efficiency::SessionEfficiencyService,
-        sessions::Sessions,
+        sessions::{Sessions, TargetBindings},
         skill_runs::SkillRunService,
         skills::SkillService,
     },
@@ -53,6 +53,8 @@ pub struct AppState {
     pub feedback_invites: Arc<crate::db::feedback_invite::FeedbackInviteRepository>,
     pub profiles: Arc<ProfileService>,
     pub sessions: Arc<Sessions>,
+    /// Saved native-profile intent is separate from agent profiles and live browser state.
+    pub targets: Arc<TargetBindings>,
     pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
     pub visuals: Arc<SessionVisualService>,
@@ -78,6 +80,7 @@ impl AppState {
     pub async fn new_with_home(config: Arc<Config>, home_dir: PathBuf) -> AppResult<Self> {
         tokio::fs::create_dir_all(&config.browserclaw_dir).await?;
         let store = JsonStore::new(config.browserclaw_dir.clone());
+        let targets = TargetBindings::load(store.clone()).await?;
         let database = Database::open(config.browserclaw_dir.join(DATABASE_FILENAME)).await?;
         let migration = database.migration_outcome().clone();
         let audit_log = Arc::new(AuditLog::new(database.clone()));
@@ -143,6 +146,7 @@ impl AppState {
             config.session_sweep_interval,
             analytics_sink,
         );
+        sessions.set_target_bindings(targets.clone());
         sessions.set_completion_hook(Arc::new({
             let session_efficiency = session_efficiency.clone();
             let skill_runs = skill_runs.clone();
@@ -214,6 +218,7 @@ impl AppState {
             feedback_invites,
             profiles,
             sessions,
+            targets,
             session_efficiency,
             browser,
             visuals,

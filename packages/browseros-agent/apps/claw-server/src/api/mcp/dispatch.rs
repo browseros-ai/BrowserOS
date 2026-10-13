@@ -5,10 +5,10 @@ use crate::{
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
 };
-use browseros_core::{BrowserSession, PageId, pages::PageInfo};
+use browseros_core::{BrowserSession, PageId, pages::PageInfo, target::BrowserView};
 use browseros_mcp::{
-    BrowserToolDefaults, BrowserToolOptions, OutputFileAccess, ToolCtx, ToolDef, ToolResult,
-    execute_tool,
+    BrowserToolDefaults, BrowserToolOptions, OutputFileAccess, TargetStore, ToolCtx, ToolDef,
+    ToolResult, execute_tool,
 };
 use futures_util::future::BoxFuture;
 use rmcp::{
@@ -49,6 +49,10 @@ pub struct ToolCall {
     pub session_id: SessionId,
     pub identity: Option<ToolIdentity>,
     pub browser_session: Option<Arc<BrowserSession>>,
+    /// Captured once at admission, shared by execution, run primitives and delayed effects.
+    /// The global session above is reserved for registry/audit infrastructure.
+    pub view: Option<BrowserView>,
+    pub target_store: Arc<dyn TargetStore>,
     /// Pre-execution page incarnation retained for activity, close cleanup, and
     /// audit fallback even if execution changes or removes the live page.
     pub page_snapshot: Option<PageInfo>,
@@ -71,6 +75,10 @@ pub struct ToolCall {
     /// from its arguments the way it is for a granular tool. The script hook records what
     /// the script actually touched, and `effects::page_ownership_notice` reports it.
     pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
+    /// Incarnations observed at creation, before detached grouping. PageId can survive
+    /// native target replacement, so a late effect must not group its replacement tab.
+    pub(crate) created_page_snapshots:
+        Arc<tokio::sync::Mutex<std::collections::BTreeMap<u32, PageInfo>>>,
 }
 
 impl ToolCall {
@@ -84,6 +92,8 @@ impl ToolCall {
         session_id: SessionId,
         identity: Option<ToolIdentity>,
         browser_session: Option<Arc<BrowserSession>>,
+        view: Option<BrowserView>,
+        target_store: Arc<dyn TargetStore>,
         cancel: CancellationToken,
         client_cancel: CancellationToken,
         dispatch_cancel: CancellationToken,
@@ -117,12 +127,15 @@ impl ToolCall {
         };
         Self {
             foreign_pages: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
+            created_page_snapshots: Arc::default(),
             catalog,
             tool_index,
             raw_args,
             session_id,
             identity,
             browser_session,
+            view,
+            target_store,
             page_snapshot: None,
             started_at_ms: crate::clock::now_epoch_ms(),
             cancel,
@@ -420,12 +433,10 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
     if call.client_cancel.is_cancelled() || call.cancel.is_cancelled() {
         return DispatchExecution::ProtocolCancelled;
     }
-    let result = match &call.browser_session {
-        Some(browser_session) => {
-            // Script tools drive primitives straight against the shared browser
-            // session, bypassing the guards and audit effect the pipeline runs
-            // per tool. Inject a hook so each primitive is ownership-checked and
-            // recorded as a child of this script's dispatch.
+    let result = match &call.view {
+        Some(view) => {
+            // The same captured view reaches direct primitives and tool-backed calls.
+            // The hook adds ownership labels and child audit rows, never scope authority.
             let is_script = ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name);
             let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
                 if is_script && call.identity.is_some() {
@@ -444,14 +455,15 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                     crate::api::mcp::helper_runtime::preload_helpers(
                         &call.state,
                         &identity.ownership_key,
-                        browser_session,
+                        view,
                     )
                     .await
                 }
                 _ => Vec::new(),
             };
             let ctx = ToolCtx::new(BrowserToolOptions {
-                session: browser_session.clone(),
+                browser: view.clone(),
+                target: Some(call.target_store.clone()),
                 defaults: BrowserToolDefaults {
                     default_window_id: None,
                     default_tab_group_id: call.default_tab_group_id.clone(),
@@ -607,6 +619,169 @@ pub fn linked_cancel_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn stale_binding_blocks_execution_while_management_recovers() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(
+            transport.clone(),
+            browseros_core::BrowserSessionHooks::default(),
+        );
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"list"})).await?;
+        let binding = call
+            .state
+            .targets
+            .set(
+                &call.session_id,
+                ProfileConnection::binding("eng", 1, 1).intent,
+            )
+            .await?;
+        transport
+            .profiles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|profile| profile["browserProfileId"] != "eng");
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::capture(browser.clone(), Some(binding), None).await);
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(outcome.result.is_error);
+        assert!(
+            dispatch_error_text(&outcome.result).is_some_and(|text| text.contains("profile_gone")),
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        call.tool_index = call
+            .catalog
+            .iter()
+            .position(|tool| tool.name == "browser_target")
+            .ok_or_else(|| anyhow::anyhow!("browser_target missing"))?;
+        call.raw_args = json!({"action":"get"});
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(!outcome.result.is_error);
+        assert_eq!(
+            outcome
+                .result
+                .structured_content
+                .as_ref()
+                .map(|value| &value["bound"]),
+            Some(&json!(true))
+        );
+        call.raw_args = json!({"action":"clear"});
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(!outcome.result.is_error);
+        assert_eq!(call.state.targets.get(&call.session_id).await, None);
+        call.raw_args = json!({"action":"set", "name":"ops"});
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(!outcome.result.is_error);
+        let selected = call
+            .state
+            .targets
+            .get(&call.session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("binding missing"))?;
+        assert_eq!(selected.intent.browser_profile_id.as_str(), "ops");
+        assert_eq!(selected.revision, 3);
+        let view = BrowserView::capture(browser, Some(selected), None).await;
+        let listing = view.list_pages().await?;
+        assert_eq!(listing.pages.len(), 1);
+        assert_eq!(
+            listing.pages[0].window_id,
+            Some(browseros_core::WindowId(2))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn run_creation_and_hook_keep_admitted_view_after_rebind() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(
+            transport.clone(),
+            browseros_core::BrowserSessionHooks::default(),
+        );
+        browser.pages.list().await?;
+        let mut call = tool_call(
+            "run",
+            json!({"code":"return await browser.pages.newPage('https://synthetic.test/new');"}),
+        )
+        .await?;
+        call.browser_session = Some(browser.clone());
+        let eng = call
+            .state
+            .targets
+            .set(
+                &call.session_id,
+                ProfileConnection::binding("eng", 1, 1).intent,
+            )
+            .await?;
+        call.view = Some(BrowserView::capture(browser.clone(), Some(eng), None).await);
+        // The store has already moved to ops by the time execution starts. Both the
+        // primitive and its detached creation hook must still use the admitted eng view.
+        call.state
+            .targets
+            .set(
+                &call.session_id,
+                ProfileConnection::binding("ops", 2, 2).intent,
+            )
+            .await?;
+        let group_created = transport.group_created.notified();
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(
+            !outcome.result.is_error,
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), group_created).await?;
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let ownership = call.state.sessions.ownership();
+        let lock = ownership
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let _guard = lock.lock().await;
+        let tab = transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .last()
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+        assert_eq!(tab["windowId"], 1);
+        assert_eq!(tab["browserProfileId"], "eng");
+        assert!(tab.get("groupId").is_some());
+        assert_eq!(
+            ownership.owner_of_page(&PageId(4)).await,
+            Some(identity.ownership_key.clone())
+        );
+        assert!(
+            ownership
+                .groups(&identity.ownership_key)
+                .await
+                .iter()
+                .all(|group| group.window_id == Some(browseros_core::WindowId(1)))
+        );
+        let calls = transport.calls.lock().unwrap_or_else(|p| p.into_inner());
+        let creation = calls
+            .iter()
+            .find(|(method, _)| method == "Browser.createTab")
+            .ok_or_else(|| anyhow::anyhow!("createTab missing"))?;
+        assert_eq!(creation.1["browserContextId"], "ctx-eng");
+        Ok(())
+    }
     use crate::db::audit_log::ListDispatchesQuery;
     use browseros_mcp::token_estimate::{
         TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
