@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b47402c111779
+index 0000000000000000000000000000000000000000..19919de8931b03b7ae7cf772f9e98b0d907259cd
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1552 @@
+@@ -0,0 +1,1558 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -131,8 +131,9 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +//   downloaded --(reject for this session, files kept)--> bundled
 +//   bundled ----(readmit the download, if any)----------> downloaded
 +//
-+// Strikes reset only once a server stays healthy for kStableWindow, so one
-+// that passes a check and then crashes still builds toward a fallback. When
++// Strikes reset only once a server has passed every health check for
++// kStableWindow, so one that passes a check and then crashes or hangs still
++// builds toward a fallback. A newly activated version starts fresh. When
 +// every installation has run out of strikes in a row, the next relaunch waits
 +// kFailedCycleDelay so broken binaries cannot spin. Supervision never gives up,
 +// and the updater runs independently of health, so a newer download can rescue
@@ -145,7 +146,7 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +constexpr int kMaxConsecutiveHealthCheckFailures = 3;
 +// Strikes an installation may take before supervision switches installation.
 +constexpr int kMaxStrikes = 3;
-+// How long a server must stay healthy before its strikes are forgiven.
++// How long a server must pass every health check before strikes are forgiven.
 +constexpr base::TimeDelta kStableWindow = base::Seconds(30);
 +// Pause before retrying once every installation has failed in a row.
 +constexpr base::TimeDelta kFailedCycleDelay = base::Seconds(30);
@@ -1025,9 +1026,13 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +  }
 +  if (success) {
 +    consecutive_health_failures_ = 0;
++    if (healthy_since_.is_null()) {
++      healthy_since_ = base::TimeTicks::Now();
++    } else if (base::TimeTicks::Now() - healthy_since_ >= kStableWindow) {
++      ForgiveStrikes();
++    }
 +    if (!running_installation_ && launched_installation_) {
 +      running_installation_ = launched_installation_;
-+      healthy_since_ = base::TimeTicks::Now();
 +      startup_health_retry_timer_.Stop();
 +      startup_health_deadline_timer_.Stop();
 +      is_restarting_ = false;
@@ -1061,6 +1066,7 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +    return;
 +  }
 +
++  healthy_since_ = base::TimeTicks();
 +  if (++consecutive_health_failures_ >= kMaxConsecutiveHealthCheckFailures) {
 +    consecutive_health_failures_ = 0;
 +    OnStrike("health_check");
@@ -1079,11 +1085,6 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +void BrowserOSServerManager::OnStrike(std::string_view reason) {
 +  if (!started_ || !version_store_) {
 +    return;
-+  }
-+  if (!healthy_since_.is_null() &&
-+      base::TimeTicks::Now() - healthy_since_ >= kStableWindow) {
-+    strikes_ = 0;
-+    failed_installations_ = 0;
 +  }
 +  ++strikes_;
 +  LOG(WARNING) << "browseros: Strike " << strikes_ << "/" << kMaxStrikes
@@ -1152,6 +1153,11 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +                 download ? VersionString(download->version) : "none");
 +  LogSupervisionEvent("server.bundled.failed", failed.version,
 +                      std::move(properties));
++}
++
++void BrowserOSServerManager::ForgiveStrikes() {
++  strikes_ = 0;
++  failed_installations_ = 0;
 +}
 +
 +void BrowserOSServerManager::RelaunchAfterFailure(base::TimeDelta delay) {
@@ -1349,8 +1355,9 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +
 +void BrowserOSServerManager::ActivateWithoutHealthyServer(
 +    const ServerInstallation& target) {
-+  // Already starting (or waiting to relaunch) this version or a newer one.
-+  if (!launched_installation_ ||
++  // Already starting this version or a newer one. A pending relaunch picks the
++  // best version when it fires; preempting it would cut the failed-cycle pause.
++  if (!launched_installation_ || relaunch_timer_.IsRunning() ||
 +      (launched_installation_->version.IsValid() &&
 +       target.version <= launched_installation_->version)) {
 +    return;
@@ -1360,9 +1367,7 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +  // from ever switching to a fixed download.
 +  LOG(INFO) << "browseros: No healthy server; activating ready version "
 +            << target.version.GetString() << " now";
-+  strikes_ = 0;
-+  failed_installations_ = 0;
-+  relaunch_timer_.Stop();
++  ForgiveStrikes();
 +  next_installation_.reset();
 +  is_restarting_ = true;
 +  TerminateBrowserOSProcess(
@@ -1376,6 +1381,7 @@ index 0000000000000000000000000000000000000000..741ae036874889500655f8c0319b4740
 +      termination_in_progress_) {
 +    return;
 +  }
++  ForgiveStrikes();
 +  next_installation_ = installation;
 +  const base::Version old_version = GetRunningVersion();
 +  RestartServerForUpdate(base::BindOnce(

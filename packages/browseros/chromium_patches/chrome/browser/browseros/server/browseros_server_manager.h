@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..0389d3faefb96bf4c1f6ab7d5f4fb5cf0bb4f29e
+index 0000000000000000000000000000000000000000..dd0a2cf2cf09faba02600b569c492916a251ce6e
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,246 @@
+@@ -0,0 +1,249 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -149,6 +149,7 @@ index 0000000000000000000000000000000000000000..0389d3faefb96bf4c1f6ab7d5f4fb5cf
 +  // policy comment in the .cc.
 +  void OnStrike(std::string_view reason);
 +  void SwitchAwayFromLaunchedInstallation(std::string_view reason);
++  void ForgiveStrikes();
 +  void RelaunchAfterFailure(base::TimeDelta delay);
 +  void ScheduleRelaunch(base::TimeDelta delay);
 +  void ActivateWithoutHealthyServer(const ServerInstallation& target);
@@ -217,12 +218,14 @@ index 0000000000000000000000000000000000000000..0389d3faefb96bf4c1f6ab7d5f4fb5cf
 +  bool version_io_pending_ = false;
 +  uint64_t process_generation_ = 0;
 +
-+  // Failures of the launched installation since it was last stably healthy.
++  // Failures of the launched installation since it was last stably healthy
++  // or a new version was activated.
 +  int strikes_ = 0;
 +  // Installations that ran out of strikes in a row; a full set means every
 +  // option failed and the next relaunch waits.
 +  int failed_installations_ = 0;
-+  // When the current process first passed a health check; null until then.
++  // Start of the current process's unbroken run of passing health checks;
++  // null after a missed check or a new launch.
 +  base::TimeTicks healthy_since_;
 +  int consecutive_health_failures_ = 0;
 +  bool advance_port_on_restart_ = false;
