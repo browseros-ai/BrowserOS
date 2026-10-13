@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..6c6b9f18f3b65f290fa7a47ebea8fedd7567557d
+index 0000000000000000000000000000000000000000..90e762a1e5410d01408a36ea74518e6dee7d27cb
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,241 @@
+@@ -0,0 +1,243 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -147,10 +147,12 @@ index 0000000000000000000000000000000000000000..6c6b9f18f3b65f290fa7a47ebea8fedd
 +  // Supervision. Every launched-installation failure funnels into OnStrike(),
 +  // which restarts it and, after kMaxStrikes, switches installation. See the
 +  // policy comment in the .cc.
-+  void OnStrike(std::string_view reason);
++  // |was_healthy| means the failed process had passed a health check, so it
++  // relaunches without kRelaunchDelay.
++  void OnStrike(std::string_view reason, bool was_healthy);
 +  void SwitchAwayFromLaunchedInstallation(std::string_view reason);
-+  void RelaunchAfterFailure();
-+  void ScheduleRelaunch();
++  void RelaunchAfterFailure(base::TimeDelta delay);
++  void ScheduleRelaunch(base::TimeDelta delay);
 +  void ActivateWithoutHealthyServer(const ServerInstallation& target);
 +  // Sends a supervision event at most once per event and version per session.
 +  void LogSupervisionEvent(std::string_view event,

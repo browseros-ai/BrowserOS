@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.cc b/chrome/browser/browseros/server/browseros_server_manager.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc69160a64
+index 0000000000000000000000000000000000000000..31ec3dc5e874a5a802ea02862cbe6b9a55f31635
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.cc
-@@ -0,0 +1,1561 @@
+@@ -0,0 +1,1566 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -126,9 +126,10 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +// Every failure of the launched installation is a strike: a non-zero exit, no
 +// health before kStartupGracePeriod, a failed launch, or
 +// kMaxConsecutiveHealthCheckFailures missed checks while running. A strike
-+// restarts the same installation after kRelaunchDelay; any passing health check
-+// clears strikes, so a server that hangs once a day never builds toward a
-+// fallback. After kMaxStrikes:
++// restarts the same installation: at once if it had been healthy (a crash or
++// hang), otherwise after kRelaunchDelay. Any passing health check clears
++// strikes, so a server that hangs once a day never builds toward a fallback.
++// After kMaxStrikes:
 +//
 +//   downloaded --(reject, files kept)--> bundled
 +//   bundled ----(readmit newest download)--> downloaded, or bundled again
@@ -145,8 +146,10 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +// Strikes an installation may take, with no passing health check in between,
 +// before supervision switches installation.
 +constexpr int kMaxStrikes = 3;
-+// Fixed delay before relaunching after a strike. A single local process needs
-+// no backoff, only enough spacing that a crashing binary cannot spin.
++// Fixed delay before relaunching a server that never became healthy. A single
++// local process needs no backoff, only enough spacing that a binary which
++// cannot start does not spin. A server that was healthy relaunches at once: it
++// cannot spin, because a relaunch that fails before health takes this delay.
 +constexpr base::TimeDelta kRelaunchDelay = base::Seconds(30);
 +
 +constexpr int kExitCodeSuccess = 0;
@@ -757,7 +760,7 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +  ServerLaunchConfig config = BuildLaunchConfig();
 +  if (config.paths.execution.empty()) {
 +    LOG(ERROR) << "browseros: Failed to resolve execution directory";
-+    OnStrike("launch_failed");
++    OnStrike("launch_failed", /*was_healthy=*/false);
 +    return;
 +  }
 +
@@ -816,7 +819,7 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +  if (!process_.IsValid()) {
 +    LOG(ERROR) << "browseros: Failed to launch "
 +               << GetManagedServerDescriptor().log_name;
-+    OnStrike("launch_failed");
++    OnStrike("launch_failed", /*was_healthy=*/false);
 +    return;
 +  }
 +
@@ -984,7 +987,8 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +  }
 +
 +  // A binary can pass --version yet fail during real initialization.
-+  OnStrike(was_starting ? "startup_exit" : "crash");
++  OnStrike(was_starting ? "startup_exit" : "crash",
++           /*was_healthy=*/!was_starting);
 +}
 +
 +void BrowserOSServerManager::CheckServerHealth() {
@@ -1068,7 +1072,7 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +
 +  if (++consecutive_health_failures_ >= kMaxConsecutiveHealthCheckFailures) {
 +    consecutive_health_failures_ = 0;
-+    OnStrike("health_check");
++    OnStrike("health_check", /*was_healthy=*/true);
 +  }
 +}
 +
@@ -1078,10 +1082,11 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +  }
 +  LOG(ERROR)
 +      << "browseros: Server did not become healthy before startup deadline";
-+  OnStrike("startup_deadline");
++  OnStrike("startup_deadline", /*was_healthy=*/false);
 +}
 +
-+void BrowserOSServerManager::OnStrike(std::string_view reason) {
++void BrowserOSServerManager::OnStrike(std::string_view reason,
++                                      bool was_healthy) {
 +  if (!started_ || !version_store_) {
 +    return;
 +  }
@@ -1099,7 +1104,7 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +    strikes_ = 0;
 +    SwitchAwayFromLaunchedInstallation(reason);
 +  }
-+  RelaunchAfterFailure();
++  RelaunchAfterFailure(was_healthy ? base::TimeDelta() : kRelaunchDelay);
 +}
 +
 +void BrowserOSServerManager::InvalidateDownloadedServer() {
@@ -1109,7 +1114,7 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +  }
 +  strikes_ = 0;
 +  SwitchAwayFromLaunchedInstallation("invalidated");
-+  RelaunchAfterFailure();
++  RelaunchAfterFailure(kRelaunchDelay);
 +}
 +
 +void BrowserOSServerManager::SwitchAwayFromLaunchedInstallation(
@@ -1164,25 +1169,25 @@ index 0000000000000000000000000000000000000000..e88f283b913a8cc77a68183b188ab2dc
 +                      std::move(properties));
 +}
 +
-+void BrowserOSServerManager::RelaunchAfterFailure() {
++void BrowserOSServerManager::RelaunchAfterFailure(base::TimeDelta delay) {
 +  // An activation that ends in a strike did not succeed.
 +  CompleteUpdate(false);
 +  next_installation_.reset();
 +  is_restarting_ = true;
 +  TerminateBrowserOSProcess(
 +      base::BindOnce(&BrowserOSServerManager::ScheduleRelaunch,
-+                     weak_factory_.GetWeakPtr()));
++                     weak_factory_.GetWeakPtr(), delay));
 +}
 +
-+void BrowserOSServerManager::ScheduleRelaunch() {
++void BrowserOSServerManager::ScheduleRelaunch(base::TimeDelta delay) {
 +  if (!started_) {
 +    return;
 +  }
 +  LOG(INFO) << "browseros: Relaunching "
 +            << GetManagedServerDescriptor().log_name << " in "
-+            << kRelaunchDelay.InSeconds() << "s";
++            << delay.InSeconds() << "s";
 +  relaunch_timer_.Start(
-+      FROM_HERE, kRelaunchDelay,
++      FROM_HERE, delay,
 +      base::BindOnce(&BrowserOSServerManager::ContinueRestartAfterTerminate,
 +                     weak_factory_.GetWeakPtr()));
 +}
