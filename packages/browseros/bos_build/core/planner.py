@@ -374,7 +374,7 @@ def required_env(step_names: List[str]) -> List[str]:
         cls = registry.get(name)
         if cls is None:
             continue
-        for var in cls.env:
+        for var in cls.required_env():
             if var not in seen:
                 seen.append(var)
     return seen

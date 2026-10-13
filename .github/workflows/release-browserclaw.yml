@@ -2,6 +2,19 @@ name: "Release: BrowserOS neo (full)"
 
 on:
   workflow_dispatch:
+    inputs:
+      windows_signing_provider:
+        description: "Windows signing provider (SSL.com is the rollback default)"
+        required: false
+        type: choice
+        default: sslcom
+        options: [sslcom, azure]
+      windows_server_signing_provider:
+        description: "Bundled and standalone server override"
+        required: false
+        type: choice
+        default: inherit
+        options: [inherit, sslcom, azure]
 
 permissions: {}
 
@@ -57,9 +70,11 @@ jobs:
     needs: preflight
     uses: ./.github/workflows/release-claw-server.yml
     permissions:
+      id-token: write
       contents: write
       pull-requests: write
     with:
+      windows_signing_provider: ${{ inputs.windows_server_signing_provider != 'inherit' && inputs.windows_server_signing_provider || inputs.windows_signing_provider }}
       ref: ${{ needs.preflight.outputs.source_sha }}
       publish_ota: true
     secrets: inherit
@@ -121,9 +136,12 @@ jobs:
     needs: [preflight, server, extension, components]
     uses: ./.github/workflows/release-windows.yml
     permissions:
+      id-token: write
       actions: write
       contents: read
     with:
+      windows_signing_provider: ${{ inputs.windows_signing_provider }}
+      windows_server_signing_provider: ${{ inputs.windows_server_signing_provider }}
       products: browserclaw
       sign: true
       upload_to_r2: true

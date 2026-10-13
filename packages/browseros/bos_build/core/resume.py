@@ -209,6 +209,12 @@ def write_step_checkpoint(
         "registry": _registry_entries(ctx, step),
         "snapshots": _step_snapshots(ctx, step_name),
     }
+    if step_name == "sign_windows":
+        from ..lib.windows_signing.config import browser_signing_identity
+
+        # Compile checkpoints stay reusable across provider changes. A signed
+        # installer cannot be reused after changing either embedded identity.
+        document["windows_signing"] = browser_signing_identity(ctx.env)
     _atomic_write_json(checkpoint_path(ctx, step_name), document)
 
 
@@ -484,6 +490,15 @@ def _validated_checkpoint(
     if not isinstance(document, dict) or document.get("schema") != CHECKPOINT_SCHEMA:
         raise _mismatch(ctx.architecture, step_name, "unsupported checkpoint schema")
     _validate_checkpoint_identity(ctx, step_name, state, document)
+    if step_name == "sign_windows":
+        from ..lib.windows_signing.config import browser_signing_identity
+
+        if document.get("windows_signing") != browser_signing_identity(ctx.env):
+            raise _mismatch(
+                ctx.architecture,
+                step_name,
+                "Windows signing identity changed; resume from sign_windows",
+            )
     _validate_chromium_checkout(ctx, step_name, document)
     for entry in document.get("registry", []):
         _validate_registry_entry(ctx.architecture, step_name, entry)
@@ -875,9 +890,7 @@ def _operation_applies(
     if product_condition is None or ctx.build_type == "debug":
         return True
     products = (
-        [product_condition]
-        if isinstance(product_condition, str)
-        else product_condition
+        [product_condition] if isinstance(product_condition, str) else product_condition
     )
     return isinstance(products, list) and ctx.product.id in products
 

@@ -3,6 +3,11 @@ name: Publish server alpha OTA
 on:
   workflow_call:
     inputs:
+      windows_signing_provider:
+        description: "Windows signing provider (SSL.com is the rollback default)"
+        required: false
+        type: string
+        default: sslcom
       product:
         required: true
         type: string
@@ -46,17 +51,16 @@ on:
       PROD_MACOS_NOTARIZATION_PWD:
         required: true
       ESIGNER_USERNAME:
-        required: true
+        required: false
       ESIGNER_PASSWORD:
-        required: true
+        required: false
       ESIGNER_TOTP_SECRET:
-        required: true
+        required: false
       ESIGNER_CREDENTIAL_ID:
         required: false
 
-permissions:
-  contents: write
-  pull-requests: write
+# Inherit the caller ceiling: Azure callers grant id-token: write; legacy
+# SSL-only nightly callers need no Azure identity.
 
 jobs:
   validate:
@@ -66,9 +70,14 @@ jobs:
         env:
           PRODUCT: ${{ inputs.product }}
           SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
+          WINDOWS_SIGNING_PROVIDER: ${{ inputs.windows_signing_provider || 'sslcom' }}
           STATE_OWNER: ${{ inputs.state_owner || 'component' }}
         run: |
           set -euo pipefail
+          case "$WINDOWS_SIGNING_PROVIDER" in
+            sslcom|azure) ;;
+            *) echo "::error::Invalid Windows signing provider"; exit 1 ;;
+          esac
           case "$PRODUCT:$SNAPSHOT_PATH" in
             browseros:updates/server/appcast-server.alpha.xml) ;;
             browserclaw:updates/server/appcast-claw-server.alpha.xml) ;;
@@ -115,6 +124,7 @@ jobs:
       RELEASE_SHA: ${{ inputs.release_sha }}
       SNAPSHOT_PATH: ${{ inputs.snapshot_path }}
       VERSION: ${{ inputs.version }}
+      WINDOWS_SIGNING_PROVIDER: ${{ inputs.windows_signing_provider || 'sslcom' }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -164,6 +174,12 @@ jobs:
       - name: Preflight Windows signing credentials
         if: runner.os == 'Windows'
         env:
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PROFILE_OID: ${{ vars.AZURE_SIGNING_PROFILE_OID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
           ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
@@ -171,6 +187,9 @@ jobs:
         run: |
           set -euo pipefail
           required=(ESIGNER_USERNAME ESIGNER_PASSWORD ESIGNER_TOTP_SECRET)
+          if [ "$WINDOWS_SIGNING_PROVIDER" = "azure" ]; then
+            required=(AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE AZURE_SIGNING_PROFILE_OID AZURE_TENANT_ID AZURE_CLIENT_ID)
+          fi
           missing=()
           for name in "${required[@]}"; do
             if [ -z "${!name:-}" ]; then missing+=("$name"); fi
@@ -210,7 +229,7 @@ jobs:
           security default-keychain -d user -s "$keychain_path"
 
       - name: Setup Java for Windows signing
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_signing_provider != 'azure'
         uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -218,7 +237,7 @@ jobs:
           check-latest: true
 
       - name: Install SSL.com CodeSignTool
-        if: runner.os == 'Windows'
+        if: runner.os == 'Windows' && inputs.windows_signing_provider != 'azure'
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -259,9 +278,20 @@ jobs:
             --product "$PRODUCT" \
             --platform "$PLATFORM"
 
+      - name: Setup Azure signing tools
+        if: runner.os == 'Windows' && inputs.windows_signing_provider == 'azure'
+        uses: ./.github/actions/setup-azure-signing
+
       - name: Sign and upload Windows OTA payload
         if: runner.os == 'Windows'
         env:
+          WINDOWS_SIGNING_REPORT_DIR: ${{ runner.temp }}/windows-signing-reports
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PROFILE_OID: ${{ vars.AZURE_SIGNING_PROFILE_OID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
           ESIGNER_CREDENTIAL_ID: ${{ secrets.ESIGNER_CREDENTIAL_ID }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
           ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
@@ -298,6 +328,15 @@ jobs:
             --channel alpha \
             --product "$PRODUCT" \
             --platform "$PLATFORM"
+
+      - name: Upload Windows signing evidence
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-signing-${{ inputs.product }}-${{ inputs.version }}
+          path: ${{ runner.temp }}/windows-signing-reports/*.json
+          if-no-files-found: warn
+          retention-days: 30
 
       # Both products share a nightly run's artifact namespace. Include the
       # product so each publisher downloads only its own appcast fragments.

@@ -19,7 +19,7 @@ from ...lib.utils import (
     log_success,
     IS_MACOS,
 )
-from ...steps.sign.windows import sign_with_codesigntool
+from ...lib.windows_signing import sign_windows_files
 
 
 def sign_macos_binary(
@@ -247,7 +247,8 @@ def sign_windows_binary(
     bundled Java launcher is available, and reports redacted tool errors
     before a later Authenticode check can obscure the original failure.
     """
-    return sign_with_codesigntool([binary_path], env)
+    env = env or EnvConfig()
+    return sign_windows_files([binary_path], env, env.windows_signing_provider)
 
 
 def sign_server_bundle_macos(

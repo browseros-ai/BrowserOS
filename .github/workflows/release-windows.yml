@@ -3,6 +3,18 @@ name: "Release: Windows Browser"
 on:
   workflow_dispatch:
     inputs:
+      windows_signing_provider:
+        description: "Windows signing provider (SSL.com is the rollback default)"
+        required: false
+        type: choice
+        default: sslcom
+        options: [sslcom, azure]
+      windows_server_signing_provider:
+        description: "Bundled and standalone server override"
+        required: false
+        type: choice
+        default: inherit
+        options: [inherit, sslcom, azure]
       products:
         description: "Product set to build"
         type: choice
@@ -21,6 +33,16 @@ on:
         default: true
   workflow_call:
     inputs:
+      windows_signing_provider:
+        description: "Windows signing provider (SSL.com is the rollback default)"
+        required: false
+        type: string
+        default: sslcom
+      windows_server_signing_provider:
+        description: "Bundled and standalone server override"
+        required: false
+        type: string
+        default: inherit
       products:
         description: "Product set to build: browseros, browserclaw, or all"
         required: false
@@ -144,6 +166,14 @@ jobs:
       - name: Check signing secrets
         env:
           SIGN: ${{ inputs.sign }}
+          WINDOWS_SIGNING_PROVIDER: ${{ inputs.windows_signing_provider || 'sslcom' }}
+          WINDOWS_SERVER_SIGNING_PROVIDER: ${{ inputs.windows_server_signing_provider || 'inherit' }}
+          AZURE_SIGNING_ENDPOINT: ${{ vars.AZURE_SIGNING_ENDPOINT }}
+          AZURE_SIGNING_ACCOUNT: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
+          AZURE_SIGNING_PROFILE_OID: ${{ vars.AZURE_SIGNING_PROFILE_OID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ vars.AZURE_SIGNING_CLIENT_ID }}
           ESIGNER_USERNAME: ${{ secrets.ESIGNER_USERNAME }}
           ESIGNER_PASSWORD: ${{ secrets.ESIGNER_PASSWORD }}
           ESIGNER_TOTP_SECRET: ${{ secrets.ESIGNER_TOTP_SECRET }}
@@ -155,15 +185,25 @@ jobs:
             exit 0
           fi
 
+          case "$WINDOWS_SIGNING_PROVIDER:$WINDOWS_SERVER_SIGNING_PROVIDER" in
+            sslcom:inherit|sslcom:sslcom|sslcom:azure|azure:inherit|azure:sslcom|azure:azure) ;;
+            *) echo "::error::Invalid Windows signing provider selection"; exit 1 ;;
+          esac
+          required=(SPARKLE_PRIVATE_KEY)
+          if [ "$WINDOWS_SIGNING_PROVIDER" = "sslcom" ] || [ "$WINDOWS_SERVER_SIGNING_PROVIDER" = "sslcom" ]; then
+            required+=(ESIGNER_USERNAME ESIGNER_PASSWORD ESIGNER_TOTP_SECRET)
+          fi
+          if [ "$WINDOWS_SIGNING_PROVIDER" = "azure" ] || [ "$WINDOWS_SERVER_SIGNING_PROVIDER" = "azure" ]; then
+            required+=(AZURE_SIGNING_ENDPOINT AZURE_SIGNING_ACCOUNT AZURE_SIGNING_PROFILE AZURE_SIGNING_PROFILE_OID AZURE_TENANT_ID AZURE_CLIENT_ID)
+          fi
           missing=()
-          [ -n "${ESIGNER_USERNAME:-}" ] || missing+=(ESIGNER_USERNAME)
-          [ -n "${ESIGNER_PASSWORD:-}" ] || missing+=(ESIGNER_PASSWORD)
-          [ -n "${ESIGNER_TOTP_SECRET:-}" ] || missing+=(ESIGNER_TOTP_SECRET)
-          [ -n "${SPARKLE_PRIVATE_KEY:-}" ] || missing+=(SPARKLE_PRIVATE_KEY)
+          for name in "${required[@]}"; do
+            [ -n "${!name:-}" ] || missing+=("$name")
+          done
 
           if [ "${#missing[@]}" -gt 0 ]; then
             printf '::error::Windows signing requested, but missing required secrets: %s\n' "${missing[*]}"
-            echo "::error::Add the missing repository secrets or rerun this workflow with sign=false for an unsigned mini_installer build. ESIGNER_CREDENTIAL_ID is optional."
+            echo "::error::Configure the selected signing provider, or select SSL.com to roll back. ESIGNER_CREDENTIAL_ID is optional."
             exit 1
           fi
 
@@ -233,6 +273,9 @@ jobs:
           done
 
   build:
+    permissions:
+      contents: read
+      id-token: write
     needs: [plan, preflight]
     strategy:
       fail-fast: false
@@ -241,6 +284,8 @@ jobs:
     name: build (${{ matrix.product }} windows-x64)
     uses: ./.github/workflows/build-browseros.yml
     with:
+      windows_signing_provider: ${{ inputs.windows_signing_provider || 'sslcom' }}
+      windows_server_signing_provider: ${{ inputs.windows_server_signing_provider || 'inherit' }}
       platform: windows
       arch: x64
       product: ${{ matrix.product }}

@@ -1,0 +1,39 @@
+name: Setup Azure Artifact Signing
+description: Install pinned x64 signing tools; authentication is acquired by Python immediately before signing.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-dotnet@v5
+      with:
+        dotnet-version: '8.0.x'
+    - name: Install pinned SignTool and Artifact Signing Dlib
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        # Use per-job directories: custom Chromium runners may contain an old
+        # SDK, and matching x64 SignTool/Dlib is required by the native bridge.
+        $root = Join-Path $env:RUNNER_TEMP 'browseros-azure-signing'
+        New-Item -ItemType Directory -Force -Path $root | Out-Null
+        $packages = @(
+          @{ Id='microsoft.artifactsigning.client'; Version='1.0.128'; Hash='74bd7d27e6ce1051409c38d9b46bc8df0400ecd643d51ffbf2ac00869061e40b'; Folder='client' },
+          @{ Id='microsoft.windows.sdk.buildtools'; Version='10.0.26100.8249'; Hash='1628c77d21ed187c4db998b37b18e267a7f092ae755589e21110c14260b14960'; Folder='sdk' }
+        )
+        foreach ($package in $packages) {
+          $archive = Join-Path $root "$($package.Folder).zip"
+          $uri = "https://api.nuget.org/v3-flatcontainer/$($package.Id)/$($package.Version)/$($package.Id).$($package.Version).nupkg"
+          Invoke-WebRequest -Uri $uri -OutFile $archive
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant() -ne $package.Hash) {
+            throw "Package checksum mismatch: $($package.Id)"
+          }
+          Expand-Archive -Path $archive -DestinationPath (Join-Path $root $package.Folder) -Force
+        }
+        $signTool = Join-Path $root 'sdk/bin/10.0.26100.0/x64/signtool.exe'
+        $dlib = Join-Path $root 'client/bin/x64/Azure.CodeSigning.Dlib.dll'
+        if (-not (Test-Path $signTool) -or -not (Test-Path $dlib)) { throw 'Signing tools missing' }
+        # Both supported Windows runner images have the VC++ x64 runtime. Fail
+        # here if a replacement image drops it instead of failing after compile.
+        foreach ($dll in @('vcruntime140.dll', 'msvcp140.dll')) {
+          if (-not (Test-Path (Join-Path $env:WINDIR "System32/$dll"))) { throw "Install VC++ x64 runtime: $dll missing" }
+        }
+        "AZURE_SIGNTOOL_PATH=$signTool" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+        "AZURE_SIGNING_DLIB_PATH=$dlib" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
