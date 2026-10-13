@@ -383,7 +383,6 @@ async fn ensure_captured_tab_group(
     let key = ScopedGroupKey {
         browser_profile_id: scope.map(|scope| scope.binding.intent.browser_profile_id.clone()),
         window_id,
-        revision: scope.map(|scope| scope.binding.revision),
     };
     let tab_groups = cached_tab_groups_tool();
     let mut saved = ownership.scoped_group(&identity.ownership_key, &key).await;
@@ -1324,7 +1323,6 @@ mod tests {
             browser_profile_id: bound
                 .then(|| browseros_core::BrowserProfileId::from("eng".to_string())),
             window_id: WindowId(1),
-            revision: bound.then_some(1),
         };
         let identity = call
             .identity
@@ -1612,6 +1610,155 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn scope_rebind_reuses_groups_and_late_creation_keeps_original_scope()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use browseros_core::pages::NewPageOptions;
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut base = tool_call("tabs", json!({"action":"new"})).await?;
+        base.browser_session = Some(browser.clone());
+        let key = base
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = base.state.sessions.ownership();
+        let mut groups = HashMap::new();
+        let mut pages = Vec::new();
+        let mut late = None;
+        // Use real persisted binding revisions and native creation receipts. The
+        // same destination must remain reusable after visiting other destinations.
+        for (index, (profile, window)) in
+            [("eng", 1), ("ops", 2), ("eng", 3), ("eng", 1), ("ops", 2)]
+                .into_iter()
+                .enumerate()
+        {
+            let binding = base
+                .state
+                .targets
+                .set(
+                    &base.session_id,
+                    ProfileConnection::binding(profile, 0, window).intent,
+                )
+                .await?;
+            let mut call = base.clone();
+            call.view =
+                Some(BrowserView::capture(browser.clone(), Some(binding.clone()), None).await);
+            let view = call
+                .view
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("view missing"))?;
+            let page = view
+                .new_page(
+                    &format!("https://synthetic.invalid/scope-rebind-{index}"),
+                    NewPageOptions::default(),
+                )
+                .await?;
+            let created = created_page(&call, page.page_id.0).await;
+            assert!(created.is_some());
+            run_tab_group_work(call.clone(), created).await;
+            let current = view.page(page.page_id.clone()).await?;
+            assert_eq!(current.target_id, page.target_id);
+            assert_eq!(current.tab_id, page.tab_id);
+            assert_eq!(current.window_id, Some(WindowId(window)));
+            let group = current
+                .group_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("group missing"))?;
+            let destination = (profile, window);
+            if let Some(previous) = groups.get(&destination) {
+                assert_eq!(
+                    &group, previous,
+                    "returning to {profile}/window{window} forgot its retained group"
+                );
+            } else {
+                assert!(!groups.values().any(|previous| previous == &group));
+                groups.insert(destination, group.clone());
+            }
+            assert_eq!(
+                ownership
+                    .group_for_capture(
+                        &key,
+                        &binding.intent.browser_profile_id,
+                        Some(WindowId(window)),
+                        binding.revision,
+                    )
+                    .await
+                    .and_then(|group| group.group_ref)
+                    .as_deref(),
+                Some(group.as_str())
+            );
+            pages.push((page.page_id, page.tab_id, window, group));
+            if index == 0 {
+                // The creation receipt is retained now, but its detached callback
+                // runs only after the task's current binding has moved to ops/w2.
+                let page = view
+                    .new_page(
+                        "https://synthetic.invalid/late-old-revision",
+                        NewPageOptions::default(),
+                    )
+                    .await?;
+                let created = created_page(&call, page.page_id.0)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("late capture missing"))?;
+                late = Some((call, created, page, binding));
+            }
+        }
+        assert_eq!(groups.len(), 3);
+        assert_eq!(ownership.groups(&key).await.len(), 3);
+        let (old, created, page, binding) =
+            late.ok_or_else(|| anyhow::anyhow!("old callback missing"))?;
+        let current_binding = base
+            .state
+            .targets
+            .get(&base.session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("current binding missing"))?;
+        assert_eq!(current_binding.intent.browser_profile_id.as_str(), "ops");
+        assert!(current_binding.revision > binding.revision);
+        assert_eq!(
+            old.view.as_ref().and_then(BrowserView::binding),
+            Some(&binding)
+        );
+        run_tab_group_work(old.clone(), Some(created)).await;
+        let current = old
+            .view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("old view missing"))?
+            .page(page.page_id.clone())
+            .await?;
+        let original_group = groups
+            .get(&("eng", 1))
+            .ok_or_else(|| anyhow::anyhow!("original group missing"))?;
+        assert_eq!(current.target_id, page.target_id);
+        assert_eq!(current.tab_id, page.tab_id);
+        assert_eq!(current.window_id, Some(WindowId(1)));
+        assert_eq!(current.group_id.as_deref(), Some(original_group.as_str()));
+        assert_eq!(ownership.groups(&key).await.len(), 3);
+        let root = BrowserView::unbound(browser, None);
+        // The complete inventory still holds every page in its original window
+        // and group after projected calls in other scopes and the late callback.
+        for (page, tab, window, group) in pages {
+            let current = root.page(page).await?;
+            assert_eq!(current.tab_id, tab);
+            assert_eq!(current.window_id, Some(WindowId(window)));
+            assert_eq!(current.group_id.as_deref(), Some(group.as_str()));
+        }
+        assert_eq!(
+            transport
+                .groups
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn delayed_bound_grouping_preserves_each_actual_window_and_revision() -> anyhow::Result<()>
     {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
@@ -1702,13 +1849,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![json!(1), json!(2), json!(3)]
         );
-        // Rebinding the same saved profile/window is a different capture generation.
+        // Rebinding changes the captured generation, but native group identity
+        // remains conversation/profile/actual-window. The view retains revision.
         let rebound = old
             .state
             .targets
             .set(&old.session_id, eng.intent.clone())
             .await?;
-        assert!(
+        assert_eq!(
             ownership
                 .group_for_capture(
                     &key,
@@ -1717,7 +1865,8 @@ mod tests {
                     rebound.revision
                 )
                 .await
-                .is_none()
+                .and_then(|group| group.group_ref),
+            eng_group.and_then(|group| group.group_ref),
         );
         // Lifecycle covers all groups, rather than losing the old run's group behind
         // whichever group most recently updated the conversation's presentation.

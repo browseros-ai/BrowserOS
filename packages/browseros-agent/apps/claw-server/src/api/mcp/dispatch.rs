@@ -741,7 +741,6 @@ mod tests {
                 ScopedGroupKey {
                     browser_profile_id: None,
                     window_id: WindowId(2),
-                    revision: None,
                 },
                 TabGroup {
                     group_ref: Some("previous-closed-group".into()),
@@ -887,7 +886,6 @@ mod tests {
                 ScopedGroupKey {
                     browser_profile_id: None,
                     window_id: WindowId(2),
-                    revision: None,
                 },
                 TabGroup {
                     group_ref: Some("previous-closed-group".into()),

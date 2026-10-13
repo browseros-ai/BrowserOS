@@ -67,21 +67,21 @@ struct Inner {
 struct ConvoTabs {
     pages: BTreeSet<PageId>,
     group: Option<TabGroup>,
-    /// Placement pointers are keyed by the admitting capture, not the current target.
+    /// Stable placement for each captured profile/window, independent of rebind revision.
     scoped_groups: HashMap<ScopedGroupKey, String>,
     /// Keep every native group independently of placement pointers. Explicitly
     /// borrowing another group in the same window must not orphan an earlier owned one.
     retained_groups: BTreeMap<String, TabGroup>,
 }
 
-/// Grouping destination admitted with a call; revision prevents delayed work from
-/// joining a group created by a later selection of the same native window.
-/// Unbound captures have no saved profile/revision but still retain their actual window.
+/// Native group identity within a conversation: saved profile and actual window.
+/// Selection revision stays in BrowserView and the detached creation capability;
+/// it must not split a retained group or redirect work to the task's current binding.
+/// Unbound captures have no saved profile but still retain their actual window.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub(crate) struct ScopedGroupKey {
     pub browser_profile_id: Option<BrowserProfileId>,
     pub window_id: WindowId,
-    pub revision: Option<u64>,
 }
 
 /// One native group's lifecycle state. The current group is only a presentation
@@ -245,7 +245,6 @@ impl PageOwnership {
                 let key = ScopedGroupKey {
                     browser_profile_id: None,
                     window_id,
-                    revision: None,
                 };
                 convo.scoped_groups.insert(key, group_ref.clone());
             }
@@ -256,17 +255,19 @@ impl PageOwnership {
         inner.remove_empty_convos();
     }
 
+    /// Looks up the profile/window supplied by the admitted view. Revision remains
+    /// in BrowserView and delayed creation capabilities; this lookup never reads
+    /// or follows the task's current binding. Keep the argument for caller compatibility.
     pub(crate) async fn group_for_capture(
         &self,
         convo_id: &ConvoId,
         profile: &BrowserProfileId,
         window: Option<WindowId>,
-        revision: u64,
+        _revision: u64,
     ) -> Option<TabGroup> {
         let scope = ScopedGroupKey {
             browser_profile_id: Some(profile.clone()),
             window_id: window?,
-            revision: Some(revision),
         };
         self.scoped_group(convo_id, &scope).await
     }
