@@ -122,6 +122,13 @@ pub struct RecordToolInput {
 }
 
 impl TabActivityService {
+    /// Hold the real ownership-recording await so cross-component tests can
+    /// reconcile a replacement before the creation callback resumes.
+    #[cfg(test)]
+    pub(crate) async fn pause_recording_for_testing(&self) -> impl Send {
+        self.records.clone().lock_owned().await
+    }
+
     pub async fn record_tool(&self, input: RecordToolInput) {
         let now = self.now_ms();
         let target_key = input.target_id.as_str().to_string();

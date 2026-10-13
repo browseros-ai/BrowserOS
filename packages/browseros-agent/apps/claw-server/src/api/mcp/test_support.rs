@@ -97,6 +97,11 @@ pub(crate) struct ProfileConnection {
     pub pause_group_lookup: std::sync::atomic::AtomicBool,
     pub group_lookup_entered: tokio::sync::Notify,
     pub group_lookup_release: tokio::sync::Notify,
+    /// Response settling runs after new_page returns but before Claw effects
+    /// capture the page. Pause this handoff to reconcile a replacement there.
+    pub pause_response_evaluation: std::sync::atomic::AtomicBool,
+    pub response_evaluation_entered: tokio::sync::Notify,
+    pub response_evaluation_release: tokio::sync::Notify,
 }
 
 impl ProfileConnection {
@@ -126,6 +131,9 @@ impl ProfileConnection {
             pause_group_lookup: std::sync::atomic::AtomicBool::new(false),
             group_lookup_entered: tokio::sync::Notify::new(),
             group_lookup_release: tokio::sync::Notify::new(),
+            pause_response_evaluation: std::sync::atomic::AtomicBool::new(false),
+            response_evaluation_entered: tokio::sync::Notify::new(),
+            response_evaluation_release: tokio::sync::Notify::new(),
         })
     }
 
@@ -154,6 +162,12 @@ impl ProfileConnection {
             {
                 self.group_lookup_entered.notify_one();
                 self.group_lookup_release.notified().await;
+            }
+            if method == "Runtime.evaluate"
+                && self.pause_response_evaluation.swap(false, Ordering::SeqCst)
+            {
+                self.response_evaluation_entered.notify_one();
+                self.response_evaluation_release.notified().await;
             }
             {
                 let epoch = self
@@ -278,6 +292,18 @@ impl ProfileConnection {
                     Ok(json!({}))
                 }
                 "Target.detachFromTarget" => Ok(json!({})),
+                "Target.attachToTarget" => {
+                    Ok(json!({"sessionId":format!("S-{}", params["targetId"])}))
+                }
+                "Page.enable"
+                | "DOM.enable"
+                | "Runtime.enable"
+                | "Accessibility.enable"
+                | "Runtime.runIfWaitingForDebugger"
+                | "Target.setAutoAttach" => Ok(json!({})),
+                // A snapshot failure is advisory to creation. The retained result
+                // still enters Claw effects, exercising the earlier response await.
+                "Runtime.evaluate" => Err(error("synthetic snapshot unavailable")),
                 _ => Err(error(&format!("unexpected CDP method {method}"))),
             }
         })

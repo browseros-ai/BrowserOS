@@ -158,8 +158,9 @@ pub struct CreatedPage {
 }
 
 pub(crate) async fn created_page(call: &ToolCall, page_id: u32) -> Option<CreatedPage> {
-    // Creation registered this PageInfo through the call's view. Read that original
-    // registry snapshot rather than refreshing a reusable PageId into a new target.
+    // The shared registry can reconcile another incarnation while ownership or
+    // response work awaits. Core validates this candidate against the creating
+    // view's immutable receipt; the registry alone cannot prove creation identity.
     let info = call
         .browser_session
         .as_ref()?
@@ -1378,6 +1379,109 @@ mod tests {
         assert_eq!(groups[0]["title"], "original title");
         assert_eq!(groups[0]["collapsed"], true);
         assert_eq!(groups[0]["tabIds"], json!([101]));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bound_tabs_creation_receipt_survives_response_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_response_handoff(true).await
+    }
+
+    #[tokio::test]
+    async fn unbound_tabs_creation_receipt_survives_response_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_response_handoff(false).await
+    }
+
+    async fn assert_creation_survives_response_handoff(bound: bool) -> anyhow::Result<()> {
+        use crate::api::mcp::{
+            dispatch::dispatch_tool_call,
+            test_support::{ProfileConnection, tool_call},
+        };
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call(
+            "tabs",
+            json!({"action":"new", "url":"https://synthetic.test/response-handoff"}),
+        )
+        .await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(if bound {
+            BrowserView::capture(
+                browser.clone(),
+                Some(ProfileConnection::binding("eng", 1, 1)),
+                None,
+            )
+            .await
+        } else {
+            BrowserView::unbound(browser.clone(), Some(WindowId(1)))
+        });
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let ownership = call.state.sessions.ownership();
+        let operation = ownership
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let queued = operation.lock().await;
+        native
+            .pause_response_evaluation
+            .store(true, Ordering::SeqCst);
+        let entered = native.response_evaluation_entered.notified();
+        let work = tokio::spawn(dispatch_tool_call(call.clone()));
+        timeout(Duration::from_secs(3), entered).await?;
+        let original = browser
+            .pages
+            .get_info(PageId(4))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("new page missing at response pause"))?;
+        assert!(call.created_page_snapshots.lock().await.is_empty());
+        // Creation returned through a clone of the admitted view, but response
+        // settling is still awaited. Reconcile the same native tab into a new
+        // target before effects read the shared registry candidate.
+        {
+            let mut tabs = native.tabs.lock().unwrap_or_else(|p| p.into_inner());
+            let tab = tabs
+                .iter_mut()
+                .find(|tab| tab["tabId"] == original.tab_id.0)
+                .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+            tab["targetId"] = json!("replacement-before-response-capture");
+        }
+        browser.pages.list().await?;
+        let replaced = browser
+            .pages
+            .get_info(original.page_id.clone())
+            .await
+            .ok_or_else(|| anyhow::anyhow!("reconciled page missing"))?;
+        assert_eq!(replaced.tab_id, original.tab_id);
+        assert_eq!(replaced.window_id, original.window_id);
+        assert_ne!(replaced.target_id, original.target_id);
+        native.response_evaluation_release.notify_one();
+        let result = timeout(Duration::from_secs(3), work).await???;
+        assert_eq!(result.is_error, Some(false));
+        assert!(result.content.iter().any(|block| matches!(block,
+            ContentBlock::Text(text) if text.text.contains("opened page 4"))));
+        tokio::task::yield_now().await;
+        drop(queued);
+        let _finished = operation.lock().await;
+        {
+            let calls = native.calls.lock().unwrap_or_else(|p| p.into_inner());
+            let mutations = calls
+                .iter()
+                .filter(|(method, _)| {
+                    method.contains("TabGroup") && method != "Browser.getTabGroups"
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                mutations.is_empty(),
+                "replacement received tabs group writes: {mutations:?}"
+            );
+        }
+        assert!(
+            call.created_page_snapshots.lock().await.is_empty(),
+            "replacement was adopted after response settling"
+        );
         Ok(())
     }
 

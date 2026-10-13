@@ -319,6 +319,114 @@ mod tests {
         ScriptInnerCallHook::new(call.clone())
     }
 
+    #[tokio::test]
+    async fn bound_script_creation_receipt_survives_ownership_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_ownership_handoff(true).await
+    }
+
+    #[tokio::test]
+    async fn unbound_script_creation_receipt_survives_ownership_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_ownership_handoff(false).await
+    }
+
+    async fn assert_creation_survives_ownership_handoff(bound: bool) -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::ProfileConnection;
+        use browseros_core::{PageId, WindowId, pages::NewPageOptions, target::BrowserView};
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("run", json!({"code":"return 1"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(if bound {
+            BrowserView::capture(
+                browser.clone(),
+                Some(ProfileConnection::binding("eng", 1, 1)),
+                None,
+            )
+            .await
+        } else {
+            BrowserView::unbound(browser.clone(), Some(WindowId(1)))
+        });
+        let original = call
+            .view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("view missing"))?
+            .new_page(
+                "https://synthetic.test/ownership-handoff",
+                NewPageOptions::default(),
+            )
+            .await?;
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let ownership = call.state.sessions.ownership();
+        let operation = ownership
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let queued = operation.lock().await;
+        let paused = call.state.tab_activity.pause_recording_for_testing().await;
+        let hook = hook_for(&call);
+        let mut work = hook.on_page_created(original.page_id.0);
+        // Poll the actual hook until record_new_page waits on its recording lock.
+        // No grouping capture has run; the native creation has already returned.
+        assert!(futures_util::poll!(work.as_mut()).is_pending());
+        assert!(call.created_page_snapshots.lock().await.is_empty());
+        {
+            let mut tabs = native.tabs.lock().unwrap_or_else(|p| p.into_inner());
+            let tab = tabs
+                .iter_mut()
+                .find(|tab| tab["tabId"] == original.tab_id.0)
+                .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+            tab["targetId"] = json!("replacement-before-script-capture");
+        }
+        browser.pages.list().await?;
+        let replaced = browser
+            .pages
+            .get_info(PageId(original.page_id.0))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("reconciled page missing"))?;
+        assert_eq!(replaced.tab_id, original.tab_id);
+        assert_eq!(replaced.window_id, original.window_id);
+        assert_ne!(replaced.target_id, original.target_id);
+        drop(paused);
+        tokio::time::timeout(std::time::Duration::from_secs(3), work).await?;
+        // Let any incorrectly spawned callback queue behind the real operation
+        // lock, then wait for it to finish before inspecting native mutations.
+        tokio::task::yield_now().await;
+        drop(queued);
+        let _finished = operation.lock().await;
+        {
+            let calls = native.calls.lock().unwrap_or_else(|p| p.into_inner());
+            let mutations = calls
+                .iter()
+                .filter(|(method, _)| {
+                    method.contains("TabGroup") && method != "Browser.getTabGroups"
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                mutations.is_empty(),
+                "replacement received script group writes: {mutations:?}"
+            );
+        }
+        assert!(
+            call.created_page_snapshots.lock().await.is_empty(),
+            "replacement was adopted as the creation snapshot"
+        );
+        call.state.session_tabs.drain_writes().await;
+        let recorded = call
+            .state
+            .session_tabs
+            .first_session_tab()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("creation ownership missing"))?;
+        assert_eq!(
+            recorded.opened_target_id.as_deref(),
+            Some(original.target_id.as_str())
+        );
+        Ok(())
+    }
+
     /// Minimal browser connection exposing one page (tab 11), enough for
     /// `pages.get_info` so the hook can open a session-tab window.
     struct OnePageConnection {
