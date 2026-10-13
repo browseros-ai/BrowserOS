@@ -1,12 +1,25 @@
 diff --git a/third_party/blink/public/devtools_protocol/domains/Browser.pdl b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a43a0198d2 100644
+index 142bd94887c32abbc4e840521a8a4e892eb71ce8..5aa39c3b542eab0929d2d62484a20fcc5dd7fa0a 100644
 --- a/third_party/blink/public/devtools_protocol/domains/Browser.pdl
 +++ b/third_party/blink/public/devtools_protocol/domains/Browser.pdl
-@@ -8,6 +8,16 @@
+@@ -8,6 +8,29 @@
  domain Browser
    experimental type BrowserContextID extends string
    experimental type WindowID extends integer
 +  experimental type TabID extends integer
++
++  # Opaque saved-profile handle, valid only for this browser process and catalog entry.
++  experimental type BrowserProfileID extends string
++
++  experimental type BrowserProfileInfo extends object
++    properties
++      BrowserProfileID browserProfileId
++      string name
++      # Basename only, for distinguishing profiles with the same local name.
++      string directory
++      boolean loaded
++      # Genuine live context identity, present only while the regular profile is loaded.
++      optional BrowserContextID browserContextId
 +
 +  experimental type WindowType extends string
 +    enum
@@ -19,7 +32,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a4
  
    # The state of the browser window.
    experimental type WindowState extends string
-@@ -31,6 +41,227 @@ domain Browser
+@@ -31,6 +54,251 @@ domain Browser
        # The window state. Default to normal.
        optional WindowState windowState
  
@@ -32,7 +45,11 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a4
 +      boolean isVisible
 +      integer tabCount
 +      optional TabID activeTabId
++      # Legacy directory label; this field is not a routable context identity.
 +      optional BrowserContextID browserContextId
++      # Both identities are absent for omitted, guest, system and OTR profiles.
++      optional BrowserProfileID browserProfileId
++      optional BrowserContextID liveBrowserContextId
 +
 +  experimental type TabInfo extends object
 +    properties
@@ -47,7 +64,10 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a4
 +      boolean isHidden
 +      optional WindowID windowId
 +      optional integer index
++      # Legacy directory label; this field is not a routable context identity.
 +      optional BrowserContextID browserContextId
++      optional BrowserProfileID browserProfileId
++      optional BrowserContextID liveBrowserContextId
 +      optional TabGroupID groupId
 +
 +  experimental type TabGroupID extends string
@@ -61,6 +81,20 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a4
 +      string color
 +      boolean collapsed
 +      array of TabID tabIds
++
++  # Lists saved regular profiles without loading them or opening windows.
++  experimental command getProfiles
++    returns
++      array of BrowserProfileInfo profiles
++
++  # Loads an existing saved profile without creating a profile or window.
++  experimental command loadProfile
++    parameters
++      BrowserProfileID browserProfileId
++    returns
++      BrowserProfileInfo profile
++      # True for the call initiating a load; false for loaded/in-flight reuse.
++      boolean loaded
 +
 +  # --- Window Management ---
 +
@@ -78,6 +112,8 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a4
 +      optional Bounds bounds
 +      optional WindowType windowType
 +      optional boolean hidden
++      # Genuine loaded regular-context identity. Context-routed windows are normal,
++      # shown inactive, and do not trigger session restore.
 +      optional BrowserContextID browserContextId
 +    returns
 +      WindowInfo window
@@ -136,6 +172,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a4
 +      # window itself is never raised by this command.
 +      optional boolean background
 +      optional boolean pinned
++      # Must agree with windowId when both are supplied.
 +      optional BrowserContextID browserContextId
 +    returns
 +      TabInfo tab
@@ -247,7 +284,7 @@ index 142bd94887c32abbc4e840521a8a4e892eb71ce8..ac1935136b73c64b2ccab2a5d78974a4
    experimental type PermissionType extends string
      enum
        ar
-@@ -304,6 +535,28 @@ domain Browser
+@@ -304,6 +572,28 @@ domain Browser
        # position and size are returned.
        Bounds bounds
  
