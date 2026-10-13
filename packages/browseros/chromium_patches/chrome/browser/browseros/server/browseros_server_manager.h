@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager.h b/chrome/browser/browseros/server/browseros_server_manager.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..c91e0bcc78e2953048bc3861ce5b004972480560
+index 0000000000000000000000000000000000000000..6c6b9f18f3b65f290fa7a47ebea8fedd7567557d
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager.h
-@@ -0,0 +1,219 @@
+@@ -0,0 +1,241 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -15,6 +15,8 @@ index 0000000000000000000000000000000000000000..c91e0bcc78e2953048bc3861ce5b0049
 +#include <memory>
 +#include <optional>
 +#include <set>
++#include <string>
++#include <string_view>
 +
 +#include "base/files/file.h"
 +#include "base/files/file_path.h"
@@ -24,6 +26,7 @@ index 0000000000000000000000000000000000000000..c91e0bcc78e2953048bc3861ce5b0049
 +#include "base/no_destructor.h"
 +#include "base/process/process.h"
 +#include "base/timer/timer.h"
++#include "base/values.h"
 +#include "chrome/browser/browseros/server/browseros_server_config.h"
 +#include "chrome/browser/browseros/server/browseros_server_prefs.h"
 +#include "chrome/browser/browseros/server/process_controller.h"
@@ -103,7 +106,10 @@ index 0000000000000000000000000000000000000000..c91e0bcc78e2953048bc3861ce5b0049
 +
 +  ServerVersionStore& GetVersionStore();
 +  base::Version GetRunningVersion() const;
++  // Switches to the store's ready download. With a healthy server this waits
++  // for its can_update; with none it activates immediately.
 +  void MaybeActivateReadyVersion();
++  // Rejects the launched download at once, skipping the remaining strikes.
 +  void InvalidateDownloadedServer();
 +
 + private:
@@ -137,7 +143,20 @@ index 0000000000000000000000000000000000000000..c91e0bcc78e2953048bc3861ce5b0049
 +  void FinishStop();
 +  void ClearRunningInstallation();
 +  void OnStartupHealthTimeout(uint64_t generation);
-+  void OnRejectedProcessStopped(const base::Version& version);
++
++  // Supervision. Every launched-installation failure funnels into OnStrike(),
++  // which restarts it and, after kMaxStrikes, switches installation. See the
++  // policy comment in the .cc.
++  void OnStrike(std::string_view reason);
++  void SwitchAwayFromLaunchedInstallation(std::string_view reason);
++  void RelaunchAfterFailure();
++  void ScheduleRelaunch();
++  void ActivateWithoutHealthyServer(const ServerInstallation& target);
++  // Sends a supervision event at most once per event and version per session.
++  void LogSupervisionEvent(std::string_view event,
++                           const base::Version& version,
++                           base::DictValue properties);
++
 +  void CompleteUpdate(bool success);
 +  void StartUpdater();
 +  void OnReadinessChecked(ServerInstallation installation,
@@ -198,12 +217,15 @@ index 0000000000000000000000000000000000000000..c91e0bcc78e2953048bc3861ce5b0049
 +  bool version_io_pending_ = false;
 +  uint64_t process_generation_ = 0;
 +
-+  int consecutive_startup_failures_ = 0;
++  // Failures of the launched installation since its last passing health check.
++  int strikes_ = 0;
 +  int consecutive_health_failures_ = 0;
 +  bool advance_port_on_restart_ = false;
-+  base::TimeTicks last_launch_time_;
++  // "<event>:<version>" keys already reported this session.
++  std::set<std::string> reported_supervision_events_;
 +
 +  base::RepeatingTimer health_check_timer_;
++  base::OneShotTimer relaunch_timer_;
 +  base::RepeatingTimer process_check_timer_;
 +  base::OneShotTimer startup_health_retry_timer_;
 +  base::OneShotTimer startup_health_deadline_timer_;

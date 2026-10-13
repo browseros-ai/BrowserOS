@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_constants.h b/chrome/browser/browseros/server/browseros_server_constants.h
 new file mode 100644
-index 0000000000000..8c9469cc988b5
+index 0000000000000000000000000000000000000000..33c72353be26cd2b72551cfc7db56230c917eb2f
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_constants.h
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,50 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -46,6 +46,8 @@ index 0000000000000..8c9469cc988b5
 +// Directory and file names
 +inline constexpr char kVersionsDirectoryName[] = "versions";
 +inline constexpr char kCurrentVersionFileName[] = "current_version";
++// Names a downloaded version supervision gave up on. Its files stay on disk.
++inline constexpr char kRejectedVersionFileName[] = "rejected_version";
 +inline constexpr char kPendingUpdateDirectoryName[] = "pending_update";
 +inline constexpr char kDownloadFileName[] = "download.zip";
 +
