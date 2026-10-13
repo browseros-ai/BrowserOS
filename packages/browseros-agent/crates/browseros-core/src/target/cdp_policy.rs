@@ -309,6 +309,15 @@ fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
     }
 }
 
+/// Native tab methods require exactly one selector. Caller aliases are resolved together
+/// during admission, then translated to the admitted target incarnation for publication.
+fn use_target_selector(method: &str, params: &mut Value, page: &PageInfo) -> Result<(), CoreError> {
+    let params = params.as_object_mut().ok_or_else(|| unsupported(method))?;
+    params.remove("tabId");
+    params.insert("targetId".into(), json!(page.target_id.as_str()));
+    Ok(())
+}
+
 fn root_parameters(method: &str) -> Option<&'static [&'static str]> {
     match method {
         "Browser.getVersion" => Some(&[]),
@@ -621,9 +630,7 @@ impl BrowserView {
                 // Address the admitted target incarnation, rather than a tab integer that may
                 // have been rebound during an awaited inventory read. Native target resolution
                 // also prevents fallback to whichever window happens to be focused.
-                if allowed.contains(&"targetId") {
-                    params["targetId"] = json!(page.target_id.as_str());
-                }
+                use_target_selector(method, &mut params, &page)?;
                 if method == "Browser.showTab" {
                     let window = match params.get("windowId") {
                         Some(id) => WindowId(id.as_i64().ok_or_else(|| unsupported(method))?),
@@ -653,7 +660,7 @@ impl BrowserView {
                 );
                 self.validate_window(window).await?;
                 admission.windows.push(window);
-                params["targetId"] = json!(page.target_id.as_str());
+                use_target_selector(method, &mut params, &page)?;
                 admission.tabs.push(page);
             }
             "Browser.createTab" => {

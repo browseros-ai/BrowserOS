@@ -1,7 +1,7 @@
 use crate::{
     BrowserContextId, BrowserProfileId, CoreError, PageId, ProtocolSession, SessionId, TabId,
     TargetError, TargetId, WindowId,
-    connection::{CdpConnection, EXCLUDED_URL_PREFIXES},
+    connection::{CdpConnection, EXCLUDED_URL_PREFIXES, EpochGuard},
     profiles::ProfileMeta,
     target::PageAdmission,
     timeouts,
@@ -46,6 +46,27 @@ pub struct PageInfo {
     pub group_id: Option<String>,
     pub browser_profile_id: Option<BrowserProfileId>,
     pub live_browser_context_id: Option<BrowserContextId>,
+}
+
+impl PageInfo {
+    /// Native target and ownership distinguish an incarnation from a reusable PageId.
+    /// Readiness/navigation may update presentation fields without changing this identity.
+    pub(crate) fn same_incarnation(&self, other: &Self) -> bool {
+        self.page_id == other.page_id
+            && self.target_id == other.target_id
+            && self.tab_id == other.tab_id
+            && self.window_id == other.window_id
+            && self.browser_profile_id == other.browser_profile_id
+            && self.live_browser_context_id == other.live_browser_context_id
+    }
+}
+
+/// Identity authority taken from the native create reply, before registration/readiness can
+/// await. Views retain this receipt separately from the globally reconciled page inventory.
+#[derive(Clone)]
+pub(crate) struct PageCreation {
+    pub(crate) original: PageInfo,
+    pub(crate) guard: EpochGuard,
 }
 
 #[derive(Debug, Clone)]
@@ -401,7 +422,20 @@ impl PageManager {
     }
 
     pub async fn new_page(&self, url: &str, opts: NewPageOptions) -> Result<PageId, CoreError> {
+        let (creation, _) = self.new_page_info(url, opts).await?;
+        Ok(creation.original.page_id)
+    }
+
+    /// Ordinary unbound creation keeps its placement and best-effort default grouping. Once
+    /// native creation returns, all follow-up work belongs to that exact target and epoch;
+    /// neither readiness nor a later registry lookup may provide a new initial identity.
+    pub(crate) async fn new_page_info(
+        &self,
+        url: &str,
+        opts: NewPageOptions,
+    ) -> Result<(PageCreation, PageInfo), CoreError> {
         self.ensure_connected().await?;
+        let epoch = self.cdp.connection_epoch();
         let root = ProtocolSession::root(self.cdp.clone());
         let mut params = serde_json::Map::new();
         params.insert("url".to_string(), Value::String(url.to_string()));
@@ -417,19 +451,26 @@ impl PageManager {
         let created: NativeTabReply = root
             .send("Browser.createTab", Value::Object(params))
             .await?;
-        let tab_id = created.tab.tab_id;
+        let creation = self.register_created(created.tab, url, epoch, None).await?;
+        let root = root.with_epoch_guard(Some(creation.guard.clone()));
+        let tab_id = creation.original.tab_id.0;
 
         let mut tab = None;
         for _attempt in 0..timeouts::NEW_PAGE_READY_ATTEMPTS {
             let result = root
                 .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
                 .await;
-            if let Ok(result) = result {
-                let ready = !result.tab.is_loading || result.tab.load_progress >= 1.0;
-                tab = Some(result.tab);
-                if ready {
-                    break;
+            match result {
+                Ok(result) => {
+                    let fresh = self.created_readback(&creation, result.tab).await?;
+                    let ready = !fresh.is_loading || fresh.load_progress >= 1.0;
+                    tab = Some(fresh);
+                    if ready {
+                        break;
+                    }
                 }
+                Err(err @ CoreError::Target(_)) => return Err(err),
+                Err(_) => {}
             }
             sleep(timeouts::NEW_PAGE_READY_POLL).await;
         }
@@ -437,41 +478,56 @@ impl PageManager {
             .ok_or_else(|| CoreError::Message(format!("Tab {tab_id} not found after creation")))?;
 
         if let Some(group_id) = opts.tab_group_id {
+            // The readiness loop can await registry locks and sleeps. Refresh the ORIGINAL
+            // incarnation before the final native-tab mutation, never resolve its ID anew.
+            let before: NativeTabReply = root
+                .send("Browser.getTabInfo", json!({"tabId":tab_id}))
+                .await?;
+            tab = self.created_readback(&creation, before.tab).await?;
             let result: Result<browser::AddTabsToGroupResult, CoreError> = root
                 .send(
                     "Browser.addTabsToGroup",
                     json!({ "groupId": group_id, "tabIds": [tab_id] }),
                 )
                 .await;
-            if let Err(err) = result {
-                warn!("failed to add new page to default tab group: {err}");
-            } else if let Ok(result) = root
-                .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
-                .await
-            {
-                tab = result.tab;
+            match result {
+                Err(err @ CoreError::Target(_)) => return Err(err),
+                Err(err) => warn!("failed to add new page to default tab group: {err}"),
+                Ok(_) => match root
+                    .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
+                    .await
+                {
+                    Ok(result) => tab = self.created_readback(&creation, result.tab).await?,
+                    Err(err @ CoreError::Target(_)) => return Err(err),
+                    Err(_) => {}
+                },
             }
         }
-
-        let mut state = self.state.lock().await;
-        let page_id = PageId(state.next_page_id);
-        state.next_page_id += 1;
-        if tab.url.is_empty() {
-            tab.url = url.to_string();
-        }
-        state.pages.insert(
-            page_id.clone(),
-            page_info_from_tab(page_id.clone(), tab, None),
-        );
-        state.agent_created.insert(page_id.clone());
-        Ok(page_id)
+        self.publish_created_readback(&creation, &tab).await?;
+        Ok((creation, tab))
     }
 
-    /// Registers the actual native create result, preserving an ID a concurrent global list
-    /// may already have allocated. Only this seam marks the page as agent-created for focus emulation.
-    pub(crate) async fn adopt_created(&self, raw: Value, url: &str) -> Result<PageId, CoreError> {
-        let mut tab: NativeTab =
+    /// Return the actual native create snapshot, rather than only its reusable registry ID.
+    /// A bound view must seed admission from this return before its first readiness await.
+    pub(crate) async fn adopt_created(
+        &self,
+        raw: Value,
+        url: &str,
+        guard: EpochGuard,
+    ) -> Result<PageCreation, CoreError> {
+        let tab: NativeTab =
             serde_json::from_value(raw).map_err(|err| CoreError::Message(err.to_string()))?;
+        self.register_created(tab, url, guard.expected, Some(guard.invalidated))
+            .await
+    }
+
+    async fn register_created(
+        &self,
+        mut tab: NativeTab,
+        url: &str,
+        epoch: u64,
+        invalidated: Option<TargetError>,
+    ) -> Result<PageCreation, CoreError> {
         if tab.url.is_empty() {
             tab.url = url.to_string();
         }
@@ -483,12 +539,63 @@ impl PageManager {
             state.next_page_id += 1;
             id
         });
-        state.pages.insert(
-            page_id.clone(),
-            page_info_from_tab(page_id.clone(), tab, None),
-        );
+        let guard = EpochGuard {
+            expected: epoch,
+            invalidated: invalidated
+                .unwrap_or_else(|| TargetError::PageTargetChanged(page_id.clone())),
+        };
+        guard.check(self.cdp.as_ref())?;
+        let original = page_info_from_tab(page_id.clone(), tab, None);
+        // A concurrent global reconciliation may have seen creation already, or may have
+        // rebound its native tab. Preserve the allocated ID, but never overwrite replacement
+        // identity with an older response and then treat a fresh read as original creation.
+        if let Some(current) = state.pages.get(&page_id)
+            && !original.same_incarnation(current)
+        {
+            return Err(TargetError::PageTargetChanged(page_id).into());
+        }
+        state.pages.insert(page_id.clone(), original.clone());
         state.agent_created.insert(page_id.clone());
-        Ok(page_id)
+        Ok(PageCreation { original, guard })
+    }
+
+    async fn created_readback(
+        &self,
+        creation: &PageCreation,
+        tab: NativeTab,
+    ) -> Result<PageInfo, CoreError> {
+        let mut fresh = page_info_from_tab(
+            creation.original.page_id.clone(),
+            tab,
+            creation.original.window_id,
+        );
+        if fresh.url.is_empty() {
+            fresh.url.clone_from(&creation.original.url);
+        }
+        self.publish_created_readback(creation, &fresh).await?;
+        Ok(fresh)
+    }
+
+    /// Readbacks can update loading/title/group data only while both the native response and
+    /// the registry still describe creation. This check also closes the registration lock
+    /// handoff: another global list cannot make a replacement authoritative for this call.
+    async fn publish_created_readback(
+        &self,
+        creation: &PageCreation,
+        fresh: &PageInfo,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().await;
+        creation.guard.check(self.cdp.as_ref())?;
+        if !creation.original.same_incarnation(fresh)
+            || state
+                .pages
+                .get(&creation.original.page_id)
+                .is_none_or(|current| !creation.original.same_incarnation(current))
+        {
+            return Err(TargetError::PageTargetChanged(creation.original.page_id.clone()).into());
+        }
+        state.pages.insert(fresh.page_id.clone(), fresh.clone());
+        Ok(())
     }
 
     pub async fn close(&self, page_id: PageId) -> Result<(), CoreError> {

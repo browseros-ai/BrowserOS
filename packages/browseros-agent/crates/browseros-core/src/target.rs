@@ -9,7 +9,7 @@ use crate::{
     navigation::Navigation,
     observer::Observer,
     page_signals::PageSignals,
-    pages::{MovePageOptions, NewPageOptions, PageInfo, PageSession},
+    pages::{MovePageOptions, NewPageOptions, PageCreation, PageInfo, PageSession},
     profiles::{BrowserProfileInfo, LoadProfileOutcome, ProfileSelector},
     screenshot::{ScreenshotCaptureOptions, ScreenshotCaptureResult},
     windows::WindowInfo,
@@ -86,14 +86,15 @@ pub struct BrowserView {
     unbound_default_window: Option<WindowId>,
     signals: Arc<PageSignals>,
     signal_windows: Arc<std::sync::RwLock<BTreeSet<WindowId>>>,
-    // Unbound calls normally follow the live connection. A derived creation capability must
-    // retain the call's original epoch before a detached callback can run after reconnect.
+    // Ordinary unbound calls follow the live connection. Supplied snapshots without a
+    // creation receipt retain call-entry epoch; native creations retain their own later epoch.
     initial_epoch: u64,
     expected_created_page: Option<PageInfo>,
+    expected_creation_epoch: Option<u64>,
     // Caller hooks and response snapshots can await before deriving a creation capability.
-    // View clones share these immutable return receipts; the global registry may reconcile
-    // a replacement under the same PageId without changing the original creation identity.
-    creation_receipts: Arc<std::sync::RwLock<HashMap<PageId, PageInfo>>>,
+    // View clones share immutable native creation identities/epochs; global reconciliation
+    // can replace a PageId's registry entry without rewriting this call's creation authority.
+    creation_receipts: Arc<std::sync::RwLock<HashMap<PageId, PageCreation>>>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -247,6 +248,7 @@ impl BrowserView {
         Self {
             initial_epoch: session.connection().connection_epoch(),
             expected_created_page: None,
+            expected_creation_epoch: None,
             creation_receipts: Arc::new(std::sync::RwLock::new(HashMap::new())),
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
@@ -273,6 +275,7 @@ impl BrowserView {
     /// awaited helper and MCP dispatch. PageId/native tab/window IDs can survive target reuse;
     /// a creation receipt validates even a snapshot read after ownership/response awaits.
     /// Preserving that original incarnation guards title/expansion writes as well as final add.
+    /// For ordinary unbound calls, a native creation receipt also retains its creation epoch.
     pub fn with_expected_created_page(&self, created: &PageInfo) -> Result<Self, CoreError> {
         if created.window_id.is_none() {
             return Err(TargetError::PageOutOfScope(created.page_id.clone()).into());
@@ -296,38 +299,49 @@ impl BrowserView {
             .get(&created.page_id)
             .cloned();
         if let Some(original) = &receipt
-            && !same_created_incarnation(original, created)
+            && !original.original.same_incarnation(created)
         {
-            return Err(TargetError::PageTargetChanged(original.page_id.clone()).into());
+            return Err(TargetError::PageTargetChanged(original.original.page_id.clone()).into());
         }
         if let Some(expected) = &self.expected_created_page
-            && !same_created_incarnation(expected, created)
+            && !expected.same_incarnation(created)
         {
             return Err(TargetError::PageTargetChanged(expected.page_id.clone()).into());
         }
         let mut derived = self.clone();
-        derived.expected_created_page = Some(receipt.unwrap_or_else(|| created.clone()));
+        if let Some(receipt) = receipt {
+            derived.expected_created_page = Some(receipt.original);
+            derived.expected_creation_epoch = Some(receipt.guard.expected);
+        } else {
+            derived.expected_created_page = Some(created.clone());
+        }
         if let Some(guard) = derived.epoch_guard()? {
             guard.check(derived.session.connection().as_ref())?;
         }
         Ok(derived)
     }
 
-    /// Publish the receipt synchronously before returning creation to the host. Recording a
-    /// later registry read in an effect would adopt a replacement across the host's awaits.
-    fn retain_created_page(&self, created: PageInfo) -> Result<PageInfo, CoreError> {
+    /// Publish native creation authority before returning to the host. Bound creation records
+    /// it before readiness; unbound readiness retains the same private authority in PageManager.
+    /// Later reads may refresh presentation fields, but cannot replace this target or epoch.
+    fn retain_created_page(&self, creation: PageCreation) -> Result<(), CoreError> {
         let mut receipts = self
             .creation_receipts
             .write()
             .map_err(|_| CoreError::Message("creation receipt lock poisoned".into()))?;
-        if let Some(original) = receipts.get(&created.page_id) {
-            if !same_created_incarnation(original, &created) {
-                return Err(TargetError::PageTargetChanged(original.page_id.clone()).into());
+        creation.guard.check(self.session.connection().as_ref())?;
+        if let Some(original) = receipts.get(&creation.original.page_id) {
+            if !original.original.same_incarnation(&creation.original)
+                || original.guard.expected != creation.guard.expected
+            {
+                return Err(
+                    TargetError::PageTargetChanged(original.original.page_id.clone()).into(),
+                );
             }
         } else {
-            receipts.insert(created.page_id.clone(), created.clone());
+            receipts.insert(creation.original.page_id.clone(), creation);
         }
-        Ok(created)
+        Ok(())
     }
 
     pub(super) fn epoch_guard(&self) -> Result<Option<crate::connection::EpochGuard>, CoreError> {
@@ -341,7 +355,7 @@ impl BrowserView {
             .expected_created_page
             .as_ref()
             .map(|page| crate::connection::EpochGuard {
-                expected: self.initial_epoch,
+                expected: self.expected_creation_epoch.unwrap_or(self.initial_epoch),
                 invalidated: TargetError::PageTargetChanged(page.page_id.clone()),
             }))
     }
@@ -376,7 +390,7 @@ impl BrowserView {
             .refresh_with_epoch(expected.page_id.clone(), self.epoch_guard()?)
             .await?
             .ok_or_else(|| TargetError::PageTargetChanged(expected.page_id.clone()))?;
-        if !same_created_incarnation(expected, &fresh) {
+        if !expected.same_incarnation(&fresh) {
             return Err(TargetError::PageTargetChanged(expected.page_id.clone()).into());
         }
         Ok(())
@@ -830,14 +844,9 @@ impl BrowserView {
                 return Err(cdp_policy::unsupported("Browser.createTab"));
             }
             opts.window_id = opts.window_id.or(self.unbound_default_window);
-            let page = self.session.pages.new_page(url, opts).await?;
-            let created = self
-                .session
-                .pages
-                .get_info(page.clone())
-                .await
-                .ok_or(CoreError::UnknownPage(page))?;
-            return self.retain_created_page(created);
+            let (creation, fresh) = self.session.pages.new_page_info(url, opts).await?;
+            self.retain_created_page(creation)?;
+            return Ok(fresh);
         };
         scope.context()?;
         let window = opts.window_id.or(scope.placement_window).ok_or_else(|| {
@@ -864,15 +873,19 @@ impl BrowserView {
                 None,
             )
             .await?;
-        let page = self
+        let guard = self
+            .epoch_guard()?
+            .ok_or_else(|| CoreError::Message("missing bound page epoch".into()))?;
+        let creation = self
             .session
             .pages
-            .adopt_created(created["tab"].clone(), url)
+            .adopt_created(created["tab"].clone(), url, guard)
             .await?;
-        let access = self
-            .page_access(page.clone())
-            .await?
-            .ok_or_else(|| CoreError::Message("missing bound page admission".into()))?;
+        self.retain_created_page(creation.clone())?;
+        // Seed the capability from the native create reply BEFORE its first refresh. Asking
+        // page_access(PageId) here would adopt a replacement reconciled during that await.
+        let creating_view = self.with_expected_created_page(&creation.original)?;
+        let access = PageAccess::new(creating_view.clone(), creation.original);
         for _ in 0..crate::timeouts::NEW_PAGE_READY_ATTEMPTS {
             let fresh = access.fresh().await?;
             if !fresh.is_loading || fresh.load_progress >= 1.0 {
@@ -882,14 +895,15 @@ impl BrowserView {
         }
         if let Some(group) = opts.tab_group_id {
             let fresh = access.fresh().await?;
-            self.cdp(
-                "Browser.addTabsToGroup",
-                json!({"groupId":group,"tabIds":[fresh.tab_id.0]}),
-                None,
-            )
-            .await?;
+            creating_view
+                .cdp(
+                    "Browser.addTabsToGroup",
+                    json!({"groupId":group,"tabIds":[fresh.tab_id.0]}),
+                    None,
+                )
+                .await?;
         }
-        self.retain_created_page(access.fresh().await?)
+        access.fresh().await
     }
     pub async fn close_page(&self, page: PageId) -> Result<(), CoreError> {
         if self.epoch_guard()?.is_none() {
@@ -898,7 +912,7 @@ impl BrowserView {
         let fresh = self.page(page).await?;
         self.cdp(
             "Browser.closeTab",
-            json!({"tabId":fresh.tab_id.0,"targetId":fresh.target_id.as_str()}),
+            json!({"targetId":fresh.target_id.as_str()}),
             None,
         )
         .await?;
@@ -921,8 +935,7 @@ impl BrowserView {
             .window_id
             .or(fresh.window_id)
             .ok_or(TargetError::PageOutOfScope(page.clone()))?;
-        let mut params =
-            json!({"tabId":fresh.tab_id.0,"targetId":fresh.target_id.as_str(),"windowId":window.0});
+        let mut params = json!({"targetId":fresh.target_id.as_str(),"windowId":window.0});
         if let Some(index) = opts.index {
             params["index"] = json!(index);
         }
@@ -1174,15 +1187,6 @@ impl BrowserView {
             Ok(values)
         }
     }
-}
-
-fn same_created_incarnation(expected: &PageInfo, fresh: &PageInfo) -> bool {
-    expected.page_id == fresh.page_id
-        && expected.target_id == fresh.target_id
-        && expected.tab_id == fresh.tab_id
-        && expected.window_id == fresh.window_id
-        && expected.browser_profile_id == fresh.browser_profile_id
-        && expected.live_browser_context_id == fresh.live_browser_context_id
 }
 
 #[cfg(test)]

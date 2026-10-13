@@ -46,6 +46,7 @@ struct Native {
     navigation_sent: tokio::sync::Notify,
     dispatch_hold: Mutex<Option<(String, Arc<tokio::sync::Notify>)>>,
     dispatch_started: tokio::sync::Notify,
+    creation_read_hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
     group_read_hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
     group_read_started: tokio::sync::Notify,
 }
@@ -79,6 +80,7 @@ impl Native {
             navigation_sent: tokio::sync::Notify::new(),
             dispatch_hold: Mutex::new(None),
             dispatch_started: tokio::sync::Notify::new(),
+            creation_read_hold: Mutex::new(None),
             group_read_hold: Mutex::new(None),
             group_read_started: tokio::sync::Notify::new(),
             state: Mutex::new(Fixture {
@@ -146,6 +148,27 @@ impl Native {
             params: params.clone(),
             session: session.cloned(),
         });
+        // The real native resolver rejects dual selectors (-32602), even when they identify
+        // the same tab. A permissive OR lookup hid invalid bound-facade close/move requests.
+        if matches!(
+            method,
+            "Browser.getTabInfo"
+                | "Browser.closeTab"
+                | "Browser.activateTab"
+                | "Browser.showTab"
+                | "Browser.moveTab"
+        ) && params.get("targetId").is_some() == params.get("tabId").is_some()
+        {
+            return Err(CdpError::Protocol {
+                code: -32602,
+                message: if params.get("targetId").is_some() {
+                    "Specify either targetId or tabId, not both"
+                } else {
+                    "Either targetId or tabId must be specified"
+                }
+                .into(),
+            });
+        }
         let result = match method {
             "Browser.getProfiles" if state.missing_profiles => {
                 return Err(CdpError::Protocol {
@@ -228,7 +251,12 @@ impl Native {
                 let found = state
                     .tabs
                     .iter_mut()
-                    .find(|tab| tab["tabId"] == params["tabId"])
+                    .find(|tab| {
+                        params.get("tabId").is_some_and(|id| *id == tab["tabId"])
+                            || params
+                                .get("targetId")
+                                .is_some_and(|id| *id == tab["targetId"])
+                    })
                     .ok_or(CdpError::SessionGone)?;
                 found["windowId"] = params["windowId"].clone();
                 json!({"tab":found})
@@ -244,6 +272,42 @@ impl Native {
                     tab["targetId"] != params["targetId"] && tab["tabId"] != params["tabId"]
                 });
                 json!({})
+            }
+            "Browser.addTabsToGroup" => {
+                let index = state
+                    .groups
+                    .iter()
+                    .position(|group| group["groupId"] == params["groupId"])
+                    .ok_or(CdpError::SessionGone)?;
+                let ids = params["tabIds"].as_array().ok_or(CdpError::SessionGone)?;
+                let window = state.groups[index]["windowId"].clone();
+                // BrowserHandler::AddTabsToGroup rejects cross-window tabs before calling
+                // AddToExistingGroup. It does not relocate even same-profile tabs.
+                if ids.iter().any(|id| {
+                    !state
+                        .tabs
+                        .iter()
+                        .any(|tab| tab["tabId"] == *id && tab["windowId"] == window)
+                }) {
+                    return Err(CdpError::Protocol {
+                        code: -32602,
+                        message: "Tabs must be in the same window as the group".into(),
+                    });
+                }
+                for tab in &mut state.tabs {
+                    if ids.contains(&tab["tabId"]) {
+                        tab["groupId"] = params["groupId"].clone();
+                    }
+                }
+                let members = state.groups[index]["tabIds"]
+                    .as_array_mut()
+                    .ok_or(CdpError::SessionGone)?;
+                for id in ids {
+                    if !members.contains(id) {
+                        members.push(id.clone());
+                    }
+                }
+                json!({"group":state.groups[index]})
             }
             "Browser.moveTabGroup" => {
                 let index = state
@@ -350,6 +414,26 @@ impl Native {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
+        // Group admission can read existing tabs before creation. This separate one-shot
+        // boundary pauses only the first read after the native create reply has been emitted.
+        let creation_hold = if method == "Browser.getTabInfo"
+            && self
+                .lock()
+                .calls
+                .iter()
+                .any(|call| call.method == "Browser.createTab")
+        {
+            self.creation_read_hold
+                .lock()
+                .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
+                .take()
+        } else {
+            None
+        };
+        if let Some(hold) = creation_hold {
+            self.dispatch_started.notify_one();
+            hold.notified().await;
+        }
         let hold = self
             .dispatch_hold
             .lock()
@@ -1945,4 +2029,312 @@ async fn bound_creation_receipt_rejects_reconciliation_before_handoff_capture() 
 #[tokio::test]
 async fn unbound_creation_receipt_rejects_reconciliation_before_handoff_capture() -> TestResult {
     creation_receipt_before_handoff(false).await
+}
+
+async fn creation_origin_during_readiness(bound: bool, reconnect: bool) -> TestResult {
+    let native = Native::new();
+    let base = if bound {
+        view(
+            native.clone(),
+            Some(WindowSelection::Working {
+                window_id: WindowId(11),
+            }),
+        )
+        .await
+    } else {
+        BrowserView::unbound(
+            BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+            Some(WindowId(11)),
+        )
+    };
+    let release = Arc::new(tokio::sync::Notify::new());
+    *native
+        .creation_read_hold
+        .lock()
+        .map_err(|_| "hold poisoned")? = Some(release.clone());
+    let creating_view = base.clone();
+    let creation = tokio::spawn(async move {
+        creating_view
+            .new_page(
+                "https://creation-origin.test",
+                NewPageOptions {
+                    tab_group_id: Some("eng-group".into()),
+                    ..NewPageOptions::default()
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        native.dispatch_started.notified(),
+    )
+    .await?;
+    assert_eq!(native.calls("Browser.createTab").len(), 1);
+    // Native creation has already returned target-5. Pause the first readiness dispatch,
+    // before the implementation can derive an expectation from a mutable registry/readback.
+    base.session.pages.list().await?;
+    let original = base
+        .session
+        .pages
+        .list()
+        .await?
+        .into_iter()
+        .find(|page| page.tab_id == TabId(5))
+        .ok_or("original creation missing")?;
+    assert_eq!(original.target_id, TargetId("target-5".into()));
+    if reconnect {
+        native.reconnect();
+    } else {
+        let mut state = native.lock();
+        let tab = state
+            .tabs
+            .iter_mut()
+            .find(|tab| tab["tabId"] == 5)
+            .ok_or("native created tab missing")?;
+        tab["targetId"] = json!("replacement-before-creation-receipt");
+    }
+    base.session.pages.list().await?;
+    if !reconnect {
+        let replacement = base
+            .session
+            .pages
+            .get_info(original.page_id.clone())
+            .await
+            .ok_or("reconciled creation missing")?;
+        assert_eq!(replacement.page_id, original.page_id);
+        assert_eq!(replacement.tab_id, original.tab_id);
+        assert_eq!(replacement.window_id, original.window_id);
+        assert_ne!(replacement.target_id, original.target_id);
+    }
+    release.notify_one();
+    let result = tokio::time::timeout(std::time::Duration::from_secs(2), creation).await??;
+    let expected_error = if reconnect && bound {
+        matches!(result, Err(CoreError::Target(TargetError::ProfileGone(_))))
+    } else {
+        matches!(
+            result,
+            Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+        )
+    };
+    assert!(
+        expected_error,
+        "bound={bound}, reconnect={reconnect}: {result:?}; default-group writes={}",
+        native.calls("Browser.addTabsToGroup").len()
+    );
+    assert!(native.calls("Browser.addTabsToGroup").is_empty());
+    assert!(native.calls("Browser.updateTabGroup").is_empty());
+    assert!(native.calls("Browser.createTabGroup").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_creation_origin_rejects_replacement_during_first_readiness_read() -> TestResult {
+    creation_origin_during_readiness(true, false).await
+}
+
+#[tokio::test]
+async fn unbound_creation_origin_rejects_replacement_during_first_readiness_read() -> TestResult {
+    creation_origin_during_readiness(false, false).await
+}
+
+#[tokio::test]
+async fn bound_creation_origin_retains_epoch_during_readiness() -> TestResult {
+    creation_origin_during_readiness(true, true).await
+}
+
+#[tokio::test]
+async fn unbound_creation_origin_retains_epoch_during_readiness() -> TestResult {
+    creation_origin_during_readiness(false, true).await
+}
+
+#[tokio::test]
+async fn unbound_creation_origin_uses_creation_epoch_after_an_earlier_reconnect() -> TestResult {
+    let native = Native::new();
+    let base = BrowserView::unbound(
+        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        Some(WindowId(11)),
+    );
+    // An ordinary unbound view follows the live connection at each new call. Only the receipt
+    // for the newly created page is frozen; using the view's old epoch rejects valid creation.
+    native.reconnect();
+    let created = base
+        .new_page("https://creation-epoch.test", NewPageOptions::default())
+        .await?;
+    let derived = base.clone().with_expected_created_page(&created)?;
+    derived
+        .cdp(
+            "Browser.updateTabGroup",
+            json!({"groupId":"eng-group","title":"creation epoch"}),
+            None,
+        )
+        .await?;
+    assert_eq!(native.calls("Browser.updateTabGroup").len(), 1);
+    native.reconnect();
+    let result = derived
+        .cdp(
+            "Browser.updateTabGroup",
+            json!({"groupId":"eng-group","collapsed":false}),
+            None,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+    ));
+    assert_eq!(native.calls("Browser.updateTabGroup").len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_facade_close_uses_exclusive_native_target_selector() -> TestResult {
+    let native = Native::new();
+    let browser = Browser::new(native.clone());
+    browser.set_target(Some(binding(None))).await;
+    let closing = browser
+        .list_pages()
+        .await?
+        .into_iter()
+        .find(|page| page.tab_id == TabId(1))
+        .ok_or("bound facade page missing")?;
+    browser.close_page(closing.page_id).await?;
+    let calls = native.calls("Browser.closeTab");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].params, json!({"targetId":"target-1"}));
+    assert!(!native.lock().tabs.iter().any(|tab| tab["tabId"] == 1));
+    // Another profile's tab remains present; selector normalization must preserve admission.
+    assert!(native.lock().tabs.iter().any(|tab| tab["tabId"] == 4));
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_tab_selector_translation_uses_one_admitted_target() -> TestResult {
+    for method in [
+        "Browser.getTabInfo",
+        "Browser.activateTab",
+        "Browser.showTab",
+        "Browser.moveTab",
+        "Browser.closeTab",
+    ] {
+        let native = Native::new();
+        let scoped = view(native.clone(), None).await;
+        let mut params = json!({"tabId":1});
+        if method == "Browser.moveTab" {
+            params["windowId"] = json!(12);
+        }
+        scoped.cdp(method, params, None).await?;
+        let calls = native.calls(method);
+        // Tab-info admission uses tabId internally, but the final caller request is canonical.
+        let call = calls.last().ok_or("no native selector dispatch")?;
+        assert_eq!(call.params["targetId"], "target-1", "{method}");
+        assert!(call.params.get("tabId").is_none(), "{method}: {call:?}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_conflicting_tab_selectors_fail_before_native_mutation() -> TestResult {
+    let native = Native::new();
+    let scoped = view(native.clone(), None).await;
+    let result = scoped
+        .cdp(
+            "Browser.closeTab",
+            json!({"tabId":1,"targetId":"target-2"}),
+            None,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(CoreError::Target(TargetError::CdpUnsupported { .. }))
+    ));
+    assert!(native.calls("Browser.closeTab").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn unbound_creation_origin_preserves_best_effort_cross_window_group_rejection() -> TestResult
+{
+    let native = Native::new();
+    let base = BrowserView::unbound(
+        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        Some(WindowId(12)),
+    );
+    let created = base
+        .new_page(
+            "https://cross-window-group.test",
+            NewPageOptions {
+                tab_group_id: Some("eng-group".into()),
+                ..NewPageOptions::default()
+            },
+        )
+        .await?;
+    assert_eq!(created.target_id, TargetId("target-5".into()));
+    assert_eq!(created.tab_id, TabId(5));
+    assert_eq!(created.window_id, Some(WindowId(12)));
+    assert_eq!(
+        created.browser_profile_id,
+        Some(BrowserProfileId("eng".into()))
+    );
+    assert!(created.group_id.is_none());
+    assert_eq!(native.calls("Browser.addTabsToGroup").len(), 1);
+    assert_eq!(native.lock().groups[0]["windowId"], 11);
+    assert_eq!(native.lock().groups[0]["tabIds"], json!([1]));
+    let actual = native
+        .lock()
+        .tabs
+        .iter()
+        .find(|tab| tab["tabId"] == 5)
+        .cloned()
+        .ok_or("new native tab missing")?;
+    assert_eq!(actual["windowId"], 12);
+    assert!(actual.get("groupId").is_none());
+    assert!(base.clone().with_expected_created_page(&created).is_ok());
+    Ok(())
+}
+
+#[tokio::test]
+async fn bound_creation_origin_rejects_cross_window_default_group_before_create() -> TestResult {
+    let native = Native::new();
+    let scoped = view(native.clone(), None).await;
+    let result = scoped
+        .new_page(
+            "https://cross-window-group.test",
+            NewPageOptions {
+                window_id: Some(WindowId(12)),
+                tab_group_id: Some("eng-group".into()),
+                ..NewPageOptions::default()
+            },
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(CoreError::Target(TargetError::GroupOutOfScope(_)))
+    ));
+    assert!(native.calls("Browser.createTab").is_empty());
+    assert!(native.calls("Browser.addTabsToGroup").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn unbound_creation_origin_refreshes_successful_same_window_group_membership() -> TestResult {
+    let native = Native::new();
+    let base = BrowserView::unbound(
+        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        Some(WindowId(11)),
+    );
+    let created = base
+        .new_page(
+            "https://same-window-group.test",
+            NewPageOptions {
+                tab_group_id: Some("eng-group".into()),
+                ..NewPageOptions::default()
+            },
+        )
+        .await?;
+    assert_eq!(created.target_id, TargetId("target-5".into()));
+    assert_eq!(created.window_id, Some(WindowId(11)));
+    assert_eq!(created.group_id.as_deref(), Some("eng-group"));
+    assert_eq!(native.calls("Browser.addTabsToGroup").len(), 1);
+    assert_eq!(native.lock().groups[0]["tabIds"], json!([1, 5]));
+    assert!(base.clone().with_expected_created_page(&created).is_ok());
+    Ok(())
 }
