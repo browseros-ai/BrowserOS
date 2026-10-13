@@ -83,9 +83,3 @@ impl BrowserView {
         }
     }
 }
-fn contains_frame(tree: &Value, id: &str) -> bool {
-    tree["frame"]["id"] == id
-        || tree["childFrames"]
-            .as_array()
-            .is_some_and(|frames| frames.iter().any(|tree| contains_frame(tree, id)))
-}

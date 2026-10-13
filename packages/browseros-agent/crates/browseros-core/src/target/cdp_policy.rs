@@ -422,7 +422,7 @@ impl BrowserView {
             let fresh = self
                 .session
                 .pages
-                .refresh(expected.page_id.clone())
+                .refresh_with_epoch(expected.page_id.clone(), self.epoch_guard()?)
                 .await?
                 .ok_or_else(|| CoreError::UnknownPage(expected.page_id.clone()))?;
             live.scope.admit_page(&fresh, &live.windows)?;
@@ -453,8 +453,7 @@ impl BrowserView {
         // tab handoff, otherwise a concurrent group drag/edit could expand or relocate it.
         if !admission.groups.is_empty() {
             let current = self
-                .session
-                .cdp("Browser.getTabGroups", json!({}), None)
+                .send_at_capture("Browser.getTabGroups", json!({}), None)
                 .await?;
             for expected in &admission.groups {
                 let id = expected["groupId"].as_str().unwrap_or_default();
@@ -470,9 +469,11 @@ impl BrowserView {
                 }
             }
         }
-        // There is no await between this check and dispatch. Native IDs constrain the target;
-        // the protocol has no atomic expected-window assertion for close/update operations.
-        self.check_epoch(&live.scope)
+        // Creation callbacks keep their original target even when a helper re-resolved PageId
+        // during the lookups above. The transport closes the remaining connection-epoch race;
+        // native IDs still do not provide an atomic expected-window assertion for tab drags.
+        self.check_epoch(&live.scope)?;
+        self.validate_expected_created_page().await
     }
 
     async fn native_tab(&self, method: &str, params: &Value) -> Result<PageInfo, CoreError> {
@@ -487,7 +488,11 @@ impl BrowserView {
         if tab.is_none() && target.is_none() {
             return Err(unsupported(method));
         }
-        let pages = self.session.pages.list().await?;
+        let pages = self
+            .session
+            .pages
+            .list_with_epoch(self.epoch_guard()?)
+            .await?;
         let selected = pages
             .into_iter()
             .find(|page| {
@@ -513,7 +518,11 @@ impl BrowserView {
         if tabs.is_empty() {
             return Err(unsupported(method));
         }
-        let all = self.session.pages.list().await?;
+        let all = self
+            .session
+            .pages
+            .list_with_epoch(self.epoch_guard()?)
+            .await?;
         let mut admitted = Vec::new();
         for id in tabs {
             let id = id.as_i64().ok_or_else(|| unsupported(method))?;
@@ -531,8 +540,7 @@ impl BrowserView {
         expected_window: Option<WindowId>,
     ) -> Result<Value, CoreError> {
         let value = self
-            .session
-            .cdp("Browser.getTabGroups", json!({}), None)
+            .send_at_capture("Browser.getTabGroups", json!({}), None)
             .await?;
         let group = value["groups"]
             .as_array()
@@ -750,7 +758,7 @@ impl BrowserView {
         // Revalidate after method-specific awaited lookups and before mutation. Native creation
         // receives genuine context + window IDs; native move guards run before any detachment.
         self.admit_dispatch(&admission).await?;
-        let result = self.session.cdp(method, params, None).await?;
+        let result = self.send_at_capture(method, params, None).await?;
         // Closing one's own strict pin is allowed, but all later calls must fail closed.
         if method != "Browser.closeWindow"
             && method != "Browser.closeTab"

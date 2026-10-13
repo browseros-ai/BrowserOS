@@ -159,11 +159,16 @@ impl Observer {
     ) -> Result<AcquiredFrame, CoreError> {
         let mut target = self
             .frames
-            .resolve_frame_target(
+            .resolve_frame_target_with_epoch(
                 self.page_id.clone(),
                 frame_id.clone(),
                 same_process_parent,
                 cross_process,
+                self.access
+                    .as_ref()
+                    .map(|access| access.epoch_guard())
+                    .transpose()?
+                    .flatten(),
             )
             .await?;
         if let Some(access) = &self.access {

@@ -86,6 +86,10 @@ pub struct BrowserView {
     unbound_default_window: Option<WindowId>,
     signals: Arc<PageSignals>,
     signal_windows: Arc<std::sync::RwLock<BTreeSet<WindowId>>>,
+    // Unbound calls normally follow the live connection. A derived creation capability must
+    // retain the call's original epoch before a detached callback can run after reconnect.
+    initial_epoch: u64,
+    expected_created_page: Option<PageInfo>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -99,6 +103,14 @@ mod cdp_policy;
 mod events;
 pub(crate) mod page_access;
 use page_access::PageAccess;
+
+/// Both event attribution and OOPIF admission inspect the same native frame-tree shape.
+fn contains_frame(tree: &Value, id: &str) -> bool {
+    tree["frame"]["id"] == id
+        || tree["childFrames"]
+            .as_array()
+            .is_some_and(|children| children.iter().any(|child| contains_frame(child, id)))
+}
 
 /// Native window plus the identity sidecar from the same reply. Keeping the raw value avoids
 /// treating the legacy directory label as a context while the generated protocol evolves.
@@ -229,6 +241,8 @@ impl BrowserView {
     }
     pub fn unbound(session: Arc<BrowserSession>, unbound_default_window: Option<WindowId>) -> Self {
         Self {
+            initial_epoch: session.connection().connection_epoch(),
+            expected_created_page: None,
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             session,
@@ -248,6 +262,90 @@ impl BrowserView {
     }
     pub fn admission_error(&self) -> Option<&TargetError> {
         self.capture.as_ref().err()
+    }
+
+    /// Derive before spawning creation follow-up work, then carry this same view through every
+    /// awaited helper and MCP dispatch. PageId/native tab/window IDs can survive target reuse;
+    /// preserving the original snapshot guards title/expansion writes as well as final add.
+    pub fn with_expected_created_page(&self, created: &PageInfo) -> Result<Self, CoreError> {
+        if created.window_id.is_none() {
+            return Err(TargetError::PageOutOfScope(created.page_id.clone()).into());
+        }
+        if let Some(scope) = self.scope()? {
+            scope.context()?;
+            self.check_epoch(scope)?;
+            if created.browser_profile_id.as_ref() != Some(&scope.profile.browser_profile_id)
+                || created.live_browser_context_id != scope.context_id
+                || scope
+                    .pin()
+                    .is_some_and(|pin| created.window_id != Some(pin))
+            {
+                return Err(TargetError::PageOutOfScope(created.page_id.clone()).into());
+            }
+        }
+        if let Some(expected) = &self.expected_created_page
+            && !same_created_incarnation(expected, created)
+        {
+            return Err(TargetError::PageTargetChanged(expected.page_id.clone()).into());
+        }
+        let mut derived = self.clone();
+        derived.expected_created_page = Some(created.clone());
+        if let Some(guard) = derived.epoch_guard()? {
+            guard.check(derived.session.connection().as_ref())?;
+        }
+        Ok(derived)
+    }
+
+    pub(super) fn epoch_guard(&self) -> Result<Option<crate::connection::EpochGuard>, CoreError> {
+        if let Some(scope) = self.scope()? {
+            return Ok(Some(crate::connection::EpochGuard {
+                expected: scope.connection_epoch,
+                invalidated: TargetError::ProfileGone(scope.profile.browser_profile_id.clone()),
+            }));
+        }
+        Ok(self
+            .expected_created_page
+            .as_ref()
+            .map(|page| crate::connection::EpochGuard {
+                expected: self.initial_epoch,
+                invalidated: TargetError::PageTargetChanged(page.page_id.clone()),
+            }))
+    }
+
+    /// Policy-free native discovery/cleanup still uses the capture's atomic transport guard.
+    /// Callers own routing admission; using this helper does not authorize a new root method.
+    async fn send_at_capture(
+        &self,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CoreError> {
+        let endpoint = match session {
+            Some(session) => {
+                crate::ProtocolSession::for_session(self.session.connection(), session.clone())
+            }
+            None => crate::ProtocolSession::root(self.session.connection()),
+        };
+        endpoint
+            .with_epoch_guard(self.epoch_guard()?)
+            .send_value(method, params)
+            .await
+    }
+
+    async fn validate_expected_created_page(&self) -> Result<(), CoreError> {
+        let Some(expected) = &self.expected_created_page else {
+            return Ok(());
+        };
+        let fresh = self
+            .session
+            .pages
+            .refresh_with_epoch(expected.page_id.clone(), self.epoch_guard()?)
+            .await?
+            .ok_or_else(|| TargetError::PageTargetChanged(expected.page_id.clone()))?;
+        if !same_created_incarnation(expected, &fresh) {
+            return Err(TargetError::PageTargetChanged(expected.page_id.clone()).into());
+        }
+        Ok(())
     }
 
     pub async fn list_profiles(&self) -> Result<Vec<BrowserProfileInfo>, CoreError> {
@@ -294,9 +392,16 @@ impl BrowserView {
         Ok(outcome)
     }
     async fn read_windows(&self) -> Result<Vec<NativeWindow>, CoreError> {
-        let value = self
-            .session
-            .cdp("Browser.getWindows", json!({}), None)
+        self.read_windows_with_epoch(None).await
+    }
+
+    async fn read_windows_with_epoch(
+        &self,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<Vec<NativeWindow>, CoreError> {
+        let value = crate::ProtocolSession::root(self.session.connection())
+            .with_epoch_guard(guard)
+            .send_value("Browser.getWindows", json!({}))
             .await?;
         value["windows"]
             .as_array()
@@ -362,16 +467,23 @@ impl BrowserView {
     }
     async fn capture_scope(&self, binding: &TargetBinding) -> Result<CapturedScope, CoreError> {
         let epoch = self.session.connection().connection_epoch();
-        let profile = self
-            .list_profiles()
-            .await?
+        let guard = crate::connection::EpochGuard {
+            expected: epoch,
+            invalidated: TargetError::ProfileGone(binding.intent.browser_profile_id.clone()),
+        };
+        let catalog = crate::ProtocolSession::root(self.session.connection())
+            .with_epoch_guard(Some(guard.clone()))
+            .send_value("Browser.getProfiles", json!({}))
+            .await
+            .map_err(native_missing)?;
+        let profile = decode::<Vec<BrowserProfileInfo>>(catalog["profiles"].clone())?
             .into_iter()
             .find(|profile| {
                 profile.browser_profile_id == binding.intent.browser_profile_id
                     && profile.directory == binding.intent.directory
             })
             .ok_or_else(|| TargetError::ProfileGone(binding.intent.browser_profile_id.clone()))?;
-        let windows = self.read_windows().await?;
+        let windows = self.read_windows_with_epoch(Some(guard)).await?;
         let eligible = windows
             .iter()
             .filter(|window| eligible(window, &profile))
@@ -459,15 +571,18 @@ impl BrowserView {
     }
     async fn validate_live(&self) -> Result<Option<LiveScope>, CoreError> {
         let Some(scope) = self.scope()? else {
+            self.validate_expected_created_page().await?;
             return Ok(None);
         };
         if let Ok(mut windows) = self.signal_windows.write() {
             windows.clear();
         }
         self.check_epoch(scope)?;
-        let current = self
-            .list_profiles()
-            .await?
+        let catalog = self
+            .send_at_capture("Browser.getProfiles", json!({}), None)
+            .await
+            .map_err(native_missing)?;
+        let current = decode::<Vec<BrowserProfileInfo>>(catalog["profiles"].clone())?
             .into_iter()
             .find(|profile| {
                 profile.browser_profile_id == scope.profile.browser_profile_id
@@ -490,7 +605,7 @@ impl BrowserView {
             };
             return Err(error.into());
         }
-        let windows = self.read_windows().await?;
+        let windows = self.read_windows_with_epoch(self.epoch_guard()?).await?;
         if let Some(pin) = scope.pin()
             && !windows
                 .iter()
@@ -499,6 +614,7 @@ impl BrowserView {
             return Err(TargetError::PinnedWindowClosed(pin).into());
         }
         self.check_epoch(scope)?;
+        self.validate_expected_created_page().await?;
         if let Ok(mut signal_windows) = self.signal_windows.write() {
             *signal_windows = windows
                 .iter()
@@ -536,7 +652,11 @@ impl BrowserView {
         self.scope()?;
         // Reconciliation owns detachment and tab ownership. It must see every profile before
         // projection, otherwise listing one profile would erase the others from shared state.
-        let all = self.session.pages.list().await?;
+        let all = self
+            .session
+            .pages
+            .list_with_epoch(self.epoch_guard()?)
+            .await?;
         let live_page_ids = all.iter().map(|page| page.page_id.clone()).collect();
         let count = all.len();
         let pages = if let Some(live) = self.validate_live().await? {
@@ -554,7 +674,11 @@ impl BrowserView {
     }
     pub async fn refresh_page(&self, page: PageId) -> Result<Option<PageInfo>, CoreError> {
         self.scope()?;
-        let fresh = self.session.pages.refresh(page).await?;
+        let fresh = self
+            .session
+            .pages
+            .refresh_with_epoch(page, self.epoch_guard()?)
+            .await?;
         if let Some(live) = self.validate_live().await? {
             live.scope.context()?;
             if let Some(page) = &fresh {
@@ -569,7 +693,7 @@ impl BrowserView {
             .ok_or(CoreError::UnknownPage(page))
     }
     async fn page_access(&self, page: PageId) -> Result<Option<Arc<PageAccess>>, CoreError> {
-        if self.scope()?.is_none() {
+        if self.epoch_guard()?.is_none() {
             return Ok(None);
         }
         let fresh = self.page(page).await?;
@@ -615,7 +739,7 @@ impl BrowserView {
         page: PageId,
         o: ScreenshotCaptureOptions,
     ) -> Result<ScreenshotCaptureResult, CoreError> {
-        if self.scope()?.is_none() {
+        if self.epoch_guard()?.is_none() {
             return self.session.screenshot(page, o).await;
         }
         let access = self
@@ -633,6 +757,16 @@ impl BrowserView {
 
     pub async fn active_page(&self) -> Result<Option<PageInfo>, CoreError> {
         let Some(scope) = self.scope()? else {
+            if self.expected_created_page.is_some() {
+                let result = self.cdp("Browser.getActiveTab", json!({}), None).await?;
+                let target = result["tab"]["targetId"].as_str();
+                return Ok(self
+                    .list_pages()
+                    .await?
+                    .pages
+                    .into_iter()
+                    .find(|page| Some(page.target_id.as_str()) == target));
+            }
             return self.session.pages.get_active().await;
         };
         scope.context()?;
@@ -658,6 +792,9 @@ impl BrowserView {
         mut opts: NewPageOptions,
     ) -> Result<PageInfo, CoreError> {
         let Some(scope) = self.scope()? else {
+            if self.expected_created_page.is_some() {
+                return Err(cdp_policy::unsupported("Browser.createTab"));
+            }
             opts.window_id = opts.window_id.or(self.unbound_default_window);
             let page = self.session.pages.new_page(url, opts).await?;
             return self
@@ -720,7 +857,7 @@ impl BrowserView {
         access.fresh().await
     }
     pub async fn close_page(&self, page: PageId) -> Result<(), CoreError> {
-        if self.scope()?.is_none() {
+        if self.epoch_guard()?.is_none() {
             return self.session.pages.close(page).await;
         }
         let fresh = self.page(page).await?;
@@ -730,7 +867,10 @@ impl BrowserView {
             None,
         )
         .await?;
-        self.session.pages.list().await?;
+        self.session
+            .pages
+            .list_with_epoch(self.epoch_guard()?)
+            .await?;
         Ok(())
     }
     pub async fn move_page(
@@ -738,7 +878,7 @@ impl BrowserView {
         page: PageId,
         opts: MovePageOptions,
     ) -> Result<PageInfo, CoreError> {
-        if self.scope()?.is_none() {
+        if self.epoch_guard()?.is_none() {
             return self.session.pages.move_page(page, opts).await;
         }
         let fresh = self.page(page.clone()).await?;
@@ -759,7 +899,11 @@ impl BrowserView {
         tabs: &[TabId],
     ) -> Result<HashMap<TabId, PageId>, CoreError> {
         self.scope()?;
-        let all = self.session.pages.list().await?;
+        let all = self
+            .session
+            .pages
+            .list_with_epoch(self.epoch_guard()?)
+            .await?;
         let mut resolved = HashMap::new();
         for tab in tabs {
             if let Some(page) = all.iter().find(|page| &page.tab_id == tab) {
@@ -790,18 +934,24 @@ impl BrowserView {
                 .filter(|window| live.scope.window_matches(window))
                 .map(|window| window.info)
                 .collect()),
+            None if self.expected_created_page.is_some() => Ok(self
+                .read_windows_with_epoch(self.epoch_guard()?)
+                .await?
+                .into_iter()
+                .map(|window| window.info)
+                .collect()),
             None => self.session.windows.list().await,
         }
     }
     pub async fn create_window(&self) -> Result<WindowInfo, CoreError> {
-        if self.scope()?.is_none() {
+        if self.epoch_guard()?.is_none() {
             return self.session.windows.create().await;
         }
         let result = self.cdp("Browser.createWindow", json!({}), None).await?;
         decode(result["window"].clone())
     }
     pub async fn close_window(&self, w: WindowId) -> Result<(), CoreError> {
-        if self.scope()?.is_none() {
+        if self.epoch_guard()?.is_none() {
             return self.session.windows.close(w).await;
         }
         self.cdp("Browser.closeWindow", json!({"windowId":w.0}), None)
@@ -815,6 +965,14 @@ impl BrowserView {
         session: Option<&SessionId>,
     ) -> Result<Value, CoreError> {
         if self.scope()?.is_none() {
+            if self.expected_created_page.is_some() {
+                // An unbound creation callback remains global in routing, but it cannot
+                // replace its original page or connection after an awaited lookup.
+                self.validate_expected_created_page().await?;
+                let result = self.send_at_capture(method, params, session).await?;
+                self.validate_expected_created_page().await?;
+                return Ok(result);
+            }
             return self.session.cdp(method, params, session).await;
         }
         if let Some(session) = session {
@@ -838,7 +996,7 @@ impl BrowserView {
         method: &str,
         params_json: &str,
     ) -> Result<String, CoreError> {
-        if self.scope()?.is_none() {
+        if self.epoch_guard()?.is_none() {
             return self
                 .session
                 .cdp_json_for_page(page, method, params_json)
@@ -873,10 +1031,19 @@ impl BrowserView {
     ) -> Result<Vec<Value>, CoreError> {
         let live = self.validate_live().await?;
         let context = live.as_ref().map(|live| live.scope.context()).transpose()?;
-        let targets = self
-            .session
-            .cdp("Target.getTargets", json!({}), None)
-            .await?;
+        // This adapter owns a short-lived root/session pair. Even an unbound evaluation
+        // cannot carry its attached session ID onto a replacement socket during cleanup.
+        let worker_guard = self
+            .epoch_guard()?
+            .unwrap_or(crate::connection::EpochGuard {
+                expected: self.session.connection().connection_epoch(),
+                invalidated: TargetError::CdpUnsupported {
+                    method: "evaluate_extension_workers".into(),
+                },
+            });
+        let root = crate::ProtocolSession::root(self.session.connection())
+            .with_epoch_guard(Some(worker_guard.clone()));
+        let targets = root.send_value("Target.getTargets", json!({})).await?;
         let mut values = Vec::new();
         for target in targets["targetInfos"]
             .as_array()
@@ -894,17 +1061,15 @@ impl BrowserView {
             if cancel.is_cancelled() {
                 return Err(CoreError::Message("extension evaluation cancelled".into()));
             }
-            let attach_epoch = self.session.connection().connection_epoch();
-            let attached = match self
-                .session
-                .cdp(
+            let attached = match root
+                .send_value(
                     "Target.attachToTarget",
                     json!({"targetId":target["targetId"],"flatten":true}),
-                    None,
                 )
                 .await
             {
                 Ok(attached) => attached,
+                Err(err @ CoreError::Target(_)) => return Err(err),
                 Err(_) => continue,
             };
             let session = attached["sessionId"]
@@ -918,10 +1083,7 @@ impl BrowserView {
                     return Err(CoreError::Message("extension evaluation cancelled".into()));
                 }
                 self.validate_live().await?;
-                let fresh_targets = self
-                    .session
-                    .cdp("Target.getTargets", json!({}), None)
-                    .await?;
+                let fresh_targets = root.send_value("Target.getTargets", json!({})).await?;
                 let fresh = fresh_targets["targetInfos"]
                     .as_array()
                     .into_iter()
@@ -936,14 +1098,16 @@ impl BrowserView {
                 {
                     return Err(cdp_policy::unsupported("Runtime.evaluate"));
                 }
-                let result = self
-                    .session
-                    .cdp(
-                        "Runtime.evaluate",
-                        json!({"expression":expression,"returnByValue":true,"awaitPromise":true}),
-                        Some(&session),
-                    )
-                    .await?;
+                let result = crate::ProtocolSession::for_session(
+                    self.session.connection(),
+                    session.clone(),
+                )
+                .with_epoch_guard(Some(worker_guard.clone()))
+                .send_value(
+                    "Runtime.evaluate",
+                    json!({"expression":expression,"returnByValue":true,"awaitPromise":true}),
+                )
+                .await?;
                 self.validate_live().await?;
                 Ok::<_, CoreError>(result)
             };
@@ -953,16 +1117,8 @@ impl BrowserView {
             };
             // Session IDs belong to one websocket. Disconnect already releases the attachment;
             // never detach an old ID on a new connection that might have reused its value.
-            if self.session.connection().connection_epoch() != attach_epoch {
-                return Err(cdp_policy::unsupported("Target.detachFromTarget"));
-            }
-            let detach = self
-                .session
-                .cdp(
-                    "Target.detachFromTarget",
-                    json!({"sessionId":session}),
-                    None,
-                )
+            let detach = root
+                .send_value("Target.detachFromTarget", json!({"sessionId":session}))
                 .await;
             detach?;
             match evaluation {
@@ -983,6 +1139,15 @@ impl BrowserView {
             Ok(values)
         }
     }
+}
+
+fn same_created_incarnation(expected: &PageInfo, fresh: &PageInfo) -> bool {
+    expected.page_id == fresh.page_id
+        && expected.target_id == fresh.target_id
+        && expected.tab_id == fresh.tab_id
+        && expected.window_id == fresh.window_id
+        && expected.browser_profile_id == fresh.browser_profile_id
+        && expected.live_browser_context_id == fresh.live_browser_context_id
 }
 
 #[cfg(test)]

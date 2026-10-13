@@ -160,7 +160,17 @@ impl Observer {
         let _page_session = self.page_session().await?;
         let mut target = self
             .frames
-            .resolve_frame_target(self.page_id.clone(), entry.frame_id.clone(), None, false)
+            .resolve_frame_target_with_epoch(
+                self.page_id.clone(),
+                entry.frame_id.clone(),
+                None,
+                false,
+                self.access
+                    .as_ref()
+                    .map(|access| access.epoch_guard())
+                    .transpose()?
+                    .flatten(),
+            )
             .await?;
         if let Some(access) = &self.access {
             target.session = access

@@ -44,6 +44,10 @@ struct Native {
     attach_started: tokio::sync::Notify,
     detach_done: tokio::sync::Notify,
     navigation_sent: tokio::sync::Notify,
+    dispatch_hold: Mutex<Option<(String, Arc<tokio::sync::Notify>)>>,
+    dispatch_started: tokio::sync::Notify,
+    group_read_hold: Mutex<Option<Arc<tokio::sync::Notify>>>,
+    group_read_started: tokio::sync::Notify,
 }
 fn profile(id: &str, loaded: bool) -> Value {
     let mut value = json!({"browserProfileId":id,"name":id,"directory":format!("directory-{id}"),"loaded":loaded});
@@ -73,6 +77,10 @@ impl Native {
             attach_started: tokio::sync::Notify::new(),
             detach_done: tokio::sync::Notify::new(),
             navigation_sent: tokio::sync::Notify::new(),
+            dispatch_hold: Mutex::new(None),
+            dispatch_started: tokio::sync::Notify::new(),
+            group_read_hold: Mutex::new(None),
+            group_read_started: tokio::sync::Notify::new(),
             state: Mutex::new(Fixture {
                 profiles: vec![
                     profile("eng", true),
@@ -119,11 +127,20 @@ impl Native {
     }
     fn reply(
         &self,
+        expected_epoch: Option<u64>,
         method: &str,
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
         let mut state = self.lock();
+        // This lock also owns fixture reconnect publication. Pauses occur before the lock,
+        // so the final epoch check and mutation recording model the real CDP sink boundary.
+        if let Some(expected) = expected_epoch {
+            let actual = self.epoch.load(Ordering::SeqCst);
+            if expected != actual {
+                return Err(CdpError::ConnectionEpochChanged { expected, actual });
+            }
+        }
         state.calls.push(Call {
             method: method.into(),
             params: params.clone(),
@@ -320,6 +337,71 @@ impl Native {
         }
         Ok(result)
     }
+
+    fn reconnect(&self) {
+        let _state = self.lock();
+        self.epoch.fetch_add(1, Ordering::SeqCst);
+    }
+
+    async fn dispatch(
+        &self,
+        expected: Option<u64>,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CdpError> {
+        let hold = self
+            .dispatch_hold
+            .lock()
+            .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
+            .as_ref()
+            .filter(|(held_method, _)| held_method == method)
+            .map(|(_, hold)| hold.clone());
+        if let Some(hold) = hold {
+            self.dispatch_started.notify_one();
+            hold.notified().await;
+        }
+        let worker_attach = method == "Target.attachToTarget"
+            && params["targetId"]
+                .as_str()
+                .is_some_and(|id| id.starts_with("worker-"));
+        let result = self.reply(expected, method, params, session);
+        if method == "Browser.getProfiles" {
+            let invalidate_epoch = std::mem::take(&mut self.lock().epoch_after_profiles);
+            if invalidate_epoch {
+                self.reconnect();
+            }
+        }
+        if worker_attach {
+            let hold = self
+                .attach_hold
+                .lock()
+                .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
+                .clone();
+            if let Some(hold) = hold {
+                self.attach_started.notify_one();
+                hold.notified().await;
+            }
+        }
+        if method == "Browser.getTabGroups" {
+            let hold = self
+                .group_read_hold
+                .lock()
+                .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
+                .clone();
+            if let Some(hold) = hold {
+                self.group_read_started.notify_one();
+                hold.notified().await;
+            }
+        }
+        if method == "Target.detachFromTarget" {
+            self.detach_done.notify_one();
+        }
+        if method == "Page.navigate" {
+            self.navigation_sent.notify_one();
+        }
+        result
+    }
 }
 
 #[tokio::test]
@@ -390,37 +472,7 @@ impl CdpConnection for Native {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move {
-            let worker_attach = method == "Target.attachToTarget"
-                && params["targetId"]
-                    .as_str()
-                    .is_some_and(|id| id.starts_with("worker-"));
-            let result = self.reply(method, params, session);
-            if method == "Browser.getProfiles" {
-                let invalidate_epoch = std::mem::take(&mut self.lock().epoch_after_profiles);
-                if invalidate_epoch {
-                    self.epoch.fetch_add(1, Ordering::SeqCst);
-                }
-            }
-            if worker_attach {
-                let hold = self
-                    .attach_hold
-                    .lock()
-                    .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
-                    .clone();
-                if let Some(hold) = hold {
-                    self.attach_started.notify_one();
-                    hold.notified().await;
-                }
-            }
-            if method == "Target.detachFromTarget" {
-                self.detach_done.notify_one();
-            }
-            if method == "Page.navigate" {
-                self.navigation_sent.notify_one();
-            }
-            result
-        })
+        Box::pin(self.dispatch(None, method, params, session))
     }
     fn send_raw_json<'a>(
         &'a self,
@@ -437,6 +489,34 @@ impl CdpConnection for Native {
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
         self.events.subscribe()
+    }
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(self.dispatch(Some(expected_epoch), method, params, session))
+    }
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async move {
+            let value = self
+                .dispatch(
+                    Some(expected_epoch),
+                    method,
+                    serde_json::from_str(params)?,
+                    session,
+                )
+                .await?;
+            Ok(serde_json::to_string(&value)?)
+        })
     }
     fn is_connected(&self) -> bool {
         true
@@ -1399,5 +1479,347 @@ async fn group_drag_during_final_tab_read_is_rejected_before_close_dispatch() ->
     ));
     assert!(native.calls("Browser.closeTabGroup").is_empty());
     assert_eq!(native.lock().groups[0]["windowId"], 12);
+    Ok(())
+}
+
+#[tokio::test]
+async fn reconnect_after_admission_never_dispatches_root_page_raw_or_extension_work() -> TestResult
+{
+    // Pause inside the transport, after core's last admission. The replacement retains all
+    // native IDs, so only forwarding the original epoch to atomic publication can reject it.
+    for (case, method) in [
+        ("root", "Browser.closeWindow"),
+        ("page", "Runtime.evaluate"),
+        ("raw", "Runtime.evaluate"),
+        ("extension", "Runtime.evaluate"),
+        ("extension_cleanup", "Target.detachFromTarget"),
+        ("page_attach", "Target.attachToTarget"),
+        ("page_setup", "Page.enable"),
+        ("oopif_attach", "Target.attachToTarget"),
+        ("oopif_setup", "DOM.enable"),
+    ] {
+        let native = Native::new();
+        let scoped = view(native.clone(), None).await;
+        let page = page_id(&scoped, 1).await?;
+        let retained = if matches!(case, "page" | "raw" | "oopif_attach" | "oopif_setup") {
+            Some(scoped.page_session(page.clone()).await?)
+        } else {
+            None
+        };
+        let before = native.calls(method).len();
+        let release = Arc::new(tokio::sync::Notify::new());
+        *native
+            .dispatch_hold
+            .lock()
+            .unwrap_or_else(|err| panic!("fixture poisoned: {err}")) =
+            Some((method.into(), release.clone()));
+        let caller = tokio::spawn(async move {
+            match case {
+                "root" => scoped.close_window(WindowId(11)).await,
+                "page" => retained
+                    .ok_or_else(|| CoreError::Message("missing retained session".into()))?
+                    .session
+                    .send_value("Runtime.evaluate", json!({"expression":"1"}))
+                    .await
+                    .map(|_| ()),
+                "raw" => scoped
+                    .cdp_json_for_page(page, "Runtime.evaluate", r#"{"expression":"1"}"#)
+                    .await
+                    .map(|_| ()),
+                "extension" | "extension_cleanup" => {
+                    scoped.evaluate_extension_workers("1").await.map(|_| ())
+                }
+                "page_attach" | "page_setup" => scoped.page_session(page).await.map(|_| ()),
+                "oopif_attach" | "oopif_setup" => scoped
+                    .session
+                    .frames()
+                    .resolve_frame_target_with_epoch(
+                        page,
+                        Some(crate::FrameId("child-target".into())),
+                        None,
+                        true,
+                        scoped.epoch_guard()?,
+                    )
+                    .await
+                    .map(|_| ()),
+                _ => Err(CoreError::Message("unknown regression case".into())),
+            }
+        });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            native.dispatch_started.notified(),
+        )
+        .await?;
+        native.reconnect();
+        release.notify_one();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), caller).await??;
+        assert!(
+            matches!(result, Err(CoreError::Target(TargetError::ProfileGone(_)))),
+            "{case}: {result:?}"
+        );
+        assert_eq!(
+            native.calls(method).len(),
+            before,
+            "{case} published to the replacement"
+        );
+        assert!(
+            native
+                .lock()
+                .windows
+                .iter()
+                .any(|window| window["windowId"] == 11)
+        );
+        if matches!(case, "extension" | "extension_cleanup") {
+            assert!(
+                native.calls("Target.detachFromTarget").is_empty(),
+                "old worker session leaked onto replacement"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn created_page_constraint_survives_group_lookup_and_guards_every_group_write() -> TestResult
+{
+    for bound in [true, false] {
+        let native = Native::new();
+        let base = if bound {
+            view(native.clone(), None).await
+        } else {
+            BrowserView::unbound(
+                BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+                None,
+            )
+        };
+        let page = base.page(page_id(&base, 1).await?).await?;
+        let derived = base.with_expected_created_page(&page)?;
+        let release = Arc::new(tokio::sync::Notify::new());
+        *native
+            .group_read_hold
+            .lock()
+            .unwrap_or_else(|err| panic!("fixture poisoned: {err}")) = Some(release.clone());
+        let delayed = derived.clone();
+        let lookup =
+            tokio::spawn(async move { delayed.cdp("Browser.getTabGroups", json!({}), None).await });
+        tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            native.group_read_started.notified(),
+        )
+        .await?;
+        native.lock().tabs[0]["targetId"] = json!("replacement-with-same-tab-and-window");
+        release.notify_one();
+        let result = tokio::time::timeout(std::time::Duration::from_secs(1), lookup).await??;
+        assert!(
+            matches!(
+                result,
+                Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+            ),
+            "bound={bound}: {result:?}"
+        );
+        // Deliberately try every follow-up even after lookup failed. Title and expansion have
+        // no page argument, so an entry-only guard or PageId-only final add cannot protect them.
+        for (method, params) in [
+            (
+                "Browser.updateTabGroup",
+                json!({"groupId":"eng-group","title":"pending title"}),
+            ),
+            (
+                "Browser.updateTabGroup",
+                json!({"groupId":"eng-group","collapsed":false}),
+            ),
+            (
+                "Browser.createTabGroup",
+                json!({"tabIds":[1],"title":"new group"}),
+            ),
+            (
+                "Browser.addTabsToGroup",
+                json!({"groupId":"eng-group","tabIds":[1]}),
+            ),
+            ("Browser.removeTabsFromGroup", json!({"tabIds":[1]})),
+            ("Browser.closeTabGroup", json!({"groupId":"eng-group"})),
+            (
+                "Browser.moveTabGroup",
+                json!({"groupId":"eng-group","windowId":12}),
+            ),
+        ] {
+            let result = derived.clone().cdp(method, params, None).await;
+            assert!(
+                matches!(
+                    result,
+                    Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+                ),
+                "bound={bound}, {method}: {result:?}"
+            );
+            assert!(
+                native.calls(method).is_empty(),
+                "bound={bound}, {method} mutated replacement"
+            );
+        }
+        let replacement = base.page(page.page_id.clone()).await?;
+        assert_eq!(replacement.tab_id, page.tab_id);
+        assert_eq!(replacement.window_id, page.window_id);
+        assert!(
+            derived.with_expected_created_page(&replacement).is_err(),
+            "derived view adopted a new expectation"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn unbound_created_page_retains_creation_epoch_before_delayed_callback() -> TestResult {
+    let native = Native::new();
+    let base = BrowserView::unbound(
+        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        None,
+    );
+    let created = base.page(page_id(&base, 1).await?).await?;
+    let delayed = base.with_expected_created_page(&created)?;
+    native.reconnect();
+    let result = delayed
+        .cdp(
+            "Browser.updateTabGroup",
+            json!({"groupId":"eng-group","title":"delayed"}),
+            None,
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+    ));
+    assert!(native.calls("Browser.updateTabGroup").is_empty());
+    assert!(
+        base.with_expected_created_page(&created).is_err(),
+        "late derivation adopted the replacement epoch"
+    );
+    // Ordinary unbound calls still follow the live browser; only the creation clone is frozen.
+    base.cdp(
+        "Browser.updateTabGroup",
+        json!({"groupId":"eng-group","title":"current"}),
+        None,
+    )
+    .await?;
+    assert_eq!(native.calls("Browser.updateTabGroup").len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn created_page_constraint_allows_live_work_but_never_adopts_changed_tab_window_or_context()
+-> TestResult {
+    for changed in [
+        "tabId",
+        "windowId",
+        "browserProfileId",
+        "liveBrowserContextId",
+    ] {
+        let native = Native::new();
+        let base = BrowserView::unbound(
+            BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+            None,
+        );
+        let created = base.page(page_id(&base, 1).await?).await?;
+        let derived = base.with_expected_created_page(&created)?;
+        derived
+            .cdp(
+                "Browser.updateTabGroup",
+                json!({"groupId":"eng-group","title":"live title"}),
+                None,
+            )
+            .await?;
+        assert_eq!(native.calls("Browser.updateTabGroup").len(), 1);
+        native.lock().tabs[0][changed] = match changed {
+            "tabId" => json!(101),
+            "windowId" => json!(12),
+            "browserProfileId" => json!("sales"),
+            _ => json!("live-sales"),
+        };
+        let result = derived
+            .cdp(
+                "Browser.updateTabGroup",
+                json!({"groupId":"eng-group","collapsed":false}),
+                None,
+            )
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(CoreError::Target(TargetError::PageTargetChanged(_)))
+            ),
+            "{changed}: {result:?}"
+        );
+        assert_eq!(
+            native.calls("Browser.updateTabGroup").len(),
+            1,
+            "{changed} authorized a new incarnation"
+        );
+    }
+    Ok(())
+}
+
+struct LegacyTransport(Arc<Native>);
+impl CdpConnection for LegacyTransport {
+    fn send<'a>(
+        &'a self,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        self.0.send(method, params, session)
+    }
+    fn send_raw_json<'a>(
+        &'a self,
+        method: &'a str,
+        params: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        self.0.send_raw_json(method, params, session)
+    }
+    fn events(&self) -> broadcast::Receiver<CdpEvent> {
+        self.0.events()
+    }
+    fn is_connected(&self) -> bool {
+        self.0.is_connected()
+    }
+    fn connection_epoch(&self) -> u64 {
+        self.0.connection_epoch()
+    }
+}
+
+#[tokio::test]
+async fn transports_without_atomic_epoch_support_fail_without_value_or_raw_dispatch() -> TestResult
+{
+    let native = Native::new();
+    let legacy: Arc<dyn CdpConnection> = Arc::new(LegacyTransport(native.clone()));
+    let guarded = crate::ProtocolSession::root(legacy).with_epoch_guard(Some(
+        crate::connection::EpochGuard {
+            expected: 1,
+            invalidated: TargetError::ProfileGone(BrowserProfileId("eng".into())),
+        },
+    ));
+    for result in [
+        guarded
+            .send_value("Browser.closeWindow", json!({"windowId":11}))
+            .await
+            .map(|_| ()),
+        guarded
+            .send_raw_json("Browser.closeWindow", r#"{"windowId":11}"#)
+            .await
+            .map(|_| ()),
+    ] {
+        let error = result.err().ok_or("unsafe fallback dispatched")?;
+        assert!(
+            error.to_string().starts_with("target_scope_unsupported:"),
+            "{error}"
+        );
+    }
+    assert!(native.calls("Browser.closeWindow").is_empty());
+    assert!(
+        native
+            .lock()
+            .windows
+            .iter()
+            .any(|window| window["windowId"] == 11)
+    );
     Ok(())
 }

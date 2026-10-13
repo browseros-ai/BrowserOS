@@ -1,6 +1,6 @@
 //! Reusable page capabilities retain both the call's scope and the page's target incarnation.
 //! Observer state remains shared; only acquisition and protocol dispatch carry these guards.
-use super::{BrowserView, CapturedScope, NativeWindow, cdp_policy};
+use super::{BrowserView, CapturedScope, NativeWindow, cdp_policy, contains_frame};
 use crate::{
     CoreError, FrameId, PageAdmission, ProtocolSession, SessionId, TargetError, TargetId,
     connection::ProtocolAdmission,
@@ -31,21 +31,21 @@ impl PageAccess {
         Ok(fresh)
     }
     pub(crate) async fn session(self: &Arc<Self>) -> Result<PageSession, CoreError> {
-        let live = self
-            .view
-            .validate_live()
-            .await?
-            .ok_or_else(|| cdp_policy::unsupported("page_session"))?;
+        let live = self.view.validate_live().await?;
         let admission = Admission {
             access: self,
-            scope: &live.scope,
-            windows: &live.windows,
+            scope: live.as_ref().map(|live| &live.scope),
+            windows: live.as_ref().map_or(&[], |live| live.windows.as_slice()),
         };
         let mut session = self
             .view
             .session
             .pages
-            .get_session_admitted(self.page.clone(), &admission)
+            .get_session_admitted_with_epoch(
+                self.page.clone(),
+                &admission,
+                self.view.epoch_guard()?,
+            )
             .await?;
         self.fresh().await?;
         session.session = session.session.with_admission(Arc::new(PageProtocol {
@@ -71,22 +71,33 @@ impl PageAccess {
             .ok_or_else(|| cdp_policy::unsupported("frame_session"))?;
         // OOPIFs are internal descendants, never independent page capabilities. Bind the child
         // endpoint to a frame still present in this page's tree and its current registry session.
-        Ok(session.with_admission(Arc::new(PageProtocol {
-            access: self.clone(),
-            root_session: root.session_id,
-            frame: Some((frame_id, endpoint)),
-        })))
+        Ok(session
+            .with_epoch_guard(self.view.epoch_guard()?)
+            .with_admission(Arc::new(PageProtocol {
+                access: self.clone(),
+                root_session: root.session_id,
+                frame: Some((frame_id, endpoint)),
+            })))
+    }
+
+    pub(crate) fn epoch_guard(&self) -> Result<Option<crate::connection::EpochGuard>, CoreError> {
+        self.view.epoch_guard()
     }
 }
 struct Admission<'a> {
     access: &'a PageAccess,
-    scope: &'a CapturedScope,
+    scope: Option<&'a CapturedScope>,
     windows: &'a [NativeWindow],
 }
 impl PageAdmission for Admission<'_> {
     fn admit(&self, fresh: &PageInfo) -> Result<(), CoreError> {
-        self.access.view.check_epoch(self.scope)?;
-        self.scope.admit_page(fresh, self.windows)?;
+        if let Some(scope) = self.scope {
+            self.access.view.check_epoch(scope)?;
+            scope.admit_page(fresh, self.windows)?;
+        }
+        if let Some(guard) = self.access.epoch_guard()? {
+            guard.check(self.access.view.session.connection().as_ref())?;
+        }
         if fresh.target_id != self.access.target {
             return Err(TargetError::PageTargetChanged(fresh.page_id.clone()).into());
         }
@@ -123,7 +134,8 @@ impl ProtocolAdmission for PageProtocol {
                 let root = ProtocolSession::for_session(
                     self.access.view.session.connection(),
                     self.root_session.clone(),
-                );
+                )
+                .with_epoch_guard(self.access.epoch_guard()?);
                 let tree = root.send_value("Page.getFrameTree", json!({})).await?;
                 if !contains_frame(&tree["frameTree"], frame.as_str())
                     || !self
@@ -141,10 +153,4 @@ impl ProtocolAdmission for PageProtocol {
             Ok(())
         })
     }
-}
-fn contains_frame(tree: &Value, id: &str) -> bool {
-    tree["frame"]["id"] == id
-        || tree["childFrames"]
-            .as_array()
-            .is_some_and(|children| children.iter().any(|child| contains_frame(child, id)))
 }

@@ -89,8 +89,17 @@ impl PageManager {
     }
 
     pub async fn list(&self) -> Result<Vec<PageInfo>, CoreError> {
-        self.ensure_connected().await?;
-        let root = ProtocolSession::root(self.cdp.clone());
+        self.list_with_epoch(None).await
+    }
+
+    /// View-owned reconciliation still sees the full browser, but cannot publish work to a
+    /// replacement connection. Global callers retain the original unrestricted entry point.
+    pub(crate) async fn list_with_epoch(
+        &self,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<Vec<PageInfo>, CoreError> {
+        self.ensure_connected_with_epoch(guard.as_ref()).await?;
+        let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let result: NativeTabs = root.send("Browser.getTabs", json!({})).await?;
         let tabs = result
             .tabs
@@ -104,6 +113,9 @@ impl PageManager {
 
         let mut detached = Vec::new();
         let mut state = self.state.lock().await;
+        if let Some(guard) = &guard {
+            guard.check(self.cdp.as_ref())?;
+        }
         let mut seen = Vec::<TargetId>::new();
         for tab in tabs {
             let target_id = TargetId(tab.target_id.clone());
@@ -170,17 +182,27 @@ impl PageManager {
         page_id: PageId,
         admission: &dyn PageAdmission,
     ) -> Result<PageSession, CoreError> {
+        self.get_session_admitted_with_epoch(page_id, admission, None)
+            .await
+    }
+
+    pub(crate) async fn get_session_admitted_with_epoch(
+        &self,
+        page_id: PageId,
+        admission: &dyn PageAdmission,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<PageSession, CoreError> {
         for _ in 0..2 {
             let before = self
-                .refresh(page_id.clone())
+                .refresh_with_epoch(page_id.clone(), guard.clone())
                 .await?
                 .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
             admission.admit(&before)?;
             let session_id = self
-                .attach(before.target_id.clone(), page_id.clone())
+                .attach_with_epoch(before.target_id.clone(), page_id.clone(), guard.clone())
                 .await?;
             let after = self
-                .refresh(page_id.clone())
+                .refresh_with_epoch(page_id.clone(), guard.clone())
                 .await?
                 .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
             if before.target_id != after.target_id {
@@ -190,7 +212,8 @@ impl PageManager {
             return Ok(PageSession {
                 target_id: after.target_id,
                 session_id: session_id.clone(),
-                session: ProtocolSession::for_session(self.cdp.clone(), session_id),
+                session: ProtocolSession::for_session(self.cdp.clone(), session_id)
+                    .with_epoch_guard(guard),
                 url: after.url,
             });
         }
@@ -313,16 +336,24 @@ impl PageManager {
     }
 
     pub async fn refresh(&self, page_id: PageId) -> Result<Option<PageInfo>, CoreError> {
-        self.ensure_connected().await?;
+        self.refresh_with_epoch(page_id, None).await
+    }
+
+    pub(crate) async fn refresh_with_epoch(
+        &self,
+        page_id: PageId,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<Option<PageInfo>, CoreError> {
+        self.ensure_connected_with_epoch(guard.as_ref()).await?;
         let info = {
             let state = self.state.lock().await;
             state.pages.get(&page_id).cloned()
         };
         let Some(info) = info else {
-            self.list().await?;
+            self.list_with_epoch(guard).await?;
             return Ok(self.state.lock().await.pages.get(&page_id).cloned());
         };
-        let root = ProtocolSession::root(self.cdp.clone());
+        let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let refreshed = root
             .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": info.tab_id.0 }))
             .await;
@@ -330,6 +361,9 @@ impl PageManager {
             Ok(result) => {
                 let updated = page_info_from_tab(page_id.clone(), result.tab, info.window_id);
                 let mut state = self.state.lock().await;
+                if let Some(guard) = &guard {
+                    guard.check(self.cdp.as_ref())?;
+                }
                 let Some(current) = state.pages.get(&page_id) else {
                     return Ok(None);
                 };
@@ -343,8 +377,9 @@ impl PageManager {
                 state.pages.insert(page_id, updated.clone());
                 Ok(Some(updated))
             }
+            Err(err @ CoreError::Target(_)) => Err(err),
             Err(_err) => {
-                self.list().await?;
+                self.list_with_epoch(guard).await?;
                 Ok(self.state.lock().await.pages.get(&page_id).cloned())
             }
         }
@@ -516,12 +551,21 @@ impl PageManager {
     }
 
     async fn attach(&self, target_id: TargetId, page_id: PageId) -> Result<SessionId, CoreError> {
-        self.ensure_connected().await?;
+        self.attach_with_epoch(target_id, page_id, None).await
+    }
+
+    async fn attach_with_epoch(
+        &self,
+        target_id: TargetId,
+        page_id: PageId,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<SessionId, CoreError> {
+        self.ensure_connected_with_epoch(guard.as_ref()).await?;
         if let Some(cached) = self.state.lock().await.sessions.get(&target_id).cloned() {
             return Ok(cached);
         }
 
-        let root = ProtocolSession::root(self.cdp.clone());
+        let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let attached: target::AttachToTargetResult = root
             .send(
                 "Target.attachToTarget",
@@ -529,7 +573,10 @@ impl PageManager {
             )
             .await?;
         let session_id = SessionId::from(attached.session_id);
-        let session = ProtocolSession::for_session(self.cdp.clone(), session_id.clone());
+        // Infrastructure setup and its frame-registration hook keep the epoch even though
+        // they do not use the caller's page-method policy (e.g. Target.setAutoAttach).
+        let session = ProtocolSession::for_session(self.cdp.clone(), session_id.clone())
+            .with_epoch_guard(guard.clone());
         let _: Value = session.send("Page.enable", json!({})).await?;
         let _: Value = session.send("DOM.enable", json!({})).await?;
         let _: Value = session.send("Runtime.enable", json!({})).await?;
@@ -553,15 +600,35 @@ impl PageManager {
         {
             warn!("failed to enable focus emulation for agent page {page_id:?}: {err}");
         }
-        self.state
-            .lock()
-            .await
-            .sessions
-            .insert(target_id, session_id.clone());
+        {
+            let mut state = self.state.lock().await;
+            if let Some(guard) = &guard {
+                guard.check(self.cdp.as_ref())?;
+            }
+            state.sessions.insert(target_id, session_id.clone());
+        }
         if let Some(callback) = &self.hooks.on_session_attached {
             callback(session, page_id, session_id.clone()).await?;
         }
         Ok(session_id)
+    }
+
+    async fn ensure_connected_with_epoch(
+        &self,
+        guard: Option<&crate::connection::EpochGuard>,
+    ) -> Result<(), CoreError> {
+        if let Some(guard) = guard {
+            guard.check(self.cdp.as_ref())?;
+            let mut state = self.state.lock().await;
+            guard.check(self.cdp.as_ref())?;
+            if state.connection_epoch != guard.expected {
+                state.sessions.clear();
+                state.connection_epoch = guard.expected;
+            }
+        } else {
+            self.ensure_connected().await?;
+        }
+        Ok(())
     }
 
     async fn ensure_connected(&self) -> Result<bool, CoreError> {
