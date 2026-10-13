@@ -15,6 +15,7 @@
 //! ```
 
 pub mod client;
+pub mod gate;
 pub mod kind;
 pub mod offer;
 pub mod questions;
