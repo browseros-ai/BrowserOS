@@ -28,6 +28,7 @@ struct Call {
 }
 
 struct NativeFixture {
+    epoch: u64,
     profiles: Vec<Value>,
     windows: Vec<Value>,
     tabs: Vec<Value>,
@@ -77,6 +78,7 @@ impl FixtureConnection {
         Arc::new(Self {
             events,
             state: Mutex::new(NativeFixture {
+                epoch: 1,
                 profiles: vec![
                     profile("eng", "eng", true),
                     profile("sales", "sales", true),
@@ -125,6 +127,7 @@ impl FixtureConnection {
 
     fn reply(
         &self,
+        expected_epoch: Option<u64>,
         method: &str,
         params: Value,
         session: Option<&SessionId>,
@@ -133,6 +136,17 @@ impl FixtureConnection {
             code: -1,
             message: err.to_string(),
         })?;
+        // Reconnect simulation uses this same lock. Check after acquiring it,
+        // before publishing or applying dispatch; there is no awaited gap that
+        // could send an admitted request to the replacement fixture epoch.
+        if let Some(expected) = expected_epoch
+            && expected != state.epoch
+        {
+            return Err(CdpError::ConnectionEpochChanged {
+                expected,
+                actual: state.epoch,
+            });
+        }
         state.calls.push(Call {
             method: method.to_string(),
             params: params.clone(),
@@ -308,7 +322,16 @@ impl CdpConnection for FixtureConnection {
         params: Value,
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
-        Box::pin(async move { self.reply(method, params, session) })
+        Box::pin(async move { self.reply(None, method, params, session) })
+    }
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(async move { self.reply(Some(expected_epoch), method, params, session) })
     }
     fn send_raw_json<'a>(
         &'a self,
@@ -321,7 +344,24 @@ impl CdpConnection for FixtureConnection {
                 code: -1,
                 message: err.to_string(),
             })?;
-            Ok(self.reply(method, params, session)?.to_string())
+            Ok(self.reply(None, method, params, session)?.to_string())
+        })
+    }
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async move {
+            let params = serde_json::from_str(params).map_err(|err| CdpError::Protocol {
+                code: -1,
+                message: err.to_string(),
+            })?;
+            Ok(self
+                .reply(Some(expected_epoch), method, params, session)?
+                .to_string())
         })
     }
     fn events(&self) -> broadcast::Receiver<CdpEvent> {
@@ -331,8 +371,52 @@ impl CdpConnection for FixtureConnection {
         true
     }
     fn connection_epoch(&self) -> u64 {
-        1
+        self.state
+            .lock()
+            .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
+            .epoch
     }
+}
+
+#[tokio::test]
+async fn fixture_epoch_dispatch_rechecks_before_recording_or_mutating() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let expected = connection.connection_epoch();
+    let params = json!({ "windowId": 20, "url": "https://eng.example.test/epoch" });
+    let raw_params = params.to_string();
+    // Both dispatch futures were prepared on the original connection. Changing
+    // its epoch before polling must reject even if the IDs are still reusable.
+    let decoded = connection.send_at_epoch(expected, "Browser.createTab", params.clone(), None);
+    let raw = connection.send_raw_json_at_epoch(expected, "Browser.createTab", &raw_params, None);
+    connection.change(|state| state.epoch += 1);
+    assert!(matches!(
+        decoded.await,
+        Err(CdpError::ConnectionEpochChanged {
+            expected: 1,
+            actual: 2
+        })
+    ));
+    assert!(matches!(
+        raw.await,
+        Err(CdpError::ConnectionEpochChanged {
+            expected: 1,
+            actual: 2
+        })
+    ));
+    assert!(connection.calls().is_empty());
+    connection.change(|state| assert_eq!(state.tabs.len(), 4));
+
+    let current = connection.connection_epoch();
+    connection
+        .send_at_epoch(current, "Browser.createTab", params, None)
+        .await?;
+    let created = connection
+        .send_raw_json_at_epoch(current, "Browser.createTab", &raw_params, None)
+        .await?;
+    assert!(serde_json::from_str::<Value>(&created)?["tab"].is_object());
+    assert_eq!(connection.calls().len(), 2);
+    connection.change(|state| assert_eq!(state.tabs.len(), 6));
+    Ok(())
 }
 
 fn intent(profile: &str) -> TargetIntent {
