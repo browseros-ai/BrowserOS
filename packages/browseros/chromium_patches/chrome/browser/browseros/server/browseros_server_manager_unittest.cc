@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_manager_unittest.cc b/chrome/browser/browseros/server/browseros_server_manager_unittest.cc
 new file mode 100644
-index 0000000000000..0b48cea4baebe
+index 0000000000000000000000000000000000000000..6b59362a95ac0d1b3590b5d12d2e8e002877a783
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_manager_unittest.cc
-@@ -0,0 +1,562 @@
+@@ -0,0 +1,464 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -149,40 +149,6 @@ index 0000000000000..0b48cea4baebe
 +  task_environment_.RunUntilIdle();
 +
 +  EXPECT_EQ(0, port_finder_call_count_);
-+}
-+
-+TEST_F(BrowserOSServerManagerTest, HealthCheckFail_RestartsAfterTwoStrikes) {
-+  SetupSuccessfulLaunch();
-+  manager_->SetRunningForTesting(true);
-+  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
-+  UseFakePortFinder();
-+
-+  // First failure is only a warning strike.
-+  manager_->OnHealthCheckComplete(false);
-+  task_environment_.RunUntilIdle();
-+  EXPECT_EQ(0, port_finder_call_count_);
-+
-+  // Second consecutive failure triggers the managed restart.
-+  manager_->OnHealthCheckComplete(false);
-+  task_environment_.RunUntilIdle();
-+  EXPECT_EQ(1, port_finder_call_count_);
-+}
-+
-+TEST_F(BrowserOSServerManagerTest, HealthCheckPass_ResetsFailureStrikes) {
-+  SetupSuccessfulLaunch();
-+  manager_->SetRunningForTesting(true);
-+  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
-+  UseFakePortFinder();
-+
-+  manager_->OnHealthCheckComplete(false);
-+  manager_->OnHealthCheckComplete(true);
-+  manager_->OnHealthCheckComplete(false);
-+  task_environment_.RunUntilIdle();
-+  EXPECT_EQ(0, port_finder_call_count_);
-+
-+  manager_->OnHealthCheckComplete(false);
-+  task_environment_.RunUntilIdle();
-+  EXPECT_EQ(1, port_finder_call_count_);
 +}
 +
 +// =============================================================================
@@ -450,33 +416,6 @@ index 0000000000000..0b48cea4baebe
 +// Restart Saves Ports to Prefs Tests
 +// =============================================================================
 +
-+TEST_F(BrowserOSServerManagerTest, ManagedRestartKeepsServerPortWithReuse) {
-+  SetupSuccessfulLaunch();
-+  manager_->SetRunningForTesting(true);
-+  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
-+  UseFakePortFinder(browseros_server::kDefaultServerPort);
-+
-+  // Trigger restart via two consecutive health check failures.
-+  manager_->OnHealthCheckComplete(false);
-+  manager_->OnHealthCheckComplete(false);
-+
-+  // Run all pending tasks (thread pool + reply)
-+  task_environment_.RunUntilIdle();
-+
-+  EXPECT_EQ(1, port_finder_call_count_);
-+  EXPECT_EQ(browseros_server::kDefaultServerPort, port_finder_starting_port_);
-+  EXPECT_EQ(1u, port_finder_excluded_.count(browseros_server::kDefaultCDPPort));
-+  EXPECT_EQ(1u,
-+            port_finder_excluded_.count(browseros_server::kDefaultProxyPort));
-+  EXPECT_EQ(1u, port_finder_excluded_.count(
-+                    browseros_server::kDefaultProxyHttpsPort));
-+  EXPECT_TRUE(port_finder_allow_reuse_);
-+  EXPECT_EQ(manager_->GetServerPort(),
-+            prefs_.GetInteger(browseros_server::kServerPort));
-+  EXPECT_EQ(browseros_server::kDefaultServerPort,
-+            prefs_.GetInteger(browseros_server::kServerPort));
-+}
-+
 +TEST_F(BrowserOSServerManagerTest,
 +       PortConflictExitAdvancesServerPortWithoutReuse) {
 +  SetupSuccessfulLaunch();
@@ -497,43 +436,6 @@ index 0000000000000..0b48cea4baebe
 +            manager_->GetServerPort());
 +  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
 +            prefs_.GetInteger(browseros_server::kServerPort));
-+}
-+
-+TEST_F(BrowserOSServerManagerTest,
-+       PortConflictAdvanceConsumedThenManagedRestartKeepsPort) {
-+  SetupSuccessfulLaunch();
-+  manager_->SetRunningForTesting(true);
-+  manager_->SetPortsForTesting(MakePorts(browseros_server::kDefaultServerPort));
-+  UseFakePortFinder(browseros_server::kDefaultServerPort + 1);
-+
-+  manager_->OnProcessExitedForTesting(2);
-+  task_environment_.RunUntilIdle();
-+
-+  EXPECT_EQ(1, port_finder_call_count_);
-+  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
-+            port_finder_starting_port_);
-+  EXPECT_EQ(1u, port_finder_excluded_.count(
-+                    browseros_server::kDefaultProxyHttpsPort));
-+  EXPECT_FALSE(port_finder_allow_reuse_);
-+  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
-+            manager_->GetServerPort());
-+
-+  // The mock launch does not create a process, so restore running state before
-+  // simulating the next health-check restart.
-+  manager_->SetRunningForTesting(true);
-+
-+  manager_->OnHealthCheckComplete(false);
-+  manager_->OnHealthCheckComplete(false);
-+  task_environment_.RunUntilIdle();
-+
-+  EXPECT_EQ(2, port_finder_call_count_);
-+  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
-+            port_finder_starting_port_);
-+  EXPECT_EQ(1u, port_finder_excluded_.count(
-+                    browseros_server::kDefaultProxyHttpsPort));
-+  EXPECT_TRUE(port_finder_allow_reuse_);
-+  EXPECT_EQ(browseros_server::kDefaultServerPort + 1,
-+            manager_->GetServerPort());
 +}
 +
 +TEST_F(BrowserOSServerManagerTest, UpdateRestartKeepsServerPortWithReuse) {

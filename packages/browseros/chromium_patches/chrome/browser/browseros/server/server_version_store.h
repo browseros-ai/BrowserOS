@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/server_version_store.h b/chrome/browser/browseros/server/server_version_store.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..c90917d67b435cd056142782e2df6c3ac2aa26f2
+index 0000000000000000000000000000000000000000..be6ac747f34ecfe74c89b916d708cbe1f05687fa
 --- /dev/null
 +++ b/chrome/browser/browseros/server/server_version_store.h
-@@ -0,0 +1,85 @@
+@@ -0,0 +1,103 @@
 +#ifndef CHROME_BROWSER_BROWSEROS_SERVER_SERVER_VERSION_STORE_H_
 +#define CHROME_BROWSER_BROWSEROS_SERVER_SERVER_VERSION_STORE_H_
 +
@@ -57,10 +57,26 @@ index 0000000000000000000000000000000000000000..c90917d67b435cd056142782e2df6c3a
 +  void PrepareVersion(const base::Version& version,
 +                      base::OnceCallback<void(bool)> callback);
 +
-+  // Call after the rejected process has stopped, so Windows can remove its
++  // Removes an installation that can never run, such as one whose executable
++  // is missing. Call after its process has stopped, so Windows can remove its
 +  // files and a live server never loses its resources. Clears only this
 +  // version.
-+  void RejectVersion(const base::Version& version);
++  void RemoveInvalidVersion(const base::Version& version);
++
++  // A downloaded version that failed under supervision. GetBestAvailable()
++  // skips it for the rest of this session, but its files are kept: it may have
++  // migrated user data past what the bundled server can open, and then it is
++  // the only binary that can still serve. An invalid version readmits it.
++  void set_rejected_version(const base::Version& version) {
++    rejected_ = version;
++  }
++  const base::Version& rejected_version() const { return rejected_; }
++
++  // The ready download even if rejected. Supervision falls back to it when the
++  // bundled server is out of strikes too.
++  const std::optional<ServerInstallation>& fallback_download() const {
++    return ready_;
++  }
 +
 +  base::FilePath GetVersionsDir() const;
 +  base::FilePath GetVersionDir(const base::Version& version) const;
@@ -80,6 +96,8 @@ index 0000000000000000000000000000000000000000..c90917d67b435cd056142782e2df6c3a
 +  const base::FilePath binary_name_;
 +  ServerInstallation bundled_;
 +  std::optional<ServerInstallation> ready_;
++  // Excluded from GetBestAvailable(). Invalid when nothing is rejected.
++  base::Version rejected_;
 +  bool initialized_ = false;
 +
 +  scoped_refptr<base::SequencedTaskRunner> task_runner_;
