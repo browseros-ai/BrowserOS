@@ -105,8 +105,8 @@ pub struct BrowserToolOptions {
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
-    /// Host hook a script tool invokes around each primitive; `None` outside
-    /// the host (unit tests, non-host callers), which disables the hook.
+    /// Host capabilities for script primitive hooks and central tool-operation
+    /// ordering; `None` disables these additions for non-host callers.
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
     /// Helpers the host loads into the script runtime before the agent's code
     /// runs, exposed as `helpers.<name>`. Empty outside the host.
@@ -151,11 +151,10 @@ impl ToolCtx {
     }
 }
 
-/// Host-injected hook a script tool (`run`/`execute`) calls around each browser
-/// primitive so the host can enforce per-primitive ownership and record the
-/// primitive as a child audit row. `browseros-mcp` cannot reach the host's
-/// guards or audit store, so the host implements this and passes it in via
-/// [`ToolCtx::inner_call_hook`].
+/// Host capabilities for script ownership/audit and optional tool-operation ordering.
+/// The script bridge records each primitive; the central executor retains a host guard
+/// only for operations the host selects. `browseros-mcp` cannot reach the host's guards
+/// or audit store, so the host supplies this through [`ToolCtx::inner_call_hook`].
 pub trait InnerCallHook: Send + Sync {
     /// Authorize a primitive about to run against the caller's ownership.
     /// `page` is the primitive's target page id, when it addresses one.
@@ -165,6 +164,20 @@ pub trait InnerCallHook: Send + Sync {
 
     /// Record a completed inner primitive as a child audit row.
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()>;
+
+    /// Optionally order a tool operation with other host work. `execute_tool`
+    /// passes the plain catalog name and raw arguments, then retains the owned
+    /// guard through handler/readback work and releases it before bridge audit.
+    /// Acquisition may be dropped on cancellation or a caller's timeout; it
+    /// must not detach queued work. The captured BrowserView still governs access.
+    fn acquire_tool_guard<'a>(
+        &'a self,
+        tool_name: &'a str,
+        args: &'a Value,
+    ) -> BoxFuture<'a, Result<Option<Box<dyn Send>>, String>> {
+        let _ = (tool_name, args);
+        Box::pin(async { Ok(None) })
+    }
 
     /// Signal that the script just created a page. The host claims and groups
     /// it exactly as a `tabs new` would, so a script's tabs get the agent's
@@ -381,6 +394,20 @@ pub async fn execute_tool(
         }
     }
     ctx.throw_if_cancelled()?;
+    // Acquisition stays inside the caller's execution future: queued cancellation
+    // and the run's existing deadline drop it without publishing handler work. Keep
+    // the owned guard through all response readbacks; BrowserView remains the scope
+    // authority and each handler's native operations re-admit after this wait.
+    let tool_guard = if let Some(hook) = &ctx.inner_call_hook {
+        tokio::select! {
+            biased;
+            () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+            guard = hook.acquire_tool_guard(def.name, &raw_args) => guard.map_err(ToolError::message)?,
+        }
+    } else {
+        None
+    };
+    ctx.throw_if_cancelled()?;
     let mut response = ToolResponse::new();
     match (def.handler)(raw_args, ctx, &mut response).await {
         Ok(Some(result)) => response.append_result(result),
@@ -402,7 +429,11 @@ pub async fn execute_tool(
     {
         result.metadata_tab_id = Some(tab_id.0);
     }
-    Ok(result.into_tool_result())
+    let result = result.into_tool_result();
+    // The script bridge records its child audit only after execute_tool returns.
+    // Releasing here prevents host audit work from retaining an operation lock.
+    drop(tool_guard);
+    Ok(result)
 }
 
 #[must_use]

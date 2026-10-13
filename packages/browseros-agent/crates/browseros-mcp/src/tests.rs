@@ -28,6 +28,9 @@ use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 
+#[path = "tool_guard_tests.rs"]
+mod tool_guard_tests;
+
 struct FakeConnection {
     sender: broadcast::Sender<CdpEvent>,
 }
