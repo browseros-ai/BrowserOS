@@ -56,7 +56,6 @@ const RETIRED_KEYS = new Set(['R2_UPLOAD_PREFIX', 'R2_DOWNLOAD_PREFIX'])
 const RETIRED_PREFIX_DEFAULTS: Record<string, readonly string[]> = {
   R2_UPLOAD_PREFIX: [
     'artifacts/server',
-    'cli',
     'claw-server/prod-resources',
     'claw-onboard/prod-resources',
   ],
@@ -64,7 +63,7 @@ const RETIRED_PREFIX_DEFAULTS: Record<string, readonly string[]> = {
 }
 const PRIMARY_OLD_FILES: Record<EnvMode, string[]> = {
   development: ['apps/server/.env.development', 'apps/app/.env.development'],
-  production: ['apps/server/.env.production', 'apps/cli/.env.production'],
+  production: ['apps/server/.env.production'],
 }
 
 /** Builds the root env migration plan from existing per-app env files. */

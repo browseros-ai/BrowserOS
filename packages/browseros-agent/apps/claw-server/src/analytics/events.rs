@@ -445,7 +445,6 @@ mod tests {
             "Cline",
             "Continue",
             "Goose",
-            "browseros-cli",
         ];
         let expected = [
             "claude-desktop",
@@ -462,7 +461,6 @@ mod tests {
             "cline",
             "continue",
             "goose",
-            "browseros-cli",
         ];
 
         for (raw, expected) in known.into_iter().zip(expected) {

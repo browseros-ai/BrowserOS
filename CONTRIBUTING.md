@@ -2,7 +2,7 @@
 
 Thanks for being here. Whether you are fixing a bug, building a feature, improving docs, or just poking around, we are glad to have you.
 
-Both browsers ship from this one repo, and there are four places you can work. Pick the one that matches what you want to change.
+Both browsers ship from this one repo, and there are three places you can work. Pick the one that matches what you want to change.
 
 ## Pick your path
 
@@ -10,7 +10,6 @@ Both browsers ship from this one repo, and there are four places you can work. P
 |---|---|---|---|
 | **[BrowserOS neo](packages/browseros-agent/CONTRIBUTING.md)** | The cockpit new tab, the MCP surface agents connect to, session replay | TypeScript, React, Rust | ~15 minutes |
 | **[BrowserOS](packages/browseros-agent/CONTRIBUTING.BrowserOS.md)** | The side panel chat, the agent loop, scheduled tasks, settings | TypeScript, React, Bun | ~15 minutes |
-| **CLI** | Driving BrowserOS from a terminal or a coding agent | Go | ~5 minutes |
 | **Browser** | Chromium patches, the build system, platform features | C++, Python | ~100GB disk, hours |
 
 Most contributors start with BrowserOS neo or BrowserOS. Both live in `packages/browseros-agent` and share one toolchain, so setting up for one gets you most of the way to the other.
