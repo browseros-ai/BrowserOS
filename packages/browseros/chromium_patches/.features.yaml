@@ -512,3 +512,15 @@ features:
       - extensions/browser/crx_installer.h
       - extensions/browser/external_install_info.cc
       - extensions/browser/external_install_info.h
+
+  renderer-termination-diagnostics:
+    description: "feat: opt-in renderer termination diagnostics"
+    files:
+      - "content/browser/renderer_host/render_process_host_impl.h"
+      - "content/browser/renderer_host/render_process_host_impl.cc"
+      - "content/browser/renderer_host/spare_render_process_host_manager_impl.cc"
+      - "content/browser/child_process_launcher.h"
+      - "content/browser/child_process_launcher.cc"
+      - "content/browser/child_process_launcher_helper.h"
+      - "content/browser/child_process_launcher_helper.cc"
+      - "content/browser/child_process_launcher_helper_mac.cc"
