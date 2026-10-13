@@ -15,3 +15,4 @@
 //! ```
 
 pub mod client;
+pub mod view;
