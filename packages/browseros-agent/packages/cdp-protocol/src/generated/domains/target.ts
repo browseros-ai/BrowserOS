@@ -15,12 +15,14 @@ export interface TargetInfo {
   title: string
   url: string
   attached: boolean
+  parentId?: TargetID
   openerId?: TargetID
   canAccessOpener: boolean
   openerFrameId?: FrameId
   parentFrameId?: FrameId
   browserContextId?: BrowserContextID
   subtype?: string
+  embedderData?: Record<string, unknown>
   tabId?: TabID
   windowId?: WindowID
 }

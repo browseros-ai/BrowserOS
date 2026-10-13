@@ -31,7 +31,7 @@ export type PseudoType =
   | 'after'
   | 'expand-icon'
   | 'picker-icon'
-  | 'interest-hint'
+  | 'interest-button'
   | 'marker'
   | 'backdrop'
   | 'column'
@@ -63,8 +63,11 @@ export type PseudoType =
   | 'file-selector-button'
   | 'details-content'
   | 'picker'
+  | 'select-listbox'
   | 'permission-icon'
   | 'overscroll-area-parent'
+  | 'overscroll-backdrop'
+  | 'skeleton'
 
 export type ShadowRootType = 'user-agent' | 'open' | 'closed'
 
@@ -519,10 +522,33 @@ export interface GetAnchorElementResult {
 export interface ForceShowPopoverParams {
   nodeId: NodeId
   enable: boolean
+  invokerNodeId?: BackendNodeId
 }
 
 export interface ForceShowPopoverResult {
   nodeIds: NodeId[]
+}
+
+export interface GetImplicitAnchorCandidatesParams {
+  nodeId: NodeId
+}
+
+export interface GetImplicitAnchorCandidatesResult {
+  backendNodeIds: BackendNodeId[]
+}
+
+export interface ForceShowInterestParams {
+  nodeId: NodeId
+  enable: boolean
+}
+
+export interface SetTextMarkerParams {
+  nodeId?: NodeId
+  backendNodeId?: BackendNodeId
+  objectId?: RemoteObjectId
+  type: 'spelling' | 'grammar'
+  start: number
+  end: number
 }
 
 // ══ Events ══

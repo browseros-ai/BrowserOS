@@ -33,6 +33,7 @@ export interface BaseAudioContext {
   callbackBufferSize: number
   maxOutputChannelCount: number
   sampleRate: number
+  renderQuantumSize: number
 }
 
 export interface AudioListener {

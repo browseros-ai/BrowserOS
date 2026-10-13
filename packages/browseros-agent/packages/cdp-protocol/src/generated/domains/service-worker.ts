@@ -26,6 +26,39 @@ export type ServiceWorkerVersionStatus =
   | 'activated'
   | 'redundant'
 
+export interface ServiceWorkerRouterCondition {
+  urlPattern?: string
+  requestMethod?: string
+  requestMode?: string
+  requestDestination?: string
+  runningStatus?: ServiceWorkerVersionRunningStatus
+  or?: ServiceWorkerRouterCondition[]
+  not?: ServiceWorkerRouterCondition
+}
+
+export type ServiceWorkerRouterSourceType =
+  | 'cache'
+  | 'fetchEvent'
+  | 'network'
+  | 'raceNetworkAndFetchHandler'
+  | 'raceNetworkAndCache'
+  | 'sourceDict'
+
+export interface ServiceWorkerRouterSourceDict {
+  cacheName: string
+}
+
+export interface ServiceWorkerRouterSource {
+  type: ServiceWorkerRouterSourceType
+  sourceDict?: ServiceWorkerRouterSourceDict
+}
+
+export interface ServiceWorkerRouterRule {
+  condition: ServiceWorkerRouterCondition
+  source: ServiceWorkerRouterSource
+  id: number
+}
+
 export interface ServiceWorkerVersion {
   versionId: string
   registrationId: RegistrationID
@@ -37,6 +70,7 @@ export interface ServiceWorkerVersion {
   controlledClients?: TargetID[]
   targetId?: TargetID
   routerRules?: string
+  typedRouterRules?: ServiceWorkerRouterRule[]
 }
 
 export interface ServiceWorkerErrorMessage {

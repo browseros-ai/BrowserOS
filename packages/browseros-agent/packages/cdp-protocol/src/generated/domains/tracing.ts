@@ -64,6 +64,8 @@ export interface StartParams {
   traceConfig?: TraceConfig
   perfettoConfig?: string
   tracingBackend?: TracingBackend
+  screenshotMaxSize?: number
+  screenshotMaxCount?: number
 }
 
 // ══ Events ══

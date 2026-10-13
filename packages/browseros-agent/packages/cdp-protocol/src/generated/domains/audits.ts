@@ -90,7 +90,6 @@ export type MixedContentResolutionStatus =
   | 'MixedContentWarning'
 
 export type MixedContentResourceType =
-  | 'AttributionSrc'
   | 'Audio'
   | 'Beacon'
   | 'CSPReport'
@@ -203,29 +202,6 @@ export interface CorsIssueDetails {
   clientSecurityState?: ClientSecurityState
 }
 
-export type AttributionReportingIssueType =
-  | 'PermissionPolicyDisabled'
-  | 'UntrustworthyReportingOrigin'
-  | 'InsecureContext'
-  | 'InvalidHeader'
-  | 'InvalidRegisterTriggerHeader'
-  | 'SourceAndTriggerHeaders'
-  | 'SourceIgnored'
-  | 'TriggerIgnored'
-  | 'OsSourceIgnored'
-  | 'OsTriggerIgnored'
-  | 'InvalidRegisterOsSourceHeader'
-  | 'InvalidRegisterOsTriggerHeader'
-  | 'WebAndOsHeaders'
-  | 'NoWebOrOsSupport'
-  | 'NavigationRegistrationWithoutTransientUserActivation'
-  | 'InvalidInfoHeader'
-  | 'NoRegisterSourceHeader'
-  | 'NoRegisterTriggerHeader'
-  | 'NoRegisterOsSourceHeader'
-  | 'NoRegisterOsTriggerHeader'
-  | 'NavigationRegistrationUniqueScopeAlreadySet'
-
 export type SharedDictionaryError =
   | 'UseErrorCrossOriginNoCorsRequest'
   | 'UseErrorDictionaryLoadFailure'
@@ -246,6 +222,7 @@ export type SharedDictionaryError =
   | 'WriteErrorNonSecureContext'
   | 'WriteErrorNonStringIdField'
   | 'WriteErrorNonStringInMatchDestList'
+  | 'WriteErrorInvalidMatchDestList'
   | 'WriteErrorNonStringMatchField'
   | 'WriteErrorNonTokenTypeField'
   | 'WriteErrorRequestAborted'
@@ -275,6 +252,10 @@ export type SRIMessageSignatureError =
   | 'ValidationFailedInvalidLength'
   | 'ValidationFailedSignatureMismatch'
   | 'ValidationFailedIntegrityMismatch'
+  | 'SignatureBaseUnknownDerivedComponent'
+  | 'SignatureBaseMissingHeader'
+  | 'SignatureBaseInvalidUnencodedDigest'
+  | 'SignatureBaseUnsupportedComponent'
 
 export type UnencodedDigestError =
   | 'MalformedDictionary'
@@ -289,13 +270,9 @@ export type ConnectionAllowlistError =
   | 'InvalidAllowlistItemType'
   | 'ReportingEndpointNotToken'
   | 'InvalidUrlPattern'
-
-export interface AttributionReportingIssueDetails {
-  violationType: AttributionReportingIssueType
-  request?: AffectedRequest
-  violatingNodeId?: BackendNodeId
-  invalidParameter?: string
-}
+  | 'IFrameAttributeLoosensEmbeddingRequirement'
+  | 'InvalidAllowConnectionAllowlistFrom'
+  | 'EmbeddingRequirementNotSatisfied'
 
 export interface QuirksModeIssueDetails {
   isLimitedQuirksMode: boolean
@@ -345,10 +322,15 @@ export type GenericIssueErrorType =
   | 'FormInputHasWrongButWellIntendedAutocompleteValueError'
   | 'ResponseWasBlockedByORB'
   | 'NavigationEntryMarkedSkippable'
+  | 'BackUINavigationWouldSkipAd'
   | 'AutofillAndManualTextPolicyControlledFeaturesInfo'
   | 'AutofillPolicyControlledFeatureInfo'
   | 'ManualTextPolicyControlledFeatureInfo'
   | 'FormModelContextParameterMissingTitleAndDescription'
+  | 'FormModelContextMissingToolName'
+  | 'FormModelContextMissingToolDescription'
+  | 'FormModelContextRequiredParameterMissingName'
+  | 'FormModelContextParameterMissingName'
 
 export interface GenericIssueDetails {
   errorType: GenericIssueErrorType
@@ -388,6 +370,7 @@ export type FederatedAuthRequestIssueReason =
   | 'TooManyRequests'
   | 'WellKnownHttpNotFound'
   | 'WellKnownNoResponse'
+  | 'WellKnownBlockedByConnectionAllowlist'
   | 'WellKnownInvalidResponse'
   | 'WellKnownListEmpty'
   | 'WellKnownInvalidContentType'
@@ -395,6 +378,7 @@ export type FederatedAuthRequestIssueReason =
   | 'WellKnownTooBig'
   | 'ConfigHttpNotFound'
   | 'ConfigNoResponse'
+  | 'ConfigBlockedByConnectionAllowlist'
   | 'ConfigInvalidResponse'
   | 'ConfigInvalidContentType'
   | 'IdpNotPotentiallyTrustworthy'
@@ -404,11 +388,13 @@ export type FederatedAuthRequestIssueReason =
   | 'InvalidSigninResponse'
   | 'AccountsHttpNotFound'
   | 'AccountsNoResponse'
+  | 'AccountsBlockedByConnectionAllowlist'
   | 'AccountsInvalidResponse'
   | 'AccountsListEmpty'
   | 'AccountsInvalidContentType'
   | 'IdTokenHttpNotFound'
   | 'IdTokenNoResponse'
+  | 'IdTokenBlockedByConnectionAllowlist'
   | 'IdTokenInvalidResponse'
   | 'IdTokenIdpErrorResponse'
   | 'IdTokenCrossSiteIdpErrorResponse'
@@ -426,6 +412,7 @@ export type FederatedAuthRequestIssueReason =
   | 'UiDismissedNoEmbargo'
   | 'CorsError'
   | 'SuppressedBySegmentationPlatform'
+  | 'PopupBlockedByConnectionAllowlist'
 
 export interface FederatedAuthUserInfoRequestIssueDetails {
   federatedAuthUserInfoRequestIssueReason: FederatedAuthUserInfoRequestIssueReason
@@ -441,6 +428,70 @@ export type FederatedAuthUserInfoRequestIssueReason =
   | 'InvalidConfigOrWellKnown'
   | 'InvalidAccountsResponse'
   | 'NoReturningUserFromFetchedAccounts'
+
+export interface EmailVerificationRequestIssueDetails {
+  emailVerificationRequestIssueReason: EmailVerificationRequestIssueReason
+}
+
+export type EmailVerificationRequestIssueReason =
+  | 'InvalidEmail'
+  | 'DnsFetchFailed'
+  | 'DnsInvalidRecord'
+  | 'WellKnownHttpNotFound'
+  | 'WellKnownNoResponse'
+  | 'WellKnownInvalidResponse'
+  | 'WellKnownListEmpty'
+  | 'WellKnownInvalidContentType'
+  | 'WellKnownMissingIssuanceEndpoint'
+  | 'WellKnownIssuanceEndpointCrossOrigin'
+  | 'WellKnownUnsupportedSigningAlgorithm'
+  | 'TokenHttpNotFound'
+  | 'TokenNoResponse'
+  | 'TokenInvalidResponse'
+  | 'TokenInvalidContentType'
+  | 'TokenMalformedSdJwt'
+  | 'TokenInvalidSdJwt'
+  | 'KeyBindingSigningFailed'
+  | 'RpOriginIsOpaque'
+  | 'WellKnownMissingAccountsEndpoint'
+  | 'UserLoggedOut'
+  | 'WellKnownAccountsEndpointCrossOrigin'
+  | 'AccountsHttpNotFound'
+  | 'AccountsNoResponse'
+  | 'AccountsInvalidResponse'
+  | 'AccountsInvalidContentType'
+  | 'AccountsEmptyList'
+  | 'EmailVerificationWellKnownHttpNotFound'
+  | 'EmailVerificationWellKnownNoResponse'
+  | 'EmailVerificationWellKnownInvalidResponse'
+  | 'EmailVerificationWellKnownInvalidContentType'
+  | 'JwksHttpNotFound'
+  | 'JwksInvalidResponse'
+  | 'TokenVerificationSdJwtUnsupportedHeaderAlg'
+  | 'TokenVerificationSdJwtInvalidTyp'
+  | 'TokenVerificationSdJwtMissingIss'
+  | 'TokenVerificationSdJwtMissingIat'
+  | 'TokenVerificationSdJwtMissingCnf'
+  | 'TokenVerificationSdJwtMissingEmail'
+  | 'TokenVerificationSdJwtInvalidIssuedAt'
+  | 'TokenVerificationSdJwtInvalidIssuer'
+  | 'TokenVerificationSdJwtJwksMissingKeys'
+  | 'TokenVerificationSdJwtSignatureFailed'
+  | 'TokenVerificationSdJwtInvalidEmailVerified'
+  | 'TokenVerificationSdJwtInvalidEmail'
+  | 'TokenVerificationSdJwtInvalidHolderKey'
+  | 'TokenVerificationKbInvalidTyp'
+  | 'TokenVerificationKbMissingAud'
+  | 'TokenVerificationKbMissingNonce'
+  | 'TokenVerificationKbMissingIat'
+  | 'TokenVerificationKbMissingSdHash'
+  | 'TokenVerificationKbInvalidIssuedAt'
+  | 'TokenVerificationKbInvalidAudience'
+  | 'TokenVerificationKbInvalidNonce'
+  | 'TokenVerificationKbInvalidSdHash'
+  | 'TokenVerificationKbMissingCnf'
+  | 'TokenVerificationKbSignatureFailed'
+  | 'CrossOriginIframeNotSupported'
 
 export interface ClientHintIssueDetails {
   sourceCodeLocation: SourceCodeLocation
@@ -529,6 +580,8 @@ export type PermissionElementIssueType =
   | 'FontSizeTooSmall'
   | 'FontSizeTooLarge'
   | 'InvalidSizeValue'
+  | 'NonSecureContext'
+  | 'MissingTransientUserActivation'
 
 export interface PermissionElementIssueDetails {
   issueType: PermissionElementIssueType
@@ -541,10 +594,28 @@ export interface PermissionElementIssueDetails {
   disableReason?: string
 }
 
+export type WebInstallIssueReason =
+  | 'ManifestParsingOrNetworkError'
+  | 'StartUrlInvalid'
+  | 'ManifestMissingNameOrShortName'
+  | 'ManifestMissingId'
+  | 'NoManifest'
+
+export interface WebInstallIssueDetails {
+  manifestUrl?: string
+  reason: WebInstallIssueReason
+}
+
 export interface SelectivePermissionsInterventionIssueDetails {
   apiName: string
   adAncestry: AdAncestry
   stackTrace?: StackTrace
+}
+
+export interface LazyLoadImageIssueDetails {
+  nodeId: BackendNodeId
+  url: string
+  frameId: FrameId
 }
 
 export type InspectorIssueCode =
@@ -555,7 +626,6 @@ export type InspectorIssueCode =
   | 'ContentSecurityPolicyIssue'
   | 'SharedArrayBufferIssue'
   | 'CorsIssue'
-  | 'AttributionReportingIssue'
   | 'QuirksModeIssue'
   | 'PartitioningBlobURLIssue'
   | 'NavigatorUserAgentIssue'
@@ -577,6 +647,9 @@ export type InspectorIssueCode =
   | 'PermissionElementIssue'
   | 'PerformanceIssue'
   | 'SelectivePermissionsInterventionIssue'
+  | 'EmailVerificationRequestIssue'
+  | 'LazyLoadImageIssue'
+  | 'WebInstallIssue'
 
 export interface InspectorIssueDetails {
   cookieIssueDetails?: CookieIssueDetails
@@ -586,7 +659,6 @@ export interface InspectorIssueDetails {
   contentSecurityPolicyIssueDetails?: ContentSecurityPolicyIssueDetails
   sharedArrayBufferIssueDetails?: SharedArrayBufferIssueDetails
   corsIssueDetails?: CorsIssueDetails
-  attributionReportingIssueDetails?: AttributionReportingIssueDetails
   quirksModeIssueDetails?: QuirksModeIssueDetails
   partitioningBlobURLIssueDetails?: PartitioningBlobURLIssueDetails
   navigatorUserAgentIssueDetails?: NavigatorUserAgentIssueDetails
@@ -608,6 +680,9 @@ export interface InspectorIssueDetails {
   permissionElementIssueDetails?: PermissionElementIssueDetails
   performanceIssueDetails?: PerformanceIssueDetails
   selectivePermissionsInterventionIssueDetails?: SelectivePermissionsInterventionIssueDetails
+  emailVerificationRequestIssueDetails?: EmailVerificationRequestIssueDetails
+  lazyLoadImageIssueDetails?: LazyLoadImageIssueDetails
+  webInstallIssueDetails?: WebInstallIssueDetails
 }
 
 export type IssueId = string
