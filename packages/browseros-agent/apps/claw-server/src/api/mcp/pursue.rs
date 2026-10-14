@@ -264,7 +264,7 @@ impl PageDriver {
             How::Fill | How::Select => {
                 args["value"] = json!(decision.value.clone()?);
             }
-            How::Press => {
+            How::Press | How::Submit => {
                 args["key"] = json!(decision.key.clone()?);
             }
             How::Scroll => {
@@ -286,10 +286,14 @@ impl PageDriver {
                 "the chosen way of acting had no argument to act with".to_string(),
             ));
         };
-        // A key press carries no target: act sends the key to whatever has
-        // focus. So the chosen control is focused first, and a failure to focus
-        // stops the step rather than pressing a key at something else.
-        if decision.how == Some(How::Press)
+        // A key press carries no target: `ActKind::Press` reads `key` and
+        // ignores `ref`, sending the key to whatever has focus. So the chosen
+        // control is focused first, and a failure to focus stops the step rather
+        // than pressing a key at something else. A submit is the same mechanism
+        // with the field supplied by the run rather than by the model, and
+        // focusing it is what makes Enter land in the box that was just filled
+        // rather than wherever the page left the focus.
+        if matches!(decision.how, Some(How::Press | How::Submit))
             && let Some(reference) = decision.target.as_deref()
         {
             self.run(
