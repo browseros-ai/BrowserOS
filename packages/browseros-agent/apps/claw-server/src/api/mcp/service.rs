@@ -77,6 +77,63 @@ const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of 
 const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
 const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
 const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
+const PURSUE_TOOL_NAME: &str = "pursue";
+/// What the caller is told about `pursue`, and it has to earn every line.
+///
+/// Written against what was measured rather than against what sounds good. Each
+/// paragraph exists because a run failed without it: goals arriving one step at
+/// a time, fields that could not be typed because nothing supplied the text,
+/// questions about a page answered with a confident claim and no text, and
+/// callers reading a bare status word and learning nothing.
+const PURSUE_DESCRIPTION: &str = "\
+Pursue a whole outcome on one page. Every step is decided on the server, so one \
+call does the work of a snapshot, your reasoning, an act, and another snapshot, \
+repeated until it is done.
+
+STATE THE OUTCOME, NOT THE STEP. Say \"narrow these results to the Corsair \
+brand and sort them by price, lowest first\" rather than \"click the Corsair \
+checkbox\". It plans each step against the page as it is now. If you already \
+know the single control you want, `act` is cheaper and more direct.
+
+IT CAN ANSWER, NOT ONLY ACT. A goal like \"find out how many points the top \
+story has\" or \"check whether this page mentions a delivery date\" ends with \
+the page's text handed back to you, with nothing clicked. Ask for what you want \
+to know, not for the clicks you think would reveal it.
+
+IT CANNOT INVENT STRINGS, SO SUPPLY THEM. It chooses between things you give \
+it and never writes text of its own.
+ - `values`: anything that must be typed, named by what it is, for instance \
+{\"pincode\": \"600042\", \"search term\": \"wireless headphones\"}. Without \
+this a run that needs to type will stop and ask you.
+ - `destinations`: anywhere it may go, as label and url. Without this it cannot \
+leave the page, because it will not invent a url. It can also go back and \
+reload without being told.
+Never put a password, API key, token or card number in `values`. The text is \
+typed into the page and recorded with the call like any other argument. For a \
+secret, use request_human_help so a person enters it in the browser.
+
+IT STOPS RATHER THAN GUESSING. Anything consequential needs high confidence \
+before it runs, so a run will hand back rather than submit, pay or delete on a \
+hunch. Read `status` to see which happened:
+ - `satisfied`: it says the goal is visibly met on the page. That is a claim, \
+not evidence; check `url` and the action count.
+ - `answered`: it read the page for you. The text is in the result and you \
+parse it. It cannot return \"312\" on its own.
+ - `too_risky_to_guess`, `nothing_offered`, `no_field_named`: it came back to \
+you, and the sentence says what it needs.
+ - `not_confident`, `nothing_changed`, `budget_spent`: it stopped making \
+progress. The sentence says what it tried.
+ - `cancelled`: something outside the run stopped it. Not the same as running \
+out of steps, and worth retrying.
+
+WHAT THE RESULT TELLS YOU. `actions` is what it ran and `changed` is how many \
+of those moved the page; the two differing is the signal that something is not \
+working. `omitted` is how much of the page would not fit in one decision, so a \
+large number means the answer may not have been in front of it. \
+`unlabelledImages` counts pictures with no text label, which nothing here can \
+read: take a screenshot yourself if the goal depends on them.
+
+Needs JEV_TOKEN in the server's environment, and is not listed without one.";
 const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
 /// For an agent whose cached tool list still offers request_human_help after the user turned
 /// human help off.
@@ -95,6 +152,7 @@ pub struct ClawMcpService {
     mark_skill_run_tool: Tool,
     request_help_tool: Tool,
     await_help_tool: Tool,
+    pursue_tool: Tool,
     output_files: OutputFileAccess,
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
@@ -158,6 +216,7 @@ impl ClawMcpService {
             mark_skill_run_tool: mark_skill_run_tool(),
             request_help_tool: request_help_tool(),
             await_help_tool: await_help_tool(),
+            pursue_tool: pursue_tool(),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
@@ -190,11 +249,256 @@ impl ClawMcpService {
         tools.push(decorate(self.name_session_tool.clone()));
         tools.push(decorate(self.save_skill_tool.clone()));
         tools.push(decorate(self.mark_skill_run_tool.clone()));
+        // Offered only when the server has a credential for the decision model.
+        // A tool that can only fail is worse than one that is not there.
+        if pursue_credential().is_some() {
+            tools.push(decorate(self.pursue_tool.clone()));
+        }
         if self.state.agent_settings.human_help() == HumanHelp::On {
             tools.push(decorate(self.request_help_tool.clone()));
             tools.push(decorate(self.await_help_tool.clone()));
         }
         tools
+    }
+
+
+    /// Pursues a whole outcome on one page, deciding each step here.
+    ///
+    /// Every move the loop makes goes down the same dispatch path a connected
+    /// agent uses, so it gets the same guards, effects and audit record as
+    /// anything else.
+    async fn call_pursue(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        client_cancel: CancellationToken,
+    ) -> CallToolResult {
+        // Registered and recorded like any other local tool. Without this the run
+        // is invisible in the audit: its inner actions appear as though the
+        // caller made them directly, and the one call that explains them does
+        // not appear at all. Measured the hard way, on a session where pursue
+        // ran twice and the timeline showed eight bare acts.
+        let dispatch_id = DispatchId::new();
+        let dispatch_registration = CancellationToken::new();
+        if !started
+            .session
+            .try_register_dispatch(dispatch_id.clone(), dispatch_registration)
+            .await
+        {
+            return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
+                "BrowserOS neo session is no longer live",
+            )]);
+        }
+        let started_at = StdInstant::now();
+
+        let Some(token) = pursue_credential() else {
+            return self
+                .refuse_pursue(started, raw_args, "this server has no credential for the decision model".to_string(), started_at, &dispatch_id)
+                .await;
+        };
+        let Some(page) = raw_args.get("page").and_then(Value::as_u64) else {
+            return self
+                .refuse_pursue(started, raw_args, "pursue needs the page to work on".to_string(), started_at, &dispatch_id)
+                .await;
+        };
+        let Some(goal) = raw_args.get("goal").and_then(Value::as_str) else {
+            return self
+                .refuse_pursue(started, raw_args, "pursue needs a goal".to_string(), started_at, &dispatch_id)
+                .await;
+        };
+        if goal.trim().is_empty() {
+            return self
+                .refuse_pursue(started, raw_args, "the goal was empty".to_string(), started_at, &dispatch_id)
+                .await;
+        }
+
+        let browser_session = self.state.browser.session().await;
+        let Some(browser_session) = browser_session else {
+            return self
+                .refuse_pursue(started, raw_args, "no browser is connected".to_string(), started_at, &dispatch_id)
+                .await;
+        };
+        // Captured once for the whole run. Every tool call a decision makes
+        // needs these, and they describe which window and tab group the session
+        // is bound to, which does not move under a run working one page.
+        let binding = self
+            .state
+            .targets
+            .binding_for_execution(started.session.id())
+            .await
+            .ok()
+            .flatten();
+        let view = Some(BrowserView::capture(browser_session.clone(), binding, None).await);
+        let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
+            bindings: self.state.targets.clone(),
+            session: started.session.id().clone(),
+        });
+        let ownership_key = started.session.convo_id().clone();
+        let default_tab_group_id = self
+            .state
+            .sessions
+            .ownership()
+            .tab_group_ref(&ownership_key)
+            .await;
+        let dispatch_cancel = CancellationToken::new();
+        let cancel = linked_cancel_token(
+            started.session.child_token(),
+            client_cancel,
+            dispatch_cancel.clone(),
+        );
+        let identity = ToolIdentity {
+            session: started.session.clone(),
+            agent: started.session.agent().clone(),
+            ownership_key,
+            agent_label: started.agent_label.clone(),
+        };
+
+        let Some(driver) = crate::api::mcp::pursue::PageDriver::new(
+            browser_session,
+            page as u32,
+            self.catalog.clone(),
+            started.session.id().clone(),
+            identity,
+            view,
+            target_store,
+            default_tab_group_id,
+            self.state.clone(),
+            self.output_files.clone(),
+            cancel,
+        ) else {
+            return self
+                .refuse_pursue(started, raw_args, "this browser does not offer the act tool".to_string(), started_at, &dispatch_id)
+                .await;
+        };
+
+        let offered = browseros_decide::run::Offered {
+            destinations: destinations_from(raw_args),
+            values: values_from(raw_args),
+            tabs: Vec::new(),
+            // Whatever this browser cannot do is never offered as a choice, so
+            // the model is not asked for a move that would only fail.
+            unavailable: driver.unavailable(),
+        };
+        let budget = browseros_decide::run::Budget {
+            max_steps: raw_args
+                .get("maxSteps")
+                .and_then(Value::as_u64)
+                .unwrap_or(12)
+                .clamp(1, 40) as u32,
+            max_seconds: 120,
+        };
+        let run = browseros_decide::run::Run::new(goal, budget).offering(offered);
+
+        let jev = browseros_decide::client::Jev::new(token);
+        let outcome = browseros_decide::pursue::advance(&jev, &driver, run).await;
+        let told = browseros_decide::report::tell(&outcome);
+
+        let mut said = vec![told.said.clone()];
+        if let Some(answer) = &told.answer
+            && let Some(text) = &answer.text
+        {
+            said.push(format!("\nWhat it found ({}):\n{text}", answer.asked));
+        }
+        if told.omitted > 0 {
+            said.push(format!(
+                "\nIt chose between {} controls; {} more were on the page and did not fit.",
+                told.offered, told.omitted
+            ));
+        }
+        if told.unlabelled_images > 0 {
+            said.push(format!(
+                "\n{} images on this page carry no text label, so nothing here could read them. Take a screenshot if the goal depends on them.",
+                told.unlabelled_images
+            ));
+        }
+
+        // The line stays, because a caller reading text gets something it can
+        // branch on without parsing JSON. What is new is beside it.
+        said.push(format!(
+            "\nstatus={} actions={} changed={} decisions={} batches={} offered={} omitted={} retired={} tokens={} url={}",
+            told.status,
+            told.actions,
+            told.changed,
+            told.decisions,
+            told.batches,
+            told.offered,
+            told.omitted,
+            told.retired,
+            told.input_tokens,
+            told.url,
+        ));
+
+        // The page, as structured content, which is the whole point. A caller
+        // that gets `not_confident` and a sentence can only reword its goal and
+        // hope; one holding control names can change the goal to something the
+        // page can satisfy.
+        //
+        // An earlier version of this tool returned text alone and explained
+        // that dispatch strips structured content from a tool with no output
+        // schema. That is true of `wire_result`, which is on the browser-tool
+        // dispatch path. A local tool returns through `into_call_tool_result`,
+        // which keeps structured content unconditionally, so the constraint was
+        // never on this path. The output schema is declared anyway, for the
+        // better reason: it puts the shape in `tools/list` where a caller can
+        // see it, and makes the field contractual rather than incidental.
+        let result = ToolResult::text(said.join("\n"), Some(pursue_structured(&told)));
+        self.record_pursue(started, raw_args, &result, started_at, &dispatch_id)
+            .await;
+        finish_local_dispatch(started.session.as_ref(), &dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    /// A refusal that still appears in the audit.
+    ///
+    /// A run that never started is the one most worth seeing, because the
+    /// caller is about to try again and the reason is the only thing that would
+    /// stop it.
+    async fn refuse_pursue(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        said: String,
+        started_at: StdInstant,
+        dispatch_id: &DispatchId,
+    ) -> CallToolResult {
+        let result = ToolResult {
+            content: vec![rmcp::model::ContentBlock::text(said)],
+            is_error: true,
+            structured_content: None,
+        };
+        self.record_pursue(started, raw_args, &result, started_at, dispatch_id)
+            .await;
+        finish_local_dispatch(started.session.as_ref(), dispatch_id, result)
+            .await
+            .into_call_tool_result()
+    }
+
+    /// Puts one pursue run in the audit, beside the actions it took.
+    async fn record_pursue(
+        &self,
+        started: &StartedSession,
+        raw_args: &Value,
+        result: &ToolResult,
+        started_at: StdInstant,
+        dispatch_id: &DispatchId,
+    ) {
+        if let Err(error) = record_local_tool_dispatch(
+            &self.state,
+            LocalToolDispatch {
+                session: &started.session,
+                agent_label: &started.agent_label,
+                tool_name: PURSUE_TOOL_NAME,
+                raw_args,
+                result,
+                duration_ms: i64::try_from(started_at.elapsed().as_millis()).unwrap_or(i64::MAX),
+                dispatch_id: dispatch_id.clone(),
+            },
+        )
+        .await
+        {
+            warn!(error = %error, "local tool audit submission failed");
+        }
     }
 
     async fn call_name_session(
@@ -994,6 +1298,9 @@ impl ServerHandler for ClawMcpService {
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(with_session_arg(self.mark_skill_run_tool.clone()));
         }
+        if name == PURSUE_TOOL_NAME && pursue_credential().is_some() {
+            return Some(with_session_arg(self.pursue_tool.clone()));
+        }
         self.find_tool_index(name)
             .map(|index| with_session_arg(self.catalog[index].to_mcp_tool()))
     }
@@ -1008,12 +1315,14 @@ impl ServerHandler for ClawMcpService {
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
+        let is_pursue = request.name == PURSUE_TOOL_NAME && pursue_credential().is_some();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
             && !is_save_skill
             && !is_mark_skill_run
             && !is_request_help
             && !is_await_help
+            && !is_pursue
             && tool_index.is_none()
         {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
@@ -1099,6 +1408,10 @@ impl ServerHandler for ClawMcpService {
         } else if is_await_help {
             Ok(self
                 .call_await_human_help(&started, context.ct.clone())
+                .await)
+        } else if is_pursue {
+            Ok(self
+                .call_pursue(&started, &raw_args, context.ct.clone())
                 .await)
         } else {
             let Some(tool_index) = tool_index else {
@@ -1352,6 +1665,227 @@ fn mark_skill_run_tool() -> Tool {
             .read_only(false)
             .destructive(false)
             .idempotent(true),
+    )
+}
+
+/// The credential for the decision model, or nothing.
+///
+/// Read per call rather than cached, so a server started without one picks it up
+/// after a restart of the environment rather than of itself. Never logged.
+fn pursue_credential() -> Option<String> {
+    std::env::var("JEV_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
+}
+
+/// Destinations the caller authored, which is the only way this run may move.
+fn destinations_from(raw_args: &Value) -> Vec<browseros_decide::offer::Destination> {
+    raw_args
+        .get("destinations")
+        .and_then(Value::as_array)
+        .map(|listed| {
+            listed
+                .iter()
+                .filter_map(|entry| {
+                    Some(browseros_decide::offer::Destination {
+                        label: entry.get("label")?.as_str()?.to_string(),
+                        url: entry.get("url")?.as_str()?.to_string(),
+                        new_tab: entry
+                            .get("newTab")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false),
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Values the caller supplied, which is the only way this run may type.
+fn values_from(raw_args: &Value) -> Vec<browseros_decide::offer::NamedValue> {
+    raw_args
+        .get("values")
+        .and_then(Value::as_object)
+        .map(|given| {
+            given
+                .iter()
+                .filter_map(|(name, text)| {
+                    Some(browseros_decide::offer::NamedValue::new(
+                        name.clone(),
+                        text.as_str()?.to_string(),
+                    ))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// What `pursue` hands back beside its text.
+///
+/// Built by hand rather than derived, because `Told` is the decision layer's
+/// shape and this is the wire's. Keeping them apart means a field can be
+/// renamed in one without silently changing the other's contract.
+fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
+    let mut body = json!({
+        "status": told.status,
+        "said": told.said,
+        "actions": told.actions,
+        "changed": told.changed,
+        "decisions": told.decisions,
+        "batches": told.batches,
+        "retired": told.retired,
+        "inputTokens": told.input_tokens,
+        "url": told.url,
+        "title": told.title,
+    });
+    if let Some(answer) = &told.answer {
+        body["answer"] = json!({
+            "asked": answer.asked,
+            "text": answer.text,
+            "pictured": answer.pictured,
+        });
+    }
+    if let Some(goal_met) = told.goal_met {
+        body["goalMet"] = json!(goal_met);
+    }
+    if let Some(page) = &told.page {
+        body["page"] = json!({
+            "url": page.url,
+            "title": page.title,
+            "text": page.text,
+            "omitted": page.omitted,
+            "controls": page
+                .controls
+                .iter()
+                .map(|control| {
+                    let mut shown = json!({
+                        "ref": control.reference,
+                        "role": control.role,
+                        "name": control.name,
+                    });
+                    if let Some(state) = &control.state {
+                        shown["state"] = json!(state);
+                    }
+                    shown
+                })
+                .collect::<Vec<_>>(),
+        });
+    }
+    body
+}
+
+/// The shape `pursue` promises to return.
+///
+/// Declared so the shape is visible in `tools/list` rather than discovered by
+/// a caller parsing what arrives. `run` is the precedent on this server for a
+/// tool that promises structured content and delivers it.
+fn pursue_output_schema() -> Value {
+    json!({
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": "string",
+                "description": "One word to branch on: satisfied, answered, blocked, budget_spent, cancelled, nothing_changed, not_confident, browser_kept_failing, only_waiting, nothing_offered, too_risky_to_guess, no_field_named, asked_too_often, unverifiable."
+            },
+            "said": { "type": "string", "description": "One sentence, true of what actually happened." },
+            "answer": {
+                "type": "object",
+                "description": "What a report handed back, when one ended the run. The text is raw: this model cannot write a string, so pulling the answer out of the page is yours to do.",
+                "properties": {
+                    "asked": { "type": "string" },
+                    "text": { "type": ["string", "null"] },
+                    "pictured": { "type": "boolean" }
+                },
+                "required": ["asked", "pictured"]
+            },
+            "page": {
+                "type": "object",
+                "description": "The page it ended on. Read the controls: if it could not finish, these are what it had to choose between, and naming one of them in a new goal is how you get further than rewording.",
+                "properties": {
+                    "url": { "type": "string" },
+                    "title": { "type": "string" },
+                    "text": { "type": "string", "description": "The page's text, budgeted rather than complete." },
+                    "omitted": { "type": "integer", "description": "Controls that exist and are not listed, so you know the list is partial." },
+                    "controls": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "ref": { "type": "string", "description": "Name this back in a goal, or pass it to act." },
+                                "role": { "type": "string" },
+                                "name": { "type": "string" },
+                                "state": { "type": "string", "description": "Present when the control has one: checked, unchecked, selected, expanded, collapsed." }
+                            },
+                            "required": ["ref", "role", "name"]
+                        }
+                    }
+                },
+                "required": ["url", "title", "controls", "omitted"]
+            },
+            "actions": { "type": "integer", "description": "Actions that ran, which is not the same as decisions asked for." },
+            "changed": { "type": "integer", "description": "How many of those changed the page." },
+            "decisions": { "type": "integer" },
+            "batches": { "type": "integer", "description": "Questions asked about part of a page. More than one per decision when a page is larger than one question." },
+            "retired": { "type": "integer", "description": "Controls set aside for changing nothing when acted on." },
+            "goalMet": { "type": "number", "description": "How likely the last decision thought the goal was already satisfied. Reported, never acted on: a completion claim is not evidence." },
+            "inputTokens": { "type": "integer" },
+            "url": { "type": "string" },
+            "title": { "type": "string" }
+        },
+        "required": ["status", "said", "actions", "changed", "decisions", "batches", "retired", "inputTokens", "url", "title"]
+    })
+}
+
+fn pursue_tool() -> Tool {
+    let Value::Object(input_schema) = json!({
+        "type": "object",
+        "properties": {
+            "page": {
+                "type": "integer",
+                "description": "The page to work on, from tabs or navigate. It is already yours, and it stays yours."
+            },
+            "goal": {
+                "type": "string",
+                "description": "The whole outcome you want, for instance \"sort these results by price, lowest first, and narrow them to the Corsair brand\". Not a single step."
+            },
+            "maxSteps": {
+                "type": "integer",
+                "description": "Stop after this many actions. Defaults to 12."
+            },
+            "destinations": {
+                "type": "array",
+                "description": "Pages this run may move to. It picks one by label and never invents a url, so moving stays inside the set you wrote.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "label": { "type": "string", "description": "What this page is, in the words your goal uses." },
+                        "url": { "type": "string" },
+                        "newTab": { "type": "boolean", "description": "Open it beside this page instead of moving this one." }
+                    },
+                    "required": ["label", "url"]
+                }
+            },
+            "values": {
+                "type": "object",
+                "description": "Values this run may type, named by what they are, for instance {\"pincode\": \"600042\"}. It picks which one belongs in a field it chose and never invents a string. Never put a password, key, token or card number here.",
+                "additionalProperties": { "type": "string" }
+            }
+        },
+        "required": ["page", "goal"]
+    }) else {
+        unreachable!();
+    };
+    let Value::Object(output_schema) = pursue_output_schema() else {
+        unreachable!();
+    };
+    Tool::new(PURSUE_TOOL_NAME, PURSUE_DESCRIPTION, input_schema)
+        .with_raw_output_schema(std::sync::Arc::new(output_schema))
+        .with_annotations(
+        ToolAnnotations::with_title("Pursue a goal")
+            .read_only(false)
+            .destructive(false)
+            .idempotent(false)
+            .open_world(true),
     )
 }
 
@@ -1869,6 +2403,15 @@ mod tests {
     fn supported_protocol_versions_includes_modern_and_legacy() {
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2026_07_28));
         assert!(SUPPORTED_PROTOCOL_VERSIONS.contains(&ProtocolVersion::V_2025_11_25));
+    }
+
+    /// `pursue` is listed only when the server holds a credential for the
+    /// decision model, so an exact tool list has to say so. Without this the
+    /// suite passes or fails depending on whose shell ran it.
+    fn expect_pursue_if_credentialled(expected: &mut Vec<String>) {
+        if pursue_credential().is_some() {
+            expected.push(PURSUE_TOOL_NAME.to_string());
+        }
     }
 
     #[tokio::test]
@@ -2595,6 +3138,7 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
+        expect_pursue_if_credentialled(&mut expected);
         expected.push(REQUEST_HELP_TOOL_NAME.to_string());
         expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
@@ -2766,6 +3310,7 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
+        expect_pursue_if_credentialled(&mut expected);
         for declare_agent_name in [false, true] {
             assert_eq!(tool_names(&service, declare_agent_name), expected);
         }

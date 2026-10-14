@@ -391,9 +391,12 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
         .iter()
         .filter_map(|tool| tool["name"].as_str())
         .collect();
-    assert_eq!(
-        listed,
-        vec![
+    // `pursue` is advertised only where the server has a credential for the
+    // decision model, so the expected list depends on the environment the test
+    // runs in rather than on the code. Asserted the way the server decides it,
+    // so the test passes on a machine that has the credential and on one that
+    // does not.
+    let mut expected = vec![
             "browser_profiles",
             "browser_target",
             "tabs",
@@ -418,8 +421,19 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
             "mark_skill_run",
             "request_human_help",
             "await_human_help",
-        ]
-    );
+    ];
+    if std::env::var("JEV_TOKEN")
+        .ok()
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        // Before the help tools, which is where the server pushes it.
+        let after = expected
+            .iter()
+            .position(|name| *name == "request_human_help")
+            .unwrap_or(expected.len());
+        expected.insert(after, "pursue");
+    }
+    assert_eq!(listed, expected);
 
     let blocked = json!({
         "jsonrpc": "2.0",
