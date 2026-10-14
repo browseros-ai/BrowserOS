@@ -863,3 +863,75 @@ async fn a_dead_control_is_still_retired_once_the_waiting_is_done() {
     assert_eq!(outcome.retired, 1, "the dead one was set aside");
     assert_eq!(browser.targets_acted_on(), vec!["e1".to_string(), "e2".to_string()]);
 }
+
+
+/// The model picks a value by name, because a name is something it can choose
+/// between and a string is something it cannot write. The name must not be what
+/// lands in the field.
+///
+/// Measured by reading the search box after a live run: given
+/// {"search term": "32GB DDR5"}, the box held the words "search term".
+#[tokio::test]
+async fn the_caller_s_text_is_typed_rather_than_the_name_it_was_given() {
+    let browser = Fake::new(page(
+        "https://example.test/",
+        1,
+        vec![control("e1", "searchbox", "Search parts")],
+    ));
+    let model = Scripted::new(vec![
+        vec![
+            ("operation", spread("ACT", 0.92, 0.02)),
+            ("act_how", spread("FILL", 0.90, 0.03)),
+            ("target", spread("e1", 0.93, 0.02)),
+            ("fill_value", spread("search term", 0.95, 0.01)),
+        ],
+        vec![("operation", spread("DONE", 0.95, 0.01))],
+    ]);
+    let run = Run::new("put the search term in the box", Budget::default()).offering(Offered {
+        values: vec![NamedValue::new("search term", "32GB DDR5")],
+        ..Offered::default()
+    });
+    let outcome = advance(&model, &browser, run).await;
+    assert_eq!(outcome.status, Status::Satisfied);
+    let typed: Vec<String> = browser
+        .ran()
+        .iter()
+        .filter_map(|act| match act {
+            Move::Act(decision) => decision.value.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        typed,
+        vec!["32GB DDR5".to_string()],
+        "the caller's text, not the key it was filed under"
+    );
+}
+
+/// A select is not the same case: its value came from the control's own
+/// options, so it is already the literal thing the page expects.
+#[tokio::test]
+async fn a_selects_own_value_is_passed_through_untouched() {
+    let mut sort = control("e1", "combobox", "Sort by");
+    sort.options = vec!["Featured".to_string(), "Price: Low to High".to_string()];
+    let browser = Fake::new(page("https://example.test/", 1, vec![sort]));
+    let model = Scripted::new(vec![
+        vec![
+            ("operation", spread("ACT", 0.92, 0.02)),
+            ("act_how", spread("SELECT", 0.90, 0.03)),
+            ("select_value", spread("e1::Price: Low to High", 0.94, 0.02)),
+        ],
+        vec![("operation", spread("DONE", 0.95, 0.01))],
+    ]);
+    let outcome = advance(&model, &browser, run_for("sort by price")).await;
+    assert_eq!(outcome.status, Status::Satisfied);
+    let chosen: Vec<String> = browser
+        .ran()
+        .iter()
+        .filter_map(|act| match act {
+            Move::Act(decision) => decision.value.clone(),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(chosen, vec!["Price: Low to High".to_string()]);
+}

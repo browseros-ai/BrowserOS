@@ -636,9 +636,24 @@ fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<
     match decision.operation {
         Operation::Act => {
             let how = decision.how?;
-            if how == How::Fill && supplied.is_none() {
-                return None;
+            if how == How::Fill {
+                // The model chose the value by its name, because a name is
+                // something it can choose between and a string is something it
+                // cannot write. The name is not what belongs in the field. Only
+                // the caller has the text, so the key is swapped for it here.
+                //
+                // Without this swap the key itself is typed: a run given
+                // {"search term": "32GB DDR5"} put the words "search term" in
+                // the search box. Measured by reading the box afterwards.
+                let text = supplied.clone()?;
+                let mut filled = decision.clone();
+                filled.value = Some(text);
+                return Some(Move::Act(filled));
             }
+            // A select is not the same case. Its value came from the control's
+            // own options, flattened into the question as one option per
+            // control and value, so it is already the literal thing the page
+            // expects rather than a name standing in for it.
             Some(Move::Act(decision.clone()))
         }
         Operation::Navigate => {
