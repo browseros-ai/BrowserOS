@@ -27,6 +27,8 @@ struct Call {
     session: Option<String>,
 }
 
+type FixtureChange = Box<dyn FnOnce(&mut NativeFixture) + Send>;
+
 struct NativeFixture {
     epoch: u64,
     profiles: Vec<Value>,
@@ -34,6 +36,9 @@ struct NativeFixture {
     tabs: Vec<Value>,
     groups: Vec<Value>,
     calls: Vec<Call>,
+    /// Applied under the reply lock once metrics are answered, so the change lands between
+    /// a screenshot's viewport measurement and its capture without timing-dependent sleeps.
+    after_layout_metrics: Option<FixtureChange>,
 }
 
 struct FixtureConnection {
@@ -104,6 +109,7 @@ impl FixtureConnection {
                     json!({ "groupId": "group-sales", "windowId": 90, "title": "sales", "color": "red", "collapsed": false, "tabIds": [201] }),
                 ],
                 calls: Vec::new(),
+                after_layout_metrics: None,
             }),
         })
     }
@@ -297,6 +303,16 @@ impl FixtureConnection {
             "Page.getFrameTree" => Ok(
                 json!({ "frameTree": { "frame": { "id": "frame-1", "loaderId": "loader-1", "url": "https://eng.example.test", "domainAndRegistry": "example.test", "securityOrigin": "https://eng.example.test", "mimeType": "text/html" } } }),
             ),
+            "Page.getLayoutMetrics" => {
+                if let Some(change) = state.after_layout_metrics.take() {
+                    change(&mut state);
+                }
+                Ok(json!({
+                    "layoutViewport": { "pageX": 0, "pageY": 0, "clientWidth": 2560, "clientHeight": 1600 },
+                    "cssLayoutViewport": { "pageX": 3, "pageY": 4, "clientWidth": 1280, "clientHeight": 800 }
+                }))
+            }
+            "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
             "Page.enable"
             | "DOM.enable"
             | "Runtime.enable"
@@ -1035,6 +1051,99 @@ async fn bound_raw_policy_and_explicit_window_group_conflicts_fail_before_dispat
     assert!(connection.calls().iter().any(
         |call| call.method == "Target.attachToTarget" && call.params["targetId"] == "forbidden"
     ));
+    Ok(())
+}
+
+/// The default viewport clip measures the page before capture, so both protocol calls must ride
+/// the bound page capability. Out-of-scope pages are refused before either call; a target
+/// incarnation replaced while the measurement is in flight fails the post-send check uncaptured.
+#[tokio::test]
+async fn bound_viewport_screenshot_measures_and_captures_only_through_guarded_page()
+-> anyhow::Result<()> {
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let pages = session.pages.list().await?;
+    let page_for_tab = |tab: i64| {
+        pages
+            .iter()
+            .find(|page| page.tab_id.0 == tab)
+            .map(|page| page.page_id.0)
+            .ok_or_else(|| anyhow::anyhow!("fixture page for tab {tab} missing"))
+    };
+    let (eng, sales) = (page_for_tab(102)?, page_for_tab(201)?);
+    let store = Arc::new(StaticTargetStore::new());
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let captured = ctx(session, store).await?;
+
+    data(call(&captured, "screenshot", json!({ "page": eng })).await?)?;
+    let calls = connection.calls();
+    let page_calls = calls
+        .iter()
+        .filter(|call| {
+            call.method == "Page.getLayoutMetrics" || call.method == "Page.captureScreenshot"
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(page_calls.len(), 2, "{page_calls:?}");
+    for call in &page_calls {
+        assert_eq!(
+            call.session.as_deref(),
+            Some("session-target-102"),
+            "{call:?}"
+        );
+    }
+    assert_eq!(
+        page_calls[1].params["clip"],
+        json!({ "x": 3.0, "y": 4.0, "width": 1280.0, "height": 800.0, "scale": 1.0 })
+    );
+
+    let before = connection.calls().len();
+    let foreign = call(
+        &captured,
+        "screenshot",
+        json!({ "page": sales, "size": { "width": 640 } }),
+    )
+    .await?;
+    assert!(
+        foreign.is_error && text(&foreign).contains("page_out_of_scope"),
+        "{}",
+        text(&foreign)
+    );
+    assert!(
+        !connection.calls()[before..]
+            .iter()
+            .any(|call| call.method.starts_with("Page.")),
+        "an out-of-scope page must not be measured or captured"
+    );
+
+    connection.change(|state| {
+        state.after_layout_metrics = Some(Box::new(|state| {
+            for tab in &mut state.tabs {
+                if tab["tabId"] == 102 {
+                    tab["targetId"] = json!("target-102-replaced");
+                }
+            }
+        }));
+    });
+    let before = connection.calls().len();
+    let replaced = call(&captured, "screenshot", json!({ "page": eng })).await?;
+    assert!(
+        replaced.is_error && text(&replaced).contains("page_target_changed"),
+        "{}",
+        text(&replaced)
+    );
+    let after = &connection.calls()[before..];
+    assert!(
+        after
+            .iter()
+            .any(|call| call.method == "Page.getLayoutMetrics")
+    );
+    assert!(
+        !after
+            .iter()
+            .any(|call| call.method == "Page.captureScreenshot"),
+        "a page replaced during measurement must not be captured: {}",
+        text(&replaced)
+    );
     Ok(())
 }
 
