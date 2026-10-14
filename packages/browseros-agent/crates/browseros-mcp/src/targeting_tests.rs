@@ -2209,3 +2209,39 @@ async fn profile_management_never_loads_an_unloaded_default() -> anyhow::Result<
     assert_eq!(loads(), 1);
     Ok(())
 }
+
+#[tokio::test]
+async fn one_run_without_a_default_window_opens_one_window_for_all_pages() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    connection.change(|state| {
+        state.windows.retain(|window| window["windowId"] != 50);
+        state.tabs.retain(|tab| tab["windowId"] != 50);
+    });
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let ctx = ctx(session, Arc::new(StaticTargetStore::new())).await?;
+    let run = data(
+        call(
+            &ctx,
+            "run",
+            json!({ "code": "const a = await browser.open('https://a.test/'); const b = await browser.open('https://b.test/'); const [c, d] = await Promise.all([browser.open('https://c.test/'), browser.open('https://d.test/')]); return [await a.info(), await b.info(), await c.info(), await d.info()].map((page) => page.windowId);" }),
+        )
+        .await?,
+    )?;
+    let windows = run["value"].as_array().cloned().unwrap_or_default();
+    assert_eq!(windows.len(), 4, "{run}");
+    assert!(windows.iter().all(|window| *window == windows[0]), "{run}");
+    let created = creations(&connection);
+    assert_eq!(
+        created
+            .iter()
+            .filter(|(method, _)| method == "Browser.createWindow")
+            .count(),
+        1,
+        "{created:?}"
+    );
+    Ok(())
+}

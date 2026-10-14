@@ -3030,3 +3030,37 @@ async fn failed_default_view_exposes_no_global_events() -> TestResult {
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn one_admitted_default_view_opens_at_most_one_window() -> TestResult {
+    // Default has no window. Several pages opened through the same admitted view, in order
+    // or concurrently (Promise.all in a run), share the one window that view created.
+    let native = default_native(true, false);
+    let view = default_view(native.clone()).await;
+    let first = view
+        .new_page("https://one.test/", NewPageOptions::default())
+        .await?;
+    let second = view
+        .new_page("https://two.test/", NewPageOptions::default())
+        .await?;
+    let (third, fourth) = tokio::join!(
+        view.new_page("https://three.test/", NewPageOptions::default()),
+        view.cdp(
+            "Browser.createTab",
+            json!({"url":"https://four.test/"}),
+            None
+        ),
+    );
+    let third = third?;
+    fourth?;
+    assert_eq!(native.calls("Browser.createWindow").len(), 1);
+    assert_eq!(first.window_id, second.window_id);
+    assert_eq!(first.window_id, third.window_id);
+    let tabs = native.calls("Browser.createTab");
+    assert_eq!(tabs.len(), 4);
+    assert!(
+        tabs.iter()
+            .all(|call| call.params["windowId"].as_i64() == first.window_id.map(|id| id.0))
+    );
+    Ok(())
+}

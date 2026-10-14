@@ -111,6 +111,11 @@ pub struct BrowserView {
     // View clones share immutable native creation identities/epochs; global reconciliation
     // can replace a PageId's registry entry without rewriting this call's creation authority.
     creation_receipts: Arc<std::sync::RwLock<HashMap<PageId, PageCreation>>>,
+    // The window this admitted view opened for a windowless Default profile. Placement is
+    // captured once and never refreshes, so without this every page opened through the same
+    // call (Promise.all in a run) would open its own window. Shared by clones; the async lock
+    // makes creation single-flight.
+    default_window: Arc<tokio::sync::Mutex<Option<WindowId>>>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -332,6 +337,7 @@ impl BrowserView {
             expected_created_page: None,
             expected_creation_epoch: None,
             creation_receipts: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            default_window: Arc::new(tokio::sync::Mutex::new(None)),
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             session,
@@ -1101,16 +1107,25 @@ impl BrowserView {
     }
     /// The default profile has no normal window yet: open one (normal and inactive, in the
     /// captured Default context) instead of failing or using another profile's window. It goes
-    /// through the scoped root policy, which validates the reply against this capture. The
-    /// caller then creates its tab in it with createTab, so the page is identified by its own
-    /// creation reply (the window keeps the browser's initial tab). An explicit target without
-    /// a window keeps `no_profile_window` instead.
+    /// through the scoped root policy, which validates the reply against this capture, and is
+    /// reused by every later creation through the same admitted view. The caller then creates
+    /// its tab in it with createTab, so each page is identified by its own creation reply (the
+    /// window keeps the browser's initial tab). An explicit target without a window keeps
+    /// `no_profile_window` instead.
     pub(super) async fn create_default_window(&self) -> Result<WindowId, CoreError> {
+        let mut opened = self.default_window.lock().await;
+        if let Some(window) = *opened
+            && self.validate_window(window).await.is_ok()
+        {
+            return Ok(window);
+        }
         let created = Box::pin(self.scoped_root_cdp("Browser.createWindow", json!({}))).await?;
-        created["window"]["windowId"]
+        let window = created["window"]["windowId"]
             .as_i64()
             .map(WindowId)
-            .ok_or_else(|| cdp_policy::unsupported("Browser.createWindow"))
+            .ok_or_else(|| cdp_policy::unsupported("Browser.createWindow"))?;
+        *opened = Some(window);
+        Ok(window)
     }
     pub async fn close_page(&self, page: PageId) -> Result<(), CoreError> {
         if self.epoch_guard()?.is_none() {
