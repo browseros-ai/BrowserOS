@@ -264,7 +264,11 @@ impl Native {
                     .unwrap_or_default()
                     + 1;
                 let mut created = tab(id, window, owner);
-                created["url"] = params["url"].clone();
+                // The native opens a default page when no URL is given.
+                created["url"] = params
+                    .get("url")
+                    .cloned()
+                    .unwrap_or_else(|| json!("about:blank"));
                 state.tabs.push(created.clone());
                 json!({"tab":created})
             }
@@ -2689,6 +2693,8 @@ async fn default_without_a_window_opens_an_inactive_normal_window_there() -> Tes
     let opened = view
         .new_page("https://first.test/", NewPageOptions::default())
         .await?;
+    // First an inactive normal Default window, then the page created in it, so the page is
+    // identified by its own createTab reply rather than a later lookup of the window.
     let windows = native.calls("Browser.createWindow");
     assert_eq!(windows.len(), 1);
     assert_eq!(
@@ -2696,13 +2702,7 @@ async fn default_without_a_window_opens_an_inactive_normal_window_there() -> Tes
         json!("live-original")
     );
     assert_eq!(windows[0].params["windowType"], json!("normal"));
-    assert_eq!(windows[0].params["url"], json!("https://first.test/"));
-    assert!(native.calls("Browser.createTab").is_empty());
-    assert_eq!(opened.url, "https://first.test/");
-    assert_eq!(
-        opened.browser_profile_id.as_ref().map(|id| id.as_str()),
-        Some("original")
-    );
+    assert!(windows[0].params.get("url").is_none());
     let created_window = native
         .lock()
         .windows
@@ -2710,15 +2710,36 @@ async fn default_without_a_window_opens_an_inactive_normal_window_there() -> Tes
         .cloned()
         .ok_or("window missing")?;
     assert_eq!(created_window["isActive"], json!(false));
+    let tabs = native.calls("Browser.createTab");
+    assert_eq!(tabs.len(), 1);
+    assert_eq!(tabs[0].params["windowId"], created_window["windowId"]);
+    assert_eq!(tabs[0].params["url"], json!("https://first.test/"));
+    assert_eq!(opened.url, "https://first.test/");
+    assert_eq!(
+        opened.window_id.map(|id| id.0),
+        created_window["windowId"].as_i64()
+    );
+    assert_eq!(
+        opened.browser_profile_id.as_ref().map(|id| id.as_str()),
+        Some("original")
+    );
 
-    // Raw creation without a window takes the same path; an explicit target does not.
-    view.cdp(
-        "Browser.createTab",
-        json!({"url":"https://raw.test/"}),
-        None,
-    )
-    .await?;
-    assert_eq!(native.calls("Browser.createWindow").len(), 2);
+    // Raw creation without a window takes the same path and keeps its own arguments
+    // (no url, pinned); an explicit target does not.
+    let raw_native = default_native(true, false);
+    default_view(raw_native.clone())
+        .await
+        .cdp("Browser.createTab", json!({"pinned":true}), None)
+        .await?;
+    assert_eq!(raw_native.calls("Browser.createWindow").len(), 1);
+    let raw_tabs = raw_native.calls("Browser.createTab");
+    assert_eq!(raw_tabs.len(), 1);
+    assert_eq!(raw_tabs[0].params["pinned"], json!(true));
+    assert!(raw_tabs[0].params.get("url").is_none());
+    assert_eq!(
+        raw_tabs[0].params["browserContextId"],
+        json!("live-original")
+    );
     let explicit_native = default_native(true, false);
     let mut original = binding(None);
     original.intent.browser_profile_id = BrowserProfileId("original".into());
@@ -2933,5 +2954,79 @@ async fn natives_without_profile_targeting_keep_unbound_routing_with_no_target()
                 .all(|call| call.params.get("browserContextId").is_none())
         );
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn management_capture_never_loads_the_default() -> TestResult {
+    let native = default_native(false, false);
+    let view = BrowserView::capture_for_management(
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
+        None,
+        None,
+    )
+    .await;
+    assert_eq!(view.target_source(), Some(TargetSource::Default));
+    assert!(
+        view.list_profiles()
+            .await?
+            .iter()
+            .any(|profile| profile.directory == "Default")
+    );
+    let intent = view
+        .resolve_intent(&ProfileSelector::Name("sales".into()), None)
+        .await?;
+    assert_eq!(intent.browser_profile_id.as_str(), "sales");
+    assert!(native.calls("Browser.loadProfile").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn facade_never_falls_back_to_global_routing_without_a_default() -> TestResult {
+    // No profile has directory "Default": the facade must not treat the failed default as an
+    // unbound view and hand out another profile's window or session.
+    let native = Native::new();
+    let browser = Browser::new_with_native(native.clone(), current_native());
+    code(
+        browser
+            .get_active_page_for_window(WindowId(20))
+            .await
+            .err()
+            .ok_or("unrestricted session returned")?,
+        "default_profile_unavailable",
+    );
+    code(
+        browser
+            .new_page("https://nowhere.test/", NewPageOptions::default())
+            .await
+            .err()
+            .ok_or("page created without a default")?,
+        "default_profile_unavailable",
+    );
+    assert!(native.calls("Browser.createTab").is_empty());
+    assert!(native.calls("Target.attachToTarget").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_default_view_exposes_no_global_events() -> TestResult {
+    let native = Native::new();
+    let view = default_view(native.clone()).await;
+    assert!(view.admission_error().is_some());
+    let mut events = view.cdp_events();
+    let _ = native.events.send(CdpEvent {
+        method: "Target.targetCreated".into(),
+        params: json!({"targetInfo":{"targetId":"target-4","type":"page"}}),
+        session_id: None,
+    });
+    let received = tokio::time::timeout(std::time::Duration::from_millis(200), events.recv()).await;
+    assert!(
+        !matches!(received, Ok(Ok(_))),
+        "a view without a usable default relayed a global event"
+    );
     Ok(())
 }

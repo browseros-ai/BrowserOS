@@ -253,6 +253,24 @@ impl BrowserView {
         binding: Option<TargetBinding>,
         unbound_default_window: Option<WindowId>,
     ) -> Self {
+        Self::capture_with(session, binding, unbound_default_window, true).await
+    }
+    /// Admission for profile management (discovery and selection). Same precedence as
+    /// [`Self::capture`], but an unloaded Default is captured as it is instead of being loaded:
+    /// choosing or listing profiles must never load an unrelated profile as a side effect.
+    pub async fn capture_for_management(
+        session: Arc<BrowserSession>,
+        binding: Option<TargetBinding>,
+        unbound_default_window: Option<WindowId>,
+    ) -> Self {
+        Self::capture_with(session, binding, unbound_default_window, false).await
+    }
+    async fn capture_with(
+        session: Arc<BrowserSession>,
+        binding: Option<TargetBinding>,
+        unbound_default_window: Option<WindowId>,
+        load_default: bool,
+    ) -> Self {
         let mut view = Self::unbound(session, unbound_default_window);
         // Older natives cannot honor regular-profile routing (they ignore the context params),
         // so they keep the unbound path, send no getProfiles, and only disclose an explicit
@@ -275,7 +293,7 @@ impl BrowserView {
             }
             None => {
                 view.source = Some(TargetSource::Default);
-                match view.capture_default().await {
+                match view.capture_default(load_default).await {
                     Ok(scope) => (Some(scope.binding.clone()), Ok(Some(scope))),
                     // No silent fallback to the focused window or another profile: ordinary
                     // calls fail admission, while profile management stays usable.
@@ -632,9 +650,9 @@ impl BrowserView {
     }
     /// Resolves the original Default profile afresh for this call. Its handles are process
     /// lifetime, so they are never saved: each capture reads the live catalog, loads Default if
-    /// needed (an existing profile only; loading opens no window), and then captures it like an
-    /// explicit binding, including placement and the epoch guard.
-    async fn capture_default(&self) -> Result<CapturedScope, CoreError> {
+    /// needed and allowed (an existing profile only; loading opens no window), and then
+    /// captures it like an explicit binding, including placement and the epoch guard.
+    async fn capture_default(&self, load: bool) -> Result<CapturedScope, CoreError> {
         let epoch = self.session.connection().connection_epoch();
         let guard = crate::connection::EpochGuard {
             expected: epoch,
@@ -649,7 +667,7 @@ impl BrowserView {
                 crate::DEFAULT_PROFILE_DIRECTORY
             ))
         })?;
-        if !profile.loaded || profile.browser_context_id.is_none() {
+        if load && (!profile.loaded || profile.browser_context_id.is_none()) {
             // A concurrent capture may load it too; the native joins that load. Cancellation
             // can leave the load running, which only leaves Default loaded for the next call.
             crate::ProtocolSession::root(self.session.connection())
@@ -1029,32 +1047,26 @@ impl BrowserView {
             }
             .into());
         }
-        let created = match opts.window_id.or(scope.placement_window) {
-            Some(window) => {
-                self.validate_window(window).await?;
-                if let Some(group) = &opts.tab_group_id {
-                    self.validate_group(group, Some(window)).await?;
-                }
-                self.cdp(
-                    "Browser.createTab",
-                    json!({"url":url,"windowId":window.0,"background":true}),
-                    None,
-                )
-                .await?
-            }
-            None if scope.source == TargetSource::Default => {
-                // A group lives in one window; a window created for this page cannot hold it.
-                if let Some(group) = &opts.tab_group_id {
-                    return Err(TargetError::GroupOutOfScope(group.clone()).into());
-                }
-                self.open_in_new_default_window(url).await?
-            }
+        let window = match opts.window_id.or(scope.placement_window) {
+            Some(window) => window,
+            None if scope.source == TargetSource::Default => self.create_default_window().await?,
             None => {
                 return Err(
                     TargetError::NoProfileWindow(scope.profile.browser_profile_id.clone()).into(),
                 );
             }
         };
+        self.validate_window(window).await?;
+        if let Some(group) = &opts.tab_group_id {
+            self.validate_group(group, Some(window)).await?;
+        }
+        let created = self
+            .cdp(
+                "Browser.createTab",
+                json!({"url":url,"windowId":window.0,"background":true}),
+                None,
+            )
+            .await?;
         let guard = self
             .epoch_guard()?
             .ok_or_else(|| CoreError::Message("missing bound page epoch".into()))?;
@@ -1088,18 +1100,17 @@ impl BrowserView {
         access.fresh().await
     }
     /// The default profile has no normal window yet: open one (normal and inactive, in the
-    /// captured Default context) with the page as its first tab, rather than failing or using
-    /// another profile's window. Returns that tab in `Browser.createTab`'s reply shape. Both
-    /// steps go through the scoped root policy, so context, placement and epoch stay checked.
-    /// An explicit target without a window keeps `no_profile_window` instead.
-    pub(super) async fn open_in_new_default_window(&self, url: &str) -> Result<Value, CoreError> {
-        let window =
-            Box::pin(self.scoped_root_cdp("Browser.createWindow", json!({"url":url}))).await?;
-        Box::pin(self.scoped_root_cdp(
-            "Browser.getActiveTab",
-            json!({"windowId":window["window"]["windowId"]}),
-        ))
-        .await
+    /// captured Default context) instead of failing or using another profile's window. It goes
+    /// through the scoped root policy, which validates the reply against this capture. The
+    /// caller then creates its tab in it with createTab, so the page is identified by its own
+    /// creation reply (the window keeps the browser's initial tab). An explicit target without
+    /// a window keeps `no_profile_window` instead.
+    pub(super) async fn create_default_window(&self) -> Result<WindowId, CoreError> {
+        let created = Box::pin(self.scoped_root_cdp("Browser.createWindow", json!({}))).await?;
+        created["window"]["windowId"]
+            .as_i64()
+            .map(WindowId)
+            .ok_or_else(|| cdp_policy::unsupported("Browser.createWindow"))
     }
     pub async fn close_page(&self, page: PageId) -> Result<(), CoreError> {
         if self.epoch_guard()?.is_none() {

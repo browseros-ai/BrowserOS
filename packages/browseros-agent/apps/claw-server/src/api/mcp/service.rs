@@ -1124,7 +1124,12 @@ impl ServerHandler for ClawMcpService {
                 .binding_for_execution(started.session.id())
                 .await
                 .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
+            // Profile management must not load the Default profile as a side effect of admission.
+            let manages_target = self.catalog[tool_index].metadata.manages_target;
             let view = match &browser_session {
+                Some(browser) if manages_target => {
+                    Some(BrowserView::capture_for_management(browser.clone(), binding, None).await)
+                }
                 Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
                 None => None,
             };

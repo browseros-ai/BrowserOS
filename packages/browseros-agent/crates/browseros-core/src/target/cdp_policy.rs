@@ -670,8 +670,8 @@ impl BrowserView {
                     && scope.placement_window.is_none()
                     && scope.source == super::TargetSource::Default
                 {
-                    let url = params["url"].as_str().ok_or_else(|| unsupported(method))?;
-                    return Box::pin(self.open_in_new_default_window(url)).await;
+                    // Supply only the placement; every other argument the caller passed stays.
+                    params["windowId"] = json!(Box::pin(self.create_default_window()).await?.0);
                 }
                 admission
                     .windows

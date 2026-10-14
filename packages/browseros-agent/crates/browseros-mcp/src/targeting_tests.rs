@@ -2007,13 +2007,13 @@ async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result
         )
         .await?,
     )?;
+    // An inactive normal Default window first, then the page created in it by createTab.
     let created = creations(&connection);
-    assert_eq!(created.len(), 1, "{created:?}");
+    assert_eq!(created.len(), 2, "{created:?}");
     let (method, params) = &created[0];
     assert_eq!(method, "Browser.createWindow");
     assert_eq!(params["browserContextId"], json!("context-original"));
     assert_eq!(params["windowType"], json!("normal"));
-    assert_eq!(params["url"], json!("https://first.test/"));
     let window = connection
         .state
         .lock()
@@ -2023,6 +2023,9 @@ async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result
         .cloned()
         .unwrap_or_default();
     assert_eq!(window["isActive"], json!(false));
+    assert_eq!(created[1].0, "Browser.createTab");
+    assert_eq!(created[1].1["windowId"], window["windowId"]);
+    assert_eq!(created[1].1["url"], json!("https://first.test/"));
 
     // The next call captures that window as Default's placement and creates tabs there.
     let run_ctx = ctx(session, Arc::new(StaticTargetStore::new())).await?;
@@ -2032,9 +2035,9 @@ async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result
     )?;
     assert_eq!(run["value"]["windowId"], window["windowId"], "{run}");
     let created = creations(&connection);
-    assert_eq!(created.len(), 2, "{created:?}");
-    assert_eq!(created[1].0, "Browser.createTab");
-    assert_eq!(created[1].1["windowId"], window["windowId"]);
+    assert_eq!(created.len(), 3, "{created:?}");
+    assert_eq!(created[2].0, "Browser.createTab");
+    assert_eq!(created[2].1["windowId"], window["windowId"]);
     Ok(())
 }
 
@@ -2153,5 +2156,56 @@ async fn missing_default_refuses_work_but_selection_recovers() -> anyhow::Result
     let opened = call_service("tabs", json!({ "action": "new" })).await?;
     assert_eq!(opened.is_error, Some(false), "{opened:?}");
     assert_eq!(creations(&connection)[0].1["windowId"], json!(20));
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_management_never_loads_an_unloaded_default() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    connection.change(|state| {
+        let original = state
+            .profiles
+            .iter_mut()
+            .find(|profile| profile["directory"] == "Default");
+        if let Some(original) = original {
+            original["loaded"] = json!(false);
+            if let Some(fields) = original.as_object_mut() {
+                fields.remove("browserContextId");
+            }
+        }
+    });
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let service = BrowserMcpService::new(super::tests::service_options(session));
+    let call_service = |name: &'static str, args: Value| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    let loads = || {
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "Browser.loadProfile")
+            .count()
+    };
+    for (name, args) in [
+        ("browser_profiles", json!({ "action": "list" })),
+        ("browser_target", json!({})),
+        (
+            "browser_target",
+            json!({ "action": "set", "name": "sales" }),
+        ),
+        ("browser_target", json!({ "action": "clear" })),
+    ] {
+        let result = call_service(name, args.clone()).await?;
+        assert_eq!(result.is_error, Some(false), "{name} {args}: {result:?}");
+    }
+    assert_eq!(loads(), 0, "management loaded the default profile");
+    // Ordinary work needs Default's live context, so it loads that existing profile.
+    let listed = call_service("tabs", json!({ "action": "list" })).await?;
+    assert_eq!(listed.is_error, Some(false), "{listed:?}");
+    assert_eq!(loads(), 1);
     Ok(())
 }

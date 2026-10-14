@@ -197,12 +197,19 @@ impl BrowserMcpService {
     async fn tool_ctx(
         &self,
         session: Arc<BrowserSession>,
+        manages_target: bool,
         cancel: CancellationToken,
     ) -> Result<ToolCtx, ToolError> {
         // Read once at request admission. A successor browser connection still
         // receives the intent; a stale native handle fails closed in capture.
         let binding = self.target.get().await.map_err(ToolError::message)?;
-        let browser = BrowserView::capture(session, binding, self.defaults.default_window_id).await;
+        let default_window = self.defaults.default_window_id;
+        // Profile management must not load the Default profile as a side effect of admission.
+        let browser = if manages_target {
+            BrowserView::capture_for_management(session, binding, default_window).await
+        } else {
+            BrowserView::capture(session, binding, default_window).await
+        };
         Ok(ToolCtx::new(BrowserToolOptions {
             browser,
             target: Some(self.target.clone()),
@@ -235,7 +242,10 @@ impl BrowserMcpService {
 
         let (mut result, error_message) =
             if let Some(browser_session) = self.browser_session().await {
-                let execution = match self.tool_ctx(browser_session, cancel).await {
+                let execution = match self
+                    .tool_ctx(browser_session, def.metadata.manages_target, cancel)
+                    .await
+                {
                     Ok(ctx) => execute_tool(def, args, &ctx).await.map(|mut result| {
                         // Outer results only; run's inner primitives never pass through here.
                         if let Some(note) = unapplied_target_note(&ctx.browser) {

@@ -60,7 +60,9 @@ impl Browser {
         window_id: crate::WindowId,
     ) -> Result<crate::pages::PageSession, CoreError> {
         let view = self.view().await;
-        if view.binding().is_none() {
+        // Only a genuinely unbound view (older native) takes the global path; a failed
+        // default capture must surface its error, never widen to another profile's window.
+        if view.scope()?.is_none() {
             return self
                 .core
                 .pages
@@ -105,7 +107,7 @@ impl Browser {
     ) -> Result<PageId, CoreError> {
         let view = self.view().await;
         let mut opts = opts;
-        if view.binding().is_none() && opts.window_id.is_none() {
+        if view.scope()?.is_none() && opts.window_id.is_none() {
             opts.window_id = Self::resolve_visible_window_id(&view).await?;
         }
         Ok(view.new_page(url, opts).await?.page_id)
