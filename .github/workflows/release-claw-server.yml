@@ -737,8 +737,10 @@ jobs:
 
       - name: Attach zips to private draft
         env:
+          DEFER_FINALIZE: ${{ inputs.defer_finalize }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESERVATION: ${{ needs.prepare.outputs.reservation }}
         run: |
           set -euo pipefail
           mapfile -t assets < <(find dist/claw-server -maxdepth 1 -name 'browseros-claw-server-rust-resources-*.zip' | sort)
@@ -752,6 +754,47 @@ jobs:
               --target "$RELEASE_SHA" \
               --generate-notes \
               --title "BrowserClaw Server - v$VERSION"
+          fi
+          # A deferred build never finalizes, so it may write only to a private
+          # draft bound to this source. The resolver can reuse a same-source tag
+          # whose release is already public (an earlier run finalized it); that
+          # release is read-only here and must already hold these exact bytes.
+          # The metadata read is a plain assignment so any gh failure aborts
+          # under set -e instead of skipping the guard before --clobber.
+          # Without deferral, finalize verifies and publishes as before.
+          if [ "$DEFER_FINALIZE" = "true" ]; then
+            release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            case "$is_draft" in
+              true|false) ;;
+              *)
+                echo "::error::Could not read the draft state of $RELEASE_TAG"
+                exit 1
+                ;;
+            esac
+            if [ "$is_draft" = "false" ]; then
+              published_dir="$(mktemp -d)"
+              for asset in "${assets[@]}"; do
+                name="$(basename "$asset")"
+                if ! jq -e --arg name "$name" 'any(.assets[]; .name == $name)' <<< "$release" >/dev/null; then
+                  echo "::error::Published $RELEASE_TAG lacks $name; a deferred build cannot add it"
+                  exit 1
+                fi
+                gh release download "$RELEASE_TAG" --pattern "$name" --dir "$published_dir"
+                if ! cmp --silent "$asset" "$published_dir/$name"; then
+                  echo "::error::Published $RELEASE_TAG/$name differs from the canonical R2 object"
+                  exit 1
+                fi
+              done
+              echo "Reused published $RELEASE_TAG assets read-only"
+              exit 0
+            fi
+            # A tag reservation was already verified as annotated at RELEASE_SHA.
+            if [ "$(jq -r '.targetCommitish' <<< "$release")" != "$RELEASE_SHA" ] && \
+              [ "$RESERVATION" != "tag" ]; then
+              echo "::error::$RELEASE_TAG is not a private draft for $RELEASE_SHA"
+              exit 1
+            fi
           fi
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 

@@ -169,6 +169,37 @@ class ReleaseContractTest(unittest.TestCase):
 
         self.assertEqual(set(selected), {"win"})
 
+    def test_macos_arm64_contract_selects_only_the_exact_arm64_receipt(self):
+        self.metadata["macos"] = _release_metadata("macos", {"arm64"})
+        contract = dict(
+            version="0.49.0",
+            product_id="browserclaw",
+            platforms="macos",
+            macos_arch="arm64",
+            source_sha="a" * 40,
+            workflow_run_id="123",
+        )
+
+        selected = validate_release_metadata(self.metadata, **contract)
+
+        self.assertEqual(set(selected), {"macos"})
+        self.assertEqual(set(selected["macos"]["artifacts"]), {"arm64"})
+
+        # A universal receipt left by another build is not an arm64 draft.
+        universal = {
+            **self.metadata,
+            "macos": _release_metadata("macos", {"arm64", "x64", "universal"}),
+        }
+        with self.assertRaisesRegex(RuntimeError, "artifact keys"):
+            validate_release_metadata(universal, **contract)
+
+        foreign = {
+            **self.metadata,
+            "macos": _release_metadata("macos", {"arm64"}, source_sha="b" * 40),
+        }
+        with self.assertRaisesRegex(RuntimeError, "source_sha"):
+            validate_release_metadata(foreign, **contract)
+
     def test_release_notes_use_product_display_name(self):
         notes = generate_release_notes(
             "0.49.0",
