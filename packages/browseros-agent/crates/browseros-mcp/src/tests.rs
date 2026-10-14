@@ -14,7 +14,7 @@ use crate::{
 };
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks, CdpConnection, PageId, SessionId,
+    BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, PageId, SessionId,
     snapshot::{AxNode, AxValue, SnapshotDiff},
 };
 use futures_util::future::BoxFuture;
@@ -27,6 +27,9 @@ use std::sync::{
 use std::time::Duration;
 use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
+
+#[path = "tool_guard_tests.rs"]
+mod tool_guard_tests;
 
 struct FakeConnection {
     sender: broadcast::Sender<CdpEvent>,
@@ -88,7 +91,44 @@ fn fake_session() -> Arc<BrowserSession> {
     )
 }
 
-fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
+/// Fixed-epoch fixtures cannot reconnect between this check and dispatch. A transport that
+/// replaces its epoch must instead check and publish under its replacement/state lock.
+pub(crate) fn check_fixed_fixture_epoch(expected: u64, actual: u64) -> Result<(), CdpError> {
+    if expected != actual {
+        return Err(CdpError::ConnectionEpochChanged { expected, actual });
+    }
+    Ok(())
+}
+
+/// Resolve exactly one native selector against retained tab metadata. Origin checks must see
+/// the actual create reply, including its window, rather than a synthesized default tab.
+pub(crate) fn select_fixture_tab(tabs: &[Value], params: &Value) -> Result<Value, CdpError> {
+    let (field, value) = match (params.get("tabId"), params.get("targetId")) {
+        (Some(_), Some(_)) => {
+            return Err(CdpError::Protocol {
+                code: -32602,
+                message: "Specify either targetId or tabId, not both".into(),
+            });
+        }
+        (Some(value), None) => ("tabId", value),
+        (None, Some(value)) => ("targetId", value),
+        (None, None) => {
+            return Err(CdpError::Protocol {
+                code: -32602,
+                message: "Missing tab selector".into(),
+            });
+        }
+    };
+    tabs.iter()
+        .find(|tab| tab.get(field) == Some(value))
+        .cloned()
+        .ok_or_else(|| CdpError::Protocol {
+            code: -1,
+            message: format!("Unknown fixture tab: {params}"),
+        })
+}
+
+pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
     BrowserMcpServiceOptions {
         name: "browseros-mcp-test".to_string(),
         title: "BrowserOS MCP Test".to_string(),
@@ -108,7 +148,8 @@ fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
 
 fn fake_ctx() -> ToolCtx {
     ToolCtx::new(BrowserToolOptions {
-        session: fake_session(),
+        browser: BrowserView::unbound(fake_session(), None),
+        target: None,
         defaults: BrowserToolDefaults::default(),
         cancel: CancellationToken::new(),
         output_files: create_browser_output_file_access(),
@@ -124,9 +165,11 @@ struct HarnessCall {
     session: Option<SessionId>,
 }
 
+/// Tool fixture whose transport epoch is immutable; guarded dispatch still validates callers.
 struct HarnessConnection {
     sender: broadcast::Sender<CdpEvent>,
     calls: Mutex<Vec<HarnessCall>>,
+    created_tab: Mutex<Option<Value>>,
     emit_console_on_input: AtomicBool,
 }
 
@@ -136,6 +179,7 @@ impl HarnessConnection {
         Arc::new(Self {
             sender,
             calls: Mutex::new(Vec::new()),
+            created_tab: Mutex::new(None),
             emit_console_on_input: AtomicBool::new(false),
         })
     }
@@ -158,6 +202,19 @@ impl HarnessConnection {
     fn enable_console_on_input(&self) {
         self.emit_console_on_input.store(true, Ordering::SeqCst);
     }
+
+    fn tabs(&self) -> Vec<Value> {
+        let mut tabs = vec![harness_tab()];
+        if let Some(tab) = self
+            .created_tab
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+        {
+            tabs.push(tab);
+        }
+        tabs
+    }
 }
 
 impl CdpConnection for HarnessConnection {
@@ -177,16 +234,31 @@ impl CdpConnection for HarnessConnection {
                     session: session.cloned(),
                 });
             match method {
-                "Browser.getTabs" => Ok(json!({ "tabs": [harness_tab()] })),
-                "Browser.getTabInfo" => {
-                    let tab = if params.get("tabId").and_then(Value::as_i64) == Some(202) {
-                        new_harness_tab()
-                    } else {
-                        harness_tab()
-                    };
+                "Browser.getTabs" => Ok(json!({ "tabs": self.tabs() })),
+                "Browser.getTabInfo" => Ok(json!({
+                    "tab": select_fixture_tab(&self.tabs(), &params)?
+                })),
+                "Browser.createTab" => {
+                    let mut tab = new_harness_tab();
+                    tab["url"] = params
+                        .get("url")
+                        .cloned()
+                        .unwrap_or_else(|| json!("about:blank"));
+                    tab["windowId"] = params.get("windowId").cloned().unwrap_or_else(|| json!(1));
+                    tab["isActive"] = json!(
+                        !params
+                            .get("background")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                    );
+                    // The native reply remains authoritative through guarded readiness,
+                    // snapshot attachment and later inventory reconciliation.
+                    *self
+                        .created_tab
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tab.clone());
                     Ok(json!({ "tab": tab }))
                 }
-                "Browser.createTab" => Ok(json!({ "tab": new_harness_tab() })),
                 "History.getRecent" => {
                     if params.get("maxResults") == Some(&json!(2)) {
                         Ok(json!({
@@ -289,14 +361,41 @@ impl CdpConnection for HarnessConnection {
     fn send_raw_json<'a>(
         &'a self,
         method: &'a str,
-        _params_json: &'a str,
-        _session: Option<&'a SessionId>,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<String, CdpError>> {
         Box::pin(async move {
-            Err(CdpError::Protocol {
-                code: -1,
-                message: format!("unexpected harness raw call: {method}"),
-            })
+            let params = serde_json::from_str(params_json).map_err(|err| CdpError::Protocol {
+                code: -32602,
+                message: err.to_string(),
+            })?;
+            Ok(self.send(method, params, session).await?.to_string())
+        })
+    }
+
+    fn send_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params: Value,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<Value, CdpError>> {
+        Box::pin(async move {
+            check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+            self.send(method, params, session).await
+        })
+    }
+
+    fn send_raw_json_at_epoch<'a>(
+        &'a self,
+        expected_epoch: u64,
+        method: &'a str,
+        params_json: &'a str,
+        session: Option<&'a SessionId>,
+    ) -> BoxFuture<'a, Result<String, CdpError>> {
+        Box::pin(async move {
+            check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+            self.send_raw_json(method, params_json, session).await
         })
     }
 
@@ -311,6 +410,69 @@ impl CdpConnection for HarnessConnection {
     fn connection_epoch(&self) -> u64 {
         1
     }
+}
+
+#[tokio::test]
+async fn legacy_fixture_epoch_dispatch_preserves_created_identity() -> anyhow::Result<()> {
+    let connection = HarnessConnection::new();
+    let epoch = connection.connection_epoch();
+    let params = json!({
+        "url": "https://fixture-created.example/",
+        "windowId": 88,
+        "background": true
+    });
+    let raw_params = params.to_string();
+    let decoded = connection.send_at_epoch(epoch + 1, "Browser.createTab", params.clone(), None);
+    let raw = connection.send_raw_json_at_epoch(epoch + 1, "Browser.createTab", &raw_params, None);
+    for result in [decoded.await.map(|_| ()), raw.await.map(|_| ())] {
+        assert!(matches!(
+            result,
+            Err(CdpError::ConnectionEpochChanged {
+                expected: 2,
+                actual: 1
+            })
+        ));
+    }
+    assert!(connection.calls().is_empty());
+    assert_eq!(
+        connection.send("Browser.getTabs", json!({}), None).await?["tabs"]
+            .as_array()
+            .map(Vec::len),
+        Some(1)
+    );
+
+    let created = connection
+        .send_at_epoch(epoch, "Browser.createTab", params, None)
+        .await?["tab"]
+        .clone();
+    assert_eq!(created["url"], json!("https://fixture-created.example/"));
+    assert_eq!(created["windowId"], json!(88));
+    assert_eq!(created["isActive"], json!(false));
+    let selector = json!({ "targetId": created["targetId"] });
+    let readback = connection
+        .send_raw_json_at_epoch(epoch, "Browser.getTabInfo", &selector.to_string(), None)
+        .await?;
+    assert_eq!(serde_json::from_str::<Value>(&readback)?["tab"], created);
+    let inventory = connection
+        .send_at_epoch(epoch, "Browser.getTabs", json!({}), None)
+        .await?;
+    assert!(
+        inventory["tabs"]
+            .as_array()
+            .is_some_and(|tabs| tabs.contains(&created))
+    );
+    assert!(matches!(
+        connection
+            .send_at_epoch(
+                epoch,
+                "Browser.getTabInfo",
+                json!({ "tabId": created["tabId"], "targetId": created["targetId"] }),
+                None,
+            )
+            .await,
+        Err(CdpError::Protocol { code: -32602, .. })
+    ));
+    Ok(())
 }
 
 fn harness_tab() -> Value {
@@ -400,7 +562,8 @@ async fn harness_ctx() -> (ToolCtx, Arc<HarnessConnection>, u32) {
         .unwrap_or_else(|err| panic!("harness should attach page session: {err}"));
     (
         ToolCtx::new(BrowserToolOptions {
-            session,
+            browser: BrowserView::unbound(session, None),
+            target: None,
             defaults: BrowserToolDefaults::default(),
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
@@ -445,6 +608,8 @@ fn catalog_order_matches_typescript_registry() {
     assert_eq!(
         names,
         vec![
+            "browser_profiles",
+            "browser_target",
             "tabs",
             "tab_groups",
             "history",
@@ -475,6 +640,8 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
     assert_eq!(
         flags,
         vec![
+            ("browser_profiles", false),
+            ("browser_target", false),
             ("tabs", true),
             ("tab_groups", false),
             ("history", false),
@@ -623,6 +790,95 @@ fn run_has_compat_output_schema() {
     }
 }
 
+#[test]
+fn only_targeting_tools_and_run_advertise_output_schemas() {
+    let advertised = catalog()
+        .into_iter()
+        .filter(|tool| tool.output_schema.is_some())
+        .map(|tool| tool.name)
+        .collect::<Vec<_>>();
+    assert_eq!(advertised, ["browser_profiles", "browser_target", "run"]);
+}
+
+#[test]
+fn targeting_output_schemas_describe_native_identity_binding_and_status() {
+    let schema = |name| {
+        let tool = catalog()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("missing tool {name}"));
+        Value::Object(
+            tool.output_schema
+                .unwrap_or_else(|| panic!("missing output schema {name}"))
+                .as_ref()
+                .clone(),
+        )
+    };
+    let profiles = schema("browser_profiles");
+    let target = schema("browser_target");
+    for output in [&profiles, &target] {
+        assert_eq!(output["type"], "object");
+    }
+    let descriptor = &profiles["oneOf"][0]["properties"]["profiles"]["items"];
+    assert_eq!(
+        descriptor["required"],
+        json!(["browserProfileId", "name", "directory", "loaded"])
+    );
+    for field in ["browserProfileId", "name", "directory", "browserContextId"] {
+        assert_eq!(descriptor["properties"][field]["type"], "string");
+    }
+    assert_eq!(descriptor["properties"]["loaded"]["type"], "boolean");
+    assert_eq!(
+        profiles["oneOf"][0]["properties"]["boundBrowserProfileId"]["type"],
+        "string"
+    );
+    assert_eq!(profiles["oneOf"][1]["properties"]["profile"], *descriptor);
+    assert_eq!(
+        profiles["oneOf"][1]["required"],
+        json!(["action", "profile", "loaded"])
+    );
+
+    let readback = &target["oneOf"][0]["properties"];
+    let binding = &readback["binding"];
+    assert_eq!(
+        binding["required"],
+        json!(["browserProfileId", "name", "directory", "revision"])
+    );
+    assert_eq!(binding["properties"]["revision"]["type"], "integer");
+    assert_eq!(
+        binding["properties"]["window"]["properties"]["mode"]["enum"],
+        json!(["working", "pinned"])
+    );
+    assert_eq!(
+        binding["properties"]["window"]["required"],
+        json!(["mode", "windowId"])
+    );
+    assert_eq!(
+        binding["properties"]["window"]["properties"]["windowId"]["type"],
+        "integer"
+    );
+    let status = &readback["status"];
+    assert_eq!(
+        status["required"],
+        json!(["profile", "windows", "placementWindowId", "error"])
+    );
+    assert_eq!(
+        status["properties"]["profile"]["anyOf"],
+        json!([descriptor, { "type": "null" }])
+    );
+    assert_eq!(status["properties"]["windows"]["items"]["type"], "integer");
+    assert_eq!(
+        status["properties"]["placementWindowId"]["type"],
+        json!(["integer", "null"])
+    );
+    assert_eq!(
+        status["properties"]["error"]["type"],
+        json!(["string", "null"])
+    );
+    assert_eq!(target["oneOf"][1]["properties"]["binding"], *binding);
+    assert_eq!(target["oneOf"][1]["properties"]["previous"], *binding);
+}
+
 #[tokio::test]
 async fn service_capabilities_and_instructions_match_contract() {
     let service = BrowserMcpService::new(service_options(fake_session()));
@@ -648,8 +904,9 @@ async fn service_capabilities_and_instructions_match_contract() {
 
 #[tokio::test]
 async fn service_structured_content_gate_matches_typescript_contract() {
-    let (ctx, _connection, _page) = harness_ctx().await;
-    let included = BrowserMcpService::new(service_options(ctx.session.clone()));
+    let (_ctx, connection, _page) = harness_ctx().await;
+    let session = BrowserSession::new(connection, BrowserSessionHooks::default());
+    let included = BrowserMcpService::new(service_options(session.clone()));
     let included_tabs = included
         .call_tool_for_testing(
             "tabs",
@@ -660,7 +917,7 @@ async fn service_structured_content_gate_matches_typescript_contract() {
         .unwrap_or_else(|err| panic!("tabs should be registered: {err}"));
     assert!(included_tabs.structured_content.is_some());
 
-    let mut hidden_options = service_options(ctx.session.clone());
+    let mut hidden_options = service_options(session);
     hidden_options.include_structured_content = Some(false);
     let hidden = BrowserMcpService::new(hidden_options);
     let hidden_tabs = hidden
@@ -991,22 +1248,37 @@ async fn screenshot_full_page_ignores_size_and_viewport_metrics() {
     assert!(capture.params.get("clip").is_none());
 }
 
+/// Central dispatch admits the primary page before any handler runs, so the page must exist.
+/// Argument validation still precedes every page protocol call: no measurement, no capture.
 #[tokio::test]
-async fn screenshot_rejects_invalid_supplied_dimensions_before_browser_access() {
+async fn screenshot_rejects_invalid_supplied_dimensions_before_page_protocol() {
     for size in [
         json!({ "width": 0 }),
         json!({ "height": 4097 }),
         json!({ "width": 1.5 }),
     ] {
+        let (ctx, connection, page) = harness_ctx().await;
+        let before = connection.calls().len();
         let result = execute_tool(
             &tool_by_name("screenshot"),
-            json!({ "page": 1, "size": size }),
-            &fake_ctx(),
+            json!({ "page": page, "size": size }),
+            &ctx,
         )
         .await
         .unwrap_or_else(|err| panic!("validation should return a tool result: {err}"));
         assert!(result.is_error);
-        assert!(result_text(&result).contains("Invalid arguments"));
+        assert!(
+            result_text(&result).contains("Invalid arguments"),
+            "{size}: {}",
+            result_text(&result)
+        );
+        assert!(
+            !connection.calls()[before..]
+                .iter()
+                .any(|call| call.method.starts_with("Page.")
+                    || call.method.starts_with("Emulation.")),
+            "{size}"
+        );
     }
 }
 
@@ -1055,8 +1327,8 @@ async fn snapshot_fails_fast_when_dialog_is_open() {
         Some("session-1"),
     );
     eventually(|| {
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .pending_dialog_line(&PageId(page))
             .is_some()
     })
@@ -1092,8 +1364,8 @@ async fn act_dialog_accept_sends_cdp_and_clears_pending_dialog() {
         Some("session-1"),
     );
     eventually(|| {
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .pending_dialog_line(&PageId(page))
             .is_some()
     })
@@ -1110,8 +1382,8 @@ async fn act_dialog_accept_sends_cdp_and_clears_pending_dialog() {
 
     assert!(!result.is_error);
     assert!(
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .pending_dialog(&PageId(page))
             .is_none()
     );
@@ -1187,14 +1459,7 @@ async fn read_console_returns_captured_ring() {
         }),
         Some("session-1"),
     );
-    eventually(|| {
-        ctx.session
-            .page_signals
-            .console_entries(&PageId(page))
-            .len()
-            == 2
-    })
-    .await;
+    eventually(|| ctx.browser.signals().console_entries(&PageId(page)).len() == 2).await;
 
     let read = tool_by_name("read");
     let result = execute_tool(&read, json!({ "page": page, "format": "console" }), &ctx)

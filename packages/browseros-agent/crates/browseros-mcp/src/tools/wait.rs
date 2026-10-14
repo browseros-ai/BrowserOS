@@ -105,7 +105,7 @@ fn handler<'a>(
         if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
             return Ok(Some(result));
         }
-        let page = ctx.session.pages.get_session(PageId(args.page)).await?;
+        let page = ctx.browser.page_session(PageId(args.page)).await?;
         let expression = match args.wait_for {
             WaitFor::Text => format!(
                 "(document.body?.innerText ?? '').includes({})",

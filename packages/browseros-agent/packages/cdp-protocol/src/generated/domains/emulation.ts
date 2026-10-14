@@ -1,6 +1,6 @@
 // ── AUTO-GENERATED from CDP protocol. DO NOT EDIT. ──
 
-import type { RGBA } from './dom'
+import type { Rect, RGBA } from './dom'
 import type { TimeSinceEpoch } from './network'
 import type { Viewport } from './page'
 
@@ -168,6 +168,10 @@ export interface SetSafeAreaInsetsOverrideParams {
   insets: SafeAreaInsets
 }
 
+export interface SetVirtualKeyboardGeometryOverrideParams {
+  keyboardRect?: Rect
+}
+
 export interface SetDeviceMetricsOverrideParams {
   width: number
   height: number
@@ -185,6 +189,7 @@ export interface SetDeviceMetricsOverrideParams {
   devicePosture?: DevicePosture
   scrollbarType?: 'overlay' | 'default'
   screenOrientationLockEmulation?: boolean
+  viewportMeta?: 'enable' | 'default'
 }
 
 export interface SetDevicePostureOverrideParams {
@@ -268,12 +273,6 @@ export interface SetPressureStateOverrideParams {
   state: PressureState
 }
 
-export interface SetPressureDataOverrideParams {
-  source: PressureSource
-  state: PressureState
-  ownContributionEstimate?: number
-}
-
 export interface SetIdleOverrideParams {
   isUserActive: boolean
   isScreenUnlocked: boolean
@@ -330,6 +329,10 @@ export interface SetDataSaverOverrideParams {
 
 export interface SetHardwareConcurrencyOverrideParams {
   hardwareConcurrency: number
+}
+
+export interface SetCPUPerformanceOverrideParams {
+  performanceTier?: 'unknown' | 'low' | 'mid' | 'high' | 'ultra'
 }
 
 export interface SetUserAgentOverrideParams {

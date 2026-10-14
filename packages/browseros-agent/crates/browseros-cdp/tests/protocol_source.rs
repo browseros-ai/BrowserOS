@@ -15,9 +15,18 @@ fn protocol_source_matches_pinned_chromium_input() -> Result<(), Box<dyn Error>>
     let protocol: Value = serde_json::from_slice(PROTOCOL)?;
     assert_eq!(
         protocol["domains"].as_array().map(Vec::len),
-        Some(58),
-        "the pinned ch1 combined protocol has 58 domains"
+        Some(60),
+        "the pinned ch1 combined protocol has 60 domains"
     );
+    // These upstream additions belong to the full snapshot even though the Rust
+    // client does not compile them into its focused surface.
+    for name in ["Ads", "DigitalCredentials"] {
+        assert!(
+            protocol["domains"]
+                .as_array()
+                .is_some_and(|domains| { domains.iter().any(|domain| domain["domain"] == name) })
+        );
+    }
     let surface: Value = serde_json::from_slice(SURFACE)?;
     assert_eq!(
         surface["domains"].as_array().map(Vec::len),

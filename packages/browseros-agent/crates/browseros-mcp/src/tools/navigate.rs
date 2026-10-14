@@ -42,7 +42,7 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: NavigateArgs = parse_args(raw)?;
-        let nav = ctx.session.nav(PageId(args.page));
+        let nav = ctx.browser.nav(PageId(args.page)).await?;
         let action = match args.action {
             NavigateAction::Url => {
                 let Some(url) = args.url.as_deref().filter(|url| !url.is_empty()) else {
@@ -67,18 +67,16 @@ fn handler<'a>(
             }
         };
         let origin = ctx
-            .session
-            .pages
-            .refresh(PageId(args.page))
+            .browser
+            .refresh_page(PageId(args.page))
             .await?
             .map(|info| info.url);
         let origin = match origin {
             Some(origin) => origin,
             None => ctx
-                .session
-                .pages
-                .get_info(PageId(args.page))
-                .await
+                .browser
+                .refresh_page(PageId(args.page))
+                .await?
                 .map(|info| info.url)
                 .unwrap_or_else(|| "unknown".to_string()),
         };

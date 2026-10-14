@@ -1,16 +1,16 @@
 use crate::{
     api::mcp::{
-        dispatch::{ToolCall, ToolEffect, ToolEffectContext, result_page_id},
+        dispatch::{CreatedPageCapture, ToolCall, ToolEffect, ToolEffectContext, result_page_id},
         naming::{desired_group_title, is_session_group_candidate},
         timeouts::TAB_GROUP_OPERATION,
     },
     ids::ConvoId,
     services::{
         browser::color_for_slug,
-        sessions::{PageOwnership, Session},
+        sessions::{PageOwnership, ScopedGroupKey, Session, TabGroup, TitleSync},
     },
 };
-use browseros_core::{BrowserSession, PageId};
+use browseros_core::{BrowserSession, PageId, WindowId, target::BrowserView};
 use browseros_mcp::{
     BrowserToolDefaults, BrowserToolOptions, OutputFileAccess, ToolCtx, ToolDef, ToolResult,
     execute_tool,
@@ -32,8 +32,11 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         if context.call.identity.is_none() || context.call.browser_session.is_none() {
             return Ok(None);
         }
-        let page_id = if context.call.flags.new_page {
-            result_page_id(context.result)
+        let created = if context.call.flags.new_page {
+            match result_page_id(context.result) {
+                Some(page_id) => created_page(context.call, page_id).await,
+                None => None,
+            }
         } else {
             None
         };
@@ -42,8 +45,11 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         // the agent should consider reusing.
         let notice = own_group_candidates_notice(&context).await;
         // Detach browser-group synchronization so cosmetic/durable grouping cannot
-        // delay the tool response.
-        drop(spawn_tab_group_work(context.call.clone(), page_id));
+        // delay the tool response. Failed creation capture skips all group writes;
+        // existing-page calls can still synchronize their already captured view.
+        if !context.call.flags.new_page || created.is_some() {
+            drop(spawn_tab_group_work(context.call.clone(), created));
+        }
         Ok(notice.map(|notice| append_notice(context.result, notice)))
     })
 }
@@ -79,7 +85,7 @@ async fn own_group_candidates_notice(context: &ToolEffectContext<'_>) -> Option<
         return None;
     }
     let identity = context.call.identity.as_ref()?;
-    let browser = context.call.browser_session.as_ref()?;
+    let browser = context.call.view.as_ref()?;
     let candidates = open_groups(browser, context.call.output_files.clone())
         .await?
         .into_iter()
@@ -93,7 +99,7 @@ async fn own_group_candidates_notice(context: &ToolEffectContext<'_>) -> Option<
         "note: a new tab group is being started for this session. These open groups have a matching client prefix and may be \
          earlier tasks: {}. If you are \
          continuing one of them, pass its id as groupId on tabs action=\"new\" and your pages go \
-         there instead, with the tabs already in it reading as yours again.",
+         there instead. Existing tabs keep their actual ownership; a known group also recovers its task binding.",
         candidates.join("; ")
     ))
 }
@@ -103,7 +109,7 @@ async fn own_group_candidates_notice(context: &ToolEffectContext<'_>) -> Option<
 /// Silent on failure on purpose: a note that names no groups, or invents the
 /// absence of them, is worse than no note.
 async fn open_groups(
-    browser: &Arc<BrowserSession>,
+    browser: &BrowserView,
     output_files: OutputFileAccess,
 ) -> Option<Vec<(String, String)>> {
     let result = dispatch_tab_groups(
@@ -144,18 +150,50 @@ fn append_notice(result: &ToolResult, notice: String) -> ToolResult {
     annotated
 }
 
-fn spawn_tab_group_work(call: ToolCall, page_id: Option<u32>) -> JoinHandle<()> {
-    tokio::spawn(run_tab_group_work(call, page_id))
+/// Actual creation destination recorded before the asynchronous grouping handoff.
+#[derive(Debug, Clone, Copy)]
+pub struct CreatedPage {
+    pub page_id: u32,
+    pub window_id: Option<WindowId>,
+}
+
+pub(crate) async fn created_page(call: &ToolCall, page_id: u32) -> Option<CreatedPage> {
+    // The shared registry can reconcile another incarnation while ownership or
+    // response work awaits. Core validates this candidate against the creating
+    // view's immutable receipt; the registry alone cannot prove creation identity.
+    let info = call
+        .browser_session
+        .as_ref()?
+        .pages
+        .get_info(PageId(page_id))
+        .await?;
+    // Derive before any detached work: capturing at callback entry would adopt a
+    // reconnect's epoch for an unbound call. Core carries this expectation through
+    // awaited admission and the final transport publication for every group write.
+    let view = call.view.as_ref()?.with_expected_created_page(&info).ok()?;
+    let created = CreatedPage {
+        page_id,
+        window_id: info.window_id,
+    };
+    call.created_page_snapshots
+        .lock()
+        .await
+        .insert(page_id, CreatedPageCapture { page: info, view });
+    Some(created)
+}
+
+fn spawn_tab_group_work(call: ToolCall, created: Option<CreatedPage>) -> JoinHandle<()> {
+    tokio::spawn(run_tab_group_work(call, created))
 }
 
 /// Ensures the calling agent's tab group exists and, when `page_id` is set,
 /// places that page in it. Shared by the tab-groups effect and the code-mode
 /// script hook so a page a script opens joins the agent's group the same way a
 /// `tabs new` page does.
-pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
+pub(crate) async fn run_tab_group_work(call: ToolCall, created: Option<CreatedPage>) {
     let (Some(identity), Some(browser), Some(tab_groups)) = (
         call.identity.as_ref(),
-        call.browser_session.as_ref(),
+        call.view.as_ref(),
         call.tool_named("tab_groups"),
     ) else {
         return;
@@ -175,6 +213,36 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     // Session teardown gates queued work above; once browser mutation starts, let it
     // finish so any created group can be recorded.
     let operation_cancel = CancellationToken::new();
+    let current_group = ownership.group(&identity.ownership_key).await;
+    let has_creation_snapshot = match created {
+        Some(page) if page.window_id.is_some() => call
+            .created_page_snapshots
+            .lock()
+            .await
+            .contains_key(&page.page_id),
+        _ => false,
+    };
+    // Even an unbound call must not move its newly created tab to a group that
+    // has since been dragged to another window. Missing creation metadata keeps
+    // the legacy unbound path, while every known destination is revalidated.
+    let must_keep_actual_scope = has_creation_snapshot
+        || browser.binding().is_some()
+        || current_group
+            .as_ref()
+            .is_some_and(|group| group.scope.is_some())
+        || current_group
+            .as_ref()
+            .and_then(|group| group.window_id)
+            .zip(created.and_then(|page| page.window_id))
+            .is_some_and(|(group_window, page_window)| group_window != page_window);
+    if must_keep_actual_scope {
+        // A late run may belong to an earlier revision/window, including an unbound
+        // capture. Recover its actual destination independently of the current pointer.
+        if let Some(created) = created {
+            ensure_captured_tab_group(&call, &ownership, &operation_cancel, created).await;
+        }
+        return;
+    }
     sync_pending_group_title_unlocked(
         tab_groups,
         browser,
@@ -193,45 +261,12 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         call.output_files.clone(),
     )
     .await;
-    let Some(page_id) = page_id else {
+    let Some(CreatedPage { page_id, .. }) = created else {
         return;
     };
-    // A caller that names a group is continuing work in it, so that group
-    // becomes this session's and later pages follow it. This has to happen
-    // before the default-group reconciliation below, which would otherwise see
-    // the page in a group that is not the session's and clear the reference it
-    // was just given.
-    //
-    // The unclaimed pages already in that group become this session's too, so
-    // the reconnected agent picks up the work rather than treating its own tabs
-    // as someone else's. Claims are written rather than inferred at read time
-    // because `tabs list`, the ownership notice and code-mode helper discovery
-    // all read the claim; inferring it in one makes the three disagree.
-    //
-    // Nothing is authorized and nothing is refused. Ownership is a label, never
-    // a permission, asserted in guards/mod.rs and enforced nowhere, so there is
-    // no privilege here to gate. An earlier revision checked the group title
-    // against the client's slug; that was removed because it gated nothing real
-    // while breaking the honest case, since `tab_groups update` renames any
-    // group for anyone and a user renaming a group would have locked its own
-    // agent out of it.
-    //
-    // A page held by another session of the same client is taken over, because
-    // that session is the caller's own earlier self: a reconnect mints a new
-    // conversation while the old one stays in the ownership map holding the
-    // tabs, which is the whole reason the agent sees its own work as foreign.
-    // Only taking unclaimed pages made this do nothing at all in the case it
-    // exists for, since the pages are claimed, just by the previous session.
-    //
-    // A page held by a session of a DIFFERENT client is left alone. Not a
-    // refusal of this caller, just not relabelling someone else's work.
-    //
-    // A group that is no longer open is not adopted either. A remembered id goes
-    // stale as soon as the group is closed, and adopting one would replace a
-    // reference that works with one that cannot: the add then fails, the failure
-    // path clears the reference and returns without creating a replacement, and
-    // the page ends up in no group at all. One listing answers both questions,
-    // so this costs nothing extra.
+    // Named groups are placement/correlation, not an ownership claim. Reusing
+    // a user's or another task's group must leave its existing tabs and cleanup
+    // responsibilities with their actual owner.
     let named_group = call
         .raw_args
         .get("groupId")
@@ -241,24 +276,22 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
         .map(str::to_string);
     let named_requested = named_group.is_some();
     if let Some(requested) = named_group
-        && let Some(pages) =
-            group_pages_if_open(browser, &requested, call.output_files.clone()).await
+        && group_pages_if_open(browser, &requested, call.output_files.clone())
+            .await
+            .is_some()
     {
-        ownership
-            .set_tab_group_ref(identity.ownership_key.clone(), Some(requested))
+        let borrowed = !call
+            .state
+            .targets
+            .owns_group(&call.session_id, &requested)
             .await;
-        let held_by_others = live_convos_of_other_clients(&call.state, identity).await;
-        for page in pages {
-            let claimable = match ownership.owner_of_page(&PageId(page)).await {
-                None => true,
-                Some(owner) => !held_by_others.contains(&owner),
-            };
-            if claimable {
-                ownership
-                    .claim_page(identity.ownership_key.clone(), PageId(page))
-                    .await;
-            }
-        }
+        ownership
+            .update_group(&identity.ownership_key, |group| {
+                group.group_ref = Some(requested);
+                group.borrowed = borrowed;
+                group.window_id = created.and_then(|page| page.window_id);
+            })
+            .await;
         ensure_agent_tab_group_unlocked(
             &call,
             tab_groups,
@@ -289,9 +322,9 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     }
     if let Some(default_group_id) = &call.default_tab_group_id {
         let page_group_id = browser
-            .pages
-            .get_info(PageId(page_id))
+            .page(PageId(page_id))
             .await
+            .ok()
             .and_then(|page| page.group_id);
         if page_group_id.as_ref() == Some(default_group_id) {
             return;
@@ -311,29 +344,225 @@ pub(crate) async fn run_tab_group_work(call: ToolCall, page_id: Option<u32>) {
     .await;
 }
 
-/// Conversations of OTHER clients that are currently live. The only claims a
-/// reclaim leaves alone.
-///
-/// Stated as the exclusion rather than as "my own conversations" on purpose. A
-/// session that disconnects or idles out is removed from the live set while its
-/// claims survive until the retained window is reaped, so listing the caller's
-/// own conversations would miss exactly the case a reconnect is: the previous
-/// session is gone from the snapshot but still holds the tabs. Inverting it also
-/// covers an orphaned claim from any dead session, which no live caller is using
-/// and which would otherwise sit unreclaimable until reaping.
-async fn live_convos_of_other_clients(
-    state: &crate::AppState,
-    identity: &crate::api::mcp::dispatch::ToolIdentity,
-) -> std::collections::BTreeSet<ConvoId> {
-    let slug = identity.agent.slug();
-    state
-        .sessions
-        .snapshot()
+async fn ensure_captured_tab_group(
+    call: &ToolCall,
+    ownership: &Arc<PageOwnership>,
+    cancel: &CancellationToken,
+    created: CreatedPage,
+) {
+    let Some(identity) = &call.identity else {
+        return;
+    };
+    let Some(captured) = call
+        .created_page_snapshots
+        .lock()
         .await
-        .into_iter()
-        .filter(|session| session.agent().slug() != slug)
-        .map(|session| session.convo_id().clone())
-        .collect()
+        .get(&created.page_id)
+        .cloned()
+    else {
+        return;
+    };
+    // Use one creation-time capability throughout this flow, including title and
+    // expansion helpers. An entry-only comparison cannot protect later awaits, and
+    // MCP must not re-resolve a replacement through the original unrestricted view.
+    let browser = &captured.view;
+    let Ok(scope) = browser.scope() else {
+        return;
+    };
+    // Re-admit the actual page before delayed mutation. Closing/replacing the
+    // context or dragging the tab must fail the captured view, never reroute it.
+    let Ok(mut page) = browser.page(PageId(created.page_id)).await else {
+        return;
+    };
+    let Some(window_id) = captured.page.window_id else {
+        return;
+    };
+    if page.window_id != Some(window_id) {
+        return;
+    }
+    let key = ScopedGroupKey {
+        browser_profile_id: scope.map(|scope| scope.binding.intent.browser_profile_id.clone()),
+        window_id,
+    };
+    let tab_groups = cached_tab_groups_tool();
+    let mut saved = ownership.scoped_group(&identity.ownership_key, &key).await;
+    if page.group_id.as_ref().is_some_and(|actual| {
+        saved.as_ref().and_then(|group| group.group_ref.as_ref()) != Some(actual)
+    }) {
+        // Explicit tabs-new placement can choose another group in this same capture.
+        // Keep the former group's lifecycle record, but do not move this page out of
+        // its requested destination when the detached callback finally runs.
+        saved = None;
+    }
+    if let Some(group) = &saved
+        && let Some(group_id) = &group.group_ref
+    {
+        let Ok(reply) = browser.cdp("Browser.getTabGroups", json!({}), None).await else {
+            return;
+        };
+        let actual_window = reply
+            .get("groups")
+            .and_then(Value::as_array)
+            .and_then(|groups| {
+                groups
+                    .iter()
+                    .find(|group| group.get("groupId").and_then(Value::as_str) == Some(group_id))
+            })
+            .and_then(|group| group.get("windowId"))
+            .and_then(Value::as_i64);
+        if actual_window != Some(window_id.0) {
+            // A saved group can be dragged since creation. Never add a tab from a
+            // different actual window merely because the old scope key matched.
+            // A scoped absence does not erase its global lifecycle ownership.
+            ownership
+                .detach_captured_group(&identity.ownership_key, &key, group_id)
+                .await;
+            saved = None;
+        }
+    }
+    // Group membership is mutable presentation/placement, not creation identity.
+    // A native actor can place this page while group discovery awaits, outside
+    // our conversation mutex. Refresh through the SAME deep capability before
+    // choosing a destination; never erase a newer explicit group or ungrouping.
+    let Ok(current) = browser.page(PageId(created.page_id)).await else {
+        return;
+    };
+    if current.window_id != Some(window_id) {
+        return;
+    }
+    if current.group_id != page.group_id {
+        if current.group_id.is_none() {
+            return;
+        }
+        saved = None;
+    }
+    page = current;
+    if let Some(group) = saved
+        && let Some(group_id) = group.group_ref
+    {
+        sync_pending_group_title_unlocked(
+            tab_groups,
+            browser,
+            ownership,
+            &identity.ownership_key,
+            cancel.child_token(),
+            call.output_files.clone(),
+        )
+        .await;
+        if group.collapsed && !group.borrowed {
+            expand_group_unlocked(
+                tab_groups,
+                browser,
+                ownership,
+                &identity.ownership_key,
+                &group_id,
+                cancel.child_token(),
+                call.output_files.clone(),
+            )
+            .await;
+        }
+        if let Err(error) = dispatch_tab_groups(
+            tab_groups,
+            browser,
+            cancel.child_token(),
+            call.output_files.clone(),
+            json!({"action":"create", "groupId":group_id, "pages":[created.page_id]}),
+        )
+        .await
+        {
+            if group_exists_unlocked(browser, &group_id, call.output_files.clone()).await
+                == Some(false)
+            {
+                ownership
+                    .detach_captured_group(&identity.ownership_key, &key, &group_id)
+                    .await;
+            }
+            warn!(%error, "captured tab group add failed");
+        }
+        return;
+    }
+    // A page may already be in an explicitly requested group. Reuse its actual
+    // destination without claiming other tabs or granting lifecycle ownership.
+    let title = desired_group_title(&identity.session).await;
+    let color = color_for_slug(identity.agent.slug());
+    let (group_id, borrowed) = if let Some(group_id) = page.group_id {
+        let borrowed = !call
+            .state
+            .targets
+            .owns_group(&call.session_id, &group_id)
+            .await;
+        (group_id, borrowed)
+    } else {
+        let result = dispatch_tab_groups(
+            tab_groups,
+            browser,
+            cancel.child_token(),
+            call.output_files.clone(),
+            json!({"action":"create", "pages":[created.page_id], "title":title}),
+        )
+        .await;
+        let group_id = match result {
+            Ok(result) => result_group_id(&result),
+            Err(error) => {
+                warn!(%error, "captured tab group create failed");
+                return;
+            }
+        };
+        let Some(group_id) = group_id else { return };
+        (group_id, false)
+    };
+    ownership
+        .remember_scoped_group(
+            &identity.ownership_key,
+            key,
+            TabGroup {
+                group_ref: Some(group_id.clone()),
+                window_id: Some(window_id),
+                color: Some(color),
+                title: TitleSync::Synced(title.clone()),
+                borrowed,
+                ..TabGroup::default()
+            },
+        )
+        .await;
+    if !borrowed {
+        if let Err(error) = call
+            .state
+            .targets
+            .remember_group(&call.session_id, &group_id)
+            .await
+        {
+            warn!(%error, "tab group task correlation persistence failed");
+        }
+        if let Err(error) = dispatch_tab_groups(
+            tab_groups,
+            browser,
+            cancel.child_token(),
+            call.output_files.clone(),
+            json!({"action":"update", "groupId":group_id, "color":color, "collapsed":false}),
+        )
+        .await
+        {
+            warn!(%error, "captured tab group color update failed");
+        }
+        // Naming can race the native create await. Record the created group's
+        // actual title first, then apply a newer task title to all owned groups.
+        let desired_title = desired_group_title(&identity.session).await;
+        if desired_title != title {
+            ownership
+                .set_desired_group_title(identity.ownership_key.clone(), desired_title)
+                .await;
+            sync_pending_group_title_unlocked(
+                tab_groups,
+                browser,
+                ownership,
+                &identity.ownership_key,
+                cancel.child_token(),
+                call.output_files.clone(),
+            )
+            .await;
+        }
+    }
 }
 
 /// The pages in a named tab group, or `None` only when the listing says that
@@ -345,7 +574,7 @@ async fn live_convos_of_other_clients(
 /// closed group and silently route the page somewhere else, splitting one task
 /// across two groups because of a transient error.
 async fn group_pages_if_open(
-    browser: &Arc<BrowserSession>,
+    browser: &BrowserView,
     group_id: &str,
     output_files: OutputFileAccess,
 ) -> Option<Vec<u32>> {
@@ -388,7 +617,7 @@ async fn group_pages_if_open(
 async fn ensure_agent_tab_group_unlocked(
     call: &ToolCall,
     tab_groups: &ToolDef,
-    browser: &Arc<BrowserSession>,
+    browser: &BrowserView,
     ownership: &Arc<PageOwnership>,
     operation_cancel: &CancellationToken,
     page_id: u32,
@@ -409,7 +638,7 @@ async fn ensure_agent_tab_group_unlocked(
         {
             if group_exists_unlocked(browser, &group_id, output_files).await == Some(false) {
                 ownership
-                    .set_tab_group(identity.ownership_key.clone(), None, None)
+                    .forget_group_by_ref(&identity.ownership_key, &group_id)
                     .await;
             }
             warn!(
@@ -463,6 +692,25 @@ async fn ensure_agent_tab_group_unlocked(
             creation_title.clone(),
         )
         .await;
+    let window_id = match call.browser_session.as_ref() {
+        Some(session) => session
+            .pages
+            .get_info(PageId(page_id))
+            .await
+            .and_then(|page| page.window_id),
+        None => None,
+    };
+    ownership
+        .update_group(&identity.ownership_key, |group| group.window_id = window_id)
+        .await;
+    if let Err(error) = call
+        .state
+        .targets
+        .remember_group(&call.session_id, &group_id)
+        .await
+    {
+        warn!(%error, "tab group task correlation persistence failed");
+    }
     if let Err(reason) = dispatch_tab_groups(
         tab_groups,
         browser,
@@ -496,93 +744,92 @@ async fn ensure_agent_tab_group_unlocked(
     }
 }
 
-/// Collapses the durable group when its session enters retention, confirming absence on failure.
+/// Collapses every owned group when the task enters retention. Borrowed groups
+/// remain under their original owner's lifecycle even if they were used by this task.
 pub async fn collapse_agent_tab_group(
     browser: Option<&Arc<BrowserSession>>,
     ownership: &Arc<PageOwnership>,
     key: &ConvoId,
 ) -> bool {
-    let operation_lock = ownership.group_operation_lock(key).await;
-    let _guard = operation_lock.lock().await;
-    if ownership.tab_group_collapsed(key).await {
-        return true;
-    }
-    let Some(group_id) = ownership.tab_group_ref(key).await else {
-        return true;
-    };
-    let Some(browser) = browser else {
-        return false;
-    };
-    let output_files = browseros_mcp::output_file::create_browser_output_file_access();
-    let collapsed = dispatch_tab_groups(
-        cached_tab_groups_tool(),
-        browser,
-        CancellationToken::new(),
-        output_files.clone(),
-        json!({ "action": "update", "groupId": group_id, "collapsed": true }),
-    )
-    .await;
-    let collapse_error = match collapsed {
-        Ok(_) => {
-            ownership
-                .set_tab_group_collapsed_if_current(key, &group_id, true)
-                .await;
-            return true;
-        }
-        Err(error) => error,
-    };
-    if group_exists_unlocked(browser, &group_id, output_files).await == Some(false) {
-        ownership
-            .clear_tab_group_ref_if_current(key, &group_id)
-            .await;
-        return true;
-    }
-    warn!(key = %key, error = %collapse_error, "agent tab group collapse failed");
-    false
+    retained_groups(browser, ownership, key, false).await
 }
 
-/// Closes a retained session group, confirming absence after a failed close.
+/// Closes the task's own retained groups across every captured profile/window.
 pub async fn close_agent_tab_group(
     browser: Option<&Arc<BrowserSession>>,
     ownership: &Arc<PageOwnership>,
     key: &ConvoId,
 ) -> bool {
+    retained_groups(browser, ownership, key, true).await
+}
+
+async fn retained_groups(
+    browser: Option<&Arc<BrowserSession>>,
+    ownership: &Arc<PageOwnership>,
+    key: &ConvoId,
+    close: bool,
+) -> bool {
     let operation_lock = ownership.group_operation_lock(key).await;
     let _guard = operation_lock.lock().await;
-    let Some(group_id) = ownership.tab_group_ref(key).await else {
-        return true;
-    };
-    let Some(browser) = browser else {
-        return false;
-    };
-    let output_files = browseros_mcp::output_file::create_browser_output_file_access();
-    let closed = dispatch_tab_groups(
-        cached_tab_groups_tool(),
-        browser,
-        CancellationToken::new(),
-        output_files.clone(),
-        json!({ "action": "close", "groupId": group_id }),
-    )
-    .await;
-    let close_error = match closed {
-        Ok(_) => {
-            return ownership
-                .clear_tab_group_ref_if_current(key, &group_id)
-                .await;
+    let groups = ownership.groups(key).await;
+    let mut complete = true;
+    for group in groups {
+        let Some(group_id) = group.group_ref else {
+            continue;
+        };
+        if group.borrowed {
+            if close {
+                ownership.forget_group_by_ref(key, &group_id).await;
+            }
+            continue;
         }
-        Err(error) => error,
-    };
-    if group_exists_unlocked(browser, &group_id, output_files).await == Some(false) {
-        return ownership
-            .clear_tab_group_ref_if_current(key, &group_id)
-            .await;
+        if !close && group.collapsed {
+            continue;
+        }
+        let Some(browser) = browser else {
+            complete = false;
+            continue;
+        };
+        // Host cleanup follows recorded ownership over multiple former bindings.
+        // It does not execute a new browser call on behalf of the current target.
+        let view = BrowserView::unbound(browser.clone(), None);
+        let output_files = browseros_mcp::output_file::create_browser_output_file_access();
+        let args = if close {
+            json!({"action":"close", "groupId":group_id})
+        } else {
+            json!({"action":"update", "groupId":group_id, "collapsed":true})
+        };
+        let result = dispatch_tab_groups(
+            cached_tab_groups_tool(),
+            &view,
+            CancellationToken::new(),
+            output_files.clone(),
+            args,
+        )
+        .await;
+        let absent = result.is_err()
+            && group_exists_unlocked(&view, &group_id, output_files).await == Some(false);
+        if absent || result.is_ok() && close {
+            ownership.forget_group_by_ref(key, &group_id).await;
+        } else if result.is_ok() {
+            ownership
+                .update_group_by_ref(key, &group_id, |group| group.collapsed = true)
+                .await;
+        } else {
+            complete = false;
+            warn!(%key, error = ?result.err(), "retained tab group cleanup failed");
+        }
     }
-    warn!(key = %key, error = %close_error, "agent tab group close failed");
-    false
+    complete
+        && ownership
+            .groups(key)
+            .await
+            .iter()
+            .all(|group| !close && (group.collapsed || group.borrowed))
 }
 
 async fn group_exists_unlocked(
-    browser: &Arc<BrowserSession>,
+    browser: &BrowserView,
     group_id: &str,
     output_files: OutputFileAccess,
 ) -> Option<bool> {
@@ -609,7 +856,7 @@ async fn group_exists_unlocked(
 
 async fn expand_agent_tab_group_unlocked(
     tab_groups: &ToolDef,
-    browser: &Arc<BrowserSession>,
+    browser: &BrowserView,
     ownership: &Arc<PageOwnership>,
     key: &ConvoId,
     cancel: CancellationToken,
@@ -621,6 +868,28 @@ async fn expand_agent_tab_group_unlocked(
     let Some(group_id) = ownership.tab_group_ref(key).await else {
         return;
     };
+    expand_group_unlocked(
+        tab_groups,
+        browser,
+        ownership,
+        key,
+        &group_id,
+        cancel,
+        output_files,
+    )
+    .await;
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn expand_group_unlocked(
+    tab_groups: &ToolDef,
+    browser: &BrowserView,
+    ownership: &Arc<PageOwnership>,
+    key: &ConvoId,
+    group_id: &str,
+    cancel: CancellationToken,
+    output_files: OutputFileAccess,
+) {
     match dispatch_tab_groups(
         tab_groups,
         browser,
@@ -632,14 +901,14 @@ async fn expand_agent_tab_group_unlocked(
     {
         Ok(_) => {
             ownership
-                .set_tab_group_collapsed_if_current(key, &group_id, false)
+                .update_group_by_ref(key, group_id, |group| group.collapsed = false)
                 .await;
         }
         Err(reason) => warn!(key = %key, error = %reason, "agent tab group expand failed"),
     }
 }
 
-/// Stores the desired title and best-effort applies it to the current group.
+/// Stores the desired title and best-effort applies it to every owned native group.
 pub async fn apply_agent_tab_group_title(
     browser: Option<&Arc<BrowserSession>>,
     ownership: &Arc<PageOwnership>,
@@ -654,6 +923,8 @@ pub async fn apply_agent_tab_group_title(
     let Some(browser) = browser else {
         return;
     };
+    let view = BrowserView::unbound(browser.clone(), None);
+    let browser = &view;
     sync_pending_group_title_unlocked(
         cached_tab_groups_tool(),
         browser,
@@ -667,45 +938,54 @@ pub async fn apply_agent_tab_group_title(
 
 async fn sync_pending_group_title_unlocked(
     tab_groups: &ToolDef,
-    browser: &Arc<BrowserSession>,
+    browser: &BrowserView,
     ownership: &Arc<PageOwnership>,
     key: &ConvoId,
     cancel: CancellationToken,
     output_files: OutputFileAccess,
 ) {
-    let Some((group_id, title)) = ownership.pending_group_title(key).await else {
-        return;
-    };
-    match dispatch_tab_groups(
-        tab_groups,
-        browser,
-        cancel,
-        output_files,
-        json!({ "action": "update", "groupId": group_id, "title": title }),
-    )
-    .await
-    {
-        Ok(_) => {
-            ownership
-                .mark_group_title_synced(key, &group_id, &title)
-                .await;
+    for group in ownership.groups(key).await {
+        if group.borrowed {
+            continue;
         }
-        Err(reason) => {
-            warn!(key = %key, error = %reason, "session name tab group retitle failed");
+        let (Some(group_id), TitleSync::Pending(title)) = (group.group_ref, group.title) else {
+            continue;
+        };
+        match dispatch_tab_groups(
+            tab_groups,
+            browser,
+            cancel.child_token(),
+            output_files.clone(),
+            json!({"action":"update", "groupId":group_id, "title":title}),
+        )
+        .await
+        {
+            Ok(_) => {
+                ownership
+                    .update_group_by_ref(key, &group_id, |group| {
+                        if matches!(&group.title, TitleSync::Pending(pending) if pending == &title)
+                        {
+                            group.title = TitleSync::Synced(title.clone());
+                        }
+                    })
+                    .await
+            }
+            Err(reason) => warn!(%key, error = %reason, "session name tab group retitle failed"),
         }
     }
 }
 
 async fn dispatch_tab_groups(
     tab_groups: &ToolDef,
-    browser: &Arc<BrowserSession>,
+    browser: &BrowserView,
     cancel: CancellationToken,
     output_files: OutputFileAccess,
     args: Value,
 ) -> Result<ToolResult, String> {
     let operation_cancel = cancel.child_token();
     let ctx = ToolCtx::new(BrowserToolOptions {
-        session: browser.clone(),
+        browser: browser.clone(),
+        target: None,
         defaults: BrowserToolDefaults::default(),
         cancel: operation_cancel.clone(),
         output_files,
@@ -783,6 +1063,838 @@ mod tests {
         time::Duration,
     };
     use tokio::sync::{Notify, broadcast};
+
+    #[tokio::test]
+    async fn dragged_group_is_detached_from_placement_but_retained_for_cleanup()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(
+            BrowserView::capture(
+                browser.clone(),
+                Some(ProfileConnection::binding("eng", 1, 1)),
+                None,
+            )
+            .await,
+        );
+        assert!(
+            call.view
+                .as_ref()
+                .is_some_and(|view| view.admission_error().is_none())
+        );
+        let first = created_page(&call, 1).await;
+        run_tab_group_work(call.clone(), first).await;
+        let key = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        let original = ownership.tab_group_ref(&key).await;
+        // Model a user dragging the group after creation. A later created tab must
+        // stay in its actual window, while cleanup must still remember the old group.
+        transport.groups.lock().unwrap_or_else(|p| p.into_inner())[0]["windowId"] = json!(3);
+        transport.tabs.lock().unwrap_or_else(|p| p.into_inner())[0]["windowId"] = json!(3);
+        let root = BrowserView::unbound(browser.clone(), None);
+        root.cdp(
+            "Browser.createTab",
+            json!({"url":"https://synthetic.invalid/late", "windowId":1}),
+            None,
+        )
+        .await?;
+        browser.pages.list().await?;
+        let late = created_page(&call, 4).await;
+        run_tab_group_work(call, late).await;
+        let replacement = ownership.tab_group_ref(&key).await;
+        assert!(replacement.is_some());
+        assert_ne!(original, replacement);
+        assert_eq!(ownership.groups(&key).await.len(), 2);
+        let late = transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|tab| tab["tabId"] == 104)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("late tab missing"))?;
+        assert_eq!(late["windowId"], 1);
+        assert_eq!(late["groupId"].as_str(), replacement.as_deref());
+        assert!(close_agent_tab_group(Some(&browser), &ownership, &key).await);
+        assert!(
+            transport
+                .groups
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn explicit_borrowed_group_in_same_capture_preserves_owned_group_cleanup()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(
+            BrowserView::capture(
+                browser.clone(),
+                Some(ProfileConnection::binding("eng", 1, 1)),
+                None,
+            )
+            .await,
+        );
+        assert!(
+            call.view
+                .as_ref()
+                .is_some_and(|view| view.admission_error().is_none())
+        );
+        let created = created_page(&call, 1).await;
+        run_tab_group_work(call.clone(), created).await;
+        let key = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        let owned = ownership.tab_group_ref(&key).await;
+        let root = BrowserView::unbound(browser.clone(), None);
+        root.cdp(
+            "Browser.createTab",
+            json!({"url":"https://synthetic.invalid/borrowed", "windowId":1}),
+            None,
+        )
+        .await?;
+        let borrowed = root
+            .cdp(
+                "Browser.createTabGroup",
+                json!({"tabIds":[104], "title":"User's group"}),
+                None,
+            )
+            .await?;
+        let borrowed_id = borrowed["group"]["groupId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("borrowed group missing"))?
+            .to_string();
+        browser.pages.list().await?;
+        let other_owner = ConvoId::new("other-task");
+        ownership.claim_page(other_owner.clone(), PageId(4)).await;
+        let created = created_page(&call, 4).await;
+        run_tab_group_work(call, created).await;
+        assert_eq!(
+            ownership.tab_group_ref(&key).await,
+            Some(borrowed_id.clone())
+        );
+        assert_eq!(ownership.groups(&key).await.len(), 2);
+        assert_eq!(ownership.owner_of_page(&PageId(4)).await, Some(other_owner));
+        let tab = transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|tab| tab["tabId"] == 104)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("borrowed tab missing"))?;
+        assert_eq!(tab["groupId"], borrowed_id);
+        assert!(close_agent_tab_group(Some(&browser), &ownership, &key).await);
+        let remaining = root.cdp("Browser.getTabGroups", json!({}), None).await?;
+        let remaining = remaining["groups"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("groups missing"))?;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0]["groupId"], borrowed_id);
+        assert!(
+            remaining
+                .iter()
+                .all(|group| group["groupId"].as_str() != owned.as_deref())
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delayed_bound_grouping_refuses_replacement_during_group_lookup() -> anyhow::Result<()>
+    {
+        assert_change_during_group_lookup(true, false).await
+    }
+
+    #[tokio::test]
+    async fn delayed_unbound_grouping_refuses_replacement_during_group_lookup() -> anyhow::Result<()>
+    {
+        assert_change_during_group_lookup(false, false).await
+    }
+
+    #[tokio::test]
+    async fn delayed_bound_grouping_refuses_reconnect_during_group_lookup() -> anyhow::Result<()> {
+        assert_change_during_group_lookup(true, true).await
+    }
+
+    #[tokio::test]
+    async fn delayed_unbound_grouping_refuses_reconnect_during_group_lookup() -> anyhow::Result<()>
+    {
+        assert_change_during_group_lookup(false, true).await
+    }
+
+    #[tokio::test]
+    async fn delayed_unbound_grouping_keeps_creation_epoch_before_callback() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::unbound(browser, None));
+        let created = created_page(&call, 1).await;
+        assert!(created.is_some());
+        let before = transport
+            .calls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len();
+
+        // Reused native IDs and metadata can look identical after reconnect. A
+        // callback-entry derivation would capture epoch 2 and mutate that new peer.
+        transport.reconnect();
+        run_tab_group_work(call, created).await;
+        let calls = transport.calls.lock().unwrap_or_else(|p| p.into_inner());
+        assert!(
+            calls[before..]
+                .iter()
+                .all(|(method, _)| !method.contains("TabGroup"))
+        );
+        assert!(
+            transport
+                .groups
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .is_empty()
+        );
+        Ok(())
+    }
+
+    async fn assert_change_during_group_lookup(bound: bool, reconnect: bool) -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use browseros_core::pages::NewPageOptions;
+        use std::sync::atomic::Ordering;
+
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let root = BrowserView::unbound(browser.clone(), None);
+        let native_group = root
+            .cdp(
+                "Browser.createTabGroup",
+                json!({"tabIds":[101], "title":"original title"}),
+                None,
+            )
+            .await?;
+        let group_id = native_group["group"]["groupId"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("group missing"))?
+            .to_string();
+        transport.groups.lock().unwrap_or_else(|p| p.into_inner())[0]["collapsed"] = json!(true);
+        let page = root
+            .new_page(
+                "https://synthetic.test/created",
+                NewPageOptions {
+                    window_id: Some(WindowId(1)),
+                    ..NewPageOptions::default()
+                },
+            )
+            .await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(if bound {
+            BrowserView::capture(browser, Some(ProfileConnection::binding("eng", 1, 1)), None).await
+        } else {
+            root
+        });
+        let created = created_page(&call, page.page_id.0).await;
+        assert!(created.is_some());
+        let key = ScopedGroupKey {
+            browser_profile_id: bound
+                .then(|| browseros_core::BrowserProfileId::from("eng".to_string())),
+            window_id: WindowId(1),
+        };
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        call.state
+            .sessions
+            .ownership()
+            .remember_scoped_group(
+                &identity.ownership_key,
+                key,
+                TabGroup {
+                    group_ref: Some(group_id.clone()),
+                    window_id: Some(WindowId(1)),
+                    collapsed: true,
+                    title: TitleSync::Pending("updated title".into()),
+                    ..TabGroup::default()
+                },
+            )
+            .await;
+        let before = transport
+            .calls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len();
+        transport.pause_group_lookup.store(true, Ordering::SeqCst);
+        let entered = transport.group_lookup_entered.notified();
+        let work = tokio::spawn(run_tab_group_work(call, created));
+        timeout(std::time::Duration::from_secs(2), entered).await?;
+
+        // The original incarnation passed callback entry. Replacement now happens
+        // while native group discovery is awaited, before title/expand/add work.
+        // Keep native tab and window IDs stable to expose PageId-only re-resolution.
+        if reconnect {
+            transport.reconnect();
+        } else {
+            let mut tabs = transport.tabs.lock().unwrap_or_else(|p| p.into_inner());
+            let tab = tabs
+                .iter_mut()
+                .find(|tab| tab["tabId"] == page.tab_id.0)
+                .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+            assert_eq!(tab["targetId"], page.target_id.as_str());
+            tab["targetId"] = json!("replacement-created-target");
+        }
+        transport.group_lookup_release.notify_one();
+        timeout(std::time::Duration::from_secs(2), work).await??;
+        let calls = transport.calls.lock().unwrap_or_else(|p| p.into_inner());
+        let mutations = calls[before..]
+            .iter()
+            .filter(|(method, _)| {
+                matches!(
+                    method.as_str(),
+                    "Browser.createTabGroup"
+                        | "Browser.addTabsToGroup"
+                        | "Browser.updateTabGroup"
+                        | "Browser.removeTabsFromGroup"
+                        | "Browser.closeTabGroup"
+                        | "Browser.moveTabGroup"
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            mutations.is_empty(),
+            "replacement received group mutations: {mutations:?}"
+        );
+        let groups = transport.groups.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0]["groupId"], group_id);
+        assert_eq!(groups[0]["title"], "original title");
+        assert_eq!(groups[0]["collapsed"], true);
+        assert_eq!(groups[0]["tabIds"], json!([101]));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn bound_tabs_creation_receipt_survives_response_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_response_handoff(true).await
+    }
+
+    #[tokio::test]
+    async fn unbound_tabs_creation_receipt_survives_response_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_response_handoff(false).await
+    }
+
+    async fn assert_creation_survives_response_handoff(bound: bool) -> anyhow::Result<()> {
+        use crate::api::mcp::{
+            dispatch::dispatch_tool_call,
+            test_support::{ProfileConnection, tool_call},
+        };
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call(
+            "tabs",
+            json!({"action":"new", "url":"https://synthetic.test/response-handoff"}),
+        )
+        .await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(if bound {
+            BrowserView::capture(
+                browser.clone(),
+                Some(ProfileConnection::binding("eng", 1, 1)),
+                None,
+            )
+            .await
+        } else {
+            BrowserView::unbound(browser.clone(), Some(WindowId(1)))
+        });
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let ownership = call.state.sessions.ownership();
+        let operation = ownership
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let queued = operation.lock().await;
+        native
+            .pause_response_evaluation
+            .store(true, Ordering::SeqCst);
+        let entered = native.response_evaluation_entered.notified();
+        let work = tokio::spawn(dispatch_tool_call(call.clone()));
+        timeout(Duration::from_secs(3), entered).await?;
+        let original = browser
+            .pages
+            .get_info(PageId(4))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("new page missing at response pause"))?;
+        assert!(call.created_page_snapshots.lock().await.is_empty());
+        // Creation returned through a clone of the admitted view, but response
+        // settling is still awaited. Reconcile the same native tab into a new
+        // target before effects read the shared registry candidate.
+        {
+            let mut tabs = native.tabs.lock().unwrap_or_else(|p| p.into_inner());
+            let tab = tabs
+                .iter_mut()
+                .find(|tab| tab["tabId"] == original.tab_id.0)
+                .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+            tab["targetId"] = json!("replacement-before-response-capture");
+        }
+        browser.pages.list().await?;
+        let replaced = browser
+            .pages
+            .get_info(original.page_id.clone())
+            .await
+            .ok_or_else(|| anyhow::anyhow!("reconciled page missing"))?;
+        assert_eq!(replaced.tab_id, original.tab_id);
+        assert_eq!(replaced.window_id, original.window_id);
+        assert_ne!(replaced.target_id, original.target_id);
+        native.response_evaluation_release.notify_one();
+        let result = timeout(Duration::from_secs(3), work).await???;
+        assert_eq!(result.is_error, Some(false));
+        assert!(result.content.iter().any(|block| matches!(block,
+            ContentBlock::Text(text) if text.text.contains("opened page 4"))));
+        tokio::task::yield_now().await;
+        drop(queued);
+        let _finished = operation.lock().await;
+        {
+            let calls = native.calls.lock().unwrap_or_else(|p| p.into_inner());
+            let mutations = calls
+                .iter()
+                .filter(|(method, _)| {
+                    method.contains("TabGroup") && method != "Browser.getTabGroups"
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                mutations.is_empty(),
+                "replacement received tabs group writes: {mutations:?}"
+            );
+        }
+        assert!(
+            call.created_page_snapshots.lock().await.is_empty(),
+            "replacement was adopted after response settling"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delayed_grouping_refuses_replacement_of_created_page_incarnation() -> anyhow::Result<()>
+    {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"new"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(
+            BrowserView::capture(browser, Some(ProfileConnection::binding("eng", 1, 1)), None)
+                .await,
+        );
+        assert!(
+            call.view
+                .as_ref()
+                .is_some_and(|view| view.admission_error().is_none())
+        );
+        let created = created_page(&call, 1).await;
+        transport.tabs.lock().unwrap_or_else(|p| p.into_inner())[0]["targetId"] =
+            json!("replacement-T101");
+        run_tab_group_work(call, created).await;
+        assert!(
+            transport
+                .calls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .all(|(method, _)| method != "Browser.createTabGroup"
+                    && method != "Browser.addTabsToGroup")
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delayed_unbound_grouping_recovers_its_original_window_after_binding()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut old = tool_call("tabs", json!({"action":"new"})).await?;
+        old.browser_session = Some(browser.clone());
+        old.view = Some(BrowserView::unbound(browser.clone(), None));
+        let first_page = created_page(&old, 1).await;
+        run_tab_group_work(old.clone(), first_page).await;
+        let key = old
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = old.state.sessions.ownership();
+        let old_group = ownership.tab_group_ref(&key).await;
+        assert!(old_group.is_some());
+        // This tab was admitted before target selection, but its grouping callback
+        // runs only after the newly bound call has replaced the presentation group.
+        old.view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("view missing"))?
+            .cdp(
+                "Browser.createTab",
+                json!({"url":"https://synthetic.invalid/late", "windowId":1}),
+                None,
+            )
+            .await?;
+        browser.pages.list().await?;
+        let late_page = created_page(&old, 4).await;
+        let binding = old
+            .state
+            .targets
+            .set(
+                &old.session_id,
+                ProfileConnection::binding("ops", 1, 2).intent,
+            )
+            .await?;
+        let mut bound = old.clone();
+        bound.view = Some(BrowserView::capture(browser.clone(), Some(binding.clone()), None).await);
+        assert!(
+            bound
+                .view
+                .as_ref()
+                .is_some_and(|view| view.admission_error().is_none())
+        );
+        let bound_page = created_page(&bound, 2).await;
+        run_tab_group_work(bound, bound_page).await;
+        let bound_group = ownership
+            .group_for_capture(
+                &key,
+                &binding.intent.browser_profile_id,
+                Some(WindowId(2)),
+                binding.revision,
+            )
+            .await
+            .and_then(|group| group.group_ref);
+        assert!(bound_group.is_some());
+        assert_ne!(bound_group, old_group);
+        run_tab_group_work(old, late_page).await;
+        assert_eq!(ownership.groups(&key).await.len(), 2);
+        let tabs = transport.tabs.lock().unwrap_or_else(|p| p.into_inner());
+        let late = tabs
+            .iter()
+            .find(|tab| tab["tabId"] == 104)
+            .ok_or_else(|| anyhow::anyhow!("late tab missing"))?;
+        assert_eq!(late["windowId"], 1);
+        assert_eq!(late["groupId"].as_str(), old_group.as_deref());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn scope_rebind_reuses_groups_and_late_creation_keeps_original_scope()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use browseros_core::pages::NewPageOptions;
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut base = tool_call("tabs", json!({"action":"new"})).await?;
+        base.browser_session = Some(browser.clone());
+        let key = base
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = base.state.sessions.ownership();
+        let mut groups = HashMap::new();
+        let mut pages = Vec::new();
+        let mut late = None;
+        // Use real persisted binding revisions and native creation receipts. The
+        // same destination must remain reusable after visiting other destinations.
+        for (index, (profile, window)) in
+            [("eng", 1), ("ops", 2), ("eng", 3), ("eng", 1), ("ops", 2)]
+                .into_iter()
+                .enumerate()
+        {
+            let binding = base
+                .state
+                .targets
+                .set(
+                    &base.session_id,
+                    ProfileConnection::binding(profile, 0, window).intent,
+                )
+                .await?;
+            let mut call = base.clone();
+            call.view =
+                Some(BrowserView::capture(browser.clone(), Some(binding.clone()), None).await);
+            let view = call
+                .view
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("view missing"))?;
+            let page = view
+                .new_page(
+                    &format!("https://synthetic.invalid/scope-rebind-{index}"),
+                    NewPageOptions::default(),
+                )
+                .await?;
+            let created = created_page(&call, page.page_id.0).await;
+            assert!(created.is_some());
+            run_tab_group_work(call.clone(), created).await;
+            let current = view.page(page.page_id.clone()).await?;
+            assert_eq!(current.target_id, page.target_id);
+            assert_eq!(current.tab_id, page.tab_id);
+            assert_eq!(current.window_id, Some(WindowId(window)));
+            let group = current
+                .group_id
+                .clone()
+                .ok_or_else(|| anyhow::anyhow!("group missing"))?;
+            let destination = (profile, window);
+            if let Some(previous) = groups.get(&destination) {
+                assert_eq!(
+                    &group, previous,
+                    "returning to {profile}/window{window} forgot its retained group"
+                );
+            } else {
+                assert!(!groups.values().any(|previous| previous == &group));
+                groups.insert(destination, group.clone());
+            }
+            assert_eq!(
+                ownership
+                    .group_for_capture(
+                        &key,
+                        &binding.intent.browser_profile_id,
+                        Some(WindowId(window)),
+                        binding.revision,
+                    )
+                    .await
+                    .and_then(|group| group.group_ref)
+                    .as_deref(),
+                Some(group.as_str())
+            );
+            pages.push((page.page_id, page.tab_id, window, group));
+            if index == 0 {
+                // The creation receipt is retained now, but its detached callback
+                // runs only after the task's current binding has moved to ops/w2.
+                let page = view
+                    .new_page(
+                        "https://synthetic.invalid/late-old-revision",
+                        NewPageOptions::default(),
+                    )
+                    .await?;
+                let created = created_page(&call, page.page_id.0)
+                    .await
+                    .ok_or_else(|| anyhow::anyhow!("late capture missing"))?;
+                late = Some((call, created, page, binding));
+            }
+        }
+        assert_eq!(groups.len(), 3);
+        assert_eq!(ownership.groups(&key).await.len(), 3);
+        let (old, created, page, binding) =
+            late.ok_or_else(|| anyhow::anyhow!("old callback missing"))?;
+        let current_binding = base
+            .state
+            .targets
+            .get(&base.session_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("current binding missing"))?;
+        assert_eq!(current_binding.intent.browser_profile_id.as_str(), "ops");
+        assert!(current_binding.revision > binding.revision);
+        assert_eq!(
+            old.view.as_ref().and_then(BrowserView::binding),
+            Some(&binding)
+        );
+        run_tab_group_work(old.clone(), Some(created)).await;
+        let current = old
+            .view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("old view missing"))?
+            .page(page.page_id.clone())
+            .await?;
+        let original_group = groups
+            .get(&("eng", 1))
+            .ok_or_else(|| anyhow::anyhow!("original group missing"))?;
+        assert_eq!(current.target_id, page.target_id);
+        assert_eq!(current.tab_id, page.tab_id);
+        assert_eq!(current.window_id, Some(WindowId(1)));
+        assert_eq!(current.group_id.as_deref(), Some(original_group.as_str()));
+        assert_eq!(ownership.groups(&key).await.len(), 3);
+        let root = BrowserView::unbound(browser, None);
+        // The complete inventory still holds every page in its original window
+        // and group after projected calls in other scopes and the late callback.
+        for (page, tab, window, group) in pages {
+            let current = root.page(page).await?;
+            assert_eq!(current.tab_id, tab);
+            assert_eq!(current.window_id, Some(WindowId(window)));
+            assert_eq!(current.group_id.as_deref(), Some(group.as_str()));
+        }
+        assert_eq!(
+            transport
+                .groups
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .len(),
+            3
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn delayed_bound_grouping_preserves_each_actual_window_and_revision() -> anyhow::Result<()>
+    {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut old = tool_call("tabs", json!({"action":"new"})).await?;
+        old.browser_session = Some(browser.clone());
+        let eng = old
+            .state
+            .targets
+            .set(
+                &old.session_id,
+                ProfileConnection::binding("eng", 1, 1).intent,
+            )
+            .await?;
+        old.view = Some(BrowserView::capture(browser.clone(), Some(eng.clone()), None).await);
+        assert!(
+            old.view
+                .as_ref()
+                .is_some_and(|view| view.admission_error().is_none())
+        );
+        let old_page = created_page(&old, 1).await;
+        let other_eng_window = created_page(&old, 3).await;
+        let ops = old
+            .state
+            .targets
+            .set(
+                &old.session_id,
+                ProfileConnection::binding("ops", 2, 2).intent,
+            )
+            .await?;
+        let mut new = old.clone();
+        new.view = Some(BrowserView::capture(browser.clone(), Some(ops.clone()), None).await);
+        let new_page = created_page(&new, 2).await;
+        run_tab_group_work(new.clone(), new_page).await;
+        run_tab_group_work(old.clone(), old_page).await;
+        run_tab_group_work(old.clone(), other_eng_window).await;
+        let key = old
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = old.state.sessions.ownership();
+        let ops_group = ownership
+            .group_for_capture(
+                &key,
+                &ops.intent.browser_profile_id,
+                Some(WindowId(2)),
+                ops.revision,
+            )
+            .await;
+        let eng_group = ownership
+            .group_for_capture(
+                &key,
+                &eng.intent.browser_profile_id,
+                Some(WindowId(1)),
+                eng.revision,
+            )
+            .await;
+        let eng_other_group = ownership
+            .group_for_capture(
+                &key,
+                &eng.intent.browser_profile_id,
+                Some(WindowId(3)),
+                eng.revision,
+            )
+            .await;
+        assert!(ops_group.is_some() && eng_group.is_some() && eng_other_group.is_some());
+        assert_ne!(
+            ops_group
+                .as_ref()
+                .and_then(|group| group.group_ref.as_ref()),
+            eng_group
+                .as_ref()
+                .and_then(|group| group.group_ref.as_ref())
+        );
+        assert_eq!(ownership.groups(&key).await.len(), 3);
+        let tabs = transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
+        assert_eq!(
+            tabs.iter()
+                .map(|tab| tab["windowId"].clone())
+                .collect::<Vec<_>>(),
+            vec![json!(1), json!(2), json!(3)]
+        );
+        // Rebinding changes the captured generation, but native group identity
+        // remains conversation/profile/actual-window. The view retains revision.
+        let rebound = old
+            .state
+            .targets
+            .set(&old.session_id, eng.intent.clone())
+            .await?;
+        assert_eq!(
+            ownership
+                .group_for_capture(
+                    &key,
+                    &eng.intent.browser_profile_id,
+                    Some(WindowId(1)),
+                    rebound.revision
+                )
+                .await
+                .and_then(|group| group.group_ref),
+            eng_group.and_then(|group| group.group_ref),
+        );
+        // Lifecycle covers all groups, rather than losing the old run's group behind
+        // whichever group most recently updated the conversation's presentation.
+        assert!(close_agent_tab_group(Some(&browser), &ownership, &key).await);
+        assert!(ownership.groups(&key).await.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn borrowed_group_cleanup_leaves_its_tabs_and_group_open() -> anyhow::Result<()> {
+        let recorder = Arc::new(GroupDispatchRecorder::new());
+        recorder.seed_group("borrowed", [101]);
+        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let ownership = Arc::new(PageOwnership::new());
+        let key = ConvoId::new("borrower");
+        ownership
+            .update_group(&key, |group| {
+                group.group_ref = Some("borrowed".into());
+                group.borrowed = true;
+                group.window_id = Some(WindowId(1));
+            })
+            .await;
+        assert!(collapse_agent_tab_group(Some(&browser), &ownership, &key).await);
+        assert!(close_agent_tab_group(Some(&browser), &ownership, &key).await);
+        assert_eq!(recorder.tab_group_call_count(), 0);
+        assert_eq!(recorder.group_members("borrowed"), BTreeSet::from([101]));
+        Ok(())
+    }
 
     struct GroupDispatchRecorder {
         sender: broadcast::Sender<CdpEvent>,
@@ -978,9 +2090,27 @@ mod tests {
             &'a self,
             method: &'a str,
             params: Value,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            self.send_at_epoch(1, method, params, session)
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
             _session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
+                // This fixture's epoch is immutable; validation and any synchronous
+                // recorded publication cannot be separated by a reconnect.
+                if expected_epoch != 1 {
+                    return Err(browseros_cdp::CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
                 self.record(method, &params);
                 match method {
                     "Browser.getTabs" => Ok(json!({
@@ -1122,6 +2252,27 @@ mod tests {
             })
         }
 
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params_json: &'a str,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+            Box::pin(async move {
+                let params = serde_json::from_str(params_json).map_err(|error| {
+                    browseros_cdp::CdpError::Protocol {
+                        code: -1,
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(self
+                    .send_at_epoch(expected_epoch, method, params, session)
+                    .await?
+                    .to_string())
+            })
+        }
+
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             self.sender.subscribe()
         }
@@ -1158,6 +2309,7 @@ mod tests {
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser.clone());
         Ok((call, browser))
     }
@@ -1333,7 +2485,10 @@ mod tests {
             .await;
         recorder.release_group_list();
 
-        assert!(collapse.await?);
+        assert!(
+            !collapse.await?,
+            "a replacement group still needs its own collapse"
+        );
         assert_eq!(
             ownership.tab_group_ref(&key).await.as_deref(),
             Some("group-2")
@@ -1395,6 +2550,7 @@ mod tests {
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         let result = ToolResult::text("opened", Some(json!({ "page": 1 })));
 
@@ -1432,6 +2588,7 @@ mod tests {
             json!({ "action": "new", "groupId": "group-earlier" }),
         )
         .await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         let key = call
             .identity
@@ -1441,7 +2598,14 @@ mod tests {
             .clone();
         let ownership = call.state.sessions.ownership();
 
-        run_tab_group_work(call.clone(), Some(2)).await;
+        run_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await;
 
         assert_eq!(
             ownership.tab_group_ref(&key).await.as_deref(),
@@ -1460,9 +2624,8 @@ mod tests {
         );
         assert_eq!(
             ownership.owner_of_page(&PageId(1)).await.as_ref(),
-            Some(&key),
-            "the unclaimed page already in the group becomes this session's, so \
-             tabs list, the ownership notice and helper discovery agree"
+            None,
+            "borrowing a group does not claim its pre-existing user tab"
         );
         Ok(())
     }
@@ -1481,6 +2644,7 @@ mod tests {
             json!({ "action": "new", "groupId": "group-closed" }),
         )
         .await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         // The live server sets this from the session's group on every call. A
         // fixture that leaves it None cannot reach the reconciliation that this
@@ -1498,7 +2662,14 @@ mod tests {
             .set_tab_group_ref(key.clone(), Some("group-live".to_string()))
             .await;
 
-        run_tab_group_work(call.clone(), Some(2)).await;
+        run_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await;
 
         assert_eq!(
             ownership.tab_group_ref(&key).await.as_deref(),
@@ -1518,12 +2689,10 @@ mod tests {
         Ok(())
     }
 
-    /// The case the live run exposed. A reconnect leaves the previous session in
-    /// the ownership map still holding the tabs, so the page is claimed, not
-    /// unclaimed. Taking over a page held by an earlier session of the same
-    /// client is what makes the reclaim actually reclaim.
+    /// The client label alone does not prove task identity or transfer ownership.
+    /// A second task can borrow a group while the first still owns its tabs.
     #[tokio::test]
-    async fn a_page_an_earlier_session_of_this_client_holds_is_taken_over() -> anyhow::Result<()> {
+    async fn borrowing_a_group_keeps_an_earlier_sessions_actual_ownership() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-earlier", [101]);
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
@@ -1532,9 +2701,9 @@ mod tests {
             json!({ "action": "new", "groupId": "group-earlier" }),
         )
         .await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
-        let key = identity.ownership_key.clone();
         // The same client reconnecting: a second session with the caller's slug.
         let earlier = crate::services::sessions::Session::new(
             crate::ids::SessionId::new("earlier"),
@@ -1552,12 +2721,19 @@ mod tests {
             .claim_page(earlier.convo_id().clone(), PageId(1))
             .await;
 
-        run_tab_group_work(call.clone(), Some(2)).await;
+        run_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await;
 
         assert_eq!(
             ownership.owner_of_page(&PageId(1)).await.as_ref(),
-            Some(&key),
-            "the earlier session of this client held it, so the reconnect takes it over"
+            Some(earlier.convo_id()),
+            "borrowing a group preserves the earlier task's actual tab ownership"
         );
         Ok(())
     }
@@ -1600,6 +2776,7 @@ mod tests {
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         // The first tabs new of a fresh connection: no group for this session yet.
         call.default_tab_group_id = None;
@@ -1641,6 +2818,7 @@ mod tests {
             json!({ "action": "new", "groupId": "group-earlier" }),
         )
         .await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         call.default_tab_group_id = None;
 
@@ -1660,6 +2838,7 @@ mod tests {
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         call.default_tab_group_id = Some("group-mine".to_string());
 
@@ -1679,6 +2858,7 @@ mod tests {
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         call.default_tab_group_id = None;
 
@@ -1704,6 +2884,7 @@ mod tests {
             json!({ "action": "new", "groupId": "group-earlier" }),
         )
         .await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         // Set the same way the live server sets it, so the reconciliation this
         // has to beat is actually reachable.
@@ -1716,7 +2897,14 @@ mod tests {
             .clone();
         let ownership = call.state.sessions.ownership();
 
-        run_tab_group_work(call.clone(), Some(2)).await;
+        run_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await;
 
         assert_eq!(
             ownership.tab_group_ref(&key).await.as_deref(),
@@ -1746,6 +2934,7 @@ mod tests {
             json!({ "action": "new", "groupId": "group-shared" }),
         )
         .await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         let other_client = Session::new(
             AppSessionId::new("other-client"),
@@ -1765,7 +2954,14 @@ mod tests {
         let other = other_client.convo_id().clone();
         ownership.claim_page(other.clone(), PageId(1)).await;
 
-        run_tab_group_work(call.clone(), Some(2)).await;
+        run_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await;
 
         assert_eq!(
             ownership.owner_of_page(&PageId(1)).await.as_ref(),
@@ -1775,11 +2971,10 @@ mod tests {
         Ok(())
     }
 
-    /// A claim whose session is gone belongs to nobody. Leaving it in place
-    /// would make the page unreclaimable by anyone until reaping runs, so the
-    /// reclaim takes it.
+    /// Session retirement does not prove that a live tab became the borrower's.
+    /// Keep the recorded claim until global page reconciliation or owner cleanup.
     #[tokio::test]
-    async fn a_page_held_by_a_claim_with_no_live_session_is_reclaimed() -> anyhow::Result<()> {
+    async fn borrowing_a_group_keeps_claims_even_when_the_owner_is_retired() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-orphan", [101]);
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
@@ -1788,24 +2983,26 @@ mod tests {
             json!({ "action": "new", "groupId": "group-orphan" }),
         )
         .await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
-        let key = call
-            .identity
-            .as_ref()
-            .unwrap_or_else(|| unreachable!())
-            .ownership_key
-            .clone();
         let ownership = call.state.sessions.ownership();
         ownership
             .claim_page(ConvoId::new("cowork-long-gone"), PageId(1))
             .await;
 
-        run_tab_group_work(call.clone(), Some(2)).await;
+        run_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await;
 
         assert_eq!(
             ownership.owner_of_page(&PageId(1)).await.as_ref(),
-            Some(&key),
-            "nobody live holds it, so the reclaim takes it"
+            Some(&ConvoId::new("cowork-long-gone")),
+            "retirement alone does not transfer actual tab ownership"
         );
         Ok(())
     }
@@ -1819,6 +3016,7 @@ mod tests {
         let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        call.view = Some(BrowserView::unbound(browser.clone(), None));
         call.browser_session = Some(browser);
         let key = call
             .identity
@@ -1831,7 +3029,14 @@ mod tests {
             .set_tab_group_ref(key.clone(), Some("group-1".to_string()))
             .await;
 
-        run_tab_group_work(call.clone(), Some(2)).await;
+        run_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await;
 
         assert_eq!(
             ownership.tab_group_ref(&key).await.as_deref(),
@@ -1847,11 +3052,24 @@ mod tests {
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut first_call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        first_call.view = Some(BrowserView::unbound(browser.clone(), None));
         first_call.browser_session = Some(browser);
         let second_call = first_call.clone();
         let (first, second) = tokio::join!(
-            spawn_tab_group_work(first_call.clone(), Some(1)),
-            spawn_tab_group_work(second_call, Some(2))
+            spawn_tab_group_work(
+                first_call.clone(),
+                Some(CreatedPage {
+                    page_id: 1,
+                    window_id: Some(WindowId(1))
+                })
+            ),
+            spawn_tab_group_work(
+                second_call,
+                Some(CreatedPage {
+                    page_id: 2,
+                    window_id: Some(WindowId(1))
+                })
+            )
         );
         first?;
         second?;
@@ -1889,7 +3107,13 @@ mod tests {
             .identity
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
-        let creation = spawn_tab_group_work(call.clone(), Some(1));
+        let creation = spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        );
         for _ in 0..100 {
             if recorder.create_count() > 0 {
                 break;
@@ -1923,7 +3147,14 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
         identity.session.cancel();
 
-        spawn_tab_group_work(call, Some(1)).await?;
+        spawn_tab_group_work(
+            call,
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
 
         assert_eq!(recorder.create_count(), 0);
         Ok(())
@@ -1933,9 +3164,23 @@ mod tests {
     async fn transient_group_add_failure_keeps_the_winning_group_reference() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         let (call, _browser) = connected_call(recorder.clone()).await?;
-        spawn_tab_group_work(call.clone(), Some(1)).await?;
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
         recorder.fail_group_add(true);
-        spawn_tab_group_work(call.clone(), Some(2)).await?;
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 2,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
         let identity = call
             .identity
             .as_ref()
@@ -1967,7 +3212,14 @@ mod tests {
             .rename("invoice-processing".to_string())
             .await;
 
-        spawn_tab_group_work(call.clone(), Some(1)).await?;
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
 
         assert_eq!(
             recorder.create_title().as_deref(),
@@ -1993,7 +3245,14 @@ mod tests {
     -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         let (call, browser) = connected_call(recorder.clone()).await?;
-        spawn_tab_group_work(call.clone(), Some(1)).await?;
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
         let identity = call
             .identity
             .as_ref()
@@ -2033,7 +3292,14 @@ mod tests {
     {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         let (call, browser) = connected_call(recorder.clone()).await?;
-        spawn_tab_group_work(call.clone(), Some(1)).await?;
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
         let identity = call
             .identity
             .as_ref()
@@ -2076,7 +3342,13 @@ mod tests {
             .identity
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
-        let creation = spawn_tab_group_work(call.clone(), Some(1));
+        let creation = spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        );
         for _ in 0..100 {
             if recorder.create_count() > 0 {
                 break;
@@ -2110,7 +3382,14 @@ mod tests {
     async fn disconnected_and_failed_title_updates_retry_on_later_dispatch() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         let (call, browser) = connected_call(recorder.clone()).await?;
-        spawn_tab_group_work(call.clone(), Some(1)).await?;
+        spawn_tab_group_work(
+            call.clone(),
+            Some(CreatedPage {
+                page_id: 1,
+                window_id: Some(WindowId(1)),
+            }),
+        )
+        .await?;
         let identity = call
             .identity
             .as_ref()
@@ -2182,7 +3461,7 @@ mod tests {
             dispatch_tab_groups(
                 call.tool_named("tab_groups")
                     .unwrap_or_else(|| unreachable!()),
-                &browser,
+                &BrowserView::unbound(browser, None),
                 CancellationToken::new(),
                 call.output_files.clone(),
                 json!({ "action": "create", "pages": [1] }),

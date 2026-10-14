@@ -157,15 +157,25 @@ impl Observer {
         cross_process: bool,
         context: &CaptureContext,
     ) -> Result<AcquiredFrame, CoreError> {
-        let target = self
+        let mut target = self
             .frames
-            .resolve_frame_target(
+            .resolve_frame_target_with_epoch(
                 self.page_id.clone(),
                 frame_id.clone(),
                 same_process_parent,
                 cross_process,
+                self.access
+                    .as_ref()
+                    .map(|access| access.epoch_guard())
+                    .transpose()?
+                    .flatten(),
             )
             .await?;
+        if let Some(access) = &self.access {
+            target.session = access
+                .frame_session(target.session, frame_id.clone())
+                .await?;
+        }
         let runtime_document_id = if target.cursor_uses_session_default {
             None
         } else {

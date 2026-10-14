@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.cc b/chrome/browser/devtools/protocol/browser_handler_android.cc
-index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..b922032ae70de5a1c6c2b1a64df4c8b35b60574d 100644
+index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..a6b70cc256f15512be75ba704d654145b8210f5f 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.cc
 @@ -15,6 +15,7 @@
@@ -70,12 +70,24 @@ index 7e68ad976d8e1d480d4297e7ade562c2b2f693a7..b922032ae70de5a1c6c2b1a64df4c8b3
  Response BrowserHandlerAndroid::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -355,3 +409,178 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
+@@ -355,3 +409,190 @@ protocol::Response BrowserHandlerAndroid::AddPrivacySandboxEnrollmentOverride(
      const std::string& in_url) {
    return Response::MethodNotFound(kNotImplemented);
  }
 +
 +// --- Window Management (all stubs) ---
++
++Response BrowserHandlerAndroid::GetProfiles(
++    std::unique_ptr<protocol::Array<protocol::Browser::BrowserProfileInfo>>*
++        out_profiles) {
++  return Response::MethodNotFound(kNotImplemented);
++}
++
++void BrowserHandlerAndroid::LoadProfile(
++    const std::string& browser_profile_id,
++    std::unique_ptr<LoadProfileCallback> callback) {
++  callback->sendFailure(Response::MethodNotFound(kNotImplemented));
++}
 +
 +Response BrowserHandlerAndroid::GetWindows(
 +    std::unique_ptr<protocol::Array<protocol::Browser::WindowInfo>>*

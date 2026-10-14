@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.h b/chrome/browser/devtools/protocol/browser_handler.h
-index e1424aa52cbf6..aa49d245cc034 100644
+index e1424aa52cbf60d3de12a509f7eb815a390a32bc..b82f83ebda7b4e9ba5b51fa02e4461dc90f6db47 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.h
 +++ b/chrome/browser/devtools/protocol/browser_handler.h
 @@ -5,9 +5,17 @@
@@ -35,10 +35,17 @@ index e1424aa52cbf6..aa49d245cc034 100644
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -41,6 +57,108 @@ class BrowserHandler : public protocol::Browser::Backend {
+@@ -41,6 +57,115 @@ class BrowserHandler : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
++  // Saved profile discovery and loading are separate from window creation.
++  protocol::Response GetProfiles(
++      std::unique_ptr<protocol::Array<protocol::Browser::BrowserProfileInfo>>*
++          out_profiles) override;
++  void LoadProfile(const std::string& browser_profile_id,
++                   std::unique_ptr<LoadProfileCallback> callback) override;
++
 +  // Window management
 +  protocol::Response GetWindows(
 +      std::unique_ptr<protocol::Array<protocol::Browser::WindowInfo>>*

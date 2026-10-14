@@ -124,6 +124,7 @@ export type PrerenderFinalStatus =
   | 'BrowsingDataRemoved'
   | 'PrerenderHostReused'
   | 'FormSubmitWhenPrerendering'
+  | 'CrossDocumentRestart'
 
 export type PreloadingStatus =
   | 'Pending'
@@ -147,7 +148,9 @@ export type PrefetchStatus =
   | 'PrefetchIneligibleRetryAfter'
   | 'PrefetchIsPrivacyDecoy'
   | 'PrefetchIsStale'
+  | 'PrefetchNotEligibleBlockedByConnectionAllowlist'
   | 'PrefetchNotEligibleBrowserContextOffTheRecord'
+  | 'PrefetchNotEligibleCrossOrigin'
   | 'PrefetchNotEligibleDataSaverEnabled'
   | 'PrefetchNotEligibleExistingProxy'
   | 'PrefetchNotEligibleHostIsNonUnique'
@@ -168,6 +171,7 @@ export type PrefetchStatus =
   | 'PrefetchResponseUsed'
   | 'PrefetchSuccessfulButNotUsed'
   | 'PrefetchNotUsedProbeFailed'
+  | 'PrefetchCancelledOnUserNavigation'
 
 export interface PrerenderMismatchedHeaders {
   headerName: string

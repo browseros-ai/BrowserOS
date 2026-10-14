@@ -1,4 +1,4 @@
-use super::{PageOwnership, Session};
+use super::{PageOwnership, Session, TargetBindings};
 use crate::{
     analytics::{AnalyticsSink, NoopAnalyticsSink, events},
     db::{AuditLog, SessionTabLedger},
@@ -136,6 +136,7 @@ pub struct Sessions {
     retained_group_hook: OnceLock<RetainedGroupHook>,
     audit_flush_hook: OnceLock<SessionAuditFlushHook>,
     completion_hook: OnceLock<SessionCompletionHook>,
+    target_bindings: OnceLock<Arc<TargetBindings>>,
     idle_after: Duration,
     retention: Duration,
     sweep_interval: Duration,
@@ -184,6 +185,7 @@ impl Sessions {
             retained_group_hook: OnceLock::new(),
             audit_flush_hook: OnceLock::new(),
             completion_hook: OnceLock::new(),
+            target_bindings: OnceLock::new(),
             idle_after,
             retention,
             sweep_interval,
@@ -207,6 +209,11 @@ impl Sessions {
 
     pub fn set_audit_flush_hook(&self, hook: SessionAuditFlushHook) {
         let _ = self.audit_flush_hook.set(hook);
+    }
+
+    /// Connects lifecycle retirement to durable task intent without retaining BrowserViews.
+    pub fn set_target_bindings(&self, targets: Arc<TargetBindings>) {
+        let _ = self.target_bindings.set(targets);
     }
 
     pub async fn mint(
@@ -406,6 +413,13 @@ impl Sessions {
         // The moment a handle stops resolving is the moment it must start explaining itself.
         let session = {
             let mut sessions = self.sessions.write().await;
+            if sessions.contains_key(session_id)
+                && let Some(targets) = self.target_bindings.get()
+            {
+                // Persist Stop before removing the live handle. A restart in teardown
+                // must still refuse every alias instead of adopting an unbound successor.
+                targets.forget(session_id).await?;
+            }
             let removed = sessions
                 .remove(session_id)
                 .map(|session| (session, self.teardowns.begin()));
@@ -527,6 +541,9 @@ impl Sessions {
         }
         self.reap_retained(now).await;
         self.reap_retired(now).await;
+        if let Some(targets) = self.target_bindings.get() {
+            targets.sweep(crate::clock::now_epoch_ms()).await?;
+        }
         Ok(removed)
     }
 

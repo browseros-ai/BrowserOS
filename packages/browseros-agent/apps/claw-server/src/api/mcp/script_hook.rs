@@ -16,12 +16,13 @@ use serde_json::Value;
 use tracing::warn;
 
 /// Host hook a `run`/`execute` script invokes around each browser primitive.
-/// A script drives the shared browser session directly, bypassing the pipeline
-/// guards and effects, so this hook reproduces what those effects would have
+/// A script uses the captured BrowserView directly, bypassing the outer pipeline
+/// effects. Core enforces scope; this hook reproduces what the host effects would have
 /// done: it notes whose tab each primitive touched, records each primitive as a child
 /// audit row linked to the script dispatch, and (on page creation) claims and
-/// groups the page exactly as a `tabs new` would. It holds the script's own
-/// `ToolCall` so it can reuse the effect helpers with the same inputs.
+/// groups the page exactly as a `tabs new` would. Explicit group tools share the
+/// detached grouper's mutex for that inner operation, without locking a whole
+/// script. It holds the script's own `ToolCall` to retain the same captured view.
 pub struct ScriptInnerCallHook {
     call: ToolCall,
 }
@@ -38,6 +39,23 @@ impl ScriptInnerCallHook {
 }
 
 impl InnerCallHook for ScriptInnerCallHook {
+    fn acquire_tool_guard<'a>(
+        &'a self,
+        tool_name: &'a str,
+        args: &'a Value,
+    ) -> BoxFuture<'a, Result<Option<Box<dyn Send>>, String>> {
+        Box::pin(async move {
+            // MCP retains this opaque RAII guard through handler and readback,
+            // then drops it before child auditing. The mutex supplies ordering;
+            // it never replaces the immutable BrowserView's deep scope guards.
+            self.call
+                .acquire_group_operation_guard(tool_name, args)
+                .await
+                .map(|guard| guard.map(|guard| Box::new(guard) as Box<dyn Send>))
+                .map_err(|()| "cancelled".to_string())
+        })
+    }
+
     fn authorize<'a>(&'a self, page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
             let Some(page) = page else {
@@ -199,10 +217,15 @@ impl InnerCallHook for ScriptInnerCallHook {
             .await;
             // Ensure the agent's tab group and place the page in it. Detached so
             // browser grouping does not block the script, matching the effect.
-            tokio::spawn(tab_groups::run_tab_group_work(
-                self.call.clone(),
-                Some(page_id),
-            ));
+            // Retain the created incarnation and its guarded view before spawning,
+            // including the original epoch for an unbound run. Missing metadata
+            // skips this cosmetic effect rather than dispatching without a guard.
+            if let Some(created) = tab_groups::created_page(&self.call, page_id).await {
+                tokio::spawn(tab_groups::run_tab_group_work(
+                    self.call.clone(),
+                    Some(created),
+                ));
+            }
         })
     }
 
@@ -226,8 +249,10 @@ impl InnerCallHook for ScriptInnerCallHook {
 
     fn resolve_host<'a>(&'a self, page: u32) -> BoxFuture<'a, Option<String>> {
         Box::pin(async move {
-            let browser = self.call.browser_session.as_ref()?;
-            let info = browser.pages.get_info(PageId(page)).await?;
+            // Helper selection is visible to the script, so it admits the requested
+            // page through the same capture as all browser primitives.
+            let browser = self.call.view.as_ref()?;
+            let info = browser.page(PageId(page)).await.ok()?;
             helpers::host_bucket(&info.url)
         })
     }
@@ -312,6 +337,114 @@ mod tests {
         ScriptInnerCallHook::new(call.clone())
     }
 
+    #[tokio::test]
+    async fn bound_script_creation_receipt_survives_ownership_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_ownership_handoff(true).await
+    }
+
+    #[tokio::test]
+    async fn unbound_script_creation_receipt_survives_ownership_handoff() -> anyhow::Result<()> {
+        assert_creation_survives_ownership_handoff(false).await
+    }
+
+    async fn assert_creation_survives_ownership_handoff(bound: bool) -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::ProfileConnection;
+        use browseros_core::{PageId, WindowId, pages::NewPageOptions, target::BrowserView};
+        let native = ProfileConnection::new();
+        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        browser.pages.list().await?;
+        let mut call = tool_call("run", json!({"code":"return 1"})).await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(if bound {
+            BrowserView::capture(
+                browser.clone(),
+                Some(ProfileConnection::binding("eng", 1, 1)),
+                None,
+            )
+            .await
+        } else {
+            BrowserView::unbound(browser.clone(), Some(WindowId(1)))
+        });
+        let original = call
+            .view
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("view missing"))?
+            .new_page(
+                "https://synthetic.test/ownership-handoff",
+                NewPageOptions::default(),
+            )
+            .await?;
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let ownership = call.state.sessions.ownership();
+        let operation = ownership
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let queued = operation.lock().await;
+        let paused = call.state.tab_activity.pause_recording_for_testing().await;
+        let hook = hook_for(&call);
+        let mut work = hook.on_page_created(original.page_id.0);
+        // Poll the actual hook until record_new_page waits on its recording lock.
+        // No grouping capture has run; the native creation has already returned.
+        assert!(futures_util::poll!(work.as_mut()).is_pending());
+        assert!(call.created_page_snapshots.lock().await.is_empty());
+        {
+            let mut tabs = native.tabs.lock().unwrap_or_else(|p| p.into_inner());
+            let tab = tabs
+                .iter_mut()
+                .find(|tab| tab["tabId"] == original.tab_id.0)
+                .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+            tab["targetId"] = json!("replacement-before-script-capture");
+        }
+        browser.pages.list().await?;
+        let replaced = browser
+            .pages
+            .get_info(PageId(original.page_id.0))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("reconciled page missing"))?;
+        assert_eq!(replaced.tab_id, original.tab_id);
+        assert_eq!(replaced.window_id, original.window_id);
+        assert_ne!(replaced.target_id, original.target_id);
+        drop(paused);
+        tokio::time::timeout(std::time::Duration::from_secs(3), work).await?;
+        // Let any incorrectly spawned callback queue behind the real operation
+        // lock, then wait for it to finish before inspecting native mutations.
+        tokio::task::yield_now().await;
+        drop(queued);
+        let _finished = operation.lock().await;
+        {
+            let calls = native.calls.lock().unwrap_or_else(|p| p.into_inner());
+            let mutations = calls
+                .iter()
+                .filter(|(method, _)| {
+                    method.contains("TabGroup") && method != "Browser.getTabGroups"
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                mutations.is_empty(),
+                "replacement received script group writes: {mutations:?}"
+            );
+        }
+        assert!(
+            call.created_page_snapshots.lock().await.is_empty(),
+            "replacement was adopted as the creation snapshot"
+        );
+        call.state.session_tabs.drain_writes().await;
+        let recorded = call
+            .state
+            .session_tabs
+            .first_session_tab()
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("creation ownership missing"))?;
+        assert_eq!(
+            recorded.opened_target_id.as_deref(),
+            Some(original.target_id.as_str())
+        );
+        Ok(())
+    }
+
     /// Minimal browser connection exposing one page (tab 11), enough for
     /// `pages.get_info` so the hook can open a session-tab window.
     struct OnePageConnection {
@@ -329,10 +462,28 @@ mod tests {
         fn send<'a>(
             &'a self,
             method: &'a str,
+            params: Value,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            self.send_at_epoch(1, method, params, session)
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
             _params: Value,
             _session: Option<&'a CdpSessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
+                // This fixture's epoch is immutable; validation and any synchronous
+                // recorded publication cannot be separated by a reconnect.
+                if expected_epoch != 1 {
+                    return Err(browseros_cdp::CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
                 match method {
                     "Browser.getTabs" => Ok(json!({ "tabs": [{
                         "tabId": 11, "targetId": "target-a", "url": "https://example.com",
@@ -352,6 +503,27 @@ mod tests {
             _session: Option<&'a CdpSessionId>,
         ) -> BoxFuture<'a, Result<String, CdpError>> {
             Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params_json: &'a str,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+            Box::pin(async move {
+                let params = serde_json::from_str(params_json).map_err(|error| {
+                    browseros_cdp::CdpError::Protocol {
+                        code: -1,
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(self
+                    .send_at_epoch(expected_epoch, method, params, session)
+                    .await?
+                    .to_string())
+            })
         }
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {

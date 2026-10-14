@@ -81,9 +81,9 @@ fn handler<'a>(
             return Ok(Some(result));
         }
         let snapshot = ctx
-            .session
+            .browser
             .observe(PageId(args.page))
-            .await
+            .await?
             .snapshot_with_options(SnapshotOptions {
                 mode: args.mode.into(),
                 depth,
