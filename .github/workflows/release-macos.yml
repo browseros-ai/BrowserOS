@@ -26,6 +26,10 @@ on:
         description: "Published-mode checkout ref"
         type: string
         default: ""
+      notify:
+        description: "Send Slack build notifications"
+        type: boolean
+        default: true
   workflow_call:
     inputs:
       products:
@@ -78,6 +82,13 @@ on:
         required: false
         type: string
         default: ""
+      # Declared on both triggers so it is never null: GitHub's loose equality
+      # treats null as false, which would silently mute direct dispatches.
+      notify:
+        description: "Send Slack build notifications"
+        required: false
+        type: boolean
+        default: true
     secrets:
       R2_ACCOUNT_ID:
         required: false
@@ -372,9 +383,15 @@ jobs:
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
           R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN }}
+          SLACK_NOTIFY: ${{ inputs.notify }}
           SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+          if [ "$SLACK_NOTIFY" = "false" ]; then
+            # bos_build loads the persistent checkout's .env without overriding
+            # variables already set, and treats an empty webhook as disabled.
+            export SLACK_WEBHOOK_URL=""
+          fi
           for product in ${{ steps.inputs.outputs.product_ids }}; do
             case "$product" in
               browseros) chromium_src="$BROWSEROS_CHROMIUM_SRC" ;;
@@ -464,7 +481,7 @@ jobs:
           overwrite: true
 
       - name: Slack failure ping
-        if: failure()
+        if: failure() && inputs.notify
         env:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

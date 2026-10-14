@@ -145,18 +145,22 @@ ephemeral runners — live in [`docs/build-cli.md`](docs/build-cli.md).
 
 ## Release a browser
 
-Full releases are dispatch-only and fixed-shape: Linux x64, signed Windows x64,
-and signed macOS arm64, x64, and universal. Dispatch from the default branch:
+Full releases are dispatch-only. By default they build Linux x64, signed
+Windows x64, and signed macOS arm64, x64, and universal. Dispatch from the
+default branch:
 
 ```bash
 gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
 
-There are no platform, component, extension-channel, or signing inputs. The
-workflow freezes the dispatch SHA, publishes the product server and extension
-to alpha in strict order, and passes their exact output versions into every
-native browser lane. The committed onboarding version is pinned too, so queued
+BrowserOS has no platform, component, extension-channel, or signing inputs.
+BrowserOS neo accepts `platforms`, `macos_arch`, and `publication`, whose
+defaults are the full release; `publication=draft-only` keeps both components
+private for test builds (see [`docs/release-ci.md`](docs/release-ci.md#dispatch)).
+The workflow freezes the dispatch SHA, publishes the product server and
+extension to alpha in strict order, and passes their exact output versions into
+every native browser lane. The committed onboarding version is pinned too, so queued
 builds cannot drift to a later component release.
 
 ### What CI does, and where it stops

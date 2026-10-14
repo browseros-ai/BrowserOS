@@ -56,15 +56,45 @@ while a native browser lane waits for a runner.
 
 ## Dispatch
 
-There are no release-shape inputs. A full release always publishes the
-product's server and extension, updates alpha, builds Linux x64, signed Windows
-x64, and signed macOS universal, uploads browser deliverables, and creates a
-draft browser GitHub release.
+A dispatch without inputs is a full release: it publishes the product's server
+and extension, updates alpha, builds Linux x64, signed Windows x64, and signed
+macOS universal, uploads browser deliverables, and creates a draft browser
+GitHub release. `release-browseros.yml` has no release-shape inputs.
 
 ```bash
 gh workflow run release-browseros.yml --ref main
 gh workflow run release-browserclaw.yml --ref main
 ```
+
+`release-browserclaw.yml` can narrow that run. Every input defaults to the full
+release, and preflight rejects anything else before allocating a version:
+
+| Input | Values | Effect |
+| --- | --- | --- |
+| `platforms` | `all` (default), `macos`, `linux`, `windows` | native lanes to build; the others are skipped |
+| `macos_arch` | `universal` (default), `arm64` | macOS artifact set; non-default only when macOS is selected |
+| `publication` | `alpha` (default), `draft-only` | component publication, see below |
+
+`draft-only` passes `defer_finalize: true` to both component workflows. Each
+component still allocates a version from the frozen SHA, uploads its immutable
+versioned R2 objects and keeps a private GitHub draft, and the browser lanes pin
+those exact versions. Nothing downstream of component finalization runs: no
+component tags, server `latest` alias, public component releases, server OTA,
+extension alpha/bundled feeds, or version-reflection PRs. The macOS lane also
+runs with `notify: false`, which skips its Slack failure ping and blanks
+`SLACK_WEBHOOK_URL` so a builder `.env` cannot post. The browser draft is
+created as usual from only the selected receipts.
+
+```bash
+# Signed macOS arm64 test build with private component drafts.
+gh workflow run release-browserclaw.yml --ref main \
+  -f platforms=macos -f macos_arch=arm64 -f publication=draft-only
+```
+
+The deferred component drafts remain allocations bound to that source SHA: a
+later dispatch of the same SHA reuses them, and releases from other SHAs skip
+their versions. Browser R2 objects are versioned but not write-once, so give the
+next real release a new browser version instead of reusing a test build's.
 
 The dispatch ref must be the repository default branch. Product, component,
 native-lane, and shared Mac concurrency groups use `queue: max`, so up to 100
@@ -134,8 +164,9 @@ merged fails closed; post-merge recovery must rerun failed jobs so it reuses the
 successful signed artifacts from the original run.
 
 If browser draft creation alone fails, rerun that job in the original run. It
-uses the R2 metadata written by the three native lanes and verifies the same
-source SHA and workflow run ID before refreshing the draft. Native lanes from
+uses the R2 metadata written by the selected native lanes and verifies the same
+source SHA and workflow run ID before refreshing the draft. It runs only when
+every selected lane succeeded and every unselected lane was skipped. Native lanes from
 different rerun attempts are valid because GitHub keeps the run ID stable.
 
 ## Local published-resource build
@@ -188,7 +219,7 @@ versions, commit, push, or open a PR.
 ## Publication boundary
 
 The full workflow creates or refreshes a draft browser GitHub release after
-all three native lanes upload complete R2 metadata. It does not publish the
+every selected native lane uploads complete R2 metadata. It does not publish the
 browser appcast. Inspect the browser draft before promotion.
 
 | Workflow | Owned publication |

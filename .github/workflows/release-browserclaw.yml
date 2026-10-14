@@ -1,7 +1,35 @@
 name: "Release: BrowserOS neo (full)"
 
+# Defaults reproduce the full release: every native lane, macOS universal,
+# public component releases with alpha OTA/feeds. Narrower dispatches select
+# lanes and keep components private; preflight validates every input once and
+# later jobs read only its outputs.
 on:
   workflow_dispatch:
+    inputs:
+      platforms:
+        description: "Browser platforms to build and attach to the draft"
+        type: choice
+        default: all
+        options:
+          - all
+          - macos
+          - linux
+          - windows
+      macos_arch:
+        description: "macOS artifact set (universal also yields arm64 and x64 DMGs)"
+        type: choice
+        default: universal
+        options:
+          - universal
+          - arm64
+      publication:
+        description: "alpha: publish components, alpha OTA/feeds. draft-only: private component drafts, no tags/aliases/feeds/Slack"
+        type: choice
+        default: alpha
+        options:
+          - alpha
+          - draft-only
 
 permissions: {}
 
@@ -18,10 +46,64 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     outputs:
+      build_linux: ${{ steps.selection.outputs.build_linux }}
+      build_macos: ${{ steps.selection.outputs.build_macos }}
+      build_windows: ${{ steps.selection.outputs.build_windows }}
+      macos_arch: ${{ steps.selection.outputs.macos_arch }}
       onboarding_version: ${{ steps.release.outputs.onboarding_version }}
+      platforms: ${{ steps.selection.outputs.platforms }}
+      publication: ${{ steps.selection.outputs.publication }}
       source_sha: ${{ steps.release.outputs.source_sha }}
       version: ${{ steps.release.outputs.version }}
     steps:
+      # Runs before any allocation or build so a malformed request publishes
+      # nothing. Values arrive through env and are re-emitted only after an
+      # exact match, so no dispatch text is ever expanded into a script.
+      - name: Validate release selection
+        id: selection
+        env:
+          MACOS_ARCH: ${{ inputs.macos_arch }}
+          PLATFORMS: ${{ inputs.platforms }}
+          PUBLICATION: ${{ inputs.publication }}
+        run: |
+          set -euo pipefail
+          case "$PLATFORMS" in
+            all) build_linux=true build_windows=true build_macos=true ;;
+            linux) build_linux=true build_windows=false build_macos=false ;;
+            windows) build_linux=false build_windows=true build_macos=false ;;
+            macos) build_linux=false build_windows=false build_macos=true ;;
+            *)
+              echo "::error::platforms must be all, macos, linux, or windows"
+              exit 1
+              ;;
+          esac
+          case "$MACOS_ARCH" in
+            universal|arm64) ;;
+            *)
+              echo "::error::macos_arch must be universal or arm64"
+              exit 1
+              ;;
+          esac
+          if [ "$build_macos" != true ] && [ "$MACOS_ARCH" != universal ]; then
+            echo "::error::macos_arch=$MACOS_ARCH requires platforms to include macos"
+            exit 1
+          fi
+          case "$PUBLICATION" in
+            alpha|draft-only) ;;
+            *)
+              echo "::error::publication must be alpha or draft-only"
+              exit 1
+              ;;
+          esac
+          {
+            echo "build_linux=$build_linux"
+            echo "build_macos=$build_macos"
+            echo "build_windows=$build_windows"
+            echo "macos_arch=$MACOS_ARCH"
+            echo "platforms=$PLATFORMS"
+            echo "publication=$PUBLICATION"
+          } >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -52,6 +134,11 @@ jobs:
             echo "version=$version"
           } >> "$GITHUB_OUTPUT"
 
+  # draft-only stops each component after its immutable versioned R2 objects
+  # and private draft exist. Deferring finalize also skips the reusable
+  # workflows' tag push, server `latest` alias copy, public release, OTA/feed
+  # publication and version-reflection PR, all of which hang off finalize.
+  # The versions they output still pin the browser lanes to those objects.
   server:
     name: Release BrowserOS neo server
     needs: preflight
@@ -61,7 +148,8 @@ jobs:
       pull-requests: write
     with:
       ref: ${{ needs.preflight.outputs.source_sha }}
-      publish_ota: true
+      defer_finalize: ${{ needs.preflight.outputs.publication == 'draft-only' }}
+      publish_ota: ${{ needs.preflight.outputs.publication == 'alpha' }}
     secrets: inherit
 
   extension:
@@ -74,7 +162,8 @@ jobs:
     with:
       extension: browserclaw
       branch: ${{ needs.preflight.outputs.source_sha }}
-      publish_alpha_feed: true
+      defer_finalize: ${{ needs.preflight.outputs.publication == 'draft-only' }}
+      publish_alpha_feed: ${{ needs.preflight.outputs.publication == 'alpha' }}
     secrets: inherit
 
   components:
@@ -99,9 +188,13 @@ jobs:
           [[ "$EXTENSION_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
           [[ "$ONBOARDING_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 
+  # Native lanes run only when preflight selected them. A job-level `if`
+  # without a status function keeps the implicit success() over `needs`, so
+  # a selected lane still requires preflight and both exact components.
   linux:
     name: Linux x64
     needs: [preflight, server, extension, components]
+    if: needs.preflight.outputs.build_linux == 'true'
     uses: ./.github/workflows/release-linux.yml
     permissions:
       actions: write
@@ -119,6 +212,7 @@ jobs:
   windows:
     name: Windows x64
     needs: [preflight, server, extension, components]
+    if: needs.preflight.outputs.build_windows == 'true'
     uses: ./.github/workflows/release-windows.yml
     permissions:
       actions: write
@@ -135,14 +229,18 @@ jobs:
     secrets: inherit
 
   macos:
-    name: macOS universal
+    name: macOS ${{ inputs.macos_arch }}
     needs: [preflight, server, extension, components]
+    if: needs.preflight.outputs.build_macos == 'true'
     uses: ./.github/workflows/release-macos.yml
     permissions:
       contents: read
     with:
       products: browserclaw
-      arch: universal
+      arch: ${{ needs.preflight.outputs.macos_arch }}
+      # draft-only test builds must not reach Slack, including the lane's
+      # failure ping and any webhook the persistent builder's .env provides.
+      notify: ${{ needs.preflight.outputs.publication == 'alpha' }}
       upload_to_r2: true
       resource_mode: published
       ref: ${{ needs.preflight.outputs.source_sha }}
@@ -151,9 +249,25 @@ jobs:
       onboarding_version: ${{ needs.preflight.outputs.onboarding_version }}
     secrets: inherit
 
+  # Finalize must tolerate intentionally skipped lanes, so it replaces the
+  # implicit success() with !cancelled() and states every dependency itself:
+  # preflight and both components must succeed, each selected lane must
+  # succeed, and each unselected lane must be skipped. A failed or cancelled
+  # selected lane, or an unselected lane that ran anyway, leaves no draft.
   finalize:
     name: Create browser draft
     needs: [preflight, server, extension, components, linux, windows, macos]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.preflight.result == 'success'
+        && needs.server.result == 'success'
+        && needs.extension.result == 'success'
+        && needs.components.result == 'success'
+        && needs.linux.result == (needs.preflight.outputs.build_linux == 'true' && 'success' || 'skipped')
+        && needs.windows.result == (needs.preflight.outputs.build_windows == 'true' && 'success' || 'skipped')
+        && needs.macos.result == (needs.preflight.outputs.build_macos == 'true' && 'success' || 'skipped')
+      }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
@@ -166,10 +280,14 @@ jobs:
 
       - uses: astral-sh/setup-uv@v8.3.2
 
+      # The finalizer selects only receipts for the chosen platforms and
+      # macOS artifact set, bound to this source SHA and run ID.
       - name: Create or refresh browser draft
         working-directory: packages/browseros
         env:
           GH_TOKEN: ${{ github.token }}
+          MACOS_ARCH: ${{ needs.preflight.outputs.macos_arch }}
+          PLATFORMS: ${{ needs.preflight.outputs.platforms }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
           R2_BUCKET: ${{ secrets.R2_BUCKET }}
@@ -181,8 +299,8 @@ jobs:
           uv run browseros release github create \
             --version "$VERSION" \
             --product browserclaw \
-            --platforms all \
-            --macos-arch universal \
+            --platforms "$PLATFORMS" \
+            --macos-arch "$MACOS_ARCH" \
             --source-sha "$SOURCE_SHA" \
             --workflow-run-id "$GITHUB_RUN_ID" \
             --target "$SOURCE_SHA"
