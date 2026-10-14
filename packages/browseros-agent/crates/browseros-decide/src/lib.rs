@@ -15,7 +15,12 @@
 //! ```
 
 pub mod client;
+pub mod drive;
+pub mod gate;
 pub mod kind;
 pub mod offer;
+pub mod questions;
 pub mod relevance;
+pub mod space;
 pub mod view;
+pub mod vocabulary;
