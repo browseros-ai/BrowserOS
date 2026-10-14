@@ -20,20 +20,25 @@ step, step-by-step debugging, or when a run script genuinely cannot express it."
 
 /// Taught only when the native browser implements profile targeting; older natives hide
 /// the profile tools, so instructions must not send agents to them.
-const PROFILE_GUIDANCE: &str = r#"Choose a browser profile once for the task when needed:
+const PROFILE_GUIDANCE: &str = r#"Every call works in one regular profile. With no browser_target selection it is
+the browser's original Default profile (directory "Default"), whatever window is
+focused; tabs new opens a new inactive Default window when it has none. Choose
+another profile once for the task when needed:
 - browser_profiles action="list" discovers saved regular profiles; action="load"
   loads an existing profile. Loading neither binds the task nor opens a window.
 - browser_target action="set" with an exact name or browserProfileId binds the
   task; action="set_window" chooses a working window (strict=true pins it).
-  action="get" reports the saved binding and live status even when it is stale.
-  action="clear_window" keeps the profile; action="clear" releases the binding.
+  action="get" reports the saved binding and live status even when it is stale,
+  or the Default profile in use. action="clear_window" keeps the profile;
+  action="clear" returns the task to Default.
 - Window CRUD stays in windows. If the selected profile has no normal window,
   load it with browser_profiles, then use windows action="create" before opening
   a tab. Binding itself never loads, creates or closes profiles/windows.
 The binding persists through task handles and known reconnects. All browser
 operations, including a whole run, capture it once; rebind between calls, never
 inside run. A stale profile or closed strict pin requires explicit recovery and
-never redirects to the focused profile. An unbound task keeps global behavior."#;
+never redirects to the focused profile; default_profile_unavailable needs
+browser_target set."#;
 
 const SHARED_BROWSER_GUIDANCE: &str = r#"Shared with other agents:
 - Open your own tab with tabs action="new". You may also work in the user's tabs
@@ -264,7 +269,10 @@ mod tests {
     #[test]
     fn profile_guidance_is_offered_only_to_capable_natives() {
         let capable = mcp_instructions(HumanHelp::On, current());
-        assert!(capable.contains("Choose a browser profile once for the task"));
+        assert!(capable.contains("Choose\nanother profile once for the task"));
+        // The default rule is what agents rely on when they never select a profile.
+        assert!(capable.contains("original Default profile (directory \"Default\")"));
+        assert!(capable.contains("action=\"clear\" returns the task to Default"));
         for older in [
             NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
             NativeCapabilities::default(),
@@ -272,6 +280,7 @@ mod tests {
             let instructions = mcp_instructions(HumanHelp::On, older);
             assert!(!instructions.contains("browser_profiles"), "{older}");
             assert!(!instructions.contains("browser_target"), "{older}");
+            assert!(!instructions.contains("Default profile"), "{older}");
             assert!(instructions.contains("Reach for run first"));
             assert!(instructions.contains("Shared with other agents:"));
             assert!(instructions.ends_with(PAGE_CONTENT_LINE));

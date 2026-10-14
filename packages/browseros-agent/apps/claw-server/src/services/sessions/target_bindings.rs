@@ -84,7 +84,8 @@ impl Records {
 
 /// Atomic host adapter for saved task intent and canonical successor correlation.
 /// Records are deliberately small and retained indefinitely: age must never turn a
-/// previously targeted or stopped handle into an unknown, globally unbound task.
+/// previously targeted or stopped handle into an unknown task that has lost its saved
+/// selection (falling back to the default profile) or its stop.
 pub struct TargetBindings {
     records: Mutex<Records>,
     store: JsonStore,

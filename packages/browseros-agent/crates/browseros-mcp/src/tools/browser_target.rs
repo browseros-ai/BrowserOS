@@ -1,12 +1,14 @@
 //! Logical task selection. Native discovery validates intent, while the host
 //! owns storage; none of these operations load profiles or create windows.
+//! A stored binding is an explicit override. Without one, calls use the browser's
+//! original Default profile, resolved by core capture and never stored here.
 
 use crate::framework::{
     ArgIssue, TargetStore, ToolCtx, ToolError, ToolExecResult, ToolResult, parse_args, text_result,
 };
 use browseros_core::{
-    BrowserProfileId, CoreError, ProfileSelector, TargetBinding, TargetError, TargetIntent,
-    WindowId, WindowSelection,
+    BrowserProfileId, CoreError, DEFAULT_PROFILE_DIRECTORY, ProfileSelector, TargetBinding,
+    TargetError, TargetIntent, TargetSource, TargetStatus, WindowId, WindowSelection,
 };
 use futures_util::future::BoxFuture;
 use schemars::JsonSchema;
@@ -14,7 +16,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 
-const DESCRIPTION: &str = "Select a browser profile for this task: get, set (exact name or browserProfileId), set_window (windowId; strict=true pins), clear_window, or clear. set only records intent and clears window selection; it never loads or creates anything. Use browser_profiles load and separate windows create when needed. Selection affects later calls; mutating selection inside run returns target_change_in_run. Bound calls include only regular profiles' normal windows and pages: OAuth/window.open popups return page_out_of_scope, even in the same profile. Never automatically clear or widen scope to drive a popup; explicit clear permits browser-wide work. get, clear, and reselection remain available after profile_gone or pinned_window_closed.";
+const DESCRIPTION: &str = "Select a browser profile for this task: get, set (exact name or browserProfileId), set_window (windowId; strict=true pins), clear_window, or clear. With no selection, calls use the browser's original Default profile (directory \"Default\"), whatever window is focused; set overrides it for this task and clear returns to Default. get reports the selection, or the Default profile this call resolved. set only records intent and clears window selection; it never loads or creates anything. Use browser_profiles load and separate windows create when needed. Selection affects later calls; mutating selection inside run returns target_change_in_run. Calls include only regular profiles' normal windows and pages: OAuth/window.open popups return page_out_of_scope, even in the same profile. get, clear, and reselection remain available after profile_gone, pinned_window_closed or default_profile_unavailable.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -98,6 +100,43 @@ pub(super) async fn resolve_bound_intent(
     Ok(intent)
 }
 
+/// No stored override: report the Default profile this very call resolved (core capture owns
+/// that resolution), so agents never read "unbound" as browser-wide on a capable native.
+async fn default_target_result(ctx: &ToolCtx) -> ToolResult {
+    let status = match (ctx.browser.target_source(), ctx.browser.binding()) {
+        (Some(TargetSource::Default), Some(effective)) => ctx.browser.status(effective).await,
+        _ => TargetStatus {
+            profile: None,
+            windows: Vec::new(),
+            placement_window_id: None,
+            error: Some(ctx.browser.admission_error().map_or_else(
+                || "the Default profile was not resolved for this call".to_string(),
+                ToString::to_string,
+            )),
+        },
+    };
+    let summary = match (&status.profile, &status.error) {
+        (_, Some(err)) => {
+            format!("no browser target is set; the default profile is unavailable: {err}")
+        }
+        (Some(profile), None) => format!(
+            "no browser target is set; calls use the default profile {} (directory {DEFAULT_PROFILE_DIRECTORY})",
+            profile.name
+        ),
+        (None, None) => format!(
+            "no browser target is set; calls use the default profile (directory {DEFAULT_PROFILE_DIRECTORY})"
+        ),
+    };
+    text_result(
+        summary,
+        Some(json!({
+            "action": "get",
+            "bound": false,
+            "default": { "directory": DEFAULT_PROFILE_DIRECTORY, "status": status },
+        })),
+    )
+}
+
 fn binding_result(
     action: &str,
     binding: TargetBinding,
@@ -144,10 +183,7 @@ fn handler<'a>(
                         ),
                     )
                 }
-                None => text_result(
-                    "browser target is unbound",
-                    Some(json!({ "action": "get", "bound": false })),
-                ),
+                None => default_target_result(ctx).await,
             },
             TargetAction::Set => {
                 let selector = selector(args.name, args.browser_profile_id)?.ok_or_else(|| {
@@ -203,7 +239,9 @@ fn handler<'a>(
             TargetAction::Clear => {
                 store.clear().await.map_err(ToolError::message)?;
                 text_result(
-                    "browser target cleared",
+                    format!(
+                        "browser target cleared; later calls use the default profile (directory {DEFAULT_PROFILE_DIRECTORY})"
+                    ),
                     Some(json!({ "action": "clear", "bound": false })),
                 )
             }

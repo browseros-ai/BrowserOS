@@ -5,7 +5,9 @@ use std::collections::HashSet;
 
 impl BrowserView {
     pub(super) fn scoped_events(&self) -> broadcast::Receiver<CdpEvent> {
-        if self.binding.is_none() {
+        // Only a genuinely unbound view (older native, host infrastructure) gets the global
+        // stream. A capture that failed, including an unusable default, relays nothing.
+        if matches!(self.capture, Ok(None)) {
             return self.session.cdp_events();
         }
         let (sender, receiver) = broadcast::channel(128);

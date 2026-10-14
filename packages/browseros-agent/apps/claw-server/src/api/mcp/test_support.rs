@@ -385,6 +385,28 @@ impl ProfileConnection {
         })
     }
 
+    /// Adds the browser's original profile (directory "Default", renamed "Personal") with
+    /// one normal window that is not the focused one, as a capable native has. The base
+    /// fixture without it models a browser whose Default profile is gone.
+    pub(crate) fn with_default_profile(self: Arc<Self>) -> Arc<Self> {
+        self.profiles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(
+                serde_json::json!({"browserProfileId":"default", "name":"Personal",
+                "directory":"Default", "loaded":true, "browserContextId":"ctx-default"}),
+            );
+        self.windows
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(Self::window(4, "default"));
+        self.tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(Self::tab(104, 4, "default"));
+        self
+    }
+
     fn window(id: i64, profile: &str) -> Value {
         serde_json::json!({"windowId":id, "windowType":"normal", "bounds":{}, "isActive":id == 2,
             "isVisible":true, "tabCount":1, "browserProfileId":profile, "liveBrowserContextId":format!("ctx-{profile}")})

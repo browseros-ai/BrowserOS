@@ -1414,6 +1414,89 @@ mod tests {
         Ok(())
     }
 
+    /// With no saved selection a capable native's call runs in the original Default profile,
+    /// not the focused window. A selection made after admission does not move the admitted
+    /// run or its detached grouping, and the default itself is never saved for the task.
+    #[tokio::test]
+    async fn unselected_run_uses_the_default_profile_and_keeps_it_after_rebind()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new().with_default_profile();
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
+        browser.pages.list().await?;
+        let mut call = tool_call(
+            "run",
+            json!({"code":"return await browser.pages.newPage('https://synthetic.test/default');"}),
+        )
+        .await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::capture(browser.clone(), None, None).await);
+        assert_eq!(call.state.targets.get(&call.session_id).await, None);
+        call.state
+            .targets
+            .set(
+                &call.session_id,
+                ProfileConnection::binding("ops", 1, 2).intent,
+            )
+            .await?;
+        let group_created = transport.group_created.notified();
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(
+            !outcome.result.is_error,
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), group_created).await?;
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let ownership = call.state.sessions.ownership();
+        let lock = ownership
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let _guard = lock.lock().await;
+        let tab = transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|tab| tab["url"] == "https://synthetic.test/default")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+        assert_eq!(tab["windowId"], 4);
+        assert_eq!(tab["browserProfileId"], "default");
+        assert!(tab.get("groupId").is_some());
+        assert!(
+            ownership
+                .groups(&identity.ownership_key)
+                .await
+                .iter()
+                .all(|group| group.window_id == Some(browseros_core::WindowId(4)))
+        );
+        let creation = transport
+            .calls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|(method, _)| method == "Browser.createTab")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("createTab missing"))?;
+        assert_eq!(creation.1["browserContextId"], "ctx-default");
+        // Only the explicit selection made after admission is stored; the default never was.
+        assert_eq!(
+            call.state
+                .targets
+                .get(&call.session_id)
+                .await
+                .map(|binding| binding.intent.browser_profile_id.0),
+            Some("ops".to_string())
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn run_creation_and_hook_keep_admitted_view_after_rebind() -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
