@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, PageId, TargetId,
+    CoreError, NativeCapabilities, PageId, TargetId,
     connection::CdpConnection,
     frames::FrameRegistry,
     input::Input,
@@ -26,6 +26,10 @@ pub struct BrowserSessionHooks {
 /// task execution receives a BrowserView so capture and admission cannot be bypassed.
 pub struct BrowserSession {
     connection: Arc<dyn CdpConnection>,
+    /// Native identity of the browser behind `connection`, fixed for the session. Every view
+    /// reads it through its session, so capture, dispatch and raw CDP share one gate decision;
+    /// hosts derive discovery from the same value they pass in here.
+    native: NativeCapabilities,
     pub pages: Arc<PageManager>,
     pub page_signals: Arc<PageSignals>,
     pub windows: Arc<WindowManager>,
@@ -34,8 +38,19 @@ pub struct BrowserSession {
 }
 
 impl BrowserSession {
+    /// A session whose native identity is unknown, so no gated native feature is used.
+    /// Hosts that know the browser's version use [`Self::new_with_native`].
     #[must_use]
     pub fn new(connection: Arc<dyn CdpConnection>, hooks: BrowserSessionHooks) -> Arc<Self> {
+        Self::new_with_native(connection, hooks, NativeCapabilities::default())
+    }
+
+    #[must_use]
+    pub fn new_with_native(
+        connection: Arc<dyn CdpConnection>,
+        hooks: BrowserSessionHooks,
+        native: NativeCapabilities,
+    ) -> Arc<Self> {
         let frames = FrameRegistry::new(connection.clone());
         let page_signals = PageSignals::new(connection.clone());
         let frame_hook = {
@@ -81,6 +96,7 @@ impl BrowserSession {
         let windows = Arc::new(WindowManager::new(connection.clone()));
         let session = Arc::new(Self {
             connection: connection.clone(),
+            native,
             pages,
             page_signals,
             windows,
@@ -89,6 +105,11 @@ impl BrowserSession {
         });
         Self::spawn_detach_listener(session.clone());
         session
+    }
+
+    #[must_use]
+    pub fn native(&self) -> NativeCapabilities {
+        self.native
     }
 
     pub(crate) fn frames(&self) -> &Arc<FrameRegistry> {

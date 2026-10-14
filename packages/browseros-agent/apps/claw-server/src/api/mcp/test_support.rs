@@ -10,6 +10,23 @@ use serde_json::Value;
 use std::{sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
+/// The first native release with profile targeting. Host fixtures model that browser unless a
+/// test is about an older or unknown one.
+pub(crate) fn current_native() -> browseros_core::NativeCapabilities {
+    browseros_core::NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
+}
+
+/// A browser session on `connection` that models the current native (profile targeting on).
+pub(crate) fn current_session(
+    connection: Arc<dyn browseros_core::CdpConnection>,
+) -> Arc<browseros_core::BrowserSession> {
+    browseros_core::BrowserSession::new_with_native(
+        connection,
+        browseros_core::BrowserSessionHooks::default(),
+        current_native(),
+    )
+}
+
 pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolCall> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
@@ -26,6 +43,10 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
+        native: crate::config::NativeIdentity {
+            capabilities: current_native(),
+            asserted: false,
+        },
     });
     let state = AppState::new_with_home(config, home).await?;
     let session = Session::new(

@@ -1053,7 +1053,7 @@ mod tests {
         services::sessions::{RetainedGroupAction, Sessions},
     };
     use browseros_cdp::{CdpError, CdpEvent};
-    use browseros_core::{BrowserSessionHooks, CdpConnection, SessionId};
+    use browseros_core::{CdpConnection, SessionId};
     use std::{
         collections::{BTreeSet, HashMap},
         sync::{
@@ -1069,7 +1069,7 @@ mod tests {
     -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1140,7 +1140,7 @@ mod tests {
     -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1247,7 +1247,7 @@ mod tests {
     async fn delayed_unbound_grouping_keeps_creation_epoch_before_callback() -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1286,7 +1286,7 @@ mod tests {
         use std::sync::atomic::Ordering;
 
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let root = BrowserView::unbound(browser.clone(), None);
         let native_group = root
@@ -1413,7 +1413,7 @@ mod tests {
             test_support::{ProfileConnection, tool_call},
         };
         let native = ProfileConnection::new();
-        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call(
             "tabs",
@@ -1505,7 +1505,7 @@ mod tests {
     {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1539,7 +1539,7 @@ mod tests {
     -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut old = tool_call("tabs", json!({"action":"new"})).await?;
         old.browser_session = Some(browser.clone());
@@ -1615,7 +1615,7 @@ mod tests {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         use browseros_core::pages::NewPageOptions;
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut base = tool_call("tabs", json!({"action":"new"})).await?;
         base.browser_session = Some(browser.clone());
@@ -1763,7 +1763,7 @@ mod tests {
     {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(transport.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut old = tool_call("tabs", json!({"action":"new"})).await?;
         old.browser_session = Some(browser.clone());
@@ -1879,7 +1879,7 @@ mod tests {
     async fn borrowed_group_cleanup_leaves_its_tabs_and_group_open() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("borrowed", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let ownership = Arc::new(PageOwnership::new());
         let key = ConvoId::new("borrower");
         ownership
@@ -2305,7 +2305,7 @@ mod tests {
     async fn connected_call(
         recorder: Arc<GroupDispatchRecorder>,
     ) -> anyhow::Result<(ToolCall, Arc<BrowserSession>)> {
-        let browser = BrowserSession::new(recorder, BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder);
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
@@ -2333,7 +2333,7 @@ mod tests {
     -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-1", [101]);
-        let browser = BrowserSession::new(recorder, BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder);
         assert_eq!(browser.pages.list().await?.len(), 2);
         let ownership = Arc::new(PageOwnership::new());
         let key = ConvoId::new("codex-agile-alpaca");
@@ -2356,7 +2356,7 @@ mod tests {
     -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.fail_collapse(true);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let dir = tempfile::tempdir()?;
         let database = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
@@ -2414,7 +2414,7 @@ mod tests {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-1", [101]);
         recorder.fail_collapse(true);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let ownership = Arc::new(PageOwnership::new());
         let key = ConvoId::new("codex-agile-alpaca");
@@ -2438,7 +2438,7 @@ mod tests {
         recorder.seed_group("group-1", [101]);
         recorder.fail_collapse(true);
         recorder.fail_list(true);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let ownership = Arc::new(PageOwnership::new());
         let key = ConvoId::new("codex-agile-alpaca");
@@ -2463,7 +2463,7 @@ mod tests {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.fail_collapse(true);
         recorder.block_group_list();
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let ownership = Arc::new(PageOwnership::new());
         let key = ConvoId::new("codex-agile-alpaca");
@@ -2502,7 +2502,7 @@ mod tests {
     {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-1", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let ownership = Arc::new(PageOwnership::new());
         let key = ConvoId::new("codex-agile-alpaca");
@@ -2524,7 +2524,7 @@ mod tests {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-1", [101]);
         recorder.fail_close(true);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let ownership = Arc::new(PageOwnership::new());
         let key = ConvoId::new("codex-agile-alpaca");
@@ -2546,7 +2546,7 @@ mod tests {
     async fn effect_returns_before_group_creation_finishes() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.block_group_creation();
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
@@ -2582,7 +2582,7 @@ mod tests {
     async fn naming_a_group_makes_it_this_sessions_group() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-earlier", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "new", "groupId": "group-earlier" }),
@@ -2638,7 +2638,7 @@ mod tests {
     async fn naming_a_closed_group_keeps_the_session_grouped() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-live", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "new", "groupId": "group-closed" }),
@@ -2695,7 +2695,7 @@ mod tests {
     async fn borrowing_a_group_keeps_an_earlier_sessions_actual_ownership() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-earlier", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "new", "groupId": "group-earlier" }),
@@ -2773,7 +2773,7 @@ mod tests {
         recorder.seed_group_titled("group-legacy", "codex-mcp-client/legacy-task", [103]);
         recorder.seed_group_titled("group-truncated", "codex-posthog/dashboard", [104]);
         recorder.seed_group_titled("group-theirs", "cowork/research", [102]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         call.view = Some(BrowserView::unbound(browser.clone(), None));
@@ -2812,7 +2812,7 @@ mod tests {
     async fn naming_a_group_suppresses_the_nudge() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "new", "groupId": "group-earlier" }),
@@ -2835,7 +2835,7 @@ mod tests {
     async fn a_session_that_already_has_a_group_gets_no_nudge() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group_titled("group-earlier", "codex/invoice-run", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         call.view = Some(BrowserView::unbound(browser.clone(), None));
@@ -2855,7 +2855,7 @@ mod tests {
     async fn no_group_of_this_clients_own_means_no_nudge() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group_titled("group-theirs", "cowork/research", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         call.view = Some(BrowserView::unbound(browser.clone(), None));
@@ -2878,7 +2878,7 @@ mod tests {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-earlier", [101]);
         recorder.fail_list(true);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "new", "groupId": "group-earlier" }),
@@ -2928,7 +2928,7 @@ mod tests {
     async fn a_page_another_client_holds_is_left_alone() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-shared", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "new", "groupId": "group-shared" }),
@@ -2977,7 +2977,7 @@ mod tests {
     async fn borrowing_a_group_keeps_claims_even_when_the_owner_is_retired() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-orphan", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call = crate::api::mcp::test_support::tool_call(
             "tabs",
             json!({ "action": "new", "groupId": "group-orphan" }),
@@ -3013,7 +3013,7 @@ mod tests {
     async fn omitting_the_group_id_leaves_the_existing_group_alone() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.seed_group("group-1", [101]);
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         let mut call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         call.view = Some(BrowserView::unbound(browser.clone(), None));
@@ -3048,7 +3048,7 @@ mod tests {
     #[tokio::test]
     async fn concurrent_first_pages_share_one_created_group() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
-        let browser = BrowserSession::new(recorder.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder.clone());
         assert_eq!(browser.pages.list().await?.len(), 2);
         let mut first_call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
@@ -3451,7 +3451,7 @@ mod tests {
     async fn each_group_dispatch_uses_the_shared_timeout() -> anyhow::Result<()> {
         let recorder = Arc::new(GroupDispatchRecorder::new());
         recorder.block_group_creation();
-        let browser = BrowserSession::new(recorder, BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(recorder);
         assert_eq!(browser.pages.list().await?.len(), 2);
         let call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;

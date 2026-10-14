@@ -1,8 +1,8 @@
 //! Immutable execution views over a shared browser runtime. Task hosts own logical binding;
 //! views capture it once and keep management callable even when normal admission fails.
 use crate::{
-    BrowserContextId, BrowserProfileId, BrowserSession, CoreError, PageId, SessionId, TabId,
-    TargetError, WindowId,
+    BrowserContextId, BrowserProfileId, BrowserSession, CoreError, NativeCapabilities,
+    NativeFeature, PageId, SessionId, TabId, TargetError, WindowId,
 };
 use crate::{
     input::Input,
@@ -82,6 +82,10 @@ pub trait PageAdmission: Send + Sync {
 pub struct BrowserView {
     session: Arc<BrowserSession>,
     binding: Option<TargetBinding>,
+    /// A saved binding this view did not apply because the native browser lacks profile
+    /// targeting. Routing is unbound; hosts only disclose it, and it stays persisted so a
+    /// capable browser retries it later.
+    unapplied: Option<TargetBinding>,
     capture: Result<Option<CapturedScope>, TargetError>,
     unbound_default_window: Option<WindowId>,
     signals: Arc<PageSignals>,
@@ -212,6 +216,14 @@ impl BrowserView {
     ) -> Self {
         let mut view = Self::unbound(session, unbound_default_window);
         if let Some(binding) = binding {
+            // Older natives cannot honor a binding saved on a newer browser. Keep ordinary work
+            // running with the unbound routing those natives always had, send no getProfiles,
+            // and leave the binding for disclosure. A capable browser retries it on a later
+            // capture, where stale process-lifetime handles still fail closed below.
+            if !view.supports(NativeFeature::ProfileTargeting) {
+                view.unapplied = Some(binding);
+                return view;
+            }
             // No lock or host store is retained. Rebinding later cannot change this call's context
             // or chosen placement; a failed capture still carries the intent for management.
             view.capture = view
@@ -254,6 +266,7 @@ impl BrowserView {
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             session,
             binding: None,
+            unapplied: None,
             capture: Ok(None),
             unbound_default_window,
         }
@@ -269,6 +282,21 @@ impl BrowserView {
     }
     pub fn admission_error(&self) -> Option<&TargetError> {
         self.capture.as_ref().err()
+    }
+    /// The saved binding capture left unapplied on a native without profile targeting.
+    pub fn unapplied_binding(&self) -> Option<&TargetBinding> {
+        self.unapplied.as_ref()
+    }
+    #[must_use]
+    pub fn native(&self) -> NativeCapabilities {
+        self.session.native()
+    }
+    #[must_use]
+    pub fn supports(&self, feature: NativeFeature) -> bool {
+        self.session.native().supports(feature)
+    }
+    pub fn require(&self, feature: NativeFeature) -> Result<(), CoreError> {
+        self.session.native().require(feature)
     }
 
     /// Derive before spawning creation follow-up work, then carry this same view through every
@@ -396,7 +424,10 @@ impl BrowserView {
         Ok(())
     }
 
+    /// Every profile management path (load, resolve, status) reads the catalog here first,
+    /// so this is where an unsupported native is refused before `Browser.getProfiles`.
     pub async fn list_profiles(&self) -> Result<Vec<BrowserProfileInfo>, CoreError> {
+        self.require(NativeFeature::ProfileTargeting)?;
         #[derive(Deserialize)]
         struct Reply {
             profiles: Vec<BrowserProfileInfo>,
@@ -497,6 +528,9 @@ impl BrowserView {
         &self,
         window: WindowSelection,
     ) -> Result<TargetIntent, CoreError> {
+        // Older natives' windows lack the identity sidecar; refuse as unsupported rather
+        // than reporting every window as ineligible.
+        self.require(NativeFeature::ProfileTargeting)?;
         let windows = self.read_windows().await?;
         let native = windows
             .iter()
@@ -839,6 +873,11 @@ impl BrowserView {
         url: &str,
         mut opts: NewPageOptions,
     ) -> Result<PageInfo, CoreError> {
+        // An explicit context asks createTab for profile routing, the same gated behavior the
+        // raw guard refuses; older natives would ignore it and open in the last-active window.
+        if opts.browser_context_id.is_some() {
+            self.require(NativeFeature::ProfileTargeting)?;
+        }
         let Some(scope) = self.scope()? else {
             if self.expected_created_page.is_some() {
                 return Err(cdp_policy::unsupported("Browser.createTab"));
@@ -1012,6 +1051,9 @@ impl BrowserView {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CoreError> {
+        // Raw CDP passes the native gate before any routing. Only methods and (method,
+        // parameter) pairs a FEATURES row lists can be refused; internal calls never send them.
+        self.native().check_raw(method, &params)?;
         if self.scope()?.is_none() {
             if self.expected_created_page.is_some() {
                 // An unbound creation callback remains global in routing, but it cannot
@@ -1044,6 +1086,7 @@ impl BrowserView {
         method: &str,
         params_json: &str,
     ) -> Result<String, CoreError> {
+        self.native().check_raw_json(method, params_json)?;
         if self.epoch_guard()?.is_none() {
             return self
                 .session

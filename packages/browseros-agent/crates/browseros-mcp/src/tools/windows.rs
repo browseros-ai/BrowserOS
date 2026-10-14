@@ -7,7 +7,8 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const DESCRIPTION: &str = "Manage browser windows: list, create, or close. This is separate from browser_profiles discovery/loading and browser_target task selection. Bound calls include normal windows of the selected regular profile only. create requires a loaded profile and opens an inactive normal window; a strict pin rejects creation with pinned_window_restricts. Without a binding, existing browser-wide behavior applies.";
+const DESCRIPTION: &str = "Manage browser windows: list, create, or close.";
+const PROFILE_NOTE: &str = "This is separate from browser_profiles discovery/loading and browser_target task selection. Bound calls include normal windows of the selected regular profile only. create requires a loaded profile and opens an inactive normal window; a strict pin rejects creation with pinned_window_restricts. Without a binding, existing browser-wide behavior applies.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -30,12 +31,15 @@ struct WindowsArgs {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<WindowsArgs>(
-        "windows",
-        DESCRIPTION,
-        Some(super::open_world_annotations()),
-        handler,
-    )
+    crate::framework::ToolDef {
+        feature_note: super::profile_note(PROFILE_NOTE),
+        ..super::def::<WindowsArgs>(
+            "windows",
+            DESCRIPTION,
+            Some(super::open_world_annotations()),
+            handler,
+        )
+    }
 }
 
 fn handler<'a>(
