@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/profiles/profile_manager.cc b/chrome/browser/profiles/profile_manager.cc
-index 5856f418248ac92b8e695c1bfe54ad1ab13b1360..fc7f22eb39dd9cd8c9bc41287737b0219a014ac3 100644
+index 5856f418248ac92b8e695c1bfe54ad1ab13b1360..271189f5849b8eec6486f6dea6fd03dec74e1a31 100644
 --- a/chrome/browser/profiles/profile_manager.cc
 +++ b/chrome/browser/profiles/profile_manager.cc
-@@ -832,10 +832,48 @@ bool ProfileManager::LoadProfileByPath(const base::FilePath& profile_path,
+@@ -832,6 +832,64 @@ bool ProfileManager::LoadProfileByPath(const base::FilePath& profile_path,
    return true;
  }
  
@@ -10,9 +10,11 @@ index 5856f418248ac92b8e695c1bfe54ad1ab13b1360..fc7f22eb39dd9cd8c9bc41287737b021
 +    const base::FilePath& profile_path,
 +    base::OnceCallback<void(Profile*, bool)> callback) {
 +  DCHECK_CURRENTLY_ON(BrowserThread::UI);
-+  // Decide ownership only after startup/unloading deferrals. Counting a
-+  // preflight request as the owner could report a new load when another
-+  // Chromium caller initializes the profile before the deferred call runs.
++  // Mirror CreateProfileAsync's startup/unloading deferrals before deciding
++  // ownership. Counting a deferred request as the owner could report a new
++  // load when another Chromium caller initializes the profile first. After
++  // this point the stock CreateProfileAsync call below runs in this same task,
++  // so its own deferral branches cannot fire.
 +  if (defer_async_loading_) {
 +    deferred_asynchronous_loads_.push_back(base::BindOnce(
 +        &ProfileManager::LoadExistingProfileByPath, base::Unretained(this),
@@ -26,12 +28,32 @@ index 5856f418248ac92b8e695c1bfe54ad1ab13b1360..fc7f22eb39dd9cd8c9bc41287737b021
 +        profile_path, std::move(callback)));
 +    return;
 +  }
-+  if (!GetProfileAttributesStorage().GetProfileAttributesWithPath(
++  if (!CanCreateProfileAtPath(profile_path) ||
++      !GetProfileAttributesStorage().GetProfileAttributesWithPath(
 +          profile_path)) {
 +    std::move(callback).Run(nullptr, false);
 +    return;
 +  }
 +  const bool newly_loaded = !profiles_info_.contains(profile_path);
++  if (newly_loaded) {
++    // Start the load here rather than in CreateProfileAsync, whose
++    // CreateProfileAsyncHelper creates a missing directory. Like the stock
++    // path, register the Profile before any callback is enqueued: its prefs
++    // load asynchronously, so OnProfileCreationFinished cannot run before
++    // CreateProfileAsync below appends to init_callbacks.
++    std::unique_ptr<Profile> profile = Profile::CreateProfile(
++        profile_path, this, Profile::CreateMode::kAsynchronous,
++        /*create_if_missing=*/false);
++    if (!profile) {
++      std::move(callback).Run(nullptr, false);
++      return;
++    }
++    RegisterOwnedProfile(std::move(profile));
++  }
++  // Join through the stock path, which finds the registered ProfileInfo and
++  // either runs the callback now (already initialized) or queues it until
++  // OnProfileCreationFinished. Only the call that registered above reports
++  // `newly_loaded`; joining another caller's load reports false.
 +  CreateProfileAsync(profile_path,
 +                     base::BindOnce(
 +                         [](base::OnceCallback<void(Profile*, bool)> callback,
@@ -39,73 +61,9 @@ index 5856f418248ac92b8e695c1bfe54ad1ab13b1360..fc7f22eb39dd9cd8c9bc41287737b021
 +                           std::move(callback).Run(profile,
 +                                                   profile && newly_loaded);
 +                         },
-+                         std::move(callback), newly_loaded),
-+                     {}, /*create_if_missing=*/false);
++                         std::move(callback), newly_loaded));
 +}
 +
  void ProfileManager::CreateProfileAsync(
      const base::FilePath& profile_path,
      base::OnceCallback<void(Profile*)> initialized_callback,
--    base::OnceCallback<void(Profile*)> created_callback) {
-+    base::OnceCallback<void(Profile*)> created_callback,
-+    bool create_if_missing) {
-   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-   TRACE_EVENT1("browser,startup", "ProfileManager::CreateProfileAsync",
-                "profile_path", profile_path.AsUTF8Unsafe());
-@@ -846,7 +884,7 @@ void ProfileManager::CreateProfileAsync(
-     deferred_asynchronous_loads_.push_back(base::BindOnce(
-         &ProfileManager::CreateProfileAsync, base::Unretained(this),
-         profile_path, std::move(initialized_callback),
--        std::move(created_callback)));
-+        std::move(created_callback), create_if_missing));
-     return;
-   }
- 
-@@ -857,11 +895,14 @@ void ProfileManager::CreateProfileAsync(
-     pending_it->second.push_back(base::BindOnce(
-         &ProfileManager::CreateProfileAsync, weak_factory_.GetWeakPtr(),
-         profile_path, std::move(initialized_callback),
--        std::move(created_callback)));
-+        std::move(created_callback), create_if_missing));
-     return;
-   }
- 
--  if (!CanCreateProfileAtPath(profile_path)) {
-+  if (!CanCreateProfileAtPath(profile_path) ||
-+      (!create_if_missing &&
-+       !GetProfileAttributesStorage().GetProfileAttributesWithPath(
-+           profile_path))) {
-     if (!initialized_callback.is_null()) {
-       std::move(initialized_callback).Run(nullptr);
-     }
-@@ -876,7 +917,19 @@ void ProfileManager::CreateProfileAsync(
-     info = iter->second.get();
-   } else {
-     // Initiate asynchronous creation process.
--    info = RegisterOwnedProfile(CreateProfileAsyncHelper(profile_path));
-+    std::unique_ptr<Profile> profile =
-+        create_if_missing
-+            ? CreateProfileAsyncHelper(profile_path)
-+            : Profile::CreateProfile(profile_path, this,
-+                                     Profile::CreateMode::kAsynchronous,
-+                                     /*create_if_missing=*/false);
-+    if (!profile) {
-+      if (!initialized_callback.is_null()) {
-+        std::move(initialized_callback).Run(nullptr);
-+      }
-+      return;
-+    }
-+    info = RegisterOwnedProfile(std::move(profile));
-   }
- 
-   // Call or enqueue the callback.
-@@ -1095,7 +1148,8 @@ void ProfileManager::CreateMultiProfileAsync(
-                      base::BindOnce(&ProfileManager::CreateProfileAsync,
-                                     profile_manager->weak_factory_.GetWeakPtr(),
-                                     new_path, std::move(initialized_callback),
--                                    std::move(created_callback))));
-+                                    std::move(created_callback),
-+                                    /*create_if_missing=*/true)));
- }
- #endif  // !BUILDFLAG(IS_ANDROID)
- 
