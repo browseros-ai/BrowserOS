@@ -432,7 +432,13 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             run.travelled = true;
         }
 
-        let after = driver.observe().await.ok();
+        // Looks, and if nothing moved, keeps looking for a moment: a control
+        // whose effect is delayed is indistinguishable from a dead one at the
+        // instant the act returns.
+        let after = match driver.observe().await {
+            Ok(fresh) => Some(look_for_a_change(driver, before, fresh).await),
+            Err(_) => None,
+        };
         let changed = after
             .as_ref()
             .is_some_and(|view| view.fingerprint != before);
@@ -467,6 +473,53 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         }
         last = after.or(Some(view));
     }
+}
+
+/// How long to keep looking for a change the page has not made yet.
+///
+/// Only ever spent on the unchanged path, which is the path that otherwise
+/// retires a control that worked.
+const SLOW_PAGE_PATIENCE: Duration = Duration::from_millis(1_500);
+/// How often to look while waiting for that change.
+const SLOW_PAGE_POLL: Duration = Duration::from_millis(150);
+
+/// Looks again until the page differs from what it was, or patience runs out.
+///
+/// The settle inside `observe` answers "has this page stopped changing", which
+/// is the wrong question for a control whose effect is delayed. A page that has
+/// not begun reacting is perfectly quiet, so a quiet check returns at once and
+/// the loop reads the move as having done nothing.
+///
+/// Measured against a button whose panel appears 400ms after the click: the act
+/// tool returns in under 10ms, the page is quiet when the settle looks, and the
+/// settle returns immediately. The loop then saw an unchanged page and retired
+/// a control that worked perfectly.
+///
+/// "Has it started" is a question only the loop can ask, because the
+/// fingerprint from before the act lives here. So the waiting lives here too,
+/// and the driver keeps its two methods.
+async fn look_for_a_change<D: Driver>(driver: &D, before: u64, view: PageView) -> PageView {
+    if view.fingerprint != before {
+        return view;
+    }
+    let until = Instant::now() + SLOW_PAGE_PATIENCE;
+    let mut latest = view;
+    while Instant::now() < until {
+        tokio::time::sleep(SLOW_PAGE_POLL).await;
+        match driver.observe().await {
+            Ok(fresh) => {
+                let moved = fresh.fingerprint != before;
+                latest = fresh;
+                if moved {
+                    break;
+                }
+            }
+            // A page that cannot be read is not a page that did not change, so
+            // the view in hand is the honest answer.
+            Err(_) => break,
+        }
+    }
+    latest
 }
 
 /// One decision, the batch of the page it was decided against, and what

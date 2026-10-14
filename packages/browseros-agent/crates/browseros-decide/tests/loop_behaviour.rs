@@ -138,11 +138,16 @@ struct Fake {
     ran: RefCell<Vec<Move>>,
     /// How many times the loop read the page.
     observed: RefCell<usize>,
+    /// The look at which a slow control's effect becomes visible.
+    pending: RefCell<Option<usize>>,
     /// References whose click this page swallows: the action reports success
     /// and nothing changes.
     inert: Vec<String>,
     /// Tools this browser does not have.
     missing: Vec<Operation>,
+    /// Controls whose effect appears only after this many further looks, which
+    /// is what a panel behind a timeout looks like from here.
+    slow: Vec<(String, usize)>,
     /// What a report hands back.
     reports: String,
 }
@@ -153,10 +158,19 @@ impl Fake {
             page: RefCell::new(page),
             ran: RefCell::new(Vec::new()),
             observed: RefCell::new(0),
+            pending: RefCell::new(None),
             inert: Vec::new(),
+            slow: Vec::new(),
             missing: Vec::new(),
             reports: "312 points by someone 2 hours ago".to_string(),
         }
+    }
+
+    /// A control that works, late. `after` is how many looks pass before the
+    /// page shows it.
+    fn slow_to_react(mut self, reference: &str, after: usize) -> Self {
+        self.slow.push((reference.to_string(), after));
+        self
     }
 
     fn swallowing(mut self, references: &[&str]) -> Self {
@@ -190,6 +204,17 @@ impl Driver for Fake {
 
     async fn observe(&self) -> Result<PageView, String> {
         *self.observed.borrow_mut() += 1;
+        // A slow control's effect lands on the look it was scheduled for, not
+        // on the one right after the act.
+        let due = *self.pending.borrow();
+        if let Some(due) = due
+            && *self.observed.borrow() >= due
+        {
+            *self.pending.borrow_mut() = None;
+            let mut page = self.page.borrow_mut();
+            page.fingerprint += 1;
+            page.controls.push(control("late", "checkbox", "Brand: Corsair"));
+        }
         Ok(self.page.borrow().clone())
     }
 
@@ -212,6 +237,12 @@ impl Driver for Fake {
                     // The click lands, the browser says it worked, and the page
                     // is untouched.
                     return Ok(Performed::Unmoved);
+                }
+                if let Some((_, looks)) = self.slow.iter().find(|(slow, _)| *slow == aimed) {
+                    // The click landed and the page will show it, later. Until
+                    // then it is a perfectly quiet page that looks dead.
+                    *self.pending.borrow_mut() = Some(*self.observed.borrow() + looks);
+                    return Ok(Performed::Moved);
                 }
                 let mut page = self.page.borrow_mut();
                 page.fingerprint += 1;
@@ -737,4 +768,98 @@ async fn looking_again_is_not_one_of_the_moves_offered() {
         operation.contains(&"operation".to_string()),
         "the move question is always asked"
     );
+}
+
+
+/// A button whose panel appears 400ms after the click is indistinguishable
+/// from a dead one at the instant the act returns, and the page is perfectly
+/// quiet in between, so a quiet check returns at once.
+///
+/// Measured live against exactly that button: the act tool returned in under
+/// 10ms, the settle found a quiet page and returned, the loop saw nothing
+/// change, and a control that worked perfectly was retired.
+#[tokio::test]
+async fn a_control_that_works_late_is_not_retired_as_dead() {
+    let browser = Fake::new(page(
+        "https://example.test/",
+        1,
+        vec![control("e1", "button", "Filters")],
+    ))
+    .slow_to_react("e1", 3);
+    let model = Scripted::new(vec![
+        vec![
+            ("operation", spread("ACT", 0.90, 0.02)),
+            ("act_how", spread("CLICK", 0.95, 0.01)),
+            ("target", spread("e1", 0.90, 0.02)),
+        ],
+        vec![("operation", spread("DONE", 0.95, 0.01))],
+    ]);
+    let outcome = advance(&model, &browser, run_for("open the filters")).await;
+    assert_eq!(
+        outcome.retired, 0,
+        "it worked, so nothing should have been set aside"
+    );
+    assert!(
+        outcome.trail.first().is_some_and(|step| step.page_changed),
+        "and the step is recorded as having changed the page"
+    );
+    assert_eq!(outcome.status, Status::Satisfied);
+}
+
+/// The waiting is only ever paid for on the unchanged path, so a page that
+/// reacts at once costs nothing extra.
+#[tokio::test]
+async fn a_page_that_reacts_at_once_is_not_waited_on() {
+    let browser = Fake::new(page(
+        "https://example.test/",
+        1,
+        vec![control("e1", "link", "Open it")],
+    ));
+    let model = Scripted::new(vec![
+        vec![
+            ("operation", spread("ACT", 0.90, 0.02)),
+            ("act_how", spread("CLICK", 0.95, 0.01)),
+            ("target", spread("e1", 0.90, 0.02)),
+        ],
+        vec![("operation", spread("DONE", 0.95, 0.01))],
+    ]);
+    let began = std::time::Instant::now();
+    let outcome = advance(&model, &browser, run_for("open it")).await;
+    assert_eq!(outcome.status, Status::Satisfied);
+    assert_eq!(browser.observes(), 2, "no extra looks were needed");
+    assert!(
+        began.elapsed() < Duration::from_millis(100),
+        "and no time was spent waiting for a change that had already happened"
+    );
+}
+
+/// A control that genuinely does nothing still gets retired, after the wait
+/// rather than instead of it.
+#[tokio::test]
+async fn a_dead_control_is_still_retired_once_the_waiting_is_done() {
+    let browser = Fake::new(page(
+        "https://example.test/",
+        1,
+        vec![
+            control("e1", "link", "Swallows clicks"),
+            control("e2", "link", "Works"),
+        ],
+    ))
+    .swallowing(&["e1"]);
+    let model = Scripted::new(vec![
+        vec![
+            ("operation", spread("ACT", 0.90, 0.02)),
+            ("act_how", spread("CLICK", 0.95, 0.01)),
+            ("target", spread("e1", 0.90, 0.02)),
+        ],
+        vec![
+            ("operation", spread("ACT", 0.90, 0.02)),
+            ("act_how", spread("CLICK", 0.95, 0.01)),
+            ("target", spread("e2", 0.90, 0.02)),
+        ],
+        vec![("operation", spread("DONE", 0.95, 0.01))],
+    ]);
+    let outcome = advance(&model, &browser, run_for("open something")).await;
+    assert_eq!(outcome.retired, 1, "the dead one was set aside");
+    assert_eq!(browser.targets_acted_on(), vec!["e1".to_string(), "e2".to_string()]);
 }
