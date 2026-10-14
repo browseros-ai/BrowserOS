@@ -372,6 +372,14 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
                 .or(Some(Direction::Down));
             return Ok(decision);
         }
+        // A submit aims at nothing the model has to name: the field is the one
+        // the last step typed into, which the loop knows. Returning before the
+        // target head is read is what makes that true, because reading it is
+        // what sets `none_of_these`, and an answer about a question this move
+        // does not depend on must not be able to end the run.
+        if decision.how == Some(How::Submit) {
+            return Ok(decision);
+        }
         // A select carries its control and its value as one option, because a
         // question cannot read another question's answer and so cannot be told
         // which control was chosen.

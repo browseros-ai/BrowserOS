@@ -221,6 +221,10 @@ pub fn ways(space: &ActionSpace, view: &PageView) -> Vec<How> {
             .is_some_and(|control| control.state.editable)
     }) {
         ways.push(How::Fill);
+        // Submitting needs something to have been typed, which needs a field.
+        // Offered on the same condition as filling rather than always, because
+        // an option that cannot run still competes for the answer.
+        ways.push(How::Submit);
     }
     if any(&|candidate| CLICKABLE.contains(&candidate.role.as_str()) || candidate.clickable) {
         ways.push(How::Hover);
@@ -499,7 +503,9 @@ fn roles_for(ways: &[How]) -> Vec<&'static str> {
             How::Click | How::Hover => roles.extend_from_slice(CLICKABLE),
             How::Check | How::Uncheck => roles.extend_from_slice(CHECKABLE),
             How::Fill | How::Select => roles.extend_from_slice(EDITABLE),
-            How::Press | How::Scroll => {}
+            // These aim at the page, or at a field the run already knows, so
+            // they widen the target head to nothing.
+            How::Press | How::Scroll | How::Submit => {}
         }
     }
     if roles.is_empty() {

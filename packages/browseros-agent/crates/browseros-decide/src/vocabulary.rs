@@ -63,6 +63,13 @@ pub enum How {
     /// Needs text. The caller supplies it, so the model picks from a closed set
     /// rather than writing one.
     Fill,
+    /// Submits what a previous step typed.
+    ///
+    /// Aims at nothing the model has to name: the field is the one the run last
+    /// filled, which the loop knows. Sits next to [`How::Fill`] because the
+    /// model is documented as leaning toward a Choice's earlier options, and
+    /// these two are read together.
+    Submit,
     /// Sets a value on a control that has a fixed set of them. Never a click: a
     /// native select draws its options outside the document, so there is
     /// nothing at those coordinates to click.
@@ -229,8 +236,10 @@ impl Operation {
     pub fn description(self) -> &'static str {
         match self {
             Self::Act => {
-                "Do something to one control on this page: click it, type into it, tick it, set a \
-                 dropdown, hover it, press a key on it, or scroll."
+                "Do something to one control on this page: click it, type into it, submit what \
+                 has been typed into it, tick it, set a dropdown, hover it, press a key on it, \
+                 or scroll. Typing a value and then submitting it are two separate acts, so \
+                 choose this again to submit what the last step typed."
             }
             Self::Navigate => {
                 "Move to one of the pages listed for this goal. Choose this when what the goal \
@@ -354,6 +363,7 @@ impl How {
         match self {
             Self::Click => "CLICK",
             Self::Fill => "FILL",
+            Self::Submit => "SUBMIT",
             Self::Select => "SELECT",
             Self::Check => "CHECK",
             Self::Uncheck => "UNCHECK",
@@ -368,6 +378,7 @@ impl How {
         Some(match value {
             "CLICK" => Self::Click,
             "FILL" => Self::Fill,
+            "SUBMIT" => Self::Submit,
             "SELECT" => Self::Select,
             "CHECK" => Self::Check,
             "UNCHECK" => Self::Uncheck,
@@ -385,6 +396,10 @@ impl How {
             Self::Fill => {
                 "Enter text in a field. The caller supplies the text, so choose this only when \
                  typing is what the goal needs next."
+            }
+            Self::Submit => {
+                "Press Enter in the field a previous step typed into, to search for or submit \
+                 what it now holds. This is how a search box is acted on once it has text in it."
             }
             Self::Select => {
                 "Set a dropdown to one of its listed values. Use this for a sort order or any \
@@ -404,7 +419,7 @@ impl How {
     /// Whether this aims at one control rather than at the page.
     #[must_use]
     pub fn needs_control(self) -> bool {
-        self != Self::Scroll
+        !matches!(self, Self::Scroll | Self::Submit)
     }
 
     /// The act tool's kind for this, where one applies.
@@ -413,6 +428,7 @@ impl How {
         match self {
             Self::Click => "click",
             Self::Fill => "fill",
+            Self::Submit => "press",
             Self::Select => "select",
             Self::Check => "check",
             Self::Uncheck => "uncheck",
