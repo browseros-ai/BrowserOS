@@ -675,6 +675,22 @@ fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<
                 filled.value = Some(text);
                 return Some(Move::Act(filled));
             }
+            if how == How::Submit {
+                // The field is the one the previous step typed into, which this
+                // run recorded. Whatever the model named for the target head is
+                // discarded on purpose: that head was not read for a submit and
+                // so was never judged, and acting on an ungated judgement is
+                // what the gate exists to prevent.
+                //
+                // No field recorded leaves the reference unset, which the driver
+                // sends as a bare key press at whatever holds the focus. That is
+                // the behaviour of the implementation this was measured against,
+                // so it is a weaker fallback rather than a new risk.
+                let mut submitting = decision.clone();
+                submitting.target = run.last_acted.clone();
+                submitting.key = Some("Enter".to_string());
+                return Some(Move::Act(submitting));
+            }
             // A select is not the same case. Its value came from the control's
             // own options, flattened into the question as one option per
             // control and value, so it is already the literal thing the page

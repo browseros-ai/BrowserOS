@@ -15,7 +15,7 @@ use browseros_decide::offer::{Destination, NamedValue};
 use browseros_decide::pursue::{Oracle, Status, Stuck, advance};
 use browseros_decide::run::{Budget, Offered, Run};
 use browseros_decide::view::{Control, ControlState, PageView};
-use browseros_decide::vocabulary::Operation;
+use browseros_decide::vocabulary::{How, Operation};
 
 /// A model that answers from a script, so a scenario is written rather than
 /// hoped for.
@@ -943,4 +943,90 @@ async fn a_selects_own_value_is_passed_through_untouched() {
         })
         .collect();
     assert_eq!(chosen, vec!["Price: Low to High".to_string()]);
+}
+
+/// The amazon.in case, replayed. A run typed the caller's search term into the
+/// box and then had no way to search with it, so the step that should have
+/// submitted was asked which of 254 controls to aim at and answered that none
+/// of them would do, which ended the run one move from working.
+///
+/// The second turn here answers `none_of_these` on the target head on purpose:
+/// that is what the live model answered, and this passes only if that answer no
+/// longer decides anything for a submit.
+#[tokio::test]
+async fn a_run_that_typed_can_submit_what_it_typed() {
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![
+            control("e1", "searchbox", "Search Amazon.in"),
+            control("e2", "button", "Go"),
+            control("e3", "link", "Today's Deals"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![
+        vec![
+            ("operation", choice("ACT", 0.95)),
+            ("act_how", choice("FILL", 0.95)),
+            ("target", choice("e1", 0.95)),
+            ("fill_value", choice("search term", 0.95)),
+        ],
+        vec![
+            ("operation", choice("ACT", 0.95)),
+            ("act_how", choice("SUBMIT", 0.95)),
+            ("target", choice("none_of_these", 0.95)),
+        ],
+        vec![("operation", choice("DONE", 0.95))],
+    ]);
+    let run = run_for("search for sensodyne toothpaste and add it to the cart").offering(Offered {
+        values: vec![NamedValue::new("search term", "sensodyne toothpaste")],
+        ..Offered::default()
+    });
+
+    let outcome = advance(&oracle, &driver, run).await;
+
+    assert_eq!(
+        outcome.status,
+        Status::Satisfied,
+        "a submit must not be ended by an answer about the target head"
+    );
+
+    let acted: Vec<_> = driver
+        .ran()
+        .into_iter()
+        .filter_map(|act| match act {
+            Move::Act(decision) => Some(decision),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(acted.len(), 2, "the fill and the submit both ran");
+    assert_eq!(acted[0].how, Some(How::Fill));
+    assert_eq!(
+        acted[0].value.as_deref(),
+        Some("sensodyne toothpaste"),
+        "the caller's text is typed, not the name it was filed under"
+    );
+
+    assert_eq!(acted[1].how, Some(How::Submit));
+    assert_eq!(
+        acted[1].target.as_deref(),
+        Some("e1"),
+        "the field comes from what the last step filled, not from the answer"
+    );
+    assert_eq!(acted[1].key.as_deref(), Some("Enter"));
+
+    assert_eq!(
+        outcome.retired, 0,
+        "submitting is not aiming at the same control twice, so nothing is set aside"
+    );
+
+    // The target head is still asked on this step, because one request cannot
+    // know the answer to `act_how` before it is built. It is asked and not read,
+    // which is the whole of the fix.
+    let heads = oracle.heads_asked();
+    assert!(
+        heads[1].contains(&"target".to_string()),
+        "the target head is still asked, it is simply not read for a submit"
+    );
 }
