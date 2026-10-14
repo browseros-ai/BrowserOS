@@ -10,7 +10,7 @@ import (
 	"browseros-dogfood/config"
 )
 
-func writeSignedBundle(t *testing.T, bundleVersion string) string {
+func writeStampedBundle(t *testing.T, bundleVersion string) string {
 	t.Helper()
 	contents := filepath.Join(t.TempDir(), "BrowserOS neo.app", "Contents")
 	if err := os.MkdirAll(filepath.Join(contents, "MacOS"), 0o755); err != nil {
@@ -25,7 +25,7 @@ func writeSignedBundle(t *testing.T, bundleVersion string) string {
 	return filepath.Join(contents, "MacOS", "BrowserOS neo")
 }
 
-func TestDogfoodSidecarRecordsOnlySignedNativeVersions(t *testing.T) {
+func TestDogfoodSidecarRecordsOnlyReleaseStampedVersions(t *testing.T) {
 	if _, err := exec.LookPath("plutil"); err != nil {
 		t.Skip("plutil is only available on macOS")
 	}
@@ -36,7 +36,7 @@ func TestDogfoodSidecarRecordsOnlySignedNativeVersions(t *testing.T) {
 		cfg := config.Config{
 			DevUserDataDir:   t.TempDir(),
 			BrowserOSDir:     "/tmp/browseros-dogfood",
-			BrowserOSAppPath: writeSignedBundle(t, bundleVersion),
+			BrowserOSAppPath: writeStampedBundle(t, bundleVersion),
 			Ports:            config.Ports{CDP: 9015, Server: 9115, Extension: 9315},
 		}
 		path := dogfoodSidecarConfigPath(cfg)

@@ -12,7 +12,7 @@ type SidecarConfigOptions struct {
 	ResourcesDir string
 	ExecutionDir string
 	// BrowserBinary is the browser the server will drive, when the launcher knows it. Its
-	// signed bundle stamp becomes instance.browseros_version; see NativeBrowserOSVersion.
+	// release bundle stamp becomes instance.browseros_version; see NativeBrowserOSVersion.
 	BrowserBinary string
 }
 

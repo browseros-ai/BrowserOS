@@ -2528,3 +2528,34 @@ async fn capable_native_retries_a_retained_binding_with_live_checks() -> TestRes
     assert!(stale.unapplied_binding().is_none());
     Ok(())
 }
+
+#[tokio::test]
+async fn typed_tab_creation_with_a_context_needs_profile_targeting() -> TestResult {
+    // The typed API reaches the same gated createTab routing as raw CDP, so it is refused the
+    // same way; creation without a context keeps working on the older native.
+    let native = Native::new();
+    let view = BrowserView::unbound(
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            native_version("0.51.1.2"),
+        ),
+        None,
+    );
+    let contextual = NewPageOptions {
+        browser_context_id: Some(BrowserContextId("live-eng".into())),
+        ..NewPageOptions::default()
+    };
+    code(
+        view.new_page("https://new.test/", contextual)
+            .await
+            .err()
+            .ok_or("context creation sent")?,
+        "native_feature_unavailable",
+    );
+    assert!(native.calls("Browser.createTab").is_empty());
+    view.new_page("https://new.test/", NewPageOptions::default())
+        .await?;
+    assert_eq!(native.calls("Browser.createTab").len(), 1);
+    Ok(())
+}

@@ -873,6 +873,11 @@ impl BrowserView {
         url: &str,
         mut opts: NewPageOptions,
     ) -> Result<PageInfo, CoreError> {
+        // An explicit context asks createTab for profile routing, the same gated behavior the
+        // raw guard refuses; older natives would ignore it and open in the last-active window.
+        if opts.browser_context_id.is_some() {
+            self.require(NativeFeature::ProfileTargeting)?;
+        }
         let Some(scope) = self.scope()? else {
             if self.expected_created_page.is_some() {
                 return Err(cdp_policy::unsupported("Browser.createTab"));

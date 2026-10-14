@@ -24,7 +24,7 @@ func writeBundle(t *testing.T, bundleVersion string) string {
 	return filepath.Join(contents, "MacOS", "BrowserOS neo")
 }
 
-func TestNativeBrowserOSVersionTrustsOnlySignedStamps(t *testing.T) {
+func TestNativeBrowserOSVersionTrustsOnlyReleaseStamps(t *testing.T) {
 	if _, err := exec.LookPath("plutil"); err != nil {
 		t.Skip("plutil is only available on macOS")
 	}
