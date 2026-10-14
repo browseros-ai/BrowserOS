@@ -15,8 +15,8 @@
 
 use crate::gate::Decision;
 use crate::offer::Destination;
-use crate::vocabulary::Operation;
 use crate::view::PageView;
+use crate::vocabulary::Operation;
 
 /// Where a run may go, and whether it takes this page with it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -147,7 +147,11 @@ impl std::fmt::Display for ActError {
             Self::Refused(what) => write!(formatter, "{what}"),
             Self::Unreachable(what) => write!(formatter, "could not reach the browser: {what}"),
             Self::NotOffered(operation) => {
-                write!(formatter, "this browser does not offer {}", operation.as_str())
+                write!(
+                    formatter,
+                    "this browser does not offer {}",
+                    operation.as_str()
+                )
             }
         }
     }

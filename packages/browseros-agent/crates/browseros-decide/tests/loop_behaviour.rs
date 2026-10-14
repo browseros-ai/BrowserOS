@@ -213,7 +213,8 @@ impl Driver for Fake {
             *self.pending.borrow_mut() = None;
             let mut page = self.page.borrow_mut();
             page.fingerprint += 1;
-            page.controls.push(control("late", "checkbox", "Brand: Corsair"));
+            page.controls
+                .push(control("late", "checkbox", "Brand: Corsair"));
         }
         Ok(self.page.borrow().clone())
     }
@@ -293,7 +294,12 @@ async fn a_control_that_swallows_its_click_is_retired_and_the_next_one_is_tried(
         vec![("operation", choice("DONE", 0.95))],
     ]);
 
-    let outcome = advance(&oracle, &driver, run_for("open the Floyd-Steinberg article")).await;
+    let outcome = advance(
+        &oracle,
+        &driver,
+        run_for("open the Floyd-Steinberg article"),
+    )
+    .await;
 
     assert_eq!(outcome.status, Status::Satisfied);
     assert_eq!(
@@ -436,7 +442,10 @@ async fn a_run_the_gate_keeps_declining_stops() {
     let view = page(
         "https://example.test/",
         1,
-        vec![control("e1", "link", "Something"), control("e2", "link", "Else")],
+        vec![
+            control("e1", "link", "Something"),
+            control("e2", "link", "Else"),
+        ],
     );
     let driver = Fake::new(view);
     let unsure = vec![
@@ -574,7 +583,10 @@ async fn the_outcome_reports_what_actually_happened() {
     let view = page(
         "https://example.test/start",
         1,
-        vec![control("e1", "link", "Go"), control("e2", "link", "Elsewhere")],
+        vec![
+            control("e1", "link", "Go"),
+            control("e2", "link", "Elsewhere"),
+        ],
     );
     let driver = Fake::new(view);
     let oracle = Scripted::new(vec![
@@ -596,7 +608,6 @@ async fn the_outcome_reports_what_actually_happened() {
     assert!(outcome.url_after.contains("after-e1"));
     assert_eq!(outcome.input_tokens, 2_000, "both decisions are billed");
 }
-
 
 /// The loop used to read the page twice per step: once at the top and once
 /// after acting, with nothing touching it in between. A snapshot is the most
@@ -694,10 +705,7 @@ async fn a_batch_that_settles_stops_the_search() {
         "three batches existed and one answer settled it, so two questions were \
          asked in total rather than four"
     );
-    assert_eq!(
-        outcome.batches, 2,
-        "and the run says how many it paid for"
-    );
+    assert_eq!(outcome.batches, 2, "and the run says how many it paid for");
 }
 
 /// The measured case the margin gate exists for, driven end to end: an answer
@@ -769,7 +777,6 @@ async fn looking_again_is_not_one_of_the_moves_offered() {
         "the move question is always asked"
     );
 }
-
 
 /// A button whose panel appears 400ms after the click is indistinguishable
 /// from a dead one at the instant the act returns, and the page is perfectly
@@ -861,9 +868,11 @@ async fn a_dead_control_is_still_retired_once_the_waiting_is_done() {
     ]);
     let outcome = advance(&model, &browser, run_for("open something")).await;
     assert_eq!(outcome.retired, 1, "the dead one was set aside");
-    assert_eq!(browser.targets_acted_on(), vec!["e1".to_string(), "e2".to_string()]);
+    assert_eq!(
+        browser.targets_acted_on(),
+        vec!["e1".to_string(), "e2".to_string()]
+    );
 }
-
 
 /// The model picks a value by name, because a name is something it can choose
 /// between and a string is something it cannot write. The name must not be what

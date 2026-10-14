@@ -77,7 +77,11 @@ pub fn lead(response: &Response, head: &str) -> Lead {
         return Lead::default();
     };
     let share = answer.confidence.unwrap_or(0.0);
-    let undistributed = Lead { margin: share, share, distributed: false };
+    let undistributed = Lead {
+        margin: share,
+        share,
+        distributed: false,
+    };
     let Some(probabilities) = &answer.probabilities else {
         return undistributed;
     };
@@ -88,8 +92,16 @@ pub fn lead(response: &Response, head: &str) -> Lead {
         [] => undistributed,
         // One option is not a judgement: there was nothing it could have lost
         // to, so its share is all there is to go on.
-        [only] => Lead { margin: *only, share: *only, distributed: false },
-        [top, second, ..] => Lead { margin: top - second, share: *top, distributed: true },
+        [only] => Lead {
+            margin: *only,
+            share: *only,
+            distributed: false,
+        },
+        [top, second, ..] => Lead {
+            margin: top - second,
+            share: *top,
+            distributed: true,
+        },
     }
 }
 
@@ -173,7 +185,11 @@ impl Decision {
             operation: Operation::Act,
             // Not a judgement, so it carries no uncertainty for the gate to
             // weigh. The gate is not consulted for it either.
-            operation_lead: Lead { margin: 1.0, share: 1.0, distributed: true },
+            operation_lead: Lead {
+                margin: 1.0,
+                share: 1.0,
+                distributed: true,
+            },
             how: Some(How::Scroll),
             how_lead: None,
             target: None,
@@ -203,8 +219,7 @@ impl Decision {
     /// Whether this decision needs something chosen alongside it.
     #[must_use]
     pub fn needs_target(&self) -> bool {
-        self.aims_at_a_control()
-            || matches!(self.operation, Operation::Navigate | Operation::Tabs)
+        self.aims_at_a_control() || matches!(self.operation, Operation::Navigate | Operation::Tabs)
     }
 
     /// Every judgement the execution of this decision depends on.
@@ -694,7 +709,10 @@ mod tests {
     #[test]
     fn noise_cancellation_does_not_raise_the_bar() {
         let listing = "SONY WH-1000XM5 Wireless Noise Cancellation Headphones";
-        assert_eq!(verdict(&clicking(0.80), Some(listing), None), Verdict::Execute);
+        assert_eq!(
+            verdict(&clicking(0.80), Some(listing), None),
+            Verdict::Execute
+        );
     }
 
     #[test]
@@ -786,12 +804,25 @@ mod tests {
     fn a_landslide_over_many_options_runs_where_an_absolute_bar_refused_it() {
         let mut spread_out: Vec<(&str, f64)> = vec![("ACT", 0.63), ("WAIT", 0.11)];
         // Nine more sharing what is left, so no single one is the runner-up.
-        for name in ["READ", "GREP", "COUNT", "BACK", "RELOAD", "NAVIGATE", "DONE", "BLOCKED", "SCREENSHOT"] {
+        for name in [
+            "READ",
+            "GREP",
+            "COUNT",
+            "BACK",
+            "RELOAD",
+            "NAVIGATE",
+            "DONE",
+            "BLOCKED",
+            "SCREENSHOT",
+        ] {
             spread_out.push((name, 0.26 / 9.0));
         }
         let decision = read(&response(&[
             (OPERATION, spread(spread_out[0].0, &spread_out)),
-            (ACT_HOW, spread("CLICK", &[("CLICK", 0.91), ("HOVER", 0.05)])),
+            (
+                ACT_HOW,
+                spread("CLICK", &[("CLICK", 0.91), ("HOVER", 0.05)]),
+            ),
             (TARGET, spread("e30", &[("e30", 0.74), ("e12", 0.08)])),
         ]))
         .expect("reads");
@@ -845,7 +876,10 @@ mod tests {
         let narrow = |target: &str| {
             read(&response(&[
                 (OPERATION, spread("ACT", &[("ACT", 0.80), ("WAIT", 0.05)])),
-                (ACT_HOW, spread("CLICK", &[("CLICK", 0.95), ("HOVER", 0.01)])),
+                (
+                    ACT_HOW,
+                    spread("CLICK", &[("CLICK", 0.95), ("HOVER", 0.01)]),
+                ),
                 (TARGET, spread(target, &[(target, 0.60), ("e9", 0.25)])),
             ]))
             .expect("reads")
@@ -884,7 +918,10 @@ mod tests {
     fn purchase_is_treated_as_expensive() {
         let decision = read(&response(&[
             (OPERATION, spread("ACT", &[("ACT", 0.80), ("WAIT", 0.05)])),
-            (ACT_HOW, spread("CLICK", &[("CLICK", 0.95), ("HOVER", 0.01)])),
+            (
+                ACT_HOW,
+                spread("CLICK", &[("CLICK", 0.95), ("HOVER", 0.01)]),
+            ),
             (TARGET, spread("e1", &[("e1", 0.60), ("e9", 0.25)])),
         ]))
         .expect("reads");
@@ -893,5 +930,4 @@ mod tests {
         };
         assert_eq!(why, Handback::TooRiskyToGuess);
     }
-
 }

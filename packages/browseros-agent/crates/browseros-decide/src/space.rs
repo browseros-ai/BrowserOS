@@ -726,7 +726,12 @@ mod tests {
             "Price: Low to High".to_string(),
             "Newest".to_string(),
         ];
-        let space = ActionSpace::build(&view_with(vec![sort]), "sort by price low to high", None, &[]);
+        let space = ActionSpace::build(
+            &view_with(vec![sort]),
+            "sort by price low to high",
+            None,
+            &[],
+        );
         let options = space.select_options();
         assert_eq!(options.len(), 3);
         assert!(options.contains_key("e9::Price: Low to High"));
@@ -862,7 +867,13 @@ mod tests {
     #[test]
     fn a_pagination_control_at_the_bottom_of_a_long_page_is_still_offered() {
         let mut controls: Vec<Control> = (0..200)
-            .map(|index| control(&format!("e{index}"), "link", &format!("Story number {index}")))
+            .map(|index| {
+                control(
+                    &format!("e{index}"),
+                    "link",
+                    &format!("Story number {index}"),
+                )
+            })
             .collect();
         controls.push(control("more", "link", "More"));
 

@@ -191,11 +191,10 @@ pub fn available(space: &ActionSpace, view: &PageView, surface: Surface<'_>) -> 
 #[must_use]
 pub fn ways(space: &ActionSpace, view: &PageView) -> Vec<How> {
     let mut ways = Vec::new();
-    let any = |predicate: &dyn Fn(&crate::space::Candidate) -> bool| space.offered.iter().any(predicate);
+    let any =
+        |predicate: &dyn Fn(&crate::space::Candidate) -> bool| space.offered.iter().any(predicate);
 
-    if any(&|candidate| {
-        CLICKABLE.contains(&candidate.role.as_str()) || candidate.clickable
-    }) {
+    if any(&|candidate| CLICKABLE.contains(&candidate.role.as_str()) || candidate.clickable) {
         ways.push(How::Click);
     }
     if any(&|candidate| !candidate.options.is_empty()) {
@@ -708,6 +707,9 @@ mod tests {
         let Question::Choice { criteria, .. } = &questions[TAB] else {
             panic!("the tab head is a choice");
         };
-        assert!(criteria.contains_key("7"), "chosen by page id, not by title");
+        assert!(
+            criteria.contains_key("7"),
+            "chosen by page id, not by title"
+        );
     }
 }

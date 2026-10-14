@@ -311,10 +311,20 @@ mod tests {
         run.known.exhausted = true;
 
         run.now_looking_at(7);
-        assert!(run.known.target.is_some(), "the same page keeps what it knows");
+        assert!(
+            run.known.target.is_some(),
+            "the same page keeps what it knows"
+        );
 
         run.now_looking_at(8);
-        assert_eq!(run.known, Known { fingerprint: 8, target: None, exhausted: false });
+        assert_eq!(
+            run.known,
+            Known {
+                fingerprint: 8,
+                target: None,
+                exhausted: false
+            }
+        );
     }
 
     /// The better of two batches wins, so searching further never loses what
@@ -347,7 +357,9 @@ mod tests {
         run.now_looking_at(3);
         run.known.found("e5", 0.40, 0);
         run.known.exhausted = true;
-        assert_eq!(run.known.target.as_ref().map(|f| f.reference.as_str()), Some("e5"));
+        assert_eq!(
+            run.known.target.as_ref().map(|f| f.reference.as_str()),
+            Some("e5")
+        );
     }
-
 }

@@ -63,7 +63,11 @@ const WAITED_FOR_BUDGET: std::time::Duration = std::time::Duration::from_millis(
 /// for; `Skipped` means the page could not be evaluated, and a snapshot is
 /// still the right next move. There is nothing a caller could do differently
 /// with either.
-async fn settle(pages: &browseros_core::pages::PageManager, page: u32, budget: std::time::Duration) {
+async fn settle(
+    pages: &browseros_core::pages::PageManager,
+    page: u32,
+    budget: std::time::Duration,
+) {
     let _ = browseros_core::settle::wait_for_action_settle(pages, PageId(page), budget).await;
 }
 
@@ -223,7 +227,12 @@ impl PageDriver {
     }
 
     /// Runs one tool and returns its text, or why it refused.
-    async fn run(&self, index: Option<usize>, what: Operation, args: Value) -> Result<String, ActError> {
+    async fn run(
+        &self,
+        index: Option<usize>,
+        what: Operation,
+        args: Value,
+    ) -> Result<String, ActError> {
         let Some(index) = index else {
             return Err(ActError::NotOffered(what));
         };
@@ -354,7 +363,11 @@ impl PageDriver {
         match ask {
             Ask::Read => {
                 let text = self
-                    .run(self.reach.read, Operation::Read, json!({ "page": self.page }))
+                    .run(
+                        self.reach.read,
+                        Operation::Read,
+                        json!({ "page": self.page }),
+                    )
                     .await?;
                 Ok(answer(Some(text), false))
             }
@@ -374,7 +387,11 @@ impl PageDriver {
             // code.
             Ask::Count(pattern) => {
                 let text = self
-                    .run(self.reach.read, Operation::Count, json!({ "page": self.page }))
+                    .run(
+                        self.reach.read,
+                        Operation::Count,
+                        json!({ "page": self.page }),
+                    )
                     .await?;
                 let needle = pattern.to_lowercase();
                 let found = text
@@ -516,9 +533,15 @@ fn first_text(result: &rmcp::model::CallToolResult) -> String {
 /// control while an overlay sat on top of it.
 fn covered_or_gone(reason: &str) -> bool {
     let reason = reason.to_lowercase();
-    ["no longer", "not found", "stale", "is covered by", "detached"]
-        .iter()
-        .any(|phrase| reason.contains(phrase))
+    [
+        "no longer",
+        "not found",
+        "stale",
+        "is covered by",
+        "detached",
+    ]
+    .iter()
+    .any(|phrase| reason.contains(phrase))
 }
 
 #[cfg(test)]
@@ -526,7 +549,15 @@ mod tests {
     use super::*;
 
     /// Reach as a peer that ships these tools and no others.
-    fn reaching(act: bool, navigate: bool, tabs: bool, screenshot: bool, read: bool, grep: bool, evaluate: bool) -> Reach {
+    fn reaching(
+        act: bool,
+        navigate: bool,
+        tabs: bool,
+        screenshot: bool,
+        read: bool,
+        grep: bool,
+        evaluate: bool,
+    ) -> Reach {
         let at = |present: bool| if present { Some(0) } else { None };
         Reach {
             act: at(act),
@@ -611,7 +642,9 @@ mod tests {
 
     #[test]
     fn a_covered_control_reads_the_same_as_a_vanished_one() {
-        assert!(covered_or_gone("ref e12 is covered by <div class=\"overlay\">"));
+        assert!(covered_or_gone(
+            "ref e12 is covered by <div class=\"overlay\">"
+        ));
         assert!(covered_or_gone("ref e12 no longer exists"));
         assert!(covered_or_gone("the handle is stale"));
         assert!(

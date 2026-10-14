@@ -363,7 +363,11 @@ mod tests {
     #[test]
     fn a_partly_effective_run_counts_only_what_landed() {
         let told = tell(&outcome(Status::BudgetSpent, vec![step(true), step(false)]));
-        assert!(told.said.contains("1 of which changed the page"), "{}", told.said);
+        assert!(
+            told.said.contains("1 of which changed the page"),
+            "{}",
+            told.said
+        );
         assert_eq!(told.actions, 2);
         assert_eq!(told.changed, 1);
     }
@@ -397,7 +401,9 @@ mod tests {
         assert_eq!(told.status, "answered");
         assert!(told.said.contains("Nothing on the page was changed"));
         assert_eq!(
-            told.answer.as_ref().and_then(|answer| answer.text.as_deref()),
+            told.answer
+                .as_ref()
+                .and_then(|answer| answer.text.as_deref()),
             Some("312 points by someone"),
             "the text travels raw; pulling the number out is the caller's job"
         );

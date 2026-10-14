@@ -261,7 +261,6 @@ impl ClawMcpService {
         tools
     }
 
-
     /// Pursues a whole outcome on one page, deciding each step here.
     ///
     /// Every move the loop makes goes down the same dispatch path a connected
@@ -293,29 +292,59 @@ impl ClawMcpService {
 
         let Some(token) = pursue_credential() else {
             return self
-                .refuse_pursue(started, raw_args, "this server has no credential for the decision model".to_string(), started_at, &dispatch_id)
+                .refuse_pursue(
+                    started,
+                    raw_args,
+                    "this server has no credential for the decision model".to_string(),
+                    started_at,
+                    &dispatch_id,
+                )
                 .await;
         };
         let Some(page) = raw_args.get("page").and_then(Value::as_u64) else {
             return self
-                .refuse_pursue(started, raw_args, "pursue needs the page to work on".to_string(), started_at, &dispatch_id)
+                .refuse_pursue(
+                    started,
+                    raw_args,
+                    "pursue needs the page to work on".to_string(),
+                    started_at,
+                    &dispatch_id,
+                )
                 .await;
         };
         let Some(goal) = raw_args.get("goal").and_then(Value::as_str) else {
             return self
-                .refuse_pursue(started, raw_args, "pursue needs a goal".to_string(), started_at, &dispatch_id)
+                .refuse_pursue(
+                    started,
+                    raw_args,
+                    "pursue needs a goal".to_string(),
+                    started_at,
+                    &dispatch_id,
+                )
                 .await;
         };
         if goal.trim().is_empty() {
             return self
-                .refuse_pursue(started, raw_args, "the goal was empty".to_string(), started_at, &dispatch_id)
+                .refuse_pursue(
+                    started,
+                    raw_args,
+                    "the goal was empty".to_string(),
+                    started_at,
+                    &dispatch_id,
+                )
                 .await;
         }
 
         let browser_session = self.state.browser.session().await;
         let Some(browser_session) = browser_session else {
             return self
-                .refuse_pursue(started, raw_args, "no browser is connected".to_string(), started_at, &dispatch_id)
+                .refuse_pursue(
+                    started,
+                    raw_args,
+                    "no browser is connected".to_string(),
+                    started_at,
+                    &dispatch_id,
+                )
                 .await;
         };
         // Captured once for the whole run. Every tool call a decision makes
@@ -367,7 +396,13 @@ impl ClawMcpService {
             cancel,
         ) else {
             return self
-                .refuse_pursue(started, raw_args, "this browser does not offer the act tool".to_string(), started_at, &dispatch_id)
+                .refuse_pursue(
+                    started,
+                    raw_args,
+                    "this browser does not offer the act tool".to_string(),
+                    started_at,
+                    &dispatch_id,
+                )
                 .await;
         };
 
@@ -1881,12 +1916,12 @@ fn pursue_tool() -> Tool {
     Tool::new(PURSUE_TOOL_NAME, PURSUE_DESCRIPTION, input_schema)
         .with_raw_output_schema(std::sync::Arc::new(output_schema))
         .with_annotations(
-        ToolAnnotations::with_title("Pursue a goal")
-            .read_only(false)
-            .destructive(false)
-            .idempotent(false)
-            .open_world(true),
-    )
+            ToolAnnotations::with_title("Pursue a goal")
+                .read_only(false)
+                .destructive(false)
+                .idempotent(false)
+                .open_world(true),
+        )
 }
 
 fn request_help_tool() -> Tool {

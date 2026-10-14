@@ -116,7 +116,14 @@ pub fn implied_by(goal: &str) -> Vec<Kind> {
     let mut kinds = Vec::new();
     let mentions = |phrases: &[&str]| phrases.iter().any(|phrase| goal.contains(phrase));
 
-    if mentions(&["sort", "order by", "cheapest", "most expensive", "newest", "oldest"]) {
+    if mentions(&[
+        "sort",
+        "order by",
+        "cheapest",
+        "most expensive",
+        "newest",
+        "oldest",
+    ]) {
         kinds.push(Kind::SortControl);
         kinds.push(Kind::Dropdown);
     }
@@ -141,7 +148,14 @@ pub fn implied_by(goal: &str) -> Vec<Kind> {
     if mentions(&["type ", "enter ", "fill", "search for", "write "]) {
         kinds.push(Kind::TextField);
     }
-    if mentions(&["open ", "product page", "story", "article", "thread", "listing"]) {
+    if mentions(&[
+        "open ",
+        "product page",
+        "story",
+        "article",
+        "thread",
+        "listing",
+    ]) {
         kinds.push(Kind::ResultLink);
     }
     kinds.dedup();

@@ -1462,7 +1462,10 @@ mod tests {
         };
         let kept = without_nested_twins(vec![(1, twin("e1")), (2, twin("e2"))]);
         assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].reference, "e1", "the outer one is the one that stays");
+        assert_eq!(
+            kept[0].reference, "e1",
+            "the outer one is the one that stays"
+        );
     }
 
     /// The test is nesting, not the name. Twenty cards each with their own
@@ -1535,7 +1538,9 @@ mod tests {
                 },
             )
         };
-        assert_eq!(without_nested_twins(vec![bare(1, "e1"), bare(2, "e2")]).len(), 2);
+        assert_eq!(
+            without_nested_twins(vec![bare(1, "e1"), bare(2, "e2")]).len(),
+            2
+        );
     }
-
 }

@@ -13,12 +13,10 @@ use crate::drive::{Answer, Ask, Driver, Journey, Move, Performed};
 use crate::gate::{self, Decision, Handback, Verdict};
 use crate::offer::Destination;
 use crate::questions::{self, Surface};
-use crate::run::{
-    Budget, DECLINE_LIMIT, NAVIGATION_LIMIT, Run, STALL_LIMIT, WAIT_LIMIT,
-};
 use crate::run::Known;
-use crate::space::Candidate;
+use crate::run::{Budget, DECLINE_LIMIT, NAVIGATION_LIMIT, Run, STALL_LIMIT, WAIT_LIMIT};
 use crate::space::ActionSpace;
+use crate::space::Candidate;
 use crate::view::PageView;
 use crate::vocabulary::{How, Operation};
 
@@ -196,7 +194,15 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             return end(&run, Status::Cancelled, last, &space, trail, None, goal_met);
         }
         if run.out_of_steps() || started.elapsed().as_secs() >= run.budget.max_seconds {
-            return end(&run, Status::BudgetSpent, last, &space, trail, None, goal_met);
+            return end(
+                &run,
+                Status::BudgetSpent,
+                last,
+                &space,
+                trail,
+                None,
+                goal_met,
+            );
         }
 
         // The previous iteration read the page after it acted, and nothing has
@@ -234,7 +240,8 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             values: &values,
             unavailable: &run.offered.unavailable,
         };
-        let ordered = ActionSpace::ordered(&view, &run.goal, run.last_acted.as_deref(), &run.retired);
+        let ordered =
+            ActionSpace::ordered(&view, &run.goal, run.last_acted.as_deref(), &run.retired);
 
         let left = Duration::from_secs(run.budget.max_seconds).saturating_sub(started.elapsed());
         let searched = match search(oracle, &run, &view, &ordered, surface, left).await {
@@ -260,7 +267,15 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         goal_met = decision.goal_met;
 
         if decision.operation == Operation::Done {
-            return end(&run, Status::Satisfied, Some(view), &space, trail, None, goal_met);
+            return end(
+                &run,
+                Status::Satisfied,
+                Some(view),
+                &space,
+                trail,
+                None,
+                goal_met,
+            );
         }
         if decision.operation == Operation::Blocked {
             return end(
@@ -347,7 +362,9 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             if run.navigations > NAVIGATION_LIMIT {
                 return end(
                     &run,
-                    Status::Blocked("this run has moved between pages as often as it may".to_string()),
+                    Status::Blocked(
+                        "this run has moved between pages as often as it may".to_string(),
+                    ),
                     Some(view),
                     &space,
                     trail,
@@ -602,7 +619,11 @@ async fn search<O: Oracle>(
         // A move that aims at nothing is not a question about this batch, so
         // nothing further down the page could improve on it.
         if !decision.needs_target() {
-            return Ok(Searched { decision, space, spent });
+            return Ok(Searched {
+                decision,
+                space,
+                spent,
+            });
         }
 
         let share = decision.target_lead.map_or(0.0, |lead| lead.share);
@@ -627,8 +648,12 @@ async fn search<O: Oracle>(
         spent.known.exhausted = true;
     }
 
-    best.map(|(decision, space)| Searched { decision, space, spent })
-        .ok_or_else(|| "this page offered nothing to decide between".to_string())
+    best.map(|(decision, space)| Searched {
+        decision,
+        space,
+        spent,
+    })
+    .ok_or_else(|| "this page offered nothing to decide between".to_string())
 }
 
 /// Turns a judged decision into something the driver can run.
@@ -678,7 +703,10 @@ fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<
         Operation::Count => Some(Move::Report(Ask::Count(pattern_for(&run.goal)))),
         Operation::CheckState => Some(Move::Report(Ask::State {
             reference: decision.target.clone()?,
-            state: decision.state.clone().unwrap_or_else(|| "visible".to_string()),
+            state: decision
+                .state
+                .clone()
+                .unwrap_or_else(|| "visible".to_string()),
         })),
         Operation::Screenshot => Some(Move::Report(Ask::Picture)),
         Operation::Evaluate => Some(Move::Report(Ask::Evaluate(pattern_for(&run.goal)))),
@@ -689,7 +717,8 @@ fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<
 /// Words too common to say anything about what a goal is asking for.
 const NOISE: &[&str] = &[
     "the", "and", "for", "with", "this", "that", "from", "how", "many", "does", "what", "find",
-    "out", "page", "are", "was", "its", "into", "than", "then", "there", "here", "about", "whether",
+    "out", "page", "are", "was", "its", "into", "than", "then", "there", "here", "about",
+    "whether",
 ];
 
 /// What to search the page for, derived from the goal in code.
@@ -782,8 +811,14 @@ fn end(
         input_tokens: run.input_tokens,
         trail,
         url_before: run.url_before.clone().unwrap_or_default(),
-        url_after: view.as_ref().map(|view| view.url.clone()).unwrap_or_default(),
-        title: view.as_ref().map(|view| view.title.clone()).unwrap_or_default(),
+        url_after: view
+            .as_ref()
+            .map(|view| view.url.clone())
+            .unwrap_or_default(),
+        title: view
+            .as_ref()
+            .map(|view| view.title.clone())
+            .unwrap_or_default(),
         answer,
         goal_met,
         unlabelled_images: view.as_ref().map_or(0, |view| view.unlabelled_images),
