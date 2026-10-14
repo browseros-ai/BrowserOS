@@ -1,20 +1,21 @@
 diff --git a/chrome/browser/devtools/inspector_protocol_config.json b/chrome/browser/devtools/inspector_protocol_config.json
-index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..5df839b629436a524156ad57ff5f867e3fa24b6a 100644
+index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..f5483c6c3497e8332d1f588467d6c29df66bacbd 100644
 --- a/chrome/browser/devtools/inspector_protocol_config.json
 +++ b/chrome/browser/devtools/inspector_protocol_config.json
-@@ -18,9 +18,20 @@
+@@ -18,9 +18,21 @@
              },
              {
                  "domain": "Browser",
 -                "include": [ "getWindowForTarget", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride" ],
-+                "include": [ "getWindowForTarget", "getTabForTarget", "getTargetForTab", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride", "getWindows", "getActiveWindow", "createWindow", "closeWindow", "activateWindow", "setWindowVisibility", "getTabs", "getActiveTab", "getTabInfo", "createTab", "closeTab", "activateTab", "moveTab", "duplicateTab", "pinTab", "unpinTab", "showTab", "getTabGroups", "createTabGroup", "updateTabGroup", "closeTabGroup", "addTabsToGroup", "removeTabsFromGroup", "moveTabGroup" ],
-                 "include_events": []
-             },
++                "include": [ "getWindowForTarget", "getTabForTarget", "getTargetForTab", "getWindowBounds", "setWindowBounds", "setContentsSize", "close", "setDockTile", "executeBrowserCommand", "addPrivacySandboxEnrollmentOverride", "getProfiles", "loadProfile", "getWindows", "getActiveWindow", "createWindow", "closeWindow", "activateWindow", "setWindowVisibility", "getTabs", "getActiveTab", "getTabInfo", "createTab", "closeTab", "activateTab", "moveTab", "duplicateTab", "pinTab", "unpinTab", "showTab", "getTabGroups", "createTabGroup", "updateTabGroup", "closeTabGroup", "addTabsToGroup", "removeTabsFromGroup", "moveTabGroup" ],
++                "include_events": [],
++                "async": [ "loadProfile" ]
++            },
 +            {
 +                "domain": "Bookmarks",
 +                "include": ["getBookmarks", "searchBookmarks", "createBookmark", "updateBookmark", "moveBookmark", "removeBookmark"],
-+                "include_events": []
-+            },
+                 "include_events": []
+             },
 +            {
 +                "domain": "History",
 +                "include": ["search", "getRecent", "deleteUrl", "deleteRange"],

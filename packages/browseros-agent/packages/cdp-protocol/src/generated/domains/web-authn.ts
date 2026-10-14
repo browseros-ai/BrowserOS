@@ -13,6 +13,8 @@ export type AuthenticatorTransport =
   | 'nfc'
   | 'ble'
   | 'cable'
+  | 'hybrid'
+  | 'smart-card'
   | 'internal'
 
 export interface VirtualAuthenticatorOptions {
@@ -27,6 +29,7 @@ export interface VirtualAuthenticatorOptions {
   hasPrf?: boolean
   hasHmacSecret?: boolean
   hasHmacSecretMc?: boolean
+  hasCmtgKey?: boolean
   automaticPresenceSimulation?: boolean
   isUserVerified?: boolean
   defaultBackupEligibility?: boolean
@@ -45,6 +48,9 @@ export interface Credential {
   backupState?: boolean
   userName?: string
   userDisplayName?: string
+  cmtgKeys?: string[]
+  activeCmtgKeyIndex?: number
+  generateCmtgKeyOnNextOperation?: boolean
 }
 
 // ══ Commands ══
@@ -118,6 +124,9 @@ export interface SetCredentialPropertiesParams {
   credentialId: string
   backupEligibility?: boolean
   backupState?: boolean
+  activeCmtgKeyIndex?: number
+  generateCmtgKeyOnNextOperation?: boolean
+  signCount?: number
 }
 
 // ══ Events ══

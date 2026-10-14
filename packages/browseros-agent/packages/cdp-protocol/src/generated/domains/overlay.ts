@@ -115,6 +115,20 @@ export interface HingeConfig {
   outlineColor?: RGBA
 }
 
+export type DisplayCutoutShape = 'pill' | 'notch' | 'circle' | 'rectangle'
+
+export interface DisplayCutoutConfig {
+  rect: Rect
+  shape: DisplayCutoutShape
+  borderRadius?: number
+  upperRadius?: number
+  lowerRadius?: number
+  cx?: number
+  cy?: number
+  radius?: number
+  contentColor?: RGBA
+}
+
 export interface WindowControlsOverlayConfig {
   showCSS: boolean
   selectedPlatform: string
@@ -286,6 +300,10 @@ export interface SetShowViewportSizeOnResizeParams {
 
 export interface SetShowHingeParams {
   hingeConfig?: HingeConfig
+}
+
+export interface SetShowDisplayCutoutParams {
+  displayCutoutConfig?: DisplayCutoutConfig
 }
 
 export interface SetShowIsolatedElementsParams {

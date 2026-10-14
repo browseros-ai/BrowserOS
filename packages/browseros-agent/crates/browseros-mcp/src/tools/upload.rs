@@ -45,9 +45,9 @@ fn handler<'a>(
         if files.is_empty() {
             return Ok(Some(error_result("upload: provide file or files[].")));
         }
-        ctx.session
+        ctx.browser
             .input(PageId(args.page))
-            .await
+            .await?
             .upload_file_by_ref(&Ref(args.r#ref.clone()), files.clone())
             .await?;
         Ok(Some(text_result(

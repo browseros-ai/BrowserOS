@@ -4,7 +4,7 @@ use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 
 /// Replaces successful tabs-list results with the caller's ownership view.
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
@@ -47,13 +47,10 @@ pub(crate) async fn annotate_pages_with_ownership(
     pages: &[Value],
     id_field: &str,
 ) -> Vec<Value> {
-    let live_page_ids = pages
-        .iter()
-        .filter_map(|page| page_id(page, id_field))
-        .map(PageId)
-        .collect::<BTreeSet<_>>();
     let ownership = state.sessions.ownership();
-    ownership.prune_missing_pages(&live_page_ids).await;
+    if let Some(browser) = state.browser.session().await {
+        reconcile_ownership(&browser, &ownership).await;
+    }
     let labels = state
         .sessions
         .snapshot()
@@ -75,6 +72,20 @@ pub(crate) async fn annotate_pages_with_ownership(
         annotated.push(annotate_page(page, owner.as_ref(), caller, &labels));
     }
     annotated
+}
+
+/// A projected response is never proof that hidden pages disappeared. Perform a
+/// fresh global reconcile for this annotation and prune only its complete inventory;
+/// a disconnected browser or failed refresh leaves last-known ownership intact.
+async fn reconcile_ownership(
+    browser: &browseros_core::BrowserSession,
+    ownership: &crate::services::sessions::PageOwnership,
+) {
+    if browser.pages.list().await.is_ok() {
+        ownership
+            .prune_missing_pages(&browser.pages.known_page_ids().await)
+            .await;
+    }
 }
 
 fn page_id(page: &Value, id_field: &str) -> Option<u32> {
@@ -235,6 +246,22 @@ mod tests {
     -> anyhow::Result<()> {
         let call =
             crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let transport = crate::api::mcp::test_support::ProfileConnection::new();
+        // Include a fourth global page; the result below projects a different order.
+        let fourth = transport.tabs.lock().unwrap_or_else(|p| p.into_inner())[0].clone();
+        let mut fourth = fourth;
+        fourth["tabId"] = json!(104);
+        fourth["targetId"] = json!("T104");
+        transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(fourth);
+        let browser = browseros_core::BrowserSession::new(
+            transport,
+            browseros_core::BrowserSessionHooks::default(),
+        );
+        call.state.browser.set_session_for_testing(browser).await;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
         let other_session = crate::services::sessions::Session::new(
             crate::ids::SessionId::new("s2"),
@@ -328,6 +355,60 @@ mod tests {
                 .owner_of_page(&PageId(9))
                 .await,
             None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projected_listing_prunes_only_after_fresh_global_inventory() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use std::sync::atomic::Ordering;
+        let call = tool_call("tabs", json!({"action":"list"})).await?;
+        let transport = ProfileConnection::new();
+        let browser = browseros_core::BrowserSession::new(
+            transport.clone(),
+            browseros_core::BrowserSessionHooks::default(),
+        );
+        browser.pages.list().await?;
+        call.state.browser.set_session_for_testing(browser).await;
+        let caller = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership.claim_page(caller.clone(), PageId(1)).await;
+        ownership.claim_page(caller.clone(), PageId(2)).await;
+        ownership.claim_page(caller.clone(), PageId(99)).await;
+        let projected = vec![json!({"pageId":1})];
+        let annotated =
+            annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        assert_eq!(annotated[0]["ownership"], "mine");
+        assert_eq!(
+            ownership.owner_of_page(&PageId(2)).await,
+            Some(caller.clone()),
+            "a hidden live page keeps its claim"
+        );
+        assert_eq!(ownership.owner_of_page(&PageId(99)).await, None);
+        transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|tab| tab["tabId"] != 102);
+        transport.fail_inventory.store(true, Ordering::SeqCst);
+        annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        assert_eq!(
+            ownership.owner_of_page(&PageId(2)).await,
+            Some(caller.clone()),
+            "failed refresh is not proof of disappearance"
+        );
+        transport.fail_inventory.store(false, Ordering::SeqCst);
+        annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        assert_eq!(
+            ownership.owner_of_page(&PageId(2)).await,
+            None,
+            "fresh global reconcile removes the closed hidden page"
         );
         Ok(())
     }

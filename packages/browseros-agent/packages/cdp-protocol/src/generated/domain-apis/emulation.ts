@@ -11,6 +11,7 @@ import type {
   ScreenOrientationLockChangedEvent,
   SetAutoDarkModeOverrideParams,
   SetAutomationOverrideParams,
+  SetCPUPerformanceOverrideParams,
   SetCPUThrottlingRateParams,
   SetDataSaverOverrideParams,
   SetDefaultBackgroundColorOverrideParams,
@@ -30,7 +31,6 @@ import type {
   SetLocaleOverrideParams,
   SetNavigatorOverridesParams,
   SetPageScaleFactorParams,
-  SetPressureDataOverrideParams,
   SetPressureSourceOverrideEnabledParams,
   SetPressureStateOverrideParams,
   SetPrimaryScreenParams,
@@ -43,6 +43,7 @@ import type {
   SetTimezoneOverrideParams,
   SetTouchEmulationEnabledParams,
   SetUserAgentOverrideParams,
+  SetVirtualKeyboardGeometryOverrideParams,
   SetVirtualTimePolicyParams,
   SetVirtualTimePolicyResult,
   SetVisibleSizeParams,
@@ -67,6 +68,9 @@ export interface EmulationApi {
   ): Promise<void>
   setSafeAreaInsetsOverride(
     params: SetSafeAreaInsetsOverrideParams,
+  ): Promise<void>
+  setVirtualKeyboardGeometryOverride(
+    params?: SetVirtualKeyboardGeometryOverrideParams,
   ): Promise<void>
   setDeviceMetricsOverride(
     params: SetDeviceMetricsOverrideParams,
@@ -107,7 +111,6 @@ export interface EmulationApi {
   setPressureStateOverride(
     params: SetPressureStateOverrideParams,
   ): Promise<void>
-  setPressureDataOverride(params: SetPressureDataOverrideParams): Promise<void>
   setIdleOverride(params: SetIdleOverrideParams): Promise<void>
   clearIdleOverride(): Promise<void>
   setNavigatorOverrides(params: SetNavigatorOverridesParams): Promise<void>
@@ -128,6 +131,9 @@ export interface EmulationApi {
   setDataSaverOverride(params?: SetDataSaverOverrideParams): Promise<void>
   setHardwareConcurrencyOverride(
     params: SetHardwareConcurrencyOverrideParams,
+  ): Promise<void>
+  setCPUPerformanceOverride(
+    params?: SetCPUPerformanceOverrideParams,
   ): Promise<void>
   setUserAgentOverride(params: SetUserAgentOverrideParams): Promise<void>
   setAutomationOverride(params: SetAutomationOverrideParams): Promise<void>

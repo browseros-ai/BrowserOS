@@ -75,6 +75,7 @@ export interface RemoteObject {
     | 'dataview'
     | 'webassemblymemory'
     | 'wasmvalue'
+    | 'deferredmodule'
     | 'trustedtype'
   className?: string
   value?: unknown
@@ -121,6 +122,7 @@ export interface ObjectPreview {
     | 'dataview'
     | 'webassemblymemory'
     | 'wasmvalue'
+    | 'deferredmodule'
     | 'trustedtype'
   description?: string
   overflow: boolean
@@ -162,6 +164,7 @@ export interface PropertyPreview {
     | 'dataview'
     | 'webassemblymemory'
     | 'wasmvalue'
+    | 'deferredmodule'
     | 'trustedtype'
 }
 

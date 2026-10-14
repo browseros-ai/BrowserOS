@@ -192,20 +192,20 @@ fn handler<'a>(
         {
             return Ok(Some(result));
         }
-        let console_start = ctx.session.page_signals.console_mark(&page_id);
-        let input = ctx.session.input(page_id.clone()).await;
+        let console_start = ctx.browser.signals().console_mark(&page_id);
+        let input = ctx.browser.input(page_id.clone()).await?;
         if args.kind.is_dialog() {
             if let Some(err) = run_kind(&args, &input).await? {
                 return Ok(Some(err));
             }
-            ctx.session.page_signals.clear_dialog(&page_id);
+            ctx.browser.signals().clear_dialog(&page_id);
         } else {
             // A confirm/prompt/beforeunload opened by this action freezes the
             // renderer, so the action's CDP ack never returns; race it against the
             // page's dialog signal and hand control back with the pending dialog so
             // the caller can accept or dismiss it, instead of hanging to the run cap
             // (#2780).
-            let signals = ctx.session.page_signals.clone();
+            let signals = ctx.browser.signals().clone();
             let watched = page_id.clone();
             let dialog = async move {
                 while signals.pending_dialog(&watched).is_none() {

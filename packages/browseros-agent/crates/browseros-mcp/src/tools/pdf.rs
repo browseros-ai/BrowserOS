@@ -52,7 +52,7 @@ fn handler<'a>(
 ) -> BoxFuture<'a, ToolExecResult<Option<ToolResult>>> {
     Box::pin(async move {
         let args: PdfArgs = parse_args(raw)?;
-        let page = ctx.session.pages.get_session(PageId(args.page)).await?;
+        let page = ctx.browser.page_session(PageId(args.page)).await?;
         let result: PrintToPdfResult = page
             .session
             .send(

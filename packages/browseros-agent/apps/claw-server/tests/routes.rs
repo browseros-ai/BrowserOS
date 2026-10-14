@@ -394,6 +394,8 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     assert_eq!(
         listed,
         vec![
+            "browser_profiles",
+            "browser_target",
             "tabs",
             "tab_groups",
             "history",

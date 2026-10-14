@@ -395,6 +395,16 @@ features:
       - third_party/blink/public/devtools_protocol/domains/History.pdl
       - third_party/blink/public/devtools_protocol/domains/Target.pdl
 
+      # Saved catalog handles, existing-only loading, and shared live-context policy.
+      - "chrome/browser/devtools/devtools_browser_context_manager.cc"
+      - "chrome/browser/devtools/devtools_browser_context_manager.h"
+      - "chrome/browser/devtools/protocol/target_handler.cc"
+      - "chrome/browser/profiles/profile.h"
+      - "chrome/browser/profiles/profile_impl.cc"
+      - "chrome/browser/profiles/profile_impl.h"
+      - "chrome/browser/profiles/profile_manager.cc"
+      - "chrome/browser/profiles/profile_manager.h"
+
   # ── LAYER 5: FIXES ────────────────────────────────────────
 
   chromium-ui-fixes:

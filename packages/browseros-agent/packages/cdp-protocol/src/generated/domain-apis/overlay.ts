@@ -22,6 +22,7 @@ import type {
   SetShowAdHighlightsParams,
   SetShowContainerQueryOverlaysParams,
   SetShowDebugBordersParams,
+  SetShowDisplayCutoutParams,
   SetShowFlexOverlaysParams,
   SetShowFPSCounterParams,
   SetShowGridOverlaysParams,
@@ -89,6 +90,7 @@ export interface OverlayApi {
     params: SetShowViewportSizeOnResizeParams,
   ): Promise<void>
   setShowHinge(params?: SetShowHingeParams): Promise<void>
+  setShowDisplayCutout(params?: SetShowDisplayCutoutParams): Promise<void>
   setShowIsolatedElements(params: SetShowIsolatedElementsParams): Promise<void>
   setShowWindowControlsOverlay(
     params?: SetShowWindowControlsOverlayParams,

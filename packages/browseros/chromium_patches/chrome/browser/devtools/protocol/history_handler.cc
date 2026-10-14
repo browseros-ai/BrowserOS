@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/devtools/protocol/history_handler.cc b/chrome/browser/devtools/protocol/history_handler.cc
 new file mode 100644
-index 0000000000000..4087a679a527f
+index 0000000000000000000000000000000000000000..1777143767c77e66174e803c792099e7184eb2b0
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/history_handler.cc
-@@ -0,0 +1,188 @@
+@@ -0,0 +1,208 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -17,13 +17,14 @@ index 0000000000000..4087a679a527f
 +#include "base/strings/string_number_conversions.h"
 +#include "base/strings/utf_string_conversions.h"
 +#include "base/time/time.h"
++#include "chrome/browser/devtools/devtools_browser_context_manager.h"
 +#include "chrome/browser/history/history_service_factory.h"
 +#include "chrome/browser/profiles/profile.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
++#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 +#include "components/history/core/browser/history_service.h"
 +#include "components/history/core/browser/history_types.h"
 +#include "components/history/core/browser/url_row.h"
-+#include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
-+#include "chrome/browser/ui/browser_window/public/browser_window_interface_iterator.h"
 +#include "content/public/browser/devtools_agent_host.h"
 +
 +using protocol::Response;
@@ -63,22 +64,38 @@ index 0000000000000..4087a679a527f
 +  return bwi ? bwi->GetProfile() : nullptr;
 +}
 +
-+history::HistoryService* HistoryHandler::GetHistoryService() const {
-+  Profile* profile = GetProfile();
-+  return profile ? HistoryServiceFactory::GetForProfile(
-+                       profile, ServiceAccessType::EXPLICIT_ACCESS)
-+                 : nullptr;
++Response HistoryHandler::GetHistoryService(
++    const std::optional<std::string>& browser_context_id,
++    history::HistoryService** out_service) const {
++  // The common resolver also serves root cookies, permissions and Target.
++  // An explicit stale/unknown ID must fail, never use the active window. The
++  // legacy target/active-window choice is retained only when the ID is absent.
++  Profile* profile =
++      browser_context_id
++          ? DevToolsBrowserContextManager::GetInstance().GetProfileById(
++                *browser_context_id)
++          : GetProfile();
++  if (browser_context_id && !profile) {
++    return Response::InvalidParams("Failed to find browser context for id " +
++                                   *browser_context_id);
++  }
++  *out_service = profile ? HistoryServiceFactory::GetForProfile(
++                               profile, ServiceAccessType::EXPLICIT_ACCESS)
++                         : nullptr;
++  return *out_service ? Response::Success()
++                      : Response::ServerError("History service not available");
 +}
 +
 +void HistoryHandler::Search(const std::string& query,
 +                            std::optional<int> max_results,
 +                            std::optional<double> start_time,
 +                            std::optional<double> end_time,
++                            std::optional<std::string> browser_context_id,
 +                            std::unique_ptr<SearchCallback> callback) {
-+  history::HistoryService* service = GetHistoryService();
-+  if (!service) {
-+    std::move(callback)->sendFailure(
-+        Response::ServerError("History service not available"));
++  history::HistoryService* service = nullptr;
++  Response response = GetHistoryService(browser_context_id, &service);
++  if (!response.IsSuccess()) {
++    std::move(callback)->sendFailure(response);
 +    return;
 +  }
 +
@@ -103,11 +120,12 @@ index 0000000000000..4087a679a527f
 +}
 +
 +void HistoryHandler::GetRecent(std::optional<int> max_results,
++                               std::optional<std::string> browser_context_id,
 +                               std::unique_ptr<GetRecentCallback> callback) {
-+  history::HistoryService* service = GetHistoryService();
-+  if (!service) {
-+    std::move(callback)->sendFailure(
-+        Response::ServerError("History service not available"));
++  history::HistoryService* service = nullptr;
++  Response response = GetHistoryService(browser_context_id, &service);
++  if (!response.IsSuccess()) {
++    std::move(callback)->sendFailure(response);
 +    return;
 +  }
 +
@@ -123,11 +141,12 @@ index 0000000000000..4087a679a527f
 +}
 +
 +void HistoryHandler::DeleteUrl(const std::string& url,
++                               std::optional<std::string> browser_context_id,
 +                               std::unique_ptr<DeleteUrlCallback> callback) {
-+  history::HistoryService* service = GetHistoryService();
-+  if (!service) {
-+    std::move(callback)->sendFailure(
-+        Response::ServerError("History service not available"));
++  history::HistoryService* service = nullptr;
++  Response response = GetHistoryService(browser_context_id, &service);
++  if (!response.IsSuccess()) {
++    std::move(callback)->sendFailure(response);
 +    return;
 +  }
 +
@@ -145,11 +164,12 @@ index 0000000000000..4087a679a527f
 +void HistoryHandler::DeleteRange(
 +    double start_time,
 +    double end_time,
++    std::optional<std::string> browser_context_id,
 +    std::unique_ptr<DeleteRangeCallback> callback) {
-+  history::HistoryService* service = GetHistoryService();
-+  if (!service) {
-+    std::move(callback)->sendFailure(
-+        Response::ServerError("History service not available"));
++  history::HistoryService* service = nullptr;
++  Response response = GetHistoryService(browser_context_id, &service);
++  if (!response.IsSuccess()) {
++    std::move(callback)->sendFailure(response);
 +    return;
 +  }
 +

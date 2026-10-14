@@ -35,6 +35,8 @@ import type {
   GetStyleSheetTextResult,
   ResolveValuesParams,
   ResolveValuesResult,
+  SetContainerQueryConditionTextParams,
+  SetContainerQueryConditionTextResult,
   SetContainerQueryTextParams,
   SetContainerQueryTextResult,
   SetEffectivePropertyValueForNodeParams,
@@ -132,6 +134,9 @@ export interface CSSApi {
   setContainerQueryText(
     params: SetContainerQueryTextParams,
   ): Promise<SetContainerQueryTextResult>
+  setContainerQueryConditionText(
+    params: SetContainerQueryConditionTextParams,
+  ): Promise<SetContainerQueryConditionTextResult>
   setSupportsText(params: SetSupportsTextParams): Promise<SetSupportsTextResult>
   setNavigationText(
     params: SetNavigationTextParams,

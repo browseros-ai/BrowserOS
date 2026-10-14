@@ -34,8 +34,6 @@ export type LoaderId = string
 
 export type RequestId = string
 
-export type InterceptionId = string
-
 export type ErrorReason =
   | 'Failed'
   | 'Aborted'
@@ -406,10 +404,6 @@ export type CookieBlockedReason =
 export type CookieExemptionReason =
   | 'None'
   | 'UserSetting'
-  | 'TPCDMetadata'
-  | 'TPCDDeprecationTrial'
-  | 'TopLevelTPCDDeprecationTrial'
-  | 'TPCDHeuristics'
   | 'EnterprisePolicy'
   | 'StorageAccess'
   | 'TopLevelStorageAccess'
@@ -463,14 +457,6 @@ export interface AuthChallengeResponse {
   password?: string
 }
 
-export type InterceptionStage = 'Request' | 'HeadersReceived'
-
-export interface RequestPattern {
-  urlPattern?: string
-  resourceType?: ResourceType
-  interceptionStage?: InterceptionStage
-}
-
 export interface SignedExchangeSignature {
   label: string
   signature: string
@@ -513,8 +499,6 @@ export interface SignedExchangeInfo {
   errors?: SignedExchangeError[]
 }
 
-export type ContentEncoding = 'deflate' | 'gzip' | 'br' | 'zstd'
-
 export interface NetworkConditions {
   urlPattern: string
   latency: number
@@ -524,6 +508,7 @@ export interface NetworkConditions {
   packetLoss?: number
   packetQueueLength?: number
   packetReordering?: boolean
+  offline?: boolean
 }
 
 export interface BlockPattern {
@@ -709,8 +694,10 @@ export type DeviceBoundSessionEventId = string
 
 export type DeviceBoundSessionFetchResult =
   | 'Success'
-  | 'KeyError'
+  | 'SigningKeyGenerationError'
+  | 'AttestationKeyGenerationError'
   | 'SigningError'
+  | 'TransientSigningError'
   | 'ServerRequestedTermination'
   | 'InvalidSessionId'
   | 'InvalidChallenge'
@@ -776,6 +763,12 @@ export type DeviceBoundSessionFetchResult =
   | 'InvalidFederatedSessionProviderFailedToRestoreKey'
   | 'FailedToUnwrapKey'
   | 'SessionDeletedDuringRefresh'
+  | 'CrossOriginRegistrationSiteNotIncluded'
+  | 'InvalidPreProvisionedKeyInitiatorMissing'
+  | 'PreProvisionedKeyAccessNotGranted'
+  | 'PreProvisionedKeyNotFound'
+  | 'AttestationCertificationError'
+  | 'AttestationSigningError'
 
 export interface DeviceBoundSessionFailedRequest {
   requestUrl: string
@@ -796,9 +789,11 @@ export interface RefreshEventDetails {
     | 'InitializedService'
     | 'Unreachable'
     | 'ServerError'
-    | 'RefreshQuotaExceeded'
     | 'FatalError'
     | 'SigningQuotaExceeded'
+    | 'RefreshedAsWaiter'
+    | 'TransientSigningError'
+    | 'InScopeRefreshNotYetNeeded'
   fetchResult?: DeviceBoundSessionFetchResult
   newSession?: DeviceBoundSession
   wasFullyProactiveRefresh: boolean
@@ -815,6 +810,8 @@ export interface TerminationEventDetails {
     | 'ServerRequested'
     | 'InvalidSessionParams'
     | 'RefreshFatalError'
+    | 'DevTools'
+    | 'Replaced'
 }
 
 export interface ChallengeEventDetails {
@@ -842,10 +839,6 @@ export interface LoadNetworkResourceOptions {
 
 // ══ Commands ══
 
-export interface SetAcceptedEncodingsParams {
-  encodings: ContentEncoding[]
-}
-
 export interface CanClearBrowserCacheResult {
   result: boolean
 }
@@ -856,17 +849,6 @@ export interface CanClearBrowserCookiesResult {
 
 export interface CanEmulateNetworkConditionsResult {
   result: boolean
-}
-
-export interface ContinueInterceptedRequestParams {
-  interceptionId: InterceptionId
-  errorReason?: ErrorReason
-  rawResponse?: string
-  url?: string
-  method?: string
-  postData?: string
-  headers?: Headers
-  authChallengeResponse?: AuthChallengeResponse
 }
 
 export interface DeleteCookiesParams {
@@ -889,7 +871,8 @@ export interface EmulateNetworkConditionsParams {
 }
 
 export interface EmulateNetworkConditionsByRuleParams {
-  offline: boolean
+  offline?: boolean
+  emulateOfflineServiceWorker?: boolean
   matchedNetworkConditions: NetworkConditions[]
 }
 
@@ -956,23 +939,6 @@ export interface GetRequestPostDataResult {
   base64Encoded: boolean
 }
 
-export interface GetResponseBodyForInterceptionParams {
-  interceptionId: InterceptionId
-}
-
-export interface GetResponseBodyForInterceptionResult {
-  body: string
-  base64Encoded: boolean
-}
-
-export interface TakeResponseBodyForInterceptionAsStreamParams {
-  interceptionId: InterceptionId
-}
-
-export interface TakeResponseBodyForInterceptionAsStreamResult {
-  stream: StreamHandle
-}
-
 export interface ReplayXHRParams {
   requestId: RequestId
 }
@@ -1033,10 +999,6 @@ export interface SetAttachDebugStackParams {
   enabled: boolean
 }
 
-export interface SetRequestInterceptionParams {
-  patterns: RequestPattern[]
-}
-
 export interface SetUserAgentOverrideParams {
   userAgent: string
   acceptLanguage?: string
@@ -1068,6 +1030,10 @@ export interface EnableDeviceBoundSessionsParams {
   enable: boolean
 }
 
+export interface DeleteDeviceBoundSessionParams {
+  key: DeviceBoundSessionKey
+}
+
 export interface FetchSchemefulSiteParams {
   origin: string
 }
@@ -1088,8 +1054,6 @@ export interface LoadNetworkResourceResult {
 
 export interface SetCookieControlsParams {
   enableThirdPartyCookieRestriction: boolean
-  disableThirdPartyCookieMetadata: boolean
-  disableThirdPartyCookieHeuristics: boolean
 }
 
 // ══ Events ══
@@ -1124,21 +1088,6 @@ export interface LoadingFinishedEvent {
   requestId: RequestId
   timestamp: MonotonicTime
   encodedDataLength: number
-}
-
-export interface RequestInterceptedEvent {
-  interceptionId: InterceptionId
-  request: Request
-  frameId: FrameId
-  resourceType: ResourceType
-  isNavigationRequest: boolean
-  isDownload?: boolean
-  redirectUrl?: string
-  authChallenge?: AuthChallenge
-  responseErrorReason?: ErrorReason
-  responseStatusCode?: number
-  responseHeaders?: Headers
-  requestId?: RequestId
 }
 
 export interface RequestServedFromCacheEvent {
@@ -1261,7 +1210,7 @@ export interface DirectTCPSocketOpenedEvent {
 
 export interface DirectTCPSocketAbortedEvent {
   identifier: RequestId
-  errorMessage: string
+  errorMessage: ErrorReason
   timestamp: MonotonicTime
 }
 
@@ -1310,7 +1259,7 @@ export interface DirectUDPSocketOpenedEvent {
 
 export interface DirectUDPSocketAbortedEvent {
   identifier: RequestId
-  errorMessage: string
+  errorMessage: ErrorReason
   timestamp: MonotonicTime
 }
 
