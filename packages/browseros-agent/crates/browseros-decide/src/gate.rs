@@ -790,7 +790,7 @@ mod tests {
             spread_out.push((name, 0.26 / 9.0));
         }
         let decision = read(&response(&[
-            (OPERATION, spread(&spread_out[0].0.to_string(), &spread_out)),
+            (OPERATION, spread(spread_out[0].0, &spread_out)),
             (ACT_HOW, spread("CLICK", &[("CLICK", 0.91), ("HOVER", 0.05)])),
             (TARGET, spread("e30", &[("e30", 0.74), ("e12", 0.08)])),
         ]))
