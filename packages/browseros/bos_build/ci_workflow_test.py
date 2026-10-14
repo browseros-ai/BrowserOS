@@ -1860,6 +1860,12 @@ if command == "view":
     if release is None:
         print("release not found", file=sys.stderr)
         raise SystemExit(1)
+    if "--json" not in args:
+        print(f"title:\t{tag}")
+        raise SystemExit(0)
+    if release.get("jsonFails"):
+        print("HTTP 502: transient metadata failure", file=sys.stderr)
+        raise SystemExit(1)
     document = {
         "isDraft": release["isDraft"],
         "targetCommitish": release["targetCommitish"],
@@ -1973,7 +1979,16 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
     def server_zip(self, target: str) -> str:
         return f"browseros-claw-server-rust-resources-{target}.zip"
 
-    def run_server(self, release, *, defer="true", reservation="create", drop=None, alter=None):
+    def run_server(
+        self,
+        release,
+        *,
+        defer="true",
+        reservation="create",
+        drop=None,
+        alter=None,
+        json_fails=False,
+    ):
         step = self.script(
             "release-claw-server.yml", "publish-versioned", "Attach zips to private draft"
         )
@@ -1997,6 +2012,7 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
                 "isDraft": draft,
                 "targetCommitish": target,
                 "assets": assets,
+                "jsonFails": json_fails,
             }
         return self.run_attachment(
             step,
@@ -2052,6 +2068,22 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
                 if release is None:
                     self.assertIn("--draft", calls[0]["args"])
 
+    def test_deferred_server_fails_closed_when_metadata_is_unreadable(self):
+        # Plain existence succeeds in every case, so only the strict deferred
+        # metadata read stands between these releases and `upload --clobber`.
+        cases = (
+            ("public, JSON read fails", (False, self.SOURCE), True),
+            ("private draft, JSON read fails", (True, self.SOURCE), True),
+            ("draft state missing", (None, self.SOURCE), False),
+        )
+        for label, release, json_fails in cases:
+            with self.subTest(label):
+                result, calls = self.run_server(
+                    release, reservation="tag", json_fails=json_fails
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+
     def test_alpha_server_attachment_is_unchanged(self):
         result, calls = self.run_server(
             (False, self.SOURCE), defer="", reservation="tag", alter="linux-x64"
@@ -2060,7 +2092,7 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual([call["command"] for call in calls], ["upload"])
 
-    def run_extension(self, release, *, defer="true", asset=None):
+    def run_extension(self, release, *, defer="true", asset=None, json_fails=False):
         step = self.script("release-extensions.yml", "build", "Attach CRX assets")
         self.assertEqual(step["env"]["DEFER_FINALIZE"], "${{ inputs.defer_finalize }}")
         built = f"packages/browseros/build/extensions/dist/{self.CRX}"
@@ -2071,6 +2103,7 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
                 "isDraft": draft,
                 "targetCommitish": target,
                 "assets": {} if asset is None else {self.CRX: asset},
+                "jsonFails": json_fails,
             }
         return self.run_attachment(
             step,
@@ -2107,6 +2140,15 @@ class DeferredComponentAttachmentTest(unittest.TestCase):
         self.assertEqual(
             [(call["command"], call["draft"]) for call in calls], [("upload", True)]
         )
+
+    def test_deferred_extension_fails_closed_when_metadata_is_unreadable(self):
+        for draft in (False, True):
+            with self.subTest(draft=draft):
+                result, calls = self.run_extension(
+                    (draft, self.SOURCE), json_fails=True
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
 
     def test_alpha_extension_attachment_is_unchanged(self):
         result, calls = self.run_extension((False, self.SOURCE), defer="")

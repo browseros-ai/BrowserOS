@@ -748,14 +748,31 @@ jobs:
             echo "::error::Expected 5 BrowserClaw server resource zips, found ${#assets[@]}"
             exit 1
           fi
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --draft \
+              --target "$RELEASE_SHA" \
+              --generate-notes \
+              --title "BrowserClaw Server - v$VERSION"
+          fi
           # A deferred build never finalizes, so it may write only to a private
           # draft bound to this source. The resolver can reuse a same-source tag
           # whose release is already public (an earlier run finalized it); that
           # release is read-only here and must already hold these exact bytes.
+          # The metadata read is a plain assignment so any gh failure aborts
+          # under set -e instead of skipping the guard before --clobber.
           # Without deferral, finalize verifies and publishes as before.
-          if [ "$DEFER_FINALIZE" = "true" ] && \
-            release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets 2>/dev/null)"; then
-            if [ "$(jq -r '.isDraft' <<< "$release")" != "true" ]; then
+          if [ "$DEFER_FINALIZE" = "true" ]; then
+            release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            case "$is_draft" in
+              true|false) ;;
+              *)
+                echo "::error::Could not read the draft state of $RELEASE_TAG"
+                exit 1
+                ;;
+            esac
+            if [ "$is_draft" = "false" ]; then
               published_dir="$(mktemp -d)"
               for asset in "${assets[@]}"; do
                 name="$(basename "$asset")"
@@ -778,13 +795,6 @@ jobs:
               echo "::error::$RELEASE_TAG is not a private draft for $RELEASE_SHA"
               exit 1
             fi
-          fi
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" \
-              --draft \
-              --target "$RELEASE_SHA" \
-              --generate-notes \
-              --title "BrowserClaw Server - v$VERSION"
           fi
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
