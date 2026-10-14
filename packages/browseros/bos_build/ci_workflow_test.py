@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Regression tests for the reusable Chromium build workflow."""
 
+import json
 import os
 import re
 import subprocess
@@ -1827,6 +1828,291 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                     os.environ.pop("SLACK_WEBHOOK_URL", None)
                     env_module._load_dotenv_file()
                     self.assertTrue(Notifier().enabled)
+
+
+FAKE_GH = r"""#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["FAKE_GH_STATE"])
+state = json.loads(state_path.read_text())
+args = sys.argv[1:]
+
+
+def option(name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def record(entry):
+    with open(os.environ["FAKE_GH_WRITES"], "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry) + "\n")
+
+
+if args[:1] != ["release"]:
+    raise SystemExit(f"unexpected fake gh call: {args}")
+command, tag = args[1], args[2]
+release = state["releases"].get(tag)
+
+if command == "view":
+    if release is None:
+        print("release not found", file=sys.stderr)
+        raise SystemExit(1)
+    document = {
+        "isDraft": release["isDraft"],
+        "targetCommitish": release["targetCommitish"],
+        "assets": [{"name": name} for name in sorted(release["assets"])],
+    }
+    query = option("--jq")
+    if query is None:
+        print(json.dumps(document))
+    else:
+        result = subprocess.run(
+            ["jq", "-r", query], input=json.dumps(document),
+            capture_output=True, text=True, check=True,
+        )
+        sys.stdout.write(result.stdout)
+elif command == "download":
+    name = option("--pattern")
+    if release is None or name not in release["assets"]:
+        raise SystemExit(1)
+    target = Path(option("--dir"))
+    target.mkdir(parents=True, exist_ok=True)
+    (target / name).write_text(release["assets"][name], encoding="utf-8")
+else:
+    # Every other release subcommand mutates GitHub state.
+    record({"command": command, "tag": tag, "args": args[3:],
+            "draft": None if release is None else release["isDraft"]})
+    if command == "create":
+        state["releases"][tag] = {
+            "isDraft": "--draft" in args,
+            "targetCommitish": option("--target", ""),
+            "assets": {},
+        }
+    elif command == "upload":
+        if release is None:
+            raise SystemExit(1)
+        for path in (value for value in args[3:] if not value.startswith("--")):
+            release["assets"][Path(path).name] = Path(path).read_text(encoding="utf-8")
+    state_path.write_text(json.dumps(state))
+"""
+
+
+@unittest.skipIf(os.name == "nt", "component release scripts run on Linux runners")
+class DeferredComponentAttachmentTest(unittest.TestCase):
+    """Deferred component builds may write only to source-bound private drafts.
+
+    These run the shipped attachment scripts against a fake `gh` that keeps
+    release state and records every mutating call, so "zero public writes" is
+    observed rather than inferred from the script text.
+    """
+
+    SOURCE = "1" * 40
+    OTHER = "2" * 40
+    SERVER_TAG = "claw-server/v1.2.3"
+    SERVER_TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+    EXTENSION_TAG = "ext-browserclaw/v1.2.3.0"
+    CRX = "browserclaw-1.2.3.0.crx"
+
+    @classmethod
+    def setUpClass(cls):
+        probe = subprocess.run(
+            [git_bash_path(), "-c", "mapfile -t probe < /dev/null"],
+            capture_output=True,
+        )
+        if probe.returncode != 0:
+            raise unittest.SkipTest("needs bash >= 4 (mapfile), as on Linux runners")
+
+    def script(self, workflow_name: str, job: str, step_name: str) -> dict:
+        workflow = yaml.safe_load((WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8"))
+        return next(
+            step for step in workflow["jobs"][job]["steps"] if step.get("name") == step_name
+        )
+
+    def run_attachment(self, step, *, files, releases, env):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            gh = fake_bin / "gh"
+            gh.write_text(FAKE_GH, encoding="utf-8")
+            gh.chmod(0o755)
+            work = root / "work"
+            for relative, content in files.items():
+                path = work / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            state = root / "state.json"
+            state.write_text(json.dumps({"releases": releases}), encoding="utf-8")
+            writes = root / "writes.jsonl"
+            writes.touch()
+            result = subprocess.run(
+                [git_bash_path(), "-c", step["run"]],
+                cwd=work,
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "FAKE_GH_STATE": str(state),
+                    "FAKE_GH_WRITES": str(writes),
+                    "GH_TOKEN": "fake",
+                    "RUNNER_TEMP": str(root / "runner-temp"),
+                    "GIT_CEILING_DIRECTORIES": str(root),
+                    **env,
+                },
+                capture_output=True,
+                text=True,
+            )
+            calls = [
+                json.loads(line)
+                for line in writes.read_text(encoding="utf-8").splitlines()
+            ]
+        return result, calls
+
+    def server_zip(self, target: str) -> str:
+        return f"browseros-claw-server-rust-resources-{target}.zip"
+
+    def run_server(self, release, *, defer="true", reservation="create", drop=None, alter=None):
+        step = self.script(
+            "release-claw-server.yml", "publish-versioned", "Attach zips to private draft"
+        )
+        self.assertEqual(step["env"]["DEFER_FINALIZE"], "${{ inputs.defer_finalize }}")
+        self.assertEqual(
+            step["env"]["RESERVATION"], "${{ needs.prepare.outputs.reservation }}"
+        )
+        files = {
+            f"dist/claw-server/{self.server_zip(target)}": f"canonical {target}"
+            for target in self.SERVER_TARGETS
+        }
+        releases = {}
+        if release is not None:
+            draft, target = release
+            assets = {Path(path).name: content for path, content in files.items()}
+            if drop:
+                del assets[self.server_zip(drop)]
+            if alter:
+                assets[self.server_zip(alter)] = "different bytes"
+            releases[self.SERVER_TAG] = {
+                "isDraft": draft,
+                "targetCommitish": target,
+                "assets": assets,
+            }
+        return self.run_attachment(
+            step,
+            files=files,
+            releases=releases,
+            env={
+                "DEFER_FINALIZE": defer,
+                "RELEASE_SHA": self.SOURCE,
+                "RELEASE_TAG": self.SERVER_TAG,
+                "RESERVATION": reservation,
+                "VERSION": "1.2.3",
+            },
+        )
+
+    def test_deferred_server_reuses_matching_public_assets_read_only(self):
+        result, calls = self.run_server((False, self.SOURCE), reservation="tag")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("read-only", result.stdout)
+        self.assertEqual(calls, [])
+
+    def test_deferred_server_rejects_missing_or_conflicting_public_assets(self):
+        for change in ({"drop": "linux-x64"}, {"alter": "darwin-arm64"}):
+            with self.subTest(**change):
+                result, calls = self.run_server(
+                    (False, self.SOURCE), reservation="tag", **change
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("::error::Published", result.stdout)
+                self.assertEqual(calls, [])
+
+    def test_deferred_server_rejects_a_foreign_draft(self):
+        result, calls = self.run_server((True, self.OTHER), reservation="reuse")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not a private draft", result.stdout)
+        self.assertEqual(calls, [])
+
+    def test_deferred_server_writes_only_to_its_private_draft(self):
+        cases = (
+            ("source-bound draft", (True, self.SOURCE), "reuse", ["upload"]),
+            ("tag-verified draft", (True, self.OTHER), "tag", ["upload"]),
+            ("new draft", None, "create", ["create", "upload"]),
+        )
+        for label, release, reservation, commands in cases:
+            with self.subTest(label):
+                result, calls = self.run_server(release, reservation=reservation)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual([call["command"] for call in calls], commands)
+                upload = calls[-1]
+                self.assertIn("--clobber", upload["args"])
+                self.assertIn(upload["draft"], (True, None))
+                if release is None:
+                    self.assertIn("--draft", calls[0]["args"])
+
+    def test_alpha_server_attachment_is_unchanged(self):
+        result, calls = self.run_server(
+            (False, self.SOURCE), defer="", reservation="tag", alter="linux-x64"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call["command"] for call in calls], ["upload"])
+
+    def run_extension(self, release, *, defer="true", asset=None):
+        step = self.script("release-extensions.yml", "build", "Attach CRX assets")
+        self.assertEqual(step["env"]["DEFER_FINALIZE"], "${{ inputs.defer_finalize }}")
+        built = f"packages/browseros/build/extensions/dist/{self.CRX}"
+        releases = {}
+        if release is not None:
+            draft, target = release
+            releases[self.EXTENSION_TAG] = {
+                "isDraft": draft,
+                "targetCommitish": target,
+                "assets": {} if asset is None else {self.CRX: asset},
+            }
+        return self.run_attachment(
+            step,
+            files={built: "canonical crx"},
+            releases=releases,
+            env={
+                "DEFER_FINALIZE": defer,
+                "NAMES": "browserclaw",
+                "RELEASE_SHA": self.SOURCE,
+                "VERSION": "1.2.3.0",
+            },
+        )
+
+    def test_deferred_extension_never_writes_to_a_public_release(self):
+        cases = (
+            ("matching", "canonical crx", 0),
+            ("missing", None, 1),
+            ("conflicting", "different bytes", 1),
+        )
+        for label, asset, failed in cases:
+            with self.subTest(label):
+                result, calls = self.run_extension((False, self.SOURCE), asset=asset)
+                self.assertEqual(result.returncode != 0, bool(failed), result.stdout)
+                self.assertEqual(calls, [])
+
+    def test_deferred_extension_adds_assets_only_to_its_private_draft(self):
+        result, calls = self.run_extension((True, self.OTHER))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not a private draft", result.stdout)
+        self.assertEqual(calls, [])
+
+        result, calls = self.run_extension((True, self.SOURCE))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            [(call["command"], call["draft"]) for call in calls], [("upload", True)]
+        )
+
+    def test_alpha_extension_attachment_is_unchanged(self):
+        result, calls = self.run_extension((False, self.SOURCE), defer="")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call["command"] for call in calls], ["upload"])
 
 
 class ProductNightlyWorkflowTest(unittest.TestCase):

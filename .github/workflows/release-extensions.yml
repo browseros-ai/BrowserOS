@@ -436,6 +436,7 @@ jobs:
 
       - name: Attach CRX assets
         env:
+          DEFER_FINALIZE: ${{ inputs.defer_finalize }}
           GH_TOKEN: ${{ github.token }}
           NAMES: ${{ needs.prepare.outputs.names }}
         run: |
@@ -460,6 +461,25 @@ jobs:
               fi
               echo "Reused identical GitHub release asset $TAG/$asset"
             else
+              # Prepare may reuse a same-source release that is already
+              # public. A deferred build never finalizes, so it adds assets
+              # only to a private draft bound to this source; without deferral
+              # finalize verifies and publishes as before.
+              if [ "$DEFER_FINALIZE" = "true" ]; then
+                release="$(gh release view "$TAG" --json isDraft,targetCommitish)"
+                tag_matches=false
+                if git rev-parse --verify --quiet "refs/tags/$TAG" >/dev/null && \
+                  [ "$(git cat-file -t "refs/tags/$TAG")" = "tag" ] && \
+                  [ "$(git rev-list -n 1 "$TAG")" = "$RELEASE_SHA" ]; then
+                  tag_matches=true
+                fi
+                if [ "$(jq -r '.isDraft' <<< "$release")" != "true" ] || \
+                  { [ "$(jq -r '.targetCommitish' <<< "$release")" != "$RELEASE_SHA" ] && \
+                    [ "$tag_matches" != "true" ]; }; then
+                  echo "::error::$TAG is not a private draft for $RELEASE_SHA; a deferred build cannot add $asset"
+                  exit 1
+                fi
+              fi
               gh release upload "$TAG" "$path"
             fi
           done
