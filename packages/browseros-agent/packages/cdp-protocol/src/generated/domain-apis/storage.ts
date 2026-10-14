@@ -6,20 +6,12 @@ import type {
   ClearCookiesParams,
   ClearDataForOriginParams,
   ClearDataForStorageKeyParams,
-  ClearSharedStorageEntriesParams,
   ClearTrustTokensParams,
   ClearTrustTokensResult,
-  DeleteSharedStorageEntryParams,
   DeleteStorageBucketParams,
   GetCookiesParams,
   GetCookiesResult,
-  GetInterestGroupDetailsParams,
-  GetInterestGroupDetailsResult,
   GetRelatedWebsiteSetsResult,
-  GetSharedStorageEntriesParams,
-  GetSharedStorageEntriesResult,
-  GetSharedStorageMetadataParams,
-  GetSharedStorageMetadataResult,
   GetStorageKeyForFrameParams,
   GetStorageKeyForFrameResult,
   GetStorageKeyParams,
@@ -29,21 +21,10 @@ import type {
   GetUsageAndQuotaResult,
   IndexedDBContentUpdatedEvent,
   IndexedDBListUpdatedEvent,
-  InterestGroupAccessedEvent,
-  InterestGroupAuctionEventOccurredEvent,
-  InterestGroupAuctionNetworkRequestCreatedEvent,
   OverrideQuotaForOriginParams,
-  ResetSharedStorageBudgetParams,
   RunBounceTrackingMitigationsResult,
   SetCookiesParams,
-  SetInterestGroupAuctionTrackingParams,
-  SetInterestGroupTrackingParams,
-  SetProtectedAudienceKAnonymityParams,
-  SetSharedStorageEntryParams,
-  SetSharedStorageTrackingParams,
   SetStorageBucketTrackingParams,
-  SharedStorageAccessedEvent,
-  SharedStorageWorkletOperationExecutionFinishedEvent,
   StorageBucketCreatedOrUpdatedEvent,
   StorageBucketDeletedEvent,
   TrackCacheStorageForOriginParams,
@@ -98,43 +79,12 @@ export interface StorageApi {
   clearTrustTokens(
     params: ClearTrustTokensParams,
   ): Promise<ClearTrustTokensResult>
-  getInterestGroupDetails(
-    params: GetInterestGroupDetailsParams,
-  ): Promise<GetInterestGroupDetailsResult>
-  setInterestGroupTracking(
-    params: SetInterestGroupTrackingParams,
-  ): Promise<void>
-  setInterestGroupAuctionTracking(
-    params: SetInterestGroupAuctionTrackingParams,
-  ): Promise<void>
-  getSharedStorageMetadata(
-    params: GetSharedStorageMetadataParams,
-  ): Promise<GetSharedStorageMetadataResult>
-  getSharedStorageEntries(
-    params: GetSharedStorageEntriesParams,
-  ): Promise<GetSharedStorageEntriesResult>
-  setSharedStorageEntry(params: SetSharedStorageEntryParams): Promise<void>
-  deleteSharedStorageEntry(
-    params: DeleteSharedStorageEntryParams,
-  ): Promise<void>
-  clearSharedStorageEntries(
-    params: ClearSharedStorageEntriesParams,
-  ): Promise<void>
-  resetSharedStorageBudget(
-    params: ResetSharedStorageBudgetParams,
-  ): Promise<void>
-  setSharedStorageTracking(
-    params: SetSharedStorageTrackingParams,
-  ): Promise<void>
   setStorageBucketTracking(
     params: SetStorageBucketTrackingParams,
   ): Promise<void>
   deleteStorageBucket(params: DeleteStorageBucketParams): Promise<void>
   runBounceTrackingMitigations(): Promise<RunBounceTrackingMitigationsResult>
   getRelatedWebsiteSets(): Promise<GetRelatedWebsiteSetsResult>
-  setProtectedAudienceKAnonymity(
-    params: SetProtectedAudienceKAnonymityParams,
-  ): Promise<void>
 
   // ── Events ──
 
@@ -153,28 +103,6 @@ export interface StorageApi {
   on(
     event: 'indexedDBListUpdated',
     handler: (params: IndexedDBListUpdatedEvent) => void,
-  ): () => void
-  on(
-    event: 'interestGroupAccessed',
-    handler: (params: InterestGroupAccessedEvent) => void,
-  ): () => void
-  on(
-    event: 'interestGroupAuctionEventOccurred',
-    handler: (params: InterestGroupAuctionEventOccurredEvent) => void,
-  ): () => void
-  on(
-    event: 'interestGroupAuctionNetworkRequestCreated',
-    handler: (params: InterestGroupAuctionNetworkRequestCreatedEvent) => void,
-  ): () => void
-  on(
-    event: 'sharedStorageAccessed',
-    handler: (params: SharedStorageAccessedEvent) => void,
-  ): () => void
-  on(
-    event: 'sharedStorageWorkletOperationExecutionFinished',
-    handler: (
-      params: SharedStorageWorkletOperationExecutionFinishedEvent,
-    ) => void,
   ): () => void
   on(
     event: 'storageBucketCreatedOrUpdated',

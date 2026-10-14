@@ -1,5 +1,5 @@
 use crate::framework::{
-    ToolCtx, ToolError, ToolExecResult, ToolResult, error_result, parse_args, text_result,
+    ToolCtx, ToolExecResult, ToolResult, error_result, parse_args, text_result,
 };
 use browseros_cdp::browser::TabGroupInfo;
 use browseros_core::{PageId, TabId};
@@ -99,7 +99,7 @@ fn handler<'a>(
         let result = match args.action {
             TabGroupsAction::List => {
                 let groups: GroupsResult = serde_json::from_value(
-                    ctx.session
+                    ctx.browser
                         .cdp("Browser.getTabGroups", json!({}), None)
                         .await?,
                 )?;
@@ -132,7 +132,7 @@ fn handler<'a>(
                 }
                 let tab_ids = to_tab_ids(ctx, page_ids).await?;
                 let value = if let Some(group_id) = args.group_id {
-                    ctx.session
+                    ctx.browser
                         .cdp(
                             "Browser.addTabsToGroup",
                             json!({ "groupId": group_id, "tabIds": tab_ids }),
@@ -144,7 +144,7 @@ fn handler<'a>(
                     if let (Value::Object(object), Some(title)) = (&mut params, args.title) {
                         object.insert("title".to_string(), Value::String(title));
                     }
-                    ctx.session
+                    ctx.browser
                         .cdp("Browser.createTabGroup", params, None)
                         .await?
                 };
@@ -187,7 +187,7 @@ fn handler<'a>(
                     }
                 }
                 let group: GroupResult = serde_json::from_value(
-                    ctx.session
+                    ctx.browser
                         .cdp("Browser.updateTabGroup", params, None)
                         .await?,
                 )?;
@@ -202,7 +202,7 @@ fn handler<'a>(
                     return Ok(Some(error_result("tab_groups ungroup: pages is required.")));
                 };
                 let tab_ids = to_tab_ids(ctx, page_ids).await?;
-                ctx.session
+                ctx.browser
                     .cdp(
                         "Browser.removeTabsFromGroup",
                         json!({ "tabIds": tab_ids }),
@@ -218,7 +218,7 @@ fn handler<'a>(
                 let Some(group_id) = args.group_id else {
                     return Ok(Some(error_result("tab_groups close: groupId is required.")));
                 };
-                ctx.session
+                ctx.browser
                     .cdp(
                         "Browser.closeTabGroup",
                         json!({ "groupId": group_id }),
@@ -236,19 +236,10 @@ fn handler<'a>(
 }
 
 async fn to_tab_ids(ctx: &ToolCtx, page_ids: &[u32]) -> ToolExecResult<Vec<i64>> {
-    ctx.session.pages.list().await?;
+    ctx.browser.list_pages().await?;
     let mut out = Vec::with_capacity(page_ids.len());
     for page_id in page_ids {
-        let info = ctx
-            .session
-            .pages
-            .get_info(PageId(*page_id))
-            .await
-            .ok_or_else(|| {
-                ToolError::message(format!(
-                    "Unknown page {page_id}. Use the tabs tool to list pages."
-                ))
-            })?;
+        let info = ctx.browser.page(PageId(*page_id)).await?;
         out.push(info.tab_id.0);
     }
     Ok(out)
@@ -256,7 +247,7 @@ async fn to_tab_ids(ctx: &ToolCtx, page_ids: &[u32]) -> ToolExecResult<Vec<i64>>
 
 async fn with_pages(ctx: &ToolCtx, group: TabGroupInfo) -> ToolExecResult<TabGroupWithPages> {
     let tab_ids = group.tab_ids.iter().copied().map(TabId).collect::<Vec<_>>();
-    let resolved = ctx.session.pages.resolve_tab_ids(&tab_ids).await?;
+    let resolved = ctx.browser.resolve_tab_ids(&tab_ids).await?;
     let page_ids = group
         .tab_ids
         .iter()

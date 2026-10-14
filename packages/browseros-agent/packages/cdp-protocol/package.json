@@ -14,6 +14,14 @@
       "types": "./src/generated/domain-apis/accessibility.ts",
       "default": "./src/generated/domain-apis/accessibility.ts"
     },
+    "./domains/ads": {
+      "types": "./src/generated/domains/ads.ts",
+      "default": "./src/generated/domains/ads.ts"
+    },
+    "./domain-apis/ads": {
+      "types": "./src/generated/domain-apis/ads.ts",
+      "default": "./src/generated/domain-apis/ads.ts"
+    },
     "./domains/animation": {
       "types": "./src/generated/domains/animation.ts",
       "default": "./src/generated/domains/animation.ts"
@@ -149,6 +157,14 @@
     "./domain-apis/device-orientation": {
       "types": "./src/generated/domain-apis/device-orientation.ts",
       "default": "./src/generated/domain-apis/device-orientation.ts"
+    },
+    "./domains/digital-credentials": {
+      "types": "./src/generated/domains/digital-credentials.ts",
+      "default": "./src/generated/domains/digital-credentials.ts"
+    },
+    "./domain-apis/digital-credentials": {
+      "types": "./src/generated/domain-apis/digital-credentials.ts",
+      "default": "./src/generated/domain-apis/digital-credentials.ts"
     },
     "./domains/emulation": {
       "types": "./src/generated/domains/emulation.ts",

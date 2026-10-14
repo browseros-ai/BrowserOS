@@ -389,6 +389,8 @@ mod tests {
             window_id: None,
             index: None,
             group_id: None,
+            browser_profile_id: None,
+            live_browser_context_id: None,
         });
         let result = ToolResult::text(
             "x".repeat(9000),

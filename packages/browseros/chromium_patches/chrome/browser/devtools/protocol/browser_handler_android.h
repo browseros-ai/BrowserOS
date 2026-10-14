@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler_android.h b/chrome/browser/devtools/protocol/browser_handler_android.h
-index 83bec7125e1fb966a61450bf93fc3aca6f46d438..377fb3a47e68c92df229fff142054217e94fea5c 100644
+index 83bec7125e1fb966a61450bf93fc3aca6f46d438..4b28161eaf7de76a82aa032f21a2a01ceb6af383 100644
 --- a/chrome/browser/devtools/protocol/browser_handler_android.h
 +++ b/chrome/browser/devtools/protocol/browser_handler_android.h
 @@ -58,6 +58,14 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
@@ -17,10 +17,18 @@ index 83bec7125e1fb966a61450bf93fc3aca6f46d438..377fb3a47e68c92df229fff142054217
    protocol::Response GetWindowBounds(
        int window_id,
        std::unique_ptr<protocol::Browser::Bounds>* out_bounds) override;
-@@ -76,6 +84,108 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
+@@ -76,6 +84,116 @@ class BrowserHandlerAndroid : public protocol::Browser::Backend {
    protocol::Response AddPrivacySandboxEnrollmentOverride(
        const std::string& in_url) override;
  
++  // Keep generated Browser backend signatures complete on Android; saved
++  // profile automation remains a desktop operation.
++  protocol::Response GetProfiles(
++      std::unique_ptr<protocol::Array<protocol::Browser::BrowserProfileInfo>>*
++          out_profiles) override;
++  void LoadProfile(const std::string& browser_profile_id,
++                   std::unique_ptr<LoadProfileCallback> callback) override;
++
 +  // Window management
 +  protocol::Response GetWindows(
 +      std::unique_ptr<protocol::Array<protocol::Browser::WindowInfo>>*

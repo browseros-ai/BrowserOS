@@ -5,7 +5,7 @@ pub mod mouse;
 
 use crate::{
     CoreError, CoveredElementTarget, PageId, ProtocolSession, Ref, observer::Observer,
-    pages::PageManager, snapshot::RefEntry,
+    pages::PageManager, snapshot::RefEntry, target::page_access::PageAccess,
 };
 use geometry::{
     call_on_element, click_blocker_at_point, focus_element_js, get_element_center, js_click,
@@ -46,10 +46,13 @@ pub enum ScrollDirection {
     Right,
 }
 
+/// Input uses the observer capability for element refs and the same captured capability for
+/// direct coordinates/keyboard commands. Retaining this handle cannot adopt a replacement target.
 pub struct Input {
     observer: Arc<Observer>,
     pages: Arc<PageManager>,
     page_id: PageId,
+    access: Option<Arc<PageAccess>>,
 }
 
 #[derive(Debug, Clone)]
@@ -89,7 +92,13 @@ impl Input {
             observer,
             pages,
             page_id,
+            access: None,
         }
+    }
+
+    pub(crate) fn with_access(mut self, access: Arc<PageAccess>) -> Self {
+        self.access = Some(access);
+        self
     }
 
     pub async fn click(
@@ -418,7 +427,10 @@ impl Input {
     }
 
     async fn page_session(&self) -> Result<ProtocolSession, CoreError> {
-        Ok(self.pages.get_session(self.page_id.clone()).await?.session)
+        match &self.access {
+            Some(access) => Ok(access.session().await?.session),
+            None => Ok(self.pages.get_session(self.page_id.clone()).await?.session),
+        }
     }
 
     async fn check_click_point(

@@ -22,6 +22,8 @@ pub struct BrowserSessionHooks {
     pub page_manager: PageManagerHooks,
 }
 
+/// Shared process runtime and global page/frame registries. Hosts use this for infrastructure;
+/// task execution receives a BrowserView so capture and admission cannot be bypassed.
 pub struct BrowserSession {
     connection: Arc<dyn CdpConnection>,
     pub pages: Arc<PageManager>,
@@ -87,6 +89,10 @@ impl BrowserSession {
         });
         Self::spawn_detach_listener(session.clone());
         session
+    }
+
+    pub(crate) fn frames(&self) -> &Arc<FrameRegistry> {
+        &self.frames
     }
 
     pub async fn observe(&self, page_id: PageId) -> Arc<Observer> {

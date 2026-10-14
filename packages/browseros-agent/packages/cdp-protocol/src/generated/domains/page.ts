@@ -51,7 +51,6 @@ export type PermissionsPolicyFeature =
   | 'all-screens-capture'
   | 'ambient-light-sensor'
   | 'aria-notify'
-  | 'attribution-reporting'
   | 'autofill'
   | 'autoplay'
   | 'bluetooth'
@@ -94,7 +93,6 @@ export type PermissionsPolicyFeature =
   | 'digital-credentials-get'
   | 'direct-sockets'
   | 'direct-sockets-multicast'
-  | 'direct-sockets-private'
   | 'display-capture'
   | 'document-domain'
   | 'encrypted-media'
@@ -106,11 +104,11 @@ export type PermissionsPolicyFeature =
   | 'gamepad'
   | 'geolocation'
   | 'gyroscope'
+  | 'haptics'
   | 'hid'
   | 'identity-credentials-get'
   | 'idle-detection'
   | 'interest-cohort'
-  | 'join-ad-interest-group'
   | 'keyboard-map'
   | 'language-detector'
   | 'language-model'
@@ -127,14 +125,11 @@ export type PermissionsPolicyFeature =
   | 'otp-credentials'
   | 'payment'
   | 'picture-in-picture'
-  | 'private-aggregation'
   | 'private-state-token-issuance'
   | 'private-state-token-redemption'
   | 'publickey-credentials-create'
   | 'publickey-credentials-get'
-  | 'record-ad-auction-events'
   | 'rewriter'
-  | 'run-ad-auction'
   | 'screen-wake-lock'
   | 'serial'
   | 'shared-storage'
@@ -145,12 +140,14 @@ export type PermissionsPolicyFeature =
   | 'sub-apps'
   | 'summarizer'
   | 'sync-xhr'
+  | 'tools'
   | 'translator'
   | 'unload'
   | 'usb'
   | 'usb-unrestricted'
   | 'vertical-scroll'
   | 'web-app-installation'
+  | 'webnn'
   | 'web-printing'
   | 'web-share'
   | 'window-management'
@@ -405,7 +402,6 @@ export interface FileFilter {
 export interface FileHandler {
   action: string
   name: string
-  icons?: ImageResource[]
   accepts?: FileFilter[]
   launchType: string
 }
@@ -627,6 +623,8 @@ export type BackForwardCacheNotRestoredReason =
   | 'EmbedderExtensionMessaging'
   | 'EmbedderExtensionMessagingForOpenPort'
   | 'EmbedderExtensionSentMessageToCachedFrame'
+  | 'EmbedderExtensionFrame'
+  | 'EmbedderPrivilegedWebContents'
   | 'RequestedByWebViewClient'
   | 'PostMessageByWebViewClient'
   | 'CacheControlNoStoreDeviceBoundSessionTerminated'
@@ -704,6 +702,7 @@ export interface CreateIsolatedWorldParams {
   frameId: FrameId
   worldName?: string
   grantUniveralAccess?: boolean
+  contentSecurityPolicy?: string
 }
 
 export interface CreateIsolatedWorldResult {
@@ -948,6 +947,23 @@ export interface StartScreencastParams {
   maxWidth?: number
   maxHeight?: number
   everyNthFrame?: number
+  maxFramesInFlight?: number
+  sendLastFrame?: boolean
+}
+
+export interface StartScreenRecordingParams {
+  audio?: boolean
+  maxWidth?: number
+  maxHeight?: number
+  frameRate?: number
+}
+
+export interface StartScreenRecordingResult {
+  stream: StreamHandle
+}
+
+export interface StopScreenRecordingResult {
+  stream: StreamHandle
 }
 
 export interface SetWebLifecycleStateParams {

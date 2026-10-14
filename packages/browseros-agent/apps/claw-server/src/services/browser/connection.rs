@@ -350,11 +350,31 @@ mod tests {
     impl CdpConnection for TestConnection {
         fn send<'a>(
             &'a self,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>> {
+            self.send_at_epoch(1, method, params, session)
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
             _method: &'a str,
             _params: Value,
             _session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
-            Box::pin(async { Ok(serde_json::json!({})) })
+            Box::pin(async move {
+                // This fixture's epoch is immutable; validation and any synchronous
+                // recorded publication cannot be separated by a reconnect.
+                if expected_epoch != 1 {
+                    return Err(browseros_cdp::CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
+                Ok(serde_json::json!({}))
+            })
         }
 
         fn send_raw_json<'a>(
@@ -364,6 +384,27 @@ mod tests {
             _session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<String, CdpError>> {
             Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params_json: &'a str,
+            session: Option<&'a browseros_core::SessionId>,
+        ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>> {
+            Box::pin(async move {
+                let params = serde_json::from_str(params_json).map_err(|error| {
+                    browseros_cdp::CdpError::Protocol {
+                        code: -1,
+                        message: error.to_string(),
+                    }
+                })?;
+                Ok(self
+                    .send_at_epoch(expected_epoch, method, params, session)
+                    .await?
+                    .to_string())
+            })
         }
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {

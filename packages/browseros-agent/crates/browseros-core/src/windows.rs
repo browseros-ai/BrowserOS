@@ -1,4 +1,6 @@
-use crate::{CoreError, ProtocolSession, WindowId, connection::CdpConnection, timeouts};
+use crate::{
+    BrowserContextId, CoreError, ProtocolSession, WindowId, connection::CdpConnection, timeouts,
+};
 use browseros_cdp::browser;
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -24,10 +26,21 @@ impl WindowManager {
     }
 
     pub async fn create(&self) -> Result<WindowInfo, CoreError> {
+        self.create_with(None).await
+    }
+
+    pub async fn create_with(
+        &self,
+        browser_context_id: Option<&BrowserContextId>,
+    ) -> Result<WindowInfo, CoreError> {
         self.ensure_connected().await?;
         let root = ProtocolSession::root(self.cdp.clone());
-        let result: browser::CreateWindowResult =
-            root.send("Browser.createWindow", json!({})).await?;
+        // Unbound creation must retain its exact empty request for existing callers.
+        let params = browser_context_id.map_or_else(
+            || json!({}),
+            |id| json!({ "browserContextId": id.as_str() }),
+        );
+        let result: browser::CreateWindowResult = root.send("Browser.createWindow", params).await?;
         Ok(result.window)
     }
 

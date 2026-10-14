@@ -1,13 +1,17 @@
 use crate::{
-    CoreError, PageId, ProtocolSession, SessionId, TabId, TargetId, WindowId,
-    connection::{CdpConnection, EXCLUDED_URL_PREFIXES},
+    BrowserContextId, BrowserProfileId, CoreError, PageId, ProtocolSession, SessionId, TabId,
+    TargetError, TargetId, WindowId,
+    connection::{CdpConnection, EXCLUDED_URL_PREFIXES, EpochGuard},
+    profiles::ProfileMeta,
+    target::PageAdmission,
     timeouts,
 };
 use browseros_cdp::{browser, target};
 use futures_util::future::BoxFuture;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     sync::Arc,
 };
 use tokio::{sync::Mutex, time::sleep};
@@ -40,6 +44,29 @@ pub struct PageInfo {
     pub window_id: Option<WindowId>,
     pub index: Option<i64>,
     pub group_id: Option<String>,
+    pub browser_profile_id: Option<BrowserProfileId>,
+    pub live_browser_context_id: Option<BrowserContextId>,
+}
+
+impl PageInfo {
+    /// Native target and ownership distinguish an incarnation from a reusable PageId.
+    /// Readiness/navigation may update presentation fields without changing this identity.
+    pub(crate) fn same_incarnation(&self, other: &Self) -> bool {
+        self.page_id == other.page_id
+            && self.target_id == other.target_id
+            && self.tab_id == other.tab_id
+            && self.window_id == other.window_id
+            && self.browser_profile_id == other.browser_profile_id
+            && self.live_browser_context_id == other.live_browser_context_id
+    }
+}
+
+/// Identity authority taken from the native create reply, before registration/readiness can
+/// await. Views retain this receipt separately from the globally reconciled page inventory.
+#[derive(Clone)]
+pub(crate) struct PageCreation {
+    pub(crate) original: PageInfo,
+    pub(crate) guard: EpochGuard,
 }
 
 #[derive(Debug, Clone)]
@@ -83,9 +110,18 @@ impl PageManager {
     }
 
     pub async fn list(&self) -> Result<Vec<PageInfo>, CoreError> {
-        self.ensure_connected().await?;
-        let root = ProtocolSession::root(self.cdp.clone());
-        let result: browser::GetTabsResult = root.send("Browser.getTabs", json!({})).await?;
+        self.list_with_epoch(None).await
+    }
+
+    /// View-owned reconciliation still sees the full browser, but cannot publish work to a
+    /// replacement connection. Global callers retain the original unrestricted entry point.
+    pub(crate) async fn list_with_epoch(
+        &self,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<Vec<PageInfo>, CoreError> {
+        self.ensure_connected_with_epoch(guard.as_ref()).await?;
+        let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
+        let result: NativeTabs = root.send("Browser.getTabs", json!({})).await?;
         let tabs = result
             .tabs
             .into_iter()
@@ -98,6 +134,9 @@ impl PageManager {
 
         let mut detached = Vec::new();
         let mut state = self.state.lock().await;
+        if let Some(guard) = &guard {
+            guard.check(self.cdp.as_ref())?;
+        }
         let mut seen = Vec::<TargetId>::new();
         for tab in tabs {
             let target_id = TargetId(tab.target_id.clone());
@@ -110,7 +149,7 @@ impl PageManager {
                     if existing.target_id != target_id {
                         stale_target = Some(existing.target_id.clone());
                     }
-                    let prior_window = existing.window_id.clone();
+                    let prior_window = existing.window_id;
                     *existing = page_info_from_tab(page_id.clone(), tab, prior_window);
                 }
                 if let Some(stale_target) = stale_target {
@@ -149,6 +188,90 @@ impl PageManager {
             }
         }
         Ok(pages)
+    }
+
+    /// Snapshot only: callers must first reconcile the complete native inventory. A view must
+    /// never prune global page ownership using only its projected response.
+    pub async fn known_page_ids(&self) -> BTreeSet<PageId> {
+        self.state.lock().await.pages.keys().cloned().collect()
+    }
+
+    /// Admission brackets attachment because PageId survives replacement of a tab's TargetId.
+    /// Retry one replacement, then fail rather than attach an unadmitted incarnation.
+    pub async fn get_session_admitted(
+        &self,
+        page_id: PageId,
+        admission: &dyn PageAdmission,
+    ) -> Result<PageSession, CoreError> {
+        self.get_session_admitted_with_epoch(page_id, admission, None)
+            .await
+    }
+
+    pub(crate) async fn get_session_admitted_with_epoch(
+        &self,
+        page_id: PageId,
+        admission: &dyn PageAdmission,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<PageSession, CoreError> {
+        for _ in 0..2 {
+            let before = self
+                .refresh_with_epoch(page_id.clone(), guard.clone())
+                .await?
+                .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
+            admission.admit(&before)?;
+            let session_id = self
+                .attach_with_epoch(before.target_id.clone(), page_id.clone(), guard.clone())
+                .await?;
+            let after = self
+                .refresh_with_epoch(page_id.clone(), guard.clone())
+                .await?
+                .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
+            if before.target_id != after.target_id {
+                continue;
+            }
+            admission.admit(&after)?;
+            return Ok(PageSession {
+                target_id: after.target_id,
+                session_id: session_id.clone(),
+                session: ProtocolSession::for_session(self.cdp.clone(), session_id)
+                    .with_epoch_guard(guard),
+                url: after.url,
+            });
+        }
+        Err(TargetError::PageTargetChanged(page_id).into())
+    }
+
+    pub(crate) async fn page_for_session(&self, session: &SessionId) -> Option<PageInfo> {
+        let state = self.state.lock().await;
+        let target = state
+            .sessions
+            .iter()
+            .find_map(|(target, id)| (id == session).then_some(target))?;
+        state
+            .pages
+            .values()
+            .find(|page| &page.target_id == target)
+            .cloned()
+    }
+
+    /// Synchronous signal reads use only the last reconciled inventory, never initiate CDP.
+    /// A busy registry fails closed; browser operations still perform fresh async admission.
+    pub(crate) fn admitted_cached(
+        &self,
+        page: &PageId,
+        scope: &crate::CapturedScope,
+        windows: &BTreeSet<WindowId>,
+    ) -> bool {
+        self.state
+            .try_lock()
+            .ok()
+            .and_then(|state| state.pages.get(page).cloned())
+            .is_some_and(|page| {
+                page.browser_profile_id.as_ref() == Some(&scope.profile.browser_profile_id)
+                    && scope.context_id.is_some()
+                    && page.live_browser_context_id == scope.context_id
+                    && page.window_id.is_some_and(|id| windows.contains(&id))
+            })
     }
 
     pub async fn get_info(&self, page_id: PageId) -> Option<PageInfo> {
@@ -234,27 +357,34 @@ impl PageManager {
     }
 
     pub async fn refresh(&self, page_id: PageId) -> Result<Option<PageInfo>, CoreError> {
-        self.ensure_connected().await?;
+        self.refresh_with_epoch(page_id, None).await
+    }
+
+    pub(crate) async fn refresh_with_epoch(
+        &self,
+        page_id: PageId,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<Option<PageInfo>, CoreError> {
+        self.ensure_connected_with_epoch(guard.as_ref()).await?;
         let info = {
             let state = self.state.lock().await;
             state.pages.get(&page_id).cloned()
         };
         let Some(info) = info else {
-            self.list().await?;
+            self.list_with_epoch(guard).await?;
             return Ok(self.state.lock().await.pages.get(&page_id).cloned());
         };
-        let root = ProtocolSession::root(self.cdp.clone());
+        let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let refreshed = root
-            .send::<_, browser::GetTabInfoResult>(
-                "Browser.getTabInfo",
-                json!({ "tabId": info.tab_id.0 }),
-            )
+            .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": info.tab_id.0 }))
             .await;
         match refreshed {
             Ok(result) => {
-                let updated =
-                    page_info_from_tab(page_id.clone(), result.tab, info.window_id.clone());
+                let updated = page_info_from_tab(page_id.clone(), result.tab, info.window_id);
                 let mut state = self.state.lock().await;
+                if let Some(guard) = &guard {
+                    guard.check(self.cdp.as_ref())?;
+                }
                 let Some(current) = state.pages.get(&page_id) else {
                     return Ok(None);
                 };
@@ -268,8 +398,9 @@ impl PageManager {
                 state.pages.insert(page_id, updated.clone());
                 Ok(Some(updated))
             }
+            Err(err @ CoreError::Target(_)) => Err(err),
             Err(_err) => {
-                self.list().await?;
+                self.list_with_epoch(guard).await?;
                 Ok(self.state.lock().await.pages.get(&page_id).cloned())
             }
         }
@@ -291,35 +422,55 @@ impl PageManager {
     }
 
     pub async fn new_page(&self, url: &str, opts: NewPageOptions) -> Result<PageId, CoreError> {
+        let (creation, _) = self.new_page_info(url, opts).await?;
+        Ok(creation.original.page_id)
+    }
+
+    /// Ordinary unbound creation keeps its placement and best-effort default grouping. Once
+    /// native creation returns, all follow-up work belongs to that exact target and epoch;
+    /// neither readiness nor a later registry lookup may provide a new initial identity.
+    pub(crate) async fn new_page_info(
+        &self,
+        url: &str,
+        opts: NewPageOptions,
+    ) -> Result<(PageCreation, PageInfo), CoreError> {
         self.ensure_connected().await?;
+        let epoch = self.cdp.connection_epoch();
         let root = ProtocolSession::root(self.cdp.clone());
         let mut params = serde_json::Map::new();
         params.insert("url".to_string(), Value::String(url.to_string()));
+        if let Some(context) = opts.browser_context_id {
+            params.insert("browserContextId".to_string(), Value::String(context.0));
+        }
         if let Some(background) = opts.background {
             params.insert("background".to_string(), Value::Bool(background));
         }
         if let Some(window_id) = opts.window_id {
             params.insert("windowId".to_string(), Value::from(window_id.0));
         }
-        let created: browser::CreateTabResult = root
+        let created: NativeTabReply = root
             .send("Browser.createTab", Value::Object(params))
             .await?;
-        let tab_id = created.tab.tab_id;
+        let creation = self.register_created(created.tab, url, epoch, None).await?;
+        let root = root.with_epoch_guard(Some(creation.guard.clone()));
+        let tab_id = creation.original.tab_id.0;
 
         let mut tab = None;
         for _attempt in 0..timeouts::NEW_PAGE_READY_ATTEMPTS {
             let result = root
-                .send::<_, browser::GetTabInfoResult>(
-                    "Browser.getTabInfo",
-                    json!({ "tabId": tab_id }),
-                )
+                .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
                 .await;
-            if let Ok(result) = result {
-                let ready = !result.tab.is_loading || result.tab.load_progress >= 1.0;
-                tab = Some(result.tab);
-                if ready {
-                    break;
+            match result {
+                Ok(result) => {
+                    let fresh = self.created_readback(&creation, result.tab).await?;
+                    let ready = !fresh.is_loading || fresh.load_progress >= 1.0;
+                    tab = Some(fresh);
+                    if ready {
+                        break;
+                    }
                 }
+                Err(err @ CoreError::Target(_)) => return Err(err),
+                Err(_) => {}
             }
             sleep(timeouts::NEW_PAGE_READY_POLL).await;
         }
@@ -327,37 +478,124 @@ impl PageManager {
             .ok_or_else(|| CoreError::Message(format!("Tab {tab_id} not found after creation")))?;
 
         if let Some(group_id) = opts.tab_group_id {
+            // The readiness loop can await registry locks and sleeps. Refresh the ORIGINAL
+            // incarnation before the final native-tab mutation, never resolve its ID anew.
+            let before: NativeTabReply = root
+                .send("Browser.getTabInfo", json!({"tabId":tab_id}))
+                .await?;
+            tab = self.created_readback(&creation, before.tab).await?;
             let result: Result<browser::AddTabsToGroupResult, CoreError> = root
                 .send(
                     "Browser.addTabsToGroup",
                     json!({ "groupId": group_id, "tabIds": [tab_id] }),
                 )
                 .await;
-            if let Err(err) = result {
-                warn!("failed to add new page to default tab group: {err}");
-            } else if let Ok(result) = root
-                .send::<_, browser::GetTabInfoResult>(
-                    "Browser.getTabInfo",
-                    json!({ "tabId": tab_id }),
-                )
-                .await
-            {
-                tab = result.tab;
+            match result {
+                Err(err @ CoreError::Target(_)) => return Err(err),
+                Err(err) => warn!("failed to add new page to default tab group: {err}"),
+                Ok(_) => match root
+                    .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
+                    .await
+                {
+                    Ok(result) => tab = self.created_readback(&creation, result.tab).await?,
+                    Err(err @ CoreError::Target(_)) => return Err(err),
+                    Err(_) => {}
+                },
             }
         }
+        self.publish_created_readback(&creation, &tab).await?;
+        Ok((creation, tab))
+    }
 
-        let mut state = self.state.lock().await;
-        let page_id = PageId(state.next_page_id);
-        state.next_page_id += 1;
+    /// Return the actual native create snapshot, rather than only its reusable registry ID.
+    /// A bound view must seed admission from this return before its first readiness await.
+    pub(crate) async fn adopt_created(
+        &self,
+        raw: Value,
+        url: &str,
+        guard: EpochGuard,
+    ) -> Result<PageCreation, CoreError> {
+        let tab: NativeTab =
+            serde_json::from_value(raw).map_err(|err| CoreError::Message(err.to_string()))?;
+        self.register_created(tab, url, guard.expected, Some(guard.invalidated))
+            .await
+    }
+
+    async fn register_created(
+        &self,
+        mut tab: NativeTab,
+        url: &str,
+        epoch: u64,
+        invalidated: Option<TargetError>,
+    ) -> Result<PageCreation, CoreError> {
         if tab.url.is_empty() {
             tab.url = url.to_string();
         }
-        state.pages.insert(
-            page_id.clone(),
-            page_info_from_tab(page_id.clone(), tab, None),
-        );
+        let mut state = self.state.lock().await;
+        let existing = find_by_target(&state.pages, &TargetId(tab.target_id.clone()))
+            .or_else(|| find_by_tab(&state.pages, TabId(tab.tab_id)));
+        let page_id = existing.unwrap_or_else(|| {
+            let id = PageId(state.next_page_id);
+            state.next_page_id += 1;
+            id
+        });
+        let guard = EpochGuard {
+            expected: epoch,
+            invalidated: invalidated
+                .unwrap_or_else(|| TargetError::PageTargetChanged(page_id.clone())),
+        };
+        guard.check(self.cdp.as_ref())?;
+        let original = page_info_from_tab(page_id.clone(), tab, None);
+        // A concurrent global reconciliation may have seen creation already, or may have
+        // rebound its native tab. Preserve the allocated ID, but never overwrite replacement
+        // identity with an older response and then treat a fresh read as original creation.
+        if let Some(current) = state.pages.get(&page_id)
+            && !original.same_incarnation(current)
+        {
+            return Err(TargetError::PageTargetChanged(page_id).into());
+        }
+        state.pages.insert(page_id.clone(), original.clone());
         state.agent_created.insert(page_id.clone());
-        Ok(page_id)
+        Ok(PageCreation { original, guard })
+    }
+
+    async fn created_readback(
+        &self,
+        creation: &PageCreation,
+        tab: NativeTab,
+    ) -> Result<PageInfo, CoreError> {
+        let mut fresh = page_info_from_tab(
+            creation.original.page_id.clone(),
+            tab,
+            creation.original.window_id,
+        );
+        if fresh.url.is_empty() {
+            fresh.url.clone_from(&creation.original.url);
+        }
+        self.publish_created_readback(creation, &fresh).await?;
+        Ok(fresh)
+    }
+
+    /// Readbacks can update loading/title/group data only while both the native response and
+    /// the registry still describe creation. This check also closes the registration lock
+    /// handoff: another global list cannot make a replacement authoritative for this call.
+    async fn publish_created_readback(
+        &self,
+        creation: &PageCreation,
+        fresh: &PageInfo,
+    ) -> Result<(), CoreError> {
+        let mut state = self.state.lock().await;
+        creation.guard.check(self.cdp.as_ref())?;
+        if !creation.original.same_incarnation(fresh)
+            || state
+                .pages
+                .get(&creation.original.page_id)
+                .is_none_or(|current| !creation.original.same_incarnation(current))
+        {
+            return Err(TargetError::PageTargetChanged(creation.original.page_id.clone()).into());
+        }
+        state.pages.insert(fresh.page_id.clone(), fresh.clone());
+        Ok(())
     }
 
     pub async fn close(&self, page_id: PageId) -> Result<(), CoreError> {
@@ -395,7 +633,7 @@ impl PageManager {
             .await?
             .ok_or_else(|| CoreError::UnknownPage(page_id.clone()))?;
         let root = ProtocolSession::root(self.cdp.clone());
-        let result: browser::MoveTabResult = root
+        let result: NativeTabReply = root
             .send(
                 "Browser.moveTab",
                 json!({
@@ -420,12 +658,21 @@ impl PageManager {
     }
 
     async fn attach(&self, target_id: TargetId, page_id: PageId) -> Result<SessionId, CoreError> {
-        self.ensure_connected().await?;
+        self.attach_with_epoch(target_id, page_id, None).await
+    }
+
+    async fn attach_with_epoch(
+        &self,
+        target_id: TargetId,
+        page_id: PageId,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<SessionId, CoreError> {
+        self.ensure_connected_with_epoch(guard.as_ref()).await?;
         if let Some(cached) = self.state.lock().await.sessions.get(&target_id).cloned() {
             return Ok(cached);
         }
 
-        let root = ProtocolSession::root(self.cdp.clone());
+        let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let attached: target::AttachToTargetResult = root
             .send(
                 "Target.attachToTarget",
@@ -433,7 +680,10 @@ impl PageManager {
             )
             .await?;
         let session_id = SessionId::from(attached.session_id);
-        let session = ProtocolSession::for_session(self.cdp.clone(), session_id.clone());
+        // Infrastructure setup and its frame-registration hook keep the epoch even though
+        // they do not use the caller's page-method policy (e.g. Target.setAutoAttach).
+        let session = ProtocolSession::for_session(self.cdp.clone(), session_id.clone())
+            .with_epoch_guard(guard.clone());
         let _: Value = session.send("Page.enable", json!({})).await?;
         let _: Value = session.send("DOM.enable", json!({})).await?;
         let _: Value = session.send("Runtime.enable", json!({})).await?;
@@ -457,15 +707,35 @@ impl PageManager {
         {
             warn!("failed to enable focus emulation for agent page {page_id:?}: {err}");
         }
-        self.state
-            .lock()
-            .await
-            .sessions
-            .insert(target_id, session_id.clone());
+        {
+            let mut state = self.state.lock().await;
+            if let Some(guard) = &guard {
+                guard.check(self.cdp.as_ref())?;
+            }
+            state.sessions.insert(target_id, session_id.clone());
+        }
         if let Some(callback) = &self.hooks.on_session_attached {
             callback(session, page_id, session_id.clone()).await?;
         }
         Ok(session_id)
+    }
+
+    async fn ensure_connected_with_epoch(
+        &self,
+        guard: Option<&crate::connection::EpochGuard>,
+    ) -> Result<(), CoreError> {
+        if let Some(guard) = guard {
+            guard.check(self.cdp.as_ref())?;
+            let mut state = self.state.lock().await;
+            guard.check(self.cdp.as_ref())?;
+            if state.connection_epoch != guard.expected {
+                state.sessions.clear();
+                state.connection_epoch = guard.expected;
+            }
+        } else {
+            self.ensure_connected().await?;
+        }
+        Ok(())
     }
 
     async fn ensure_connected(&self) -> Result<bool, CoreError> {
@@ -508,7 +778,7 @@ impl PageManager {
     async fn update_from_tab(
         &self,
         page_id: PageId,
-        tab: browser::TabInfo,
+        tab: NativeTab,
     ) -> Result<PageInfo, CoreError> {
         let prior_window = self
             .state
@@ -516,7 +786,7 @@ impl PageManager {
             .await
             .pages
             .get(&page_id)
-            .and_then(|info| info.window_id.clone());
+            .and_then(|info| info.window_id);
         let updated = page_info_from_tab(page_id.clone(), tab, prior_window);
         self.state
             .lock()
@@ -529,6 +799,7 @@ impl PageManager {
 
 #[derive(Debug, Clone, Default)]
 pub struct NewPageOptions {
+    pub browser_context_id: Option<BrowserContextId>,
     pub background: Option<bool>,
     pub window_id: Option<WindowId>,
     pub tab_group_id: Option<String>,
@@ -540,11 +811,45 @@ pub struct MovePageOptions {
     pub index: Option<i64>,
 }
 
-fn page_info_from_tab(
-    page_id: PageId,
+// Keep the full native reply: generated types on an older protocol snapshot discard the new
+// identity fields. Parsing the same JSON into a sidecar works before and after protocol sync.
+struct NativeTab {
     tab: browser::TabInfo,
-    prior_window: Option<WindowId>,
-) -> PageInfo {
+    meta: ProfileMeta,
+}
+impl<'de> Deserialize<'de> for NativeTab {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = Value::deserialize(deserializer)?;
+        // Deserialize twice from the same raw reply. Two serde(flatten) fields would consume
+        // identity keys in the generated type after protocol sync, leaving the sidecar empty.
+        Ok(Self {
+            tab: serde_json::from_value(raw.clone()).map_err(serde::de::Error::custom)?,
+            meta: serde_json::from_value(raw).map_err(serde::de::Error::custom)?,
+        })
+    }
+}
+impl std::ops::Deref for NativeTab {
+    type Target = browser::TabInfo;
+    fn deref(&self) -> &Self::Target {
+        &self.tab
+    }
+}
+impl std::ops::DerefMut for NativeTab {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.tab
+    }
+}
+#[derive(Deserialize)]
+struct NativeTabs {
+    tabs: Vec<NativeTab>,
+}
+#[derive(Deserialize)]
+struct NativeTabReply {
+    tab: NativeTab,
+}
+
+fn page_info_from_tab(page_id: PageId, tab: NativeTab, prior_window: Option<WindowId>) -> PageInfo {
+    let NativeTab { tab, meta } = tab;
     PageInfo {
         page_id,
         target_id: TargetId(tab.target_id),
@@ -555,9 +860,19 @@ fn page_info_from_tab(
         is_loading: tab.is_loading,
         load_progress: tab.load_progress,
         is_pinned: tab.is_pinned,
-        window_id: tab.window_id.map(WindowId).or(prior_window),
+        window_id: tab.window_id.map(WindowId).or_else(|| {
+            // Older unbound binaries omit ownership. New metadata must never borrow stale
+            // placement: a bound page needs an actual owning window from this native reply.
+            if meta.browser_profile_id.is_none() && meta.live_browser_context_id.is_none() {
+                prior_window
+            } else {
+                None
+            }
+        }),
         index: tab.index,
         group_id: tab.group_id,
+        browser_profile_id: meta.browser_profile_id,
+        live_browser_context_id: meta.live_browser_context_id,
     }
 }
 

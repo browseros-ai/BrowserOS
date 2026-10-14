@@ -1,7 +1,9 @@
 //! Identity glossary — the four scopes:
 //! - `ProfileId` — a stored agent profile configured by the user and persisted
 //!   by `crate::services::profiles`.
-//! - `SessionId` — one MCP transport connection, minted per handshake.
+//! - `SessionId` — a server-minted task handle (or a legacy transport session).
+//!   Browser-target successors alias one persisted task record; `BrowserProfileId`
+//!   in core identifies a native saved profile and is unrelated to `ProfileId`.
 //! - `ConvoId` — one conversation, `"{client_slug}-{fun_name}"`, minted with
 //!   the session and stable for its life. Legacy JSON and database records call
 //!   it `agentId` and `agent_id`; canonical API responses expose profile and

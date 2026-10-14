@@ -1,8 +1,8 @@
 use crate::ids::ConvoId;
-use browseros_core::PageId;
+use browseros_core::{BrowserProfileId, PageId, WindowId};
 use serde::Serialize;
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt,
     sync::{Arc, Weak},
 };
@@ -67,14 +67,35 @@ struct Inner {
 struct ConvoTabs {
     pages: BTreeSet<PageId>,
     group: Option<TabGroup>,
+    /// Stable placement for each captured profile/window, independent of rebind revision.
+    scoped_groups: HashMap<ScopedGroupKey, String>,
+    /// Keep every native group independently of placement pointers. Explicitly
+    /// borrowing another group in the same window must not orphan an earlier owned one.
+    retained_groups: BTreeMap<String, TabGroup>,
 }
 
+/// Native group identity within a conversation: saved profile and actual window.
+/// Selection revision stays in BrowserView and the detached creation capability;
+/// it must not split a retained group or redirect work to the task's current binding.
+/// Unbound captures have no saved profile but still retain their actual window.
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
+pub(crate) struct ScopedGroupKey {
+    pub browser_profile_id: Option<BrowserProfileId>,
+    pub window_id: WindowId,
+}
+
+/// One native group's lifecycle state. The current group is only a presentation
+/// pointer; archived captured groups remain owned until their individual cleanup finishes.
 #[derive(Debug, Clone, Default, Eq, PartialEq)]
 pub struct TabGroup {
     pub group_ref: Option<String>,
     pub color: Option<TabGroupColor>,
     pub collapsed: bool,
     pub title: TitleSync,
+    pub window_id: Option<WindowId>,
+    /// Borrowed groups are never closed by retained-task cleanup.
+    pub borrowed: bool,
+    pub(crate) scope: Option<ScopedGroupKey>,
 }
 
 /// Desired browser group-title state. `Pending` survives disconnects until the
@@ -126,7 +147,7 @@ impl PageOwnership {
         Self::default()
     }
 
-    /** Serializes check, create, and remember so each conversation gets one durable tab group. */
+    /// Serializes creation and lifecycle work across every captured group of a conversation.
     pub(crate) async fn group_operation_lock(&self, convo_id: &ConvoId) -> Arc<GroupOperationLock> {
         let mut locks = self.group_operation_locks.lock().await;
         locks.retain(|_, lock| lock.strong_count() > 0);
@@ -211,10 +232,141 @@ impl PageOwnership {
         let mut inner = self.inner.write().await;
         let convo = inner.convos.entry(convo_id.clone()).or_default();
         update(convo.group.get_or_insert_default());
+        if let Some(group) = &convo.group
+            && let Some(group_ref) = &group.group_ref
+        {
+            convo
+                .retained_groups
+                .insert(group_ref.clone(), group.clone());
+            if let Some(scope) = &group.scope {
+                convo.scoped_groups.insert(scope.clone(), group_ref.clone());
+            } else if let Some(window_id) = group.window_id {
+                // An unbound call can complete after later target selection too.
+                let key = ScopedGroupKey {
+                    browser_profile_id: None,
+                    window_id,
+                };
+                convo.scoped_groups.insert(key, group_ref.clone());
+            }
+        }
         if convo.group.as_ref().is_some_and(TabGroup::is_empty) {
             convo.group = None;
         }
         inner.remove_empty_convos();
+    }
+
+    /// Looks up the profile/window supplied by the admitted view. Revision remains
+    /// in BrowserView and delayed creation capabilities; this lookup never reads
+    /// or follows the task's current binding. Keep the argument for caller compatibility.
+    pub(crate) async fn group_for_capture(
+        &self,
+        convo_id: &ConvoId,
+        profile: &BrowserProfileId,
+        window: Option<WindowId>,
+        _revision: u64,
+    ) -> Option<TabGroup> {
+        let scope = ScopedGroupKey {
+            browser_profile_id: Some(profile.clone()),
+            window_id: window?,
+        };
+        self.scoped_group(convo_id, &scope).await
+    }
+
+    pub(crate) async fn scoped_group(
+        &self,
+        convo_id: &ConvoId,
+        scope: &ScopedGroupKey,
+    ) -> Option<TabGroup> {
+        let inner = self.inner.read().await;
+        let convo = inner.convos.get(convo_id)?;
+        convo
+            .retained_groups
+            .get(convo.scoped_groups.get(scope)?)
+            .cloned()
+    }
+
+    pub(crate) async fn remember_scoped_group(
+        &self,
+        convo_id: &ConvoId,
+        scope: ScopedGroupKey,
+        mut group: TabGroup,
+    ) {
+        group.window_id = Some(scope.window_id);
+        group.scope = Some(scope.clone());
+        let mut inner = self.inner.write().await;
+        let convo = inner.convos.entry(convo_id.clone()).or_default();
+        if let Some(group_ref) = &group.group_ref {
+            convo.scoped_groups.insert(scope, group_ref.clone());
+            convo
+                .retained_groups
+                .insert(group_ref.clone(), group.clone());
+        }
+        convo.group = Some(group);
+    }
+
+    /// Lifecycle operations cover every actual group, including those no longer current.
+    pub(crate) async fn groups(&self, convo_id: &ConvoId) -> Vec<TabGroup> {
+        let inner = self.inner.read().await;
+        let Some(convo) = inner.convos.get(convo_id) else {
+            return Vec::new();
+        };
+        convo.retained_groups.values().cloned().collect()
+    }
+
+    pub(crate) async fn update_group_by_ref(
+        &self,
+        convo_id: &ConvoId,
+        group_ref: &str,
+        mut update: impl FnMut(&mut TabGroup),
+    ) {
+        let mut inner = self.inner.write().await;
+        let Some(convo) = inner.convos.get_mut(convo_id) else {
+            return;
+        };
+        for group in convo
+            .retained_groups
+            .values_mut()
+            .chain(convo.group.iter_mut())
+        {
+            if group.group_ref.as_deref() == Some(group_ref) {
+                update(group);
+            }
+        }
+    }
+
+    pub(crate) async fn forget_group_by_ref(&self, convo_id: &ConvoId, group_ref: &str) {
+        let mut inner = self.inner.write().await;
+        if let Some(convo) = inner.convos.get_mut(convo_id) {
+            convo.scoped_groups.retain(|_, id| id != group_ref);
+            convo.retained_groups.remove(group_ref);
+            if convo
+                .group
+                .as_ref()
+                .is_some_and(|group| group.group_ref.as_deref() == Some(group_ref))
+            {
+                convo.group = None;
+            }
+        }
+        inner.remove_empty_convos();
+    }
+
+    /// A projected listing can prove a group is no longer this capture's destination,
+    /// but cannot prove global absence. Keep lifecycle ownership until global cleanup.
+    pub(crate) async fn detach_captured_group(
+        &self,
+        convo_id: &ConvoId,
+        scope: &ScopedGroupKey,
+        group_ref: &str,
+    ) {
+        let mut inner = self.inner.write().await;
+        if let Some(convo) = inner.convos.get_mut(convo_id)
+            && convo
+                .scoped_groups
+                .get(scope)
+                .is_some_and(|id| id == group_ref)
+        {
+            convo.scoped_groups.remove(scope);
+        }
     }
 
     pub async fn tab_group_ref(&self, convo_id: &ConvoId) -> Option<String> {
@@ -252,9 +404,13 @@ impl PageOwnership {
         group.group_ref = None;
         group.collapsed = false;
         group.title.mark_synced();
-        if group.is_empty()
-            && let Some(convo) = inner.convos.get_mut(convo_id)
-        {
+        let convo = inner
+            .convos
+            .get_mut(convo_id)
+            .unwrap_or_else(|| unreachable!());
+        convo.retained_groups.remove(group_ref);
+        convo.scoped_groups.retain(|_, id| id != group_ref);
+        if convo.group.as_ref().is_some_and(TabGroup::is_empty) {
             convo.group = None;
         }
         inner.remove_empty_convos();
@@ -299,6 +455,13 @@ impl PageOwnership {
         };
         if group.group_ref.as_deref() == Some(group_ref) {
             group.collapsed = collapsed;
+            if let Some(retained) = inner
+                .convos
+                .get_mut(convo_id)
+                .and_then(|convo| convo.retained_groups.get_mut(group_ref))
+            {
+                retained.collapsed = collapsed;
+            }
         }
     }
 
@@ -333,6 +496,7 @@ impl PageOwnership {
                 color: Some(color),
                 collapsed: false,
                 title: TitleSync::Synced(title),
+                ..TabGroup::default()
             };
         })
         .await;
@@ -358,12 +522,18 @@ impl PageOwnership {
     pub async fn set_desired_group_title(&self, convo_id: ConvoId, title: String) {
         self.update_group(&convo_id, |group| {
             group.title = if group.group_ref.is_some() {
-                TitleSync::Pending(title)
+                TitleSync::Pending(title.clone())
             } else {
-                TitleSync::Synced(title)
+                TitleSync::Synced(title.clone())
             };
         })
         .await;
+        let mut inner = self.inner.write().await;
+        if let Some(convo) = inner.convos.get_mut(&convo_id) {
+            for group in convo.retained_groups.values_mut() {
+                group.title = TitleSync::Pending(title.clone());
+            }
+        }
     }
 
     pub async fn pending_group_title(&self, convo_id: &ConvoId) -> Option<(String, String)> {
@@ -375,19 +545,12 @@ impl PageOwnership {
     }
 
     pub async fn mark_group_title_synced(&self, convo_id: &ConvoId, group_ref: &str, title: &str) {
-        let mut inner = self.inner.write().await;
-        let Some(group) = inner
-            .convos
-            .get_mut(convo_id)
-            .and_then(|convo| convo.group.as_mut())
-        else {
-            return;
-        };
-        if group.group_ref.as_deref() == Some(group_ref)
-            && matches!(&group.title, TitleSync::Pending(pending) if pending == title)
-        {
-            group.title = TitleSync::Synced(title.to_string());
-        }
+        self.update_group_by_ref(convo_id, group_ref, |group| {
+            if matches!(&group.title, TitleSync::Pending(pending) if pending == title) {
+                group.title = TitleSync::Synced(title.to_string());
+            }
+        })
+        .await;
     }
 
     /// Removes all durable ownership and tab-group state for a conversation.
@@ -405,8 +568,9 @@ impl PageOwnership {
 
 impl Inner {
     fn remove_empty_convos(&mut self) {
-        self.convos
-            .retain(|_, convo| !convo.pages.is_empty() || convo.group.is_some());
+        self.convos.retain(|_, convo| {
+            !convo.pages.is_empty() || convo.group.is_some() || !convo.retained_groups.is_empty()
+        });
     }
 }
 

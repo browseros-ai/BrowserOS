@@ -1,9 +1,9 @@
 diff --git a/third_party/blink/public/devtools_protocol/domains/History.pdl b/third_party/blink/public/devtools_protocol/domains/History.pdl
 new file mode 100644
-index 0000000000000..65f836611779e
+index 0000000000000000000000000000000000000000..6ab7ecd29c31cc8cfe5bfcb2836d40eac81dc9d3
 --- /dev/null
 +++ b/third_party/blink/public/devtools_protocol/domains/History.pdl
-@@ -0,0 +1,53 @@
+@@ -0,0 +1,58 @@
 +# Copyright 2026 The Chromium Authors
 +# Use of this source code is governed by a BSD-style license that can be
 +# found in the LICENSE file.
@@ -34,6 +34,8 @@ index 0000000000000..65f836611779e
 +      optional number startTime
 +      # Only return results before this time (ms since epoch).
 +      optional number endTime
++      # Genuine context identity; omitted preserves the target/active-window behavior.
++      optional Browser.BrowserContextID browserContextId
 +    returns
 +      array of HistoryEntry entries
 +
@@ -42,6 +44,7 @@ index 0000000000000..65f836611779e
 +    parameters
 +      # Number of entries. Default 100.
 +      optional integer maxResults
++      optional Browser.BrowserContextID browserContextId
 +    returns
 +      array of HistoryEntry entries
 +
@@ -49,6 +52,7 @@ index 0000000000000..65f836611779e
 +  experimental command deleteUrl
 +    parameters
 +      string url
++      optional Browser.BrowserContextID browserContextId
 +
 +  # Delete all history within a time range.
 +  experimental command deleteRange
@@ -57,3 +61,4 @@ index 0000000000000..65f836611779e
 +      number startTime
 +      # End time (ms since epoch). Required.
 +      number endTime
++      optional Browser.BrowserContextID browserContextId

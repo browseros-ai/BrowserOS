@@ -1,8 +1,8 @@
 diff --git a/chrome/browser/devtools/protocol/browser_handler.cc b/chrome/browser/devtools/protocol/browser_handler.cc
-index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbdd620a2d6 100644
+index 6af060d287872bf2ae881ff013c124eb7508c839..eefd161c2d5a1a8aacda1ee2c687c60f697b01f6 100644
 --- a/chrome/browser/devtools/protocol/browser_handler.cc
 +++ b/chrome/browser/devtools/protocol/browser_handler.cc
-@@ -4,24 +4,39 @@
+@@ -4,24 +4,41 @@
  
  #include "chrome/browser/devtools/protocol/browser_handler.h"
  
@@ -17,8 +17,10 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +#include "base/strings/utf_string_conversions.h"
 +#include "build/build_config.h"
  #include "chrome/app/chrome_command_ids.h"
++#include "chrome/browser/browser_process.h"
 +#include "chrome/browser/browseros/core/browseros_prefs.h"
  #include "chrome/browser/devtools/chrome_devtools_manager_delegate.h"
++#include "chrome/browser/devtools/devtools_browser_context_manager.h"
  #include "chrome/browser/devtools/devtools_dock_tile.h"
  #include "chrome/browser/profiles/profile.h"
  #include "chrome/browser/profiles/profile_manager.h"
@@ -42,7 +44,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
  #include "content/public/browser/browser_task_traits.h"
  #include "content/public/browser/browser_thread.h"
  #include "content/public/browser/devtools_agent_host.h"
-@@ -35,6 +50,19 @@ using protocol::Response;
+@@ -35,6 +52,49 @@ using protocol::Response;
  
  namespace {
  
@@ -59,10 +61,40 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +  return profile && browseros::AutomationNeverStealsFocus(profile->GetPrefs());
 +}
 +
++std::unique_ptr<protocol::Browser::BrowserProfileInfo> BuildProfileInfo(
++    const DevToolsBrowserContextManager::SavedProfileInfo& profile) {
++  auto info = protocol::Browser::BrowserProfileInfo::Create()
++                  .SetBrowserProfileId(profile.browser_profile_id)
++                  .SetName(profile.name)
++                  .SetDirectory(profile.directory)
++                  .SetLoaded(profile.loaded)
++                  .Build();
++  if (profile.browser_context_id) {
++    info->SetBrowserContextId(*profile.browser_context_id);
++  }
++  return info;
++}
++
++// Creation below reaches CHECK-bearing Chromium code. Validate policy on the
++// UI thread immediately before mutation, and refuse the UI helpers that might
++// substitute guest/incognito profiles or open the locked-profile picker.
++Response CheckRegularProfileAutomation(Profile* profile) {
++  auto& manager = DevToolsBrowserContextManager::GetInstance();
++  if (!manager.GetBrowserProfileId(profile)) {
++    return Response::InvalidParams(
++        "browserContextId must identify a loaded eligible regular profile");
++  }
++  if (!manager.CanCreateRegularProfileWindow(profile)) {
++    return Response::ServerError(
++        "Profile policy does not allow a regular window");
++  }
++  return Response::Success();
++}
++
  BrowserWindow* GetBrowserWindow(int window_id) {
    BrowserWindow* result = nullptr;
    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
-@@ -76,6 +104,404 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
+@@ -76,6 +136,418 @@ std::unique_ptr<protocol::Browser::Bounds> GetBrowserWindowBounds(
        .Build();
  }
  
@@ -153,6 +185,12 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +  Profile* profile = bwi->GetProfile();
 +  if (profile) {
 +    info->SetBrowserContextId(profile->GetDebugName());
++    if (auto id =
++            DevToolsBrowserContextManager::GetInstance().GetBrowserProfileId(
++                profile)) {
++      info->SetBrowserProfileId(*id);
++      info->SetLiveBrowserContextId(profile->UniqueId());
++    }
 +  }
 +
 +  return info;
@@ -195,6 +233,14 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +  Profile* profile = Profile::FromBrowserContext(wc->GetBrowserContext());
 +  if (profile) {
 +    info->SetBrowserContextId(profile->GetDebugName());
++    // WebContents owns the tab's context. Its containing window is not an
++    // identity source, and OTR contents must not inherit a saved-profile ID.
++    if (auto id =
++            DevToolsBrowserContextManager::GetInstance().GetBrowserProfileId(
++                profile)) {
++      info->SetBrowserProfileId(*id);
++      info->SetLiveBrowserContextId(profile->UniqueId());
++    }
 +  }
 +
 +  return info;
@@ -467,7 +513,7 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
  }  // namespace
  
  BrowserHandler::BrowserHandler(protocol::UberDispatcher* dispatcher,
-@@ -126,6 +552,67 @@ Response BrowserHandler::GetWindowForTarget(
+@@ -126,6 +598,67 @@ Response BrowserHandler::GetWindowForTarget(
    return Response::Success();
  }
  
@@ -535,12 +581,47 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
  Response BrowserHandler::GetWindowBounds(
      int window_id,
      std::unique_ptr<protocol::Browser::Bounds>* out_bounds) {
-@@ -305,3 +792,672 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
+@@ -305,3 +838,767 @@ protocol::Response BrowserHandler::AddPrivacySandboxEnrollmentOverride(
        net::SchemefulSite(url_to_add));
    return Response::Success();
  }
 +
 +// --- Window Management ---
++
++Response BrowserHandler::GetProfiles(
++    std::unique_ptr<protocol::Array<protocol::Browser::BrowserProfileInfo>>*
++        out_profiles) {
++  auto profiles = std::make_unique<
++      protocol::Array<protocol::Browser::BrowserProfileInfo>>();
++  for (const auto& info :
++       DevToolsBrowserContextManager::GetInstance().GetProfiles()) {
++    profiles->push_back(BuildProfileInfo(info));
++  }
++  *out_profiles = std::move(profiles);
++  return Response::Success();
++}
++
++void BrowserHandler::LoadProfile(
++    const std::string& browser_profile_id,
++    std::unique_ptr<LoadProfileCallback> callback) {
++  // The manager coalesces across CDP sessions and bounds completion. The
++  // protocol callback owns its response channel and never captures this
++  // handler, so disconnecting a session cannot leave a dangling handler.
++  DevToolsBrowserContextManager::GetInstance().LoadProfile(
++      browser_profile_id,
++      base::BindOnce(
++          [](std::unique_ptr<LoadProfileCallback> callback,
++             std::optional<DevToolsBrowserContextManager::SavedProfileInfo>
++                 info,
++             bool loaded, const std::string& error) {
++            if (!info) {
++              callback->sendFailure(Response::ServerError(error));
++              return;
++            }
++            callback->sendSuccess(BuildProfileInfo(*info), loaded);
++          },
++          std::move(callback)));
++}
 +
 +Response BrowserHandler::GetWindows(
 +    std::unique_ptr<protocol::Array<protocol::Browser::WindowInfo>>*
@@ -578,13 +659,29 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +  }
 +
 +  Profile* profile = nullptr;
-+  BrowserWindowInterface* last_active =
-+      GetLastActiveBrowserWindowInterfaceWithAnyProfile();
-+  if (last_active) {
-+    profile = last_active->GetProfile();
++  if (browser_context_id) {
++    profile = DevToolsBrowserContextManager::GetInstance().GetProfileById(
++        *browser_context_id);
++    Response response = CheckRegularProfileAutomation(profile);
++    if (!response.IsSuccess()) {
++      return response;
++    }
++    if (window_type && *window_type != "normal") {
++      return Response::InvalidParams("Context-routed windows must be normal");
++    }
++  } else {
++    BrowserWindowInterface* last_active =
++        GetLastActiveBrowserWindowInterfaceWithAnyProfile();
++    if (last_active) {
++      profile = last_active->GetProfile();
++    }
 +  }
 +  if (!profile) {
 +    return Response::ServerError("No profile available");
++  }
++  if (GetBrowserWindowCreationStatusForProfile(*profile) !=
++      BrowserWindowInterface::CreationStatus::kOk) {
++    return Response::ServerError("Profile does not allow window creation");
 +  }
 +
 +  BrowserWindowInterface::Type type = BrowserWindowInterface::TYPE_NORMAL;
@@ -593,6 +690,10 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +  }
 +
 +  BrowserWindowCreateParams params(type, *profile, true);
++  if (browser_context_id) {
++    params.should_trigger_session_restore = false;
++    params.initial_show_state = ui::mojom::WindowShowState::kInactive;
++  }
 +  if (bounds) {
 +    params.initial_bounds =
 +        gfx::Rect(bounds->GetLeft(0), bounds->GetTop(0), bounds->GetWidth(0),
@@ -612,7 +713,8 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +
 +  // Show() activates the window (and on macOS the whole app); when automation
 +  // must not steal focus the new window is shown behind the user's work.
-+  if (browseros::AutomationNeverStealsFocus(profile->GetPrefs())) {
++  if (browser_context_id ||
++      browseros::AutomationNeverStealsFocus(profile->GetPrefs())) {
 +    bwi->GetWindow()->ShowInactive();
 +  } else {
 +    bwi->GetWindow()->Show();
@@ -755,12 +857,38 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +    std::optional<bool> pinned,
 +    std::optional<std::string> browser_context_id,
 +    std::unique_ptr<protocol::Browser::TabInfo>* out_tab) {
++  Profile* profile = nullptr;
++  if (browser_context_id) {
++    profile = DevToolsBrowserContextManager::GetInstance().GetProfileById(
++        *browser_context_id);
++    Response response = CheckRegularProfileAutomation(profile);
++    if (!response.IsSuccess()) {
++      return response;
++    }
++  }
 +  BrowserWindowInterface* bwi = nullptr;
 +  if (window_id.has_value()) {
 +    bwi = GetBrowserWindowInterface(window_id.value());
 +    if (!bwi) {
 +      return Response::ServerError("Browser window not found");
 +    }
++    // Validate before navigation, insertion or pinning can mutate either
++    // window. A focused window from another profile is never a fallback.
++    if (profile && (bwi->GetProfile() != profile ||
++                    bwi->GetType() != BrowserWindowInterface::TYPE_NORMAL)) {
++      return Response::InvalidParams(
++          "windowId does not match browserContextId");
++    }
++  } else if (profile) {
++    ForEachCurrentBrowserWindowInterfaceOrderedByActivation(
++        [profile, &bwi](BrowserWindowInterface* candidate) {
++          if (candidate->GetProfile() == profile &&
++              candidate->GetType() == BrowserWindowInterface::TYPE_NORMAL) {
++            bwi = candidate;
++            return false;
++          }
++          return true;
++        });
 +  } else {
 +    bwi = GetLastActiveBrowserWindowInterfaceWithAnyProfile();
 +  }
@@ -851,6 +979,11 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +    }
 +
 +    if (new_bwi != lookup.bwi) {
++      // A WebContents cannot be reparented into a different BrowserContext.
++      // Detaching first would already remove the caller's tab on rejection.
++      if (lookup.web_contents->GetBrowserContext() != new_bwi->GetProfile()) {
++        return Response::InvalidParams("Cannot move tabs between profiles");
++      }
 +      // Cross-window move.
 +      TabStripModel* source_strip = lookup.bwi->GetTabStripModel();
 +      std::unique_ptr<content::WebContents> detached_wc =
@@ -1167,6 +1300,9 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +  }
 +
 +  // Cross-window move: collect tabs, detach, re-insert, re-group.
++  if (target_bwi->GetProfile() != lookup.bwi->GetProfile()) {
++    return Response::InvalidParams("Cannot move tab groups between profiles");
++  }
 +  TabStripModel* source_strip = lookup.bwi->GetTabStripModel();
 +  const tab_groups::TabGroupVisualData* visual =
 +      source_strip->group_model()->GetTabGroup(lookup.group_id)->visual_data();
@@ -1176,6 +1312,11 @@ index 6af060d287872bf2ae881ff013c124eb7508c839..ba4b83551d3cfaf6ff3261a43524edbd
 +  std::vector<content::WebContents*> group_tabs;
 +  for (int i = source_strip->count() - 1; i >= 0; --i) {
 +    if (source_strip->GetTabGroupForTab(i) == lookup.group_id) {
++      if (source_strip->GetWebContentsAt(i)->GetBrowserContext() !=
++          target_bwi->GetProfile()) {
++        return Response::InvalidParams(
++            "Cannot move tab groups between profiles");
++      }
 +      group_tabs.push_back(source_strip->GetWebContentsAt(i));
 +    }
 +  }

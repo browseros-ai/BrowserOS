@@ -99,10 +99,12 @@ fn handler<'a>(
             clip: None,
         };
         if !full_page {
-            let page = ctx.session.pages.get_session(PageId(args.page)).await?;
+            // A bound view's page session brackets Page.getLayoutMetrics with scope and
+            // target-incarnation checks; the raw registry session would bypass the profile.
+            let page = ctx.browser.page_session(PageId(args.page)).await?;
             options.clip = Some(build_screenshot_clip(&page.session, args.size.as_ref()).await?);
         }
-        let result = ctx.session.screenshot(PageId(args.page), options).await?;
+        let result = ctx.browser.screenshot(PageId(args.page), options).await?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&result.data)
             .map(|bytes| bytes.len())

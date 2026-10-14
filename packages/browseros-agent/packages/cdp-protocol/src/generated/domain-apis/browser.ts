@@ -3,7 +3,7 @@
 import type {
   ActivateTabParams,
   ActivateWindowParams,
-  AddPrivacySandboxCoordinatorKeyConfigParams,
+  AddMockCameraParams,
   AddPrivacySandboxEnrollmentOverrideParams,
   AddTabsToGroupParams,
   AddTabsToGroupResult,
@@ -26,10 +26,12 @@ import type {
   GetActiveTabResult,
   GetActiveWindowResult,
   GetBrowserCommandLineResult,
+  GetGlobalPrivacyControlResult,
   GetHistogramParams,
   GetHistogramResult,
   GetHistogramsParams,
   GetHistogramsResult,
+  GetProfilesResult,
   GetTabForTargetParams,
   GetTabForTargetResult,
   GetTabGroupsParams,
@@ -47,6 +49,8 @@ import type {
   GetWindowForTargetResult,
   GetWindowsResult,
   GrantPermissionsParams,
+  LoadProfileParams,
+  LoadProfileResult,
   MoveTabGroupParams,
   MoveTabGroupResult,
   MoveTabParams,
@@ -58,6 +62,8 @@ import type {
   SetContentsSizeParams,
   SetDockTileParams,
   SetDownloadBehaviorParams,
+  SetGlobalPrivacyControlParams,
+  SetGlobalPrivacyControlResult,
   SetPermissionParams,
   SetWindowBoundsParams,
   SetWindowVisibilityParams,
@@ -73,6 +79,8 @@ import type {
 export interface BrowserApi {
   // ── Commands ──
 
+  getProfiles(): Promise<GetProfilesResult>
+  loadProfile(params: LoadProfileParams): Promise<LoadProfileResult>
   getWindows(): Promise<GetWindowsResult>
   getActiveWindow(): Promise<GetActiveWindowResult>
   createWindow(params?: CreateWindowParams): Promise<CreateWindowResult>
@@ -109,6 +117,7 @@ export interface BrowserApi {
   crashGpuProcess(): Promise<void>
   getVersion(): Promise<GetVersionResult>
   getBrowserCommandLine(): Promise<GetBrowserCommandLineResult>
+  addMockCamera(params: AddMockCameraParams): Promise<void>
   getHistograms(params?: GetHistogramsParams): Promise<GetHistogramsResult>
   getHistogram(params: GetHistogramParams): Promise<GetHistogramResult>
   getWindowBounds(params: GetWindowBoundsParams): Promise<GetWindowBoundsResult>
@@ -126,9 +135,10 @@ export interface BrowserApi {
   addPrivacySandboxEnrollmentOverride(
     params: AddPrivacySandboxEnrollmentOverrideParams,
   ): Promise<void>
-  addPrivacySandboxCoordinatorKeyConfig(
-    params: AddPrivacySandboxCoordinatorKeyConfigParams,
-  ): Promise<void>
+  getGlobalPrivacyControl(): Promise<GetGlobalPrivacyControlResult>
+  setGlobalPrivacyControl(
+    params: SetGlobalPrivacyControlParams,
+  ): Promise<SetGlobalPrivacyControlResult>
 
   // ── Events ──
 

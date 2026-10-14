@@ -54,10 +54,18 @@ export interface Value {
   specificity?: Specificity
 }
 
+export interface SpecificityComponent {
+  text: string
+  a: number
+  b: number
+  c: number
+}
+
 export interface Specificity {
   a: number
   b: number
   c: number
+  components?: SpecificityComponent[]
 }
 
 export interface SelectorList {
@@ -193,6 +201,7 @@ export interface CSSContainerQuery {
   logicalAxes?: LogicalAxes
   queriesScrollState?: boolean
   queriesAnchored?: boolean
+  conditionText: string
 }
 
 export interface CSSSupports {
@@ -287,7 +296,11 @@ export interface CSSPropertyRegistration {
 }
 
 export interface CSSAtRule {
-  type: 'font-face' | 'font-feature-values' | 'font-palette-values'
+  type:
+    | 'font-face'
+    | 'font-feature-values'
+    | 'font-palette-values'
+    | 'counter-style'
   subsection?:
     | 'swash'
     | 'annotation'
@@ -565,6 +578,16 @@ export interface SetContainerQueryTextParams {
 }
 
 export interface SetContainerQueryTextResult {
+  containerQuery: CSSContainerQuery
+}
+
+export interface SetContainerQueryConditionTextParams {
+  styleSheetId: StyleSheetId
+  range: SourceRange
+  text: string
+}
+
+export interface SetContainerQueryConditionTextResult {
   containerQuery: CSSContainerQuery
 }
 

@@ -51,6 +51,8 @@ const SDK_SURFACE: &[&str] = &[
     "upload",
     "tabGroups",
     "windows",
+    "profiles",
+    "target",
     "saveHelper",
     "listHelpers",
     "readHelper",

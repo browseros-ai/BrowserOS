@@ -5,9 +5,9 @@ import type {
   CanClearBrowserCookiesResult,
   CanEmulateNetworkConditionsResult,
   ConfigureDurableMessagesParams,
-  ContinueInterceptedRequestParams,
   DataReceivedEvent,
   DeleteCookiesParams,
+  DeleteDeviceBoundSessionParams,
   DeviceBoundSessionEventOccurredEvent,
   DeviceBoundSessionsAddedEvent,
   DirectTCPSocketAbortedEvent,
@@ -40,8 +40,6 @@ import type {
   GetCookiesResult,
   GetRequestPostDataParams,
   GetRequestPostDataResult,
-  GetResponseBodyForInterceptionParams,
-  GetResponseBodyForInterceptionResult,
   GetResponseBodyParams,
   GetResponseBodyResult,
   GetSecurityIsolationStatusParams,
@@ -55,7 +53,6 @@ import type {
   ReportingApiEndpointsChangedForOriginEvent,
   ReportingApiReportAddedEvent,
   ReportingApiReportUpdatedEvent,
-  RequestInterceptedEvent,
   RequestServedFromCacheEvent,
   RequestWillBeSentEvent,
   RequestWillBeSentExtraInfoEvent,
@@ -65,7 +62,6 @@ import type {
   ResponseReceivedExtraInfoEvent,
   SearchInResponseBodyParams,
   SearchInResponseBodyResult,
-  SetAcceptedEncodingsParams,
   SetAttachDebugStackParams,
   SetBlockedURLsParams,
   SetBypassServiceWorkerParams,
@@ -75,13 +71,10 @@ import type {
   SetCookieResult,
   SetCookiesParams,
   SetExtraHTTPHeadersParams,
-  SetRequestInterceptionParams,
   SetUserAgentOverrideParams,
   SignedExchangeReceivedEvent,
   StreamResourceContentParams,
   StreamResourceContentResult,
-  TakeResponseBodyForInterceptionAsStreamParams,
-  TakeResponseBodyForInterceptionAsStreamResult,
   TrustTokenOperationDoneEvent,
   WebSocketClosedEvent,
   WebSocketCreatedEvent,
@@ -98,16 +91,11 @@ import type {
 export interface NetworkApi {
   // ── Commands ──
 
-  setAcceptedEncodings(params: SetAcceptedEncodingsParams): Promise<void>
-  clearAcceptedEncodingsOverride(): Promise<void>
   canClearBrowserCache(): Promise<CanClearBrowserCacheResult>
   canClearBrowserCookies(): Promise<CanClearBrowserCookiesResult>
   canEmulateNetworkConditions(): Promise<CanEmulateNetworkConditionsResult>
   clearBrowserCache(): Promise<void>
   clearBrowserCookies(): Promise<void>
-  continueInterceptedRequest(
-    params: ContinueInterceptedRequestParams,
-  ): Promise<void>
   deleteCookies(params: DeleteCookiesParams): Promise<void>
   disable(): Promise<void>
   emulateNetworkConditions(
@@ -128,12 +116,6 @@ export interface NetworkApi {
   getRequestPostData(
     params: GetRequestPostDataParams,
   ): Promise<GetRequestPostDataResult>
-  getResponseBodyForInterception(
-    params: GetResponseBodyForInterceptionParams,
-  ): Promise<GetResponseBodyForInterceptionResult>
-  takeResponseBodyForInterceptionAsStream(
-    params: TakeResponseBodyForInterceptionAsStreamParams,
-  ): Promise<TakeResponseBodyForInterceptionAsStreamResult>
   replayXHR(params: ReplayXHRParams): Promise<void>
   searchInResponseBody(
     params: SearchInResponseBodyParams,
@@ -145,7 +127,6 @@ export interface NetworkApi {
   setCookies(params: SetCookiesParams): Promise<void>
   setExtraHTTPHeaders(params: SetExtraHTTPHeadersParams): Promise<void>
   setAttachDebugStack(params: SetAttachDebugStackParams): Promise<void>
-  setRequestInterception(params: SetRequestInterceptionParams): Promise<void>
   setUserAgentOverride(params: SetUserAgentOverrideParams): Promise<void>
   streamResourceContent(
     params: StreamResourceContentParams,
@@ -156,6 +137,9 @@ export interface NetworkApi {
   enableReportingApi(params: EnableReportingApiParams): Promise<void>
   enableDeviceBoundSessions(
     params: EnableDeviceBoundSessionsParams,
+  ): Promise<void>
+  deleteDeviceBoundSession(
+    params: DeleteDeviceBoundSessionParams,
   ): Promise<void>
   fetchSchemefulSite(
     params: FetchSchemefulSiteParams,
@@ -182,10 +166,6 @@ export interface NetworkApi {
   on(
     event: 'loadingFinished',
     handler: (params: LoadingFinishedEvent) => void,
-  ): () => void
-  on(
-    event: 'requestIntercepted',
-    handler: (params: RequestInterceptedEvent) => void,
   ): () => void
   on(
     event: 'requestServedFromCache',

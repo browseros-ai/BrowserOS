@@ -64,6 +64,7 @@ export interface Scope {
   name?: string
   startLocation?: Location
   endLocation?: Location
+  empty?: boolean
 }
 
 export interface SearchMatch {
@@ -120,6 +121,7 @@ export interface EvaluateOnCallFrameParams {
   generatePreview?: boolean
   throwOnSideEffect?: boolean
   timeout?: TimeDelta
+  scopeNumber?: number
 }
 
 export interface EvaluateOnCallFrameResult {

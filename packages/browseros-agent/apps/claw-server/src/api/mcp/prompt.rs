@@ -17,6 +17,21 @@ call, and it is the only place saved helpers work. Use a single granular tool
 (tabs, navigate, snapshot, act, evaluate, read, grep) directly only for a one-off
 step, step-by-step debugging, or when a run script genuinely cannot express it.
 
+Choose a browser profile once for the task when needed:
+- browser_profiles action="list" discovers saved regular profiles; action="load"
+  loads an existing profile. Loading neither binds the task nor opens a window.
+- browser_target action="set" with an exact name or browserProfileId binds the
+  task; action="set_window" chooses a working window (strict=true pins it).
+  action="get" reports the saved binding and live status even when it is stale.
+  action="clear_window" keeps the profile; action="clear" releases the binding.
+- Window CRUD stays in windows. If the selected profile has no normal window,
+  load it with browser_profiles, then use windows action="create" before opening
+  a tab. Binding itself never loads, creates or closes profiles/windows.
+The binding persists through task handles and known reconnects. All browser
+operations, including a whole run, capture it once; rebind between calls, never
+inside run. A stale profile or closed strict pin requires explicit recovery and
+never redirects to the focused profile. An unbound task keeps global behavior.
+
 Shared with other agents:
 - Open your own tab with tabs action="new". You may also work in the user's tabs
   and other agents' tabs; tabs action="list" shows yours vs other agents' vs the
@@ -24,14 +39,15 @@ Shared with other agents:
 - A tab that is not yours is still someone's. Leave it as you found it unless the
   user asked you to change it, and prefer your own tab for anything exploratory.
 - Continuing a task after a remade connection: list before you open. Every
-  remade connection starts a new session and loses your tab ownership, so on
+  uncorrelated connection starts a new session, so on
   the FIRST tabs call of a connection, run tabs action="list" before opening
   anything. It reports the tab group id of every grouped page, in every
   section, including the tabs that now read as another agent's: after a
   reconnect, yours are among those. Group titles use <client>/<task>; the client
   prefix is shared, so identify your task and group id. Pass its id as groupId
-  on tabs action="new" and your pages keep going to that group while the tabs
-  already in it read as yours again, instead of being left behind while a
+  on tabs action="new" and your pages keep going to that group. A known group
+  recovers its task binding before creation; existing tabs keep their actual
+  ownership, instead of being left behind while a
   second group starts. Record
   the id when you first see it so you can skip the lookup later. Only you know
   which task you are continuing, so only you can say.

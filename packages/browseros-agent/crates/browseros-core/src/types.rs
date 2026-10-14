@@ -39,7 +39,26 @@ id_newtype!(TargetId, String);
 pub type SessionId = browseros_cdp::SessionId;
 id_newtype!(FrameId, String);
 id_newtype!(WindowId, i64);
+impl Copy for WindowId {}
 id_newtype!(Ref, String);
+// Saved handles describe catalog entries for one native process lifetime; live context IDs
+// describe loaded BrowserContexts. Neither is Claw's persisted agent configuration identity.
+id_newtype!(BrowserProfileId, String);
+id_newtype!(BrowserContextId, String);
+
+impl BrowserProfileId {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl BrowserContextId {
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 impl TargetId {
     #[must_use]
