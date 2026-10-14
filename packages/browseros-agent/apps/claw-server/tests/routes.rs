@@ -48,6 +48,18 @@ async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::R
     test_app_with_native(cdp_port, start_browser, current_native()).await
 }
 
+/// `MockCdp` serves tabs but no profile catalog, windows or identity sidecars, which is what
+/// a native without profile targeting (before BrowserOS 0.51.1.3) offers. Saying so keeps
+/// these session/tab tests on that native's unbound routing instead of the Default profile.
+async fn mock_native_app(mock: &MockCdp) -> anyhow::Result<TestApp> {
+    test_app_with_native(
+        mock.cdp_port,
+        false,
+        NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+    )
+    .await
+}
+
 async fn test_app_with_native(
     cdp_port: u16,
     start_browser: bool,
@@ -1087,7 +1099,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
 #[tokio::test]
 async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
     let initialize = json!({
@@ -1172,7 +1184,7 @@ async fn mcp_session_naming_appends_five_tips_without_elicitation() -> anyhow::R
 #[tokio::test]
 async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
     let session_id = initialize_mcp(&app).await?;
@@ -1266,7 +1278,7 @@ async fn mcp_tabs_new_roundtrips_through_mock_cdp() -> anyhow::Result<()> {
 async fn same_name_mcp_sessions_have_distinct_groups_and_label_cross_page_access()
 -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
     let session_a_id = initialize_mcp(&app).await?;
@@ -1385,7 +1397,7 @@ async fn same_name_mcp_sessions_have_distinct_groups_and_label_cross_page_access
 #[tokio::test]
 async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
     let session_id = initialize_mcp(&app).await?;
@@ -1669,7 +1681,7 @@ async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Re
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-exact", 1).await;
     mock.add_tab(102, "target-fallback", 1).await;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     let browser = app
         .state
@@ -1792,7 +1804,7 @@ async fn canonical_live_sessions_enrich_through_profile_identity() -> anyhow::Re
 async fn live_projection_filters_external_close() -> anyhow::Result<()> {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-old", 1).await;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     let browser = app
         .state
@@ -1872,7 +1884,7 @@ async fn live_projection_refreshes_metadata_and_preview_uses_current_target() ->
 {
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-old", 1).await;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     let session = test_session(SessionId::new("session-live"), "codex-agent", "codex");
     app.state.sessions.insert_for_testing(session.clone()).await;
@@ -1981,7 +1993,7 @@ async fn session_previews_capture_each_sessions_owned_target() -> anyhow::Result
     let mock = MockCdp::start().await?;
     mock.add_tab(101, "target-1", 1).await;
     mock.add_tab(102, "target-2", 2).await;
-    let app = test_app_with_cdp_port(mock.cdp_port, false).await?;
+    let app = mock_native_app(&mock).await?;
     app.state.browser.connect_once_for_testing().await?;
     wait_for_cdp_connected(&app).await?;
 

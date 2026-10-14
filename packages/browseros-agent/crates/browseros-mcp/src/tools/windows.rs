@@ -8,7 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 const DESCRIPTION: &str = "Manage browser windows: list, create, or close.";
-const PROFILE_NOTE: &str = "This is separate from browser_profiles discovery/loading and browser_target task selection. Bound calls include normal windows of the selected regular profile only. create requires a loaded profile and opens an inactive normal window; a strict pin rejects creation with pinned_window_restricts. Without a binding, existing browser-wide behavior applies.";
+const PROFILE_NOTE: &str = "This is separate from browser_profiles discovery/loading and browser_target task selection. Calls include normal windows of one regular profile only: the browser_target selection, or the original Default profile (directory \"Default\") when none is set. create opens an inactive normal window in that profile (an explicit selection must be loaded first); a strict pin rejects creation with pinned_window_restricts.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
