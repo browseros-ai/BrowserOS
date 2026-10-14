@@ -99,15 +99,37 @@ pub enum Consequence {
 }
 
 impl Consequence {
-    /// The confidence an operation of this consequence needs before it runs.
+    /// How far an operation of this consequence must lead its runner-up before
+    /// it runs.
     ///
-    /// These were tuned against a thirteen option Choice. A fifteen option one
-    /// spreads probability differently, so they are due a retune against real
-    /// data rather than a guess.
+    /// A margin rather than a share, because a share is not comparable across
+    /// questions of different sizes. The absolute bars these replace were tuned
+    /// against a thirteen option Choice; against a Choice over every control on
+    /// the page they refused answers that led by half the distribution.
+    ///
+    /// Measured against a snapshot whose accessibility names are truncated at
+    /// roughly a hundred characters, which this one is not. They are a starting
+    /// point, and saying so is the whole lesson of the numbers they replace.
     #[must_use]
-    pub fn bar(self) -> f64 {
+    pub fn margin(self) -> f64 {
         match self {
-            // The documented floor: below this, nothing acts.
+            Self::Low => 0.15,
+            Self::Medium => 0.30,
+            Self::High => 0.50,
+        }
+    }
+
+    /// The share a judgement needs when it reported no distribution to take a
+    /// margin against.
+    ///
+    /// The absolute bars, kept for exactly this case. A margin needs two
+    /// numbers; with one there is nothing to compare, and falling back to
+    /// treating the share as its own margin would make a missing signal more
+    /// permissive than the bar it replaced. 0.70 on a submit used to be refused
+    /// and has to stay refused.
+    #[must_use]
+    pub fn share_bar(self) -> f64 {
+        match self {
             Self::Low => 0.60,
             Self::Medium => 0.75,
             Self::High => 0.85,
@@ -128,6 +150,7 @@ const HIGH_STAKES: &[&str] = &[
     "pay",
     "buy",
     "order",
+    "purchase",
     "checkout",
     "delete",
     "remove",
