@@ -131,6 +131,11 @@ pub fn state(view: &PageView, space: &ActionSpace, recent: &[String], retired: u
         "recent_actions": recent,
         "controls_not_listed": space.omitted,
         "controls_already_tried_that_changed_nothing": retired,
+        // Which part of the page this question is about. A page larger than one
+        // question is asked about in batches, and a later batch carrying the
+        // first batch's state reads as a question about a position the run is
+        // not at: measured at 0.57 against 0.90 for the same control.
+        "this_is_group": space.batch + 1,
     })
 }
 
@@ -140,17 +145,27 @@ pub fn state(view: &PageView, space: &ActionSpace, recent: &[String], retired: u
 /// since an option that cannot be acted on still competes for the answer.
 #[must_use]
 pub fn available(space: &ActionSpace, view: &PageView, surface: Surface<'_>) -> Vec<Operation> {
+    // SNAPSHOT is not here, and that is deliberate. The loop observes a settled
+    // page at the top of every iteration, so choosing to look again costs a
+    // whole request to obtain what the next step does for nothing. An option
+    // that cannot be the right answer still competes for the answer, which is
+    // the same reason FILL is withheld when nothing on the page can be typed
+    // into.
+    //
+    // EVALUATE is not here either, for a different reason: it was never
+    // measured. The script is written in code from the goal's words, which is
+    // defensible, but no errand in the measured set reached for it. It stays
+    // implemented and unoffered, which is what the vocabulary does with any
+    // move the browser cannot perform.
     let mut moves = vec![
         Operation::Done,
         Operation::Blocked,
         Operation::Wait,
-        Operation::Snapshot,
         Operation::Reload,
         Operation::Read,
         Operation::Grep,
         Operation::Count,
         Operation::Screenshot,
-        Operation::Evaluate,
     ];
     if !space.offered.is_empty() {
         moves.push(Operation::Act);
