@@ -3,10 +3,10 @@ use axum::{
     body::{Body, BodyDataStream, to_bytes},
     http::{HeaderMap, Request, StatusCode, header},
 };
-use browseros_core::{PageId, TargetId, screenshot::ScreenshotCaptureOptions};
+use browseros_core::{NativeCapabilities, PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server::{
     AppState, build_router,
-    config::Config,
+    config::{Config, NativeIdentity},
     db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, ProfileId, SessionId},
@@ -39,7 +39,20 @@ async fn test_app() -> anyhow::Result<TestApp> {
     test_app_with_cdp_port(49337, false).await
 }
 
+/// The first native release with profile targeting; the default harness models it.
+fn current_native() -> NativeCapabilities {
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
+}
+
 async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::Result<TestApp> {
+    test_app_with_native(cdp_port, start_browser, current_native()).await
+}
+
+async fn test_app_with_native(
+    cdp_port: u16,
+    start_browser: bool,
+    native: NativeCapabilities,
+) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let config = Arc::new(Config {
@@ -53,6 +66,10 @@ async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::R
         session_sweep_interval: Duration::from_secs(60),
         replay_retention_days: 7,
         dev_mode: false,
+        native: NativeIdentity {
+            capabilities: native,
+            asserted: false,
+        },
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {
@@ -362,6 +379,73 @@ async fn mcp_hygiene_rejects_non_json_writes() -> anyhow::Result<()> {
     let bytes = to_bytes(response.into_body(), usize::MAX).await?;
     let body: Value = serde_json::from_slice(&bytes)?;
     assert_eq!(body, json!({ "error": "unsupported content type" }));
+    Ok(())
+}
+
+/// The launch config names an older native: discovery and instructions offer no profile
+/// surface from the very first list, because the identity is known before any MCP session.
+#[tokio::test]
+async fn older_native_lists_and_teaches_no_profile_surface() -> anyhow::Result<()> {
+    for native in [
+        NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+        NativeCapabilities::default(),
+    ] {
+        let app = test_app_with_native(49337, false, native).await?;
+        let initialize = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-06-18",
+                "capabilities": {},
+                "clientInfo": { "name": "Codex", "version": "1.0" }
+            }
+        });
+        let (status, headers, body) =
+            request_json_with_headers(&app.router, "POST", "/mcp", Some(initialize), &[]).await?;
+        assert_eq!(status, StatusCode::OK, "{body:?}");
+        let instructions = body["result"]["instructions"].as_str().unwrap_or_default();
+        assert!(instructions.starts_with("BrowserOS neo — the browser for agents"));
+        assert!(!instructions.contains("browser_profiles"), "{native}");
+        assert!(!instructions.contains("browser_target"), "{native}");
+        let session_id = headers
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string)
+            .ok_or_else(|| anyhow::anyhow!("missing mcp-session-id"))?;
+        send_initialized(&app.router, &session_id).await?;
+        wait_for_session_registration(&app, &session_id).await?;
+
+        let list = json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {} });
+        let (status, _headers, body) = request_json_with_headers(
+            &app.router,
+            "POST",
+            "/mcp",
+            Some(list),
+            &[("mcp-session-id", &session_id)],
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        let tools = body["result"]["tools"]
+            .as_array()
+            .ok_or_else(|| anyhow::anyhow!("tools not array"))?;
+        let names = tools
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect::<Vec<_>>();
+        assert!(!names.contains(&"browser_profiles"), "{native}: {names:?}");
+        assert!(!names.contains(&"browser_target"), "{native}: {names:?}");
+        assert!(names.contains(&"run") && names.contains(&"tabs"));
+        for tool in tools {
+            let description = tool["description"].as_str().unwrap_or_default();
+            assert!(
+                !description.contains("browser_profiles")
+                    && !description.contains("browser_target"),
+                "{native}: {} still teaches profile tools",
+                tool["name"]
+            );
+        }
+    }
     Ok(())
 }
 

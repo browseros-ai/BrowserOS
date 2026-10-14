@@ -3,7 +3,7 @@ use crate::framework::{
     execute_tool, page_json, parse_args, text_result,
 };
 use browseros_core::{
-    PageId, Ref, SessionId, WindowId,
+    NativeFeature, PageId, Ref, SessionId, WindowId,
     input::ScrollDirection,
     pages::NewPageOptions,
     snapshot::{SnapshotMode, SnapshotOptions},
@@ -69,13 +69,16 @@ Page handle (refs eN come from a snapshot's text/refs):
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
   page.saveHelper(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
-Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). While bound, supported methods follow the same captured profile/window scope; unsupported methods return target_scope_unsupported.
-Profile management: browser.profiles({ action: 'list'|'load', name?, browserProfileId? }) and browser.target({ action: 'get' }) (read status). Change selection between run calls with browser_target; mutating browser.target inside run returns target_change_in_run. All direct/tool/raw primitives in this run keep one captured view. Only regular profiles' normal windows and pages are admitted: OAuth/window.open popups return page_out_of_scope even in the selected profile. Never clear or widen scope automatically to drive them; explicit browser_target clear permits browser-wide work.
+Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
   await Promise.all(pages.map(p => p.waitForSelector('.result')));
   return await Promise.all(pages.map(p => p.read()));"#;
+
+/// Appended to the description only for browsers with profile targeting; the matching SDK
+/// exports are installed under the same condition (see `install_globals`).
+const PROFILE_NOTE: &str = "Profile management: browser.profiles({ action: 'list'|'load', name?, browserProfileId? }) and browser.target({ action: 'get' }) (read status). Change selection between run calls with browser_target; mutating browser.target inside run returns target_change_in_run. All direct/tool/raw primitives in this run keep one captured view. While bound, raw CDP methods follow the same captured profile/window scope; unsupported methods return target_scope_unsupported. Only regular profiles' normal windows and pages are admitted: OAuth/window.open popups return page_out_of_scope even in the selected profile. Never clear or widen scope automatically to drive them; explicit browser_target clear permits browser-wide work.";
 
 const BOOTSTRAP_JS: &str = r#"
 (() => {
@@ -336,8 +339,14 @@ const BOOTSTRAP_JS: &str = r#"
     page: (pageId) => pageHandle(pageId),
     open: async (url, opts) => pageHandle(await call('pages.newPage', [url, opts])),
     history: (opts) => call('tool:history', [opts]),
-    profiles: (opts) => call('tool:browser_profiles', [opts]),
-    target: (opts) => call('tool:browser_target', [opts]),
+    // Discovery only: Rust refuses tool:browser_profiles/browser_target on older natives
+    // whether or not a script finds a way to call them.
+    ...(__browserosFeatures.profileTargeting
+      ? {
+          profiles: (opts) => call('tool:browser_profiles', [opts]),
+          target: (opts) => call('tool:browser_target', [opts]),
+        }
+      : {}),
     pages: {
       list: () => call('pages.list', []),
       newPage: (url, opts) => call('pages.newPage', [url, opts]),
@@ -438,12 +447,15 @@ struct RunOutput {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def_with_output::<RunArgs, RunOutput>(
-        "run",
-        DESCRIPTION,
-        Some(super::open_world_annotations()),
-        handler,
-    )
+    crate::framework::ToolDef {
+        feature_note: super::profile_note(PROFILE_NOTE),
+        ..super::def_with_output::<RunArgs, RunOutput>(
+            "run",
+            DESCRIPTION,
+            Some(super::open_world_annotations()),
+            handler,
+        )
+    }
 }
 
 fn handler<'a>(
@@ -753,6 +765,17 @@ fn install_globals<'js>(
     logs: SharedLogs,
     control: RunControl,
 ) -> Result<(), RunError> {
+    // The JS/Rust boundary for native features: the SDK reads one flag per feature to decide
+    // which exports to define. The flags only shape discovery; refusals stay in Rust.
+    let features = NativeFeature::ALL
+        .iter()
+        .map(|feature| {
+            (
+                feature.key().to_string(),
+                Value::Bool(tool_ctx.browser.supports(*feature)),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
     let bridge = BrowserBridge {
         ctx: tool_ctx,
         control,
@@ -781,6 +804,15 @@ fn install_globals<'js>(
         tokio::time::sleep(Duration::from_millis(capped)).await;
     };
     let globals = ctx.globals();
+    globals
+        .set(
+            "__browserosFeatures",
+            json_to_js(ctx, Value::Object(features))
+                .catch(ctx)
+                .map_err(|err| RunError::Engine(js_error_message(ctx, err)))?,
+        )
+        .catch(ctx)
+        .map_err(|err| RunError::Engine(js_error_message(ctx, err)))?;
     globals
         .set("__browserosCall", Func::from(Async(call_bridge)))
         .catch(ctx)

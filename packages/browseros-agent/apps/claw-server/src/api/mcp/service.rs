@@ -165,6 +165,10 @@ impl ClawMcpService {
         }
     }
 
+    fn native(&self) -> browseros_core::NativeCapabilities {
+        self.state.config.native.capabilities
+    }
+
     fn find_tool_index(&self, name: &str) -> Option<usize> {
         self.catalog.iter().position(|tool| tool.name == name)
     }
@@ -181,10 +185,14 @@ impl ClawMcpService {
                 tool
             }
         };
+        // Tools whose native feature the connected browser lacks are not offered. The list is
+        // fixed for the process (the identity is), and execute_tool refuses cached callers.
+        let native = self.native();
         let mut tools = self
             .catalog
             .iter()
-            .map(ToolDef::to_mcp_tool)
+            .filter(|tool| tool.available(native))
+            .map(|tool| tool.to_mcp_tool(native))
             .map(&decorate)
             .collect::<Vec<_>>();
         tools.push(decorate(self.name_session_tool.clone()));
@@ -924,7 +932,10 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(mcp_instructions(self.state.agent_settings.human_help()))
+            .with_instructions(mcp_instructions(
+                self.state.agent_settings.human_help(),
+                self.native(),
+            ))
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -994,8 +1005,10 @@ impl ServerHandler for ClawMcpService {
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(with_session_arg(self.mark_skill_run_tool.clone()));
         }
+        // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
+        // cached caller should reach execute_tool's explanation, not method-not-found.
         self.find_tool_index(name)
-            .map(|index| with_session_arg(self.catalog[index].to_mcp_tool()))
+            .map(|index| with_session_arg(self.catalog[index].to_mcp_tool(self.native())))
     }
 
     async fn call_tool(
@@ -2468,6 +2481,7 @@ mod tests {
     #[tokio::test]
     async fn initialize_info_uses_browseros_neo_identity_and_prompt() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let native = call.state.config.native.capabilities;
         let service = ClawMcpService::new(call.state);
         let info = service.get_info();
         assert_eq!(info.server_info.name, SERVER_NAME);
@@ -2475,7 +2489,7 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::On).as_str())
+            Some(mcp_instructions(HumanHelp::On, native).as_str())
         );
         let instructions = info
             .instructions
@@ -2783,7 +2797,7 @@ mod tests {
 
         assert_eq!(
             service.get_info().instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::Off).as_str())
+            Some(mcp_instructions(HumanHelp::Off, call.state.config.native.capabilities).as_str())
         );
         Ok(())
     }

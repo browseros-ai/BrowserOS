@@ -1,5 +1,5 @@
 use crate::{
-    BrowserView, CoreError, PageId, ProtocolSession, TabId, TargetBinding,
+    BrowserView, CoreError, NativeCapabilities, PageId, ProtocolSession, TabId, TargetBinding,
     connection::CdpConnection,
     pages::PageInfo,
     screenshot::ScreenshotFormat,
@@ -17,10 +17,20 @@ pub struct Browser {
 }
 
 impl Browser {
+    /// A facade whose native identity is unknown; gated native features stay unused.
     #[must_use]
     pub fn new(connection: Arc<dyn CdpConnection>) -> Self {
+        Self::new_with_native(connection, NativeCapabilities::default())
+    }
+
+    #[must_use]
+    pub fn new_with_native(connection: Arc<dyn CdpConnection>, native: NativeCapabilities) -> Self {
         Self {
-            core: BrowserSession::new(connection, BrowserSessionHooks::default()),
+            core: BrowserSession::new_with_native(
+                connection,
+                BrowserSessionHooks::default(),
+                native,
+            ),
             binding: tokio::sync::RwLock::new(None),
         }
     }

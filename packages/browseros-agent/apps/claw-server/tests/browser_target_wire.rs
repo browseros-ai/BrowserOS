@@ -3,7 +3,9 @@
 //! through the real router, task store, tool dispatch, effects, and wire envelope.
 
 use browseros_cdp::{CdpError, CdpEvent};
-use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId};
+use browseros_core::{
+    BrowserSession, BrowserSessionHooks, CdpConnection, NativeCapabilities, SessionId,
+};
 use claw_server::{AppState, build_router, config::Config};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -13,6 +15,11 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
+
+/// The first native release with profile targeting, which this wire test models.
+fn current_native() -> NativeCapabilities {
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
+}
 
 struct NativeProfiles {
     profiles: Mutex<Vec<Value>>,
@@ -165,14 +172,19 @@ impl HttpPeer {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
+            native: claw_server::config::NativeIdentity {
+                capabilities: current_native(),
+                asserted: false,
+            },
         });
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
         let native = NativeProfiles::new();
         state
             .browser
-            .set_session_for_testing(BrowserSession::new(
+            .set_session_for_testing(BrowserSession::new_with_native(
                 native.clone(),
                 BrowserSessionHooks::default(),
+                current_native(),
             ))
             .await;
         let listener = TcpListener::bind("127.0.0.1:0").await?;

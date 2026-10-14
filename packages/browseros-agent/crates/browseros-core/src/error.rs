@@ -1,4 +1,8 @@
-use crate::{BrowserProfileId, PageId, Ref, WindowId, profiles::ProfileCandidate};
+use crate::{
+    BrowserProfileId, PageId, Ref, WindowId,
+    capabilities::{BrowserOsVersion, NativeFeature},
+    profiles::ProfileCandidate,
+};
 use browseros_cdp::CdpError;
 use std::fmt;
 
@@ -56,6 +60,19 @@ pub enum CoreError {
     ElementCovered {
         target: CoveredElementTarget,
         blocker: String,
+    },
+    /// A gated native operation was refused before it was sent. See `crate::capabilities`.
+    #[error(
+        "native_feature_unavailable: {feature} needs BrowserOS {required} or newer; {}. The operation was not sent to the browser.",
+        match reported {
+            Some(version) => format!("this browser reports BrowserOS {version}"),
+            None => "this browser's BrowserOS version is unknown".to_string(),
+        }
+    )]
+    NativeFeatureUnavailable {
+        feature: NativeFeature,
+        required: BrowserOsVersion,
+        reported: Option<BrowserOsVersion>,
     },
     #[error(transparent)]
     Cdp(#[from] CdpError),

@@ -19,7 +19,8 @@ pages then keep going to that group instead of a second one being started for th
 same task, and the tabs already in it read as yours again. If you no longer have \
 the id, find it in the listing: after a reconnect your tabs read as another \
 agent's, and your group is titled with your own name as <yourName>/<task>. Only \
-action=\"new\" reclaims; groupId is ignored on the other actions. \
+action=\"new\" reclaims; groupId is ignored on the other actions.";
+const PROFILE_NOTE: &str = "\
 When browser_target is bound, listings and page operations include only normal \
 windows of that regular profile. OAuth/window.open popups return page_out_of_scope; \
 use explicit browser_target clear for browser-wide work. With no normal window, \
@@ -57,12 +58,15 @@ struct TabsArgs {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<TabsArgs>(
-        "tabs",
-        DESCRIPTION,
-        Some(super::open_world_annotations()),
-        handler,
-    )
+    crate::framework::ToolDef {
+        feature_note: super::profile_note(PROFILE_NOTE),
+        ..super::def::<TabsArgs>(
+            "tabs",
+            DESCRIPTION,
+            Some(super::open_world_annotations()),
+            handler,
+        )
+    }
 }
 
 /// Whether a tab group is currently open. A listing failure answers `true` so

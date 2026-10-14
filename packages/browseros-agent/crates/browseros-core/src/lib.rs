@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod capabilities;
 pub mod connection;
 pub mod content_markdown;
 pub mod error;
@@ -18,6 +19,7 @@ pub mod types;
 pub mod windows;
 
 pub use browser::Browser;
+pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature};
 pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
 pub use page_signals::{ConsoleEntry, ConsoleLevel, PageDialog, PageSignals};

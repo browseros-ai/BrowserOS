@@ -622,7 +622,11 @@ fn binding(window: Option<WindowSelection>) -> TargetBinding {
 }
 async fn view(native: Arc<Native>, window: Option<WindowSelection>) -> BrowserView {
     BrowserView::capture(
-        BrowserSession::new(native, crate::BrowserSessionHooks::default()),
+        BrowserSession::new_with_native(
+            native,
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
         Some(binding(window)),
         None,
     )
@@ -640,6 +644,25 @@ async fn page_id(view: &BrowserView, tab: i64) -> Result<PageId, CoreError> {
 }
 fn code(error: CoreError, expected: &str) {
     assert!(error.to_string().starts_with(expected), "{error}");
+}
+fn native_version(raw: &str) -> NativeCapabilities {
+    NativeCapabilities::from_browseros_version(Some(raw))
+}
+/// The first native release with profile targeting; fixtures that model the #2908 bundle use it.
+fn current_native() -> NativeCapabilities {
+    native_version("0.51.1.3")
+}
+async fn view_on(
+    native: Arc<Native>,
+    caps: NativeCapabilities,
+    window: Option<WindowSelection>,
+) -> BrowserView {
+    BrowserView::capture(
+        BrowserSession::new_with_native(native, crate::BrowserSessionHooks::default(), caps),
+        Some(binding(window)),
+        None,
+    )
+    .await
 }
 
 #[tokio::test]
@@ -1197,7 +1220,7 @@ async fn unloaded_capture_prioritizes_missing_identity_and_epoch_over_not_loaded
 #[tokio::test]
 async fn facade_rebind_only_changes_later_calls_and_old_view_keeps_genuine_context() -> TestResult {
     let native = Native::new();
-    let browser = Browser::new(native.clone());
+    let browser = Browser::new_with_native(native.clone(), current_native());
     browser.set_target(Some(binding(None))).await;
     let old = browser.view().await;
     let mut next = binding(None);
@@ -1319,7 +1342,10 @@ async fn admission_retries_one_target_replacement_and_rejects_a_second() -> Test
     Ok(())
 }
 #[tokio::test]
-async fn old_native_is_explicitly_unsupported_while_unbound_raw_is_unchanged() -> TestResult {
+async fn missing_profile_method_on_a_capable_identity_fails_closed_while_unbound_raw_is_unchanged()
+-> TestResult {
+    // A version mismatch (identity says capable, native lacks the method) keeps today's
+    // native_missing backstop; it is not a substitute for the version gate.
     let native = Native::new();
     native.lock().missing_profiles = true;
     let scoped = view(native.clone(), None).await;
@@ -1672,7 +1698,11 @@ async fn created_page_constraint_survives_group_lookup_and_guards_every_group_wr
             view(native.clone(), None).await
         } else {
             BrowserView::unbound(
-                BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+                BrowserSession::new_with_native(
+                    native.clone(),
+                    crate::BrowserSessionHooks::default(),
+                    current_native(),
+                ),
                 None,
             )
         };
@@ -1755,7 +1785,11 @@ async fn created_page_constraint_survives_group_lookup_and_guards_every_group_wr
 async fn unbound_created_page_retains_creation_epoch_before_delayed_callback() -> TestResult {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
         None,
     );
     let created = base.page(page_id(&base, 1).await?).await?;
@@ -1799,7 +1833,11 @@ async fn created_page_constraint_allows_live_work_but_never_adopts_changed_tab_w
     ] {
         let native = Native::new();
         let base = BrowserView::unbound(
-            BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+            BrowserSession::new_with_native(
+                native.clone(),
+                crate::BrowserSessionHooks::default(),
+                current_native(),
+            ),
             None,
         );
         let created = base.page(page_id(&base, 1).await?).await?;
@@ -1920,7 +1958,11 @@ async fn creation_receipt_before_handoff(bound: bool) -> TestResult {
         .await
     } else {
         BrowserView::unbound(
-            BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+            BrowserSession::new_with_native(
+                native.clone(),
+                crate::BrowserSessionHooks::default(),
+                current_native(),
+            ),
             Some(WindowId(11)),
         )
     };
@@ -2043,7 +2085,11 @@ async fn creation_origin_during_readiness(bound: bool, reconnect: bool) -> TestR
         .await
     } else {
         BrowserView::unbound(
-            BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+            BrowserSession::new_with_native(
+                native.clone(),
+                crate::BrowserSessionHooks::default(),
+                current_native(),
+            ),
             Some(WindowId(11)),
         )
     };
@@ -2151,7 +2197,11 @@ async fn unbound_creation_origin_retains_epoch_during_readiness() -> TestResult 
 async fn unbound_creation_origin_uses_creation_epoch_after_an_earlier_reconnect() -> TestResult {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
         Some(WindowId(11)),
     );
     // An ordinary unbound view follows the live connection at each new call. Only the receipt
@@ -2188,7 +2238,7 @@ async fn unbound_creation_origin_uses_creation_epoch_after_an_earlier_reconnect(
 #[tokio::test]
 async fn bound_facade_close_uses_exclusive_native_target_selector() -> TestResult {
     let native = Native::new();
-    let browser = Browser::new(native.clone());
+    let browser = Browser::new_with_native(native.clone(), current_native());
     browser.set_target(Some(binding(None))).await;
     let closing = browser
         .list_pages()
@@ -2255,7 +2305,11 @@ async fn unbound_creation_origin_preserves_best_effort_cross_window_group_reject
 {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
         Some(WindowId(12)),
     );
     let created = base
@@ -2318,7 +2372,11 @@ async fn bound_creation_origin_rejects_cross_window_default_group_before_create(
 async fn unbound_creation_origin_refreshes_successful_same_window_group_membership() -> TestResult {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new(native.clone(), crate::BrowserSessionHooks::default()),
+        BrowserSession::new_with_native(
+            native.clone(),
+            crate::BrowserSessionHooks::default(),
+            current_native(),
+        ),
         Some(WindowId(11)),
     );
     let created = base
@@ -2336,5 +2394,137 @@ async fn unbound_creation_origin_refreshes_successful_same_window_group_membersh
     assert_eq!(native.calls("Browser.addTabsToGroup").len(), 1);
     assert_eq!(native.lock().groups[0]["tabIds"], json!([1, 5]));
     assert!(base.clone().with_expected_created_page(&created).is_ok());
+    Ok(())
+}
+
+#[tokio::test]
+async fn native_without_profile_targeting_runs_a_saved_binding_unbound() -> TestResult {
+    for caps in [native_version("0.51.1.2"), NativeCapabilities::default()] {
+        let native = Native::new();
+        let pin = WindowSelection::Pinned {
+            window_id: WindowId(11),
+        };
+        let view = view_on(native.clone(), caps, Some(pin)).await;
+        assert_eq!(view.admission_error(), None, "{caps}");
+        assert!(view.binding().is_none());
+        assert!(matches!(view.scope(), Ok(None)));
+        assert_eq!(view.unapplied_binding(), Some(&binding(Some(pin))));
+
+        // Ordinary work keeps the browser-wide routing older natives always had.
+        let listing = view.list_pages().await?;
+        assert_eq!(listing.pages.len(), 4);
+        assert_eq!(listing.hidden, 0);
+        let opened = view
+            .new_page("https://new.test/", NewPageOptions::default())
+            .await?;
+        assert!(opened.window_id.is_some());
+        let created = native.calls("Browser.createTab");
+        assert_eq!(created.len(), 1);
+        assert!(created[0].params.get("browserContextId").is_none());
+        assert_eq!(
+            view.cdp("Unknown.futureMethod", json!({"unchanged":true}), None)
+                .await?,
+            json!({})
+        );
+
+        // Gated operations are refused before they are sent.
+        code(
+            view.list_profiles().await.err().ok_or("profiles listed")?,
+            "native_feature_unavailable",
+        );
+        code(
+            view.intent_for_window(WindowSelection::Working {
+                window_id: WindowId(11),
+            })
+            .await
+            .err()
+            .ok_or("window selected")?,
+            "native_feature_unavailable",
+        );
+        for (method, params) in [
+            ("Browser.getProfiles", json!({})),
+            ("Browser.loadProfile", json!({"browserProfileId":"eng"})),
+            ("History.getRecent", json!({"browserContextId":"live-eng"})),
+            (
+                "Browser.createTab",
+                json!({"url":"about:blank","browserContextId":"live-eng"}),
+            ),
+            (
+                "Browser.createWindow",
+                json!({"browserContextId":"live-eng"}),
+            ),
+        ] {
+            code(
+                view.cdp(method, params, None)
+                    .await
+                    .err()
+                    .ok_or("gated raw CDP sent")?,
+                "native_feature_unavailable",
+            );
+        }
+        let page = page_id(&view, 1).await?;
+        code(
+            view.cdp_json_for_page(page, "Browser.loadProfile", r#"{"browserProfileId":"eng"}"#)
+                .await
+                .err()
+                .ok_or("gated page CDP sent")?,
+            "native_feature_unavailable",
+        );
+        assert!(native.calls("Browser.getProfiles").is_empty());
+        assert!(native.calls("Browser.loadProfile").is_empty());
+        assert!(native.calls("History.getRecent").is_empty());
+        assert_eq!(native.calls("Browser.createTab").len(), 1);
+        assert!(native.calls("Browser.createWindow").is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn stock_context_parameters_stay_allowed_on_an_older_native() -> TestResult {
+    let native = Native::new();
+    let view = view_on(native.clone(), native_version("0.51.1.2"), None).await;
+    view.cdp(
+        "Storage.getCookies",
+        json!({"browserContextId":"otr"}),
+        None,
+    )
+    .await?;
+    view.cdp("History.getRecent", json!({"maxResults":3}), None)
+        .await?;
+    assert_eq!(
+        native.calls("Storage.getCookies")[0].params,
+        json!({"browserContextId":"otr"})
+    );
+    assert_eq!(
+        native.calls("History.getRecent")[0].params,
+        json!({"maxResults":3})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn capable_native_retries_a_retained_binding_with_live_checks() -> TestResult {
+    // Unchanged native identities: the retained binding captures targeted, and every capture
+    // re-reads the live catalog instead of trusting the version gate or a cached catalog.
+    let native = Native::new();
+    let first = view_on(native.clone(), current_native(), None).await;
+    assert!(first.scope()?.is_some());
+    assert!(first.unapplied_binding().is_none());
+    let reads = native.calls("Browser.getProfiles").len();
+    assert!(reads > 0);
+    let second = view_on(native.clone(), current_native(), None).await;
+    assert!(second.scope()?.is_some());
+    assert!(native.calls("Browser.getProfiles").len() > reads);
+
+    // A restarted native minted new process-lifetime handles: the same retained binding
+    // fails closed for explicit reselection instead of binding a different identity.
+    let restarted = Native::new();
+    restarted.lock().profiles = vec![profile("eng-after-restart", true)];
+    let stale = view_on(restarted, current_native(), None).await;
+    assert_eq!(
+        stale.admission_error(),
+        Some(&TargetError::ProfileGone(BrowserProfileId("eng".into())))
+    );
+    assert!(stale.unapplied_binding().is_none());
     Ok(())
 }
