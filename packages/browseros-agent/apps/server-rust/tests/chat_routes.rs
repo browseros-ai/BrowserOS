@@ -58,6 +58,7 @@ struct MemoryRecords {
     saved: Mutex<Vec<SaveRawConversation>>,
     /// `conversation` fails as a locked or corrupt database would.
     fail_reads: AtomicBool,
+    fail_writes: AtomicBool,
     /// When set, `save_conversation` signals the first and waits for the second.
     save_gate: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
 }
@@ -86,6 +87,9 @@ impl ChatRecords for MemoryRecords {
         Ok(locked(&self.conversations).get(&id).cloned())
     }
     async fn save_conversation(&self, input: SaveRawConversation) -> DbResult<()> {
+        if self.fail_writes.load(Ordering::SeqCst) {
+            return Err(DbError::Query("database is locked".into()));
+        }
         let gate = locked(&self.save_gate).clone();
         if let Some((entered, release)) = gate {
             entered.notify_one();
@@ -1681,5 +1685,106 @@ async fn scheduled_runs_release_their_server_state() -> TestResult {
     body_bytes(h.post_chat(false, &next).await?).await?;
     let turns = h.scripted()?.turns();
     assert_eq!(turns[1].history.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn failed_history_save_reaches_the_stream_and_failed_turn_state() -> TestResult {
+    for scheduled in [false, true] {
+        let h = harness().await?;
+        h.records.fail_writes.store(true, Ordering::SeqCst);
+        let conversation = Uuid::new_v4();
+        let mut input = inline_body(conversation);
+        input["isScheduledTask"] = json!(scheduled);
+        if scheduled {
+            // Built-in scheduled runs intentionally do not persist. ACP display history does,
+            // so use that real persistence policy to exercise failure plus scheduled cleanup.
+            let agent = Uuid::new_v4();
+            locked(&h.records.agents).insert(agent, agent_row(agent, AgentKind::Claude));
+            input["target"] = json!({"type":"claude", "agentId":agent});
+        }
+        let response = h.post_chat(scheduled, &input).await?;
+        assert_eq!(response.status(), StatusCode::OK); // Headers precede the durable-save phase.
+        let chunks = sse::parse(&body_bytes(response).await?)?;
+        assert!(chunks.iter().any(|chunk| matches!(chunk, UiChunk::Error { error_text } if error_text.contains("database is locked"))),
+            "save failure did not reach the subscriber (scheduled={scheduled})");
+        let error_text = chunks
+            .iter()
+            .find_map(|chunk| match chunk {
+                UiChunk::Error { error_text } => Some(error_text),
+                _ => None,
+            })
+            .ok_or("missing save error")?;
+        let envelope: Value = serde_json::from_str(error_text)?;
+        assert_eq!(envelope["error"]["code"], "unknown");
+        assert_eq!(envelope["error"]["retryable"], true);
+        if !scheduled {
+            let replay = h
+                .send(
+                    false,
+                    empty_request("GET", &format!("/chat/{conversation}/stream"))?,
+                )
+                .await?;
+            assert_eq!(sse::parse(&body_bytes(replay).await?)?, chunks);
+        }
+        let state = state_json(&h, conversation).await?;
+        assert_eq!(state["status"], "failed");
+        assert_eq!(
+            state["messages"].as_array().map(Vec::len),
+            Some(2),
+            "keep the unsaved reply visible"
+        );
+        assert!(locked(&h.records.saved).is_empty());
+        if scheduled {
+            assert_eq!(h.acp.forgotten(), vec![conversation]);
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_real_sqlite_busy_save_fails_the_turn_without_creating_history() -> TestResult {
+    use sea_orm::sqlx::{self, Connection};
+    let dir = tempfile::tempdir()?;
+    let paths = BrowserosPaths::new(dir.path().to_path_buf());
+    let (db, _) = Database::open(&paths).await?;
+    let engine = Arc::new(ScriptedEngine::new(script()));
+    let chat = ChatService::new(ChatDeps {
+        runs: ConversationRuns::new(Arc::new(ServerActivity::new()), Duration::from_secs(5)),
+        records: Arc::new(server_rust::chat::DbChatRecords::new(&db)),
+        browseros: engine.clone(),
+        acp: engine,
+        oauth: TokenManager::new(
+            db.oauth_tokens(),
+            "browseros-test".into(),
+            reqwest::Client::new(),
+        ),
+        tabs: None,
+        use_mock_llm: false,
+    });
+    let mut ts = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(&paths.db_file),
+    )
+    .await?;
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut ts).await?;
+    let conversation = Uuid::new_v4();
+    let response = Router::new()
+        .route("/chat", post(chat::post_chat))
+        .layer(Extension(RequestTrust { trusted_app: true }))
+        .with_state(chat.clone())
+        .oneshot(json_request("POST", "/chat", &inline_body(conversation))?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let bytes = tokio::time::timeout(Duration::from_secs(5), body_bytes(response)).await??;
+    let chunks = sse::parse(&bytes)?;
+    assert!(chunks.iter().any(|chunk| matches!(chunk, UiChunk::Error { error_text } if error_text.contains("database is locked"))));
+    assert_eq!(
+        chat.state(conversation).await.ok_or("missing run")?.status,
+        server_rust::chat::RunStatus::Failed
+    );
+    assert!(db.conversations().get(conversation).await?.is_none());
+    sqlx::query("ROLLBACK").execute(&mut ts).await?;
+    ts.close().await?;
+    db.close().await?;
     Ok(())
 }

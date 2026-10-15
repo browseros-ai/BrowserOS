@@ -14,8 +14,8 @@
 //!   cannot be read fails the turn (TS answers 500 there): seeding instead would let the turn's
 //!   persist overwrite a history this process never saw.
 //! - Afterwards the in-memory copy is authoritative until `DELETE /chat/{id}` forgets it.
-//! - Persist: best-effort, never fails the turn; the caller decides *whether* (see
-//!   `ChatService`), this module only writes.
+//! - Persist: returns durable-save failures to the turn completion hook. A model reply alone
+//!   is not a successful persisted turn; the caller decides whether persistence is required.
 //!
 //! Owned by P8.
 
@@ -154,14 +154,14 @@ impl ConversationHistory {
             .insert(target.clone(), stored);
     }
 
-    /// Writes `stored` verbatim. Best-effort: logs, never fails the turn.
+    /// Writes `stored` verbatim; the completion hook must surface any failure to the subscriber.
     pub async fn persist(
         &self,
         conversation_id: Uuid,
         target: &TargetKey,
         stored: &[Value],
         origin: Origin,
-    ) {
+    ) -> DbResult<()> {
         let (target_type, agent_id) = match target {
             TargetKey::BrowserOs => (TargetType::BrowserOs, None),
             // TS writes the agent's type (`claude|codex|custom`) as the row's target.
@@ -187,9 +187,12 @@ impl ConversationHistory {
             target_type,
             agent_id,
         };
-        if let Err(error) = self.records.save_conversation(save).await {
-            tracing::warn!(%conversation_id, %error, "failed to persist conversation history");
-        }
+        self.records
+            .save_conversation(save)
+            .await
+            .inspect_err(|error| {
+                tracing::error!(%conversation_id, %error, "failed to persist conversation history");
+            })
     }
 
     /// Drops every cached history of the conversation (all targets).

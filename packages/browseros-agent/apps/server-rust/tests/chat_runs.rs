@@ -51,7 +51,7 @@ fn controlled() -> (mpsc::UnboundedSender<UiChunk>, ChunkStream) {
 }
 
 fn noop_finish() -> OnFinish {
-    Box::new(|_| Box::pin(async { None }))
+    Box::new(|_| Box::pin(async { None.into() }))
 }
 
 fn presentation(tabs: &[u32]) -> RunPresentation {
@@ -639,7 +639,7 @@ async fn runs_on_finish_before_subscribers_see_the_end() -> TestResult {
                 if let Ok(mut slot) = observed.lock() {
                     *slot = Some(finished);
                 }
-                None
+                None.into()
             })
         })
     };
@@ -692,7 +692,7 @@ async fn stop_cancels_the_engine_drains_its_abort_and_returns_after_the_end() ->
                     if let Ok(mut slot) = finished_status.lock() {
                         *slot = Some(finished.status);
                     }
-                    None
+                    None.into()
                 })
             });
             Ok(Prepared { chunks, on_finish })
@@ -937,7 +937,7 @@ async fn final_messages_are_published_together_with_the_terminal_status() -> Tes
                     // Stands in for the persistence await.
                     let _ = entered_tx.send(());
                     let _ = released.await;
-                    Some(vec![user, assistant])
+                    Some(vec![user, assistant]).into()
                 })
             });
             Ok(Prepared { chunks, on_finish })

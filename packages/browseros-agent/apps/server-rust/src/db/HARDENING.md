@@ -12,22 +12,27 @@ The TS server does not take the Rust instance lock. SQLite write admission handl
 write overlap. This serializes transactions; it cannot resolve stale application-level
 read/modify/write state accumulated before a transaction began.
 
-Two caller integrations are outside P2-fix's owned files and remain required:
+The follow-up closes the caller integrations:
 
-1. `http/agents.rs`, `http/conversations.rs`, `http/wire/crud.rs`, and the generated API contract
-   use UUID ids / closed agent and target enums. Management list/get routes must consume the
-   new `list_stored` / `get_stored` methods and serialize their raw strings. Delete methods now
-   accept raw string ids too, but HTTP path validation also needs to allow those ids. Existing
-   typed methods remain as execution views and return a clear error for unsupported rows
-   instead of silently dropping them. Their UUID normalization is not used in lossless reads.
-2. `chat/history.rs::persist` swallows `save_conversation` errors. P8-fix owns chat and must
-   propagate these into the turn outcome. DB saves already return admission/commit errors;
-   the BUSY exhaustion regression proves the error and unchanged persisted history.
+- Management list/get routes consume `list_stored` / `get_stored` and project raw ids and unknown
+  type/target strings. Get/delete still enforce TS's UUID path validation (non-UUID legacy ids
+  remain listed, but those paths return 400). Valid UUID text is passed to SQLite unchanged,
+  including case. Creation, updates, and the execution model retain the closed contract.
+- `chat/history.rs::persist` returns save errors. The completion handoff carries both final
+  messages and an optional error; the run emits that error before `[DONE]` and publishes final
+  history with status `failed`. Scheduled cleanup still runs on failure. Scheduled built-in
+  runs retain their no-persistence policy; ACP display history is persisted unconditionally.
+- Instance-lock acquisition retries contention for up to two seconds. A short-lived descriptor
+  inherited before exec, or a departing Rust process, no longer makes immediate reopen fail.
+  A live owner still prevents startup, and non-contention I/O errors are returned immediately.
 
-DECIDED: Keep lossless storage rows separate from validated execution rows — WHY: changing
-`AgentKind`/`TargetType` or UUID row fields breaks exhaustive matches and ACP execution in the
-explicitly unowned chat/HTTP interfaces. This preserves their source contract while exposing
-all stored data for the required management-route follow-up.
+DECIDED: Keep lossless storage rows separate from validated execution rows — WHY: closed ACP
+execution types cannot represent every legacy or future row; management reads must preserve
+those rows without changing request validation or accepting unsupported execution targets.
+
+DECIDED: A durable-save failure overrides completion/cancellation with a failed turn — WHY:
+a reply that was not saved must not be reported as successfully persisted. Keep its messages
+visible and finish resource cleanup before ending the stream.
 
 DECIDED: OAuth refresh deletes durable tokens only for HTTP 400/401 with `invalid_grant` or
 `invalid_token` — WHY: the TS behavior logs users out during provider outages; transient,

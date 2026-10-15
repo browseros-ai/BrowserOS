@@ -131,12 +131,26 @@ pub struct FinishedTurn {
     pub assistant: Option<UiMessage>,
 }
 
-/// Persistence hook; runs before subscribers see the end of the stream, so a client that reloads
-/// right after `[DONE]` always finds the saved conversation. Called exactly once per prepared run.
-/// Returns the run's final display history, which `finish` publishes in the same critical section
-/// as the terminal status (`None` keeps what was last published).
-pub type OnFinish =
-    Box<dyn FnOnce(FinishedTurn) -> BoxFuture<'static, Option<Vec<UiMessage>>> + Send>;
+/// Final display history and completion failure, returned after persistence and cleanup.
+/// Keeping them together lets the registry publish the reply and failed status atomically,
+/// even when the model succeeded but the durable save did not.
+pub struct FinishOutcome {
+    pub messages: Option<Vec<UiMessage>>,
+    pub error: Option<ChatError>,
+}
+
+impl From<Option<Vec<UiMessage>>> for FinishOutcome {
+    fn from(messages: Option<Vec<UiMessage>>) -> Self {
+        Self {
+            messages,
+            error: None,
+        }
+    }
+}
+
+/// Persistence hook; runs once per prepared run before subscribers see the end. A failure
+/// becomes an error chunk followed by a failed terminal state; final messages are still kept.
+pub type OnFinish = Box<dyn FnOnce(FinishedTurn) -> BoxFuture<'static, FinishOutcome> + Send>;
 
 pub struct Prepared {
     pub chunks: ChunkStream,
@@ -384,12 +398,12 @@ impl ConversationRuns {
                 if record.cancel.is_cancelled() {
                     // Stopped while preparing: the turn never runs.
                     drop(chunks);
-                    let messages = on_finish(FinishedTurn {
+                    let outcome = on_finish(FinishedTurn {
                         status: RunStatus::Aborted,
                         assistant: None,
                     })
                     .await;
-                    self.finish(&record, RunStatus::Aborted, messages);
+                    self.complete(&record, RunStatus::Aborted, outcome);
                 } else {
                     self.pump(&record, chunks, on_finish).await;
                 }
@@ -436,12 +450,29 @@ impl ConversationRuns {
         } else {
             RunStatus::Completed
         };
-        let messages = on_finish(FinishedTurn {
+        let outcome = on_finish(FinishedTurn {
             status,
             assistant: assembler.into_message(),
         })
         .await;
-        self.finish(record, status, messages);
+        self.complete(record, status, outcome);
+    }
+
+    /// A failed save is observable before the end latch, in both live streams and replay. It
+    /// takes precedence over model completion or cancellation: the promised history was not saved.
+    fn complete(&self, record: &RunRecord, status: RunStatus, outcome: FinishOutcome) {
+        let status = if let Some(error) = outcome.error {
+            append(
+                record,
+                UiChunk::Error {
+                    error_text: browseros_agent::llm::chat_error_text(&error),
+                },
+            );
+            RunStatus::Failed
+        } else {
+            status
+        };
+        self.finish(record, status, outcome.messages);
     }
 
     /// Ends the run once: final messages and status in one critical section, both latches,

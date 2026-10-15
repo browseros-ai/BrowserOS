@@ -1,6 +1,7 @@
-//! Compatibility decoding for the CRUD routes. Generated `server_api` models own the wire
-//! shapes; this module supplies the Zod rules that serde cannot express (trimming, strict
-//! objects, UTF-16 lengths, headers, and ordered issue metadata), before decoding those models.
+//! Compatibility decoding and storage projections for the CRUD routes. Generated models
+//! describe validated requests and known execution types; management reads also preserve
+//! future type strings and legacy JSON. Zod rules (trimming, strict objects, UTF-16 lengths,
+//! headers, and ordered issues) run before decoding request models.
 
 use axum::{
     Json,
@@ -712,9 +713,10 @@ pub fn deleted(result: db::DbResult<bool>, message: &str) -> Response {
 /// `/agents` parses and validates persisted config, omitting malformed legacy values. The
 /// `/providers` projection instead returns the untouched string, including invalid JSON.
 pub fn agent(row: db::AcpAgentRow) -> api::Agent {
-    let custom_config = stored_agent_config(row.custom_config.as_deref(), &row.id);
+    let id = row.id.to_string();
+    let custom_config = stored_agent_config(row.custom_config.as_deref(), &id);
     api::Agent {
-        id: row.id.to_string(),
+        id,
         name: row.name,
         r#type: match row.kind {
             db::AgentKind::Claude => api::AcpAgentType::Claude,
@@ -789,10 +791,7 @@ fn omit_null_fields(mut value: Value) -> Value {
     value
 }
 
-fn stored_agent_config(
-    raw: Option<&str>,
-    id: impl std::fmt::Display,
-) -> Option<Box<api::CustomAcpAgentConfig>> {
+fn stored_agent_config(raw: Option<&str>, id: &str) -> Option<Box<api::CustomAcpAgentConfig>> {
     raw.filter(|raw| !raw.is_empty()).and_then(|raw| {
         let value = match serde_json::from_str(raw) {
             Ok(value) => value,

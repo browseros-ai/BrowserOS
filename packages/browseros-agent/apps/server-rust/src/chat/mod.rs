@@ -12,7 +12,8 @@
 //!   replay log + live tail ◄── UiMessageAssembler ◄────────────────────────┘
 //!   on_finish: stored history (verbatim) + filter_valid(user + assistant) → cache; persist if
 //!              policy allows; scheduled runs release their engine session and cache; the final
-//!              typed history goes back to the run, published with the terminal status
+//!              typed history goes back to the run, published with the terminal status; save
+//!              failures emit an error chunk and fail the run after cleanup
 //!
 //! DELETE /chat/{id} ─► ChatService::delete (own task) ─► ConversationRuns::delete_with:
 //!   panels retired + 409 gate ─ stop, await end ─ cleanup (ACP + built-in forget, cache) ─ remove
@@ -40,8 +41,8 @@ pub use engine::{
 pub use history::{ConversationHistory, History, TargetKey};
 pub use request::{ChatRequest, ChatTurnRequest, ProviderRecord, RequestTarget};
 pub use runs::{
-    ActiveRun, ConversationRuns, FinishedTurn, OnFinish, Prepared, RunHandle, RunPresentation,
-    RunSnapshot, RunStatus, StartedRun, TabGroupPresentation,
+    ActiveRun, ConversationRuns, FinishOutcome, FinishedTurn, OnFinish, Prepared, RunHandle,
+    RunPresentation, RunSnapshot, RunStatus, StartedRun, TabGroupPresentation,
 };
 
 use crate::{
@@ -403,11 +404,15 @@ impl ChatService {
                                 turn.last().is_some_and(|last| last.role == Role::Assistant)
                             }
                         };
-                        if persist && durable {
+                        let persistence = if persist && durable {
                             history
                                 .persist(conversation_id, &target_key, &stored, input.origin)
-                                .await;
-                        }
+                                .await
+                        } else {
+                            Ok(())
+                        };
+                        // Keep cleanup independent of persistence success. A scheduled run must
+                        // release its engine/cache even when the database is busy or read-only.
                         if input.is_scheduled_task {
                             // Each scheduled run uses a fresh conversation id nobody DELETEs:
                             // release what the engine and cache hold for it now (the replay log
@@ -423,7 +428,10 @@ impl ChatService {
                         // Published by the run together with its terminal status.
                         let mut messages = filter_valid(prior.typed);
                         messages.extend(turn);
-                        Some(messages)
+                        FinishOutcome {
+                            messages: Some(messages),
+                            error: persistence.err().map(|error| db_error(&error)),
+                        }
                     })
                 });
                 Ok(Prepared { chunks, on_finish })
