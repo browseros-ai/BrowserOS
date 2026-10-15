@@ -7,7 +7,7 @@
 use crate::{
     activity::ServerActivity,
     chat::{
-        AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationHistory, ConversationRuns,
+        AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationRuns, DbChatRecords,
     },
     chat::{BrowserOsEngineDeps, NoBrowser, RegistryLeases, klavis_state_name, production_models},
     config::Config,
@@ -138,13 +138,12 @@ impl AppState {
         }));
         let chat = ChatService::new(ChatDeps {
             runs: runs.clone(),
-            history: ConversationHistory::new(db.conversations()),
+            records: Arc::new(DbChatRecords::new(&db)),
             browseros,
             acp: acp.clone(),
-            providers: db.providers(),
-            agents: db.agents(),
             oauth: oauth.clone(),
-            browseros_id: identity.browseros_id.clone(),
+            tabs: None,
+            use_mock_llm: config.env.use_mock_llm,
         });
 
         Ok(Self(Arc::new(AppInner {

@@ -1,0 +1,249 @@
+{
+  "empty": {
+    "request": {},
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"conversationId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"conversationId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "notObject": {
+    "request": [],
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [],\\n          \\\"message\\\": \\\"Invalid input: expected object, received array\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [],\\n          \\\"message\\\": \\\"Invalid input: expected object, received array\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "acpOnlyContinuable": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "userWorkingDir": "",
+      "target": {
+        "type": "claude",
+        "agentId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff"
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"origin\\\": \\\"string\\\",\\n    \\\"code\\\": \\\"too_small\\\",\\n    \\\"minimum\\\": 1,\\n    \\\"inclusive\\\": true,\\n    \\\"path\\\": [\\n      \\\"userWorkingDir\\\"\\n    ],\\n    \\\"message\\\": \\\"Too small: expected string to have >=1 characters\\\"\\n  }\\n]\"}}"
+  },
+  "acpBadAgent": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "target": {
+        "type": "claude",
+        "agentId": "x"
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"origin\\\": \\\"string\\\",\\n    \\\"code\\\": \\\"invalid_format\\\",\\n    \\\"format\\\": \\\"uuid\\\",\\n    \\\"pattern\\\": \\\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\\\",\\n    \\\"path\\\": [\\n      \\\"target\\\",\\n      \\\"agentId\\\"\\n    ],\\n    \\\"message\\\": \\\"Invalid UUID\\\"\\n  }\\n]\"}}"
+  },
+  "ctx": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "browserContext": {
+        "windowId": "a",
+        "activeTab": {
+          "url": 1
+        },
+        "selectedTabs": [
+          {
+            "id": 1
+          },
+          2
+        ],
+        "customMcpServers": [
+          {
+            "name": "n",
+            "url": "notaurl"
+          }
+        ]
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"number\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"windowId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected number, received string\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"number\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"activeTab\\\",\\n            \\\"id\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected number, received undefined\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"activeTab\\\",\\n            \\\"url\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"selectedTabs\\\",\\n            1\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received number\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_format\\\",\\n          \\\"format\\\": \\\"url\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"customMcpServers\\\",\\n            0,\\n            \\\"url\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid URL\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"number\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"windowId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected number, received string\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"number\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"activeTab\\\",\\n            \\\"id\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected number, received undefined\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"activeTab\\\",\\n            \\\"url\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"selectedTabs\\\",\\n            1\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received number\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_format\\\",\\n          \\\"format\\\": \\\"url\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\",\\n            \\\"customMcpServers\\\",\\n            0,\\n            \\\"url\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid URL\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "prevBad": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "previousConversation": [
+        {
+          "role": "system",
+          "content": "x"
+        }
+      ]
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_union\\\",\\n          \\\"errors\\\": [\\n            [\\n              {\\n                \\\"code\\\": \\\"invalid_value\\\",\\n                \\\"values\\\": [\\n                  \\\"user\\\",\\n                  \\\"assistant\\\"\\n                ],\\n                \\\"path\\\": [\\n                  0,\\n                  \\\"role\\\"\\n                ],\\n                \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"user\\\\\\\"|\\\\\\\"assistant\\\\\\\"\\\"\\n              }\\n            ],\\n            [\\n              {\\n                \\\"expected\\\": \\\"string\\\",\\n                \\\"code\\\": \\\"invalid_type\\\",\\n                \\\"path\\\": [],\\n                \\\"message\\\": \\\"Invalid input: expected string, received array\\\"\\n              }\\n            ]\\n          ],\\n          \\\"path\\\": [\\n            \\\"previousConversation\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_union\\\",\\n          \\\"errors\\\": [\\n            [\\n              {\\n                \\\"code\\\": \\\"invalid_value\\\",\\n                \\\"values\\\": [\\n                  \\\"user\\\",\\n                  \\\"assistant\\\"\\n                ],\\n                \\\"path\\\": [\\n                  0,\\n                  \\\"role\\\"\\n                ],\\n                \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"user\\\\\\\"|\\\\\\\"assistant\\\\\\\"\\\"\\n              }\\n            ],\\n            [\\n              {\\n                \\\"expected\\\": \\\"string\\\",\\n                \\\"code\\\": \\\"invalid_type\\\",\\n                \\\"path\\\": [],\\n                \\\"message\\\": \\\"Invalid input: expected string, received array\\\"\\n              }\\n            ]\\n          ],\\n          \\\"path\\\": [\\n            \\\"previousConversation\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "prevNum": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "previousConversation": 5
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_union\\\",\\n          \\\"errors\\\": [\\n            [\\n              {\\n                \\\"expected\\\": \\\"array\\\",\\n                \\\"code\\\": \\\"invalid_type\\\",\\n                \\\"path\\\": [],\\n                \\\"message\\\": \\\"Invalid input: expected array, received number\\\"\\n              }\\n            ],\\n            [\\n              {\\n                \\\"expected\\\": \\\"string\\\",\\n                \\\"code\\\": \\\"invalid_type\\\",\\n                \\\"path\\\": [],\\n                \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n              }\\n            ]\\n          ],\\n          \\\"path\\\": [\\n            \\\"previousConversation\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_union\\\",\\n          \\\"errors\\\": [\\n            [\\n              {\\n                \\\"expected\\\": \\\"array\\\",\\n                \\\"code\\\": \\\"invalid_type\\\",\\n                \\\"path\\\": [],\\n                \\\"message\\\": \\\"Invalid input: expected array, received number\\\"\\n              }\\n            ],\\n            [\\n              {\\n                \\\"expected\\\": \\\"string\\\",\\n                \\\"code\\\": \\\"invalid_type\\\",\\n                \\\"path\\\": [],\\n                \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n              }\\n            ]\\n          ],\\n          \\\"path\\\": [\\n            \\\"previousConversation\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "headersBad": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "headers": {
+        "bad name": "v",
+        "A": "x",
+        "a": "y"
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_key\\\",\\n          \\\"origin\\\": \\\"record\\\",\\n          \\\"issues\\\": [\\n            {\\n              \\\"origin\\\": \\\"string\\\",\\n              \\\"code\\\": \\\"invalid_format\\\",\\n              \\\"format\\\": \\\"regex\\\",\\n              \\\"pattern\\\": \\\"/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\\\\\\\s\\\\\\\\S])/\\\",\\n              \\\"path\\\": [],\\n              \\\"message\\\": \\\"Invalid string: must match pattern /^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\\\\\\\s\\\\\\\\S])/\\\"\\n            }\\n          ],\\n          \\\"path\\\": [\\n            \\\"headers\\\",\\n            \\\"bad name\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid key in record\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "dupHeaders": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "headers": {
+        "A": "x",
+        "a": "y"
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"custom\\\",\\n          \\\"message\\\": \\\"Duplicate header name\\\",\\n          \\\"path\\\": [\\n            \\\"headers\\\",\\n            \\\"a\\\"\\n          ]\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "badHeaderValue": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "headers": {
+        "A": "x\n",
+        "B": "€"
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_format\\\",\\n          \\\"format\\\": \\\"regex\\\",\\n          \\\"pattern\\\": \\\"/^[\\\\\\\\t\\\\\\\\x20-\\\\\\\\x7e\\\\\\\\x80-\\\\\\\\xff]*(?![\\\\\\\\s\\\\\\\\S])/\\\",\\n          \\\"path\\\": [\\n            \\\"headers\\\",\\n            \\\"A\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid string: must match pattern /^[\\\\\\\\t\\\\\\\\x20-\\\\\\\\x7e\\\\\\\\x80-\\\\\\\\xff]*(?![\\\\\\\\s\\\\\\\\S])/\\\"\\n        },\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_format\\\",\\n          \\\"format\\\": \\\"regex\\\",\\n          \\\"pattern\\\": \\\"/^[\\\\\\\\t\\\\\\\\x20-\\\\\\\\x7e\\\\\\\\x80-\\\\\\\\xff]*(?![\\\\\\\\s\\\\\\\\S])/\\\",\\n          \\\"path\\\": [\\n            \\\"headers\\\",\\n            \\\"B\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid string: must match pattern /^[\\\\\\\\t\\\\\\\\x20-\\\\\\\\x7e\\\\\\\\x80-\\\\\\\\xff]*(?![\\\\\\\\s\\\\\\\\S])/\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "headersArray": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "headers": []
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"record\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"headers\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected record, received array\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "targetMissingType": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "target": {}
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_union\\\",\\n          \\\"errors\\\": [],\\n          \\\"note\\\": \\\"No matching discriminator\\\",\\n          \\\"discriminator\\\": \\\"type\\\",\\n          \\\"options\\\": [\\n            \\\"claude\\\",\\n            \\\"codex\\\",\\n            \\\"custom\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"type\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid discriminator value. Expected 'claude' | 'codex' | 'custom'\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"browseros\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"type\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected \\\\\\\"browseros\\\\\\\"\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "targetString": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "target": "x"
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received string\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received string\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "targetBrowserosEmptyId": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "target": {
+        "type": "browseros",
+        "providerId": ""
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_union\\\",\\n          \\\"errors\\\": [],\\n          \\\"note\\\": \\\"No matching discriminator\\\",\\n          \\\"discriminator\\\": \\\"type\\\",\\n          \\\"options\\\": [\\n            \\\"claude\\\",\\n            \\\"codex\\\",\\n            \\\"custom\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"type\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid discriminator value. Expected 'claude' | 'codex' | 'custom'\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"too_small\\\",\\n          \\\"minimum\\\": 1,\\n          \\\"inclusive\\\": true,\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"providerId\\\"\\n          ],\\n          \\\"message\\\": \\\"Too small: expected string to have >=1 characters\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "acpNoAgent": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "target": {
+        "type": "custom"
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"agentId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"browseros\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"type\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected \\\\\\\"browseros\\\\\\\"\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "acpMixed": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "mode": "x",
+      "target": {
+        "type": "claude",
+        "agentId": "bad"
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"chat\\\",\\n            \\\"agent\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"mode\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"chat\\\\\\\"|\\\\\\\"agent\\\\\\\"\\\"\\n        },\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_format\\\",\\n          \\\"format\\\": \\\"uuid\\\",\\n          \\\"pattern\\\": \\\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"agentId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid UUID\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"chat\\\",\\n            \\\"agent\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"mode\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"chat\\\\\\\"|\\\\\\\"agent\\\\\\\"\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"browseros\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"target\\\",\\n            \\\"type\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected \\\\\\\"browseros\\\\\\\"\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "boolTypes": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "persist": "x",
+      "historyMode": "y",
+      "reasoningEffort": "z",
+      "provider": "claude-code",
+      "model": ""
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"boolean\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"persist\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected boolean, received string\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"local\\\",\\n            \\\"cloud\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"historyMode\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"local\\\\\\\"|\\\\\\\"cloud\\\\\\\"\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"anthropic\\\",\\n            \\\"openai\\\",\\n            \\\"google\\\",\\n            \\\"openrouter\\\",\\n            \\\"azure\\\",\\n            \\\"ollama\\\",\\n            \\\"lmstudio\\\",\\n            \\\"bedrock\\\",\\n            \\\"openai-compatible\\\",\\n            \\\"moonshot\\\",\\n            \\\"chatgpt-pro\\\",\\n            \\\"github-copilot\\\",\\n            \\\"qwen-code\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"provider\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"anthropic\\\\\\\"|\\\\\\\"openai\\\\\\\"|\\\\\\\"google\\\\\\\"|\\\\\\\"openrouter\\\\\\\"|\\\\\\\"azure\\\\\\\"|\\\\\\\"ollama\\\\\\\"|\\\\\\\"lmstudio\\\\\\\"|\\\\\\\"bedrock\\\\\\\"|\\\\\\\"openai-compatible\\\\\\\"|\\\\\\\"moonshot\\\\\\\"|\\\\\\\"chatgpt-pro\\\\\\\"|\\\\\\\"github-copilot\\\\\\\"|\\\\\\\"qwen-code\\\\\\\"\\\"\\n        },\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"too_small\\\",\\n          \\\"minimum\\\": 1,\\n          \\\"inclusive\\\": true,\\n          \\\"path\\\": [\\n            \\\"model\\\"\\n          ],\\n          \\\"message\\\": \\\"Too small: expected string to have >=1 characters\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"none\\\",\\n            \\\"low\\\",\\n            \\\"medium\\\",\\n            \\\"high\\\",\\n            \\\"xhigh\\\",\\n            \\\"max\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"reasoningEffort\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"none\\\\\\\"|\\\\\\\"low\\\\\\\"|\\\\\\\"medium\\\\\\\"|\\\\\\\"high\\\\\\\"|\\\\\\\"xhigh\\\\\\\"|\\\\\\\"max\\\\\\\"\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"boolean\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"persist\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected boolean, received string\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_value\\\",\\n          \\\"values\\\": [\\n            \\\"local\\\",\\n            \\\"cloud\\\"\\n          ],\\n          \\\"path\\\": [\\n            \\\"historyMode\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid option: expected one of \\\\\\\"local\\\\\\\"|\\\\\\\"cloud\\\\\\\"\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "numberTypes": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "contextWindowSize": "x",
+      "isScheduledTask": "y",
+      "supportsImages": 1,
+      "declinedApps": "z",
+      "browserContext": []
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"number\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"contextWindowSize\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected number, received string\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received array\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"boolean\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"isScheduledTask\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected boolean, received string\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"boolean\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"supportsImages\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected boolean, received number\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"array\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"declinedApps\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected array, received string\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"number\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"contextWindowSize\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected number, received string\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"browserContext\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received array\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"boolean\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"isScheduledTask\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected boolean, received string\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"boolean\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"supportsImages\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected boolean, received number\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"array\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"declinedApps\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected array, received string\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "attachments": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "attachments": [
+        {
+          "mediaType": "",
+          "data": "x"
+        },
+        {},
+        3
+      ]
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"too_small\\\",\\n          \\\"minimum\\\": 1,\\n          \\\"inclusive\\\": true,\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            0,\\n            \\\"mediaType\\\"\\n          ],\\n          \\\"message\\\": \\\"Too small: expected string to have >=1 characters\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            1,\\n            \\\"mediaType\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            1,\\n            \\\"data\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            2\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received number\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"too_small\\\",\\n          \\\"minimum\\\": 1,\\n          \\\"inclusive\\\": true,\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            0,\\n            \\\"mediaType\\\"\\n          ],\\n          \\\"message\\\": \\\"Too small: expected string to have >=1 characters\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            1,\\n            \\\"mediaType\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            1,\\n            \\\"data\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"attachments\\\",\\n            2\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received number\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "selSrc": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "selectedTextSource": {
+        "url": 1
+      }
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"selectedTextSource\\\",\\n            \\\"url\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"selectedTextSource\\\",\\n            \\\"title\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"selectedTextSource\\\",\\n            \\\"url\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"selectedTextSource\\\",\\n            \\\"title\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "maxUpper": {
+    "request": {
+      "conversationId": "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF"
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_format\\\",\\n          \\\"format\\\": \\\"uuid\\\",\\n          \\\"pattern\\\": \\\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\\\",\\n          \\\"path\\\": [\\n            \\\"conversationId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid UUID\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"origin\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_format\\\",\\n          \\\"format\\\": \\\"uuid\\\",\\n          \\\"pattern\\\": \\\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\\\",\\n          \\\"path\\\": [\\n            \\\"conversationId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid UUID\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "msgNull": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff",
+      "message": null,
+      "userSystemPrompt": 4
+    },
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"message\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received null\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"userSystemPrompt\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"message\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received null\\\"\\n        },\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"userSystemPrompt\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received number\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "textPlainContentType": {
+    "request": {
+      "conversationId": "6f9619ff-8b86-4d11-b42d-00c04fc964ff"
+    },
+    "contentType": "text/plain",
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"code\\\": \\\"invalid_union\\\",\\n    \\\"errors\\\": [\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"conversationId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        },\\n        {\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"expected\\\": \\\"object\\\",\\n          \\\"path\\\": [\\n            \\\"target\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected object, received undefined\\\"\\n        }\\n      ],\\n      [\\n        {\\n          \\\"expected\\\": \\\"string\\\",\\n          \\\"code\\\": \\\"invalid_type\\\",\\n          \\\"path\\\": [\\n            \\\"conversationId\\\"\\n          ],\\n          \\\"message\\\": \\\"Invalid input: expected string, received undefined\\\"\\n        }\\n      ]\\n    ],\\n    \\\"path\\\": [],\\n    \\\"message\\\": \\\"Invalid input\\\"\\n  }\\n]\"}}"
+  },
+  "streamParam": {
+    "status": 400,
+    "body": "{\"success\":false,\"error\":{\"name\":\"ZodError\",\"message\":\"[\\n  {\\n    \\\"origin\\\": \\\"string\\\",\\n    \\\"code\\\": \\\"invalid_format\\\",\\n    \\\"format\\\": \\\"uuid\\\",\\n    \\\"pattern\\\": \\\"/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/\\\",\\n    \\\"path\\\": [\\n      \\\"conversationId\\\"\\n    ],\\n    \\\"message\\\": \\\"Invalid UUID\\\"\\n  }\\n]\"}}"
+  }
+}
