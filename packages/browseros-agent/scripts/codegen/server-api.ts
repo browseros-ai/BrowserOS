@@ -528,10 +528,20 @@ import type { {{{.}}} } from './{{.}}{{importFileExtension}}';
     const source = readFileSync(path, 'utf8')
     const normalized = `${source
       .split('\n')
-      .map((line) => line.trimEnd())
+      .map((line) =>
+        line.trimStart().startsWith('*')
+          ? line.trimEnd()
+          : line
+              .trimEnd()
+              .replace(/\bany\b/g, 'unknown')
+              .replace(/unknown \| unknown/g, 'unknown'),
+      )
       .join('\n')
       .trimEnd()}\n`
     writeFileSync(path, normalized)
+    // Match the repository's pre-commit formatter so committing generated DTOs
+    // cannot silently make the byte-for-byte drift gate stale.
+    runFormatter(path, join(root, 'packages/server-api/src/generated', file))
   }
   writeFileSync(join(typescript, 'index.ts'), emitTypeScriptModelIndex(groups))
   mkdirSync(client, { recursive: true })

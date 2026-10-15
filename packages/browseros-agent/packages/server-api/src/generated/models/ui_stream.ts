@@ -18,7 +18,7 @@
  * @interface UiAbortChunk
  */
 export interface UiAbortChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiAbortChunkTypeEnum}
@@ -48,7 +48,7 @@ export type UiAbortChunkTypeEnum =
  * @interface UiErrorChunk
  */
 export interface UiErrorChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiErrorChunkTypeEnum}
@@ -78,7 +78,7 @@ export type UiErrorChunkTypeEnum =
  * @interface UiFileChunk
  */
 export interface UiFileChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiFileChunkTypeEnum}
@@ -90,7 +90,7 @@ export interface UiFileChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiFileChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -120,7 +120,7 @@ export type UiFileChunkTypeEnum =
  * @interface UiFinishChunk
  */
 export interface UiFinishChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiFinishChunkTypeEnum}
@@ -138,7 +138,7 @@ export interface UiFinishChunk {
    * @type {any}
    * @memberof UiFinishChunk
    */
-  messageMetadata?: any | null
+  messageMetadata?: unknown | null
 }
 
 /**
@@ -170,7 +170,7 @@ export type UiFinishChunkFinishReasonEnum =
  * @interface UiFinishStepChunk
  */
 export interface UiFinishStepChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiFinishStepChunkTypeEnum}
@@ -221,7 +221,7 @@ export type UiMessageChunk =
  * @interface UiReasoningDeltaChunk
  */
 export interface UiReasoningDeltaChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiReasoningDeltaChunkTypeEnum}
@@ -233,7 +233,7 @@ export interface UiReasoningDeltaChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiReasoningDeltaChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -263,7 +263,7 @@ export type UiReasoningDeltaChunkTypeEnum =
  * @interface UiReasoningEndChunk
  */
 export interface UiReasoningEndChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiReasoningEndChunkTypeEnum}
@@ -275,7 +275,7 @@ export interface UiReasoningEndChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiReasoningEndChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -299,7 +299,7 @@ export type UiReasoningEndChunkTypeEnum =
  * @interface UiReasoningStartChunk
  */
 export interface UiReasoningStartChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiReasoningStartChunkTypeEnum}
@@ -311,7 +311,7 @@ export interface UiReasoningStartChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiReasoningStartChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -335,7 +335,7 @@ export type UiReasoningStartChunkTypeEnum =
  * @interface UiSourceUrlChunk
  */
 export interface UiSourceUrlChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiSourceUrlChunkTypeEnum}
@@ -347,7 +347,7 @@ export interface UiSourceUrlChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiSourceUrlChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -383,7 +383,7 @@ export type UiSourceUrlChunkTypeEnum =
  * @interface UiStartChunk
  */
 export interface UiStartChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiStartChunkTypeEnum}
@@ -401,7 +401,7 @@ export interface UiStartChunk {
    * @type {any}
    * @memberof UiStartChunk
    */
-  messageMetadata?: any | null
+  messageMetadata?: unknown | null
 }
 
 /**
@@ -419,7 +419,7 @@ export type UiStartChunkTypeEnum =
  * @interface UiStartStepChunk
  */
 export interface UiStartStepChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiStartStepChunkTypeEnum}
@@ -443,7 +443,7 @@ export type UiStartStepChunkTypeEnum =
  * @interface UiTextDeltaChunk
  */
 export interface UiTextDeltaChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiTextDeltaChunkTypeEnum}
@@ -455,7 +455,7 @@ export interface UiTextDeltaChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiTextDeltaChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -485,7 +485,7 @@ export type UiTextDeltaChunkTypeEnum =
  * @interface UiTextEndChunk
  */
 export interface UiTextEndChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiTextEndChunkTypeEnum}
@@ -497,7 +497,7 @@ export interface UiTextEndChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiTextEndChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -521,7 +521,7 @@ export type UiTextEndChunkTypeEnum =
  * @interface UiTextStartChunk
  */
 export interface UiTextStartChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiTextStartChunkTypeEnum}
@@ -533,7 +533,7 @@ export interface UiTextStartChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiTextStartChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {string}
@@ -557,7 +557,7 @@ export type UiTextStartChunkTypeEnum =
  * @interface UiToolInputAvailableChunk
  */
 export interface UiToolInputAvailableChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiToolInputAvailableChunkTypeEnum}
@@ -569,7 +569,7 @@ export interface UiToolInputAvailableChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiToolInputAvailableChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {boolean}
@@ -581,7 +581,7 @@ export interface UiToolInputAvailableChunk {
    * @type {{ [key: string]: any; }}
    * @memberof UiToolInputAvailableChunk
    */
-  toolMetadata?: { [key: string]: any }
+  toolMetadata?: { [key: string]: unknown }
   /**
    *
    * @type {boolean}
@@ -611,7 +611,7 @@ export interface UiToolInputAvailableChunk {
    * @type {any}
    * @memberof UiToolInputAvailableChunk
    */
-  input: any | null
+  input: unknown | null
 }
 
 /**
@@ -629,7 +629,7 @@ export type UiToolInputAvailableChunkTypeEnum =
  * @interface UiToolInputDeltaChunk
  */
 export interface UiToolInputDeltaChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiToolInputDeltaChunkTypeEnum}
@@ -665,7 +665,7 @@ export type UiToolInputDeltaChunkTypeEnum =
  * @interface UiToolInputErrorChunk
  */
 export interface UiToolInputErrorChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiToolInputErrorChunkTypeEnum}
@@ -677,7 +677,7 @@ export interface UiToolInputErrorChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiToolInputErrorChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {boolean}
@@ -689,7 +689,7 @@ export interface UiToolInputErrorChunk {
    * @type {{ [key: string]: any; }}
    * @memberof UiToolInputErrorChunk
    */
-  toolMetadata?: { [key: string]: any }
+  toolMetadata?: { [key: string]: unknown }
   /**
    *
    * @type {boolean}
@@ -719,7 +719,7 @@ export interface UiToolInputErrorChunk {
    * @type {any}
    * @memberof UiToolInputErrorChunk
    */
-  input: any | null
+  input: unknown | null
   /**
    *
    * @type {string}
@@ -743,7 +743,7 @@ export type UiToolInputErrorChunkTypeEnum =
  * @interface UiToolInputStartChunk
  */
 export interface UiToolInputStartChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiToolInputStartChunkTypeEnum}
@@ -755,7 +755,7 @@ export interface UiToolInputStartChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiToolInputStartChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {boolean}
@@ -767,7 +767,7 @@ export interface UiToolInputStartChunk {
    * @type {{ [key: string]: any; }}
    * @memberof UiToolInputStartChunk
    */
-  toolMetadata?: { [key: string]: any }
+  toolMetadata?: { [key: string]: unknown }
   /**
    *
    * @type {boolean}
@@ -809,7 +809,7 @@ export type UiToolInputStartChunkTypeEnum =
  * @interface UiToolOutputAvailableChunk
  */
 export interface UiToolOutputAvailableChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiToolOutputAvailableChunkTypeEnum}
@@ -821,7 +821,7 @@ export interface UiToolOutputAvailableChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiToolOutputAvailableChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {boolean}
@@ -833,7 +833,7 @@ export interface UiToolOutputAvailableChunk {
    * @type {{ [key: string]: any; }}
    * @memberof UiToolOutputAvailableChunk
    */
-  toolMetadata?: { [key: string]: any }
+  toolMetadata?: { [key: string]: unknown }
   /**
    *
    * @type {boolean}
@@ -857,7 +857,7 @@ export interface UiToolOutputAvailableChunk {
    * @type {any}
    * @memberof UiToolOutputAvailableChunk
    */
-  output: any | null
+  output: unknown | null
   /**
    *
    * @type {boolean}
@@ -881,7 +881,7 @@ export type UiToolOutputAvailableChunkTypeEnum =
  * @interface UiToolOutputErrorChunk
  */
 export interface UiToolOutputErrorChunk {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {UiToolOutputErrorChunkTypeEnum}
@@ -893,7 +893,7 @@ export interface UiToolOutputErrorChunk {
    * @type {{ [key: string]: { [key: string]: any; }; }}
    * @memberof UiToolOutputErrorChunk
    */
-  providerMetadata?: { [key: string]: { [key: string]: any } }
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
   /**
    *
    * @type {boolean}
@@ -905,7 +905,7 @@ export interface UiToolOutputErrorChunk {
    * @type {{ [key: string]: any; }}
    * @memberof UiToolOutputErrorChunk
    */
-  toolMetadata?: { [key: string]: any }
+  toolMetadata?: { [key: string]: unknown }
   /**
    *
    * @type {boolean}

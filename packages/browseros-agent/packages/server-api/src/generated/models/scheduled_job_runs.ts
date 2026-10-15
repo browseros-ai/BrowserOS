@@ -137,7 +137,7 @@ export interface ScheduledJobRunResponse {
  * @interface ToolCallExecution
  */
 export interface ToolCallExecution {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -155,13 +155,13 @@ export interface ToolCallExecution {
    * @type {any}
    * @memberof ToolCallExecution
    */
-  input: any | null
+  input: unknown | null
   /**
    *
    * @type {any}
    * @memberof ToolCallExecution
    */
-  output?: any | null
+  output?: unknown | null
   /**
    *
    * @type {string}
@@ -182,7 +182,7 @@ export interface ToolCallExecution {
  * @interface UpsertScheduledJobRunRequest
  */
 export interface UpsertScheduledJobRunRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}

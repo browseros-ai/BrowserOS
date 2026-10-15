@@ -70,25 +70,25 @@ export interface OAuthStatus {
  * @interface OAuthTokenRequest
  */
 export interface OAuthTokenRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {any}
    * @memberof OAuthTokenRequest
    */
-  accessToken: any | null
+  accessToken: unknown | null
   /**
    *
    * @type {any}
    * @memberof OAuthTokenRequest
    */
-  refreshToken?: any | null
+  refreshToken?: unknown | null
   /**
    *
    * @type {any}
    * @memberof OAuthTokenRequest
    */
-  expiresIn?: any | null
+  expiresIn?: unknown | null
 }
 
 /**

@@ -148,27 +148,14 @@ Agent:
   properties:
     name:
       type: string
-      minLength: 1
-      pattern: \S
-      description: Trimmed by the server before minimum-length validation.
-      maxLength: 80
     type:
       $ref: "#/AcpAgentType"
     modelId:
       type: string
-      minLength: 1
-      pattern: \S
-      description: Trimmed by the server before minimum-length validation.
     reasoningEffort:
       type: string
-      minLength: 1
-      pattern: \S
-      description: Trimmed by the server before minimum-length validation.
     workingDirectory:
       type: string
-      minLength: 1
-      pattern: \S
-      description: Trimmed by the server before minimum-length validation.
     customConfig:
       $ref: "#/CustomAcpAgentConfig"
     id:

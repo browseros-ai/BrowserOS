@@ -142,7 +142,7 @@ export interface ConnectorSuccess {
  * @interface ServerNameRequest
  */
 export interface ServerNameRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -157,7 +157,7 @@ export interface ServerNameRequest {
  * @interface SubmitApiKeyRequest
  */
 export interface SubmitApiKeyRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}

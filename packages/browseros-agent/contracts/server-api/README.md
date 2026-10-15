@@ -26,7 +26,7 @@ The PKCE callback listener on port 1455 is a separate server.
 
 The generator uses Docker OpenAPI Generator v7.22.0 for models and pinned
 openapi-typescript/TypeScript 5 for operations. It bundles split references to
-avoid duplicate union models, emits type-only TS unions, preserves Rust opaque
+avoid duplicate union models, emits formatted type-only TS unions with unknown for free JSON, preserves Rust opaque
 maps and extension fields, and fixes an invalid upstream Rust array-variant
 identifier. Nullable request fields use `serde_with::rust::double_option` so
 omitted values and explicit null remain distinct. The original claw generator

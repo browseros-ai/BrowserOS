@@ -72,6 +72,7 @@ export async function* readUiMessageStream(
 class SseDataDecoder {
   private buffer = ''
   private skipLf = false
+  private scanFrom = 0
   private data: string[] = [];
 
   *push(text: string): Generator<string> {
@@ -79,7 +80,7 @@ class SseDataDecoder {
     let cursor = 0
     // SSE permits LF, CRLF and bare CR. Keep the CR/LF state across reads;
     // TextDecoder separately keeps partial multi-byte UTF-8 characters intact.
-    for (let index = 0; index < this.buffer.length; index++) {
+    for (let index = this.scanFrom; index < this.buffer.length; index++) {
       const char = this.buffer[index]
       if (this.skipLf) {
         this.skipLf = false
@@ -103,5 +104,8 @@ class SseDataDecoder {
       }
     }
     this.buffer = this.buffer.slice(cursor)
+    // A large tool-output event may span many reads without a newline. Its
+    // retained partial line has already been scanned; only examine new text.
+    this.scanFrom = this.buffer.length
   }
 }

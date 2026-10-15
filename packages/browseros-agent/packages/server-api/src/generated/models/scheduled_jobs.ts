@@ -131,7 +131,7 @@ export interface ScheduledJobResponse {
  * @interface UpsertScheduledJobRequest
  */
 export interface UpsertScheduledJobRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}

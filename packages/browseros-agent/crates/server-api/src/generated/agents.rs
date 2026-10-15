@@ -41,18 +41,14 @@ impl Default for AcpAgentType {
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Agent {
-    /// Trimmed by the server before minimum-length validation.
     #[serde(rename = "name")]
     pub name: String,
     #[serde(rename = "type")]
     pub r#type: models::AcpAgentType,
-    /// Trimmed by the server before minimum-length validation.
     #[serde(rename = "modelId", skip_serializing_if = "Option::is_none")]
     pub model_id: Option<String>,
-    /// Trimmed by the server before minimum-length validation.
     #[serde(rename = "reasoningEffort", skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
-    /// Trimmed by the server before minimum-length validation.
     #[serde(rename = "workingDirectory", skip_serializing_if = "Option::is_none")]
     pub working_directory: Option<String>,
     #[serde(rename = "customConfig", skip_serializing_if = "Option::is_none")]

@@ -425,7 +425,7 @@ export type RefinePromptBadRequest = FailureMessage | ValidationError
  * @interface RefinePromptRequest
  */
 export interface RefinePromptRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -575,7 +575,7 @@ export interface RefinePromptResponse {
  * @interface SetDefaultProviderRequest
  */
 export interface SetDefaultProviderRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -623,7 +623,7 @@ export interface TestProviderFailure {
  * @interface TestProviderRequest
  */
 export interface TestProviderRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -767,7 +767,7 @@ export interface TestProviderResponse {
  * @interface UpsertProviderRequest
  */
 export interface UpsertProviderRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}

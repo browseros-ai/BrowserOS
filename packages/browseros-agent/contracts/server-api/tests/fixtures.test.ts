@@ -42,3 +42,24 @@ test('validator rejects missing, mistyped, extra strict fields and bad chunk tag
   ] as const)
     expect(() => assertSchema(schema, value)).toThrow()
 })
+
+test('request schemas preserve trimming and Zod UUID limits', () => {
+  assertSchema('CreateAgentRequest', {
+    name: `${' '.repeat(100)}A${' '.repeat(100)}`,
+    type: 'codex',
+  })
+  expect(() =>
+    assertSchema('CreateAgentRequest', { name: 'A'.repeat(81), type: 'codex' }),
+  ).toThrow()
+  expect(() =>
+    assertSchema('CreateAgentRequest', { name: '  ', type: 'codex' }),
+  ).toThrow()
+  expect(() =>
+    assertSchema('ChatRequest', {
+      conversationId: '11111111-1111-9111-8111-111111111111',
+    }),
+  ).toThrow()
+  assertSchema('ChatRequest', {
+    conversationId: '00000000-0000-0000-0000-000000000000',
+  })
+})

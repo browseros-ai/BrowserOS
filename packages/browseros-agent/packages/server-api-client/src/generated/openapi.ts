@@ -1626,14 +1626,10 @@ export interface components {
       customConfig?: components['schemas']['CustomAcpAgentConfig']
     }
     Agent: {
-      /** @description Trimmed by the server before minimum-length validation. */
       name: string
       type: components['schemas']['AcpAgentType']
-      /** @description Trimmed by the server before minimum-length validation. */
       modelId?: string
-      /** @description Trimmed by the server before minimum-length validation. */
       reasoningEffort?: string
-      /** @description Trimmed by the server before minimum-length validation. */
       workingDirectory?: string
       customConfig?: components['schemas']['CustomAcpAgentConfig']
       id: string

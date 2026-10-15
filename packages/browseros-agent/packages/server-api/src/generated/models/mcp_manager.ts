@@ -85,7 +85,7 @@ export interface McpAgentList {
  * @interface McpInstallRequest
  */
 export interface McpInstallRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}

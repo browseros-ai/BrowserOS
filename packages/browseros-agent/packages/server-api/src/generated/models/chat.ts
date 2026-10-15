@@ -22,7 +22,7 @@ import type { LlmHeaders, LlmProvider } from './providers'
  * @interface AcpChatRequest
  */
 export interface AcpChatRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -176,7 +176,7 @@ export type AcpChatRequestHistoryModeEnum =
  * @interface AcpTarget
  */
 export interface AcpTarget {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {AcpAgentType}
@@ -197,7 +197,7 @@ export interface AcpTarget {
  * @interface BrowserContext
  */
 export interface BrowserContext {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {number}
@@ -242,7 +242,7 @@ export interface BrowserContext {
  * @interface BrowserOsChatRequest
  */
 export interface BrowserOsChatRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -505,7 +505,7 @@ export type BrowserOsChatRequestHistoryModeEnum =
  * @interface BrowserOsTarget
  */
 export interface BrowserOsTarget {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {BrowserOsTargetTypeEnum}
@@ -535,7 +535,7 @@ export type BrowserOsTargetTypeEnum =
  * @interface BrowserTab
  */
 export interface BrowserTab {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {number}
@@ -568,7 +568,7 @@ export interface BrowserTab {
  * @interface ChatAttachment
  */
 export interface ChatAttachment {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -699,7 +699,7 @@ export type ConversationRunStatus =
  * @interface CustomMcpServer
  */
 export interface CustomMcpServer {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}
@@ -753,7 +753,7 @@ export type PreviousConversation = Array<PreviousMessage> | string
  * @interface PreviousMessage
  */
 export interface PreviousMessage {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {PreviousMessageRoleEnum}
@@ -784,7 +784,7 @@ export type PreviousMessageRoleEnum =
  * @interface SelectedTextSource
  */
 export interface SelectedTextSource {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {string}

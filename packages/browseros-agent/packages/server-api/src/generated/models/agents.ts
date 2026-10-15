@@ -30,7 +30,7 @@ export type AcpAgentType = (typeof AcpAgentType)[keyof typeof AcpAgentType]
  */
 export interface Agent {
   /**
-   * Trimmed by the server before minimum-length validation.
+   *
    * @type {string}
    * @memberof Agent
    */
@@ -42,19 +42,19 @@ export interface Agent {
    */
   type: AcpAgentType
   /**
-   * Trimmed by the server before minimum-length validation.
+   *
    * @type {string}
    * @memberof Agent
    */
   modelId?: string
   /**
-   * Trimmed by the server before minimum-length validation.
+   *
    * @type {string}
    * @memberof Agent
    */
   reasoningEffort?: string
   /**
-   * Trimmed by the server before minimum-length validation.
+   *
    * @type {string}
    * @memberof Agent
    */

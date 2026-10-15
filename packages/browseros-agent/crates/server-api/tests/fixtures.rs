@@ -13,12 +13,20 @@ fn decode<T: DeserializeOwned>(source: &str) -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn all_contract_fixtures_deserialize() -> Result<(), Box<dyn Error>> {
-    let manifest: Vec<serde_json::Value> = serde_json::from_str(include_str!("../../../contracts/server-api/fixtures/manifest.json"))?;
-    let expected: BTreeSet<_> = manifest.iter().filter_map(|item| item["file"].as_str()).collect();
+    let manifest: Vec<serde_json::Value> = serde_json::from_str(include_str!(
+        "../../../contracts/server-api/fixtures/manifest.json"
+    ))?;
+    let expected: BTreeSet<_> = manifest
+        .iter()
+        .filter_map(|item| item["file"].as_str())
+        .collect();
     let mut covered = BTreeSet::new();
     macro_rules! fixture {
         ($name:literal, $model:ty) => {{
-            decode::<$model>(include_str!(concat!("../../../contracts/server-api/fixtures/", $name)))?;
+            decode::<$model>(include_str!(concat!(
+                "../../../contracts/server-api/fixtures/",
+                $name
+            )))?;
             covered.insert($name);
         }};
     }
@@ -38,10 +46,16 @@ fn all_contract_fixtures_deserialize() -> Result<(), Box<dyn Error>> {
     fixture!("provider-read.json", models::PublicProviderResponse);
     fixture!("provider-list.json", models::ProviderList);
     fixture!("provider-write.json", models::ProviderResponse);
-    fixture!("provider-default-empty.json", models::DefaultProviderResponse);
+    fixture!(
+        "provider-default-empty.json",
+        models::DefaultProviderResponse
+    );
     fixture!("provider-default.json", models::DefaultProviderResponse);
     fixture!("provider-upsert.json", models::UpsertProviderRequest);
-    fixture!("provider-default-request.json", models::SetDefaultProviderRequest);
+    fixture!(
+        "provider-default-request.json",
+        models::SetDefaultProviderRequest
+    );
     fixture!("test-provider-request.json", models::TestProviderRequest);
     fixture!("test-provider-response.json", models::TestProviderResponse);
     fixture!("test-provider-failure.json", models::TestProviderBadRequest);
@@ -50,10 +64,22 @@ fn all_contract_fixtures_deserialize() -> Result<(), Box<dyn Error>> {
     fixture!("refine-failure.json", models::RefinePromptBadRequest);
     fixture!("conversation-list.json", models::ConversationList);
     fixture!("conversation-detail.json", models::ConversationResponse);
-    fixture!("conversation-import-request.json", models::ImportConversationRequest);
-    fixture!("conversation-import-legacy-array.json", models::ImportConversationRequest);
-    fixture!("conversation-imported.json", models::ImportConversationResponse);
-    fixture!("conversation-existing.json", models::ImportConversationResponse);
+    fixture!(
+        "conversation-import-request.json",
+        models::ImportConversationRequest
+    );
+    fixture!(
+        "conversation-import-legacy-array.json",
+        models::ImportConversationRequest
+    );
+    fixture!(
+        "conversation-imported.json",
+        models::ImportConversationResponse
+    );
+    fixture!(
+        "conversation-existing.json",
+        models::ImportConversationResponse
+    );
     fixture!("chat-minimal.json", models::ChatRequest);
     fixture!("chat-browseros.json", models::ChatRequest);
     fixture!("chat-legacy.json", models::ChatRequest);
@@ -69,10 +95,16 @@ fn all_contract_fixtures_deserialize() -> Result<(), Box<dyn Error>> {
     fixture!("agent-update.json", models::UpdateAgentRequest);
     fixture!("scheduled-job-list.json", models::ScheduledJobList);
     fixture!("scheduled-job-detail.json", models::ScheduledJobResponse);
-    fixture!("scheduled-job-upsert.json", models::UpsertScheduledJobRequest);
+    fixture!(
+        "scheduled-job-upsert.json",
+        models::UpsertScheduledJobRequest
+    );
     fixture!("scheduled-run-list.json", models::ScheduledJobRunList);
     fixture!("scheduled-run-detail.json", models::ScheduledJobRunResponse);
-    fixture!("scheduled-run-upsert.json", models::UpsertScheduledJobRunRequest);
+    fixture!(
+        "scheduled-run-upsert.json",
+        models::UpsertScheduledJobRunRequest
+    );
     fixture!("probe-request.json", models::AcpxProbeRequest);
     fixture!("probe-result.json", models::AcpxProbeResult);
     fixture!("probe-error-result.json", models::AcpxProbeResult);
@@ -113,8 +145,11 @@ fn all_contract_fixtures_deserialize() -> Result<(), Box<dyn Error>> {
     fixture!("chunk-source-url.json", models::UiMessageChunk);
     fixture!("chunk-file.json", models::UiMessageChunk);
     assert_eq!(expected, covered);
-    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/server-api/fixtures");
-    let files: BTreeSet<_> = std::fs::read_dir(directory)?.map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned())).collect::<Result<_, _>>()?;
+    let directory =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/server-api/fixtures");
+    let files: BTreeSet<_> = std::fs::read_dir(directory)?
+        .map(|entry| entry.map(|entry| entry.file_name().to_string_lossy().into_owned()))
+        .collect::<Result<_, _>>()?;
     let mut indexed: BTreeSet<_> = covered.into_iter().map(String::from).collect();
     indexed.insert("manifest.json".into());
     assert_eq!(files, indexed);
@@ -123,13 +158,42 @@ fn all_contract_fixtures_deserialize() -> Result<(), Box<dyn Error>> {
 
 #[test]
 fn opaque_values_and_nullable_columns_survive_round_trips() -> Result<(), Box<dyn Error>> {
-    let message: models::UiMessage = serde_json::from_str(r#"{"id":"m1","role":"assistant","parts":[{"type":"text","text":"Hi"}]}"#)?;
+    let message: models::UiMessage = serde_json::from_str(
+        r#"{"id":"m1","role":"assistant","parts":[{"type":"text","text":"Hi"}]}"#,
+    )?;
     assert_eq!(serde_json::to_value(message)?["parts"][0]["text"], "Hi");
     let headers: models::LlmHeaders = serde_json::from_str(r#"{"X-Contract":"fixture"}"#)?;
     assert_eq!(serde_json::to_value(headers)?["X-Contract"], "fixture");
     let response: models::DefaultProviderResponse = serde_json::from_str(r#"{"provider":null}"#)?;
-    assert_eq!(serde_json::to_value(response)?["provider"], serde_json::Value::Null);
-    let chunk: models::UiMessageChunk = serde_json::from_str(r#"{"type":"start-step","extension":{"value":1}}"#)?;
+    assert_eq!(
+        serde_json::to_value(response)?["provider"],
+        serde_json::Value::Null
+    );
+    let chunk: models::UiMessageChunk =
+        serde_json::from_str(r#"{"type":"start-step","extension":{"value":1}}"#)?;
     assert_eq!(serde_json::to_value(chunk)?["extension"]["value"], 1);
+    Ok(())
+}
+
+#[test]
+fn request_nullability_and_strict_variants_are_preserved() -> Result<(), Box<dyn Error>> {
+    let cleared: models::UpdateAgentRequest = serde_json::from_str(r#"{"modelId":null}"#)?;
+    assert_eq!(
+        serde_json::to_value(cleared)?,
+        serde_json::json!({"modelId": null})
+    );
+    let omitted: models::UpdateAgentRequest = serde_json::from_str("{}")?;
+    assert_eq!(serde_json::to_value(omitted)?, serde_json::json!({}));
+    assert!(
+        serde_json::from_str::<models::CreateAgentRequest>(
+            r#"{"name":"A","type":"codex","extra":true}"#
+        )
+        .is_err()
+    );
+    assert!(
+        serde_json::from_str::<models::CreateAgentRequest>(r#"{"name":"A","type":"custom"}"#)
+            .is_err()
+    );
+    assert!(serde_json::from_str::<models::UiMessageChunk>(r#"{"type":"unknown"}"#).is_err());
     Ok(())
 }

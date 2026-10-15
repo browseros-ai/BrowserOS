@@ -188,7 +188,7 @@ export type ConversationSummaryTargetTypeEnum =
  * @interface ImportConversationRequest
  */
 export interface ImportConversationRequest {
-  [key: string]: any | any
+  [key: string]: unknown
   /**
    *
    * @type {Array<ImportedMessage>}
@@ -257,7 +257,7 @@ export interface ImportConversationResponse {
  * The actual import predicate is typeof value === object && value !== null, including arrays.
  * @export
  */
-export type ImportedMessage = Array<any> | UiMessage
+export type ImportedMessage = Array<unknown> | UiMessage
 
 /**
  * AI SDK v7 persisted UIMessage, conventionally id/role/parts/metadata. The current import route does not validate these fields.
@@ -265,5 +265,5 @@ export type ImportedMessage = Array<any> | UiMessage
  * @interface UiMessage
  */
 export interface UiMessage {
-  [key: string]: any
+  [key: string]: unknown
 }
