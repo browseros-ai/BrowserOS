@@ -118,6 +118,12 @@ pub struct Told {
     /// The page it ended on, so a caller that has to try again can see what it
     /// is trying again against.
     pub page: Option<Seen>,
+    /// Every decision the run paid for, and what the gate made of each.
+    ///
+    /// The one thing a caller could not see. A run reported twelve scalars and
+    /// a page, so three live failures in a row had to be diagnosed by reading
+    /// the source of the thing that failed.
+    pub decided: Vec<crate::pursue::Decided>,
 }
 
 /// Turns what happened into what the caller is told.
@@ -150,6 +156,7 @@ pub fn tell(outcome: &Outcome) -> Told {
             .ended_on
             .as_ref()
             .map(|view| seen(view, outcome.omitted)),
+        decided: outcome.decided.clone(),
     }
 }
 
@@ -235,6 +242,7 @@ mod tests {
             batches: 2,
             input_tokens: 2_000,
             trail,
+            decided: Vec::new(),
             url_before: "https://example.test/".to_string(),
             url_after: "https://example.test/after".to_string(),
             title: "A page".to_string(),

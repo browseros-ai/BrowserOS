@@ -1030,3 +1030,112 @@ async fn a_run_that_typed_can_submit_what_it_typed() {
         "the target head is still asked, it is simply not read for a submit"
     );
 }
+
+/// The reason three live failures in a row had to be diagnosed by reading
+/// source. A declined decision produces no step, so a run reported three
+/// decisions, no actions, and no trace of what it tried three times. The gate
+/// composed the sentence that explains it and the loop dropped it on the floor.
+#[tokio::test]
+async fn a_declined_decision_says_what_it_tried_and_why_it_was_refused() {
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![
+            control("e1", "link", "Something"),
+            control("e2", "link", "Something else"),
+        ],
+    );
+    let driver = Fake::new(view);
+    // A thin lead on the operation head, three times: the shape of a run that
+    // comes back having done nothing.
+    let thin = || {
+        vec![
+            ("operation", spread("ACT", 0.30, 0.28)),
+            ("act_how", spread("CLICK", 0.90, 0.05)),
+            ("target", spread("e1", 0.90, 0.05)),
+        ]
+    };
+    let oracle = Scripted::new(vec![thin(), thin(), thin()]);
+
+    let outcome = advance(&oracle, &driver, run_for("do the thing")).await;
+
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
+    assert!(
+        outcome.trail.is_empty(),
+        "nothing ran, which is what made this invisible"
+    );
+    assert_eq!(
+        outcome.decided.len(),
+        3,
+        "every decision it paid for is on the record"
+    );
+
+    let first = &outcome.decided[0];
+    assert_eq!(first.operation, "ACT");
+    assert_eq!(first.how, Some("CLICK"));
+    assert_eq!(first.verdict, "explored");
+    assert_eq!(
+        first.weakest,
+        Some("which move to make"),
+        "it names the head that was least certain"
+    );
+    assert!(
+        first.margin.is_some_and(|margin| margin < 0.05),
+        "it reports how far the weakest judgement actually led, got {:?}",
+        first.margin
+    );
+    assert!(
+        first
+            .why
+            .as_deref()
+            .is_some_and(|why| why.contains("which move to make")),
+        "the gate's own sentence travels, got {:?}",
+        first.why
+    );
+    assert_eq!(
+        first.batch, 1,
+        "and which part of the page it was asked about"
+    );
+}
+
+/// A decision that ran is on the record too, so a caller can see what the run
+/// chose and not only what it refused.
+#[tokio::test]
+async fn a_decision_that_ran_is_on_the_record_as_having_run() {
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![
+            control("e1", "link", "Open it"),
+            control("e2", "link", "Something else"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![
+        vec![
+            ("operation", choice("ACT", 0.95)),
+            ("act_how", choice("CLICK", 0.95)),
+            ("target", choice("e1", 0.95)),
+        ],
+        vec![("operation", choice("DONE", 0.95))],
+    ]);
+
+    let outcome = advance(&oracle, &driver, run_for("open it")).await;
+
+    let ran: Vec<&browseros_decide::pursue::Decided> = outcome
+        .decided
+        .iter()
+        .filter(|decided| decided.verdict == "ran")
+        .collect();
+    assert_eq!(ran.len(), 2, "the click and the ending both ran");
+    assert_eq!(ran[0].target.as_deref(), Some("e1"));
+    assert_eq!(
+        ran[0].target_name.as_deref(),
+        Some("Open it"),
+        "named, because a name is what a caller can act on"
+    );
+    assert!(
+        ran[0].why.is_none(),
+        "nothing to explain about a move that ran"
+    );
+}

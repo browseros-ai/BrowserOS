@@ -116,6 +116,36 @@ impl Status {
     }
 }
 
+/// One decision, as the caller needs to see it.
+///
+/// Separate from [`Step`] because a step is something that ran and a decision
+/// is something that was paid for. A declined decision produces no step, which
+/// is why a run could report three decisions and no actions and leave no trace
+/// of what it tried three times.
+///
+/// The gate already computes every field here. Until now it composed the one
+/// sentence that explains a decline and the loop discarded it, so three live
+/// failures in a row had to be diagnosed by reading source.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decided {
+    pub operation: &'static str,
+    pub how: Option<&'static str>,
+    pub target: Option<String>,
+    /// What the chosen control is called, which is what a caller can act on.
+    pub target_name: Option<String>,
+    /// `ran`, `explored` or `handed_back`.
+    pub verdict: &'static str,
+    /// Which judgement was weakest, in the gate's own words.
+    pub weakest: Option<&'static str>,
+    pub margin: Option<f64>,
+    pub share: Option<f64>,
+    /// The gate's sentence, where it had one.
+    pub why: Option<String>,
+    /// Which part of the page this decision was asked about, counting from one.
+    pub batch: usize,
+    pub input_tokens: u64,
+}
+
 /// One thing the run did.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Step {
@@ -151,6 +181,8 @@ pub struct Outcome {
     pub batches: u32,
     pub input_tokens: u64,
     pub trail: Vec<Step>,
+    /// Every decision, including the ones that never ran.
+    pub decided: Vec<Decided>,
     pub url_before: String,
     pub url_after: String,
     pub title: String,
@@ -266,6 +298,27 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         let decision = searched.decision;
         goal_met = decision.goal_met;
 
+        let target_name = decision
+            .target
+            .as_deref()
+            .and_then(|reference| view.control(reference))
+            .map(|control| control.name.clone());
+        let supplied = decision
+            .value
+            .as_deref()
+            .and_then(|key| run.offered.values.iter().find(|value| value.name == key))
+            .map(|value| value.text.clone());
+
+        let judged = gate::verdict(&decision, target_name.as_deref(), supplied.as_deref());
+        // Recorded before it is acted on, so a decision that ends the run is in
+        // the record that travels back with the ending.
+        run.judged(decided_of(
+            &decision,
+            target_name.as_deref(),
+            &judged,
+            space.batch + 1,
+        ));
+
         if decision.operation == Operation::Done {
             return end(
                 &run,
@@ -289,18 +342,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             );
         }
 
-        let target_name = decision
-            .target
-            .as_deref()
-            .and_then(|reference| view.control(reference))
-            .map(|control| control.name.clone());
-        let supplied = decision
-            .value
-            .as_deref()
-            .and_then(|key| run.offered.values.iter().find(|value| value.name == key))
-            .map(|value| value.text.clone());
-
-        match gate::verdict(&decision, target_name.as_deref(), supplied.as_deref()) {
+        match judged {
             Verdict::Execute => {}
             Verdict::HandBack(why, said) => {
                 return end(
@@ -808,6 +850,38 @@ fn said(decision: &Decision, changed: bool) -> String {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// One decision turned into the record a caller reads.
+///
+/// The gate has already worked all of this out: which judgement was weakest,
+/// by how much it missed and in what words. This only keeps it.
+fn decided_of(
+    decision: &Decision,
+    target_name: Option<&str>,
+    judged: &Verdict,
+    batch: usize,
+) -> Decided {
+    let consequence = decision.operation.consequence(decision.how, target_name);
+    let short = decision.short_of(consequence);
+    let (verdict, why) = match judged {
+        Verdict::Execute => ("ran", None),
+        Verdict::Explore(said) => ("explored", Some(said.clone())),
+        Verdict::HandBack(_, said) => ("handed_back", Some(said.clone())),
+    };
+    Decided {
+        operation: decision.operation.as_str(),
+        how: decision.how.map(How::as_str),
+        target: decision.target.clone(),
+        target_name: target_name.map(str::to_string),
+        verdict,
+        weakest: short.map(|(which, _)| which.as_str()),
+        margin: short.map(|(_, lead)| lead.margin),
+        share: short.map(|(_, lead)| lead.share),
+        why,
+        batch,
+        input_tokens: decision.input_tokens,
+    }
+}
+
 fn end(
     run: &Run,
     status: Status,
@@ -826,6 +900,7 @@ fn end(
         batches: run.batches_asked,
         input_tokens: run.input_tokens,
         trail,
+        decided: run.decided.clone(),
         url_before: run.url_before.clone().unwrap_or_default(),
         url_after: view
             .as_ref()

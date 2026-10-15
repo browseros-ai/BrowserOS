@@ -1791,6 +1791,42 @@ fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
         "inputTokens": told.input_tokens,
         "url": told.url,
         "title": told.title,
+        "offered": told.offered,
+        "unlabelledImages": told.unlabelled_images,
+        "decided": told
+            .decided
+            .iter()
+            .map(|decided| {
+                let mut one = json!({
+                    "operation": decided.operation,
+                    "verdict": decided.verdict,
+                    "batch": decided.batch,
+                    "inputTokens": decided.input_tokens,
+                });
+                if let Some(how) = decided.how {
+                    one["how"] = json!(how);
+                }
+                if let Some(target) = &decided.target {
+                    one["target"] = json!(target);
+                }
+                if let Some(name) = &decided.target_name {
+                    one["targetName"] = json!(name);
+                }
+                if let Some(weakest) = decided.weakest {
+                    one["weakest"] = json!(weakest);
+                }
+                if let Some(margin) = decided.margin {
+                    one["margin"] = json!(margin);
+                }
+                if let Some(share) = decided.share {
+                    one["share"] = json!(share);
+                }
+                if let Some(why) = &decided.why {
+                    one["why"] = json!(why);
+                }
+                one
+            })
+            .collect::<Vec<_>>(),
     });
     if let Some(answer) = &told.answer {
         body["answer"] = json!({
@@ -1875,6 +1911,29 @@ fn pursue_output_schema() -> Value {
                     }
                 },
                 "required": ["url", "title", "controls", "omitted"]
+            },
+            "offered": { "type": "integer", "description": "How many controls the deciding question could choose between." },
+            "unlabelledImages": { "type": "integer", "description": "Images carrying no text label, which nothing here could read." },
+            "decided": {
+                "type": "array",
+                "description": "Every decision the run paid for, in order, including the ones that never ran. Read `verdict` and `why` to see why a run did nothing.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "operation": { "type": "string" },
+                        "how": { "type": "string" },
+                        "target": { "type": "string" },
+                        "targetName": { "type": "string" },
+                        "verdict": { "type": "string", "description": "ran, explored, or handed_back." },
+                        "weakest": { "type": "string", "description": "Which judgement was least certain, in words." },
+                        "margin": { "type": "number", "description": "How far the weakest judgement led its runner-up by." },
+                        "share": { "type": "number" },
+                        "why": { "type": "string", "description": "What the gate made of it, where it had something to say." },
+                        "batch": { "type": "integer", "description": "Which part of the page this decision was asked about, from one." },
+                        "inputTokens": { "type": "integer" }
+                    },
+                    "required": ["operation", "verdict", "batch", "inputTokens"]
+                }
             },
             "actions": { "type": "integer", "description": "Actions that ran, which is not the same as decisions asked for." },
             "changed": { "type": "integer", "description": "How many of those changed the page." },

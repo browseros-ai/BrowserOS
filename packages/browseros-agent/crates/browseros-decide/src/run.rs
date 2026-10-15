@@ -113,6 +113,8 @@ pub struct Run {
     pub input_tokens: u64,
     /// What the run has done, in words the next decision can read.
     pub recent: Vec<String>,
+    /// Every decision this run paid for, and what the gate made of each.
+    pub decided: Vec<crate::pursue::Decided>,
     /// Controls that were acted on and changed nothing.
     ///
     /// A retry cannot clear whatever swallowed the first attempt, so these are
@@ -170,6 +172,7 @@ impl Run {
             decisions: 0,
             input_tokens: 0,
             recent: Vec::new(),
+            decided: Vec::new(),
             retired: Vec::new(),
             last_acted: None,
             repeating: None,
@@ -232,6 +235,15 @@ impl Run {
         let again = self.repeating.as_deref() == Some(target);
         self.repeating = Some(target.to_string());
         again
+    }
+
+    /// Records a decision and what the gate made of it.
+    ///
+    /// Kept on the run rather than threaded through the loop, so every one of
+    /// the fifteen ways a run can end carries the record without knowing it
+    /// exists.
+    pub fn judged(&mut self, decided: crate::pursue::Decided) {
+        self.decided.push(decided);
     }
 
     /// Records something the run did, for the next decision to read.
