@@ -945,12 +945,14 @@ fn close_page_later(pages: Arc<dyn BackgroundPages>, page_id: u32, conversation_
 
 /// A pre-stream failure. It stays small inside the engine and becomes the 500 chat envelope once,
 /// at the seam. TS throws a plain `Error` there, and the app's `onError` classifies it by message
-/// without a provider.
+/// without a provider: `ModelError::Other` takes exactly those message rungs, so a real config
+/// failure (`… requires apiKey`) is still `provider_config` while an MCP connect or agent build
+/// failure stays a retryable `unknown`, not "Provider not configured".
 struct PrepareError(String);
 
 impl From<PrepareError> for ChatRejection {
     fn from(error: PrepareError) -> Self {
-        ChatRejection::Internal(llm::to_chat_error(&ModelError::Config(error.0), None))
+        ChatRejection::Internal(llm::to_chat_error(&ModelError::Other(error.0), None))
     }
 }
 

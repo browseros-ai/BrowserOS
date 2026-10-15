@@ -4,17 +4,22 @@
 //!
 //! ```text
 //! start ─ register (sync, 409) ─ spawn drive ──► prepare(RunHandle) ── Ok ─► pump ─► on_finish ─► finish
-//!            │                                    │ (history published,          │                  │
-//!            └ panels attached                    │  engine prepared)            │ chunks appended  └ status, latches,
-//!                                                 └ Err ──────────────────────────┼─────────────────► panels published
-//!   subscribe ─► cursor over the one replay log (replay + tail, no gap) ◄─────────┘
+//!            │ seeded with the previous            │ (history published,          │  (persist,       │ final messages +
+//!            │ record's messages                   │  engine prepared)            │   final history) │ status (one lock),
+//!            ├ panels attached                     └ Err ──────────────────────────┼─────────────────► latches, panels
+//!            └ the starter's cursor ─────────────────────────────────────────────┐ │ chunks appended
+//!   subscribe ─► cursor over the one replay log (replay + tail, no gap) ◄────────┴─┘
 //! ```
 //!
 //! Lifecycle rules a reader must not break:
 //! - The run is driven by a spawned task, never by the HTTP request: a client disconnect (which
 //!   drops the handler future) only drops a subscriber cursor. Only `stop`/`delete` cancel.
 //! - `on_finish` (persistence) runs after the last chunk and before subscribers see the end, so a
-//!   client that reloads right after `[DONE]` finds the saved conversation.
+//!   client that reloads right after `[DONE]` finds the saved conversation. Its final history is
+//!   published by `finish` together with the terminal status: `/state` never pairs `running` with
+//!   the finished assistant message (a resuming panel would replay the turn onto it twice).
+//! - A record leaves the registry only through `delete_with`, and only after its run ended and
+//!   the caller's cleanup ran; until then a POST for the conversation is 409.
 //! - Lock order is `RunsState` → `RunInner`; never acquire the registry lock while holding a
 //!   record's lock. Neither lock is held across an await.
 //!
@@ -48,6 +53,10 @@ pub struct RunPresentation {
     pub panel_tab_ids: Vec<u32>,
     pub panels_visible: bool,
     pub tab_group: Option<TabGroupPresentation>,
+    /// Keep the replay log after the run ended and its last subscriber left. False for scheduled
+    /// runs: their one viewer is the POST that started them, and each uses a fresh conversation
+    /// id nobody DELETEs, so a retained log would live until restart.
+    pub keep_replay: bool,
 }
 
 /// `"<target>/<first-5-words>"` plus the color identity of the tab group a run's pages join.
@@ -124,11 +133,22 @@ pub struct FinishedTurn {
 
 /// Persistence hook; runs before subscribers see the end of the stream, so a client that reloads
 /// right after `[DONE]` always finds the saved conversation. Called exactly once per prepared run.
-pub type OnFinish = Box<dyn FnOnce(FinishedTurn) -> BoxFuture<'static, ()> + Send>;
+/// Returns the run's final display history, which `finish` publishes in the same critical section
+/// as the terminal status (`None` keeps what was last published).
+pub type OnFinish =
+    Box<dyn FnOnce(FinishedTurn) -> BoxFuture<'static, Option<Vec<UiMessage>>> + Send>;
 
 pub struct Prepared {
     pub chunks: ChunkStream,
     pub on_finish: OnFinish,
+}
+
+/// A registered, prepared run. `chunks` is a subscriber cursor on this run's own record, opened at
+/// registration: the POST that started a run streams exactly that run, from its first chunk, even
+/// if the run ends and a newer turn (or a DELETE) replaces the conversation's record first.
+pub struct StartedRun {
+    pub run_id: Uuid,
+    pub chunks: ChunkStream,
 }
 
 #[derive(Debug, Clone)]
@@ -172,6 +192,7 @@ struct RunRecord {
     run_id: Uuid,
     panels_visible: bool,
     tab_group: Option<TabGroupPresentation>,
+    keep_replay: bool,
     cancel: CancellationToken,
     /// Latch released once `prepare` returned (or the run ended): what `/state` waits on.
     prepared: CancellationToken,
@@ -185,13 +206,26 @@ struct RunRecord {
 struct RunInner {
     status: RunStatus,
     messages: Vec<UiMessage>,
-    /// The replay log: every chunk of the run, in order. Never truncated while the record lives.
+    /// The replay log: every chunk of the run, in order. Never truncated while the record lives,
+    /// except that a `keep_replay: false` run drops it whole once it ended and has no subscriber.
     chunks: Vec<UiChunk>,
+    /// Live cursors over `chunks`. Counted under this lock (not via the watch channel's receiver
+    /// count) so two cursors detaching at once cannot both miss the release.
+    subscribers: usize,
     saw_error_chunk: bool,
     ended: bool,
     deleting: bool,
     /// `prepare` has returned a stream (TS: `record.reader` is set).
     streaming: bool,
+}
+
+impl RunInner {
+    /// Drops the replay log of an ended, unwatched `keep_replay: false` run.
+    fn release_unwatched_log(&mut self, keep_replay: bool) {
+        if !keep_replay && self.ended && self.subscribers == 0 {
+            self.chunks = Vec::new();
+        }
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -234,22 +268,25 @@ impl ConversationRuns {
         conversation_id: Uuid,
         presentation: RunPresentation,
         prepare: F,
-    ) -> Result<Uuid, ChatRejection>
+    ) -> Result<StartedRun, ChatRejection>
     where
         F: FnOnce(RunHandle) -> Fut + Send + 'static,
         Fut: Future<Output = Result<Prepared, ChatRejection>> + Send + 'static,
     {
-        let record = {
+        let (record, own_cursor) = {
             let mut state = lock(&self.state);
-            let previous_group = match state.runs.get(&conversation_id) {
+            let (previous_group, previous_messages) = match state.runs.get(&conversation_id) {
                 Some(existing) => {
                     let inner = lock(&existing.inner);
                     if inner.status == RunStatus::Running || inner.deleting {
                         return Err(ChatRejection::Busy);
                     }
-                    existing.tab_group.clone()
+                    // The new record shows the conversation as it stands until this turn
+                    // publishes its own history: a turn failing before that (unknown agent,
+                    // credentials, history read) must not make other panels hydrate it empty.
+                    (existing.tab_group.clone(), inner.messages.clone())
                 }
-                None => None,
+                None => (None, Vec::new()),
             };
             let (log_version, _) = watch::channel(0);
             let record = Arc::new(RunRecord {
@@ -259,14 +296,16 @@ impl ConversationRuns {
                 // Keep the first useful presentation across turns: a group first created on a
                 // later turn still describes the conversation, not only its latest prompt.
                 tab_group: previous_group.or(presentation.tab_group),
+                keep_replay: presentation.keep_replay,
                 cancel: CancellationToken::new(),
                 prepared: CancellationToken::new(),
                 finished: CancellationToken::new(),
                 log_version,
                 inner: Mutex::new(RunInner {
                     status: RunStatus::Running,
-                    messages: Vec::new(),
+                    messages: previous_messages,
                     chunks: Vec::new(),
+                    subscribers: 0,
                     saw_error_chunk: false,
                     ended: false,
                     deleting: false,
@@ -277,7 +316,10 @@ impl ConversationRuns {
             // gives loopback MCP calls an authoritative active run.
             state.runs.insert(conversation_id, record.clone());
             attach_initial_panels(&mut state, &record, &presentation.panel_tab_ids);
-            record
+            // Opened before the run can produce (or end), so the starter never misses a chunk
+            // and a `keep_replay: false` log cannot be released before the starter read it.
+            let own_cursor = replay_and_tail(record.clone());
+            (record, own_cursor)
         };
         // `/status` reports busy from registration until the run is fully unwound (preparation,
         // pump and `on_finish`); the guard moves into the driving task.
@@ -297,11 +339,15 @@ impl ConversationRuns {
                 .await;
             if driven.is_err() {
                 tracing::error!(%conversation_id, "chat run panicked; marking it failed");
-                runs.finish(&record, RunStatus::Failed);
+                runs.finish(&record, RunStatus::Failed, None);
             }
         });
         match prepared.await {
-            Ok(outcome) => outcome,
+            Ok(Ok(run_id)) => Ok(StartedRun {
+                run_id,
+                chunks: own_cursor,
+            }),
+            Ok(Err(rejection)) => Err(rejection),
             // The driving task died before answering (a panic in `prepare`).
             Err(_) => Err(ChatRejection::Internal(run_crashed())),
         }
@@ -324,7 +370,7 @@ impl ConversationRuns {
                 } else {
                     RunStatus::Failed
                 };
-                self.finish(&record, status);
+                self.finish(&record, status, None);
                 let _ = reply.send(Err(rejection));
             }
             Ok(Prepared { chunks, on_finish }) => {
@@ -333,15 +379,17 @@ impl ConversationRuns {
                 // hydrate from here on.
                 record.prepared.cancel();
                 let _ = reply.send(Ok(record.run_id));
+                // `stop` cancels before it reads `streaming`, so either it saw `streaming` and waits
+                // for the end, or this check sees its cancel: a stopped run is never pumped.
                 if record.cancel.is_cancelled() {
                     // Stopped while preparing: the turn never runs.
                     drop(chunks);
-                    on_finish(FinishedTurn {
+                    let messages = on_finish(FinishedTurn {
                         status: RunStatus::Aborted,
                         assistant: None,
                     })
                     .await;
-                    self.finish(&record, RunStatus::Aborted);
+                    self.finish(&record, RunStatus::Aborted, messages);
                 } else {
                     self.pump(&record, chunks, on_finish).await;
                 }
@@ -388,16 +436,17 @@ impl ConversationRuns {
         } else {
             RunStatus::Completed
         };
-        on_finish(FinishedTurn {
+        let messages = on_finish(FinishedTurn {
             status,
             assistant: assembler.into_message(),
         })
         .await;
-        self.finish(record, status);
+        self.finish(record, status, messages);
     }
 
-    /// Ends the run once: status, both latches, subscriber wake-up, panel status.
-    fn finish(&self, record: &RunRecord, status: RunStatus) {
+    /// Ends the run once: final messages and status in one critical section, both latches,
+    /// subscriber wake-up, panel status.
+    fn finish(&self, record: &RunRecord, status: RunStatus, messages: Option<Vec<UiMessage>>) {
         {
             let mut inner = lock(&record.inner);
             if inner.ended {
@@ -405,6 +454,10 @@ impl ConversationRuns {
             }
             inner.ended = true;
             inner.status = status;
+            if let Some(messages) = messages {
+                inner.messages = messages;
+            }
+            inner.release_unwatched_log(record.keep_replay);
         }
         // Setup failures never reach the prepared point, but panel hydration must still resolve
         // to the visible failed/aborted state instead of hanging forever.
@@ -479,64 +532,76 @@ impl ConversationRuns {
     }
 
     /// Cancels a running run. While it is still preparing this returns at once (the preparer
-    /// owns unwinding whatever it already built); otherwise it waits until the run has ended,
-    /// `on_finish` included.
+    /// owns unwinding whatever it already built, and `drive` never pumps a cancelled run);
+    /// otherwise it waits until the run has ended, `on_finish` included.
     pub async fn stop(&self, conversation_id: Uuid) -> bool {
         let Some(record) = lock(&self.state).runs.get(&conversation_id).cloned() else {
             return false;
         };
-        let streaming = {
-            let inner = lock(&record.inner);
-            if inner.status != RunStatus::Running {
-                return false;
-            }
-            inner.streaming
-        };
+        if record.status() != RunStatus::Running {
+            return false;
+        }
+        // Cancel before reading `streaming`: read first, and `drive` could flip it and start the
+        // pump in between, leaving this call to answer `stopped` while the turn still streams.
         record.cancel.cancel();
-        if streaming {
+        if lock(&record.inner).streaming {
             record.finished.cancelled().await;
         }
         true
     }
 
-    /// Retires the conversation's panels at once, blocks replacement turns, stops the run, awaits
-    /// its end (including late preparation unwinding and `on_finish`), then removes the record.
+    /// [`Self::delete_with`] with nothing else to release.
     pub async fn delete(&self, conversation_id: Uuid) -> bool {
-        let record = {
-            let mut state = lock(&self.state);
-            let Some(record) = state.runs.get(&conversation_id).cloned() else {
-                return false;
-            };
-            lock(&record.inner).deleting = true;
-            let retired: Vec<u32> = state
-                .panels
-                .iter()
-                .filter(|(_, owner)| Arc::ptr_eq(owner, &record))
-                .map(|(tab_id, _)| *tab_id)
-                .collect();
-            for tab_id in &retired {
-                state.panels.remove(tab_id);
-                state.auto_open.remove(tab_id);
-            }
-            if !retired.is_empty() {
-                publish_panels(&state);
-            }
-            record
+        self.delete_with(conversation_id, async {}).await.0
+    }
+
+    /// Retires the conversation's panels at once, blocks replacement turns, stops the run and
+    /// awaits its end (including late preparation unwinding and `on_finish`), runs `cleanup` (the
+    /// engines' and history's release), and only then removes the record: a POST racing the
+    /// cleanup is 409, never a turn on a half-forgotten session. Returns whether this call
+    /// removed the record, and `cleanup`'s output (`cleanup` runs even without a record).
+    ///
+    /// Dropping the future part-way still removes the record (see [`Retire`]), so an abandoned
+    /// delete can leak what `cleanup` would have released but never leaves the conversation 409.
+    pub async fn delete_with<T>(
+        &self,
+        conversation_id: Uuid,
+        cleanup: impl Future<Output = T>,
+    ) -> (bool, T) {
+        let Some(record) = self.mark_deleting(conversation_id) else {
+            return (false, cleanup.await);
         };
-        if record.status() == RunStatus::Running {
-            self.stop(conversation_id).await;
-        }
+        let retire = Retire {
+            runs: self,
+            conversation_id,
+            record: record.clone(),
+        };
+        // A no-op on an ended run; a run still preparing finishes once its preparer unwinds.
+        record.cancel.cancel();
         record.finished.cancelled().await;
+        let cleaned = cleanup.await;
+        (retire.remove(), cleaned)
+    }
+
+    /// Blocks replacement turns and retires the record's panels, in one registry critical section.
+    fn mark_deleting(&self, conversation_id: Uuid) -> Option<Arc<RunRecord>> {
         let mut state = lock(&self.state);
-        if !state
-            .runs
-            .get(&conversation_id)
-            .is_some_and(|current| Arc::ptr_eq(current, &record))
-        {
-            return false;
+        let record = state.runs.get(&conversation_id).cloned()?;
+        lock(&record.inner).deleting = true;
+        let retired: Vec<u32> = state
+            .panels
+            .iter()
+            .filter(|(_, owner)| Arc::ptr_eq(owner, &record))
+            .map(|(tab_id, _)| *tab_id)
+            .collect();
+        for tab_id in &retired {
+            state.panels.remove(tab_id);
+            state.auto_open.remove(tab_id);
         }
-        state.runs.remove(&conversation_id);
-        true
+        if !retired.is_empty() {
+            publish_panels(&state);
+        }
+        Some(record)
     }
 
     /// The live, un-cancelled run of a conversation, if any.
@@ -644,6 +709,34 @@ impl ConversationRuns {
     }
 }
 
+/// Removes a deleting record from the registry, on [`Retire::remove`] or when dropped part-way.
+/// Only the record it was made for: a newer record installed meanwhile is left alone.
+struct Retire<'a> {
+    runs: &'a ConversationRuns,
+    conversation_id: Uuid,
+    record: Arc<RunRecord>,
+}
+
+impl Retire<'_> {
+    fn remove(&self) -> bool {
+        let mut state = lock(&self.runs.state);
+        let current = state
+            .runs
+            .get(&self.conversation_id)
+            .is_some_and(|current| Arc::ptr_eq(current, &self.record));
+        if current {
+            state.runs.remove(&self.conversation_id);
+        }
+        current
+    }
+}
+
+impl Drop for Retire<'_> {
+    fn drop(&mut self) {
+        self.remove();
+    }
+}
+
 fn append(record: &RunRecord, chunk: UiChunk) {
     {
         let mut inner = lock(&record.inner);
@@ -658,31 +751,60 @@ fn append(record: &RunRecord, chunk: UiChunk) {
 /// A subscriber is a cursor into the record's one replay log: replay and live tail are the same
 /// read loop, so there is no handoff gap and no per-viewer buffer. Dropping it detaches only it.
 fn replay_and_tail(record: Arc<RunRecord>) -> ChunkStream {
-    let version = record.log_version.subscribe();
+    let cursor = Cursor::new(record);
     Box::pin(futures_util::stream::unfold(
-        (record, version, 0_usize),
-        |(record, mut version, cursor)| async move {
+        cursor,
+        |mut cursor| async move {
             loop {
-                // Mark the version seen *before* reading the log, so an append racing this read
-                // is either visible now or wakes the `changed()` below.
-                version.borrow_and_update();
+                // Mark the version seen *before* reading the log, so an append racing this read is
+                // either visible now or wakes the `changed()` below.
+                cursor.version.borrow_and_update();
                 {
-                    let inner = lock(&record.inner);
-                    if let Some(chunk) = inner.chunks.get(cursor) {
+                    let inner = lock(&cursor.record.inner);
+                    if let Some(chunk) = inner.chunks.get(cursor.position) {
                         let chunk = chunk.clone();
                         drop(inner);
-                        return Some((chunk, (record, version, cursor + 1)));
+                        cursor.position += 1;
+                        return Some((chunk, cursor));
                     }
                     if inner.ended {
                         return None;
                     }
                 }
-                if version.changed().await.is_err() {
+                if cursor.version.changed().await.is_err() {
                     return None;
                 }
             }
         },
     ))
+}
+
+/// One subscriber's place in a record's replay log. Registered in `RunInner::subscribers` for its
+/// whole life; the last one to detach from an ended `keep_replay: false` run drops the log.
+struct Cursor {
+    record: Arc<RunRecord>,
+    version: watch::Receiver<u64>,
+    position: usize,
+}
+
+impl Cursor {
+    fn new(record: Arc<RunRecord>) -> Self {
+        let version = record.log_version.subscribe();
+        lock(&record.inner).subscribers += 1;
+        Self {
+            record,
+            version,
+            position: 0,
+        }
+    }
+}
+
+impl Drop for Cursor {
+    fn drop(&mut self) {
+        let mut inner = lock(&self.record.inner);
+        inner.subscribers -= 1;
+        inner.release_unwatched_log(self.record.keep_replay);
+    }
 }
 
 /// A later turn wakes every tab still mapped to this conversation; a tab claimed by another

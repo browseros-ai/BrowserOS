@@ -10,20 +10,23 @@ use axum::{
     body::{Body, to_bytes},
     routing::{delete, get, post},
 };
+use browseros_agent::llm::{HttpStack, LlmConfig, LlmConfigError};
 use futures_util::StreamExt as _;
 use http::{Request, Response, StatusCode};
 use serde_json::{Value, json};
 use server_rust::{
     activity::ServerActivity,
     chat::{
-        ChatDeps, ChatEngine, ChatRecords, ChatRejection, ChatService, ConversationRuns,
-        ProviderRecord, ScriptedEngine, Turn,
+        BrowserOsEngine, BrowserOsEngineDeps, ChatDeps, ChatEngine, ChatRecords, ChatRejection,
+        ChatService, ConversationRuns, ModelFactory, NoBrowser, ProviderRecord, RegistryLeases,
+        ScriptedEngine, Turn, production_models,
     },
     db::{
-        AcpAgentRow, AgentKind, ConversationSummary, Database, DbResult, ProviderRow,
-        SaveConversation, StoredConversation, TargetType,
+        AcpAgentRow, AgentKind, ConversationSummary, Database, DbError, DbResult,
+        ImportConversation, ProviderRow, SaveRawConversation, StoredConversation, TargetType,
     },
     http::{chat, security::RequestTrust},
+    mcp::ToolLeases,
     oauth::TokenManager,
     paths::BrowserosPaths,
 };
@@ -31,7 +34,10 @@ use std::{
     collections::HashMap,
     error::Error,
     path::Path,
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::sync::Notify;
@@ -49,7 +55,11 @@ struct MemoryRecords {
     default_provider: Mutex<Option<ProviderRecord>>,
     agents: Mutex<HashMap<Uuid, AcpAgentRow>>,
     conversations: Mutex<HashMap<Uuid, StoredConversation>>,
-    saved: Mutex<Vec<SaveConversation>>,
+    saved: Mutex<Vec<SaveRawConversation>>,
+    /// `conversation` fails as a locked or corrupt database would.
+    fail_reads: AtomicBool,
+    /// When set, `save_conversation` signals the first and waits for the second.
+    save_gate: Mutex<Option<(Arc<Notify>, Arc<Notify>)>>,
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -70,9 +80,17 @@ impl ChatRecords for MemoryRecords {
         Ok(locked(&self.agents).get(&id).cloned())
     }
     async fn conversation(&self, id: Uuid) -> DbResult<Option<StoredConversation>> {
+        if self.fail_reads.load(Ordering::SeqCst) {
+            return Err(DbError::Query("database disk image is malformed".into()));
+        }
         Ok(locked(&self.conversations).get(&id).cloned())
     }
-    async fn save_conversation(&self, input: SaveConversation) -> DbResult<()> {
+    async fn save_conversation(&self, input: SaveRawConversation) -> DbResult<()> {
+        let gate = locked(&self.save_gate).clone();
+        if let Some((entered, release)) = gate {
+            entered.notify_one();
+            release.notified().await;
+        }
         locked(&self.saved).push(input);
         Ok(())
     }
@@ -170,9 +188,18 @@ async fn harness_with(
     scripted: Option<Arc<ScriptedEngine>>,
     heartbeat: Duration,
 ) -> Result<Harness, Box<dyn Error>> {
+    harness_with_acp(browseros, scripted, script(), heartbeat).await
+}
+
+async fn harness_with_acp(
+    browseros: Arc<dyn ChatEngine>,
+    scripted: Option<Arc<ScriptedEngine>>,
+    acp_script: Vec<UiChunk>,
+    heartbeat: Duration,
+) -> Result<Harness, Box<dyn Error>> {
     let dir = tempfile::tempdir()?;
     let records = Arc::new(MemoryRecords::default());
-    let acp = Arc::new(ScriptedEngine::new(script()));
+    let acp = Arc::new(ScriptedEngine::new(acp_script));
     let chat = ChatService::new(ChatDeps {
         runs: ConversationRuns::new(Arc::new(ServerActivity::new()), heartbeat),
         records: records.clone(),
@@ -863,13 +890,13 @@ async fn a_completed_turn_is_persisted_before_the_stream_ends() -> TestResult {
     assert_eq!(saved[0].id, conversation);
     assert_eq!(saved[0].target_type, TargetType::BrowserOs);
     assert_eq!(saved[0].origin.as_deref(), Some("sidepanel"));
-    let roles: Vec<Value> = saved[0]
+    let roles: Vec<&Value> = saved[0]
         .messages
         .iter()
-        .map(|message| serde_json::to_value(message).map(|value| value["role"].clone()))
-        .collect::<Result<_, _>>()?;
-    assert_eq!(roles, vec![json!("user"), json!("assistant")]);
-    assert_eq!(saved[0].messages[1].id, "assistant-1");
+        .map(|message| &message["role"])
+        .collect();
+    assert_eq!(roles, [&json!("user"), &json!("assistant")]);
+    assert_eq!(saved[0].messages[1]["id"], json!("assistant-1"));
     Ok(())
 }
 
@@ -1159,5 +1186,490 @@ async fn db_records_classify_acp_rows_and_persist_through_the_conversation_store
     let messages = stored.ui_messages()?;
     assert_eq!(messages.len(), 2);
     assert_eq!(messages[1].id, "assistant-1");
+    Ok(())
+}
+
+// ───── review regressions (P8-fix) ─────
+
+async fn state_json(h: &Harness, conversation: Uuid) -> Result<Value, Box<dyn Error>> {
+    body_json(
+        h.send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?,
+    )
+    .await
+}
+
+/// Streams `start`, then on stop lingers 300 ms before its `abort` (a slow unwind). `forget`
+/// optionally signals and then waits on a gate, so a test can hold a DELETE mid-cleanup.
+#[derive(Default)]
+struct LingeringEngine {
+    forget_gate: Option<(Arc<Notify>, Arc<Notify>)>,
+    forgotten: Mutex<Vec<Uuid>>,
+}
+
+#[async_trait::async_trait]
+impl ChatEngine for LingeringEngine {
+    async fn start_turn(&self, turn: Turn) -> Result<ChunkStream, ChatRejection> {
+        let cancel = turn.run.cancel().clone();
+        Ok(Box::pin(futures_util::stream::unfold(0, move |step| {
+            let cancel = cancel.clone();
+            async move {
+                match step {
+                    0 => Some((
+                        UiChunk::Start {
+                            message_metadata: None,
+                            message_id: Some("lingering".into()),
+                        },
+                        1,
+                    )),
+                    1 => {
+                        cancel.cancelled().await;
+                        tokio::time::sleep(Duration::from_millis(300)).await;
+                        Some((server_rust::chat::stopped_chunk(), 2))
+                    }
+                    _ => None,
+                }
+            }
+        })))
+    }
+
+    async fn forget(&self, conversation_id: Uuid) -> bool {
+        if let Some((entered, release)) = &self.forget_gate {
+            entered.notify_one();
+            release.notified().await;
+        }
+        locked(&self.forgotten).push(conversation_id);
+        true
+    }
+}
+
+/// axum drops a handler whose client hung up. A DELETE dropped while the run unwinds used to
+/// leave the record `deleting` forever (409 until restart) with the session never forgotten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_delete_cut_short_by_its_client_still_frees_the_conversation() -> TestResult {
+    let engine = Arc::new(LingeringEngine::default());
+    let h = harness_with(engine.clone(), None, Duration::from_secs(5)).await?;
+    let conversation = Uuid::new_v4();
+    let first = h.post_chat(false, &inline_body(conversation)).await?;
+    assert_eq!(first.status(), StatusCode::OK);
+    drop(first);
+
+    let delete = empty_request("DELETE", &format!("/chat/{conversation}"))?;
+    let cut = tokio::time::timeout(Duration::from_millis(50), h.send(false, delete)).await;
+    assert!(
+        cut.is_err(),
+        "the delete should still be waiting on the run"
+    );
+
+    let mut freed = false;
+    for _ in 0..250 {
+        if h.chat.state(conversation).await.is_none() {
+            freed = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(freed, "the run record was never removed");
+    assert_eq!(*locked(&engine.forgotten), vec![conversation]);
+    let again = h.post_chat(false, &inline_body(conversation)).await?;
+    assert_eq!(again.status(), StatusCode::OK);
+    Ok(())
+}
+
+/// The record goes last: a turn posted while DELETE is still releasing the engine session is
+/// 409, not a fresh turn on a session about to be forgotten.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn a_post_during_delete_cleanup_is_409() -> TestResult {
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    let engine = Arc::new(LingeringEngine {
+        forget_gate: Some((entered.clone(), release.clone())),
+        ..LingeringEngine::default()
+    });
+    let h = harness_with(engine.clone(), None, Duration::from_secs(5)).await?;
+    let conversation = Uuid::new_v4();
+    drop(h.post_chat(false, &inline_body(conversation)).await?);
+
+    let deleting = tokio::spawn({
+        let router = h.router(false);
+        let request = empty_request("DELETE", &format!("/chat/{conversation}"))?;
+        async move { router.oneshot(request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified()).await?;
+    let racing = h.post_chat(false, &inline_body(conversation)).await?;
+    assert_eq!(racing.status(), StatusCode::CONFLICT);
+
+    release.notify_one();
+    let deleted = deleting.await??;
+    assert_eq!(deleted.status(), StatusCode::OK);
+    assert_eq!(*locked(&engine.forgotten), vec![conversation]);
+    let next = h.post_chat(false, &inline_body(conversation)).await?;
+    assert_eq!(next.status(), StatusCode::OK);
+    Ok(())
+}
+
+/// A stored history that cannot be read fails the turn (TS: 500) instead of seeding a fresh one
+/// whose persist would overwrite the row.
+#[tokio::test]
+async fn an_unreadable_stored_history_fails_the_turn_and_is_never_overwritten() -> TestResult {
+    let h = harness().await?;
+    h.records.fail_reads.store(true, Ordering::SeqCst);
+    let conversation = Uuid::new_v4();
+    let response = h.post_chat(false, &inline_body(conversation)).await?;
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let body = body_json(response).await?;
+    assert_eq!(body["error"]["code"], json!("unknown"));
+    assert_eq!(body["error"]["retryable"], json!(true));
+    assert!(h.scripted()?.turns().is_empty(), "the engine never ran");
+    assert!(locked(&h.records.saved).is_empty(), "nothing was written");
+    assert_eq!(
+        state_json(&h, conversation).await?["status"],
+        json!("failed")
+    );
+
+    // ACP display copies are persisted unconditionally, so the same holds for them.
+    let claude = Uuid::new_v4();
+    locked(&h.records.agents).insert(claude, agent_row(claude, AgentKind::Claude));
+    let acp = h
+        .post_chat(
+            true,
+            &json!({
+                "conversationId": Uuid::new_v4(),
+                "message": "look",
+                "target": { "type": "claude", "agentId": claude },
+            }),
+        )
+        .await?;
+    assert_eq!(acp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert!(h.acp.turns().is_empty());
+    assert!(locked(&h.records.saved).is_empty());
+
+    // An unpersisted turn never reads the row, so it still runs.
+    let mut ephemeral = inline_body(Uuid::new_v4());
+    ephemeral["persist"] = json!(false);
+    let response = h.post_chat(false, &ephemeral).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    body_bytes(response).await?;
+    Ok(())
+}
+
+/// Real stored shapes this build cannot decode: what the import path writes (no `id`), an AI SDK
+/// v4 `tool-invocation` part, the v4 tool state `call`, and a `data` message.
+fn legacy_messages() -> Vec<Value> {
+    vec![
+        json!({ "role": "user", "parts": [{ "type": "text", "text": "imported question" }] }),
+        json!({ "id": "m-v4", "role": "assistant", "parts": [{ "type": "tool-invocation",
+            "toolInvocation": { "state": "result", "toolCallId": "call-1", "toolName": "search",
+                "args": { "q": "x" }, "result": { "hits": 1 } } }] }),
+        json!({ "id": "m-call", "role": "assistant", "parts": [{ "type": "tool-search",
+            "toolCallId": "call-2", "state": "call", "input": { "q": "y" } }] }),
+        json!({ "id": "m-data", "role": "data", "parts": [{ "type": "text", "text": "metadata" }] }),
+    ]
+}
+
+fn stored_row(id: Uuid, messages: Vec<Value>) -> StoredConversation {
+    StoredConversation {
+        summary: ConversationSummary {
+            id,
+            last_user_message: None,
+            origin: None,
+            target_type: TargetType::BrowserOs,
+            agent_id: None,
+            last_messaged_at: 1,
+            created_at: 1,
+            updated_at: 1,
+        },
+        messages,
+    }
+}
+
+/// Stored history is never rewritten through the typed form: undecodable messages are left out of
+/// what the agent sees, and every save writes the row back verbatim with the turn appended.
+#[tokio::test]
+async fn legacy_stored_messages_survive_every_save_verbatim() -> TestResult {
+    for legacy in legacy_messages() {
+        assert!(
+            serde_json::from_value::<ui_message_stream::UiMessage>(legacy.clone()).is_err(),
+            "fixture decodes, so it tests nothing: {legacy}"
+        );
+    }
+    let h = harness().await?;
+    let conversation = Uuid::new_v4();
+    let legacy = legacy_messages();
+    let stored = vec![
+        json!({ "id": "u1", "role": "user", "parts": [{ "type": "text", "text": "earlier" }] }),
+        legacy[0].clone(),
+        json!({ "id": "a1", "role": "assistant", "parts": [{ "type": "text", "text": "reply" }] }),
+        legacy[1].clone(),
+        legacy[2].clone(),
+        legacy[3].clone(),
+    ];
+    locked(&h.records.conversations).insert(conversation, stored_row(conversation, stored.clone()));
+
+    body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
+    let texts: Vec<Value> = h.scripted()?.turns()[0]
+        .history
+        .iter()
+        .map(|message| serde_json::to_value(message).map(|value| value["parts"][0]["text"].clone()))
+        .collect::<Result<_, _>>()?;
+    assert_eq!(
+        texts,
+        vec![json!("earlier"), json!("reply"), json!("hello world")]
+    );
+    let first = locked(&h.records.saved)[0].messages.clone();
+    assert_eq!(first.len(), stored.len() + 2);
+    assert_eq!(
+        first[..stored.len()],
+        stored[..],
+        "the stored prefix is verbatim"
+    );
+    assert_eq!(first[stored.len()]["role"], json!("user"));
+    assert_eq!(first[stored.len() + 1]["role"], json!("assistant"));
+    // Panels see the typed view.
+    let state = state_json(&h, conversation).await?;
+    assert_eq!(state["messages"].as_array().map(Vec::len), Some(4));
+
+    // A turn served from the in-memory cache appends to the same verbatim list.
+    body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
+    let second = locked(&h.records.saved)[1].messages.clone();
+    assert_eq!(second.len(), first.len() + 2);
+    assert_eq!(second[..first.len()], first[..]);
+    Ok(())
+}
+
+/// The same through the real SQLite store and the import path (`PUT /conversations/{id}` writes
+/// id-less messages): the row keeps every legacy message after a chat turn.
+#[tokio::test]
+async fn imported_legacy_rows_keep_their_messages_through_a_chat_turn() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (db, _) = Database::open(&BrowserosPaths::new(dir.path().to_path_buf())).await?;
+    let conversation = Uuid::new_v4();
+    let legacy = legacy_messages();
+    db.conversations()
+        .import_if_absent(
+            conversation,
+            ImportConversation {
+                messages: legacy.clone(),
+                last_messaged_at: Some(10),
+                target_type: TargetType::BrowserOs,
+                origin: None,
+                agent_id: None,
+            },
+        )
+        .await?
+        .ok_or("not imported")?;
+    let chat = ChatService::new(ChatDeps {
+        runs: ConversationRuns::new(Arc::new(ServerActivity::new()), Duration::from_secs(5)),
+        records: Arc::new(server_rust::chat::DbChatRecords::new(&db)),
+        browseros: Arc::new(ScriptedEngine::new(script())),
+        acp: Arc::new(ScriptedEngine::new(script())),
+        oauth: token_manager(dir.path()).await?,
+        tabs: None,
+        use_mock_llm: false,
+    });
+    let response = Router::new()
+        .route("/chat", post(chat::post_chat))
+        .layer(Extension(RequestTrust { trusted_app: true }))
+        .with_state(chat)
+        .oneshot(json_request("POST", "/chat", &inline_body(conversation))?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    body_bytes(response).await?;
+    let stored = db
+        .conversations()
+        .get(conversation)
+        .await?
+        .ok_or("row vanished")?;
+    assert_eq!(stored.messages.len(), legacy.len() + 2);
+    assert_eq!(stored.messages[..legacy.len()], legacy[..]);
+    assert_eq!(
+        stored.summary.last_user_message.as_deref(),
+        Some("hello world")
+    );
+    Ok(())
+}
+
+fn engine_with(runs: &Arc<ConversationRuns>, models: ModelFactory) -> Arc<BrowserOsEngine> {
+    Arc::new(BrowserOsEngine::new(BrowserOsEngineDeps {
+        models,
+        leases: Arc::new(RegistryLeases(ToolLeases::new(runs.clone()))),
+        pages: Arc::new(NoBrowser),
+        // Nothing listens here: the required loopback MCP client cannot connect.
+        mcp_port: 1,
+        klavis_status: Arc::new(|| None),
+        connector_names: Vec::new(),
+    }))
+}
+
+/// Built-in engine setup failures are classified by message, as TS classifies the plain `Error`
+/// it throws: an MCP connect failure is a retryable `unknown` (it used to be "Provider not
+/// configured", retryable: false), while a real config failure stays `provider_config`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn builtin_engine_setup_failures_are_classified_by_message() -> TestResult {
+    let unconfigured: ModelFactory = Arc::new(|_: &LlmConfig| {
+        Err(LlmConfigError(
+            "Anthropic provider requires apiKey".to_owned(),
+        ))
+    });
+    let cases = [
+        (production_models(HttpStack::new(), true), "unknown", true),
+        (unconfigured, "provider_config", false),
+    ];
+    for (models, code, retryable) in cases {
+        let dir = tempfile::tempdir()?;
+        let runs = ConversationRuns::new(Arc::new(ServerActivity::new()), Duration::from_secs(5));
+        let chat = ChatService::new(ChatDeps {
+            browseros: engine_with(&runs, models),
+            runs,
+            records: Arc::new(MemoryRecords::default()),
+            acp: Arc::new(ScriptedEngine::new(script())),
+            oauth: token_manager(dir.path()).await?,
+            tabs: None,
+            use_mock_llm: true,
+        });
+        let response = Router::new()
+            .route("/chat", post(chat::post_chat))
+            .layer(Extension(RequestTrust { trusted_app: false }))
+            .with_state(chat)
+            .oneshot(json_request("POST", "/chat", &inline_body(Uuid::new_v4()))?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = body_json(response).await?;
+        assert_eq!(body["error"]["code"], json!(code), "{body}");
+        assert_eq!(body["error"]["retryable"], json!(retryable), "{body}");
+    }
+    Ok(())
+}
+
+/// A later turn that fails before publishing history (unknown ACP agent → 404) leaves the
+/// conversation hydrating as it was, not as an empty conversation.
+#[tokio::test]
+async fn a_later_turn_failing_early_keeps_the_conversation_visible() -> TestResult {
+    let h = harness().await?;
+    let conversation = Uuid::new_v4();
+    body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
+    let before = state_json(&h, conversation).await?;
+    assert_eq!(before["messages"].as_array().map(Vec::len), Some(2));
+
+    let failed = h
+        .post_chat(
+            true,
+            &json!({
+                "conversationId": conversation,
+                "message": "again",
+                "target": { "type": "claude", "agentId": Uuid::new_v4() },
+            }),
+        )
+        .await?;
+    assert_eq!(failed.status(), StatusCode::NOT_FOUND);
+    let after = state_json(&h, conversation).await?;
+    assert_eq!(after["status"], json!("failed"));
+    assert_eq!(after["messages"], before["messages"]);
+    Ok(())
+}
+
+/// While the finished turn is being persisted `/state` is still `running`, so it must not yet
+/// carry the final assistant message (a resumed panel would replay the reply onto it twice).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn state_while_persisting_is_running_without_the_final_reply() -> TestResult {
+    let h = harness().await?;
+    let entered = Arc::new(Notify::new());
+    let release = Arc::new(Notify::new());
+    *locked(&h.records.save_gate) = Some((entered.clone(), release.clone()));
+    let conversation = Uuid::new_v4();
+    let response = h.post_chat(false, &inline_body(conversation)).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let reader = tokio::spawn(async move { to_bytes(response.into_body(), usize::MAX).await });
+    tokio::time::timeout(Duration::from_secs(5), entered.notified()).await?;
+
+    let persisting = state_json(&h, conversation).await?;
+    assert_eq!(persisting["status"], json!("running"));
+    assert_eq!(persisting["messages"].as_array().map(Vec::len), Some(1));
+    assert_eq!(persisting["messages"][0]["role"], json!("user"));
+
+    release.notify_one();
+    reader.await??;
+    let done = state_json(&h, conversation).await?;
+    assert_eq!(done["status"], json!("completed"));
+    assert_eq!(done["messages"].as_array().map(Vec::len), Some(2));
+    Ok(())
+}
+
+/// TS persists the ACP display copy after every turn, aborted and failed ones included (only
+/// built-in turns need an assistant reply to be durable).
+#[tokio::test]
+async fn acp_turns_without_a_reply_are_still_persisted() -> TestResult {
+    let engine = Arc::new(ScriptedEngine::new(script()));
+    let failing = vec![
+        UiChunk::Start {
+            message_metadata: None,
+            message_id: None,
+        },
+        UiChunk::Error {
+            error_text: "{\"error\":{}}".into(),
+        },
+    ];
+    let h = harness_with_acp(
+        engine.clone(),
+        Some(engine),
+        failing,
+        Duration::from_secs(5),
+    )
+    .await?;
+    let claude = Uuid::new_v4();
+    locked(&h.records.agents).insert(claude, agent_row(claude, AgentKind::Claude));
+    let conversation = Uuid::new_v4();
+    let response = h
+        .post_chat(
+            true,
+            &json!({
+                "conversationId": conversation,
+                "message": "look",
+                "target": { "type": "claude", "agentId": claude },
+            }),
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    body_bytes(response).await?;
+    assert_eq!(
+        state_json(&h, conversation).await?["status"],
+        json!("failed")
+    );
+    let saved = locked(&h.records.saved).clone();
+    assert_eq!(saved.len(), 1);
+    assert_eq!(saved[0].target_type, TargetType::Claude);
+    assert_eq!(saved[0].agent_id, Some(claude.to_string()));
+    assert_eq!(saved[0].messages[0]["role"], json!("user"));
+    Ok(())
+}
+
+/// Scheduled runs use a fresh conversation id each and are never DELETEd: once finished they
+/// release the engine session, the history cache entry and (with no reader left) the replay log.
+#[tokio::test]
+async fn scheduled_runs_release_their_server_state() -> TestResult {
+    let h = harness().await?;
+    let conversation = Uuid::new_v4();
+    let mut scheduled = inline_body(conversation);
+    scheduled["isScheduledTask"] = json!(true);
+    let response = h.post_chat(false, &scheduled).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let chunks = sse::parse(&body_bytes(response).await?)?;
+    assert_eq!(chunks, script(), "the starter still reads the whole run");
+
+    assert_eq!(h.scripted()?.forgotten(), vec![conversation]);
+    let state = state_json(&h, conversation).await?;
+    assert_eq!(state["status"], json!("completed"));
+    assert_eq!(state["chunkCount"], json!(0));
+    assert_eq!(state["messages"].as_array().map(Vec::len), Some(2));
+
+    // The cached history went too: the next (unpersisted) turn starts from the client's copy.
+    let mut next = inline_body(conversation);
+    next["persist"] = json!(false);
+    body_bytes(h.post_chat(false, &next).await?).await?;
+    let turns = h.scripted()?.turns();
+    assert_eq!(turns[1].history.len(), 1);
     Ok(())
 }

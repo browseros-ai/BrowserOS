@@ -51,7 +51,7 @@ fn controlled() -> (mpsc::UnboundedSender<UiChunk>, ChunkStream) {
 }
 
 fn noop_finish() -> OnFinish {
-    Box::new(|_| Box::pin(async {}))
+    Box::new(|_| Box::pin(async { None }))
 }
 
 fn presentation(tabs: &[u32]) -> RunPresentation {
@@ -59,6 +59,7 @@ fn presentation(tabs: &[u32]) -> RunPresentation {
         panel_tab_ids: tabs.to_vec(),
         panels_visible: true,
         tab_group: None,
+        keep_replay: true,
     }
 }
 
@@ -79,6 +80,7 @@ async fn start(
         })
     })
     .await
+    .map(|started| started.run_id)
 }
 
 fn stream_of(resume: Resume) -> Result<ChunkStream, Box<dyn Error>> {
@@ -495,6 +497,7 @@ async fn keeps_scheduled_runs_out_of_panel_state() -> TestResult {
             panel_tab_ids: vec![30],
             panels_visible: false,
             tab_group: None,
+            keep_replay: false,
         },
         move |_| async move {
             Ok(Prepared {
@@ -636,6 +639,7 @@ async fn runs_on_finish_before_subscribers_see_the_end() -> TestResult {
                 if let Ok(mut slot) = observed.lock() {
                     *slot = Some(finished);
                 }
+                None
             })
         })
     };
@@ -688,6 +692,7 @@ async fn stop_cancels_the_engine_drains_its_abort_and_returns_after_the_end() ->
                     if let Ok(mut slot) = finished_status.lock() {
                         *slot = Some(finished.status);
                     }
+                    None
                 })
             });
             Ok(Prepared { chunks, on_finish })
@@ -831,5 +836,306 @@ async fn resume_compares_the_run_id_as_the_client_sent_it() -> TestResult {
         Resume::RunChanged
     ));
     runs.stop(conversation).await;
+    Ok(())
+}
+
+// ───── review regressions (P8-fix) ─────
+
+/// The POST that started a run streams that run, even once the conversation has moved on to a
+/// newer turn (it used to subscribe by conversation id, and could pick up the next run).
+#[tokio::test]
+async fn the_starter_streams_its_own_run_after_the_conversation_moved_on() -> TestResult {
+    let runs = runs();
+    let conversation = Uuid::new_v4();
+    let (source, chunks) = controlled();
+    let first = runs
+        .start(conversation, presentation(&[]), move |_| async move {
+            Ok(Prepared {
+                chunks,
+                on_finish: noop_finish(),
+            })
+        })
+        .await?;
+    source.send(text_start())?;
+    drop(source);
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.status == RunStatus::Completed)
+    })
+    .await?;
+
+    let (next, chunks) = controlled();
+    let second = start(&runs, conversation, &[], chunks).await?;
+    next.send(text_delta())?;
+    assert_ne!(first.run_id, second);
+    assert_eq!(first.chunks.collect::<Vec<_>>().await, vec![text_start()]);
+    runs.stop(conversation).await;
+    Ok(())
+}
+
+/// A later turn that fails before publishing its own history (unknown agent, credentials, a
+/// history read) leaves the conversation looking as it did, not empty.
+#[tokio::test]
+async fn a_new_record_shows_the_previous_messages_until_its_turn_publishes() -> TestResult {
+    let runs = runs();
+    let conversation = Uuid::new_v4();
+    let earlier = vec![UiMessage::user("earlier".into(), None, vec![])];
+    let (source, chunks) = controlled();
+    runs.start(conversation, presentation(&[]), {
+        let earlier = earlier.clone();
+        move |handle| async move {
+            handle.publish_messages(earlier);
+            Ok(Prepared {
+                chunks,
+                on_finish: noop_finish(),
+            })
+        }
+    })
+    .await?;
+    drop(source);
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.status == RunStatus::Completed)
+    })
+    .await?;
+
+    let rejected = runs
+        .start(conversation, presentation(&[]), |_| async {
+            Err::<Prepared, _>(ChatRejection::UnknownAgent)
+        })
+        .await;
+    assert!(matches!(rejected, Err(ChatRejection::UnknownAgent)));
+    let snapshot = runs.snapshot(conversation).ok_or("no snapshot")?;
+    assert_eq!(snapshot.status, RunStatus::Failed);
+    assert_eq!(snapshot.messages, earlier);
+    Ok(())
+}
+
+/// `/state` never pairs `running` with the run's final history: a panel resuming from such a
+/// snapshot would replay the whole turn onto the finished assistant message.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn final_messages_are_published_together_with_the_terminal_status() -> TestResult {
+    let runs = runs();
+    let conversation = Uuid::new_v4();
+    let user = UiMessage::user("question".into(), None, vec![]);
+    let assistant = UiMessage {
+        id: "answer".into(),
+        role: ui_message_stream::Role::Assistant,
+        metadata: None,
+        parts: vec![],
+    };
+    let (entered_tx, entered) = oneshot::channel::<()>();
+    let (release, released) = oneshot::channel::<()>();
+    let (source, chunks) = controlled();
+    runs.start(conversation, presentation(&[]), {
+        let user = user.clone();
+        let assistant = assistant.clone();
+        move |handle| async move {
+            handle.publish_messages(vec![user.clone()]);
+            let on_finish: OnFinish = Box::new(move |_| {
+                Box::pin(async move {
+                    // Stands in for the persistence await.
+                    let _ = entered_tx.send(());
+                    let _ = released.await;
+                    Some(vec![user, assistant])
+                })
+            });
+            Ok(Prepared { chunks, on_finish })
+        }
+    })
+    .await?;
+    source.send(text_start())?;
+    drop(source);
+    entered.await?;
+    let persisting = runs.snapshot(conversation).ok_or("no snapshot")?;
+    assert_eq!(persisting.status, RunStatus::Running);
+    assert_eq!(persisting.messages, vec![user.clone()]);
+
+    let watcher = tokio::spawn({
+        let runs = runs.clone();
+        async move {
+            loop {
+                let Some(snapshot) = runs.snapshot(conversation) else {
+                    return Err("record vanished".to_owned());
+                };
+                match snapshot.status {
+                    RunStatus::Running if snapshot.messages.len() > 1 => {
+                        return Err("running with the final history".to_owned());
+                    }
+                    RunStatus::Running => tokio::task::yield_now().await,
+                    _ => return Ok(snapshot),
+                }
+            }
+        }
+    });
+    let _ = release.send(());
+    let finished = watcher.await??;
+    assert_eq!(finished.status, RunStatus::Completed);
+    assert_eq!(finished.messages, vec![user, assistant]);
+    Ok(())
+}
+
+/// `stop` must cancel before it reads whether the run reached its stream: read first, and the
+/// pump could start in between, so `stopped: true` came back while chunks were still landing.
+/// Invariant checked: once `stop` answers true, the replay log no longer grows. The interleaving
+/// is a few instructions wide, so this is a probabilistic guard, not a deterministic repro.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stop_never_answers_while_the_turn_still_streams() -> TestResult {
+    let runs = runs();
+    for _ in 0..2000 {
+        let conversation = Uuid::new_v4();
+        let barrier = Arc::new(tokio::sync::Barrier::new(2));
+        let starting = tokio::spawn({
+            let runs = runs.clone();
+            let barrier = barrier.clone();
+            async move {
+                runs.start(conversation, presentation(&[]), move |_| async move {
+                    barrier.wait().await;
+                    // An engine that ignores cancellation: one chunk, then it ends.
+                    let chunks: ChunkStream = Box::pin(futures_util::stream::iter([text_delta()]));
+                    Ok(Prepared {
+                        chunks,
+                        on_finish: noop_finish(),
+                    })
+                })
+                .await
+                .map(|started| started.run_id)
+            }
+        });
+        // Released together with `prepare`'s return, so the stop races the pump's start.
+        barrier.wait().await;
+        let stopped = runs.stop(conversation).await;
+        let answered = runs.snapshot(conversation).ok_or("no snapshot")?;
+        starting.await??;
+        eventually(|| {
+            runs.snapshot(conversation)
+                .is_some_and(|s| s.status != RunStatus::Running)
+        })
+        .await?;
+        let settled = runs.snapshot(conversation).ok_or("no snapshot")?;
+        if stopped {
+            assert_eq!(
+                answered.chunk_count, settled.chunk_count,
+                "a chunk landed after stop answered"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// DELETE removes the record last: while the engines release the conversation a new turn is
+/// 409, and a delete abandoned part-way (its client hung up) still frees the conversation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn delete_removes_the_record_after_cleanup_and_even_when_abandoned() -> TestResult {
+    let runs = runs();
+    let conversation = Uuid::new_v4();
+    let (source, chunks) = controlled();
+    start(&runs, conversation, &[], chunks).await?;
+    drop(source);
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.status == RunStatus::Completed)
+    })
+    .await?;
+
+    let (entered_tx, entered) = oneshot::channel::<()>();
+    let (release, released) = oneshot::channel::<()>();
+    let deleting = tokio::spawn({
+        let runs = runs.clone();
+        async move {
+            runs.delete_with(conversation, async move {
+                let _ = entered_tx.send(());
+                let _ = released.await;
+                "released"
+            })
+            .await
+        }
+    });
+    entered.await?;
+    assert!(runs.snapshot(conversation).is_some());
+    let (_unused, chunks) = controlled();
+    assert!(matches!(
+        start(&runs, conversation, &[], chunks).await,
+        Err(ChatRejection::Busy)
+    ));
+    let _ = release.send(());
+    assert_eq!(deleting.await?, (true, "released"));
+    assert!(runs.snapshot(conversation).is_none());
+
+    // Abandoned mid-cleanup: the record still leaves the registry.
+    let (_source, chunks) = controlled();
+    start(&runs, conversation, &[], chunks).await?;
+    let abandoned = tokio::spawn({
+        let runs = runs.clone();
+        async move {
+            runs.delete_with(conversation, std::future::pending::<()>())
+                .await
+        }
+    });
+    eventually(|| runs.active_run(conversation).is_none()).await?;
+    abandoned.abort();
+    let _ = abandoned.await;
+    eventually(|| runs.snapshot(conversation).is_none()).await?;
+    let (_next, chunks) = controlled();
+    start(&runs, conversation, &[], chunks).await?;
+    runs.stop(conversation).await;
+    Ok(())
+}
+
+/// A `keep_replay: false` (scheduled) run keeps its replay log while anyone still reads it and
+/// drops it once the last subscriber leaves, or at its end if nobody is watching.
+#[tokio::test]
+async fn a_run_without_keep_replay_drops_its_log_once_unwatched() -> TestResult {
+    let runs = runs();
+    let ephemeral = |tabs: &[u32]| RunPresentation {
+        keep_replay: false,
+        ..presentation(tabs)
+    };
+    let conversation = Uuid::new_v4();
+    let (source, chunks) = controlled();
+    let started = runs
+        .start(conversation, ephemeral(&[]), move |_| async move {
+            Ok(Prepared {
+                chunks,
+                on_finish: noop_finish(),
+            })
+        })
+        .await?;
+    let late = stream_of(runs.subscribe(conversation, None))?;
+    source.send(text_start())?;
+    source.send(text_delta())?;
+    drop(source);
+    assert_eq!(
+        started.chunks.collect::<Vec<_>>().await,
+        vec![text_start(), text_delta()]
+    );
+    let held = runs.snapshot(conversation).ok_or("no snapshot")?;
+    assert_eq!(held.status, RunStatus::Completed);
+    assert_eq!(held.chunk_count, 2, "a subscriber is still reading");
+    assert_eq!(
+        late.collect::<Vec<_>>().await,
+        vec![text_start(), text_delta()]
+    );
+    assert_eq!(runs.snapshot(conversation).map(|s| s.chunk_count), Some(0));
+
+    // Nobody watching at the end: released by `finish` itself.
+    let unwatched = Uuid::new_v4();
+    let (source, chunks) = controlled();
+    drop(
+        runs.start(unwatched, ephemeral(&[]), move |_| async move {
+            Ok(Prepared {
+                chunks,
+                on_finish: noop_finish(),
+            })
+        })
+        .await?,
+    );
+    source.send(text_start())?;
+    drop(source);
+    eventually(|| {
+        runs.snapshot(unwatched)
+            .is_some_and(|s| s.status == RunStatus::Completed && s.chunk_count == 0)
+    })
+    .await?;
     Ok(())
 }

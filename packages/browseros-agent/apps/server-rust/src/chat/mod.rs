@@ -10,7 +10,12 @@
 //!                                ├─ BrowserOsEngine (built-in loop)   ─┐ ChunkStream
 //!                                └─ AcpEngine (ACP agents)            ─┘   │
 //!   replay log + live tail ◄── UiMessageAssembler ◄────────────────────────┘
-//!   on_finish: history cache ← filter_valid(history + assistant); persist if policy allows
+//!   on_finish: stored history (verbatim) + filter_valid(user + assistant) → cache; persist if
+//!              policy allows; scheduled runs release their engine session and cache; the final
+//!              typed history goes back to the run, published with the terminal status
+//!
+//! DELETE /chat/{id} ─► ChatService::delete (own task) ─► ConversationRuns::delete_with:
+//!   panels retired + 409 gate ─ stop, await end ─ cleanup (ACP + built-in forget, cache) ─ remove
 //! ```
 //!
 //! Owned by P8 (`mod`, `runs`, `history`, `request`, `engine`), P14 (`browseros_engine`),
@@ -32,17 +37,17 @@ pub use engine::{
     ChatEngine, ChatRejection, ResolvedLlm, ScriptedEngine, ScriptedTurn, Turn, TurnTarget,
     stopped_chunk,
 };
-pub use history::{ConversationHistory, TargetKey};
+pub use history::{ConversationHistory, History, TargetKey};
 pub use request::{ChatRequest, ChatTurnRequest, ProviderRecord, RequestTarget};
 pub use runs::{
     ActiveRun, ConversationRuns, FinishedTurn, OnFinish, Prepared, RunHandle, RunPresentation,
-    RunSnapshot, RunStatus, TabGroupPresentation,
+    RunSnapshot, RunStatus, StartedRun, TabGroupPresentation,
 };
 
 use crate::{
     db::{
         AcpAgentRow, AgentKind, AgentStore, ConversationStore, Database, DbError, DbResult,
-        ProviderStore, SaveConversation, StoredConversation,
+        ProviderStore, SaveRawConversation, StoredConversation,
     },
     http::security::RequestTrust,
     oauth::TokenManager,
@@ -94,7 +99,8 @@ pub trait ChatRecords: Send + Sync {
     async fn default_provider(&self) -> DbResult<Option<ProviderRecord>>;
     async fn agent(&self, id: Uuid) -> DbResult<Option<AcpAgentRow>>;
     async fn conversation(&self, id: Uuid) -> DbResult<Option<StoredConversation>>;
-    async fn save_conversation(&self, input: SaveConversation) -> DbResult<()>;
+    /// Writes the messages verbatim: chat appends each turn to the stored JSON as read.
+    async fn save_conversation(&self, input: SaveRawConversation) -> DbResult<()>;
 }
 
 /// Production [`ChatRecords`] over the shared SQLite stores.
@@ -132,8 +138,8 @@ impl ChatRecords for DbChatRecords {
         self.conversations.get(id).await
     }
 
-    async fn save_conversation(&self, input: SaveConversation) -> DbResult<()> {
-        self.conversations.save(input).await
+    async fn save_conversation(&self, input: SaveRawConversation) -> DbResult<()> {
+        self.conversations.save_raw(input).await
     }
 }
 
@@ -206,8 +212,9 @@ impl ChatService {
 
     /// Error order is TS's and is part of the contract: trust + provider-row hydration (403 / 400
     /// text) → run registration (409) → inside prepare: ACP agent lookup (404 / 400 mismatch) →
-    /// credentials (OAuth refresh) and engine prepare (500 envelope, or 409 ACP busy). History is
-    /// published before the engine is called. The returned stream is a subscriber of the run.
+    /// credentials (OAuth refresh), stored-history read and engine prepare (500 envelope, or 409
+    /// ACP busy). History is published before the engine is called. The returned stream is a
+    /// subscriber of this run's own record.
     pub async fn start(
         &self,
         request: ChatRequest,
@@ -261,16 +268,14 @@ impl ChatService {
                 .collect(),
             panels_visible: !input.is_scheduled_task,
             tab_group: (!input.is_scheduled_task).then(|| tab_group(&message, &plan)),
+            keep_replay: !input.is_scheduled_task,
         };
         let prepare = self.prepare(conversation_id, message, plan, Arc::new(input));
-        self.runs
+        Ok(self
+            .runs
             .start(conversation_id, presentation, prepare)
-            .await?;
-        Ok(match self.runs.subscribe(conversation_id, None) {
-            Resume::Stream(chunks) => chunks,
-            // Deleted between registration and here: an empty stream (`[DONE]` only).
-            Resume::NoRun | Resume::RunChanged => Box::pin(futures_util::stream::empty()),
-        })
+            .await?
+            .chunks)
     }
 
     /// Builds the run's `prepare` step. Everything it captures is owned, because the run's task —
@@ -337,6 +342,8 @@ impl ChatService {
 
                 let browser_context =
                     resolve_browser_context(tabs.as_deref(), input.browser_context.as_ref()).await;
+                // An unreadable stored history fails the turn (TS: 500) rather than seeding a
+                // fresh one this turn's persist would write over the row.
                 let prior = history
                     .load_or_seed(
                         conversation_id,
@@ -344,9 +351,11 @@ impl ChatService {
                         persist,
                         &input.previous_conversation,
                     )
-                    .await;
-                let mut with_user = prior.clone();
-                with_user.push(user_message(&message, &input, &target_key));
+                    .await
+                    .map_err(|error| ChatRejection::Internal(db_error(&error)))?;
+                let user = user_message(&message, &input, &target_key);
+                let mut with_user = prior.typed.clone();
+                with_user.push(user.clone());
                 if let TargetKey::Acp { agent_id, .. } = target_key {
                     acp_conversations
                         .lock()
@@ -368,29 +377,53 @@ impl ChatService {
                 let chunks = match engine.start_turn(turn).await {
                     Ok(chunks) => chunks,
                     Err(rejection) => {
-                        run.publish_messages(prior);
+                        run.publish_messages(prior.typed);
                         return Err(rejection);
                     }
                 };
 
                 let on_finish: OnFinish = Box::new(move |finished: FinishedTurn| {
                     Box::pin(async move {
-                        let mut messages = with_user;
-                        messages.extend(finished.assistant);
-                        let messages = filter_valid(messages);
-                        history.replace(conversation_id, &target_key, messages.clone());
-                        run.publish_messages(messages.clone());
-                        // Only a turn that produced an assistant reply is durable: persisting a
-                        // history ending on the user message makes the next turn send two user
-                        // messages in a row, which providers reject.
-                        let completed = messages
-                            .last()
-                            .is_some_and(|last| last.role == Role::Assistant);
-                        if persist && completed {
+                        // `filter_valid` is per message, so filtering only this turn equals
+                        // filtering the whole list; the stored prefix is never rewritten.
+                        let turn =
+                            filter_valid(std::iter::once(user).chain(finished.assistant).collect());
+                        let stored = prior.stored_with(&turn);
+                        if !input.is_scheduled_task {
+                            history.replace(conversation_id, &target_key, stored.clone());
+                        }
+                        // A built-in turn is durable only once it produced an assistant reply:
+                        // persisting a history ending on the user message makes the next turn
+                        // send two user messages in a row, which providers reject. ACP agents
+                        // keep their own continuity (acpx) and the row is only their display
+                        // copy, which TS writes after every turn, aborted and failed included.
+                        let durable = match target_key {
+                            TargetKey::Acp { .. } => true,
+                            TargetKey::BrowserOs => {
+                                turn.last().is_some_and(|last| last.role == Role::Assistant)
+                            }
+                        };
+                        if persist && durable {
                             history
-                                .persist(conversation_id, &target_key, &messages, input.origin)
+                                .persist(conversation_id, &target_key, &stored, input.origin)
                                 .await;
                         }
+                        if input.is_scheduled_task {
+                            // Each scheduled run uses a fresh conversation id nobody DELETEs:
+                            // release what the engine and cache hold for it now (the replay log
+                            // goes with its last subscriber, `keep_replay`). The run is still
+                            // `running`, so no new turn can race this release.
+                            engine.forget(conversation_id).await;
+                            history.forget(conversation_id);
+                            acp_conversations
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner)
+                                .remove(&conversation_id);
+                        }
+                        // Published by the run together with its terminal status.
+                        let mut messages = filter_valid(prior.typed);
+                        messages.extend(turn);
+                        Some(messages)
                     })
                 });
                 Ok(Prepared { chunks, on_finish })
@@ -412,23 +445,47 @@ impl ChatService {
         self.runs.stop(conversation_id).await
     }
 
-    /// Stops and removes the run (awaiting its end), then has both engines release what they
-    /// hold for the conversation, then drops its cached history.
-    pub async fn delete(&self, conversation_id: Uuid) -> DeleteOutcome {
-        let run_deleted = self.runs.delete(conversation_id).await;
-        let acp_agent = self
-            .acp_conversations
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(&conversation_id);
-        if acp_agent.is_some() {
-            self.acp.forget(conversation_id).await;
-        }
-        let session_deleted = self.browseros.forget(conversation_id).await;
-        self.history.forget(conversation_id);
-        DeleteOutcome {
-            deleted: run_deleted || acp_agent.is_some() || session_deleted,
-            session_count: self.browseros.session_count(),
+    /// Stops the run and awaits its end, has both engines release what they hold for the
+    /// conversation and drops its cached history, then removes the run record — last, so a POST
+    /// arriving mid-cleanup is 409 instead of a turn on a session being forgotten.
+    ///
+    /// The work runs on its own task and this only awaits it: axum drops a handler whose client
+    /// hung up, and a delete abandoned part-way would leak the engine session, its lease and MCP
+    /// clients, and the ACP session.
+    pub async fn delete(self: &Arc<Self>, conversation_id: Uuid) -> DeleteOutcome {
+        let service = self.clone();
+        let deleting = tokio::spawn(async move {
+            let (run_deleted, (acp_held, session_deleted)) = service
+                .runs
+                .delete_with(conversation_id, async {
+                    let acp_agent = service
+                        .acp_conversations
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .remove(&conversation_id);
+                    if acp_agent.is_some() {
+                        service.acp.forget(conversation_id).await;
+                    }
+                    let session_deleted = service.browseros.forget(conversation_id).await;
+                    service.history.forget(conversation_id);
+                    (acp_agent.is_some(), session_deleted)
+                })
+                .await;
+            DeleteOutcome {
+                deleted: run_deleted || acp_held || session_deleted,
+                session_count: service.browseros.session_count(),
+            }
+        });
+        match deleting.await {
+            Ok(outcome) => outcome,
+            // A panic in an engine's `forget`; the record was still removed (`delete_with`).
+            Err(error) => {
+                tracing::error!(%conversation_id, %error, "conversation delete failed");
+                DeleteOutcome {
+                    deleted: false,
+                    session_count: self.browseros.session_count(),
+                }
+            }
         }
     }
 

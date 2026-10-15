@@ -31,7 +31,7 @@ mod schedules;
 pub use agents::{AcpAgentRow, AgentKind, AgentStore, CreateAgent, UpdateAgent};
 pub use conversations::{
     ConversationStore, ConversationSummary, ImportConversation, SaveConversation,
-    StoredConversation, TargetType,
+    SaveRawConversation, StoredConversation, TargetType,
 };
 pub use oauth_tokens::{OAuthTokenStore, OAuthTokens};
 pub use providers::{ProviderRow, ProviderStore, UpsertProvider};

@@ -85,8 +85,8 @@ pub struct StoredConversation {
 }
 
 impl StoredConversation {
-    /// The typed history for hydrating a chat; fails if any stored message is not a `UIMessage`
-    /// (legacy imports are unvalidated).
+    /// The typed history; fails if any stored message is not a `UIMessage` (legacy imports are
+    /// unvalidated).
     pub fn ui_messages(&self) -> Result<Vec<UiMessage>, serde_json::Error> {
         self.messages
             .iter()
@@ -100,6 +100,18 @@ impl StoredConversation {
 pub struct SaveConversation {
     pub id: Uuid,
     pub messages: Vec<UiMessage>,
+    pub origin: Option<String>,
+    pub target_type: TargetType,
+    pub agent_id: Option<String>,
+}
+
+/// [`SaveConversation`] with the messages in their stored JSON form. Chat writes this one: it
+/// appends each turn to the row's messages exactly as read, so shapes this build cannot decode
+/// (id-less imports, AI SDK v4 parts, `data` messages) survive every save.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SaveRawConversation {
+    pub id: Uuid,
+    pub messages: Vec<Value>,
     pub origin: Option<String>,
     pub target_type: TargetType,
     pub agent_id: Option<String>,
@@ -178,12 +190,24 @@ impl ConversationStore {
             Value::Array(messages) => messages,
             _ => Vec::new(),
         };
+        self.save_raw(SaveRawConversation {
+            id: input.id,
+            messages,
+            origin: input.origin,
+            target_type: input.target_type,
+            agent_id: input.agent_id,
+        })
+        .await
+    }
+
+    /// [`Self::save`] with the messages written verbatim.
+    pub async fn save_raw(&self, input: SaveRawConversation) -> DbResult<()> {
         let transaction = self.db.connection().begin().await?;
         upsert(
             &transaction,
             Upsert {
                 id: input.id,
-                messages: &messages,
+                messages: &input.messages,
                 last_messaged_at: None,
                 target_type: input.target_type,
                 origin: input.origin,
