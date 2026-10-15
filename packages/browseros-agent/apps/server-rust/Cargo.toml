@@ -25,6 +25,10 @@ bench = false
 # ACP agents (P16): policy, sessions and the session/update → UiChunk runtime.
 acp-agents.workspace = true
 browseros-agent.workspace = true
+# P12: reuse the shared MCP catalog/provider seam and Strata client transport.
+browseros-mcp.workspace = true
+browseros-mcp-host.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 harness-integrations.workspace = true
 server-api.workspace = true
 ui-message-stream.workspace = true
@@ -65,6 +69,8 @@ time.workspace = true
 [dev-dependencies]
 # P14: rmcp test server standing in for loopback /mcp in tests/browseros_engine.rs.
 rmcp.workspace = true
+# P12: exercise LocalToolProvider through an actual shared host without CDP.
+browseros-mcp-host = { workspace = true, features = ["test-support"] }
 serde-saphyr.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
