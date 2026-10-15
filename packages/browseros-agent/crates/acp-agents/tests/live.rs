@@ -127,7 +127,13 @@ async fn pong_then_recall(agent: AgentDefinition) -> TestResult {
     )
     .await?;
     tokio::time::sleep(settle()).await;
+    let retiring = std::time::Instant::now();
     first.shutdown().await;
+    eprintln!(
+        "[{:?}] runtime shutdown took {:?}",
+        agent.kind,
+        retiring.elapsed()
+    );
     assert!(
         reply.to_lowercase().contains("pong"),
         "first turn: {chunks:#?}"

@@ -66,11 +66,6 @@ pub const HOST_STOP_REASON: &str = "AbortError: Conversation stopped";
 /// killed (capped by the control timeout). Claude and Codex settled within 60 ms in the spike.
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
-/// Claude Code appends a turn's final messages to its resumable transcript a beat after the
-/// prompt response, from a descendant process, and acp-client SIGKILLs the whole process group as
-/// soon as the adapter exits on stdin EOF. Retiring right after a turn therefore lost that reply:
-/// the live resume test answered "No response requested." until retire waited this long.
-const TRANSCRIPT_SETTLE: Duration = Duration::from_secs(2);
 const SESSION_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
 
 pub struct AcpRuntimeConfig {
@@ -145,7 +140,6 @@ struct Live {
     /// the record, and after a turn that neither failed nor was aborted.
     has_history: AtomicBool,
     idle: Mutex<Option<JoinHandle<()>>>,
-    last_turn_end: Mutex<Option<tokio::time::Instant>>,
 }
 
 impl Live {
@@ -470,7 +464,6 @@ impl AcpRuntime {
                 record: Mutex::new(record),
                 has_history: AtomicBool::new(has_history),
                 idle: Mutex::new(None),
-                last_turn_end: Mutex::new(None),
             }),
             reattached,
         ))
@@ -690,7 +683,6 @@ impl Driver {
         if succeeded {
             live.has_history.store(true, Ordering::SeqCst);
         }
-        *lock(&live.last_turn_end) = Some(tokio::time::Instant::now());
         drop(tx);
         drop(busy);
     }
@@ -703,16 +695,10 @@ async fn wait(timer: &mut Option<std::pin::Pin<Box<tokio::time::Sleep>>>) {
     }
 }
 
-/// `session/close` when advertised (acpx close), then stdin EOF and a process-group kill after the
-/// grace period, after letting a just-finished turn settle. A running turn ends with an error.
+/// `session/close` when advertised (acpx close), then stdin EOF; acp-client retires the process
+/// group gracefully within the grace period. A running turn on this process ends with an error.
 async fn retire(live: Arc<Live>) {
     live.clear_idle();
-    let ended = *lock(&live.last_turn_end);
-    if let Some(ended) = ended
-        && live.is_alive()
-    {
-        tokio::time::sleep(TRANSCRIPT_SETTLE.saturating_sub(ended.elapsed())).await;
-    }
     if live.conn.features().close_session {
         match tokio::time::timeout(SESSION_CLOSE_TIMEOUT, live.session.close()).await {
             Ok(Err(error)) => tracing::debug!(%error, "ACP session/close failed"),

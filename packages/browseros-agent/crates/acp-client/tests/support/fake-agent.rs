@@ -85,9 +85,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         std::future::pending::<()>().await;
         return Ok(());
     }
+    #[cfg(unix)]
+    if let Some(role) = scenario.strip_prefix("child-") {
+        return descendant(role).await;
+    }
     // Retain child handles for the life of the wrapper; subprocesses inherit
     // the group created by acp-client and must be stopped by group cleanup.
     let mut descendants = Vec::new();
+    // Like `bun x` → adapter → agent CLI: a descendant that outlives the leader,
+    // which exits as soon as its stdin closes.
+    if let Some(role) = scenario.strip_prefix("spawn-") {
+        let child = tokio::process::Command::new(std::env::current_exe()?)
+            .arg(format!("child-{role}"))
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()?;
+        descendants.push(child);
+    }
     let mut input = BufReader::new(tokio::io::stdin()).lines();
     let mut out = tokio::io::stdout();
     let mut sessions = 0;
@@ -458,6 +473,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     if scenario == "ignore-eof" {
         std::future::pending::<()>().await;
+    }
+    Ok(())
+}
+
+/// Descendant roles for graceful group retirement. `flusher` writes once its
+/// parent is gone (its stdin closes), the way Claude's CLI flushes a transcript;
+/// `term-flusher` writes only on SIGTERM; `term-immune` ignores SIGTERM and
+/// reports its own death through the lifetime socket.
+#[cfg(unix)]
+async fn descendant(role: &str) -> Result<(), Box<dyn std::error::Error>> {
+    use tokio::{
+        io::AsyncReadExt,
+        signal::unix::{SignalKind, signal as unix_signal},
+    };
+    let mut term = unix_signal(SignalKind::terminate())?;
+    match role {
+        "flusher" => {
+            signal("descendant-ready", "ready")?;
+            let mut stdin = Vec::new();
+            tokio::io::stdin().read_to_end(&mut stdin).await?;
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            signal("flushed", "flushed after the leader exited")?;
+        }
+        "term-flusher" => {
+            signal("descendant-ready", "ready")?;
+            term.recv().await;
+            signal("flushed", "flushed on SIGTERM")?;
+        }
+        "term-immune" => {
+            let mut lifetime =
+                tokio::net::UnixStream::connect(std::env::var("ACP_TEST_LIFETIME_SOCKET")?).await?;
+            lifetime.write_all(b"r").await?;
+            loop {
+                term.recv().await;
+            }
+        }
+        _ => {}
     }
     Ok(())
 }

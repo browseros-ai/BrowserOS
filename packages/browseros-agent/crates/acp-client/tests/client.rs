@@ -556,6 +556,54 @@ async fn shutdown_kills_wrapper_grandchildren() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// Regression: the group was SIGKILLed the instant the leader exited on EOF,
+/// so a descendant still flushing (Claude's CLI writing its transcript) lost
+/// its write. Shutdown must let it finish within the grace period.
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_lets_descendants_finish_after_the_leader_exits()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "spawn-flusher", Arc::new(ApproveAll)).await?;
+    wait_for_file(&dir.path().join("descendant-ready")).await?;
+    let report = tokio::time::timeout(WAIT_CAP, conn.shutdown(IO_GRACE)).await?;
+    assert!(report.status.is_some_and(|status| status.success()));
+    // The report is published only after the whole group is gone.
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("flushed"))?,
+        "flushed after the leader exited"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_terminates_lingering_descendants_before_killing()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "spawn-term-flusher", Arc::new(ApproveAll)).await?;
+    wait_for_file(&dir.path().join("descendant-ready")).await?;
+    tokio::time::timeout(WAIT_CAP, conn.shutdown(Duration::from_millis(100))).await?;
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("flushed"))?,
+        "flushed on SIGTERM"
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_kills_descendants_that_ignore_sigterm() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new()?;
+    let (spec, listener) = watched_spec(&dir, "spawn-term-immune")?;
+    let conn = AgentConnection::connect(spec, options(), Arc::new(ApproveAll)).await?;
+    let lifetime = lifetime_socket(listener).await?;
+    tokio::time::timeout(WAIT_CAP, conn.shutdown(Duration::ZERO)).await?;
+    assert_descendant_exited(lifetime)?;
+    Ok(())
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn final_response_is_drained_before_observing_process_exit()
 -> Result<(), Box<dyn std::error::Error>> {

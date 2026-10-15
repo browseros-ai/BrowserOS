@@ -57,8 +57,13 @@ always kind before the once kind. Cancellation always returns `Cancelled`.
 Async policies run outside dispatch, are dropped on cancel, and must not wait on
 the same agent.
 
-Explicit `shutdown(grace)` closes stdin, allows the child to exit, and then kills
-its process group on Unix. It affects all connection clones and sessions. The
+Explicit `shutdown(grace)` closes stdin and retires the process group on Unix in
+three steps: until the grace deadline the child and its descendants may exit on
+their own; then the group gets SIGTERM; 500 ms later, SIGKILL. Descendants that
+outlive the child (`bun x` → adapter → agent CLI) are covered too, so a CLI that
+writes its transcript after the adapter exits on EOF is never killed mid-flush.
+A child that exits unasked (a crash) skips straight to SIGTERM for its leftovers.
+It affects all connection clones and sessions. The
 last connection/session handle also starts supervised cleanup, including during
 an in-flight turn; turn streams, cancellers, and prompt tasks do not keep the
 agent alive. Pending turns finish with `Closed` on caller teardown. Driver
@@ -66,7 +71,8 @@ failures use `Exited` when an exit report is already available. After child exit
 prompts allow `ClientOptions::response_grace` for a buffered response, then finish
 with `Exited` even if an escaped descendant still holds stdout. On Unix a
 supervisor drop guard also kills the process group if the runtime shuts down before cleanup finishes.
-`closed()` waits for child reaping and bounded stderr capture; stderr is retained
+`closed()` waits for child reaping, group retirement and bounded stderr capture,
+so it resolving means the whole group is gone; stderr is retained
 for diagnostics, never forwarded into the conversation. Each retained line keeps
 at most the final 8 KiB of incoming bytes.
 Non-Unix systems terminate the direct child; descendant-group cleanup is Unix
@@ -145,6 +151,12 @@ independent of host credentials.
   WHY: Callers asking for a persistent decision should keep that preference;
   the built-in policies need compatibility when once options are unavailable.
 
+- DECIDED: Retire the process group gracefully (descendants may finish within the
+  shutdown grace, then SIGTERM, then SIGKILL) instead of SIGKILLing it the instant
+  the child exits.
+  WHY: Live acp-agents resume test: Claude's CLI, a grandchild of `bun x`, was still
+  writing the turn's last reply to its transcript when the adapter exited on EOF;
+  the instant group kill lost it and the resumed session answered "No response requested."
 - DECIDED: Keep stdout, stderr, and automatic-shutdown graces independently configurable.
   WHY: A short missing-response regression must not shorten startup or diagnostic
   capture budgets on a CPU-starved host.

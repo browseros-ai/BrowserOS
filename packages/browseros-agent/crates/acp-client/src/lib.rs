@@ -36,8 +36,9 @@ pub struct ClientOptions {
     /// safely be associated with a subsequent session or turn.
     pub control_timeout: Duration,
     pub stderr_tail_lines: usize,
-    /// Grace before killing an unresponsive child on last-handle teardown or
-    /// driver failure. Explicit shutdown can override it for that call.
+    /// How long the child and its process group may take to exit after stdin
+    /// closes on last-handle teardown or driver failure, before SIGTERM and then
+    /// SIGKILL. Explicit shutdown can override it for that call.
     pub shutdown_grace: Duration,
     /// Time to drain a final prompt response after observing child exit.
     pub response_grace: Duration,
