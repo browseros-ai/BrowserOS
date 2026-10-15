@@ -2236,7 +2236,7 @@ fn started_session_from(session: Arc<Session>, client: &ClientInfo) -> StartedSe
 const RUN_RANKED_FIRST: &str = "The primary way to drive the browser - prefer run for any task; the granular tools are the fallback.";
 
 /// What it is recast as while the decision loop is offered.
-const RUN_RANKED_AFTER_PURSUE: &str = "The fallback once pursue has come back unfinished twice, and the right first call for work that is a script rather than an outcome: pagination over many pages, bulk extraction, or anything needing a saved helper. The granular tools are the fallback to this.";
+const RUN_RANKED_AFTER_PURSUE: &str = "The fallback once two pursue calls have come back with a status other than satisfied, and the right first call for work that is a script rather than an outcome: pagination over many pages, bulk extraction, or anything needing a saved helper. The granular tools are the fallback to this.";
 
 /// Demotes `run` below `pursue` in its own description, leaving the rest of it.
 ///
