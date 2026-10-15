@@ -118,6 +118,9 @@ pub fn is_trusted_app_origin(origin: &str) -> bool {
             ))
 }
 
+/// Paths only the trusted app may call, as prefixes so unknown descendants are 403 like Hono's
+/// `app.use('/agents/*', …)` rather than 404. [`super::Auth::TrustedApp`] in the route table
+/// documents the same set; the test below keeps the two in agreement.
 fn protected_prefix(path: &str) -> bool {
     [
         "/acpx/probe",
@@ -212,4 +215,23 @@ pub async fn ingress(State(state): State<AppState>, mut request: Request, next: 
         );
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::protected_prefix;
+    use crate::http::{Auth, ROUTES};
+
+    /// `Route.auth` is what a reader consults; `protected_prefix` is what runs. A
+    /// `TrustedApp` route outside the prefix list would be open to any origin, and an
+    /// `Origin` or handler-decided route inside it would be refused before its handler runs.
+    #[test]
+    fn route_auth_column_matches_the_ingress_prefix_guard() {
+        let drift: Vec<_> = ROUTES
+            .iter()
+            .filter(|route| protected_prefix(route.path) != (route.auth == Auth::TrustedApp))
+            .map(|route| format!("{} {} ({:?})", route.method, route.path, route.auth))
+            .collect();
+        assert!(drift.is_empty(), "route auth drifted from protected_prefix: {drift:?}");
+    }
 }
