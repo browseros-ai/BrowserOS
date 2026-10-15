@@ -1,8 +1,9 @@
 //! Composition root: builds every long-lived service once at startup (`AppState::start`) and
 //! mounts `http::ROUTES` (`build_router`). Construction order mirrors the process contract:
-//! paths → DB → identity → metrics → stores → OAuth/Klavis (background) → chat engines → chat
-//! service. The `browseros-mcp-host` `HostCtx` field and its construction lines are added by P15.
-//! Owned by P3; telemetry ownership (one PostHog sink, one Sentry guard per process) wired by I1.
+//! paths → DB → identity → metrics → stores → OAuth/Klavis (background) → `/mcp` host (CDP
+//! reattach, non-fatal) → chat engines → chat service. Owned by P3; telemetry ownership (one
+//! PostHog sink, one Sentry guard per process) wired by I1; the `host`/`mcp` fields and their
+//! construction are P15's.
 
 use crate::{
     activity::ServerActivity,
@@ -14,7 +15,7 @@ use crate::{
     http,
     identity::{Identity, IdentityError},
     klavis::Klavis,
-    mcp::ToolLeases,
+    mcp::{McpConfig, McpServer, ToolLeases},
     mcp_manager::McpManagerService,
     oauth::TokenManager,
     paths::BrowserosPaths,
@@ -25,6 +26,8 @@ use crate::{
 };
 use axum::{Router, middleware, routing::MethodFilter};
 use browseros_agent::llm::HttpStack;
+use browseros_core::NativeCapabilities;
+use browseros_mcp_host::{HostCtx, HostError};
 use std::{ops::Deref, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
@@ -52,6 +55,9 @@ pub struct AppInner {
     pub klavis: Arc<Klavis>,
     pub mcp_manager: McpManagerService,
     pub leases: Arc<ToolLeases>,
+    /// The shared MCP host behind `/mcp`; also the process's browser (CDP) connection.
+    pub host: Arc<HostCtx>,
+    pub mcp: Arc<McpServer>,
     pub runs: Arc<ConversationRuns>,
     pub chat: Arc<ChatService>,
     /// Concrete (not `dyn ChatEngine`): `/agents` needs `close_all_for_agent`.
@@ -102,6 +108,8 @@ pub enum StartupError {
     Database(#[from] db::DbError),
     #[error("failed to build HTTP client: {0}")]
     HttpClient(#[from] reqwest::Error),
+    #[error("failed to open the MCP host: {0}")]
+    Mcp(#[from] HostError),
 }
 
 impl AppState {
@@ -146,6 +154,24 @@ impl AppState {
 
         let runs = ConversationRuns::new(activity.clone(), PANEL_HEARTBEAT);
         let leases = ToolLeases::new(runs.clone());
+        // Klavis's connector tools join `/mcp` once its provider lands (P12): pass
+        // `Some(klavis.tool_provider())` here; the run/read-only gate is already in place.
+        let mcp = Arc::new(
+            McpServer::open(
+                McpConfig {
+                    cdp_port: config.cdp_port,
+                    data_root: paths.mcp_host_dir.clone(),
+                    native: NativeCapabilities::from_browseros_version(
+                        config.instance.browseros_version.as_deref(),
+                    ),
+                },
+                leases.clone(),
+                None,
+            )
+            .await?,
+        );
+        mcp.start().await;
+        let host = mcp.host().clone();
         let acp = Arc::new(AcpEngine::new(&config, &paths, leases.clone()));
         // P14: until P15 wires the host's browser, scheduled runs fall back to the request's
         // context (`NoBrowser`), as TS does when it cannot open the background page.
@@ -188,6 +214,8 @@ impl AppState {
             klavis,
             mcp_manager,
             leases,
+            host,
+            mcp,
             runs,
             chat,
             acp,
@@ -198,10 +226,10 @@ impl AppState {
         })))
     }
 
-    /// Until P15 attaches the shared host, no browser is injected and health must
-    /// report disconnected. P15 replaces this read with host.browser().link_status().
+    /// The live CDP link, not the last one-second poll: health stays 200 while the
+    /// host reattaches, and `cdpConnected` tells Chromium the truth meanwhile.
     pub async fn cdp_connected(&self) -> bool {
-        false
+        self.mcp.cdp_connected().await
     }
 
     /// Bounded by the process owner's deadline; dropping HTTP clients never stops
@@ -212,7 +240,8 @@ impl AppState {
             self.klavis.stop(),
             self.acp.shutdown(),
             // Bounded by its own 2 s SDK timeout; queued events would otherwise be lost.
-            self.metrics.shutdown()
+            self.metrics.shutdown(),
+            self.mcp.stop()
         );
     }
 }

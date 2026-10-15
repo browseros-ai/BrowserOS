@@ -4211,6 +4211,7 @@ dependencies = [
  "axum",
  "base64 0.22.1",
  "browseros-agent",
+ "browseros-core",
  "browseros-mcp",
  "browseros-mcp-host",
  "futures-core",
