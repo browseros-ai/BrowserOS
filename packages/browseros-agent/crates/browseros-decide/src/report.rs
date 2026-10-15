@@ -11,7 +11,8 @@
 //! errand.
 
 use crate::drive::Answer;
-use crate::pursue::{Outcome, Status};
+use crate::gate::Handback;
+use crate::pursue::{Outcome, Status, Stuck};
 use crate::view::PageView;
 
 /// One control, as a caller needs it to compose a better goal.
@@ -118,6 +119,13 @@ pub struct Told {
     /// The page it ended on, so a caller that has to try again can see what it
     /// is trying again against.
     pub page: Option<Seen>,
+    /// One line saying what to change and try again, where there is one.
+    ///
+    /// Derived rather than guessed: every arm comes from what the run ended
+    /// with and which judgement was weakest. This is the field that turns a
+    /// failed first attempt into a better second goal, which is the whole
+    /// reason a caller reads any of the rest.
+    pub try_next: Option<String>,
     /// The run, in order, as sentences a person can read.
     ///
     /// `decided` is a flat array of eleven fields a decision and leaves the
@@ -142,9 +150,10 @@ pub fn tell(outcome: &Outcome) -> Told {
         .filter(|step| step.page_changed)
         .count();
 
+    let try_next = try_next(outcome);
     Told {
         status: outcome.status.as_str().to_string(),
-        said: said(outcome, actions, changed),
+        said: said(outcome, actions, changed, try_next.as_deref()),
         answer: outcome.answer.clone(),
         actions,
         changed,
@@ -162,9 +171,86 @@ pub fn tell(outcome: &Outcome) -> Told {
             .ended_on
             .as_ref()
             .map(|view| seen(view, outcome.omitted)),
+        try_next,
         story: story(outcome),
         decided: outcome.decided.clone(),
     }
+}
+
+/// What the caller could change, so a second attempt does better.
+///
+/// A mapping from what the run ended with, nothing more. Every arm is
+/// reachable from a scripted model, so every arm has a test.
+fn try_next(outcome: &Outcome) -> Option<String> {
+    let weakest = outcome
+        .decided
+        .iter()
+        .rev()
+        .find_map(|decided| decided.weakest);
+    let held_a_value = outcome
+        .decided
+        .iter()
+        .rev()
+        .any(|decided| decided.how == Some("FILL") && decided.verdict == "ran");
+
+    let mut advice = match &outcome.status {
+        Status::NeedsInput(Handback::NothingOffered, _) => {
+            if outcome
+                .ended_on
+                .as_ref()
+                .is_some_and(crate::view::PageView::can_search_itself)
+            {
+                "I searched this page and still found nothing. Name the control, or give me a \
+                 destination."
+            } else {
+                "Name the control you mean, or give me a destination to go to."
+            }
+        }
+        Status::NeedsInput(Handback::TooRiskyToGuess, _) => {
+            "This one needs you to name the control. I will not guess at it."
+        }
+        Status::NeedsInput(Handback::NoFieldNamed, _) => {
+            "Pass the text to type as a value, and I will put it in the field."
+        }
+        Status::Stalled(Stuck::NotConfident) => match weakest {
+            Some("which move to make") => {
+                "Say what to do rather than what to find out. A goal with one verb decides faster."
+            }
+            Some("how to act on it") if held_a_value => {
+                "That field already holds your text. Ask me to submit it."
+            }
+            Some("which control to use it on") => "Name the control, or narrow the page first.",
+            _ => "Break the goal into one step and give me that step.",
+        },
+        Status::Stalled(Stuck::GoingInCircles) => {
+            "It kept returning to pages it had already seen. Give it one step at a time."
+        }
+        Status::Stalled(Stuck::NothingChanged) => {
+            "What it acted on did nothing. The control the goal needs may not be on this page."
+        }
+        Status::Stalled(Stuck::OnlyWaiting) => {
+            "The page never settled. Try again, or give it a destination to load directly."
+        }
+        Status::Stalled(Stuck::BrowserKeptFailing) => {
+            "The browser kept refusing. Check the tab is still the one you meant."
+        }
+        Status::Blocked(_) => "Nothing on this page can do that. It may need a different page.",
+        Status::BudgetSpent => "Raise maxSteps, or split the goal in two.",
+        Status::Satisfied | Status::Answered | Status::Cancelled => return None,
+        Status::NeedsInput(_, _) => return None,
+    }
+    .to_string();
+
+    // How much of the page a decision could see is part of judging its answer,
+    // and it changes what the caller should do about it.
+    if outcome.omitted > 0 {
+        advice.push_str(&format!(
+            " I could only choose between {} of {} controls.",
+            outcome.offered,
+            outcome.offered + outcome.omitted
+        ));
+    }
+    Some(advice)
 }
 
 /// The run as sentences, built from what was already recorded.
@@ -267,7 +353,7 @@ fn ran(decided: &crate::pursue::Decided, step: Option<&crate::pursue::Step>) -> 
 }
 
 /// One sentence, which has to be true of what happened.
-fn said(outcome: &Outcome, actions: usize, changed: usize) -> String {
+fn said(outcome: &Outcome, actions: usize, changed: usize, try_next: Option<&str>) -> String {
     let did = match actions {
         0 => "It took no action".to_string(),
         1 => "It took one action".to_string(),
@@ -280,7 +366,13 @@ fn said(outcome: &Outcome, actions: usize, changed: usize) -> String {
         (_, c) => format!(", {c} of which changed the page"),
     };
 
-    match &outcome.status {
+    let ended = if outcome.url_after.is_empty() {
+        String::new()
+    } else {
+        format!(" It ended on {}.", outcome.url_after)
+    };
+    let next = try_next.map_or(String::new(), |line| format!(" {line}"));
+    let sentence = match &outcome.status {
         Status::Satisfied => format!(
             "{did}{moved}, and then said every requirement of the goal was visible on the page."
         ),
@@ -312,7 +404,8 @@ fn said(outcome: &Outcome, actions: usize, changed: usize) -> String {
         Status::Cancelled => format!(
             "{did}{moved}, then something outside the run stopped it before the goal was met."
         ),
-    }
+    };
+    format!("{sentence}{ended}{next}")
 }
 
 impl Told {
@@ -776,5 +869,128 @@ mod tests {
             told.story,
             vec!["none of the 254 controls it could choose between would do".to_string()]
         );
+    }
+
+    fn refused_on(
+        weakest: &'static str,
+        how: Option<&'static str>,
+        verdict: &'static str,
+    ) -> crate::pursue::Decided {
+        crate::pursue::Decided {
+            operation: "ACT",
+            how,
+            target: None,
+            target_name: None,
+            verdict,
+            weakest: Some(weakest),
+            margin: Some(0.06),
+            needed: Some(0.30),
+            share: Some(0.44),
+            why: None,
+            batch: 1,
+            input_tokens: 100,
+        }
+    }
+
+    /// The case from the caller-side tests: it typed into the box and then
+    /// could not choose between filling it again and submitting it.
+    #[test]
+    fn a_filled_field_is_told_to_be_submitted() {
+        let mut got = outcome(Status::Stalled(Stuck::NotConfident), vec![]);
+        got.omitted = 0;
+        got.decided = vec![
+            decision_that_ran("ACT", Some("FILL"), Some("Search Amazon.in")),
+            refused_on("how to act on it", Some("FILL"), "explored"),
+        ];
+
+        let told = tell(&got);
+
+        assert_eq!(
+            told.try_next.as_deref(),
+            Some("That field already holds your text. Ask me to submit it.")
+        );
+    }
+
+    /// An informational goal that lost its operation head is told to say what
+    /// to do instead of what to find out.
+    #[test]
+    fn a_thin_operation_head_is_told_to_name_an_action() {
+        let mut got = outcome(Status::Stalled(Stuck::NotConfident), vec![]);
+        got.decided = vec![refused_on("which move to make", None, "explored")];
+
+        let told = tell(&got);
+
+        assert!(
+            told.try_next
+                .as_deref()
+                .is_some_and(|line| line.starts_with("Say what to do")),
+            "got {:?}",
+            told.try_next
+        );
+    }
+
+    /// A refusal on a page that can search itself has already been searched,
+    /// so the advice is different from one on a page that cannot.
+    #[test]
+    fn a_refusal_names_what_the_caller_can_supply() {
+        let mut got = outcome(
+            Status::NeedsInput(Handback::NothingOffered, "none will do".to_string()),
+            vec![],
+        );
+        got.omitted = 0;
+        got.decided = vec![refused_on(
+            "which control to use it on",
+            Some("CLICK"),
+            "handed_back",
+        )];
+
+        let told = tell(&got);
+
+        assert_eq!(
+            told.try_next.as_deref(),
+            Some("Name the control you mean, or give me a destination to go to.")
+        );
+    }
+
+    /// A loop is told to be given one step at a time.
+    #[test]
+    fn going_in_circles_is_told_to_go_one_step_at_a_time() {
+        let got = outcome(Status::Stalled(Stuck::GoingInCircles), vec![]);
+
+        let told = tell(&got);
+
+        assert!(
+            told.try_next
+                .as_deref()
+                .is_some_and(|line| line.contains("one step at a time")),
+            "got {:?}",
+            told.try_next
+        );
+    }
+
+    /// How much of the page it could see changes what the caller should do, so
+    /// it is appended wherever it applies.
+    #[test]
+    fn a_page_it_could_only_partly_see_says_so() {
+        let mut got = outcome(Status::BudgetSpent, vec![]);
+        got.offered = 254;
+        got.omitted = 46;
+
+        let told = tell(&got);
+
+        assert_eq!(
+            told.try_next.as_deref(),
+            Some(
+                "Raise maxSteps, or split the goal in two. I could only choose between 254 of 300 controls."
+            )
+        );
+    }
+
+    /// A run that finished has nothing to advise, and saying nothing is the
+    /// honest answer rather than filling the field.
+    #[test]
+    fn a_run_that_finished_is_given_no_advice() {
+        assert!(tell(&outcome(Status::Satisfied, vec![])).try_next.is_none());
+        assert!(tell(&outcome(Status::Answered, vec![])).try_next.is_none());
     }
 }

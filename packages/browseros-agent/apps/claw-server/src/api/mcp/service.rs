@@ -1794,6 +1794,7 @@ fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
         "offered": told.offered,
         "unlabelledImages": told.unlabelled_images,
         "story": told.story,
+        "tryNext": told.try_next,
         "decided": told
             .decided
             .iter()
@@ -1918,6 +1919,10 @@ fn pursue_output_schema() -> Value {
             },
             "offered": { "type": "integer", "description": "How many controls the deciding question could choose between." },
             "unlabelledImages": { "type": "integer", "description": "Images carrying no text label, which nothing here could read." },
+            "tryNext": {
+                "type": ["string", "null"],
+                "description": "One line saying what to change and try again, derived from how the run ended and which judgement was weakest. Present only when the run did not finish. Read this before rewording a goal."
+            },
             "story": {
                 "type": "array",
                 "description": "What the run did, in order, as sentences. Read this first: it is the same information as `decided` in a form a person can read, including what observably moved on the page.",
