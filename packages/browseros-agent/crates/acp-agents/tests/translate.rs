@@ -274,3 +274,47 @@ fn a_silent_codex_system_error_becomes_an_error() -> TestResult {
     );
     Ok(())
 }
+
+/// The F6 change is safe for history: the reducer that persists the assistant message (P1's port
+/// of `processUIMessageStream`) still ends with a static, provider-executed tool part.
+#[test]
+fn the_persisted_message_keeps_a_static_provider_executed_tool_part() -> TestResult {
+    let mut translator = UiTranslator::new();
+    let mut assembler = ui_message_stream::UiMessageAssembler::new();
+    assembler.push(&UiChunk::Start {
+        message_metadata: None,
+        message_id: Some("m".into()),
+    });
+    let updates = [
+        text("Running", Some("m1")),
+        json!({"sessionUpdate":"tool_call", "toolCallId":"toolu_1", "title":"Terminal", "status":"pending", "rawInput":{}}),
+        json!({"sessionUpdate":"tool_call_update", "toolCallId":"toolu_1", "title":"touch probe.txt",
+               "status":"in_progress", "rawInput":{"command":"touch probe.txt"}}),
+        json!({"sessionUpdate":"tool_call_update", "toolCallId":"toolu_1", "status":"completed",
+               "rawOutput":"(Bash completed with no output)"}),
+    ];
+    for update in updates {
+        let update: SessionUpdate = serde_json::from_value(update)?;
+        for chunk in translator.on_update(&update) {
+            assembler.push(&chunk);
+        }
+    }
+    for chunk in translator.finish(TurnEnd::Completed(StopReason::EndTurn)) {
+        assembler.push(&chunk);
+    }
+    let message = serde_json::to_value(assembler.into_message().ok_or("no message")?)?;
+    assert_eq!(message["id"], "m");
+    assert_eq!(message["parts"][0]["type"], "step-start");
+    assert_eq!(message["parts"][1]["text"], "Running");
+    let tool = &message["parts"][2];
+    assert_eq!(tool["type"], "tool-Terminal");
+    assert_eq!(tool["state"], "output-available");
+    assert_eq!(tool["input"], json!({"command":"touch probe.txt"}));
+    assert_eq!(tool["output"], "(Bash completed with no output)");
+    assert_eq!(tool["providerExecuted"], true);
+    assert!(
+        tool.get("errorText").is_none(),
+        "no F6 error residue: {tool}"
+    );
+    Ok(())
+}
