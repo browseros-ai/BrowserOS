@@ -137,6 +137,9 @@ pub struct Sessions {
     reaping_keys: Mutex<HashSet<ConvoId>>,
     /// Serializes retries per session through terminal persistence without coupling unrelated Stops.
     cancellation_transitions: Mutex<HashMap<SessionId, Arc<Mutex<()>>>>,
+    /// Serializes host-bound session lookups and re-mints, so concurrent requests for one
+    /// bound key never mint it twice.
+    bind_lock: Mutex<()>,
     retained_group_hook: OnceLock<RetainedGroupHook>,
     audit_flush_hook: OnceLock<SessionAuditFlushHook>,
     completion_hook: OnceLock<SessionCompletionHook>,
@@ -182,6 +185,7 @@ impl Sessions {
             retained: RwLock::new(HashMap::new()),
             reaping_keys: Mutex::new(HashSet::new()),
             cancellation_transitions: Mutex::new(HashMap::new()),
+            bind_lock: Mutex::new(()),
             retained_group_hook: OnceLock::new(),
             audit_flush_hook: OnceLock::new(),
             completion_hook: OnceLock::new(),
@@ -275,6 +279,51 @@ impl Sessions {
             })
             .await;
         self.finish_mint(id, session, audit_result).await
+    }
+
+    /// The live session `id` a host bound to its own key, minted if it is not live.
+    ///
+    /// Unlike `mint_with_id`, the conversation key is the host's (`{slug}-{key}`), not a
+    /// generated name, so a re-mint after the session ended reclaims the same conversation:
+    /// its retained tab groups stop counting down to closure, its tombstone is cleared, and
+    /// page ownership carries on. Returns whether this call minted.
+    pub async fn bind(
+        self: &Arc<Self>,
+        id: SessionId,
+        agent: ClientIdentity,
+        key: &str,
+        client: ClientInfo,
+    ) -> HostResult<(Arc<Session>, bool)> {
+        let _bind = self.bind_lock.lock().await;
+        if let Some(session) = self.lookup(&id).await {
+            return Ok((session, false));
+        }
+        let identity = ConversationIdentity::new(agent.slug(), key.to_string());
+        let convo_id = identity.convo_id().clone();
+        self.reserved_keys.lock().await.insert(convo_id.clone());
+        self.retained.write().await.remove(&convo_id);
+        self.retired.write().await.remove(&id);
+        let session = Session::new_with_declared_product(
+            id.clone(),
+            agent,
+            identity,
+            client.name.clone(),
+            None,
+            Instant::now(),
+        );
+        let audit_result = self
+            .journal
+            .record_session_start(SessionStart {
+                session_id: id.as_str(),
+                convo_id: session.convo_id().as_str(),
+                slug: session.agent().slug(),
+                agent_label: session.agent().label(),
+                client_name: client.name.as_str(),
+                client_version: client.version.as_str(),
+            })
+            .await;
+        let session = self.finish_mint(id, session, audit_result).await?;
+        Ok((session, true))
     }
 
     // Exposed for claw-server's journal-backed lifecycle tests; not host interface.

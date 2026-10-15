@@ -54,6 +54,11 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         let Some(page_id) = extract_page_id(context.call) else {
             return Ok(None);
         };
+        // The host lent this page to the session (the user's active side-panel tab): the
+        // run is meant to act on it, so calling it someone else's would only mislead.
+        if context.call.is_lent_page(page_id) {
+            return Ok(None);
+        }
         let page_id = PageId(page_id);
 
         let owner = context.call.host.sessions.owner_of_page(&page_id).await;

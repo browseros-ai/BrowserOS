@@ -540,6 +540,7 @@ mod tests {
             agent_label: &started.agent_label,
             args,
             request_cancel,
+            caller: None,
         })
         .await
     }

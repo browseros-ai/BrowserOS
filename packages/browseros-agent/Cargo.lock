@@ -880,6 +880,7 @@ dependencies = [
  "browseros-cdp",
  "browseros-core",
  "browseros-mcp",
+ "browseros-mcp-host",
  "futures-util",
  "pulldown-cmark",
  "rand 0.9.4",

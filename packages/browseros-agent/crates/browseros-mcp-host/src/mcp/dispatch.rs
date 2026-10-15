@@ -4,6 +4,7 @@
 //! observers). Local tools never pass through here.
 
 use crate::{
+    admission::{self, AdmittedCaller},
     ctx::HostCtx,
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
@@ -84,6 +85,10 @@ pub struct ToolCall {
     pub default_tab_group_id: Option<String>,
     pub flags: ToolFlags,
     pub host: Arc<HostCtx>,
+    /// The admitted caller's policy; `None` for claw's anonymous MCP clients. Set by the
+    /// service after construction, read by the read-only refusal, execution defaults, the
+    /// tab-group effect, the ownership notice and the wire envelope.
+    pub caller: Option<AdmittedCaller>,
     pub dispatch_id: DispatchId,
     pub output_files: OutputFileAccess,
     /// Pages a `run` script acted on that belong to the user or another agent.
@@ -162,6 +167,7 @@ impl ToolCall {
             default_tab_group_id,
             flags,
             host,
+            caller: None,
             dispatch_id: DispatchId::new(),
             output_files,
         }
@@ -175,6 +181,20 @@ impl ToolCall {
     #[must_use]
     pub fn tool_named(&self, name: &str) -> Option<&ToolDef> {
         self.catalog.iter().find(|tool| tool.name == name)
+    }
+
+    /// Whether this call may create, join or retitle tab groups (off for scheduled runs).
+    #[must_use]
+    pub fn auto_group(&self) -> bool {
+        self.caller.as_ref().is_none_or(|caller| caller.auto_group)
+    }
+
+    /// Whether `page` is lent to this caller's session (the user's active side-panel tab).
+    #[must_use]
+    pub fn is_lent_page(&self, page: u32) -> bool {
+        self.caller
+            .as_ref()
+            .is_some_and(|caller| caller.lent_pages.contains(&page))
     }
 
     /// Orders explicit group mutations with detached creation and lifecycle work.
@@ -420,7 +440,13 @@ where
         call.page_snapshot = browser.pages.get_info(PageId(page_id)).await;
     }
 
-    let result = if let Some(rejection) = run_guards(&call, guards).await {
+    // Caller policy is checked before the browser guards: a read-only caller is refused
+    // even when the browser is down, as the TS server's read-only guard was.
+    let rejection = match admission::read_only_refusal(&call) {
+        Some(refusal) => Some(refusal),
+        None => run_guards(&call, guards).await,
+    };
+    let result = if let Some(rejection) = rejection {
         Ok(rejection)
     } else {
         if ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name) {
@@ -483,7 +509,13 @@ where
     } else {
         (false, false)
     };
-    let has_output_schema = call.tool().output_schema.is_some();
+    // A caller that opted into structured content keeps it for every tool; otherwise only
+    // tools that promise it in an output schema deliver it.
+    let has_output_schema = call.tool().output_schema.is_some()
+        || call
+            .caller
+            .as_ref()
+            .is_some_and(|caller| caller.structured_content);
     if teardown_before_finish && operator_stop_requested {
         let cancellation = operator_cancellation_result();
         call.dispatch_cancel.cancel();
@@ -604,7 +636,10 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 browser: view.clone(),
                 target: Some(call.target_store.clone()),
                 defaults: BrowserToolDefaults {
-                    default_window_id: None,
+                    default_window_id: call
+                        .caller
+                        .as_ref()
+                        .and_then(|caller| caller.default_window_id),
                     default_tab_group_id: call.default_tab_group_id.clone(),
                 },
                 cancel: call.cancel.clone(),

@@ -7,6 +7,7 @@
 //! in this crate and is identical for every host.
 
 use crate::{
+    admission::AdmittedCaller,
     ctx::HostCtx,
     error::HostResult,
     identity::ProfileView,
@@ -255,6 +256,8 @@ pub struct LocalToolCall<'a> {
     pub args: &'a Value,
     /// The MCP request's own token: fires when the client abandons this call.
     pub request_cancel: CancellationToken,
+    /// The admitted caller's policy, when the host admitted one.
+    pub caller: Option<&'a AdmittedCaller>,
 }
 
 /// A tool served by the host next to the browser catalog. The crate registers

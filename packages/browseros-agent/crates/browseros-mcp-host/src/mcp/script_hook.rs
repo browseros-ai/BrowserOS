@@ -61,6 +61,10 @@ impl InnerCallHook for ScriptInnerCallHook {
             let Some(identity) = self.identity() else {
                 return Ok(());
             };
+            // A lent page (the user's active side-panel tab) is the run's to use.
+            if self.call.is_lent_page(page) {
+                return Ok(());
+            }
             // Ownership is a label, not a permission, so nothing is refused here.
             //
             // This hook used to reject any page owned by another conversation, which
@@ -178,6 +182,9 @@ impl InnerCallHook for ScriptInnerCallHook {
                 self.call.started_at_ms,
             )
             .await;
+            if !self.call.auto_group() {
+                return;
+            }
             // Ensure the agent's tab group and place the page in it. Detached so
             // browser grouping does not block the script, matching the effect.
             // Retain the created incarnation and its guarded view before spawning,

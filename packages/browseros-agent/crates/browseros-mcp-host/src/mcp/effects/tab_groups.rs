@@ -30,6 +30,11 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         if context.call.identity.is_none() || context.call.browser_session.is_none() {
             return Ok(None);
         }
+        // A caller that does not auto-group (scheduled runs) leaves placement to its host:
+        // no group is created, joined or retitled, and no reuse notice is offered.
+        if !context.call.auto_group() {
+            return Ok(None);
+        }
         let created = if context.call.flags.new_page {
             match result_page_id(context.result) {
                 Some(page_id) => created_page(context.call, page_id).await,

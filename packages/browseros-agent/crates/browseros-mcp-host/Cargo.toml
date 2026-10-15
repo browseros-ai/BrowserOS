@@ -33,6 +33,8 @@ ulid.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# The crate's own synthetic browser peer, for its integration tests.
+browseros-mcp-host = { path = ".", features = ["test-support"] }
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 tower.workspace = true

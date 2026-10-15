@@ -3,20 +3,24 @@
 //! MCP layer, so the layer never sees a database, analytics SDK or cockpit directly.
 
 use crate::{
+    admission::{LocalToolProvider, SessionSpec},
     branding::HostBranding,
     browser::BrowserService,
     error::HostResult,
     mcp::{
         dispatch::{DEFAULT_EFFECTS, DEFAULT_GUARDS},
-        effects::tab_groups::{close_agent_tab_group, collapse_agent_tab_group},
+        effects::tab_groups::{
+            apply_agent_tab_group_title, close_agent_tab_group, collapse_agent_tab_group,
+        },
         name_session::NameSessionTool,
+        naming::normalize_small_name,
     },
     noop::{NoopBrowserSessionObserver, NoopProfiles, NoopSessionJournal, NoopTabJournal},
     seams::{
         DispatchEffect, DispatchGuard, DispatchObserver, HostAnalytics, LocalTool,
         ProfileDirectory, SessionJournal, TabJournal,
     },
-    sessions::{RetainedGroupAction, Sessions, TargetBindings},
+    sessions::{RetainedGroupAction, Session, Sessions, TargetBindings},
     storage::JsonStore,
 };
 use browseros_core::NativeCapabilities;
@@ -91,6 +95,8 @@ pub struct HostCtx {
     /// `name_session` first, then the host's tools in registration order; this is also
     /// their `tools/list` order after the catalog.
     pub(crate) local_tools: Vec<RegisteredLocalTool>,
+    /// Runtime tool sources, listed after `local_tools` in registration order.
+    pub(crate) providers: Vec<Arc<dyn LocalToolProvider>>,
     /// Complete ordered pipeline: built-ins first, host additions after.
     pub(crate) guards: Vec<Arc<dyn DispatchGuard>>,
     pub(crate) effects: Vec<Arc<dyn DispatchEffect>>,
@@ -106,6 +112,7 @@ impl HostCtx {
             tabs: Arc::new(NoopTabJournal),
             profiles: Arc::new(NoopProfiles),
             local_tools: Vec::new(),
+            providers: Vec::new(),
             guards: Vec::new(),
             effects: Vec::new(),
             observers: Vec::new(),
@@ -184,6 +191,42 @@ impl HostCtx {
         self.guards.len()
     }
 
+    /// The live session bound to `spec`, minted (or re-minted after it ended) under the
+    /// spec's deterministic id. Idempotent, so an admission hook may call it per request.
+    /// A changed `label` renames the session and retitles its tab group.
+    pub async fn bind_session(&self, spec: &SessionSpec) -> HostResult<Arc<Session>> {
+        let profiles = self.profiles.profiles().await?;
+        let agent = crate::identity::ClientIdentity::resolve(&spec.client, &profiles);
+        let (session, _minted) = self
+            .sessions
+            .bind(spec.session_id(), agent, &spec.key, spec.client.clone())
+            .await?;
+        if let Some(label) = spec.label.as_deref().map(normalize_small_name)
+            && !label.is_empty()
+            && session.label().await != label
+        {
+            session.rename(label).await;
+            let browser = self.browser.session().await;
+            apply_agent_tab_group_title(
+                browser.as_ref(),
+                &self.sessions.ownership(),
+                session.convo_id(),
+                session.as_ref(),
+                session.child_token(),
+            )
+            .await;
+        }
+        Ok(session)
+    }
+
+    /// Ends the session bound to `spec` the way an idle sweep would: dispatches drain, its
+    /// groups are retained (collapsed) until retention. Returns whether one was live.
+    pub async fn end_session(&self, spec: &SessionSpec, reason: &str) -> HostResult<bool> {
+        self.sessions
+            .remove(&spec.session_id(), "closed", Some(reason))
+            .await
+    }
+
     /// Starts the browser reattach loop and the idle-session sweeper. claw starts both
     /// itself, inside its ordered runtime; a lean host calls this once after `build`.
     #[must_use]
@@ -214,6 +257,7 @@ pub struct HostCtxBuilder {
     tabs: Arc<dyn TabJournal>,
     profiles: Arc<dyn ProfileDirectory>,
     local_tools: Vec<Arc<dyn LocalTool>>,
+    providers: Vec<Arc<dyn LocalToolProvider>>,
     guards: Vec<Arc<dyn DispatchGuard>>,
     effects: Vec<Arc<dyn DispatchEffect>>,
     observers: Vec<Arc<dyn DispatchObserver>>,
@@ -243,6 +287,13 @@ impl HostCtxBuilder {
     #[must_use]
     pub fn local_tool(mut self, tool: Arc<dyn LocalTool>) -> Self {
         self.local_tools.push(tool);
+        self
+    }
+
+    /// Adds a runtime tool source, listed after the local tools.
+    #[must_use]
+    pub fn tool_provider(mut self, provider: Arc<dyn LocalToolProvider>) -> Self {
+        self.providers.push(provider);
         self
     }
 
@@ -303,6 +354,7 @@ impl HostCtxBuilder {
             tabs: self.tabs,
             profiles: self.profiles,
             local_tools,
+            providers: self.providers,
             guards,
             effects,
             observers: self.observers,

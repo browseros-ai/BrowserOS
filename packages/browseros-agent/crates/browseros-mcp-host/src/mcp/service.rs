@@ -4,6 +4,7 @@
 //! `dispatch`. One instance per transport session; `HostCtx` is shared by all.
 
 use crate::{
+    admission::{self, AdmittedCaller, LocalToolProvider},
     branding::HostBranding,
     ctx::HostCtx,
     ctx::RegisteredLocalTool,
@@ -65,6 +66,9 @@ pub struct HostMcpService {
     /// Built once per service from the host's branding.
     session_arg_description: String,
     output_files: OutputFileAccess,
+    /// Caller policy for transports without HTTP request parts (stdio, in-process duplex);
+    /// an admission layer's per-request caller takes precedence over it.
+    default_caller: Option<AdmittedCaller>,
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
     closed: AtomicBool,
@@ -124,10 +128,28 @@ impl HostMcpService {
             host,
             catalog: Arc::new(catalog()),
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
+            default_caller: None,
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
             closed: AtomicBool::new(false),
         }
+    }
+
+    /// Serves every request on this service as `caller` unless the request carries its own
+    /// (an in-process transport for the host's own agent has no HTTP layer to admit it).
+    #[must_use]
+    pub fn with_caller(mut self, caller: AdmittedCaller) -> Self {
+        self.default_caller = Some(caller);
+        self
+    }
+
+    fn caller(&self, extensions: &rmcp::model::Extensions) -> Option<AdmittedCaller> {
+        AdmittedCaller::from_extensions(extensions).or_else(|| self.default_caller.clone())
+    }
+
+    fn is_bound(&self, extensions: &rmcp::model::Extensions) -> bool {
+        self.caller(extensions)
+            .is_some_and(|caller| caller.session.is_some())
     }
 
     fn native(&self) -> browseros_core::NativeCapabilities {
@@ -146,22 +168,57 @@ impl HostMcpService {
         with_session_arg(tool, &self.session_arg_description)
     }
 
-    /// The tools `tools/list` returns: available catalog tools, then listed local tools,
-    /// each decorated with the optional `session` argument.
+    /// The tools `tools/list` returns to a caller the host did not admit: available
+    /// catalog tools, then listed local tools, each decorated with the optional `session`
+    /// argument. Runtime provider tools need a caller; see `tools_for`.
     ///
     /// `declare_agent_name` gates the optional `agentName` fallback to clients on
     /// 2026-07-28 or later. Older peers negotiated `initialize`, still carry their
     /// identity in the handshake, and must keep receiving the schema unchanged.
     #[must_use]
     pub fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
-        let decorate = |tool: Tool| {
-            let tool = self.with_session_arg(tool);
-            if declare_agent_name {
-                with_agent_name_arg(tool)
-            } else {
-                tool
-            }
-        };
+        self.static_tools(None, declare_agent_name)
+    }
+
+    /// `listed_tools` for `caller`, plus every provider's current tools.
+    pub async fn tools_for(
+        &self,
+        caller: Option<&AdmittedCaller>,
+        declare_agent_name: bool,
+    ) -> Vec<Tool> {
+        let mut tools = self.static_tools(caller, declare_agent_name);
+        for provider in &self.host.providers {
+            let provided = provider.tools(caller).await;
+            tools.extend(
+                provided
+                    .into_iter()
+                    .map(|tool| self.decorate(caller, declare_agent_name, tool)),
+            );
+        }
+        tools
+    }
+
+    /// Bound callers already have their session, so they are offered neither the `session`
+    /// handle nor the `agentName` fallback, as the TS server's lease callers were not.
+    fn decorate(
+        &self,
+        caller: Option<&AdmittedCaller>,
+        declare_agent_name: bool,
+        tool: Tool,
+    ) -> Tool {
+        if caller.is_some_and(|caller| caller.session.is_some()) {
+            return tool;
+        }
+        let tool = self.with_session_arg(tool);
+        if declare_agent_name {
+            with_agent_name_arg(tool)
+        } else {
+            tool
+        }
+    }
+
+    fn static_tools(&self, caller: Option<&AdmittedCaller>, declare_agent_name: bool) -> Vec<Tool> {
+        let read_only = caller.is_some_and(|caller| caller.read_only);
         // Tools whose native feature the connected browser lacks are not offered. The list is
         // fixed for the process (the identity is), and execute_tool refuses cached callers.
         let native = self.native();
@@ -169,17 +226,47 @@ impl HostMcpService {
             .catalog
             .iter()
             .filter(|tool| tool.available(native))
-            .map(|tool| tool.to_mcp_tool(native))
-            .map(&decorate)
+            .filter(|tool| !read_only || admission::listed_read_only(tool))
+            .map(|tool| {
+                if read_only && tool.name == "tabs" {
+                    admission::read_only_tabs_tool()
+                } else {
+                    tool.to_mcp_tool(native)
+                }
+            })
+            .map(|tool| self.decorate(caller, declare_agent_name, tool))
             .collect::<Vec<_>>();
         tools.extend(
             self.host
                 .local_tools
                 .iter()
                 .filter(|entry| entry.tool.listed())
-                .map(|entry| decorate(entry.definition.clone())),
+                .filter(|entry| {
+                    !read_only
+                        || admission::is_read_only_tool(entry.definition.annotations.as_ref())
+                })
+                .map(|entry| self.decorate(caller, declare_agent_name, entry.definition.clone())),
         );
         tools
+    }
+
+    /// The provider serving `name` to `caller`, asked only once the static tools miss.
+    async fn find_provider(
+        &self,
+        caller: Option<&AdmittedCaller>,
+        name: &str,
+    ) -> Option<Arc<dyn LocalToolProvider>> {
+        for provider in &self.host.providers {
+            if provider
+                .tools(caller)
+                .await
+                .iter()
+                .any(|tool| tool.name == name)
+            {
+                return Some(provider.clone());
+            }
+        }
+        None
     }
 
     async fn set_client_info(&self, request: &InitializeRequestParams) {
@@ -506,6 +593,9 @@ impl HostMcpService {
         // A handshake without a transport session is not a unit of work. If such a
         // client goes on to call a tool, `call_tool` mints the session then, which is
         // the first moment there is anything to record.
+        if self.is_bound(&context.extensions) {
+            return;
+        }
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return;
         };
@@ -587,6 +677,10 @@ impl ServerHandler for HostMcpService {
         context.peer.set_peer_info(request.clone());
         self.set_client_info(&request).await;
         let info = self.get_info();
+        // A bound caller's session is the host's; its transport never mints one of its own.
+        if self.is_bound(&context.extensions) {
+            return Ok(info);
+        }
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return Ok(info);
         };
@@ -598,11 +692,11 @@ impl ServerHandler for HostMcpService {
         self.learn_session_from_notification(&context).await;
     }
 
-    fn list_tools(
+    async fn list_tools(
         &self,
         _request: Option<PaginatedRequestParams>,
         context: RequestContext<RoleServer>,
-    ) -> impl Future<Output = Result<ListToolsResult, McpError>> + Send + '_ {
+    ) -> Result<ListToolsResult, McpError> {
         // Two things hang off this one revision check. SEP-2549: 2026-07-28 clients
         // require ttlMs + cacheScope on list results, emitted only for that revision so
         // legacy peers keep the old wire shape (mirrors rmcp's #[tool_handler] macro);
@@ -613,11 +707,14 @@ impl ServerHandler for HostMcpService {
         let is_modern_revision = context
             .protocol_version()
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
-        let mut result = ListToolsResult::with_all_items(self.listed_tools(is_modern_revision));
+        let caller = self.caller(&context.extensions);
+        let mut result = ListToolsResult::with_all_items(
+            self.tools_for(caller.as_ref(), is_modern_revision).await,
+        );
         if is_modern_revision {
             result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
         }
-        std::future::ready(Ok(result))
+        Ok(result)
     }
 
     // Accept the 2026-07-28 `subscriptions/listen` stream instead of returning
@@ -649,12 +746,19 @@ impl ServerHandler for HostMcpService {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        // Local tools win a name clash with the catalog, as they always have.
+        let caller = self.caller(&context.extensions);
+        // Local tools win a name clash with the catalog, as they always have; runtime
+        // providers are asked last, and only for names nothing static serves.
         let local_tool = self
             .find_local_tool(&request.name)
-            .map(|entry| entry.tool.clone());
+            .map(|entry| (entry.tool.clone(), entry.definition.annotations.clone()));
         let tool_index = self.find_tool_index(&request.name);
-        if local_tool.is_none() && tool_index.is_none() {
+        let provider = if local_tool.is_none() && tool_index.is_none() {
+            self.find_provider(caller.as_ref(), &request.name).await
+        } else {
+            None
+        };
+        if local_tool.is_none() && tool_index.is_none() && provider.is_none() {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
         }
         let mut raw_args = request
@@ -680,10 +784,27 @@ impl ServerHandler for HostMcpService {
             map.remove(AGENT_NAME_ARG);
         }
         let presented_handle = provided_handle.clone();
-        let modern = protocol_version_from_extensions(&context.extensions)
-            .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
-            && session_id_from_extensions(&context.extensions).is_none();
-        let (started, session_handle) = if modern {
+        // A request with no transport session id is stateless: 2026-07-28 always is, and so
+        // is any HTTP request served with legacy sessions turned off. Both keep continuity
+        // through the returned handle. stdio has no request parts and keeps its one session.
+        let stateless = session_id_from_extensions(&context.extensions).is_none()
+            && (protocol_version_from_extensions(&context.extensions)
+                .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
+                || context
+                    .extensions
+                    .get::<axum::http::request::Parts>()
+                    .is_some());
+        let bound = caller.as_ref().and_then(|caller| caller.session.clone());
+        let (started, session_handle) = if let Some(spec) = bound {
+            // The host bound this caller to its own session; transport identity and any
+            // presented handle are irrelevant, and no handle is returned.
+            let session = self
+                .host
+                .bind_session(&spec)
+                .await
+                .map_err(|error| McpError::internal_error(error.to_string(), None))?;
+            (started_session_from(session, &spec.client), None)
+        } else if stateless {
             // rmcp extracts wire _meta into RequestContext during decoding;
             // typed request.meta is empty even when the client supplied it.
             let modern_client = context
@@ -725,16 +846,23 @@ impl ServerHandler for HostMcpService {
         let tool_started_at = tokio::time::Instant::now();
         let tool_name = request.name.to_string();
 
-        let result = if let Some(local_tool) = local_tool {
-            Ok(local_tool
-                .call(LocalToolCall {
-                    host: &self.host,
-                    session: &started.session,
-                    agent_label: &started.agent_label,
-                    args: &raw_args,
-                    request_cancel: context.ct.clone(),
-                })
-                .await)
+        let local_call = || LocalToolCall {
+            host: &self.host,
+            session: &started.session,
+            agent_label: &started.agent_label,
+            args: &raw_args,
+            request_cancel: context.ct.clone(),
+            caller: caller.as_ref(),
+        };
+        let read_only = caller.as_ref().is_some_and(|caller| caller.read_only);
+        let result = if let Some((local_tool, annotations)) = local_tool {
+            if read_only && !admission::is_read_only_tool(annotations.as_ref()) {
+                Ok(admission::read_only_unavailable(&tool_name).into_call_tool_result())
+            } else {
+                Ok(local_tool.call(local_call()).await)
+            }
+        } else if let Some(provider) = provider {
+            Ok(provider.call(&tool_name, local_call()).await)
         } else {
             let Some(tool_index) = tool_index else {
                 unreachable!("catalog tool was validated before session resolution");
@@ -773,7 +901,9 @@ impl ServerHandler for HostMcpService {
                     .and_then(|group| group.group_ref),
                 Some(Err(_)) => None,
                 _ => ownership.tab_group_ref(&ownership_key).await,
-            };
+            }
+            // A caller that does not auto-group never lands in the session's group implicitly.
+            .filter(|_| caller.as_ref().is_none_or(|caller| caller.auto_group));
             let dispatch_cancel = CancellationToken::new();
             let cancel = linked_cancel_token(
                 started.session.child_token(),
@@ -786,7 +916,11 @@ impl ServerHandler for HostMcpService {
                 ownership_key,
                 agent_label: started.agent_label,
             };
-            let call = ToolCall::new(
+            let output_files = caller
+                .as_ref()
+                .and_then(|caller| caller.output_files.clone())
+                .unwrap_or_else(|| self.output_files.clone());
+            let mut call = ToolCall::new(
                 self.catalog.clone(),
                 tool_index,
                 raw_args,
@@ -800,8 +934,9 @@ impl ServerHandler for HostMcpService {
                 dispatch_cancel,
                 default_tab_group_id,
                 self.host.clone(),
-                self.output_files.clone(),
+                output_files,
             );
+            call.caller = caller.clone();
             dispatch_tool_call(call).await
         };
 
