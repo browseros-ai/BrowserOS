@@ -172,6 +172,11 @@ export async function bootServer(
     })().finally(() => cleanups.delete(stop))
     return stopping
   }
+  const assertStarting = () => {
+    // Signals can begin teardown across any startup await. No child may be appended
+    // after cleanup snapshots the process list, or its detached group would be orphaned.
+    if (stopping) throw new Error('Server startup cancelled by shutdown')
+  }
   cleanups.add(stop)
   try {
     const serverPort = await freePort()
@@ -246,6 +251,7 @@ export async function bootServer(
       '--remote-debugging-address=127.0.0.1',
       'about:blank',
     ]
+    assertStarting()
     const browserProcess = ownedProcess(browserArgs, env, log)
     processes.push(browserProcess)
     await waitReady(
@@ -260,6 +266,7 @@ export async function bootServer(
         : process.env.SERVER_RUST_BINARY
           ? [resolve(process.env.SERVER_RUST_BINARY), '--config', config]
           : ['cargo', 'run', '-p', 'server-rust', '--', '--config', config]
+    assertStarting()
     const server = ownedProcess(command, env, log)
     processes.push(server)
     const url = `http://127.0.0.1:${serverPort}`
@@ -272,6 +279,7 @@ export async function bootServer(
           (kind === 'rust' ? 180_000 : 30_000),
       ),
     )
+    assertStarting()
     return { kind, root, url, cdpPort, stop }
   } catch (error) {
     await stop()

@@ -68,7 +68,7 @@ or `long-stream`. Provider/tool/block IDs are deterministic. Tool scenarios use 
 sentinel to exercise the agent loop without external side effects. The tool-result follow-up produces text.
 Retry state belongs to `X-Compat-Session` + endpoint + scenario, so A cannot consume B's initial 429.
 
-Unit tests use the installed OpenAI-compatible, Responses and Anthropic SDK adapters to decode the fixture
+Unit tests also reproduce shutdown during CDP readiness with fake executables, asserting that no detached server starts after teardown begins. Unit tests use the installed OpenAI-compatible, Responses and Anthropic SDK adapters to decode the fixture
 streams, including reasoning, streamed arguments, parallel calls and errors. Stream comparisons currently
 insert an **openai-compatible** provider over HTTP and drive all eight scenarios through the real TS/Rust
 agent pipeline. Passing synthetic SDK dialect tests does not establish live authentication/provider parity.

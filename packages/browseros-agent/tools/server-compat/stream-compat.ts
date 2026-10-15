@@ -55,7 +55,7 @@ async function capture(
   response: Response,
   onProgress?: (raw: string) => Promise<void>,
 ): Promise<string> {
-  if (!response.ok || !response.body)
+  if (response.status !== 200 || !response.body)
     throw new Error(`Stream HTTP ${response.status}: ${await response.text()}`)
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
@@ -131,7 +131,7 @@ async function panelHeartbeat(server: BootedServer): Promise<string[]> {
     headers,
     signal: AbortSignal.timeout(10_000),
   })
-  if (!response.ok || !response.body)
+  if (response.status !== 200 || !response.body)
     throw new Error(`Panels HTTP ${response.status}`)
   const reader = response.body.getReader()
   let raw = ''
