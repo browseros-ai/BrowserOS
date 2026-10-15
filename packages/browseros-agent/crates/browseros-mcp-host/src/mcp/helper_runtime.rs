@@ -3,11 +3,11 @@
 //! surfaces what is available for discovery.
 
 use crate::{
-    AppState,
-    api::mcp::dispatch::{ARBITRARY_SCRIPT_TOOLS, ToolEffect, ToolEffectContext},
     clock::now_epoch_ms,
+    ctx::HostCtx,
+    helpers::{self, HelperMeta},
     ids::ConvoId,
-    services::helpers::{self, HelperMeta},
+    mcp::dispatch::{ARBITRARY_SCRIPT_TOOLS, ToolEffect, ToolEffectContext},
 };
 use browseros_core::target::BrowserView;
 use browseros_mcp::{ToolResult, framework::HelperSource};
@@ -41,18 +41,18 @@ pub(crate) fn helper_info_json(meta: &HelperMeta, now: i64) -> Value {
 /// hosts of the agent's currently owned tabs. Cheap-gated so a browser with no
 /// helpers pays nothing (no page scan).
 pub(crate) async fn preload_helpers(
-    state: &AppState,
+    host: &HostCtx,
     caller: &ConvoId,
     browser: &BrowserView,
 ) -> Vec<HelperSource> {
-    let dir = &state.config.browserclaw_dir;
+    let dir = &host.helpers_root;
     if !helpers::has_any_helpers(dir) {
         return Vec::new();
     }
     let mut sources = Vec::new();
-    for host in owned_tab_hosts(state, caller, browser).await {
-        for meta in helpers::list_helper_meta(dir, &host) {
-            if let Some(source) = helpers::read_helper_source(dir, &host, &meta.name) {
+    for page_host in owned_tab_hosts(host, caller, browser).await {
+        for meta in helpers::list_helper_meta(dir, &page_host) {
+            if let Some(source) = helpers::read_helper_source(dir, &page_host, &meta.name) {
                 sources.push(HelperSource {
                     name: meta.name,
                     source,
@@ -66,11 +66,11 @@ pub(crate) async fn preload_helpers(
 /// The distinct host buckets of owned tabs visible to this call. Ownership can span
 /// earlier profile selections, so helper discovery also needs the captured projection.
 pub(crate) async fn owned_tab_hosts(
-    state: &AppState,
+    host: &HostCtx,
     caller: &ConvoId,
     browser: &BrowserView,
 ) -> BTreeSet<String> {
-    let ownership = state.sessions.ownership();
+    let ownership = host.sessions.ownership();
     let mut hosts = BTreeSet::new();
     let pages = browser
         .list_pages()
@@ -104,11 +104,11 @@ pub fn discovery(
         let (Some(identity), Some(browser)) = (&context.call.identity, &context.call.view) else {
             return Ok(None);
         };
-        let dir = &context.call.state.config.browserclaw_dir;
+        let dir = &context.call.host.helpers_root;
         if !helpers::has_any_helpers(dir) {
             return Ok(None);
         }
-        let hosts = owned_tab_hosts(&context.call.state, &identity.ownership_key, browser).await;
+        let hosts = owned_tab_hosts(&context.call.host, &identity.ownership_key, browser).await;
         let available = available_for_hosts(dir, &hosts, now_epoch_ms());
         if available.is_empty() {
             return Ok(None);
@@ -215,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn helper_discovery_projects_owned_tabs_through_captured_profile() -> anyhow::Result<()> {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         use browseros_core::PageId;
         let call = tool_call("run", json!({"code":"return 1"})).await?;
         let transport = ProfileConnection::new();
@@ -224,7 +224,7 @@ mod tests {
             tabs[0]["url"] = json!("https://eng.synthetic.invalid/");
             tabs[1]["url"] = json!("https://ops.synthetic.invalid/");
         }
-        let browser = crate::api::mcp::test_support::current_session(transport);
+        let browser = crate::mcp::test_support::current_session(transport);
         browser.pages.list().await?;
         let caller = call
             .identity
@@ -232,7 +232,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        let ownership = call.state.sessions.ownership();
+        let ownership = call.host.sessions.ownership();
         ownership.claim_page(caller.clone(), PageId(1)).await;
         ownership.claim_page(caller.clone(), PageId(2)).await;
         let view =
@@ -244,7 +244,7 @@ mod tests {
             view.admission_error()
         );
         assert_eq!(
-            owned_tab_hosts(&call.state, &caller, &view).await,
+            owned_tab_hosts(&call.host, &caller, &view).await,
             BTreeSet::from(["eng.synthetic.invalid".to_string()])
         );
         Ok(())

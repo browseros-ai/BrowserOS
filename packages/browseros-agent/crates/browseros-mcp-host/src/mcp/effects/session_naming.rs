@@ -1,4 +1,4 @@
-use crate::api::mcp::{
+use crate::mcp::{
     dispatch::{ToolEffect, ToolEffectContext},
     naming::session_group_title,
 };
@@ -35,7 +35,7 @@ mod tests {
     use serde_json::json;
 
     async fn apply_result(
-        call: &crate::api::mcp::dispatch::ToolCall,
+        call: &crate::mcp::dispatch::ToolCall,
         result: &ToolResult,
     ) -> anyhow::Result<ToolResult> {
         Ok(apply(ToolEffectContext {
@@ -57,8 +57,7 @@ mod tests {
     #[tokio::test]
     async fn appends_exactly_five_trailing_tips_and_preserves_image_content() -> anyhow::Result<()>
     {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let image = ContentBlock::image("aW1hZ2U=".to_string(), "image/png".to_string());
         let original = ToolResult {
             content: vec![ContentBlock::text("ok"), image.clone()],
@@ -87,8 +86,7 @@ mod tests {
 
     #[tokio::test]
     async fn errors_do_not_consume_a_nudge_and_rename_stops_tips() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         let error = ToolResult::error("failed");
         assert_result_eq(&apply_result(&call, &error).await?, &error);
 
@@ -107,9 +105,9 @@ mod tests {
     #[tokio::test]
     async fn separate_sessions_have_independent_nudge_budgets() -> anyhow::Result<()> {
         let first =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let second =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let success = ToolResult::text("ok", None);
 
         for _ in 0..5 {

@@ -197,6 +197,17 @@ impl Sessions {
         self.ownership.clone()
     }
 
+    /// The journal this registry records lifecycle through; local tools write to it too.
+    #[must_use]
+    pub fn journal(&self) -> &Arc<dyn SessionJournal> {
+        &self.journal
+    }
+
+    #[must_use]
+    pub fn analytics(&self) -> &Arc<dyn HostAnalytics> {
+        &self.analytics
+    }
+
     /// Installs browser-backed retained-group collapse and close operations.
     pub fn set_retained_group_hook(&self, hook: RetainedGroupHook) {
         let _ = self.retained_group_hook.set(hook);

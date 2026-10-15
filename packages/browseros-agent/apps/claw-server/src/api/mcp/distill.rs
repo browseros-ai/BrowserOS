@@ -4,11 +4,15 @@
 //! audit hierarchy.
 
 use crate::{
-    api::mcp::dispatch::{ARBITRARY_SCRIPT_TOOLS, ToolObserver, ToolObserverContext},
     clock::now_epoch_ms,
-    db::audit_log::ToolDispatchRow,
+    db::{AuditLog, audit_log::ToolDispatchRow},
     services::helpers::{self, HelperMeta},
 };
+use browseros_mcp_host::{
+    mcp::dispatch::{ARBITRARY_SCRIPT_TOOLS, ToolObserverContext},
+    seams::DispatchObserver,
+};
+use std::sync::Arc;
 use browseros_core::{BrowserSession, PageId};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -22,8 +26,26 @@ const MIN_ACTIONS: usize = 2;
 const MAX_ACTIONS: usize = 8;
 
 /// Observer that distills a successful script run into a candidate helper keyed
-/// by the host of the single page the flow drove.
-pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<()>> {
+/// by the host of the single page the flow drove. Reads the run's child audit rows,
+/// so it only works behind claw's audit observer.
+pub struct DistillObserver {
+    pub audit_log: Arc<AuditLog>,
+}
+
+impl DispatchObserver for DistillObserver {
+    fn name(&self) -> &'static str {
+        "distill"
+    }
+
+    fn observe<'a>(&'a self, context: ToolObserverContext<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+        distill(&self.audit_log, context)
+    }
+}
+
+fn distill<'a>(
+    audit_log: &'a AuditLog,
+    context: ToolObserverContext<'a>,
+) -> BoxFuture<'a, anyhow::Result<()>> {
     Box::pin(async move {
         if context.result.is_error
             || context.cancelled
@@ -36,10 +58,7 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
         else {
             return Ok(());
         };
-        let children = context
-            .call
-            .state
-            .audit_log
+        let children = audit_log
             .dispatches_with_parent(context.call.dispatch_id.as_str())
             .await
             .unwrap_or_default();
@@ -74,7 +93,7 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
         } else {
             format!("candidate-{}", short_hash(&normalize_shape(&source)))
         };
-        let dir = &context.call.state.config.browserclaw_dir;
+        let dir = context.call.host.helpers_root();
         let session = identity.session.convo_id().as_str().to_string();
         // Hard per-session cap: a single session contributes at most one candidate
         // per host, the richest qualifying flow it produced. If it already has an
@@ -117,7 +136,6 @@ pub fn distill(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result
     })
 }
 
-const _: ToolObserver = distill;
 
 /// How the distilled helper's host is resolved: directly from an opening
 /// navigation URL, or from the page id the flow drove.

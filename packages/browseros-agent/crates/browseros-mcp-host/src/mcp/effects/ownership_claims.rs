@@ -1,6 +1,9 @@
-use crate::AppState;
-use crate::api::mcp::dispatch::{
+use crate::mcp::dispatch::{
     ToolEffect, ToolEffectContext, ToolIdentity, extract_page_id, result_page_id,
+};
+use crate::{
+    ctx::HostCtx,
+    seams::{TabActivity, TabClaim},
 };
 use browseros_core::{BrowserSession, PageId};
 use futures_util::future::BoxFuture;
@@ -22,7 +25,7 @@ pub fn apply(
                 return Ok(None);
             };
             record_new_page(
-                &context.call.state,
+                &context.call.host,
                 identity,
                 context.call.browser_session.as_ref(),
                 context.call.session_id.as_str(),
@@ -39,19 +42,19 @@ pub fn apply(
                 let session_id = context.call.session_id.as_str().to_string();
                 context
                     .call
-                    .state
-                    .tab_activity
-                    .remove_incarnation(page_id.0, &target_id)
+                    .host
+                    .tabs
+                    .forget_incarnation(page_id.0, &target_id)
                     .await;
                 context
                     .call
-                    .state
-                    .session_tabs
-                    .enqueue_release_tab_for_session(page.tab_id.0, session_id);
+                    .host
+                    .tabs
+                    .release_tab(page.tab_id.0, session_id);
             }
             context
                 .call
-                .state
+                .host
                 .sessions
                 .ownership()
                 .remove_page(&page_id)
@@ -66,7 +69,7 @@ pub fn apply(
 /// tabs-new effect and the code-mode script hook so a page a script opens is
 /// claimed the same way a `tabs new` page is.
 pub(crate) async fn record_new_page(
-    state: &AppState,
+    host: &HostCtx,
     identity: &ToolIdentity,
     browser: Option<&Arc<BrowserSession>>,
     session_id: &str,
@@ -77,28 +80,26 @@ pub(crate) async fn record_new_page(
         && let Some(info) = browser.pages.get_info(PageId(page_id)).await
     {
         let target_id = info.target_id.as_str().to_string();
-        state
-            .tab_activity
-            .record_tool(crate::services::cockpit::RecordToolInput {
+        host.tabs
+            .record_activity(TabActivity {
                 target_id: info.target_id,
                 tab_id: info.tab_id.0,
                 page_id,
                 session_id: session_id.to_string(),
-                agent_id: identity.session.convo_id().as_str().to_string(),
+                convo_id: identity.session.convo_id().as_str().to_string(),
                 slug: identity.agent.slug().to_string(),
                 tool_name: "tabs".to_string(),
             })
             .await;
-        state.session_tabs.enqueue_claim_tab_for_session(
-            info.tab_id.0,
-            Some(target_id),
-            session_id.to_string(),
-            identity.session.convo_id().as_str().to_string(),
-            claimed_at,
-        );
+        host.tabs.claim_tab(TabClaim {
+            tab_id: info.tab_id.0,
+            target_id: Some(target_id),
+            session_id: session_id.to_string(),
+            convo_id: identity.session.convo_id().as_str().to_string(),
+            claimed_at_ms: claimed_at,
+        });
     }
-    state
-        .sessions
+    host.sessions
         .ownership()
         .claim_page(identity.ownership_key.clone(), PageId(page_id))
         .await;
@@ -220,11 +221,11 @@ mod tests {
     }
 
     async fn wait_for_claim(
-        call: &crate::api::mcp::dispatch::ToolCall,
+        call: &crate::mcp::dispatch::ToolCall,
         released: bool,
     ) -> anyhow::Result<SessionTabSnapshot> {
         for _ in 0..100 {
-            if let Some(claim) = call.state.session_tabs.first_session_tab().await?
+            if let Some(claim) = call.host.session_tabs.first_session_tab().await?
                 && claim.released_at.is_some() == released
             {
                 return Ok(claim);
@@ -240,7 +241,7 @@ mod tests {
             BrowserSession::new(PageListConnection::new(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 1);
         let mut new_call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "new" })).await?;
         new_call.browser_session = Some(browser.clone());
         new_call.started_at_ms = 123;
         let result = ToolResult::text("new page", Some(json!({ "page": 1 })));
@@ -258,20 +259,18 @@ mod tests {
         assert_eq!(claim.session_id, "s1");
         assert_eq!(claim.claimed_at, 123);
 
-        let mut close_call = crate::api::mcp::test_support::tool_call(
-            "tabs",
-            json!({ "action": "close", "page": 1 }),
-        )
-        .await?;
+        let mut close_call =
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
+                .await?;
         close_call.page_snapshot = browser.pages.get_info(PageId(1)).await;
-        close_call.state.session_tabs.enqueue_claim_tab_for_session(
+        close_call.host.session_tabs.enqueue_claim_tab_for_session(
             11,
             Some("target-a".to_string()),
             "s1".to_string(),
             "agent".to_string(),
             100,
         );
-        close_call.state.session_tabs.drain_writes().await;
+        close_call.host.session_tabs.drain_writes().await;
         let result = ToolResult::text("closed page", None);
         apply(ToolEffectContext {
             call: &close_call,
@@ -281,14 +280,14 @@ mod tests {
         })
         .await?;
         let released = close_call
-            .state
+            .host
             .session_tabs
             .session_tab_claimed_at(100)
             .await?
             .unwrap_or_else(|| panic!("close claim missing"));
         for _ in 0..100 {
             let current = close_call
-                .state
+                .host
                 .session_tabs
                 .session_tab_by_id(released.id)
                 .await?
@@ -303,13 +302,11 @@ mod tests {
 
     #[tokio::test]
     async fn close_page_removes_owned_page() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call(
-            "tabs",
-            json!({ "action": "close", "page": 9 }),
-        )
-        .await?;
+        let call =
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 9 }))
+                .await?;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(identity.ownership_key.clone(), PageId(9))
@@ -323,7 +320,7 @@ mod tests {
         })
         .await
         .unwrap_or_else(|error| panic!("effect failed: {error}"));
-        assert_eq!(call.state.sessions.owner_of_page(&PageId(9)).await, None);
+        assert_eq!(call.host.sessions.owner_of_page(&PageId(9)).await, None);
         Ok(())
     }
 
@@ -332,13 +329,11 @@ mod tests {
         let browser =
             BrowserSession::new(PageListConnection::new(), BrowserSessionHooks::default());
         assert_eq!(browser.pages.list().await?.len(), 1);
-        let mut call = crate::api::mcp::test_support::tool_call(
-            "tabs",
-            json!({ "action": "close", "page": 1 }),
-        )
-        .await?;
+        let mut call =
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
+                .await?;
         call.page_snapshot = browser.pages.get_info(PageId(1)).await;
-        call.state
+        call.host
             .tab_activity
             .record_tool(crate::services::cockpit::RecordToolInput {
                 target_id: browser
@@ -365,7 +360,7 @@ mod tests {
         .await?;
 
         assert!(
-            call.state
+            call.host
                 .tab_activity
                 .snapshot(Some(&browser))
                 .await

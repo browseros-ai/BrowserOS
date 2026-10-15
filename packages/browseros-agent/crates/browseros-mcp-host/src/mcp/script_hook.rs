@@ -1,26 +1,23 @@
 use crate::{
-    api::mcp::dispatch::{ToolCall, ToolIdentity},
-    api::mcp::effects::{ownership_claims, tab_groups, tabs_list_view},
     clock::now_epoch_ms,
-    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
-    ids::DispatchId,
-    services::helpers,
+    helpers,
+    mcp::{
+        dispatch::{ToolCall, ToolIdentity},
+        effects::{ownership_claims, tab_groups, tabs_list_view},
+    },
+    seams::{InnerCallContext, TabActivity},
 };
 use browseros_core::PageId;
-use browseros_mcp::{
-    InnerCallHook, InnerCallRecord,
-    token_estimate::{TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens},
-};
+use browseros_mcp::{InnerCallHook, InnerCallRecord};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
-use tracing::warn;
 
 /// Host hook a `run`/`execute` script invokes around each browser primitive.
 /// A script uses the captured BrowserView directly, bypassing the outer pipeline
 /// effects. Core enforces scope; this hook reproduces what the host effects would have
-/// done: it notes whose tab each primitive touched, records each primitive as a child
-/// audit row linked to the script dispatch, and (on page creation) claims and
-/// groups the page exactly as a `tabs new` would. Explicit group tools share the
+/// done: it notes whose tab each primitive touched, hands each primitive to the host's
+/// observers as an inner call linked to the script dispatch (claw writes a child audit
+/// row), and (on page creation) claims and groups the page exactly as a `tabs new` would. Explicit group tools share the
 /// detached grouper's mutex for that inner operation, without locking a whole
 /// script. It holds the script's own `ToolCall` to retain the same captured view.
 pub struct ScriptInnerCallHook {
@@ -75,12 +72,12 @@ impl InnerCallHook for ScriptInnerCallHook {
             // the outer effect cannot see which pages a script touched; without this,
             // a script could read, navigate, fill or close someone else's tab and be
             // told nothing, which is the promise the refusal used to keep badly.
-            let owner = self.call.state.sessions.owner_of_page(&PageId(page)).await;
+            let owner = self.call.host.sessions.owner_of_page(&PageId(page)).await;
             let describe = match owner {
                 Some(owner) if owner == identity.ownership_key => None,
                 Some(owner) => Some(
                     self.call
-                        .state
+                        .host
                         .sessions
                         .snapshot()
                         .await
@@ -129,71 +126,37 @@ impl InnerCallHook for ScriptInnerCallHook {
             // is unchanged.
             identity.session.touch(tokio::time::Instant::now()).await;
             // Record tab activity for the touched page so the cockpit ranks and
-            // shows it, and the screenshot below selects it.
+            // shows it, and an observer's screenshot below selects it.
             if let (Some(info), Some(page_id)) = (&live, page) {
                 self.call
-                    .state
-                    .tab_activity
-                    .record_tool(crate::services::cockpit::RecordToolInput {
+                    .host
+                    .tabs
+                    .record_activity(TabActivity {
                         target_id: info.target_id.clone(),
                         tab_id: info.tab_id.0,
                         page_id,
                         session_id: self.call.session_id.as_str().to_string(),
-                        agent_id: identity.session.convo_id().as_str().to_string(),
+                        convo_id: identity.session.convo_id().as_str().to_string(),
                         slug: identity.agent.slug().to_string(),
                         tool_name: tool_name.clone(),
                     })
                     .await;
             }
-            let child_dispatch_id = DispatchId::new();
-            // Measure the inner primitive with the same v1 estimator granular
-            // tools use, so a code-mode run's session is no longer tainted by a
-            // v0 child and its token savings are projected.
-            let tool_input_token_estimate = estimate_tool_input_tokens(&tool_name, &raw_args);
-            let input = RecordToolDispatchInput {
-                agent_id: identity.session.convo_id().as_str().to_string(),
-                slug: identity.agent.slug().to_string(),
-                agent_label: identity.agent_label.clone(),
-                session_id: self.call.session_id.as_str().to_string(),
-                tool_name,
-                page_id: page.map(i64::from),
-                tab_id: live.as_ref().map(|page| page.tab_id.0),
-                target_id: live
-                    .as_ref()
-                    .map(|page| page.target_id.as_str().to_string()),
-                url: live.as_ref().map(|page| page.url.clone()),
-                title: live.as_ref().map(|page| page.title.clone()),
-                args_json: bounded_args_json(&raw_args),
-                result_meta: child_result_meta(is_error, from_helper),
-                duration_ms,
-                // None: child rows keep their completion time so they sort after
-                // the parent script dispatch, which is stamped with its start.
-                created_at: None,
-                dispatch_id: child_dispatch_id.clone(),
-                parent_dispatch_id: Some(self.call.dispatch_id.clone()),
-                tool_input_token_estimate,
-                tool_output_token_estimate: output_token_estimate,
-                token_estimator_version: TOKEN_ESTIMATOR_VERSION,
-            };
-            match self.call.state.audit_log.record_tool_dispatch(input).await {
-                Ok(row_id) => {
-                    // Attach a per-step screenshot, keyed to this child row, so
-                    // code-mode audits show each primitive like granular tools.
-                    // Only for page-targeting primitives; page-less ones (windows,
-                    // tab groups) have nothing meaningful to shoot.
-                    if page.is_some() {
-                        crate::api::mcp::observers::audit::persist_screenshot(
-                            &self.call.state,
-                            self.call.session_id.as_str(),
-                            &child_dispatch_id,
-                            row_id,
-                        )
-                        .await;
-                    }
-                }
-                Err(error) => {
-                    warn!(error = %error, "script inner-call audit write failed");
-                }
+            for observer in &self.call.host.observers {
+                observer
+                    .observe_inner_call(InnerCallContext {
+                        call: &self.call,
+                        identity,
+                        tool_name: &tool_name,
+                        page,
+                        live: live.as_ref(),
+                        args: &raw_args,
+                        is_error,
+                        from_helper,
+                        duration_ms,
+                        output_token_estimate,
+                    })
+                    .await;
             }
         })
     }
@@ -207,7 +170,7 @@ impl InnerCallHook for ScriptInnerCallHook {
             // window, exactly as the tabs-new effect does. Awaited so the claim
             // lands before the script's next primitive on this page.
             ownership_claims::record_new_page(
-                &self.call.state,
+                &self.call.host,
                 identity,
                 self.call.browser_session.as_ref(),
                 self.call.session_id.as_str(),
@@ -238,7 +201,7 @@ impl InnerCallHook for ScriptInnerCallHook {
             // a code-mode script can tell its own tabs from the user's and other
             // agents' tabs. Code-mode `page_json` keys the id as `pageId`.
             tabs_list_view::annotate_pages_with_ownership(
-                &self.call.state,
+                &self.call.host,
                 &identity.ownership_key,
                 pages,
                 "pageId",
@@ -279,7 +242,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                 description: format!("Saved helper for {host}"),
                 session: String::new(),
             };
-            helpers::save_helper(&self.call.state.config.browserclaw_dir, &meta, source)
+            helpers::save_helper(&self.call.host.helpers_root, &meta, source)
                 .map_err(|error| format!("could not save helper: {error}"))
         })
     }
@@ -287,7 +250,7 @@ impl InnerCallHook for ScriptInnerCallHook {
     fn list_helpers<'a>(&'a self, host: &'a str) -> BoxFuture<'a, Vec<Value>> {
         Box::pin(async move {
             let now = now_epoch_ms();
-            helpers::list_helper_meta(&self.call.state.config.browserclaw_dir, host)
+            helpers::list_helper_meta(&self.call.host.helpers_root, host)
                 .iter()
                 .map(|meta| super::helper_runtime::helper_info_json(meta, now))
                 .collect()
@@ -299,33 +262,17 @@ impl InnerCallHook for ScriptInnerCallHook {
             // The agent-facing read returns the full self-documenting doc
             // (description, call form, source), not the bare source: hot-load uses
             // the extracted source; a reader wants the context.
-            helpers::read_helper(&self.call.state.config.browserclaw_dir, host, name)
+            helpers::read_helper(&self.call.host.helpers_root, host, name)
         })
     }
-}
-
-/// Result metadata for a child primitive: the standard summary, plus a
-/// `fromHelper` marker when the primitive ran inside a hot-loaded helper, so the
-/// distiller can skip a successful reuse's replayed actions.
-fn child_result_meta(is_error: bool, from_helper: bool) -> String {
-    let base = result_meta(is_error, false, &Value::Null, 0);
-    if !from_helper {
-        return base;
-    }
-    let mut value: Value =
-        serde_json::from_str(&base).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
-    if let Some(object) = value.as_object_mut() {
-        object.insert("fromHelper".to_string(), Value::Bool(true));
-    }
-    value.to_string()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::mcp::test_support::tool_call;
     use crate::db::audit_log::ListDispatchesQuery;
     use crate::ids::ConvoId;
+    use crate::mcp::test_support::tool_call;
     use browseros_cdp::{CdpError, CdpEvent, SessionId as CdpSessionId};
     use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection};
     use futures_util::future::BoxFuture;
@@ -333,7 +280,7 @@ mod tests {
     use std::sync::Arc;
     use tokio::sync::broadcast;
 
-    fn hook_for(call: &crate::api::mcp::dispatch::ToolCall) -> ScriptInnerCallHook {
+    fn hook_for(call: &crate::mcp::dispatch::ToolCall) -> ScriptInnerCallHook {
         ScriptInnerCallHook::new(call.clone())
     }
 
@@ -348,7 +295,7 @@ mod tests {
     }
 
     async fn assert_creation_survives_ownership_handoff(bound: bool) -> anyhow::Result<()> {
-        use crate::api::mcp::test_support::ProfileConnection;
+        use crate::mcp::test_support::ProfileConnection;
         use browseros_core::{PageId, WindowId, pages::NewPageOptions, target::BrowserView};
         let native = ProfileConnection::new();
         let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
@@ -378,12 +325,12 @@ mod tests {
             .identity
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
-        let ownership = call.state.sessions.ownership();
+        let ownership = call.host.sessions.ownership();
         let operation = ownership
             .group_operation_lock(&identity.ownership_key)
             .await;
         let queued = operation.lock().await;
-        let paused = call.state.tab_activity.pause_recording_for_testing().await;
+        let paused = call.host.tab_activity.pause_recording_for_testing().await;
         let hook = hook_for(&call);
         let mut work = hook.on_page_created(original.page_id.0);
         // Poll the actual hook until record_new_page waits on its recording lock.
@@ -431,9 +378,9 @@ mod tests {
             call.created_page_snapshots.lock().await.is_empty(),
             "replacement was adopted as the creation snapshot"
         );
-        call.state.session_tabs.drain_writes().await;
+        call.host.session_tabs.drain_writes().await;
         let recorded = call
-            .state
+            .host
             .session_tabs
             .first_session_tab()
             .await?
@@ -551,9 +498,9 @@ mod tests {
         // The session-tab ownership window is what replay attribution and
         // per-tab screenshot selection join on; a code-mode tab must open it.
         hook.on_page_created(1).await;
-        call.state.session_tabs.drain_writes().await;
+        call.host.session_tabs.drain_writes().await;
         let claim = call
-            .state
+            .host
             .session_tabs
             .first_session_tab()
             .await?
@@ -577,7 +524,7 @@ mod tests {
         let hook = hook_for(&call);
 
         // Another conversation's page: allowed.
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(ConvoId::new("other"), PageId(7))
@@ -595,7 +542,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(mine, PageId(3))
@@ -616,12 +563,12 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(mine, PageId(3))
             .await;
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(ConvoId::new("other"), PageId(7))
@@ -656,12 +603,12 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(mine, PageId(3))
             .await;
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(ConvoId::new("other"), PageId(7))
@@ -708,7 +655,7 @@ mod tests {
         // primitive on it authorizes and the cockpit can attribute it.
         hook.on_page_created(5).await;
         assert_eq!(
-            call.state.sessions.owner_of_page(&PageId(5)).await,
+            call.host.sessions.owner_of_page(&PageId(5)).await,
             Some(mine)
         );
         assert!(hook.authorize(Some(5)).await.is_ok());
@@ -727,7 +674,7 @@ mod tests {
         // populated only by the bypassed effects; the hook now records it, so
         // the cockpit sees the tab and the session as progressing.
         assert!(
-            call.state
+            call.host
                 .tab_activity
                 .snapshot(call.browser_session.as_deref())
                 .await
@@ -745,7 +692,7 @@ mod tests {
         .await;
         assert!(
             !call
-                .state
+                .host
                 .tab_activity
                 .snapshot(call.browser_session.as_deref())
                 .await
@@ -771,7 +718,7 @@ mod tests {
         .await;
 
         let rows = call
-            .state
+            .host
             .audit_log
             .list_dispatches(ListDispatchesQuery {
                 session_id: Some(call.session_id.as_str().to_string()),

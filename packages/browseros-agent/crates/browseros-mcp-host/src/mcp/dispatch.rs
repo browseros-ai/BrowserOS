@@ -1,9 +1,15 @@
+//! The catalog dispatch pipeline: admission → guards → execute → ordered effects →
+//! observers → wire envelope. Built-in guards and effects are the shared MCP logic;
+//! a host appends its own through `HostCtx` (claw adds its audit and run-failure
+//! observers). Local tools never pass through here.
+
 use crate::{
-    AppState,
-    api::mcp::{effects, guards, helper_runtime, observers},
+    ctx::HostCtx,
     identity::ClientIdentity,
     ids::{ConvoId, DispatchId, SessionId},
-    services::sessions::Session,
+    mcp::{effects, guards, helper_runtime},
+    seams::{DispatchEffect, DispatchGuard, DispatchObserver},
+    sessions::Session,
 };
 use browseros_core::{BrowserSession, PageId, pages::PageInfo, target::BrowserView};
 use browseros_mcp::{
@@ -22,7 +28,7 @@ use tracing::warn;
 
 const CANCELLATION_REASON: &str = "Operation cancelled by the User";
 const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
-pub(crate) const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
+pub const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
 const DISPATCH_ERROR_TEXT_MAX: usize = 200;
 
 #[derive(Debug, Clone, Copy, Default, Eq, PartialEq)]
@@ -74,7 +80,7 @@ pub struct ToolCall {
     pub dispatch_cancel: CancellationToken,
     pub default_tab_group_id: Option<String>,
     pub flags: ToolFlags,
-    pub state: AppState,
+    pub host: Arc<HostCtx>,
     pub dispatch_id: DispatchId,
     pub output_files: OutputFileAccess,
     /// Pages a `run` script acted on that belong to the user or another agent.
@@ -106,7 +112,7 @@ impl ToolCall {
         client_cancel: CancellationToken,
         dispatch_cancel: CancellationToken,
         default_tab_group_id: Option<String>,
-        state: AppState,
+        host: Arc<HostCtx>,
         output_files: OutputFileAccess,
     ) -> Self {
         let tool_name = catalog[tool_index].name;
@@ -151,7 +157,7 @@ impl ToolCall {
             dispatch_cancel,
             default_tab_group_id,
             flags,
-            state,
+            host,
             dispatch_id: DispatchId::new(),
             output_files,
         }
@@ -187,7 +193,7 @@ impl ToolCall {
             return Ok(None);
         }
         let acquire = async {
-            self.state
+            self.host
                 .sessions
                 .ownership()
                 .group_operation_lock(&identity.ownership_key)
@@ -241,12 +247,12 @@ pub struct NamedToolObserver {
 // Ownership is not a guard and must not become one. An agent is allowed to act on
 // the user's tabs and on other agents' tabs; it is simply told whose they are, by
 // `effects::page_ownership_notice`. See that module for why.
-const GUARDS: &[ToolGuard] = &[
+pub(crate) const DEFAULT_GUARDS: &[ToolGuard] = &[
     guards::navigate_scheme::guard,
     guards::browser_connected::guard,
 ];
 
-const EFFECTS: &[NamedToolEffect] = &[
+pub(crate) const DEFAULT_EFFECTS: &[NamedToolEffect] = &[
     NamedToolEffect {
         name: "ownership-claims",
         run: effects::ownership_claims::apply,
@@ -284,20 +290,83 @@ const EFFECTS: &[NamedToolEffect] = &[
     },
 ];
 
-// The distiller (auto-capture of a successful run into a candidate helper) is
-// intentionally not wired. Self-healing keeps its agent-driven surface
-// (saveHelper/listHelpers/readHelper, discovery, hot-load) but does not
-// auto-distill. Re-add a NamedToolObserver for `distill::distill` to re-enable.
-const OBSERVERS: &[NamedToolObserver] = &[
-    NamedToolObserver {
-        name: "audit",
-        run: observers::audit::apply,
-    },
-    NamedToolObserver {
-        name: "run_failure",
-        run: observers::run_failure::apply,
-    },
-];
+impl DispatchGuard for ToolGuard {
+    fn check<'a>(&'a self, call: &'a ToolCall) -> BoxFuture<'a, Option<ToolResult>> {
+        self(call)
+    }
+}
+
+impl DispatchEffect for NamedToolEffect {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn apply<'a>(
+        &'a self,
+        context: ToolEffectContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<Option<ToolResult>>> {
+        (self.run)(context)
+    }
+}
+
+impl DispatchObserver for NamedToolObserver {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn observe<'a>(
+        &'a self,
+        context: ToolObserverContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
+        (self.run)(context)
+    }
+}
+
+impl<T: DispatchGuard + ?Sized> DispatchGuard for Arc<T> {
+    fn check<'a>(&'a self, call: &'a ToolCall) -> BoxFuture<'a, Option<ToolResult>> {
+        (**self).check(call)
+    }
+}
+
+impl<T: DispatchEffect + ?Sized> DispatchEffect for Arc<T> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn apply<'a>(
+        &'a self,
+        context: ToolEffectContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<Option<ToolResult>>> {
+        (**self).apply(context)
+    }
+}
+
+impl<T: DispatchObserver + ?Sized> DispatchObserver for Arc<T> {
+    fn name(&self) -> &'static str {
+        (**self).name()
+    }
+
+    fn observe<'a>(
+        &'a self,
+        context: ToolObserverContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
+        (**self).observe(context)
+    }
+
+    fn observe_inner_call<'a>(
+        &'a self,
+        call: crate::seams::InnerCallContext<'a>,
+    ) -> BoxFuture<'a, ()> {
+        (**self).observe_inner_call(call)
+    }
+
+    fn observe_local_tool<'a>(
+        &'a self,
+        dispatch: crate::seams::LocalToolContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
+        (**self).observe_local_tool(dispatch)
+    }
+}
 
 struct ExecutionOutcome {
     result: ToolResult,
@@ -310,17 +379,26 @@ enum DispatchExecution {
     ProtocolCancelled,
 }
 
-/// Dispatches a tool through guards, execution, ordered effects, and read-only observers.
+/// Dispatches a tool through guards, execution, ordered effects, and read-only observers,
+/// using the host's complete pipeline (built-ins first, host additions after).
 pub async fn dispatch_tool_call(call: ToolCall) -> Result<CallToolResult, McpError> {
-    dispatch_tool_call_with(call, GUARDS, EFFECTS, OBSERVERS).await
+    let host = call.host.clone();
+    dispatch_tool_call_with(call, &host.guards, &host.effects, &host.observers).await
 }
 
-async fn dispatch_tool_call_with(
+/// `dispatch_tool_call` with an explicit pipeline. Public so a host can test its own
+/// guards, effects and observers in isolation.
+pub async fn dispatch_tool_call_with<G, E, O>(
     mut call: ToolCall,
-    guards: &[ToolGuard],
-    effects: &[NamedToolEffect],
-    observers: &[NamedToolObserver],
-) -> Result<CallToolResult, McpError> {
+    guards: &[G],
+    effects: &[E],
+    observers: &[O],
+) -> Result<CallToolResult, McpError>
+where
+    G: DispatchGuard,
+    E: DispatchEffect,
+    O: DispatchObserver,
+{
     if let Some(identity) = &call.identity
         && !identity
             .session
@@ -330,7 +408,7 @@ async fn dispatch_tool_call_with(
         call.dispatch_cancel.cancel();
         call.cancel.cancel();
         return Err(McpError::invalid_request(
-            "BrowserOS neo session is no longer live",
+            session_gone_message(&call.host),
             None,
         ));
     }
@@ -416,32 +494,36 @@ async fn dispatch_tool_call_with(
     result.map(|result| wire_result(result, has_output_schema))
 }
 
-async fn run_guards(call: &ToolCall, guards: &[ToolGuard]) -> Option<ToolResult> {
+async fn run_guards<G: DispatchGuard>(call: &ToolCall, guards: &[G]) -> Option<ToolResult> {
     for guard in guards {
-        if let Some(rejection) = guard(call).await {
+        if let Some(rejection) = guard.check(call).await {
             return Some(rejection);
         }
     }
     None
 }
 
-async fn run_effects(context: ToolEffectContext<'_>, effects: &[NamedToolEffect]) -> ToolResult {
+async fn run_effects<E: DispatchEffect>(
+    context: ToolEffectContext<'_>,
+    effects: &[E],
+) -> ToolResult {
     let mut result = context.result.clone();
     for effect in effects {
-        match (effect.run)(ToolEffectContext {
-            call: context.call,
-            result: &result,
-            cancelled: context.cancelled,
-            duration_ms: context.duration_ms,
-        })
-        .await
+        match effect
+            .apply(ToolEffectContext {
+                call: context.call,
+                result: &result,
+                cancelled: context.cancelled,
+                duration_ms: context.duration_ms,
+            })
+            .await
         {
             Ok(Some(replacement)) => result = replacement,
             Ok(None) => {}
             Err(error) => warn!(
                 tool = context.call.tool().name,
                 session_id = %context.call.session_id,
-                effect = effect.name,
+                effect = effect.name(),
                 error = %error,
                 "cockpit tool dispatch effect failed"
             ),
@@ -450,20 +532,21 @@ async fn run_effects(context: ToolEffectContext<'_>, effects: &[NamedToolEffect]
     result
 }
 
-async fn run_observers(context: ToolObserverContext<'_>, observers: &[NamedToolObserver]) {
+async fn run_observers<O: DispatchObserver>(context: ToolObserverContext<'_>, observers: &[O]) {
     for observer in observers {
-        if let Err(error) = (observer.run)(ToolObserverContext {
-            call: context.call,
-            result: context.result,
-            cancelled: context.cancelled,
-            duration_ms: context.duration_ms,
-        })
-        .await
+        if let Err(error) = observer
+            .observe(ToolObserverContext {
+                call: context.call,
+                result: context.result,
+                cancelled: context.cancelled,
+                duration_ms: context.duration_ms,
+            })
+            .await
         {
             warn!(
                 tool = context.call.tool().name,
                 session_id = %context.call.session_id,
-                observer = observer.name,
+                observer = observer.name(),
                 error = %error,
                 "cockpit tool dispatch observer failed"
             );
@@ -488,22 +571,21 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
             // The same captured view reaches direct primitives and tool-backed calls.
             // The hook adds ownership labels and child audit rows, never scope authority.
             let is_script = ARBITRARY_SCRIPT_TOOLS.contains(&call.tool().name);
-            let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> =
-                if is_script && call.identity.is_some() {
-                    Some(
-                        Arc::new(crate::api::mcp::script_hook::ScriptInnerCallHook::new(
-                            call.clone(),
-                        )) as Arc<dyn browseros_mcp::InnerCallHook>,
-                    )
-                } else {
-                    None
-                };
+            let inner_call_hook: Option<Arc<dyn browseros_mcp::InnerCallHook>> = if is_script
+                && call.identity.is_some()
+            {
+                Some(Arc::new(crate::mcp::script_hook::ScriptInnerCallHook::new(
+                    call.clone(),
+                )) as Arc<dyn browseros_mcp::InnerCallHook>)
+            } else {
+                None
+            };
             // Hot-load the helpers the agent's owned-tab hosts make relevant, so
             // the script can call them by name. Cheap-gated when no helpers exist.
             let preloaded_helpers = match &call.identity {
                 Some(identity) if is_script => {
-                    crate::api::mcp::helper_runtime::preload_helpers(
-                        &call.state,
+                    crate::mcp::helper_runtime::preload_helpers(
+                        &call.host,
                         &identity.ownership_key,
                         view,
                     )
@@ -543,7 +625,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 Err(error) => ToolResult::error(format!("{} failed: {error}", call.tool().name)),
             }
         }
-        None => ToolResult::error(browser_unavailable_message(&call.state).await),
+        None => ToolResult::error(browser_unavailable_message(&call.host).await),
     };
     let duration_ms = i64::try_from(started.elapsed().as_millis()).unwrap_or(i64::MAX);
     if call.dispatch_cancel.is_cancelled() {
@@ -570,8 +652,9 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
 /// the browser, because that is the only one where it might not be running.
 /// Telling an agent to start a browser that is already running is what turns a
 /// transient loss into the user quitting the app.
-pub(super) async fn browser_unavailable_message(state: &AppState) -> String {
-    let link = state.browser.link_status().await;
+pub(crate) async fn browser_unavailable_message(host: &HostCtx) -> String {
+    let product = &host.branding.product_name;
+    let link = host.browser.link_status().await;
     if let Some(down_for) = link.down_for {
         // Whole seconds truncate a sub-second outage to "0s ago", which reads as a
         // bug in the very message meant to explain one.
@@ -580,18 +663,25 @@ pub(super) async fn browser_unavailable_message(state: &AppState) -> String {
             seconds => format!("{seconds}s"),
         };
         return format!(
-            "browser link lost {ago} ago and the server is reconnecting; BrowserOS neo is running, so wait a moment and retry this tool. Do not relaunch it and do not fall back to another browser tool."
+            "browser link lost {ago} ago and the server is reconnecting; {product} is running, so wait a moment and retry this tool. Do not relaunch it and do not fall back to another browser tool."
         );
     }
     if link.ever_connected {
-        return "browser link is down and the server is reconnecting; BrowserOS neo was reachable a moment ago, so wait and retry this tool. Do not relaunch it and do not fall back to another browser tool."
-            .to_string();
+        return format!(
+            "browser link is down and the server is reconnecting; {product} was reachable a moment ago, so wait and retry this tool. Do not relaunch it and do not fall back to another browser tool."
+        );
     }
-    "no link to the browser yet and the server is still retrying; wait a few seconds and retry this tool. If BrowserOS neo is not running, tell the user to start it. Do not fall back to another browser tool."
-        .to_string()
+    format!(
+        "no link to the browser yet and the server is still retrying; wait a few seconds and retry this tool. If {product} is not running, tell the user to start it. Do not fall back to another browser tool."
+    )
 }
 
-pub(super) fn operator_cancellation_result() -> ToolResult {
+/// Refusal for a call whose session was torn down between admission and registration.
+pub(crate) fn session_gone_message(host: &HostCtx) -> String {
+    format!("{} session is no longer live", host.branding.product_name)
+}
+
+pub fn operator_cancellation_result() -> ToolResult {
     ToolResult {
         content: vec![ContentBlock::text(CANCELLATION_REASON)],
         is_error: true,
@@ -651,7 +741,7 @@ pub fn page_id(call: &ToolCall, result: &ToolResult) -> Option<PageId> {
         .map(PageId)
 }
 
-pub(crate) fn dispatch_error_text(result: &ToolResult) -> Option<String> {
+pub fn dispatch_error_text(result: &ToolResult) -> Option<String> {
     result.content.iter().find_map(|block| match block {
         ContentBlock::Text(text) => Some(text.text.chars().take(DISPATCH_ERROR_TEXT_MAX).collect()),
         _ => None,
@@ -713,7 +803,7 @@ mod tests {
         use browseros_core::{WindowId, pages::NewPageOptions, target::BrowserView};
         use std::{sync::atomic::Ordering, task::Poll};
         let native = ProfileConnection::new();
-        let browser = crate::api::mcp::test_support::current_session(native.clone());
+        let browser = crate::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -735,7 +825,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        let ownership = call.state.sessions.ownership();
+        let ownership = call.host.sessions.ownership();
         // A preceding case closed the last tab of the remembered session group.
         // Its native lookup awaits while this new page still has no group.
         ownership
@@ -857,7 +947,7 @@ mod tests {
         use browseros_core::{WindowId, pages::NewPageOptions, target::BrowserView};
         use std::sync::atomic::Ordering;
         let native = ProfileConnection::new();
-        let browser = crate::api::mcp::test_support::current_session(native.clone());
+        let browser = crate::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -879,7 +969,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        call.state
+        call.host
             .sessions
             .ownership()
             .remember_scoped_group(
@@ -952,14 +1042,11 @@ mod tests {
 
     async fn queued_group_call(
         script: bool,
-    ) -> anyhow::Result<(
-        ToolCall,
-        Arc<crate::api::mcp::test_support::ProfileConnection>,
-    )> {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+    ) -> anyhow::Result<(ToolCall, Arc<crate::mcp::test_support::ProfileConnection>)> {
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         use browseros_core::target::BrowserView;
         let native = ProfileConnection::new();
-        let browser = crate::api::mcp::test_support::current_session(native.clone());
+        let browser = crate::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = if script {
             tool_call(
@@ -985,7 +1072,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        let ownership = call.state.sessions.ownership();
+        let ownership = call.host.sessions.ownership();
         let lock = ownership.group_operation_lock(&key).await;
         let _busy = lock.lock().await;
         let mut work = Box::pin(execute_with_cancellation(&call));
@@ -1022,7 +1109,7 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
         let session = identity.session.clone();
         let lock = call
-            .state
+            .host
             .sessions
             .ownership()
             .group_operation_lock(&identity.ownership_key)
@@ -1037,7 +1124,7 @@ mod tests {
         );
         let mut work = Box::pin(execute_with_cancellation(&call));
         assert!(futures_util::poll!(work.as_mut()).is_pending());
-        let sessions = call.state.sessions.clone();
+        let sessions = call.host.sessions.clone();
         let session_id = call.session_id.clone();
         let stop = tokio::spawn(async move { sessions.cancel_by_session(&session_id).await });
         tokio::time::timeout(
@@ -1083,7 +1170,7 @@ mod tests {
             .ownership_key
             .clone();
         let lock = call
-            .state
+            .host
             .sessions
             .ownership()
             .group_operation_lock(&key)
@@ -1149,11 +1236,11 @@ mod tests {
     async fn assert_run_deferred_grouping_preserves_explicit_group(
         action: &str,
     ) -> anyhow::Result<()> {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         use browseros_core::{pages::NewPageOptions, target::BrowserView};
         use std::{sync::atomic::Ordering, task::Poll};
         let native = ProfileConnection::new();
-        let browser = crate::api::mcp::test_support::current_session(native.clone());
+        let browser = crate::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1260,13 +1347,13 @@ mod tests {
 
     #[tokio::test]
     async fn stale_binding_blocks_execution_while_management_recovers() -> anyhow::Result<()> {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = crate::api::mcp::test_support::current_session(transport.clone());
+        let browser = crate::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"list"})).await?;
         let binding = call
-            .state
+            .host
             .targets
             .set(
                 &call.session_id,
@@ -1312,14 +1399,14 @@ mod tests {
             anyhow::bail!("unexpected cancellation")
         };
         assert!(!outcome.result.is_error);
-        assert_eq!(call.state.targets.get(&call.session_id).await, None);
+        assert_eq!(call.host.targets.get(&call.session_id).await, None);
         call.raw_args = json!({"action":"set", "name":"ops"});
         let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
             anyhow::bail!("unexpected cancellation")
         };
         assert!(!outcome.result.is_error);
         let selected = call
-            .state
+            .host
             .targets
             .get(&call.session_id)
             .await
@@ -1342,7 +1429,7 @@ mod tests {
     #[tokio::test]
     async fn older_native_runs_saved_binding_unbound_and_refuses_hidden_tools() -> anyhow::Result<()>
     {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
         let older = BrowserSession::new_with_native(
             transport.clone(),
@@ -1352,7 +1439,7 @@ mod tests {
         older.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"list"})).await?;
         let binding = call
-            .state
+            .host
             .targets
             .set(
                 &call.session_id,
@@ -1371,7 +1458,7 @@ mod tests {
                 .count()
         };
 
-        let state = call.state.clone();
+        let state = call.host.clone();
         let session_id = call.session_id.clone();
         let listed = dispatch_tool_call(call).await?;
         assert_ne!(listed.is_error, Some(true), "{listed:?}");
@@ -1420,9 +1507,9 @@ mod tests {
     #[tokio::test]
     async fn unselected_run_uses_the_default_profile_and_keeps_it_after_rebind()
     -> anyhow::Result<()> {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new().with_default_profile();
-        let browser = crate::api::mcp::test_support::current_session(transport.clone());
+        let browser = crate::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call(
             "run",
@@ -1431,8 +1518,8 @@ mod tests {
         .await?;
         call.browser_session = Some(browser.clone());
         call.view = Some(BrowserView::capture(browser.clone(), None, None).await);
-        assert_eq!(call.state.targets.get(&call.session_id).await, None);
-        call.state
+        assert_eq!(call.host.targets.get(&call.session_id).await, None);
+        call.host
             .targets
             .set(
                 &call.session_id,
@@ -1453,7 +1540,7 @@ mod tests {
             .identity
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
-        let ownership = call.state.sessions.ownership();
+        let ownership = call.host.sessions.ownership();
         let lock = ownership
             .group_operation_lock(&identity.ownership_key)
             .await;
@@ -1487,7 +1574,7 @@ mod tests {
         assert_eq!(creation.1["browserContextId"], "ctx-default");
         // Only the explicit selection made after admission is stored; the default never was.
         assert_eq!(
-            call.state
+            call.host
                 .targets
                 .get(&call.session_id)
                 .await
@@ -1499,9 +1586,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_creation_and_hook_keep_admitted_view_after_rebind() -> anyhow::Result<()> {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = crate::api::mcp::test_support::current_session(transport.clone());
+        let browser = crate::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call(
             "run",
@@ -1510,7 +1597,7 @@ mod tests {
         .await?;
         call.browser_session = Some(browser.clone());
         let eng = call
-            .state
+            .host
             .targets
             .set(
                 &call.session_id,
@@ -1520,7 +1607,7 @@ mod tests {
         call.view = Some(BrowserView::capture(browser.clone(), Some(eng), None).await);
         // The store has already moved to ops by the time execution starts. Both the
         // primitive and its detached creation hook must still use the admitted eng view.
-        call.state
+        call.host
             .targets
             .set(
                 &call.session_id,
@@ -1541,7 +1628,7 @@ mod tests {
             .identity
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
-        let ownership = call.state.sessions.ownership();
+        let ownership = call.host.sessions.ownership();
         let lock = ownership
             .group_operation_lock(&identity.ownership_key)
             .await;
@@ -1743,7 +1830,7 @@ mod tests {
     #[tokio::test]
     async fn tabs_flags_default_to_list() -> anyhow::Result<()> {
         let call =
-            crate::api::mcp::test_support::tool_call("tabs", Value::Object(serde_json::Map::new()))
+            crate::mcp::test_support::tool_call("tabs", Value::Object(serde_json::Map::new()))
                 .await?;
         assert_eq!(
             call.flags,
@@ -1757,8 +1844,7 @@ mod tests {
 
     #[tokio::test]
     async fn effect_failure_keeps_latest_good_result() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -1789,8 +1875,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -1835,8 +1920,7 @@ mod tests {
         *OBSERVED_RESULT
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -1885,8 +1969,7 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_audit_counts_the_final_wire_content_once() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", Some(json!({ "internal": true })));
         let final_result = run_effects(
             ToolEffectContext {
@@ -1920,7 +2003,7 @@ mod tests {
             }],
         )
         .await;
-        call.state
+        call.host
             .audit_worker
             .flush_session(call.session_id.as_str())
             .await?;
@@ -1929,7 +2012,7 @@ mod tests {
         assert_eq!(wire.structured_content, None);
 
         let row = call
-            .state
+            .host
             .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
@@ -1953,8 +2036,7 @@ mod tests {
     async fn guard_rejection_skips_effects() -> anyhow::Result<()> {
         EFFECT_CALLS.store(0, Ordering::SeqCst);
         GUARD_OBSERVER_CALLS.store(0, Ordering::SeqCst);
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let result = dispatch_tool_call_with(
             call,
             &[rejecting_guard],
@@ -1977,8 +2059,7 @@ mod tests {
 
     #[tokio::test]
     async fn finish_dispatch_waits_for_observer_submission() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()
@@ -2005,8 +2086,7 @@ mod tests {
 
     #[tokio::test]
     async fn stopped_session_rejects_browser_dispatch_before_effects() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()
@@ -2034,7 +2114,7 @@ mod tests {
             "BrowserOS neo session is no longer live"
         );
         assert!(
-            call.state
+            call.host
                 .audit_log
                 .list_dispatches(ListDispatchesQuery::default())
                 .await?
@@ -2046,8 +2126,7 @@ mod tests {
 
     #[tokio::test]
     async fn stop_winning_after_audit_rewrites_the_dispatch_as_cancelled() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()
@@ -2069,7 +2148,7 @@ mod tests {
         });
 
         LATE_EFFECT_ENTERED.notified().await;
-        let sessions = call.state.sessions.clone();
+        let sessions = call.host.sessions.clone();
         let session_id = session.id().clone();
         let cancel = tokio::spawn(async move { sessions.cancel_by_session(&session_id).await });
         call.dispatch_cancel.cancelled().await;
@@ -2086,7 +2165,7 @@ mod tests {
             Some(CANCELLATION_REASON)
         );
         let rows = call
-            .state
+            .host
             .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
@@ -2114,8 +2193,7 @@ mod tests {
 
     #[tokio::test]
     async fn passthrough_guard_returns_no_rejection() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         assert!(run_guards(&call, &[passthrough_guard]).await.is_none());
         Ok(())
     }
@@ -2189,8 +2267,7 @@ mod tests {
 
     #[tokio::test]
     async fn operator_cancellation_returns_and_audits_operator_result() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()
@@ -2209,7 +2286,7 @@ mod tests {
         )
         .await
         .unwrap_or_else(|error| panic!("operator cancellation should stay in-band: {error:?}"));
-        call.state
+        call.host
             .audit_worker
             .flush_session(call.session_id.as_str())
             .await?;
@@ -2223,7 +2300,7 @@ mod tests {
             Some(CANCELLATION_REASON)
         );
         let rows = call
-            .state
+            .host
             .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
@@ -2248,7 +2325,7 @@ mod tests {
             estimate_tool_output_tokens(&result.content)
         );
         let summary = call
-            .state
+            .host
             .audit_log
             .get_task_summary(call.session_id.as_str())
             .await?
@@ -2261,8 +2338,7 @@ mod tests {
     #[tokio::test]
     async fn client_cancellation_skips_effects_and_operator_result() -> anyhow::Result<()> {
         CLIENT_OBSERVER_CALLS.store(0, Ordering::SeqCst);
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()
@@ -2291,7 +2367,7 @@ mod tests {
         };
         assert_eq!(error.message.as_ref(), CLIENT_CANCELLATION_ERROR);
         assert!(
-            call.state
+            call.host
                 .audit_log
                 .list_dispatches(ListDispatchesQuery::default())
                 .await?

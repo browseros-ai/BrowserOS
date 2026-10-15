@@ -61,6 +61,9 @@ pub struct AppState {
     pub visuals: Arc<SessionVisualService>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
+    /// The shared MCP host layer serving `/mcp` and stdio, composed over the same
+    /// sessions, browser and targets as above plus claw's adapters (`api::mcp::host`).
+    pub mcp: Arc<browseros_mcp_host::HostCtx>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
     pub shutdown: ShutdownHandle,
     /// How the data this server opened compares to the schema this build knows, published on
@@ -199,6 +202,27 @@ impl AppState {
             browser.clone(),
             tab_activity.clone(),
         ));
+        let help = Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT));
+        let mcp = crate::api::mcp::host::build_claw_host(crate::api::mcp::host::ClawHostParts {
+            browserclaw_dir: config.browserclaw_dir.clone(),
+            browser: browser.clone(),
+            sessions: sessions.clone(),
+            targets: targets.clone(),
+            audit_log: audit_log.clone(),
+            audit_worker: audit_worker.clone(),
+            session_tabs: session_tabs.clone(),
+            tab_activity: tab_activity.clone(),
+            visuals: visuals.clone(),
+            screenshots: screenshots.clone(),
+            analytics: analytics.clone(),
+            run_failures: run_failures.clone(),
+            profiles: profiles.clone(),
+            skills: skills.clone(),
+            skill_runs: skill_runs.clone(),
+            help: help.clone(),
+            cockpit: cockpit.clone(),
+            agent_settings: agent_settings.clone(),
+        });
         Ok(Self {
             config,
             audit_log,
@@ -227,7 +251,8 @@ impl AppState {
             browser,
             visuals,
             cockpit,
-            help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
+            help,
+            mcp,
             extension_updates: Arc::default(),
             shutdown: ShutdownHandle::new(),
             migration,

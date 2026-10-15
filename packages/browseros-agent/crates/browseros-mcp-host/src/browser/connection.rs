@@ -88,6 +88,12 @@ impl BrowserService {
         })
     }
 
+    /// Launch-config native identity, copied into every epoch's session.
+    #[must_use]
+    pub fn native(&self) -> NativeCapabilities {
+        self.native
+    }
+
     #[must_use]
     pub fn state(&self) -> BrowserConnectionState {
         self.state_tx.borrow().clone()

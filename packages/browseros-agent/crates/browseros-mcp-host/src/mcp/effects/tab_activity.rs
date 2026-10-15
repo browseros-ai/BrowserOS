@@ -1,4 +1,4 @@
-use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id};
+use crate::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id};
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 
@@ -24,14 +24,14 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         };
         context
             .call
-            .state
-            .tab_activity
-            .record_tool(crate::services::cockpit::RecordToolInput {
+            .host
+            .tabs
+            .record_activity(crate::seams::TabActivity {
                 target_id: info.target_id.clone(),
                 tab_id: info.tab_id.0,
                 page_id,
                 session_id: context.call.session_id.as_str().to_string(),
-                agent_id: identity.session.convo_id().as_str().to_string(),
+                convo_id: identity.session.convo_id().as_str().to_string(),
                 slug: identity.agent.slug().to_string(),
                 tool_name: context.call.tool().name.to_string(),
             })
@@ -69,8 +69,7 @@ mod tests {
 
     #[tokio::test]
     async fn error_result_does_not_record_activity() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 1 })).await?;
+        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 1 })).await?;
         let result = ToolResult::error("failed");
         apply(ToolEffectContext {
             call: &call,
@@ -80,7 +79,7 @@ mod tests {
         })
         .await?;
         assert!(
-            call.state
+            call.host
                 .tab_activity
                 .snapshot(call.browser_session.as_deref())
                 .await
@@ -92,7 +91,7 @@ mod tests {
     #[tokio::test]
     async fn successful_dispatch_records_the_starting_target_incarnation() -> anyhow::Result<()> {
         let mut call =
-            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 1 })).await?;
+            crate::mcp::test_support::tool_call("navigate", json!({ "page": 1 })).await?;
         call.page_snapshot = Some(page_info("target-old"));
         let result = ToolResult::text("navigated", None);
 
@@ -105,7 +104,7 @@ mod tests {
         .await?;
 
         assert!(
-            call.state
+            call.host
                 .tab_activity
                 .remove_incarnation(1, "target-old")
                 .await
@@ -115,11 +114,9 @@ mod tests {
 
     #[tokio::test]
     async fn close_dispatch_does_not_restore_removed_activity() -> anyhow::Result<()> {
-        let mut call = crate::api::mcp::test_support::tool_call(
-            "tabs",
-            json!({ "action": "close", "page": 1 }),
-        )
-        .await?;
+        let mut call =
+            crate::mcp::test_support::tool_call("tabs", json!({ "action": "close", "page": 1 }))
+                .await?;
         call.page_snapshot = Some(page_info("target-old"));
         let result = ToolResult::text("closed", None);
 
@@ -133,7 +130,7 @@ mod tests {
 
         assert!(
             !call
-                .state
+                .host
                 .tab_activity
                 .remove_incarnation(1, "target-old")
                 .await

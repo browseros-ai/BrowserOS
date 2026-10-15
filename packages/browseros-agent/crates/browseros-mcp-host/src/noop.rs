@@ -3,8 +3,12 @@
 
 use crate::{
     error::HostResult,
+    identity::ProfileView,
     ids::DispatchId,
-    seams::{BrowserSessionObserver, HostAnalytics, HostEvent, SessionJournal, SessionStart},
+    seams::{
+        BrowserSessionObserver, HostAnalytics, HostEvent, ProfileDirectory, SessionJournal,
+        SessionStart, TabActivity, TabClaim, TabJournal,
+    },
 };
 use browseros_core::BrowserSession;
 use futures_util::future::BoxFuture;
@@ -78,5 +82,32 @@ impl BrowserSessionObserver for NoopBrowserSessionObserver {
         _epoch: u64,
     ) -> BoxFuture<'a, anyhow::Result<()>> {
         Box::pin(async { Ok(()) })
+    }
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopTabJournal;
+
+impl TabJournal for NoopTabJournal {
+    fn record_activity(&self, _activity: TabActivity) -> BoxFuture<'_, ()> {
+        Box::pin(async {})
+    }
+
+    fn forget_incarnation<'a>(&'a self, _page_id: u32, _target_id: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+
+    fn claim_tab(&self, _claim: TabClaim) {}
+
+    fn release_tab(&self, _tab_id: i64, _session_id: String) {}
+}
+
+/// No saved agent profiles: every client resolves to an ephemeral identity.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct NoopProfiles;
+
+impl ProfileDirectory for NoopProfiles {
+    fn profiles(&self) -> BoxFuture<'_, HostResult<Vec<ProfileView>>> {
+        Box::pin(async { Ok(Vec::new()) })
     }
 }

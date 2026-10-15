@@ -1,64 +1,36 @@
-pub mod dispatch;
+//! claw's `/mcp`: the shared host layer from `browseros_mcp_host`, branded "BrowserOS
+//! neo" and wired to claw's audit timeline, cockpit, skills and human-help surfaces in
+//! `host`. Session, ownership, grouping and dispatch logic all live in the crate.
+
 pub mod distill;
-pub mod effects;
-pub mod guards;
-pub mod helper_runtime;
-pub mod naming;
+pub mod host;
+mod local_tools;
 pub mod observers;
 mod prompt;
-pub mod script_hook;
-mod service;
-mod timeouts;
 
 #[cfg(test)]
 pub mod test_support;
 
-use crate::{AppState, services::sessions::RetainedGroupAction};
+use crate::AppState;
+use browseros_mcp_host::mcp::session_arg_description;
 use rmcp::transport::streamable_http_server::{
     session::local::LocalSessionManager,
     tower::{StreamableHttpServerConfig, StreamableHttpService},
 };
-use std::sync::Arc;
+use std::sync::LazyLock;
 
-pub use service::ClawMcpService;
-// Re-exported so the route tests assert against the real text instead of keeping a
-// copy of it, which is what let the two drift apart.
-pub use service::SESSION_ARG_DESCRIPTION;
+pub use browseros_mcp_host::HostMcpService as ClawMcpService;
+
+/// The `session` argument description claw serves. Re-exported so the route tests
+/// assert against the real text instead of keeping a copy of it, which is what let the
+/// two drift apart.
+pub static SESSION_ARG_DESCRIPTION: LazyLock<String> =
+    LazyLock::new(|| session_arg_description(host::NEO_SESSION_META_KEY));
 
 /// Builds the shared MCP service used by both streamable HTTP and stdio.
 #[must_use]
 pub fn browser_mcp_service(state: AppState) -> ClawMcpService {
-    let browser = Arc::downgrade(&state.browser);
-    state
-        .sessions
-        .set_retained_group_hook(Arc::new(move |ownership, key, action| {
-            let browser = browser.clone();
-            Box::pin(async move {
-                let session = match browser.upgrade() {
-                    Some(browser) => browser.session().await,
-                    None => None,
-                };
-                match action {
-                    RetainedGroupAction::Collapse => {
-                        effects::tab_groups::collapse_agent_tab_group(
-                            session.as_ref(),
-                            &ownership,
-                            &key,
-                        )
-                        .await
-                    }
-                    RetainedGroupAction::Close => {
-                        effects::tab_groups::close_agent_tab_group(
-                            session.as_ref(),
-                            &ownership,
-                            &key,
-                        )
-                        .await
-                    }
-                }
-            })
-        }));
-    ClawMcpService::new(state)
+    browseros_mcp_host::mcp_service(state.mcp)
 }
 
 /// Builds the rmcp streamable HTTP service mounted at `/mcp`.
@@ -66,9 +38,5 @@ pub fn browser_mcp_service(state: AppState) -> ClawMcpService {
 pub fn streamable_http_service(
     state: AppState,
 ) -> StreamableHttpService<ClawMcpService, LocalSessionManager> {
-    StreamableHttpService::new(
-        move || Ok(browser_mcp_service(state.clone())),
-        Arc::new(LocalSessionManager::default()),
-        StreamableHttpServerConfig::default(),
-    )
+    browseros_mcp_host::streamable_http_service(state.mcp, StreamableHttpServerConfig::default())
 }

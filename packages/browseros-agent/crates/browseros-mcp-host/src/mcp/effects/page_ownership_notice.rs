@@ -28,7 +28,7 @@
 //!
 //! The rule: **ownership answers "whose is this", never "may I".**
 
-use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id};
+use crate::mcp::dispatch::{ToolEffect, ToolEffectContext, extract_page_id};
 use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
@@ -56,7 +56,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         };
         let page_id = PageId(page_id);
 
-        let owner = context.call.state.sessions.owner_of_page(&page_id).await;
+        let owner = context.call.host.sessions.owner_of_page(&page_id).await;
         let notice = match owner {
             // Claimed by this conversation: the ordinary case, say nothing.
             Some(owner) if owner == identity.ownership_key => return Ok(None),
@@ -65,7 +65,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
                 // whether the agent listed it or acted on it.
                 let label = context
                     .call
-                    .state
+                    .host
                     .sessions
                     .snapshot()
                     .await
@@ -87,7 +87,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
                 // id, which is the only attribution left.
                 let same_client = context
                     .call
-                    .state
+                    .host
                     .sessions
                     .snapshot()
                     .await
@@ -127,7 +127,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
 }
 
 /// Summarises the pages a `run` script touched that were not its own.
-fn run_script_notice(call: &crate::api::mcp::dispatch::ToolCall) -> Option<String> {
+fn run_script_notice(call: &crate::mcp::dispatch::ToolCall) -> Option<String> {
     let pages = call.foreign_pages.lock().ok()?;
     if pages.is_empty() {
         return None;
@@ -158,8 +158,8 @@ const _: ToolEffect = apply;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::mcp::dispatch::ToolEffectContext;
     use crate::ids::ConvoId;
+    use crate::mcp::dispatch::ToolEffectContext;
     use rmcp::model::ContentBlock;
     use serde_json::json;
 
@@ -175,10 +175,7 @@ mod tests {
             .join("\n")
     }
 
-    async fn run(
-        call: &crate::api::mcp::dispatch::ToolCall,
-        result: &ToolResult,
-    ) -> Option<ToolResult> {
+    async fn run(call: &crate::mcp::dispatch::ToolCall, result: &ToolResult) -> Option<ToolResult> {
         apply(ToolEffectContext {
             call,
             result,
@@ -195,25 +192,22 @@ mod tests {
     /// note has to say it can take it back.
     #[tokio::test]
     async fn an_own_earlier_session_is_named_as_reclaimable() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call(
+        let call = crate::mcp::test_support::tool_call(
             "evaluate",
             serde_json::json!({ "page": 7, "code": "return 1" }),
         )
         .await?;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
         // Same client, earlier conversation: what a reconnect leaves behind.
-        let earlier = crate::services::sessions::Session::new(
+        let earlier = crate::sessions::Session::new(
             crate::ids::SessionId::new("earlier"),
             identity.agent.clone(),
             crate::identity::ConversationIdentity::new(identity.agent.slug(), "prior".to_string()),
             identity.agent_label.clone(),
             tokio::time::Instant::now(),
         );
-        call.state
-            .sessions
-            .insert_for_testing(earlier.clone())
-            .await;
-        call.state
+        call.host.sessions.insert_for_testing(earlier.clone()).await;
+        call.host
             .sessions
             .ownership()
             .claim_page(earlier.convo_id().clone(), PageId(7))
@@ -243,7 +237,7 @@ mod tests {
     /// attribution left is the slug on the conversation id.
     #[tokio::test]
     async fn an_own_retired_session_is_still_named_as_reclaimable() -> anyhow::Result<()> {
-        let call = crate::api::mcp::test_support::tool_call(
+        let call = crate::mcp::test_support::tool_call(
             "evaluate",
             serde_json::json!({ "page": 7, "code": "return 1" }),
         )
@@ -256,7 +250,7 @@ mod tests {
             .slug()
             .to_string();
         // No session inserted: the conversation is gone, the claim is not.
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(ConvoId::new(format!("{slug}-prior")), PageId(7))
@@ -282,9 +276,8 @@ mod tests {
     /// This is the assertion the old guard failed.
     #[tokio::test]
     async fn another_conversations_page_is_usable_and_labelled() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
-        call.state
+        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
+        call.host
             .sessions
             .ownership()
             .claim_page(ConvoId::new("other"), PageId(7))
@@ -305,8 +298,7 @@ mod tests {
     /// A page with no claim at all is one the user opened. Agents may use those too.
     #[tokio::test]
     async fn a_user_tab_is_usable_and_identified_as_theirs() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 3 })).await?;
+        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 3 })).await?;
         let ok = ToolResult::text("navigated", None);
 
         let annotated = run(&call, &ok)
@@ -321,15 +313,14 @@ mod tests {
     /// The common case stays quiet. Silence means the page is yours.
     #[tokio::test]
     async fn your_own_page_is_not_annotated() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 9 })).await?;
+        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 9 })).await?;
         let owner = call
             .identity
             .as_ref()
             .unwrap_or_else(|| panic!("identity"))
             .ownership_key
             .clone();
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(owner, PageId(9))
@@ -345,7 +336,7 @@ mod tests {
     #[tokio::test]
     async fn a_run_script_reports_the_foreign_pages_it_touched() -> anyhow::Result<()> {
         let call =
-            crate::api::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
+            crate::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
         {
             let mut pages = call
                 .foreign_pages
@@ -374,7 +365,7 @@ mod tests {
     #[tokio::test]
     async fn a_run_script_in_its_own_tabs_is_quiet() -> anyhow::Result<()> {
         let call =
-            crate::api::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
+            crate::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
         let ok = ToolResult::text("script returned 1", None);
         assert!(run(&call, &ok).await.is_none());
         Ok(())
@@ -384,9 +375,8 @@ mod tests {
     /// somebody else's error.
     #[tokio::test]
     async fn a_failed_call_is_left_untouched() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
-        call.state
+        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
+        call.host
             .sessions
             .ownership()
             .claim_page(ConvoId::new("other"), PageId(7))

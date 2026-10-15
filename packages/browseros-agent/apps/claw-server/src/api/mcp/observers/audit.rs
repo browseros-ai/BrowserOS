@@ -1,12 +1,17 @@
+//! claw's audit observer: every finished dispatch, every primitive a script ran, and
+//! every host-local tool call becomes a bounded row on the audit timeline, with a
+//! screenshot of the agent's active tab attached when one is available.
+
 use crate::{
-    AppState,
-    api::mcp::dispatch::{
-        ToolCall, ToolObserver, ToolObserverContext, extract_page_id, result_page_id,
+    db::{
+        AuditLog,
+        audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     },
-    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
     ids::DispatchId,
     services::{
-        audit::{AuditEvent, AuditPreview},
+        audit::{AuditEvent, AuditPreview, AuditWorker},
+        cockpit::SessionVisualService,
+        screenshots::ScreenshotService,
         sessions::Session,
     },
 };
@@ -16,6 +21,10 @@ use browseros_mcp::{
     token_estimate::{
         TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
     },
+};
+use browseros_mcp_host::{
+    mcp::dispatch::{ToolCall, ToolObserverContext, extract_page_id, result_page_id},
+    seams::{DispatchObserver, InnerCallContext, LocalToolContext},
 };
 use futures_util::future::BoxFuture;
 use serde_json::Value;
@@ -28,22 +37,112 @@ const AUDIT_TARGET_ID_MAX: usize = 512;
 const AUDIT_URL_MAX: usize = 4096;
 const AUDIT_TITLE_MAX: usize = 1024;
 
-/** Converts the final tool outcome into a bounded event and admits it to the audit worker. */
-pub fn apply(context: ToolObserverContext<'_>) -> BoxFuture<'_, anyhow::Result<()>> {
-    Box::pin(async move {
-        let Some(event) = build_event(
-            context.call,
-            context.result,
-            context.duration_ms,
-            context.cancelled,
-        )
-        .await
-        else {
-            return Ok(());
-        };
-        context.call.state.audit_worker.submit(event).await?;
-        Ok(())
-    })
+pub struct AuditObserver {
+    pub audit_worker: Arc<AuditWorker>,
+    pub audit_log: Arc<AuditLog>,
+    pub visuals: Arc<SessionVisualService>,
+    pub screenshots: Arc<ScreenshotService>,
+}
+
+impl DispatchObserver for AuditObserver {
+    fn name(&self) -> &'static str {
+        "audit"
+    }
+
+    /// Converts the final tool outcome into a bounded event and admits it to the audit worker.
+    fn observe<'a>(&'a self, context: ToolObserverContext<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            let Some(event) = build_event(
+                self,
+                context.call,
+                context.result,
+                context.duration_ms,
+                context.cancelled,
+            )
+            .await
+            else {
+                return Ok(());
+            };
+            self.audit_worker.submit(event).await?;
+            Ok(())
+        })
+    }
+
+    /// A script primitive becomes a child row of the script's dispatch, written directly
+    /// (not through the worker) so its row id can key a per-step screenshot.
+    fn observe_inner_call<'a>(&'a self, call: InnerCallContext<'a>) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            let identity = call.identity;
+            let child_dispatch_id = DispatchId::new();
+            // Measure the inner primitive with the same v1 estimator granular
+            // tools use, so a code-mode run's session is no longer tainted by a
+            // v0 child and its token savings are projected.
+            let tool_input_token_estimate = estimate_tool_input_tokens(call.tool_name, call.args);
+            let input = RecordToolDispatchInput {
+                agent_id: identity.session.convo_id().as_str().to_string(),
+                slug: identity.agent.slug().to_string(),
+                agent_label: identity.agent_label.clone(),
+                session_id: call.call.session_id.as_str().to_string(),
+                tool_name: call.tool_name.to_string(),
+                page_id: call.page.map(i64::from),
+                tab_id: call.live.map(|page| page.tab_id.0),
+                target_id: call.live.map(|page| page.target_id.as_str().to_string()),
+                url: call.live.map(|page| page.url.clone()),
+                title: call.live.map(|page| page.title.clone()),
+                args_json: bounded_args_json(call.args),
+                result_meta: child_result_meta(call.is_error, call.from_helper),
+                duration_ms: call.duration_ms,
+                // None: child rows keep their completion time so they sort after
+                // the parent script dispatch, which is stamped with its start.
+                created_at: None,
+                dispatch_id: child_dispatch_id.clone(),
+                parent_dispatch_id: Some(call.call.dispatch_id.clone()),
+                tool_input_token_estimate,
+                tool_output_token_estimate: call.output_token_estimate,
+                token_estimator_version: TOKEN_ESTIMATOR_VERSION,
+            };
+            match self.audit_log.record_tool_dispatch(input).await {
+                Ok(row_id) => {
+                    // Attach a per-step screenshot, keyed to this child row, so
+                    // code-mode audits show each primitive like granular tools.
+                    // Only for page-targeting primitives; page-less ones (windows,
+                    // tab groups) have nothing meaningful to shoot.
+                    if call.page.is_some() {
+                        self.persist_screenshot(
+                            call.call.session_id.as_str(),
+                            &child_dispatch_id,
+                            row_id,
+                        )
+                        .await;
+                    }
+                }
+                Err(error) => {
+                    warn!(error = %error, "script inner-call audit write failed");
+                }
+            }
+        })
+    }
+
+    fn observe_local_tool<'a>(
+        &'a self,
+        dispatch: LocalToolContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(async move {
+            record_local_tool_dispatch(
+                &self.audit_worker,
+                LocalToolDispatch {
+                    session: dispatch.session,
+                    agent_label: dispatch.agent_label,
+                    tool_name: dispatch.tool_name,
+                    raw_args: dispatch.args,
+                    result: dispatch.result,
+                    duration_ms: dispatch.duration_ms,
+                    dispatch_id: dispatch.dispatch_id,
+                },
+            )
+            .await
+        })
+    }
 }
 
 pub struct LocalToolDispatch<'a> {
@@ -57,11 +156,10 @@ pub struct LocalToolDispatch<'a> {
 }
 
 pub async fn record_local_tool_dispatch(
-    state: &AppState,
+    audit_worker: &AuditWorker,
     dispatch: LocalToolDispatch<'_>,
 ) -> anyhow::Result<()> {
-    state
-        .audit_worker
+    audit_worker
         .submit(AuditEvent::without_preview(RecordToolDispatchInput {
             agent_id: bounded_text(
                 dispatch.session.convo_id().as_str(),
@@ -94,6 +192,7 @@ pub async fn record_local_tool_dispatch(
 }
 
 async fn build_event(
+    observer: &AuditObserver,
     call: &ToolCall,
     result: &ToolResult,
     duration_ms: i64,
@@ -150,14 +249,14 @@ async fn build_event(
             tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         },
-        preview: Some(preview_callback(call, &identity.session)),
+        preview: Some(preview_callback(observer, &identity.session)),
     })
 }
 
-fn preview_callback(call: &ToolCall, session: &Arc<Session>) -> AuditPreview {
+fn preview_callback(observer: &AuditObserver, session: &Arc<Session>) -> AuditPreview {
     let session = Arc::downgrade(session);
-    let visuals = Arc::downgrade(&call.state.visuals);
-    let screenshots = Arc::downgrade(&call.state.screenshots);
+    let visuals = Arc::downgrade(&observer.visuals);
+    let screenshots = Arc::downgrade(&observer.screenshots);
     Arc::new(move |session_id, row_id| {
         let session = session.clone();
         let visuals = visuals.clone();
@@ -177,17 +276,13 @@ fn preview_callback(call: &ToolCall, session: &Arc<Session>) -> AuditPreview {
     })
 }
 
-/// Captures a screenshot of the session's active owned tab and attaches it to
-/// the given audit row. Called synchronously by the code-mode script hook so a
-/// script's primitives get per-step screenshots like granular tools; failures
-/// are non-fatal.
-pub(crate) async fn persist_screenshot(
-    state: &AppState,
-    session_id: &str,
-    dispatch_id: &DispatchId,
-    row_id: i64,
-) {
-    let bytes = match state.visuals.capture(session_id, None).await {
+impl AuditObserver {
+    /// Captures a screenshot of the session's active owned tab and attaches it to
+    /// the given audit row. Called synchronously for each script primitive so a
+    /// script's primitives get per-step screenshots like granular tools; failures
+    /// are non-fatal.
+    async fn persist_screenshot(&self, session_id: &str, dispatch_id: &DispatchId, row_id: i64) {
+        let bytes = match self.visuals.capture(session_id, None).await {
         Ok(Some(bytes)) => bytes,
         Ok(None) => return,
         Err(error) => {
@@ -195,13 +290,30 @@ pub(crate) async fn persist_screenshot(
             return;
         }
     };
-    if let Err(error) = state.screenshots.write(session_id, row_id, &bytes).await {
+    if let Err(error) = self.screenshots.write(session_id, row_id, &bytes).await {
         warn!(error = %error, dispatch_id = %dispatch_id, "session screenshot write failed");
         return;
     }
-    if let Err(error) = state.audit_log.mark_screenshot(row_id).await {
+    if let Err(error) = self.audit_log.mark_screenshot(row_id).await {
         warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot marker failed");
     }
+    }
+}
+
+/// Result metadata for a child primitive: the standard summary, plus a
+/// `fromHelper` marker when the primitive ran inside a hot-loaded helper, so the
+/// distiller can skip a successful reuse's replayed actions.
+fn child_result_meta(is_error: bool, from_helper: bool) -> String {
+    let base = result_meta(is_error, false, &Value::Null, 0);
+    if !from_helper {
+        return base;
+    }
+    let mut value: Value =
+        serde_json::from_str(&base).unwrap_or_else(|_| Value::Object(serde_json::Map::new()));
+    if let Some(object) = value.as_object_mut() {
+        object.insert("fromHelper".to_string(), Value::Bool(true));
+    }
+    value.to_string()
 }
 
 fn tool_result_meta(result: &ToolResult, cancelled: bool) -> String {
@@ -232,7 +344,6 @@ fn bounded_text(value: &str, max_bytes: usize) -> String {
     format!("{}~", &value[..end])
 }
 
-const _: ToolObserver = apply;
 
 #[cfg(test)]
 mod tests {

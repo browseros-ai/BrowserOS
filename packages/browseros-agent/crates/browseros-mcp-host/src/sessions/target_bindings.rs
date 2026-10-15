@@ -11,7 +11,10 @@ use browseros_core::target::{TargetBinding, TargetIntent};
 use browseros_mcp::TargetStore;
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, OnceLock},
+};
 use tokio::sync::Mutex;
 
 const FILE: &str = "target-bindings.json";
@@ -46,11 +49,11 @@ impl Record {
         }
     }
 
-    fn require_live(&self) -> HostResult<()> {
+    fn require_live(&self, product: &str) -> HostResult<()> {
         if self.stopped {
-            return Err(HostError::Internal(
-                "BrowserOS neo session was stopped and will not resume".into(),
-            ));
+            return Err(HostError::Internal(format!(
+                "{product} session was stopped and will not resume"
+            )));
         }
         Ok(())
     }
@@ -89,6 +92,8 @@ impl Records {
 pub struct TargetBindings {
     records: Mutex<Records>,
     store: JsonStore,
+    /// Product named in the agent-facing stopped-task error; set once from branding.
+    product: OnceLock<String>,
 }
 
 impl TargetBindings {
@@ -101,7 +106,17 @@ impl TargetBindings {
         Ok(Arc::new(Self {
             records: Mutex::new(records),
             store,
+            product: OnceLock::new(),
         }))
+    }
+
+    /// Names the product in the stopped-task error. First call wins; `HostCtx` sets it.
+    pub fn set_product_name(&self, product: &str) {
+        let _ = self.product.set(product.to_string());
+    }
+
+    fn product(&self) -> &str {
+        self.product.get().map_or("BrowserOS", String::as_str)
     }
 
     pub async fn get(&self, session: &SessionId) -> Option<TargetBinding> {
@@ -120,7 +135,7 @@ impl TargetBindings {
         let Some(record) = records.record(session) else {
             return Ok(None);
         };
-        record.require_live()?;
+        record.require_live(self.product())?;
         Ok(record.binding.clone())
     }
 
@@ -149,7 +164,7 @@ impl TargetBindings {
         let mut records = self.records.lock().await;
         let mut next = records.clone();
         let record = next.ensure_record(session);
-        record.require_live()?;
+        record.require_live(self.product())?;
         let binding = TargetBinding {
             intent,
             revision: record.next_revision()?,
@@ -168,7 +183,7 @@ impl TargetBindings {
         let mut records = self.records.lock().await;
         let mut next = records.clone();
         let record = next.ensure_record(session);
-        record.require_live()?;
+        record.require_live(self.product())?;
         record.revision = record.next_revision()?;
         record.binding = None;
         record.updated_at_ms = crate::clock::now_epoch_ms();
@@ -186,10 +201,10 @@ impl TargetBindings {
     ) -> HostResult<Option<TargetBinding>> {
         let mut records = self.records.lock().await;
         if let Some(record) = records.record(from) {
-            record.require_live()?;
+            record.require_live(self.product())?;
         }
         if let Some(record) = records.record(to) {
-            record.require_live()?;
+            record.require_live(self.product())?;
             return Ok(record.binding.clone());
         }
         let mut next = records.clone();
@@ -265,7 +280,7 @@ impl TargetBindings {
         })?;
         if records.record(session).is_some() {
             if records.canonical(session) == &canonical {
-                source.require_live()?;
+                source.require_live(self.product())?;
                 return Ok(());
             }
             if let Some(current) = records.record(session)
@@ -273,12 +288,12 @@ impl TargetBindings {
             {
                 // Explicit set/clear selected this task's routing already. It may
                 // borrow a group without adopting that group's task or its ownership.
-                current.require_live()?;
+                current.require_live(self.product())?;
                 return Ok(());
             }
             return Err(HostError::Internal("target_reselect_required: group belongs to another task; select its profile explicitly".into()));
         }
-        source.require_live()?;
+        source.require_live(self.product())?;
         let mut next = records.clone();
         next.aliases.insert(session.clone(), canonical.clone());
         if let Some(record) = next.tasks.get_mut(&canonical) {

@@ -1,4 +1,4 @@
-use crate::api::mcp::dispatch::{ToolCall, ToolGuard, browser_unavailable_message};
+use crate::mcp::dispatch::{ToolCall, ToolGuard, browser_unavailable_message};
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use tracing::warn;
@@ -12,7 +12,7 @@ pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {
         if call.browser_session.is_some() {
             return None;
         }
-        let down_for = call.state.browser.link_status().await.down_for;
+        let down_for = call.host.browser.link_status().await.down_for;
         warn!(
             tool = call.tool().name,
             session_id = %call.session_id,
@@ -21,7 +21,7 @@ pub fn guard(call: &ToolCall) -> BoxFuture<'_, Option<ToolResult>> {
             "cockpit tool dispatch rejected"
         );
         Some(ToolResult::error(
-            browser_unavailable_message(&call.state).await,
+            browser_unavailable_message(&call.host).await,
         ))
     })
 }
@@ -51,7 +51,7 @@ mod tests {
     #[tokio::test]
     async fn a_link_that_never_connected_says_retry_and_may_mention_starting() -> anyhow::Result<()>
     {
-        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({})).await?;
         let result = guard(&call)
             .await
             .unwrap_or_else(|| ToolResult::error("the guard must reject without a session"));

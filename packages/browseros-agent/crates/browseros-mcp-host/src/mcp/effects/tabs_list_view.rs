@@ -1,4 +1,4 @@
-use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext};
+use crate::mcp::dispatch::{ToolEffect, ToolEffectContext};
 use browseros_core::PageId;
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
@@ -22,7 +22,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
             return Ok(None);
         };
         let annotated = annotate_pages_with_ownership(
-            &context.call.state,
+            &context.call.host,
             &identity.ownership_key,
             pages,
             "page",
@@ -42,16 +42,16 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
 /// (`id_field = "pageId"`), so both surfaces classify identically. Prunes
 /// ownership claims for pages no longer live before annotating.
 pub(crate) async fn annotate_pages_with_ownership(
-    state: &crate::AppState,
+    host: &crate::ctx::HostCtx,
     caller: &crate::ids::ConvoId,
     pages: &[Value],
     id_field: &str,
 ) -> Vec<Value> {
-    let ownership = state.sessions.ownership();
-    if let Some(browser) = state.browser.session().await {
+    let ownership = host.sessions.ownership();
+    if let Some(browser) = host.browser.session().await {
         reconcile_ownership(&browser, &ownership).await;
     }
-    let labels = state
+    let labels = host
         .sessions
         .snapshot()
         .await
@@ -79,7 +79,7 @@ pub(crate) async fn annotate_pages_with_ownership(
 /// a disconnected browser or failed refresh leaves last-known ownership intact.
 async fn reconcile_ownership(
     browser: &browseros_core::BrowserSession,
-    ownership: &crate::services::sessions::PageOwnership,
+    ownership: &crate::sessions::PageOwnership,
 ) {
     if browser.pages.list().await.is_ok() {
         ownership
@@ -201,10 +201,9 @@ mod tests {
     #[tokio::test]
     async fn the_group_id_reaches_the_rendered_text_for_the_callers_own_tabs() -> anyhow::Result<()>
     {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(identity.ownership_key.clone(), PageId(9))
@@ -244,9 +243,8 @@ mod tests {
     #[tokio::test]
     async fn annotates_all_tabs_in_three_ownership_buckets_and_prunes_stale_claims()
     -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        let transport = crate::api::mcp::test_support::ProfileConnection::new();
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let transport = crate::mcp::test_support::ProfileConnection::new();
         // Include a fourth global page; the result below projects a different order.
         let fourth = transport.tabs.lock().unwrap_or_else(|p| p.into_inner())[0].clone();
         let mut fourth = fourth;
@@ -261,9 +259,9 @@ mod tests {
             transport,
             browseros_core::BrowserSessionHooks::default(),
         );
-        call.state.browser.set_session_for_testing(browser).await;
+        call.host.browser.set_session_for_testing(browser).await;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
-        let other_session = crate::services::sessions::Session::new(
+        let other_session = crate::sessions::Session::new(
             crate::ids::SessionId::new("s2"),
             crate::identity::ClientIdentity::Ephemeral {
                 slug: "other".to_string(),
@@ -273,21 +271,21 @@ mod tests {
             "Codex".to_string(),
             tokio::time::Instant::now(),
         );
-        call.state
+        call.host
             .sessions
             .insert_for_testing(other_session.clone())
             .await;
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(identity.ownership_key.clone(), PageId(2))
             .await;
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(other_session.convo_id().clone(), PageId(3))
             .await;
-        call.state
+        call.host
             .sessions
             .ownership()
             .claim_page(other_session.convo_id().clone(), PageId(9))
@@ -349,7 +347,7 @@ mod tests {
             )]
         );
         assert_eq!(
-            call.state
+            call.host
                 .sessions
                 .ownership()
                 .owner_of_page(&PageId(9))
@@ -361,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn projected_listing_prunes_only_after_fresh_global_inventory() -> anyhow::Result<()> {
-        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::mcp::test_support::{ProfileConnection, tool_call};
         use std::sync::atomic::Ordering;
         let call = tool_call("tabs", json!({"action":"list"})).await?;
         let transport = ProfileConnection::new();
@@ -370,20 +368,20 @@ mod tests {
             browseros_core::BrowserSessionHooks::default(),
         );
         browser.pages.list().await?;
-        call.state.browser.set_session_for_testing(browser).await;
+        call.host.browser.set_session_for_testing(browser).await;
         let caller = call
             .identity
             .as_ref()
             .ok_or_else(|| anyhow::anyhow!("identity missing"))?
             .ownership_key
             .clone();
-        let ownership = call.state.sessions.ownership();
+        let ownership = call.host.sessions.ownership();
         ownership.claim_page(caller.clone(), PageId(1)).await;
         ownership.claim_page(caller.clone(), PageId(2)).await;
         ownership.claim_page(caller.clone(), PageId(99)).await;
         let projected = vec![json!({"pageId":1})];
         let annotated =
-            annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+            annotate_pages_with_ownership(&call.host, &caller, &projected, "pageId").await;
         assert_eq!(annotated[0]["ownership"], "mine");
         assert_eq!(
             ownership.owner_of_page(&PageId(2)).await,
@@ -397,14 +395,14 @@ mod tests {
             .unwrap_or_else(|p| p.into_inner())
             .retain(|tab| tab["tabId"] != 102);
         transport.fail_inventory.store(true, Ordering::SeqCst);
-        annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        annotate_pages_with_ownership(&call.host, &caller, &projected, "pageId").await;
         assert_eq!(
             ownership.owner_of_page(&PageId(2)).await,
             Some(caller.clone()),
             "failed refresh is not proof of disappearance"
         );
         transport.fail_inventory.store(false, Ordering::SeqCst);
-        annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        annotate_pages_with_ownership(&call.host, &caller, &projected, "pageId").await;
         assert_eq!(
             ownership.owner_of_page(&PageId(2)).await,
             None,
@@ -415,8 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_tabs_list_keeps_the_ts_empty_state() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let result = ToolResult::text("all tabs", Some(json!({ "pages": [] })));
         let annotated = apply(ToolEffectContext {
             call: &call,

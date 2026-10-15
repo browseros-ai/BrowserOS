@@ -6,7 +6,7 @@ use crate::{
     identity::{
         CLIENT_ALIASES, client_product_prefix, slugify_client_name, unversioned_client_slug,
     },
-    services::sessions::Session,
+    sessions::Session,
 };
 
 const SMALL_NAME_WORD_LIMIT: usize = 3;

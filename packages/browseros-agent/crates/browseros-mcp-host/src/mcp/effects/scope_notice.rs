@@ -10,7 +10,7 @@
 //! It annotates the outer MCP result only. Primitives inside a `run` script never pass
 //! through dispatch effects, so their text stays exactly what the page returned.
 
-use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext};
+use crate::mcp::dispatch::{ToolEffect, ToolEffectContext};
 use browseros_mcp::{ToolResult, unapplied_target_note};
 use futures_util::future::BoxFuture;
 
