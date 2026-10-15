@@ -157,7 +157,11 @@ impl Klavis {
         Ok(OAuthUrls(
             names
                 .into_iter()
-                .filter_map(|name| auth_url(&result.oauth_urls, name).map(|url| (name.into(), url)))
+                .filter_map(|name| {
+                    auth_url(&result.oauth_urls, name)
+                        .filter(|url| !url.is_empty())
+                        .map(|url| (name.into(), url))
+                })
                 .collect(),
         ))
     }

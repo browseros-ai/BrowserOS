@@ -369,7 +369,12 @@ fn with_legacy_manifest<T>(
         serde_json::from_str(&next_raw).map_err(|e| McpManagerError(e.to_string()))?;
     for (name, (original, links)) in legacy {
         if next["servers"].get(&name).is_none() {
-            next["servers"][&name] = original;
+            let mut legacy_server = original;
+            // Removing the final curated link drops the projected server. Keep
+            // only its opaque links; restoring the full original would revive
+            // every curated link that this operation just disconnected.
+            legacy_server["links"] = json!({});
+            next["servers"][&name] = legacy_server;
         }
         for (id, link) in links {
             next["servers"][&name]["links"][id] = link;

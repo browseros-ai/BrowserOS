@@ -143,9 +143,6 @@ impl Provider {
             .and_then(Value::as_str)
             .filter(|s| !s.is_empty())
         {
-            if !Klavis::catalog().iter().any(|s| s.name == name) {
-                return Err(format!("Invalid server: {name}"));
-            }
             if integrations
                 .iter()
                 .any(|i| i.name == name && i.is_authenticated)

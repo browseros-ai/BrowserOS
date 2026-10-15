@@ -114,11 +114,10 @@ async fn metadata(client: &Client, shared: &Shared) -> Result<Strata, String> {
     // One fetch is in flight per installation. Invalidation takes the same lock,
     // so an auth change cannot be overwritten by an older fetch completing late.
     let mut cache = shared.cache.lock().await;
-    if let Some((strata, expires)) = cache
+    if let Some((strata, _)) = cache
         .as_ref()
         .filter(|(_, expires)| Instant::now() < *expires)
     {
-        let _ = expires;
         return Ok(strata.clone());
     }
     let names: Vec<_> = super::Klavis::catalog().iter().map(|s| s.name).collect();
