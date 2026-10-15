@@ -19,12 +19,14 @@
 //! ```
 //!
 //! The host also owns the browser link: `McpServer::start` begins CDP reattach (non-fatal,
-//! retried forever, unlike TS's exit) and `/system/health` reports its live state.
+//! retried forever, unlike TS's exit), `/system/health` reports its live state, and
+//! [`HostPages`] opens scheduled runs' background pages through it.
 
 mod branding;
 mod connectors;
 mod endpoint;
 mod leases;
+mod pages;
 mod panel;
 mod runs;
 
@@ -35,6 +37,7 @@ pub use leases::{
     InvalidLease, LEASE_HEADER, LeaseError, LeaseScope, LeaseSource, LeaseSpec, McpQuery,
     ToolLease, ToolLeases, conversation_of_session,
 };
+pub use pages::HostPages;
 pub use runs::{NO_ACTIVE_RUN, RunRegistry};
 
 use axum::{extract::Request, response::Response};

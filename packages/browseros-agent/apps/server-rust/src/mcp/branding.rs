@@ -5,7 +5,8 @@ use browseros_core::NativeCapabilities;
 use browseros_mcp_host::HostBranding;
 use std::sync::Arc;
 
-const HEADING: &str = "BrowserOS MCP Server — compact browser automation and 40+ external service integrations.";
+const HEADING: &str =
+    "BrowserOS MCP Server — compact browser automation and 40+ external service integrations.";
 
 /// TS `mcp-prompt.ts` verbatim from its Klavis heading on: the connector tools are served
 /// unchanged, so the discovery protocol agents learned stays the same.

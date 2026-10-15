@@ -63,7 +63,8 @@ pub(super) async fn post(
         Ok(None) => {}
         Err(refusal) => return *refusal,
     }
-    let json_content = is_json_content_type(joined(&parts.headers, header::CONTENT_TYPE).as_deref());
+    let json_content =
+        is_json_content_type(joined(&parts.headers, header::CONTENT_TYPE).as_deref());
     let bytes = match read_body(&parts.headers, body).await {
         BodyRead::Complete(bytes) => bytes,
         BodyRead::TooLarge if !json_content => return unsupported_media_type(),
@@ -155,7 +156,10 @@ fn validate_message(bytes: &Bytes) -> Result<(), Response> {
             "Parse error: Invalid JSON",
         ));
     };
-    if value.as_array().is_some_and(|batch| batch.len() > MAX_BATCH) {
+    if value
+        .as_array()
+        .is_some_and(|batch| batch.len() > MAX_BATCH)
+    {
         return Err(rpc_error(
             StatusCode::BAD_REQUEST,
             -32600,

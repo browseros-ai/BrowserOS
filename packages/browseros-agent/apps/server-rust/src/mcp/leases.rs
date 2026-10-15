@@ -296,7 +296,9 @@ impl ToolLeases {
         match token.map(str::trim).filter(|token| !token.is_empty()) {
             Some(token) => {
                 let state = self.registry().leases.get(token).cloned();
-                state.map(|state| Some(state.caller(query))).ok_or(InvalidLease)
+                state
+                    .map(|state| Some(state.caller(query)))
+                    .ok_or(InvalidLease)
             }
             None if query.read_only || query.structured => Ok(Some(AdmittedCaller {
                 read_only: query.read_only,
