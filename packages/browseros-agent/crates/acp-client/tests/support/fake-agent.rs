@@ -32,6 +32,15 @@ fn session_info() -> Value {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenario = std::env::args().nth(1).unwrap_or_default();
+    if scenario == "stdout-holder" {
+        // Escape the supervised group to reproduce an inherited stdout pipe
+        // that remains open after the direct ACP child has been reaped.
+        #[cfg(unix)]
+        rustix::process::setsid()?;
+        std::fs::write("stdout-holder-ready", std::process::id().to_string())?;
+        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        return Ok(());
+    }
     if scenario == "grandchild-hang" {
         let mut count = 0_u64;
         loop {
@@ -124,9 +133,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "options":[{"optionId":"allow", "name":"Allow", "kind":"allow_once"}]}})).await?;
                     continue;
                 }
-                if scenario == "auth" || scenario == "rpc" {
+                if matches!(scenario.as_str(), "auth" | "rpc" | "auth-invalid-params" | "auth-mcp" | "rpc-local-looking") {
+                    let (code, message, data) = match scenario.as_str() {
+                        "auth" => (-32000, "scripted refusal", json!({"detail":42})),
+                        "auth-invalid-params" => (-32602, "authentication required: invalid login parameter", json!({"errorKind":"authentication_failed"})),
+                        "auth-mcp" => (-32603, "Failed to authenticate MCP server github: login required", json!({"errorKind":"authentication_failed"})),
+                        "rpc-local-looking" => (-32603, "Internal error", json!("oneshot canceled")),
+                        _ => (-32602, "scripted refusal", json!({"detail":42})),
+                    };
                     send(&mut out, json!({"jsonrpc":"2.0", "id":id, "error":{
-                        "code":if scenario == "auth" {-32000} else {-32602}, "message":"scripted refusal", "data":{"detail":42}}})).await?;
+                        "code":code, "message":message, "data":data}})).await?;
                 } else {
                     sessions += 1;
                     let mut result = session_info();
@@ -146,12 +162,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if scenario == "hang-control" {
                     continue;
                 }
+                if scenario == "crash-control" {
+                    eprintln!("control crash");
+                    std::process::exit(24);
+                }
+                if scenario == "idle-controls" {
+                    // The next control reply is a dispatch barrier: both idle
+                    // notifications must have arrived before the caller resumes.
+                    send(&mut out, json!({"jsonrpc":"2.0", "method":"session/update", "params":{
+                        "sessionId":session, "update":{"sessionUpdate":"current_mode_update", "currentModeId":"code"}
+                    }})).await?;
+                    let mut config = session_info()["configOptions"].clone();
+                    config[0]["currentValue"] = json!("agent-selected");
+                    send(&mut out, json!({"jsonrpc":"2.0", "method":"session/update", "params":{
+                        "sessionId":session, "update":{"sessionUpdate":"config_option_update", "configOptions":config}
+                    }})).await?;
+                }
                 controls.push(message["method"].as_str().unwrap_or_default().to_owned());
                 if message["method"] == "session/set_config_option" {
                     reply(
                         &mut out,
                         id,
-                        json!({"configOptions":session_info()["configOptions"]}),
+                        json!({"configOptions": if scenario == "returned-config" {
+                            let mut config = session_info()["configOptions"].clone();
+                            config[0]["currentValue"] = json!("agent-selected");
+                            config
+                        } else { session_info()["configOptions"].clone() }}),
                     )
                     .await?;
                 } else {
@@ -164,6 +200,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "session/prompt" => {
                 let prompt = params["prompt"][0]["text"].as_str().unwrap_or_default();
                 match prompt {
+                    "inherited-stdout" => {
+                        let child = tokio::process::Command::new(std::env::current_exe()?)
+                            .arg("stdout-holder")
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::inherit())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()?;
+                        descendants.push(child);
+                        while !std::path::Path::new("stdout-holder-ready").exists() {
+                            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        }
+                        eprintln!("inherited stdout crash");
+                        std::process::exit(23);
+                    }
+                    "broken-transport" => {
+                        out.write_all(b"not json\n").await?;
+                        out.flush().await?;
+                    }
                     "exit-after-result" => {
                         update(&mut out, &session, "final output before exit").await?;
                         reply(&mut out, id, json!({"stopReason":"end_turn"})).await?;
@@ -208,12 +262,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             },
                         );
                     }
-                    "permission" | "missing-option" => {
+                    "permission" | "missing-option" | "always-options" | "reject-only" | "allow-only" | "reversed-options" => {
                         send(&mut out, json!({"jsonrpc":"2.0", "method":"session/update", "params":{
                             "sessionId":session, "update":{"sessionUpdate":"tool_call", "toolCallId":"t1", "title":"Fixture command", "status":"pending"}}})).await?;
                         let permission_id = format!("p-{session}");
                         let options = if prompt == "missing-option" {
                             json!([])
+                        } else if prompt == "always-options" {
+                            json!([
+                                {"optionId":"reject-always", "name":"Reject", "kind":"reject_always"},
+                                {"optionId":"allow-always", "name":"Allow", "kind":"allow_always"}
+                            ])
+                        } else if prompt == "reject-only" {
+                            json!([{"optionId":"reject", "name":"Reject", "kind":"reject_once"}])
+                        } else if prompt == "allow-only" {
+                            json!([{"optionId":"allow", "name":"Allow", "kind":"allow_once"}])
+                        } else if prompt == "reversed-options" {
+                            json!([
+                                {"optionId":"reject-always", "name":"Reject", "kind":"reject_always"},
+                                {"optionId":"allow-always", "name":"Allow", "kind":"allow_always"},
+                                {"optionId":"reject", "name":"Reject once", "kind":"reject_once"},
+                                {"optionId":"allow", "name":"Allow once", "kind":"allow_once"}
+                            ])
                         } else {
                             json!([
                             {"optionId":"allow", "name":"Allow", "kind":"allow_once"},
@@ -265,6 +335,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "session/cancel" => {
+                if scenario == "ignore-cancel" {
+                    continue;
+                }
                 *cancels.entry(session.clone()).or_default() += 1;
                 if let Some(request) = pending.remove(&session) {
                     update(&mut out, &session, "after cancel 1").await?;
