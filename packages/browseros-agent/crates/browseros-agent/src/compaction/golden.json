@@ -1,0 +1,2561 @@
+{
+  "budgets": [
+    {
+      "input": null,
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": 0,
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": -1,
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": 0.5,
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": 1,
+      "expected": {
+        "contextWindow": 1,
+        "threshold": 1,
+        "overhead": 0
+      }
+    },
+    {
+      "input": 2,
+      "expected": {
+        "contextWindow": 2,
+        "threshold": 1,
+        "overhead": 0
+      }
+    },
+    {
+      "input": 3,
+      "expected": {
+        "contextWindow": 3,
+        "threshold": 2,
+        "overhead": 1
+      }
+    },
+    {
+      "input": 5,
+      "expected": {
+        "contextWindow": 5,
+        "threshold": 3,
+        "overhead": 2
+      }
+    },
+    {
+      "input": 20,
+      "expected": {
+        "contextWindow": 20,
+        "threshold": 10,
+        "overhead": 8
+      }
+    },
+    {
+      "input": 1000,
+      "expected": {
+        "contextWindow": 1000,
+        "threshold": 500,
+        "overhead": 400
+      }
+    },
+    {
+      "input": 40000,
+      "expected": {
+        "contextWindow": 40000,
+        "threshold": 20000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": 128000,
+      "expected": {
+        "contextWindow": 128000,
+        "threshold": 108000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": 200000,
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": 200000.9,
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": "NaN",
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    },
+    {
+      "input": "Infinity",
+      "expected": {
+        "contextWindow": 200000,
+        "threshold": 180000,
+        "overhead": 12000
+      }
+    }
+  ],
+  "estimates": [
+    {
+      "messages": [],
+      "expected": 0
+    },
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "image",
+              "image": "AA=="
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "reasoning",
+              "text": "think"
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "data": "ZZ=="
+            },
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "data": "AA=="
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "c",
+              "toolName": "snapshot",
+              "input": {
+                "n": 1,
+                "tiny": 1e-7,
+                "huge": 1e21,
+                "unicode": "😀"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "a",
+              "toolCallId": "c"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            },
+            {
+              "type": "tool-approval-response",
+              "approvalId": "a",
+              "approved": false,
+              "reason": "no"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "err",
+              "toolName": "x",
+              "output": {
+                "type": "execution-denied",
+                "reason": "because"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": 17087
+    },
+    {
+      "messages": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        }
+      ],
+      "expected": 3
+    },
+    {
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "image",
+              "image": "AA=="
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf"
+            }
+          ]
+        }
+      ],
+      "expected": 2002
+    },
+    {
+      "messages": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "reasoning",
+              "text": "think"
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "data": "ZZ=="
+            },
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "data": "AA=="
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "c",
+              "toolName": "snapshot",
+              "input": {
+                "n": 1,
+                "tiny": 1e-7,
+                "huge": 1e21,
+                "unicode": "😀"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "a",
+              "toolCallId": "c"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "expected": 8046
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            },
+            {
+              "type": "tool-approval-response",
+              "approvalId": "a",
+              "approved": false,
+              "reason": "no"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "err",
+              "toolName": "x",
+              "output": {
+                "type": "execution-denied",
+                "reason": "because"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": 7036
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "text",
+              "toolName": "x",
+              "output": {
+                "type": "text",
+                "value": "😀"
+              }
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "error-text",
+              "toolName": "x",
+              "output": {
+                "type": "error-text",
+                "value": "😀"
+              }
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "json",
+              "toolName": "x",
+              "output": {
+                "type": "json",
+                "value": {
+                  "z": 2,
+                  "a": "😀"
+                }
+              }
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "error-json",
+              "toolName": "x",
+              "output": {
+                "type": "error-json",
+                "value": {
+                  "z": 2,
+                  "a": "😀"
+                }
+              }
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "denied",
+              "toolName": "x",
+              "output": {
+                "type": "execution-denied"
+              }
+            }
+          ]
+        }
+      ],
+      "expected": 18
+    }
+  ],
+  "prepare": [
+    {
+      "name": "untouched",
+      "window": 200000,
+      "messages": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "image",
+              "image": "AA=="
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "reasoning",
+              "text": "think"
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "data": "ZZ=="
+            },
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "data": "AA=="
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "c",
+              "toolName": "snapshot",
+              "input": {
+                "n": 1,
+                "tiny": 1e-7,
+                "huge": 1e21,
+                "unicode": "😀"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "a",
+              "toolCallId": "c"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            },
+            {
+              "type": "tool-approval-response",
+              "approvalId": "a",
+              "approved": false,
+              "reason": "no"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "err",
+              "toolName": "x",
+              "output": {
+                "type": "execution-denied",
+                "reason": "because"
+              }
+            }
+          ]
+        }
+      ],
+      "steps": [],
+      "current": 29087,
+      "stage": "Untouched",
+      "stillOverBudget": false,
+      "expected": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "image",
+              "image": "AA=="
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "reasoning",
+              "text": "think"
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "data": "ZZ=="
+            },
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "data": "AA=="
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "c",
+              "toolName": "snapshot",
+              "input": {
+                "n": 1,
+                "tiny": 1e-7,
+                "huge": 1e21,
+                "unicode": "😀"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "a",
+              "toolCallId": "c"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            },
+            {
+              "type": "tool-approval-response",
+              "approvalId": "a",
+              "approved": false,
+              "reason": "no"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "err",
+              "toolName": "x",
+              "output": {
+                "type": "execution-denied",
+                "reason": "because"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "strip-binary-and-reasoning",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "image",
+              "image": "AA=="
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "reasoning",
+              "text": "think"
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "data": "ZZ=="
+            },
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "data": "AA=="
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "c",
+              "toolName": "snapshot",
+              "input": {
+                "n": 1,
+                "tiny": 1e-7,
+                "huge": 1e21,
+                "unicode": "😀"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "a",
+              "toolCallId": "c"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            },
+            {
+              "type": "tool-approval-response",
+              "approvalId": "a",
+              "approved": false,
+              "reason": "no"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "err",
+              "toolName": "x",
+              "output": {
+                "type": "execution-denied",
+                "reason": "because"
+              }
+            }
+          ]
+        }
+      ],
+      "steps": [],
+      "current": 17487,
+      "stage": "PrunedAll",
+      "stillOverBudget": false,
+      "expected": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "text",
+              "text": "[Image]"
+            },
+            {
+              "type": "text",
+              "text": "[File]"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "text",
+              "text": "[File]"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "clear-recent-tools",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "x",
+              "toolName": "snapshot",
+              "input": {
+                "large": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "x",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "steps": [],
+      "current": 1739,
+      "stage": "PrunedAll",
+      "stillOverBudget": false,
+      "expected": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "drop-oldest",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "0:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "1:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "2:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "3:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "4:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "5:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "6:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "7:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "8:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "9:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "10:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "11:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      ],
+      "steps": [],
+      "current": 1089,
+      "stage": "DroppedOldest",
+      "stillOverBudget": true,
+      "expected": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "0:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "11:xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "floor-still-over",
+      "window": 1,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+            }
+          ]
+        }
+      ],
+      "steps": [],
+      "current": 30,
+      "stage": "DroppedOldest",
+      "stillOverBudget": true,
+      "expected": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "zzzzzzzzzzzzzzzzzzzzzzzzzzzzzz"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "boundary-tool-pair",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "keep",
+              "toolName": "snapshot",
+              "input": {}
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "drop",
+              "toolName": "snapshot",
+              "input": {}
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "drop",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "old"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "keep",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "new"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "usage": {
+            "inputTokens": 10000
+          }
+        }
+      ],
+      "current": 10012,
+      "stage": "PrunedOld",
+      "stillOverBudget": false,
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "keep",
+              "toolName": "snapshot",
+              "input": {}
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "keep",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "new"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "approval-keeps-originating-call",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "keep",
+              "toolName": "snapshot",
+              "input": {}
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "keep"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true
+            }
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "usage": {
+            "inputTokens": 10000
+          }
+        }
+      ],
+      "current": 10015,
+      "stage": "PrunedOld",
+      "stillOverBudget": false,
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "keep",
+              "toolName": "snapshot",
+              "input": {}
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "keep"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "short"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "usage-can-skip-compaction",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "image",
+              "image": "AA=="
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "reasoning",
+              "text": "think"
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "data": "ZZ=="
+            },
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "data": "AA=="
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "c",
+              "toolName": "snapshot",
+              "input": {
+                "n": 1,
+                "tiny": 1e-7,
+                "huge": 1e21,
+                "unicode": "😀"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "a",
+              "toolCallId": "c"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "usage": {
+            "inputTokens": 1,
+            "outputTokens": 1
+          }
+        }
+      ],
+      "withoutTrailing": true,
+      "current": 2,
+      "stage": "Untouched",
+      "stillOverBudget": true,
+      "expected": [
+        {
+          "role": "system",
+          "content": "system 😀"
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "😀漢字"
+            },
+            {
+              "type": "image",
+              "image": "AA=="
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "answer"
+            },
+            {
+              "type": "reasoning",
+              "text": "think"
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "data": "ZZ=="
+            },
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "data": "AA=="
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "c",
+              "toolName": "snapshot",
+              "input": {
+                "n": 1,
+                "tiny": 1e-7,
+                "huge": 1e21,
+                "unicode": "😀"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "a",
+              "toolCallId": "c"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "no-assistant-reported-usage",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      ],
+      "steps": [
+        {
+          "usage": {
+            "inputTokens": 1
+          }
+        }
+      ],
+      "current": 1,
+      "stage": "Untouched",
+      "stillOverBudget": true,
+      "expected": [
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "empty-content-removal",
+      "window": 1000,
+      "messages": [
+        {
+          "role": "system",
+          "content": ""
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "reasoning",
+              "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": []
+        }
+      ],
+      "steps": [],
+      "current": 1067,
+      "stage": "PrunedOld",
+      "stillOverBudget": false,
+      "expected": []
+    }
+  ]
+}

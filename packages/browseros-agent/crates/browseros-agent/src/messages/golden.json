@@ -1,0 +1,4128 @@
+{
+  "conversion": [
+    {
+      "name": "system-and-user-metadata",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "system",
+          "parts": [
+            {
+              "type": "text",
+              "text": "one",
+              "providerMetadata": {
+                "a": {
+                  "x": 1
+                }
+              }
+            },
+            {
+              "type": "text",
+              "text": "two",
+              "providerMetadata": {
+                "b": {
+                  "x": 2
+                }
+              }
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "hello 😀"
+            },
+            {
+              "type": "file",
+              "mediaType": "image/png",
+              "filename": "screen.png",
+              "url": "data:image/png;base64,AA=="
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "file",
+              "mediaType": "application/pdf",
+              "url": "https://example.com/file",
+              "providerReference": {
+                "vendor": "id"
+              },
+              "providerMetadata": {
+                "x": {
+                  "y": true
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "system",
+          "content": "onetwo",
+          "providerOptions": {
+            "a": {
+              "x": 1
+            },
+            "b": {
+              "x": 2
+            }
+          }
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "hello 😀"
+            },
+            {
+              "type": "file",
+              "mediaType": "image/png",
+              "filename": "screen.png",
+              "data": {
+                "type": "url",
+                "url": "data:image/png;base64,AA=="
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "file",
+              "mediaType": "application/pdf",
+              "data": {
+                "type": "reference",
+                "reference": {
+                  "vendor": "id"
+                }
+              },
+              "providerOptions": {
+                "x": {
+                  "y": true
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "step-splitting-and-mcp-output",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "reasoning",
+              "text": "thinking",
+              "providerMetadata": {
+                "x": {
+                  "sig": "abc"
+                }
+              }
+            },
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "page"
+                  },
+                  {
+                    "type": "image",
+                    "data": "AA==",
+                    "mimeType": "image/png"
+                  },
+                  {
+                    "type": "resource",
+                    "resource": {
+                      "uri": "a",
+                      "text": "b"
+                    }
+                  }
+                ]
+              },
+              "callProviderMetadata": {
+                "x": {
+                  "id": "call"
+                }
+              }
+            },
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "text",
+              "text": "done"
+            },
+            {
+              "type": "custom",
+              "kind": "vendor-block",
+              "providerMetadata": {
+                "vendor": {
+                  "opaque": "x"
+                }
+              }
+            },
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "url": "https://example.com/thought"
+            },
+            {
+              "type": "source-url",
+              "sourceId": "source",
+              "url": "https://example.com"
+            },
+            {
+              "type": "data-notice",
+              "data": "ignored"
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "reasoning",
+              "text": "thinking",
+              "providerOptions": {
+                "x": {
+                  "sig": "abc"
+                }
+              }
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerOptions": {
+                "x": {
+                  "id": "call"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "page"
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "text",
+                    "text": "{\"type\":\"resource\",\"resource\":{\"uri\":\"a\",\"text\":\"b\"}}"
+                  }
+                ]
+              },
+              "providerOptions": {
+                "x": {
+                  "id": "call"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "done"
+            },
+            {
+              "type": "custom",
+              "kind": "vendor-block",
+              "providerOptions": {
+                "vendor": {
+                  "opaque": "x"
+                }
+              }
+            },
+            {
+              "type": "reasoning-file",
+              "data": {
+                "type": "url",
+                "url": "https://example.com/thought"
+              },
+              "mediaType": "image/png"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "input-streaming-provider-false",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "input-streaming",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "input-streaming-provider-true",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "input-streaming",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "input-available-provider-false",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "input-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "input-available-provider-true",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "input-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "approval-requested-provider-false",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "approval-requested",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "approval-requested-provider-true",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "approval-requested",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": []
+    },
+    {
+      "name": "approval-responded-provider-false",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "approval-responded",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true,
+              "reason": "because",
+              "providerExecuted": false
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "approval-responded-provider-true",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "approval-responded",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true,
+              "reason": "because",
+              "providerExecuted": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output-available-provider-false",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true,
+              "reason": "because",
+              "providerExecuted": false
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output-available-provider-true",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "providerOptions": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true,
+              "reason": "because",
+              "providerExecuted": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output-error-provider-false",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-error",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true,
+              "reason": "because",
+              "providerExecuted": false
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "error-text",
+                "value": "failure"
+              },
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output-error-provider-true",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-error",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": true,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "error-json",
+                "value": "failure"
+              },
+              "providerOptions": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": true,
+              "reason": "because",
+              "providerExecuted": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output-denied-provider-false",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-denied",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": false,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": false,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": false,
+              "reason": "because",
+              "providerExecuted": false
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "error-text",
+                "value": "because"
+              },
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "output-denied-provider-true",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-denied",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "result"
+                  }
+                ]
+              },
+              "errorText": "failure",
+              "approval": {
+                "id": "approve",
+                "approved": false,
+                "reason": "because",
+                "requestReason": "confirm",
+                "isAutomatic": false,
+                "inputSchemaInput": {
+                  "a": 1
+                },
+                "signature": "sig"
+              },
+              "callProviderMetadata": {
+                "vendor": {
+                  "phase": "call"
+                }
+              },
+              "resultProviderMetadata": {
+                "vendor": {
+                  "phase": "result"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              },
+              "providerExecuted": true,
+              "providerOptions": {
+                "vendor": {
+                  "phase": "call"
+                }
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "approve",
+              "toolCallId": "call",
+              "isAutomatic": false,
+              "reason": "confirm",
+              "inputSchemaInput": {
+                "a": 1
+              },
+              "signature": "sig"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "approve",
+              "approved": false,
+              "reason": "because",
+              "providerExecuted": true
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "approval-denied",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "approval-responded",
+              "input": {
+                "url": "https://example.com"
+              },
+              "approval": {
+                "id": "deny",
+                "approved": false,
+                "reason": "no"
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              }
+            },
+            {
+              "type": "tool-approval-request",
+              "approvalId": "deny",
+              "toolCallId": "call"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-approval-response",
+              "approvalId": "deny",
+              "approved": false,
+              "reason": "no"
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "execution-denied",
+                "reason": "no"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "preliminary-result-is-incomplete",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "preliminary": true,
+              "output": {}
+            },
+            {
+              "type": "text",
+              "text": "still useful"
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "still useful"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "error-metadata-and-raw-input",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-error",
+              "input": null,
+              "rawInput": "{bad",
+              "errorText": "bad json",
+              "resultProviderMetadata": {
+                "vendor": {
+                  "error": true
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": "{bad",
+              "providerOptions": {
+                "vendor": {
+                  "error": true
+                }
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "error-text",
+                "value": "bad json"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "local-output-mappings",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool-suggest_schedule",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "{\"type\":\"schedule_suggestion\"}"
+                  }
+                ]
+              }
+            },
+            {
+              "type": "tool-suggest_app_connection",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "content": []
+              }
+            },
+            {
+              "type": "tool-filesystem_read",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "text": "file",
+                "images": [
+                  {
+                    "data": "AA==",
+                    "mimeType": "image/png"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "suggest_schedule",
+              "input": {
+                "url": "https://example.com"
+              }
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "suggest_app_connection",
+              "input": {
+                "url": "https://example.com"
+              }
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "filesystem_read",
+              "input": {
+                "url": "https://example.com"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "suggest_schedule",
+              "output": {
+                "type": "text",
+                "value": "{\"type\":\"schedule_suggestion\"}"
+              }
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "suggest_app_connection",
+              "output": {
+                "type": "text",
+                "value": ""
+              }
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "filesystem_read",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "file"
+                  },
+                  {
+                    "type": "image-data",
+                    "data": "AA==",
+                    "mediaType": "image/png"
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "local-error-and-success",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool-filesystem_read",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "text": "",
+                "isError": false
+              }
+            },
+            {
+              "type": "tool-filesystem_read",
+              "toolCallId": "error",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "text": "denied",
+                "isError": true
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "filesystem_read",
+              "input": {
+                "url": "https://example.com"
+              }
+            },
+            {
+              "type": "tool-call",
+              "toolCallId": "error",
+              "toolName": "filesystem_read",
+              "input": {
+                "url": "https://example.com"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "filesystem_read",
+              "output": {
+                "type": "text",
+                "value": "Success"
+              }
+            },
+            {
+              "type": "tool-result",
+              "toolCallId": "error",
+              "toolName": "filesystem_read",
+              "output": {
+                "type": "error-text",
+                "value": "denied"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unknown-dynamic-json",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "missing",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "z": 1,
+                "a": 2
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "missing",
+              "input": {
+                "url": "https://example.com"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "missing",
+              "output": {
+                "type": "json",
+                "value": {
+                  "z": 1,
+                  "a": 2
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "unknown-static-json",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool-missing",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "answer": 42
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "missing",
+              "input": {
+                "url": "https://example.com"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "missing",
+              "output": {
+                "type": "json",
+                "value": {
+                  "answer": 42
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "mcp-no-content",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {
+                "structuredContent": {
+                  "answer": 42
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "input": {
+                "url": "https://example.com"
+              }
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "json",
+                "value": {
+                  "structuredContent": {
+                    "answer": 42
+                  }
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "assistant-file",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "url": "https://example.com/audio",
+              "filename": "voice.wav"
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "file",
+              "mediaType": "audio/wav",
+              "filename": "voice.wav",
+              "data": {
+                "type": "url",
+                "url": "https://example.com/audio"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "ignored-parts-retain-empty-user",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "data-x",
+              "data": "ignored"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "data-x",
+              "data": "ignored"
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "user",
+          "content": []
+        }
+      ]
+    }
+  ],
+  "hygiene": [
+    {
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": []
+        },
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": " \t\n"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "﻿"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning",
+              "text": "secret"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning",
+              "text": "secret"
+            },
+            {
+              "type": "text",
+              "text": "answer"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool-missing",
+              "toolCallId": "call",
+              "state": "output-error",
+              "input": {
+                "url": "https://example.com"
+              },
+              "errorText": "bad"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {}
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "url": "https://example.com/thought"
+            }
+          ]
+        }
+      ],
+      "toolNames": ["filesystem_read"],
+      "filtered": [
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning",
+              "text": "secret"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning",
+              "text": "secret"
+            },
+            {
+              "type": "text",
+              "text": "answer"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool-missing",
+              "toolCallId": "call",
+              "state": "output-error",
+              "input": {
+                "url": "https://example.com"
+              },
+              "errorText": "bad"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {}
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "url": "https://example.com/thought"
+            }
+          ]
+        }
+      ],
+      "stripped": [
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "text",
+              "text": "answer"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "tool-missing",
+              "toolCallId": "call",
+              "state": "output-error",
+              "input": {
+                "url": "https://example.com"
+              },
+              "errorText": "bad"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {}
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "url": "https://example.com/thought"
+            }
+          ]
+        }
+      ],
+      "sanitized": [
+        {
+          "id": "fixture",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": ""
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning",
+              "text": "secret"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning",
+              "text": "secret"
+            },
+            {
+              "type": "text",
+              "text": "answer"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": {}
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "step-start"
+            }
+          ]
+        },
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "reasoning-file",
+              "mediaType": "image/png",
+              "url": "https://example.com/thought"
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "normalization": [
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "caption\n[Image]\n[File: report.pdf]\n[Image]\n[Image]\n[File]\n[File: voice.wav]\n[Image]\nhttps://example.com/image\nhttps://example.com/doc\n{\"vendor\":\"id\"}\nimage-id\n[Custom content]"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "caption\n[Image]\n[File: report.pdf]\n[Image]\n[Image]\n[File]\n[File: voice.wav]\n[Image]\nhttps://example.com/image\nhttps://example.com/doc\n{\"vendor\":\"id\"}\nimage-id\n[Custom content]"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Attached files from tool result:"
+            },
+            {
+              "type": "image",
+              "image": "AA==",
+              "mediaType": "image/png"
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf",
+              "filename": "report.pdf"
+            },
+            {
+              "type": "image",
+              "image": "CC==",
+              "mediaType": "image/jpeg"
+            },
+            {
+              "type": "image",
+              "image": "DD==",
+              "mediaType": "image/png"
+            },
+            {
+              "type": "file",
+              "data": "EE==",
+              "mediaType": "audio/wav",
+              "filename": "voice.wav"
+            },
+            {
+              "type": "file",
+              "data": "FF==",
+              "mediaType": "audio/wav"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "text",
+                    "text": "caption"
+                  },
+                  {
+                    "type": "text",
+                    "text": ""
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  },
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "url",
+                      "url": "https://example.com/image"
+                    }
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "image/jpeg",
+                    "data": "CC=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "image/png",
+                    "data": "DD=="
+                  },
+                  {
+                    "type": "file-data",
+                    "mediaType": "audio/wav",
+                    "filename": "voice.wav",
+                    "data": "EE=="
+                  },
+                  {
+                    "type": "image-data",
+                    "mediaType": "audio/wav",
+                    "data": "FF=="
+                  },
+                  {
+                    "type": "image-url",
+                    "url": "https://example.com/image"
+                  },
+                  {
+                    "type": "file-url",
+                    "url": "https://example.com/doc"
+                  },
+                  {
+                    "type": "file-id",
+                    "fileId": {
+                      "vendor": "id"
+                    }
+                  },
+                  {
+                    "type": "image-file-id",
+                    "fileId": "image-id"
+                  },
+                  {
+                    "type": "custom",
+                    "kind": "vendor",
+                    "providerOptions": {}
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "[Image]"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "[Image]"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Attached image(s) from tool result:"
+            },
+            {
+              "type": "image",
+              "image": "AA==",
+              "mediaType": "image/png"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "image/png",
+                    "data": {
+                      "type": "data",
+                      "data": "AA=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "[File: report.pdf]"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "[File: report.pdf]"
+              }
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Attached file(s) from tool result:"
+            },
+            {
+              "type": "file",
+              "data": "BB==",
+              "mediaType": "application/pdf",
+              "filename": "report.pdf"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": [
+                  {
+                    "type": "file",
+                    "mediaType": "application/pdf",
+                    "filename": "report.pdf",
+                    "data": {
+                      "type": "data",
+                      "data": "BB=="
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": []
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "[Tool content omitted]"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": []
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": false,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "text",
+                "value": "[Tool content omitted]"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": []
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": false
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": []
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "messages": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": []
+              }
+            }
+          ]
+        }
+      ],
+      "options": {
+        "supportsMediaInToolResults": true,
+        "supportsImages": true
+      },
+      "expected": [
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "content",
+                "value": []
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
