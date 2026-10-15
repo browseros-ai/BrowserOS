@@ -5,7 +5,7 @@
 use super::Json;
 use super::extract::ZodIssue;
 use axum::response::{IntoResponse, Response};
-use browseros_agent::llm::ChatError;
+use browseros_agent::llm::{ChatError, ModelError, to_chat_error};
 use http::{StatusCode, header};
 use serde_json::{Value, json};
 
@@ -29,6 +29,13 @@ pub fn zod_issues_400(issues: &[Value]) -> Response {
         Json(json!({ "success": false, "error": { "name": "ZodError", "message": message } })),
     )
         .into_response()
+}
+
+/// What TS's `app.onError` → `toChatError(err)` makes of a plain thrown `Error` with this
+/// message: classified by its text (`fromMessage` rungs, else `unknown`), scrubbed, details
+/// capped. The builder for server-side failures with no typed provider error behind them.
+pub fn thrown_error(message: &str) -> ChatError {
+    to_chat_error(&ModelError::Other(message.to_owned()), None)
 }
 
 /// HTTP 500 chat envelope; an upstream statusCode remains in the body for the client card.
@@ -64,17 +71,7 @@ pub fn forbidden_origin() -> Response {
 
 /// Hono's malformed-JSON HTTPException falls through the generic error handler.
 pub fn malformed_json() -> Response {
-    chat_envelope_500(&ChatError {
-        code: browseros_agent::llm::ChatErrorCode::Unknown,
-        title: "Something went wrong".into(),
-        message: "Malformed JSON in request body".into(),
-        retryable: true,
-        provider: None,
-        status_code: None,
-        docs_url: None,
-        retry_after_seconds: None,
-        details: Some("Malformed JSON in request body".into()),
-    })
+    chat_envelope_500(&thrown_error("Malformed JSON in request body"))
 }
 
 /// 403 from `/mcp`'s browser-fetch rejection.

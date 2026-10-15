@@ -23,7 +23,6 @@ use acp_agents::{
     schema::{AudioContent, ContentBlock, ImageContent, TextContent},
 };
 use browseros_agent::{
-    llm::{ChatError, ChatErrorCode},
     messages::{AssistantPart, ModelMessage, ToolMessagePart, ToolResultOutput, UserPart},
     prompt::format_user_message,
     tools::ToolCatalog,
@@ -40,6 +39,7 @@ use super::{
 use crate::{
     config::Config,
     db::{self, AcpAgentRow},
+    http::errors::thrown_error,
     mcp::{LeaseSpec, ToolLeases},
     paths::BrowserosPaths,
 };
@@ -149,7 +149,7 @@ impl AcpEngine {
                 browser_context: request.browser_context.clone(),
             })
             .await
-            .map_err(|error| ChatRejection::Internal(internal_error(error.to_string())))?;
+            .map_err(|error| ChatRejection::Internal(thrown_error(&error.to_string())))?;
         let token = lease.token().to_owned();
         lock(&self.held).insert(
             conversation_id,
@@ -175,8 +175,8 @@ impl ChatEngine for AcpEngine {
             browser_context,
         } = turn;
         let TurnTarget::Acp(row) = target else {
-            return Err(ChatRejection::Internal(internal_error(
-                "AcpEngine received a non-ACP turn".to_owned(),
+            return Err(ChatRejection::Internal(thrown_error(
+                "AcpEngine received a non-ACP turn",
             )));
         };
         let read_only = request.mode == ChatMode::Chat;
@@ -255,20 +255,6 @@ fn task_label(message: &str) -> String {
         .take(5)
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn internal_error(message: String) -> ChatError {
-    ChatError {
-        code: ChatErrorCode::Unknown,
-        title: "Something went wrong".to_owned(),
-        message,
-        retryable: false,
-        provider: None,
-        status_code: None,
-        docs_url: None,
-        retry_after_seconds: None,
-        details: None,
-    }
 }
 
 fn failed_turn(response_message_id: String) -> ChunkStream {
