@@ -842,8 +842,9 @@ async fn non_retryable_failures_are_not_retried() -> TestResult {
     Ok(())
 }
 
-/// Once a step has produced an event, a failure is an in-stream error: never retried, and the
-/// step and turn still close (`finish-step`, `finish{error}`).
+/// Once a step has produced an event, a failure is an in-stream error: never retried, the open
+/// text still ends (the SDK provider's `flush` runs after a stream error), and the step and turn
+/// still close (`finish-step`, `finish{error}`).
 #[tokio::test(start_paused = true)]
 async fn errors_after_the_first_event_are_not_retried() -> TestResult {
     let mut events = text("t", "partial");
@@ -871,6 +872,7 @@ async fn errors_after_the_first_event_are_not_retried() -> TestResult {
             "text-start",
             "text-delta",
             "error",
+            "text-end",
             "finish-step",
             "finish"
         ]

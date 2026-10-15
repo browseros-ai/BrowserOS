@@ -289,19 +289,29 @@ pub struct ToolDefinition {
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderOptions(pub Map<String, Value>);
 
+/// The `provider_metadata` key under which the rig adapter carries a provider-native block for
+/// replay. Internal to the transcript: the loop never puts it on a UI chunk.
+pub(crate) const NATIVE_METADATA_KEY: &str = "rig";
+
 pub type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent, ModelError>> + Send>>;
 
 /// One model step's events, provider-neutral. The loop maps these 1:1 onto `UiChunk`s.
 ///
-/// - **Ids** are unique per call (so across a turn's steps). A tool call carries our `id` from
-///   `ToolInputStart` on; `ToolCall.provider_call_id` is the provider's own id, which the
-///   transcript must use as `tool_call_id` for the call and its result.
-/// - **Order.** `*End` and `ToolCall` arrive in part-start order, so appending parts to the
-///   step's assistant message as they end reproduces the provider's item order.
+/// - **Ids.** A tool call carries one `id` from `ToolInputStart` on; `ToolCall.provider_call_id`
+///   is the provider's own id, which the transcript must use as `tool_call_id` for the call and
+///   its result. Text/reasoning ids may repeat across steps (see Lifecycle).
+/// - **Order.** `ToolCall` arrives in part-start order relative to the other parts' ends, so
+///   appending calls to the step's assistant message as they end reproduces the provider's order.
 /// - **`provider_metadata`** on `*End`/`ToolCall` is opaque provider data (signatures, encrypted
 ///   reasoning). Store it verbatim as the matching `AssistantPart`'s `provider_options` (the AI SDK
 ///   providerMetadata → providerOptions convention); the adapter replays it on the next step when
-///   the model is the one that produced it. It is JSON-safe to persist in UI messages.
+///   the model is the one that produced it. The adapter's own envelope (`NATIVE_METADATA_KEY`)
+///   stays in the transcript; UI chunks carry only provider namespaces, as TS's do.
+/// - **Lifecycle** is the AI SDK provider's, not the wire's: the adapter may end a part before the
+///   provider finalizes it (reasoning ends when the next part starts, as `@ai-sdk/*` providers
+///   emit it). The provider data that arrives later comes as [`ModelEvent::PartMetadata`].
+///   `@ai-sdk/openai-compatible` numbers every response's parts `txt-0`/`reasoning-0`, so those
+///   ids repeat across steps; a step never has two open parts with one id.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelEvent {
     TextStart {
@@ -343,6 +353,12 @@ pub enum ModelEvent {
         tool_name: String,
         input_json: String,
         provider_metadata: Option<Value>,
+    },
+    /// Late `provider_metadata` for an already-ended text or reasoning part (the most recent one
+    /// with `id`): transcript-only, so the native item still replays on the next step. No UI chunk.
+    PartMetadata {
+        id: String,
+        provider_metadata: Value,
     },
     Finish {
         reason: ModelFinishReason,

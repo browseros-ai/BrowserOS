@@ -262,6 +262,7 @@ fn kinds(events: &[ModelEvent]) -> Vec<&'static str> {
             ModelEvent::ToolInputStart { .. } => "tool-input-start",
             ModelEvent::ToolInputDelta { .. } => "tool-input-delta",
             ModelEvent::ToolCall { .. } => "tool-call",
+            ModelEvent::PartMetadata { .. } => "part-metadata",
             ModelEvent::Finish { .. } => "finish",
         })
         .collect()
@@ -470,16 +471,18 @@ async fn responses_stream_decodes_and_replays_encrypted_reasoning() -> anyhow::R
     let fake = Fake::start(vec![Reply::sse(&frames), Reply::error(400, "{}")]).await?;
     let model = model_on(&fake, &config(ProviderKind::ChatGptPro, "gpt-6-astra"))?;
     let (step, replayed) = step_and_replay(&fake, model.as_ref(), "12:00").await?;
-    // rig closes the reasoning only once the call it led to completes; the adapter still releases
-    // `reasoning-end` first, so parts appended as they end keep the provider's order.
+    // `@ai-sdk/openai` ends the reasoning when its item is done, before the call starts. rig closes
+    // it only once the call completes, so the adapter ends the UI part as the call starts and
+    // delivers the native item (encrypted content) as late `part-metadata`, still before the call.
     assert_eq!(
         kinds(&step),
         [
             "reasoning-start",
             "reasoning-delta",
+            "reasoning-end",
             "tool-input-start",
             "tool-input-delta",
-            "reasoning-end",
+            "part-metadata",
             "tool-call",
             "finish",
         ]
@@ -499,13 +502,13 @@ async fn responses_stream_decodes_and_replays_encrypted_reasoning() -> anyhow::R
     );
 
     let reasoning_meta = step.iter().find_map(|event| match event {
-        ModelEvent::ReasoningEnd {
+        ModelEvent::PartMetadata {
             provider_metadata, ..
         } => Some(provider_metadata.clone()),
         _ => None,
     });
     assert!(
-        reasoning_meta.flatten().is_some(),
+        reasoning_meta.is_some(),
         "reasoning carries its native item"
     );
     let input = replayed["input"].as_array().cloned().unwrap_or_default();

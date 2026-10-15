@@ -107,30 +107,82 @@ impl LanguageModel for RigModel {
     }
 }
 
-struct OpenPart {
-    id: String,
-    /// Raw argument JSON as the provider streamed it (tool calls only).
-    arguments: String,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Text,
+    Reasoning,
+    ToolCall,
 }
 
-/// Turns rig's part events into `ModelEvent`s. Part ids are `<random>_<part index>`: unique per
-/// call, so they stay unique across a turn's steps. Tool calls get our id at `Start` (rig names
+struct OpenPart {
+    id: String,
+    kind: Kind,
+    /// Raw argument JSON as the provider streamed it (tool calls only).
+    arguments: String,
+    /// The UI part this rig part feeds is not open: it was ended early by the lifecycle, or (for
+    /// `CompatChat`) not started yet. rig's `End` for it then only delivers metadata.
+    ui_closed: bool,
+}
+
+/// Which AI SDK provider's part lifecycle the events reproduce. rig decodes the wire; the TS
+/// server's chunks follow the `@ai-sdk/*` provider's own start/end rules, which the app renders
+/// (a reasoning part still open while the answer streams shows as "thinking").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Lifecycle {
+    /// `@ai-sdk/openai-compatible` (`doStream`): one text (`txt-0`) and one reasoning
+    /// (`reasoning-0`) part at a time, each started by its first non-empty delta. Reasoning ends at
+    /// the first text or tool-call delta, text ends when reasoning resumes, and whatever is open
+    /// ends with the response.
+    CompatChat,
+    /// Every other provider: rig's parts and ids, except that an open reasoning part ends when the
+    /// next part starts (as the Anthropic/OpenAI/Google SDKs emit it; rig holds Responses
+    /// reasoning open until the following item completes).
+    Native,
+}
+
+impl Lifecycle {
+    fn of(provider: ProviderKind) -> Self {
+        // TS `provider-factory.ts`: the providers built with `createOpenAICompatible`.
+        match provider {
+            ProviderKind::OpenAiCompatible
+            | ProviderKind::Ollama
+            | ProviderKind::LmStudio
+            | ProviderKind::Moonshot
+            | ProviderKind::QwenCode
+            | ProviderKind::GitHubCopilot => Self::CompatChat,
+            _ => Self::Native,
+        }
+    }
+}
+
+const COMPAT_TEXT_ID: &str = "txt-0";
+const COMPAT_REASONING_ID: &str = "reasoning-0";
+
+/// Turns rig's part events into `ModelEvent`s with the AI SDK provider's [`Lifecycle`]. Native part
+/// ids are `<random>_<part index>`, unique per call. Tool calls get our id at `Start` (rig names
 /// the provider's call id only at `End`); `ToolCall` pairs it with the provider's.
 ///
-/// **End order = start order.** rig holds a Responses reasoning item open until the item it
-/// precedes completes, so its `End` follows that item's. A consumer that appends parts as they end
+/// **Call order = start order.** rig holds a Responses reasoning item open until the item it
+/// precedes completes, so its `End` follows that item's. A consumer that appends calls as they end
 /// (the AI SDK convention) would then replay a call before its reasoning, which the provider
-/// rejects or ignores. `*End` and `ToolCall` events are therefore released in part-start order:
-/// one that ends while an earlier part is still open waits for it (in practice, the next frame).
+/// rejects or ignores. `*End` and `ToolCall` events from rig are therefore released in part-start
+/// order: one that ends while an earlier rig part is still open waits for it (in practice, the
+/// next frame). Lifecycle ends (a reasoning part closed because the next part started) are UI
+/// events and go out at once; rig's later `End` for that part becomes `PartMetadata`.
 struct Translator {
     /// `None` once the reply ended; dropping it closes the HTTP response.
     stream: Option<CompletionStream>,
     cancel: CancellationToken,
     provider: ProviderKind,
+    lifecycle: Lifecycle,
     prefix: String,
+    /// rig parts that rig has not ended yet, by part index.
     open: HashMap<usize, OpenPart>,
     /// Ended parts waiting for an earlier part to end, by part index.
     ended: BTreeMap<usize, ModelEvent>,
+    /// `CompatChat`: whether the single UI text / reasoning part is open.
+    text_open: bool,
+    reasoning_open: bool,
     /// The reply's serialized `Origin`, read once, the first time a block needs it.
     origin: Option<Option<Value>>,
     queue: VecDeque<Result<ModelEvent, ModelError>>,
@@ -142,9 +194,12 @@ impl Translator {
             stream: Some(stream),
             cancel,
             provider,
+            lifecycle: Lifecycle::of(provider),
             prefix: format!("{:016x}", rand::random::<u64>()),
             open: HashMap::new(),
             ended: BTreeMap::new(),
+            text_open: false,
+            reasoning_open: false,
             origin: None,
             queue: VecDeque::new(),
         }
@@ -185,8 +240,15 @@ impl Translator {
         let Some(stream) = self.stream.take() else {
             return;
         };
-        // The reply ended: nothing is still open, whatever rig left unclosed.
+        // The reply ended: nothing is still open, whatever rig left unclosed. The SDK's `flush`
+        // closes reasoning, then text.
         self.open.clear();
+        if self.reasoning_open {
+            self.end_compat(Kind::Reasoning, None);
+        }
+        if self.text_open {
+            self.end_compat(Kind::Text, None);
+        }
         self.release_ended();
         let finished = tokio::select! {
             biased;
@@ -214,16 +276,21 @@ impl Translator {
         convert::block_metadata(origin.as_ref(), block)
     }
 
-    fn part_id(&mut self, index: usize) -> String {
+    /// The open rig part at `index`, registered on first sight (rig always starts a part first;
+    /// a wire that reports a part only at its end is handled in `on_end`).
+    fn part(&mut self, index: usize, kind: Kind) -> &mut OpenPart {
         let prefix = &self.prefix;
-        self.open
-            .entry(index)
-            .or_insert_with(|| OpenPart {
-                id: format!("{prefix}_{index}"),
-                arguments: String::new(),
-            })
-            .id
-            .clone()
+        let lifecycle = self.lifecycle;
+        self.open.entry(index).or_insert_with(|| OpenPart {
+            id: match (lifecycle, kind) {
+                (Lifecycle::CompatChat, Kind::Text) => COMPAT_TEXT_ID.to_owned(),
+                (Lifecycle::CompatChat, Kind::Reasoning) => COMPAT_REASONING_ID.to_owned(),
+                _ => format!("{prefix}_{index}"),
+            },
+            kind,
+            arguments: String::new(),
+            ui_closed: lifecycle == Lifecycle::CompatChat && kind != Kind::ToolCall,
+        })
     }
 
     fn push(&mut self, event: ModelEvent) {
@@ -234,98 +301,260 @@ impl Translator {
         let index = event.part().index();
         match event {
             StreamEvent::Start { kind, name, .. } => {
-                let id = self.part_id(index);
-                match kind {
-                    PartKind::Text => self.push(ModelEvent::TextStart {
-                        id,
-                        provider_metadata: None,
-                    }),
-                    PartKind::Reasoning => self.push(ModelEvent::ReasoningStart {
-                        id,
-                        provider_metadata: None,
-                    }),
-                    PartKind::ToolCall => self.push(ModelEvent::ToolInputStart {
-                        id,
-                        tool_name: name
-                            .map(|name| name.as_str().to_owned())
-                            .unwrap_or_default(),
-                    }),
-                    PartKind::Image | PartKind::Opaque => {}
-                }
+                let kind = match kind {
+                    PartKind::Text => Kind::Text,
+                    PartKind::Reasoning => Kind::Reasoning,
+                    PartKind::ToolCall => Kind::ToolCall,
+                    PartKind::Image | PartKind::Opaque => return,
+                };
+                self.on_start(index, kind, name.map(|name| name.as_str().to_owned()));
             }
-            StreamEvent::Text { text, .. } => {
-                let id = self.part_id(index);
-                self.push(ModelEvent::TextDelta { id, delta: text });
-            }
-            StreamEvent::Reasoning { text, .. } => {
-                let id = self.part_id(index);
-                self.push(ModelEvent::ReasoningDelta {
-                    id,
-                    delta: text,
-                    provider_metadata: None,
-                });
-            }
+            StreamEvent::Text { text, .. } => self.on_delta(index, Kind::Text, text),
+            StreamEvent::Reasoning { text, .. } => self.on_delta(index, Kind::Reasoning, text),
             StreamEvent::Arguments { json, .. } => {
-                let id = self.part_id(index);
-                if let Some(part) = self.open.get_mut(&index) {
-                    part.arguments.push_str(&json);
-                }
+                let part = self.part(index, Kind::ToolCall);
+                part.arguments.push_str(&json);
+                let id = part.id.clone();
                 self.push(ModelEvent::ToolInputDelta { id, delta: json });
             }
             StreamEvent::End { content, .. } => self.on_end(index, content),
         }
     }
 
+    fn on_start(&mut self, index: usize, kind: Kind, tool_name: Option<String>) {
+        match self.lifecycle {
+            Lifecycle::Native => self.close_native_reasoning(index),
+            // The SDK ends reasoning at the first tool-call delta; text and reasoning start
+            // lazily, at their first delta.
+            Lifecycle::CompatChat if kind == Kind::ToolCall && self.reasoning_open => {
+                self.end_compat(Kind::Reasoning, None);
+            }
+            Lifecycle::CompatChat => {}
+        }
+        let part = self.part(index, kind);
+        if part.ui_closed {
+            return;
+        }
+        let id = part.id.clone();
+        self.push(match kind {
+            Kind::Text => ModelEvent::TextStart {
+                id,
+                provider_metadata: None,
+            },
+            Kind::Reasoning => ModelEvent::ReasoningStart {
+                id,
+                provider_metadata: None,
+            },
+            Kind::ToolCall => ModelEvent::ToolInputStart {
+                id,
+                tool_name: tool_name.unwrap_or_default(),
+            },
+        });
+    }
+
+    fn on_delta(&mut self, index: usize, kind: Kind, delta: String) {
+        if self.lifecycle == Lifecycle::CompatChat {
+            if delta.is_empty() {
+                return;
+            }
+            // Text and reasoning take turns; the other one ends before this one (re)starts.
+            let (other_open, this_open) = match kind {
+                Kind::Text => (self.reasoning_open, self.text_open),
+                _ => (self.text_open, self.reasoning_open),
+            };
+            if other_open {
+                let other = if kind == Kind::Text {
+                    Kind::Reasoning
+                } else {
+                    Kind::Text
+                };
+                self.end_compat(other, None);
+            }
+            if !this_open {
+                let id = self.part(index, kind).id.clone();
+                self.push(match kind {
+                    Kind::Text => ModelEvent::TextStart {
+                        id,
+                        provider_metadata: None,
+                    },
+                    _ => ModelEvent::ReasoningStart {
+                        id,
+                        provider_metadata: None,
+                    },
+                });
+                match kind {
+                    Kind::Text => self.text_open = true,
+                    _ => self.reasoning_open = true,
+                }
+            }
+            self.part(index, kind).ui_closed = false;
+        } else if self.part(index, kind).ui_closed {
+            // rig kept streaming a part the lifecycle already ended: open a new UI part for it.
+            let part = self.part(index, kind);
+            part.ui_closed = false;
+            let id = part.id.clone();
+            self.push(match kind {
+                Kind::Text => ModelEvent::TextStart {
+                    id,
+                    provider_metadata: None,
+                },
+                _ => ModelEvent::ReasoningStart {
+                    id,
+                    provider_metadata: None,
+                },
+            });
+        }
+        let id = self.part(index, kind).id.clone();
+        self.push(match kind {
+            Kind::Text => ModelEvent::TextDelta { id, delta },
+            _ => ModelEvent::ReasoningDelta {
+                id,
+                delta,
+                provider_metadata: None,
+            },
+        });
+    }
+
+    /// `Native`: a part starting at `index` ends every other open reasoning part's UI part.
+    fn close_native_reasoning(&mut self, index: usize) {
+        let mut closing: Vec<(usize, String)> = self
+            .open
+            .iter_mut()
+            .filter(|(at, part)| **at != index && part.kind == Kind::Reasoning && !part.ui_closed)
+            .map(|(at, part)| {
+                part.ui_closed = true;
+                (*at, part.id.clone())
+            })
+            .collect();
+        closing.sort_unstable();
+        for (_, id) in closing {
+            self.push(ModelEvent::ReasoningEnd {
+                id,
+                provider_metadata: None,
+            });
+        }
+    }
+
+    /// `CompatChat`: ends the single UI text or reasoning part; every rig part feeding it is then
+    /// UI-closed, so their `End`s only carry metadata.
+    fn end_compat(&mut self, kind: Kind, provider_metadata: Option<Value>) {
+        for part in self.open.values_mut().filter(|part| part.kind == kind) {
+            part.ui_closed = true;
+        }
+        match kind {
+            Kind::Text => {
+                self.text_open = false;
+                self.push(ModelEvent::TextEnd {
+                    id: COMPAT_TEXT_ID.to_owned(),
+                    provider_metadata,
+                });
+            }
+            _ => {
+                self.reasoning_open = false;
+                self.push(ModelEvent::ReasoningEnd {
+                    id: COMPAT_REASONING_ID.to_owned(),
+                    provider_metadata,
+                });
+            }
+        }
+    }
+
     fn on_end(&mut self, index: usize, content: AssistantContent) {
         let opened = self.open.remove(&index);
         let provider_metadata = self.metadata(&content);
-        let id = match &opened {
-            Some(part) => part.id.clone(),
-            None => format!("{}_{index}", self.prefix),
-        };
-        let ended = match content {
-            AssistantContent::Text(_) => Some(ModelEvent::TextEnd {
-                id,
-                provider_metadata,
-            }),
-            AssistantContent::Reasoning(_) => Some(ModelEvent::ReasoningEnd {
-                id,
-                provider_metadata,
-            }),
-            AssistantContent::ToolCall(call) => {
-                let tool_name = call.function.name.as_str().to_owned();
-                let streamed = match opened {
-                    Some(part) => part.arguments,
-                    // A wire that reports a call only at its end still opens it first, so the
-                    // loop always sees start → (deltas) → call.
-                    None => {
-                        self.push(ModelEvent::ToolInputStart {
-                            id: id.clone(),
-                            tool_name: tool_name.clone(),
-                        });
-                        String::new()
-                    }
-                };
-                // The provider's own argument text, as AI SDK's `tool-call.input`.
-                let input_json = call
-                    .function
-                    .invalid_arguments
-                    .clone()
-                    .or_else(|| (!streamed.trim().is_empty()).then_some(streamed))
-                    .unwrap_or_else(|| call.function.arguments_value().to_string());
-                Some(ModelEvent::ToolCall {
-                    id,
-                    provider_call_id: call.id.wire().into_owned(),
-                    tool_name,
-                    input_json,
-                    provider_metadata,
-                })
+        let kind = match &content {
+            AssistantContent::Text(_) => Kind::Text,
+            AssistantContent::Reasoning(_) => Kind::Reasoning,
+            AssistantContent::ToolCall(_) => Kind::ToolCall,
+            _ => {
+                self.release_ended();
+                return;
             }
-            _ => None,
         };
-        if let Some(event) = ended {
-            self.ended.insert(index, event);
+        if kind != Kind::ToolCall {
+            let opened = match opened {
+                // A wire that reports a part only at its end (a Responses reasoning item without a
+                // summary carries just its encrypted content) still opens it first, so the
+                // transcript keeps the native item. The compat wire always streams deltas first.
+                None if self.lifecycle == Lifecycle::Native => {
+                    self.on_start(index, kind, None);
+                    self.open.remove(&index)
+                }
+                opened => opened,
+            };
+            let ui_open = opened.as_ref().is_some_and(|part| !part.ui_closed);
+            let compat_open = match kind {
+                Kind::Text => self.text_open,
+                _ => self.reasoning_open,
+            };
+            if self.lifecycle == Lifecycle::CompatChat && ui_open && compat_open {
+                // The SDK ends its one part when the response does; rig ends each part then.
+                self.end_compat(kind, provider_metadata);
+            } else if !ui_open {
+                if let (Some(part), Some(provider_metadata)) = (&opened, provider_metadata) {
+                    self.push(ModelEvent::PartMetadata {
+                        id: part.id.clone(),
+                        provider_metadata,
+                    });
+                }
+            } else if let Some(part) = opened {
+                let id = part.id;
+                self.ended.insert(
+                    index,
+                    match kind {
+                        Kind::Text => ModelEvent::TextEnd {
+                            id,
+                            provider_metadata,
+                        },
+                        _ => ModelEvent::ReasoningEnd {
+                            id,
+                            provider_metadata,
+                        },
+                    },
+                );
+            }
+            self.release_ended();
+            return;
         }
+        let AssistantContent::ToolCall(call) = content else {
+            return;
+        };
+        let tool_name = call.function.name.as_str().to_owned();
+        let (id, streamed) = match opened {
+            Some(part) => (part.id, part.arguments),
+            // A wire that reports a call only at its end still opens it first, so the loop
+            // always sees start → (deltas) → call.
+            None => {
+                if self.lifecycle == Lifecycle::CompatChat && self.reasoning_open {
+                    self.end_compat(Kind::Reasoning, None);
+                } else if self.lifecycle == Lifecycle::Native {
+                    self.close_native_reasoning(index);
+                }
+                let id = format!("{}_{index}", self.prefix);
+                self.push(ModelEvent::ToolInputStart {
+                    id: id.clone(),
+                    tool_name: tool_name.clone(),
+                });
+                (id, String::new())
+            }
+        };
+        // The provider's own argument text, as AI SDK's `tool-call.input`.
+        let input_json = call
+            .function
+            .invalid_arguments
+            .clone()
+            .or_else(|| (!streamed.trim().is_empty()).then_some(streamed))
+            .unwrap_or_else(|| call.function.arguments_value().to_string());
+        self.ended.insert(
+            index,
+            ModelEvent::ToolCall {
+                id,
+                provider_call_id: call.id.wire().into_owned(),
+                tool_name,
+                input_json,
+                provider_metadata,
+            },
+        );
         self.release_ended();
     }
 

@@ -27,7 +27,7 @@ use rig_core::message::{
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-const META_KEY: &str = "rig";
+const META_KEY: &str = crate::llm::NATIVE_METADATA_KEY;
 
 /// The `provider_metadata` for a finished block, or `None` when it carries no provider item (the
 /// canonical fields alone replay it).

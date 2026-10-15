@@ -513,6 +513,8 @@ impl Turn {
         // Provider part id → (stream-unique id, index into `content`).
         let mut open_text: HashMap<String, (String, usize)> = HashMap::new();
         let mut open_reasoning: HashMap<String, (String, usize)> = HashMap::new();
+        // Provider part id → index into `content` of the latest ended part, for late metadata.
+        let mut ended_parts: HashMap<String, usize> = HashMap::new();
         let mut pending: Vec<PendingCall> = Vec::new();
         // Every tool call of the step (valid or not), in call order: transcript id → order.
         let mut call_order: Vec<String> = Vec::new();
@@ -542,6 +544,28 @@ impl Turn {
                         error_text: self.model_error_text(&error),
                     })
                     .await?;
+                    // The SDK provider's `flush` still runs after a stream error: reasoning, then
+                    // text, end, so the persisted parts read `done` rather than `streaming`.
+                    for open in [&mut open_reasoning, &mut open_text] {
+                        let mut ids: Vec<(usize, String)> = open
+                            .drain()
+                            .map(|(_, (stream_id, index))| (index, stream_id))
+                            .collect();
+                        ids.sort_unstable();
+                        for (index, id) in ids {
+                            let chunk = match content.get(index) {
+                                Some(AssistantPart::Reasoning { .. }) => UiChunk::ReasoningEnd {
+                                    id,
+                                    provider_metadata: None,
+                                },
+                                _ => UiChunk::TextEnd {
+                                    id,
+                                    provider_metadata: None,
+                                },
+                            };
+                            self.emit(chunk).await?;
+                        }
+                    }
                     errored = true;
                     break;
                 }
@@ -559,7 +583,7 @@ impl Turn {
                     open_text.insert(id, (stream_id.clone(), content.len() - 1));
                     self.emit(UiChunk::TextStart {
                         id: stream_id,
-                        provider_metadata,
+                        provider_metadata: ui_metadata(provider_metadata),
                     })
                     .await?;
                 }
@@ -600,13 +624,14 @@ impl Turn {
                             {
                                 *provider_options = Some(metadata.clone());
                             }
+                            ended_parts.insert(id, index);
                             stream_id
                         }
                         None => id,
                     };
                     self.emit(UiChunk::TextEnd {
                         id: stream_id,
-                        provider_metadata,
+                        provider_metadata: ui_metadata(provider_metadata),
                     })
                     .await?;
                 }
@@ -622,7 +647,7 @@ impl Turn {
                     open_reasoning.insert(id, (stream_id.clone(), content.len() - 1));
                     self.emit(UiChunk::ReasoningStart {
                         id: stream_id,
-                        provider_metadata,
+                        provider_metadata: ui_metadata(provider_metadata),
                     })
                     .await?;
                 }
@@ -651,7 +676,7 @@ impl Turn {
                     self.emit(UiChunk::ReasoningDelta {
                         id: stream_id,
                         delta,
-                        provider_metadata,
+                        provider_metadata: ui_metadata(provider_metadata),
                     })
                     .await?;
                 }
@@ -670,15 +695,35 @@ impl Turn {
                             {
                                 *provider_options = Some(metadata.clone());
                             }
+                            ended_parts.insert(id, index);
                             stream_id
                         }
                         None => id,
                     };
                     self.emit(UiChunk::ReasoningEnd {
                         id: stream_id,
-                        provider_metadata,
+                        provider_metadata: ui_metadata(provider_metadata),
                     })
                     .await?;
+                }
+                ModelEvent::PartMetadata {
+                    id,
+                    provider_metadata,
+                } => {
+                    // The adapter ended this part early (AI SDK lifecycle); its native item came
+                    // with the provider's own end. Transcript only: the UI part is already done.
+                    if let Some(index) = ended_parts.get(&id)
+                        && let Some(
+                            AssistantPart::Text {
+                                provider_options, ..
+                            }
+                            | AssistantPart::Reasoning {
+                                provider_options, ..
+                            },
+                        ) = content.get_mut(*index)
+                    {
+                        *provider_options = Some(provider_metadata);
+                    }
                 }
                 ModelEvent::ToolInputStart { id, tool_name } => {
                     let (tool_metadata, dynamic, title) = match self.inner.tools.get(&tool_name) {
@@ -739,7 +784,7 @@ impl Turn {
                                 tool_name: tool_name.clone(),
                                 input: input.clone(),
                                 provider_executed: None,
-                                provider_metadata: provider_metadata.clone(),
+                                provider_metadata: ui_metadata(provider_metadata.clone()),
                                 tool_metadata,
                                 dynamic,
                                 title,
@@ -775,7 +820,7 @@ impl Turn {
                                 tool_name: tool_name.clone(),
                                 input: invalid.input,
                                 provider_executed: None,
-                                provider_metadata,
+                                provider_metadata: ui_metadata(provider_metadata),
                                 tool_metadata: tool_metadata.clone(),
                                 dynamic,
                                 error_text: self.message_error_text(&invalid.message),
@@ -850,10 +895,13 @@ impl Turn {
         })
     }
 
-    /// Runs the step's tools concurrently and emits each output as it completes. Each call runs
-    /// on its own task with a child of `stop`, so a stopped turn leaves nothing executing, and an
-    /// MCP call still gets to send its `notifications/cancelled`.
+    /// Runs the step's tools concurrently and emits each output as it completes. Each call is
+    /// polled once in call order first, as JS starts every `execute` before awaiting any: a tool
+    /// that answers at once (nudges, local checks) reports in call order, deterministically, like
+    /// TS. Only a call still pending moves to its own task with a child of `stop`, so a stopped
+    /// turn leaves nothing executing, and an MCP call still gets to send `notifications/cancelled`.
     async fn run_tools(&self, calls: Vec<PendingCall>) -> Flow<Vec<ToolResultPart>> {
+        type Called = Result<ToolOutput, tools::ToolCallError>;
         let mut running = FuturesUnordered::new();
         for (index, call) in calls.iter().enumerate() {
             let tool = self
@@ -864,13 +912,27 @@ impl Turn {
             let name = call.tool_name.clone();
             let input = call.input.clone();
             let token = self.stop.child_token();
-            let task = tokio::spawn(async move {
-                match tool {
-                    Some(source) => source.call(&name, input, token).await,
-                    None => Err(tools::ToolCallError(format!("Unknown tool: {name}"))),
+            let mut execution: futures_util::future::BoxFuture<'static, Called> =
+                Box::pin(async move {
+                    match tool {
+                        Some(source) => source.call(&name, input, token).await,
+                        None => Err(tools::ToolCallError(format!("Unknown tool: {name}"))),
+                    }
+                });
+            match futures_util::FutureExt::now_or_never(&mut execution) {
+                Some(done) => running.push(futures_util::future::Either::Left(
+                    futures_util::future::ready((
+                        index,
+                        Ok::<Called, tokio::task::JoinError>(done),
+                    )),
+                )),
+                None => {
+                    let task = tokio::spawn(execution);
+                    running.push(futures_util::future::Either::Right(async move {
+                        (index, task.await)
+                    }));
                 }
-            });
-            running.push(async move { (index, task.await) });
+            }
         }
 
         let mut outputs: Vec<Option<ToolResultPart>> = vec![None; calls.len()];
@@ -898,7 +960,7 @@ impl Turn {
                         tool_call_id: call.ui_id.clone(),
                         output: ui,
                         provider_executed: None,
-                        provider_metadata: call.provider_metadata.clone(),
+                        provider_metadata: ui_metadata(call.provider_metadata.clone()),
                         tool_metadata,
                         preliminary: None,
                         dynamic,
@@ -912,7 +974,7 @@ impl Turn {
                         tool_call_id: call.ui_id.clone(),
                         error_text: self.message_error_text(&error.0),
                         provider_executed: None,
-                        provider_metadata: call.provider_metadata.clone(),
+                        provider_metadata: ui_metadata(call.provider_metadata.clone()),
                         tool_metadata,
                         dynamic,
                     })
@@ -1213,6 +1275,18 @@ impl PartIds {
         self.used.insert(unique.clone());
         unique
     }
+}
+
+/// The provider metadata a UI chunk may carry: everything but the adapter's `rig` envelope (the
+/// native item it replays on the next step lives in the transcript's `provider_options` only).
+/// TS chunks carry only the `@ai-sdk/*` provider's own namespaces, and a persisted UI message must
+/// not hold an adapter-internal block.
+fn ui_metadata(metadata: Option<Value>) -> Option<Value> {
+    let Some(Value::Object(mut map)) = metadata else {
+        return metadata;
+    };
+    map.remove(llm::NATIVE_METADATA_KEY);
+    (!map.is_empty()).then_some(Value::Object(map))
 }
 
 /// `generateId()`: 16 alphanumeric characters.

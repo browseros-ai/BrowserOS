@@ -389,25 +389,49 @@ pub fn events(items: Vec<Result<ModelEvent, ModelError>>) -> anyhow::Result<Vec<
 pub fn assistant_from(events: &[ModelEvent]) -> ModelMessage {
     let mut text: BTreeMap<String, String> = BTreeMap::new();
     let mut content = Vec::new();
+    // Part id → index of its latest ended part, for late `PartMetadata` (as the loop keeps it).
+    let mut ended: BTreeMap<String, usize> = BTreeMap::new();
     for event in events {
         match event {
+            ModelEvent::PartMetadata {
+                id,
+                provider_metadata,
+            } => {
+                if let Some(
+                    AssistantPart::Text {
+                        provider_options, ..
+                    }
+                    | AssistantPart::Reasoning {
+                        provider_options, ..
+                    },
+                ) = ended.get(id).and_then(|index| content.get_mut(*index))
+                {
+                    *provider_options = Some(provider_metadata.clone());
+                }
+            }
             ModelEvent::TextDelta { id, delta } | ModelEvent::ReasoningDelta { id, delta, .. } => {
                 text.entry(id.clone()).or_default().push_str(delta);
             }
             ModelEvent::TextEnd {
                 id,
                 provider_metadata,
-            } => content.push(AssistantPart::Text {
-                text: text.get(id).cloned().unwrap_or_default(),
-                provider_options: provider_metadata.clone(),
-            }),
+            } => {
+                ended.insert(id.clone(), content.len());
+                content.push(AssistantPart::Text {
+                    text: text.get(id).cloned().unwrap_or_default(),
+                    provider_options: provider_metadata.clone(),
+                });
+            }
             ModelEvent::ReasoningEnd {
                 id,
                 provider_metadata,
-            } => content.push(AssistantPart::Reasoning {
-                text: text.get(id).cloned().unwrap_or_default(),
-                provider_options: provider_metadata.clone(),
-            }),
+            } => {
+                ended.insert(id.clone(), content.len());
+                content.push(AssistantPart::Reasoning {
+                    text: text.get(id).cloned().unwrap_or_default(),
+                    provider_options: provider_metadata.clone(),
+                });
+            }
             ModelEvent::ToolCall {
                 provider_call_id,
                 tool_name,
