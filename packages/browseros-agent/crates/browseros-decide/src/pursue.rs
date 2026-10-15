@@ -271,6 +271,9 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             run.url_before = Some(view.url.clone());
         }
         run.now_looking_at(view.fingerprint);
+        // Every page the run observes is somewhere it has stood, including the
+        // one it started on, so coming back to the start counts as a return.
+        run.standing_somewhere_new(view.fingerprint);
 
         let destinations = keyed_destinations(&run);
         let values = keyed_values(&run);
@@ -480,9 +483,15 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         // with an identically named one in its place, is one control through a
         // re-render rather than two controls.
         let last_still_there = run
-            .repeating
-            .as_ref()
+            .recent_aims
+            .last()
             .is_some_and(|(was, _)| view.control(was).is_some());
+        // Aimed at before, further back than the step before. Not a reason to
+        // stop, because a menu may be opened twice on purpose, but the next
+        // decision should know: measured live, a run walked a four-move cycle
+        // three times and every move looked new to a guard that only compared
+        // with the move before it.
+        let aimed_here_before = run.aimed_here_recently(decision.target.as_deref());
         if decision.aims_at_a_control()
             && run.aiming_again_at(
                 decision.target.as_deref(),
@@ -502,6 +511,13 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             ));
             last = Some(view);
             continue;
+        }
+
+        if aimed_here_before && decision.aims_at_a_control() {
+            run.remember(format!(
+                "aimed at {} again, a few moves after the last time",
+                decision.target.as_deref().unwrap_or("a control")
+            ));
         }
 
         run.spent += 1;
@@ -566,15 +582,18 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         if changed {
             run.unchanged = 0;
             // The page moved. Whether the run got anywhere is a different
-            // question, and the one the loop could not previously ask: every
-            // guard it had was built on change. A step that leaves the url, the
-            // completion score and the size of the page where they were has
-            // changed something and arrived nowhere.
-            let arrived = after.as_ref().is_some_and(|now| {
-                let url_moved = now.url != view.url;
-                let size_moved = now.controls.len() != view.controls.len();
-                url_moved || size_moved
-            });
+            // question, and asking whether anything changed cannot answer it:
+            // on a lap of a loop everything changes every time. Measured live,
+            // a run walked the same four moves three times, the url and the
+            // control count moved on every one of them, and the counter reset
+            // on every one of them.
+            //
+            // What catches a loop is novelty. A page this run has already stood
+            // on has been returned to, not arrived at, whatever changed on the
+            // way back to it.
+            let arrived = after
+                .as_ref()
+                .is_some_and(|now| run.standing_somewhere_new(now.fingerprint));
             let closer = goal_met.is_some_and(|now| now > run.closest + 0.05);
             if arrived || closer {
                 run.circling = 0;

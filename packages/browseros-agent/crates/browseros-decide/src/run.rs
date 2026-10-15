@@ -138,6 +138,11 @@ pub struct Run {
     /// not enough on its own.
     /// What the last step aimed at: its reference, and what it was called.
     pub repeating: Option<(String, Option<String>)>,
+    /// The last few controls this run aimed at, which it is told about rather
+    /// than stopped for.
+    pub recent_aims: Vec<(String, Option<String>)>,
+    /// Every arrangement of a page this run has stood on.
+    pub visited: std::collections::HashSet<u64>,
     /// Consecutive steps that left the page as it was.
     pub unchanged: u32,
     /// Consecutive steps that changed the page and got no closer.
@@ -186,6 +191,12 @@ pub const CIRCLING_LIMIT: u32 = 4;
 /// to mean. The flag still stops two attempts on a page standing still; this
 /// stops a page that keeps moving re-arming it forever.
 pub const SEARCH_LIMIT: u32 = 2;
+
+/// How many of a run's recent aims are compared against a new one.
+///
+/// Four, which is the length of the cycle measured live: click the search
+/// button, type in it, click the result, click the search button again.
+pub const AIMS_REMEMBERED: usize = 4;
 /// How many decisions in a row the gate may decline before the run stops.
 pub const DECLINE_LIMIT: u32 = 3;
 /// How many times one run may move between pages.
@@ -208,6 +219,8 @@ impl Run {
             retired: Vec::new(),
             last_acted: None,
             repeating: None,
+            recent_aims: Vec::new(),
+            visited: std::collections::HashSet::new(),
             unchanged: 0,
             circling: 0,
             searches: 0,
@@ -279,6 +292,7 @@ impl Run {
     /// still there. Gone, and an identically named one in its place, is a
     /// re-render. Still there, and a different one chosen, is a different
     /// control. `last_still_there` says which.
+
     pub fn aiming_again_at(
         &mut self,
         target: Option<&str>,
@@ -297,7 +311,41 @@ impl Run {
                     }))
         });
         self.repeating = Some((target.to_string(), name.map(str::to_string)));
+        self.recent_aims
+            .push((target.to_string(), name.map(str::to_string)));
+        if self.recent_aims.len() > AIMS_REMEMBERED {
+            self.recent_aims.remove(0);
+        }
         again
+    }
+
+    /// Whether this run aimed at this control within its last few moves.
+    ///
+    /// Reported to the next decision rather than acted on, which is the
+    /// difference between this and [`Run::aiming_again_at`]. Two moves in a row
+    /// at one control is a run stuck on it, and setting the control aside is
+    /// right. The same control four moves apart may be a menu opened twice on
+    /// purpose, so this only says so, and the novelty of the page is what
+    /// decides whether the run is going round in circles.
+    #[must_use]
+    pub fn aimed_here_recently(&self, target: Option<&str>) -> bool {
+        let Some(target) = target else {
+            return false;
+        };
+        // All but the aim just recorded, which is this one.
+        let earlier = self.recent_aims.len().saturating_sub(1);
+        self.recent_aims[..earlier]
+            .iter()
+            .any(|(was, _)| was == target)
+    }
+
+    /// Whether this run has stood on this arrangement of this page before.
+    ///
+    /// Records it either way. A step that lands somewhere already visited has
+    /// returned rather than arrived, which is the difference a change test
+    /// cannot see: on a lap of a loop everything changes every time.
+    pub fn standing_somewhere_new(&mut self, fingerprint: u64) -> bool {
+        self.visited.insert(fingerprint)
     }
 
     /// Records a decision and what the gate made of it.

@@ -147,6 +147,10 @@ struct Fake {
     missing: Vec<Operation>,
     /// Controls that move the fingerprint and nothing else.
     toggles: Vec<String>,
+    /// How many arrangements this page cycles through, if it cycles.
+    cycle: Option<u64>,
+    /// Which action this is, for a cycling page.
+    acted: RefCell<u64>,
     /// Controls whose effect appears only after this many further looks, which
     /// is what a panel behind a timeout looks like from here.
     slow: Vec<(String, usize)>,
@@ -165,6 +169,8 @@ impl Fake {
             slow: Vec::new(),
             missing: Vec::new(),
             toggles: Vec::new(),
+            cycle: None,
+            acted: RefCell::new(0),
             reports: "312 points by someone 2 hours ago".to_string(),
         }
     }
@@ -176,9 +182,17 @@ impl Fake {
         self
     }
 
-    /// Controls whose action changes the page without going anywhere: the url
-    /// and the control count stay put and only the fingerprint moves, which is
-    /// what opening and closing a panel looks like.
+    /// Cycles the page through `states` arrangements rather than inventing a
+    /// new one on every action, which is what a dialog opening and closing over
+    /// the same two pages does.
+    fn cycling(mut self, states: u64) -> Self {
+        self.cycle = Some(states);
+        self
+    }
+
+    /// Controls whose action changes the page without going anywhere: it flips
+    /// between two arrangements, which is what opening and closing a panel
+    /// looks like, and is a change that is also a return.
     fn toggling(mut self, references: &[&str]) -> Self {
         self.toggles = references.iter().map(|r| (*r).to_string()).collect();
         self
@@ -263,11 +277,24 @@ impl Driver for Fake {
                     return Ok(Performed::Moved);
                 }
                 let mut page = self.page.borrow_mut();
-                page.fingerprint += 1;
-                if self.toggles.contains(&aimed) {
-                    // A real change that is not progress.
+                if let Some(states) = self.cycle {
+                    // Round and round the same few arrangements, each one a
+                    // real change from the last.
+                    *self.acted.borrow_mut() += 1;
+                    let step = *self.acted.borrow();
+                    page.fingerprint = 1 + step % states;
+                    page.url = format!("https://example.test/docs/{}", step % states);
                     return Ok(Performed::Moved);
                 }
+                if self.toggles.contains(&aimed) {
+                    // A real change that is not progress, and a real return:
+                    // a panel that opens and closes comes back to the
+                    // arrangement it started from.
+                    *self.acted.borrow_mut() += 1;
+                    page.fingerprint = 1 + *self.acted.borrow() % 2;
+                    return Ok(Performed::Moved);
+                }
+                page.fingerprint += 1;
                 page.url = format!("{}/after-{aimed}", page.url);
                 Ok(Performed::Moved)
             }
@@ -1532,5 +1559,111 @@ async fn a_run_reaches_for_a_search_a_bounded_number_of_times() {
     assert_eq!(
         refusals, 3,
         "two refusals were answered by searching and the third ended the run"
+    );
+}
+
+/// The docs-site loop, as the caller-side tests recorded it. Four moves to a
+/// lap, walked three times, having reached the page it was sent for on the
+/// fourth action. Both guards missed it: no two consecutive moves aimed at the
+/// same control, and the url and control count moved on every single step.
+#[tokio::test]
+async fn a_four_move_cycle_is_a_cycle() {
+    let view = page(
+        "https://example.test/docs",
+        1,
+        vec![
+            control("e1", "button", "Search the API docs"),
+            control("e2", "searchbox", "Search docs"),
+            control("e3", "link", "Webhooks, API docs"),
+        ],
+    );
+    // Acting cycles the page through a handful of arrangements rather than
+    // inventing a new one each time, which is what a search dialog opening and
+    // closing over the same two pages does.
+    let driver = Fake::new(view).cycling(3);
+    let lap = || {
+        vec![
+            vec![
+                ("operation", spread("ACT", 0.95, 0.02)),
+                ("act_how", spread("CLICK", 0.95, 0.02)),
+                ("target", spread("e1", 0.95, 0.02)),
+            ],
+            vec![
+                ("operation", spread("ACT", 0.95, 0.02)),
+                ("act_how", spread("FILL", 0.95, 0.02)),
+                ("target", spread("e2", 0.95, 0.02)),
+                ("fill_value", spread("search term", 0.95, 0.02)),
+            ],
+            vec![
+                ("operation", spread("ACT", 0.95, 0.02)),
+                ("act_how", spread("CLICK", 0.95, 0.02)),
+                ("target", spread("e3", 0.95, 0.02)),
+            ],
+        ]
+    };
+    let mut script = Vec::new();
+    for _ in 0..4 {
+        script.extend(lap());
+    }
+    let oracle = Scripted::new(script);
+    let run = run_for("search the docs for webhooks").offering(Offered {
+        values: vec![NamedValue::new("search term", "webhooks")],
+        ..Offered::default()
+    });
+
+    let outcome = advance(&oracle, &driver, run).await;
+
+    assert_eq!(outcome.status, Status::Stalled(Stuck::GoingInCircles));
+    assert!(
+        outcome.trail.len() <= 8,
+        "it stopped inside the second lap rather than walking twelve, got {} steps",
+        outcome.trail.len()
+    );
+    assert!(
+        outcome.trail.iter().all(|step| step.page_changed),
+        "every step changed the page, which is what hid this"
+    );
+    assert_eq!(
+        outcome.retired, 0,
+        "nothing was dead either, so neither old guard could fire"
+    );
+}
+
+/// A run following a trail of new pages is left alone, because each step lands
+/// somewhere it has not stood before.
+#[tokio::test]
+async fn a_run_reaching_new_pages_is_not_called_a_circle() {
+    let view = page(
+        "https://example.test/one",
+        1,
+        vec![
+            control("e1", "link", "Next"),
+            control("e2", "link", "Other"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let step = || {
+        vec![
+            ("operation", spread("ACT", 0.95, 0.02)),
+            ("act_how", spread("CLICK", 0.95, 0.02)),
+            ("target", spread("e1", 0.95, 0.02)),
+        ]
+    };
+    let oracle = Scripted::new(vec![
+        step(),
+        step(),
+        step(),
+        step(),
+        step(),
+        step(),
+        vec![("operation", spread("DONE", 0.95, 0.02))],
+    ]);
+
+    let outcome = advance(&oracle, &driver, run_for("follow the trail")).await;
+
+    assert_eq!(
+        outcome.status,
+        Status::Satisfied,
+        "six steps, six new pages, no circle"
     );
 }
