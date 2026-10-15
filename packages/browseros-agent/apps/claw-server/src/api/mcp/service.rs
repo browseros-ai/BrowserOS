@@ -9,6 +9,7 @@ use crate::{
         naming::{normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
+        pursue::PursueOffering,
     },
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
@@ -266,7 +267,7 @@ impl ClawMcpService {
         tools.push(decorate(self.mark_skill_run_tool.clone()));
         // Offered only when the server has a credential for the decision model.
         // A tool that can only fail is worse than one that is not there.
-        if pursue_credential().is_some() {
+        if PursueOffering::read().is_offered() {
             tools.push(decorate(self.pursue_tool.clone()));
         }
         if self.state.agent_settings.human_help() == HumanHelp::On {
@@ -305,7 +306,7 @@ impl ClawMcpService {
         }
         let started_at = StdInstant::now();
 
-        let Some(token) = pursue_credential() else {
+        let Some(token) = crate::api::mcp::pursue::credential() else {
             return self
                 .refuse_pursue(
                     started,
@@ -1343,7 +1344,7 @@ impl ServerHandler for ClawMcpService {
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(with_session_arg(self.mark_skill_run_tool.clone()));
         }
-        if name == PURSUE_TOOL_NAME && pursue_credential().is_some() {
+        if name == PURSUE_TOOL_NAME && PursueOffering::read().is_offered() {
             return Some(with_session_arg(self.pursue_tool.clone()));
         }
         self.find_tool_index(name)
@@ -1360,7 +1361,7 @@ impl ServerHandler for ClawMcpService {
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
-        let is_pursue = request.name == PURSUE_TOOL_NAME && pursue_credential().is_some();
+        let is_pursue = request.name == PURSUE_TOOL_NAME && PursueOffering::read().is_offered();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
             && !is_save_skill
@@ -1711,16 +1712,6 @@ fn mark_skill_run_tool() -> Tool {
             .destructive(false)
             .idempotent(true),
     )
-}
-
-/// The credential for the decision model, or nothing.
-///
-/// Read per call rather than cached, so a server started without one picks it up
-/// after a restart of the environment rather than of itself. Never logged.
-fn pursue_credential() -> Option<String> {
-    std::env::var("JEV_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty())
 }
 
 /// Destinations the caller authored, which is the only way this run may move.
@@ -2511,7 +2502,7 @@ mod tests {
     /// decision model, so an exact tool list has to say so. Without this the
     /// suite passes or fails depending on whose shell ran it.
     fn expect_pursue_if_credentialled(expected: &mut Vec<String>) {
-        if pursue_credential().is_some() {
+        if PursueOffering::read().is_offered() {
             expected.push(PURSUE_TOOL_NAME.to_string());
         }
     }
