@@ -1,0 +1,38 @@
+[package]
+name = "browseros-agent"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["bedrock"]
+# AWS Bedrock pulls in the AWS SDK; a feature so size-sensitive builds can measure or drop it.
+bedrock = ["dep:rig-bedrock"]
+
+[dependencies]
+ui-message-stream.workspace = true
+
+async-trait.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+# Provider normalisation only: no rig type appears in this crate's public API.
+rig-core.workspace = true
+rig-reqwest.workspace = true
+rig-bedrock = { workspace = true, optional = true }
+# MCP tool sources (internal /mcp over loopback + custom servers) are rmcp clients.
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true
