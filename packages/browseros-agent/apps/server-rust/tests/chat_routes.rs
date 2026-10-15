@@ -1216,8 +1216,9 @@ async fn state_json(h: &Harness, conversation: Uuid) -> Result<Value, Box<dyn Er
     .await
 }
 
-/// Streams `start`, then on stop lingers 300 ms before its `abort` (a slow unwind). `forget`
-/// optionally signals and then waits on a gate, so a test can hold a DELETE mid-cleanup.
+/// Streams `start`, then waits for stop (the registry drops the stream at the cancel). `forget`
+/// is a slow cleanup (300 ms), or with a gate signals and then waits on it, so a test can hold a
+/// DELETE mid-cleanup.
 #[derive(Default)]
 struct LingeringEngine {
     forget_gate: Option<(Arc<Notify>, Arc<Notify>)>,
@@ -1241,7 +1242,6 @@ impl ChatEngine for LingeringEngine {
                     )),
                     1 => {
                         cancel.cancelled().await;
-                        tokio::time::sleep(Duration::from_millis(300)).await;
                         Some((server_rust::chat::stopped_chunk(), 2))
                     }
                     _ => None,
@@ -1251,17 +1251,21 @@ impl ChatEngine for LingeringEngine {
     }
 
     async fn forget(&self, conversation_id: Uuid) -> bool {
-        if let Some((entered, release)) = &self.forget_gate {
-            entered.notify_one();
-            release.notified().await;
+        match &self.forget_gate {
+            Some((entered, release)) => {
+                entered.notify_one();
+                release.notified().await;
+            }
+            None => tokio::time::sleep(Duration::from_millis(300)).await,
         }
         locked(&self.forgotten).push(conversation_id);
         true
     }
 }
 
-/// axum drops a handler whose client hung up. A DELETE dropped while the run unwinds used to
-/// leave the record `deleting` forever (409 until restart) with the session never forgotten.
+/// axum drops a handler whose client hung up. A DELETE dropped while the engine still cleans up
+/// used to leave the record `deleting` forever (409 until restart) with the session never
+/// forgotten.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn a_delete_cut_short_by_its_client_still_frees_the_conversation() -> TestResult {
     let engine = Arc::new(LingeringEngine::default());
@@ -1275,7 +1279,7 @@ async fn a_delete_cut_short_by_its_client_still_frees_the_conversation() -> Test
     let cut = tokio::time::timeout(Duration::from_millis(50), h.send(false, delete)).await;
     assert!(
         cut.is_err(),
-        "the delete should still be waiting on the run"
+        "the delete should still be waiting on the engine's cleanup"
     );
 
     let mut freed = false;
@@ -1767,6 +1771,7 @@ async fn a_real_sqlite_busy_save_fails_the_turn_without_creating_history() -> Te
         ),
         tabs: None,
         use_mock_llm: false,
+        telemetry: server_rust::chat::ChatTelemetry::default(),
     });
     let mut ts = sqlx::SqliteConnection::connect_with(
         &sqlx::sqlite::SqliteConnectOptions::new().filename(&paths.db_file),
