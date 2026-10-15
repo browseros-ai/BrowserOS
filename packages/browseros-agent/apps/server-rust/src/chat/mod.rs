@@ -117,17 +117,18 @@ impl DbChatRecords {
 #[async_trait::async_trait]
 impl ChatRecords for DbChatRecords {
     async fn provider(&self, id: &str) -> DbResult<Option<ProviderRecord>> {
-        if let Some(row) = self.providers.get(id).await? {
-            return Ok(Some(ProviderRecord::Llm(Box::new(row))));
-        }
-        // `ProviderStore` serves `kind = 'llm'` rows only; an ACP agent id still has to produce
-        // the "coding agent" 400 rather than "Unknown provider".
+        // Agents first: an ACP row must produce the "coding agent" 400 whether or not
+        // `ProviderStore` filters by `kind` (TS checks `row.kind !== 'llm'` on the one table).
         if let Ok(agent_id) = Uuid::parse_str(id)
             && self.agents.get(agent_id).await?.is_some()
         {
             return Ok(Some(ProviderRecord::CodingAgent { id: id.to_owned() }));
         }
-        Ok(None)
+        Ok(self
+            .providers
+            .get(id)
+            .await?
+            .map(|row| ProviderRecord::Llm(Box::new(row))))
     }
 
     async fn default_provider(&self) -> DbResult<Option<ProviderRecord>> {
@@ -286,7 +287,8 @@ impl ChatService {
         input: Arc<ChatTurnRequest>,
     ) -> impl FnOnce(
         RunHandle,
-    ) -> futures_util::future::BoxFuture<'static, Result<Prepared, ChatRejection>>
+    )
+        -> futures_util::future::BoxFuture<'static, Result<Prepared, ChatRejection>>
     + Send
     + 'static {
         let records = self.records.clone();
@@ -340,7 +342,12 @@ impl ChatService {
                 let browser_context =
                     resolve_browser_context(tabs.as_deref(), input.browser_context.as_ref()).await;
                 let prior = history
-                    .load_or_seed(conversation_id, &target_key, persist, &input.previous_conversation)
+                    .load_or_seed(
+                        conversation_id,
+                        &target_key,
+                        persist,
+                        &input.previous_conversation,
+                    )
                     .await;
                 let mut with_user = prior.clone();
                 with_user.push(user_message(&message, &input, &target_key));
@@ -380,8 +387,9 @@ impl ChatService {
                         // Only a turn that produced an assistant reply is durable: persisting a
                         // history ending on the user message makes the next turn send two user
                         // messages in a row, which providers reject.
-                        let completed =
-                            messages.last().is_some_and(|last| last.role == Role::Assistant);
+                        let completed = messages
+                            .last()
+                            .is_some_and(|last| last.role == Role::Assistant);
                         if persist && completed {
                             history
                                 .persist(conversation_id, &target_key, &messages, input.origin)

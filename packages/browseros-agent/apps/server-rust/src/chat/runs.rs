@@ -24,7 +24,9 @@ use super::{PanelStream, Resume, engine::ChatRejection};
 use crate::activity::ServerActivity;
 use browseros_agent::llm::{ChatError, ChatErrorCode};
 use futures_util::{FutureExt as _, StreamExt as _, future::BoxFuture};
-use server_api::{ConversationPanelAssignment, ConversationPanelAssignments, ConversationRunStatus};
+use server_api::{
+    ConversationPanelAssignment, ConversationPanelAssignments, ConversationRunStatus,
+};
 use std::{
     collections::{BTreeMap, HashMap},
     future::Future,
@@ -277,6 +279,9 @@ impl ConversationRuns {
             attach_initial_panels(&mut state, &record, &presentation.panel_tab_ids);
             record
         };
+        // `/status` reports busy from registration until the run is fully unwound (preparation,
+        // pump and `on_finish`); the guard moves into the driving task.
+        let busy = self.activity.run_started_owned();
 
         let handle = RunHandle {
             run_id: record.run_id,
@@ -286,10 +291,7 @@ impl ConversationRuns {
         let (reply, prepared) = oneshot::channel();
         let runs = self.clone();
         tokio::spawn(async move {
-            // Held for preparation, the pump and `on_finish`: `/status` reports busy until the
-            // run is fully unwound.
-            let activity = runs.activity.clone();
-            let _busy = activity.run_started();
+            let _busy = busy;
             let driven = AssertUnwindSafe(runs.drive(record.clone(), handle, prepare, reply))
                 .catch_unwind()
                 .await;
@@ -298,9 +300,11 @@ impl ConversationRuns {
                 runs.finish(&record, RunStatus::Failed);
             }
         });
-        prepared
-            .await
-            .unwrap_or_else(|_| Err(ChatRejection::Internal(run_crashed())))
+        match prepared.await {
+            Ok(outcome) => outcome,
+            // The driving task died before answering (a panic in `prepare`).
+            Err(_) => Err(ChatRejection::Internal(run_crashed())),
+        }
     }
 
     async fn drive<F, Fut>(
@@ -352,8 +356,8 @@ impl ConversationRuns {
         let mut grace_deadline = None;
         loop {
             let next = if record.cancel.is_cancelled() {
-                let deadline = *grace_deadline
-                    .get_or_insert_with(|| tokio::time::Instant::now() + STOP_GRACE);
+                let deadline =
+                    *grace_deadline.get_or_insert_with(|| tokio::time::Instant::now() + STOP_GRACE);
                 match tokio::time::timeout_at(deadline, chunks.next()).await {
                     Ok(next) => next,
                     Err(_) => {

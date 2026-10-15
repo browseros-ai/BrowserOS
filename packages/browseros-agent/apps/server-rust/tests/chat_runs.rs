@@ -89,13 +89,17 @@ fn stream_of(resume: Resume) -> Result<ChunkStream, Box<dyn Error>> {
     }
 }
 
-async fn next_panels(panels: &mut PanelStream) -> Result<ConversationPanelAssignments, Box<dyn Error>> {
+async fn next_panels(
+    panels: &mut PanelStream,
+) -> Result<ConversationPanelAssignments, Box<dyn Error>> {
     tokio::time::timeout(Duration::from_secs(5), panels.next())
         .await?
         .ok_or_else(|| "panel stream ended".into())
 }
 
-async fn current_panels(runs: &Arc<ConversationRuns>) -> Result<ConversationPanelAssignments, Box<dyn Error>> {
+async fn current_panels(
+    runs: &Arc<ConversationRuns>,
+) -> Result<ConversationPanelAssignments, Box<dyn Error>> {
     next_panels(&mut runs.panel_assignments()).await
 }
 
@@ -169,7 +173,9 @@ async fn keeps_creation_identity_across_turns_and_removes_only_retired_bindings(
     assert!(initial[1].auto_open_id.is_some());
 
     drop(first);
-    stream_of(runs.subscribe(old, None))?.collect::<Vec<_>>().await;
+    stream_of(runs.subscribe(old, None))?
+        .collect::<Vec<_>>()
+        .await;
     assert_eq!(tab_ids(&current_panels(&runs).await?), vec![10, 11, 12]);
 
     let (_second, chunks) = controlled();
@@ -198,7 +204,8 @@ async fn keeps_creation_identity_across_turns_and_removes_only_retired_bindings(
 }
 
 #[tokio::test]
-async fn retires_mappings_immediately_while_provider_preparation_is_still_unwinding() -> TestResult {
+async fn retires_mappings_immediately_while_provider_preparation_is_still_unwinding() -> TestResult
+{
     let runs = runs();
     let conversation = Uuid::new_v4();
     let (release, released) = oneshot::channel::<ChunkStream>();
@@ -284,19 +291,32 @@ async fn keeps_replay_multicast_explicit_cancellation_and_preparation_races_serv
     let (_late, chunks) = controlled();
     let _ = provide.send(chunks);
     starting.await??;
-    eventually(|| runs.snapshot(conversation).is_some_and(|s| s.status == RunStatus::Aborted))
-        .await?;
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.status == RunStatus::Aborted)
+    })
+    .await?;
 
     let (source, chunks) = controlled();
     start(&runs, conversation, &[], chunks).await?;
     let first = stream_of(runs.subscribe(conversation, None))?;
     source.send(text_start())?;
-    eventually(|| runs.snapshot(conversation).is_some_and(|s| s.chunk_count == 1)).await?;
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.chunk_count == 1)
+    })
+    .await?;
     let late = stream_of(runs.subscribe(conversation, None))?;
     source.send(text_delta())?;
     drop(source);
-    assert_eq!(first.collect::<Vec<_>>().await, vec![text_start(), text_delta()]);
-    assert_eq!(late.collect::<Vec<_>>().await, vec![text_start(), text_delta()]);
+    assert_eq!(
+        first.collect::<Vec<_>>().await,
+        vec![text_start(), text_delta()]
+    );
+    assert_eq!(
+        late.collect::<Vec<_>>().await,
+        vec![text_start(), text_delta()]
+    );
     Ok(())
 }
 
@@ -340,13 +360,19 @@ async fn does_not_let_a_subscriber_disconnect_cancel_execution() -> TestResult {
     drop(abandoned);
     source.send(text_delta())?;
     tokio::time::sleep(Duration::from_millis(20)).await;
-    assert!(!dropped.load(Ordering::SeqCst), "a viewer disconnect dropped the engine stream");
+    assert!(
+        !dropped.load(Ordering::SeqCst),
+        "a viewer disconnect dropped the engine stream"
+    );
     assert!(runs.active_run(conversation).is_some());
     drop(source);
 
     assert_eq!(remaining.collect::<Vec<_>>().await, vec![text_delta()]);
-    eventually(|| runs.snapshot(conversation).is_some_and(|s| s.status == RunStatus::Completed))
-        .await?;
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.status == RunStatus::Completed)
+    })
+    .await?;
     Ok(())
 }
 
@@ -369,7 +395,10 @@ async fn marks_an_error_chunk_as_a_failed_run_and_panel_assignment() -> TestResu
         next_panels(&mut panels).await?.assignments[0].status,
         ConversationRunStatus::Failed
     );
-    assert_eq!(runs.snapshot(conversation).map(|s| s.status), Some(RunStatus::Failed));
+    assert_eq!(
+        runs.snapshot(conversation).map(|s| s.status),
+        Some(RunStatus::Failed)
+    );
     Ok(())
 }
 
@@ -423,7 +452,11 @@ async fn wakes_retained_panels_without_reclaiming_tabs_owned_by_another_conversa
     let run = runs.active_run(older).ok_or("no active run")?;
     runs.associate_tabs(&run, &[21]);
     drop(first);
-    eventually(|| runs.snapshot(older).is_some_and(|s| s.status == RunStatus::Completed)).await?;
+    eventually(|| {
+        runs.snapshot(older)
+            .is_some_and(|s| s.status == RunStatus::Completed)
+    })
+    .await?;
 
     let (_newer_source, chunks) = controlled();
     start(&runs, newer, &[21], chunks).await?;
@@ -432,8 +465,20 @@ async fn wakes_retained_panels_without_reclaiming_tabs_owned_by_another_conversa
 
     let assignments = current_panels(&runs).await?.assignments;
     assert_eq!(assignments.len(), 2);
-    assert_eq!((assignments[0].tab_id, assignments[0].conversation_id.clone()), (20, older.to_string()));
-    assert_eq!((assignments[1].tab_id, assignments[1].conversation_id.clone()), (21, newer.to_string()));
+    assert_eq!(
+        (
+            assignments[0].tab_id,
+            assignments[0].conversation_id.clone()
+        ),
+        (20, older.to_string())
+    );
+    assert_eq!(
+        (
+            assignments[1].tab_id,
+            assignments[1].conversation_id.clone()
+        ),
+        (21, newer.to_string())
+    );
     runs.stop(newer).await;
     runs.stop(older).await;
     Ok(())
@@ -474,19 +519,23 @@ async fn holds_panel_hydration_until_preparation_publishes_canonical_messages() 
     let starting = tokio::spawn({
         let runs = runs.clone();
         async move {
-            runs.start(conversation, presentation(&[32]), move |handle| async move {
-                let _ = released.await;
-                handle.publish_messages(vec![UiMessage::user(
-                    "canonical-user".into(),
-                    None,
-                    vec![],
-                )]);
-                let (_source, chunks) = controlled();
-                Ok(Prepared {
-                    chunks,
-                    on_finish: noop_finish(),
-                })
-            })
+            runs.start(
+                conversation,
+                presentation(&[32]),
+                move |handle| async move {
+                    let _ = released.await;
+                    handle.publish_messages(vec![UiMessage::user(
+                        "canonical-user".into(),
+                        None,
+                        vec![],
+                    )]);
+                    let (_source, chunks) = controlled();
+                    Ok(Prepared {
+                        chunks,
+                        on_finish: noop_finish(),
+                    })
+                },
+            )
             .await
         }
     });
@@ -513,8 +562,11 @@ async fn rejects_stale_message_updates_from_a_replaced_run() -> TestResult {
     let (first, chunks) = controlled();
     let first_run = start(&runs, conversation, &[], chunks).await?;
     drop(first);
-    eventually(|| runs.snapshot(conversation).is_some_and(|s| s.status == RunStatus::Completed))
-        .await?;
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.status == RunStatus::Completed)
+    })
+    .await?;
     let (_second, chunks) = controlled();
     let second_run = start(&runs, conversation, &[], chunks).await?;
 
@@ -522,7 +574,8 @@ async fn rejects_stale_message_updates_from_a_replaced_run() -> TestResult {
     assert!(!runs.update_messages(conversation, first_run, vec![message("stale")]));
     assert!(runs.update_messages(conversation, second_run, vec![message("current")]));
     assert_eq!(
-        runs.snapshot(conversation).map(|s| s.messages[0].id.clone()),
+        runs.snapshot(conversation)
+            .map(|s| s.messages[0].id.clone()),
         Some("current".into())
     );
     runs.stop(conversation).await;
@@ -595,8 +648,14 @@ async fn runs_on_finish_before_subscribers_see_the_end() -> TestResult {
     drop(source);
     let chunks = subscriber.collect::<Vec<_>>().await;
     assert_eq!(chunks, vec![text_start()]);
-    assert!(persisted.load(Ordering::SeqCst), "the stream ended before on_finish completed");
-    let status = observed.lock().ok().and_then(|slot| slot.as_ref().map(|f| f.status));
+    assert!(
+        persisted.load(Ordering::SeqCst),
+        "the stream ended before on_finish completed"
+    );
+    let status = observed
+        .lock()
+        .ok()
+        .and_then(|slot| slot.as_ref().map(|f| f.status));
     assert_eq!(status, Some(RunStatus::Completed));
     Ok(())
 }
@@ -635,7 +694,11 @@ async fn stop_cancels_the_engine_drains_its_abort_and_returns_after_the_end() ->
         }
     })
     .await?;
-    eventually(|| runs.snapshot(conversation).is_some_and(|s| s.chunk_count == 1)).await?;
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.chunk_count == 1)
+    })
+    .await?;
     assert!(runs.stop(conversation).await);
     let snapshot = runs.snapshot(conversation).ok_or("no snapshot")?;
     assert_eq!(snapshot.status, RunStatus::Aborted);
@@ -644,8 +707,13 @@ async fn stop_cancels_the_engine_drains_its_abort_and_returns_after_the_end() ->
         *finished_status.lock().map_err(|_| "poisoned")?,
         Some(RunStatus::Aborted)
     );
-    assert!(!runs.stop(conversation).await, "a finished run cannot be stopped again");
-    let replay = stream_of(runs.subscribe(conversation, None))?.collect::<Vec<_>>().await;
+    assert!(
+        !runs.stop(conversation).await,
+        "a finished run cannot be stopped again"
+    );
+    let replay = stream_of(runs.subscribe(conversation, None))?
+        .collect::<Vec<_>>()
+        .await;
     assert_eq!(replay, vec![text_start(), stopped_chunk()]);
     Ok(())
 }
@@ -657,7 +725,10 @@ async fn stop_bounds_an_engine_that_ignores_cancellation() -> TestResult {
     let (_never_closed, chunks) = controlled();
     start(&runs, conversation, &[], chunks).await?;
     assert!(runs.stop(conversation).await);
-    assert_eq!(runs.snapshot(conversation).map(|s| s.status), Some(RunStatus::Aborted));
+    assert_eq!(
+        runs.snapshot(conversation).map(|s| s.status),
+        Some(RunStatus::Aborted)
+    );
     Ok(())
 }
 
@@ -672,9 +743,17 @@ async fn a_rejected_preparation_leaves_a_failed_record_and_releases_activity() -
         })
         .await;
     assert!(matches!(rejected, Err(ChatRejection::UnknownAgent)));
-    let snapshot = runs.prepared_snapshot(conversation).await.ok_or("no snapshot")?;
+    let snapshot = runs
+        .prepared_snapshot(conversation)
+        .await
+        .ok_or("no snapshot")?;
     assert_eq!(snapshot.status, RunStatus::Failed);
-    assert!(stream_of(runs.subscribe(conversation, None))?.collect::<Vec<_>>().await.is_empty());
+    assert!(
+        stream_of(runs.subscribe(conversation, None))?
+            .collect::<Vec<_>>()
+            .await
+            .is_empty()
+    );
     assert_eq!(
         current_panels(&runs).await?.assignments[0].status,
         ConversationRunStatus::Failed
@@ -702,8 +781,11 @@ async fn a_panicking_preparation_answers_500_and_frees_the_conversation() -> Tes
         })
         .await;
     assert!(matches!(crashed, Err(ChatRejection::Internal(_))));
-    eventually(|| runs.snapshot(conversation).is_some_and(|s| s.status == RunStatus::Failed))
-        .await?;
+    eventually(|| {
+        runs.snapshot(conversation)
+            .is_some_and(|s| s.status == RunStatus::Failed)
+    })
+    .await?;
     let (_source, chunks) = controlled();
     start(&runs, conversation, &[], chunks).await?;
     runs.stop(conversation).await;
@@ -730,15 +812,24 @@ async fn resume_compares_the_run_id_as_the_client_sent_it() -> TestResult {
     let runs = runs();
     let conversation = Uuid::new_v4();
     assert!(matches!(runs.subscribe(conversation, None), Resume::NoRun));
-    assert!(matches!(runs.subscribe(conversation, Some("x")), Resume::NoRun));
+    assert!(matches!(
+        runs.subscribe(conversation, Some("x")),
+        Resume::NoRun
+    ));
     let (_source, chunks) = controlled();
     let run_id = start(&runs, conversation, &[], chunks).await?;
-    assert!(matches!(runs.subscribe(conversation, Some(&run_id.to_string())), Resume::Stream(_)));
+    assert!(matches!(
+        runs.subscribe(conversation, Some(&run_id.to_string())),
+        Resume::Stream(_)
+    ));
     assert!(matches!(
         runs.subscribe(conversation, Some(&run_id.to_string().to_uppercase())),
         Resume::RunChanged
     ));
-    assert!(matches!(runs.subscribe(conversation, Some("")), Resume::RunChanged));
+    assert!(matches!(
+        runs.subscribe(conversation, Some("")),
+        Resume::RunChanged
+    ));
     runs.stop(conversation).await;
     Ok(())
 }

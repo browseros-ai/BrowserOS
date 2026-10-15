@@ -6,30 +6,31 @@
 //! disconnect drops only that cursor and never cancels the run (`POST …/stop` and DELETE do).
 //!
 //! Handlers take `State<Arc<ChatService>>` (projected from `AppState` by `FromRef`) and the
-//! request's [`RequestTrust`] from the request extensions, so they can be mounted on a test router
-//! with a scripted service. Owned by P8.
+//! security middleware's [`RequestTrust`], so they can be mounted on a test router with a scripted
+//! service. Owned by P8.
 
-use super::{errors, security::RequestTrust, wire::chat as wire};
+use super::{
+    errors,
+    extract::{ZodJson, ZodUuid},
+    security::RequestTrust,
+    wire::chat as wire,
+};
 use crate::{
     app::AppState,
     chat::{ChatRejection, ChatService, Resume, request},
 };
 use axum::{
-    Extension, Json,
+    Json,
     body::Body,
     extract::{FromRef, Path, Query, State},
     response::{IntoResponse, Response},
 };
 use futures_util::StreamExt as _;
-use http::{HeaderMap, HeaderValue, StatusCode, header};
+use http::{HeaderValue, StatusCode, header};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{convert::Infallible, sync::Arc};
 use ui_message_stream::{ChunkStream, sse};
-
-/// Bun's default request body cap: attachments travel inline as base64, so axum's 2 MB default
-/// would reject image turns the TS server accepts.
-const MAX_CHAT_BODY_BYTES: usize = 128 * 1024 * 1024;
 
 impl FromRef<AppState> for Arc<ChatService> {
     fn from_ref(state: &AppState) -> Self {
@@ -37,43 +38,31 @@ impl FromRef<AppState> for Arc<ChatService> {
     }
 }
 
-/// The request's `isTrustedAppRequest` verdict, computed once by the security middleware and
-/// left in the extensions. Absent means untrusted (fail closed).
-fn trust(extension: Option<Extension<RequestTrust>>) -> RequestTrust {
-    extension.map(|Extension(trust)| trust).unwrap_or_default()
-}
-
 fn forbidden() -> Response {
     errors::error_string(StatusCode::FORBIDDEN, "Forbidden")
 }
 
 /// `POST /chat`: answers only after the engine is prepared; the body is the turn's stream.
+/// The body is read the Hono way by `ZodJson` (non-JSON content type → `{}`, malformed → 500) and
+/// validated by `parse_chat_request`, whose issues are already in zod's key order.
 pub async fn post_chat(
     State(chat): State<Arc<ChatService>>,
-    trust_extension: Option<Extension<RequestTrust>>,
-    headers: HeaderMap,
-    body: Body,
+    trust: RequestTrust,
+    ZodJson(body): ZodJson<Value>,
 ) -> Response {
-    let value = match json_body(&headers, body).await {
-        Ok(value) => value,
-        Err(response) => return response,
-    };
-    let request = match request::parse_chat_request(&value) {
+    let request = match request::parse_chat_request(&body) {
         Ok(request) => request,
-        Err(issues) => return zod_issues_400(&issues),
+        Err(issues) => return errors::zod_issues_400(&issues),
     };
-    match chat.start(request, trust(trust_extension)).await {
+    match chat.start(request, trust).await {
         Ok(chunks) => ui_message_stream_response(chunks),
         Err(rejection) => rejection_response(rejection),
     }
 }
 
 /// `GET /chat/panels`: the background page's routing table, as reconnectable SSE.
-pub async fn panels(
-    State(chat): State<Arc<ChatService>>,
-    trust_extension: Option<Extension<RequestTrust>>,
-) -> Response {
-    if !trust(trust_extension).trusted_app {
+pub async fn panels(State(chat): State<Arc<ChatService>>, trust: RequestTrust) -> Response {
+    if !trust.trusted_app {
         return forbidden();
     }
     let frames = chat.panel_assignments().map(|assignments| {
@@ -98,10 +87,10 @@ pub async fn panels(
 /// integer.
 pub async fn delete_panel(
     State(chat): State<Arc<ChatService>>,
-    trust_extension: Option<Extension<RequestTrust>>,
+    trust: RequestTrust,
     Path(tab_id): Path<String>,
 ) -> Response {
-    if !trust(trust_extension).trusted_app {
+    if !trust.trusted_app {
         return forbidden();
     }
     let Some(tab_id) = js_number(&tab_id).filter(|id| id.fract() == 0.0 && *id >= 0.0) else {
@@ -114,12 +103,13 @@ pub async fn delete_panel(
     Json(server_api::SuccessResponse::new(true)).into_response()
 }
 
-/// `GET /chat/{conversationId}/state`: waits on the prepared gate (no timeout, TS parity).
+/// `GET /chat/{conversationId}/state`: waits on the prepared gate (no timeout, TS parity). The id
+/// is `safeParse`d in TS, so a bad one is `{"error":"Invalid conversation id"}`, not a zod body.
 pub async fn state(
     State(chat): State<Arc<ChatService>>,
     Path(conversation_id): Path<String>,
 ) -> Response {
-    let Some(conversation_id) = request::parse_zod_uuid(&conversation_id) else {
+    let Some(ZodUuid(conversation_id)) = ZodUuid::parse(&conversation_id) else {
         return errors::error_string(StatusCode::BAD_REQUEST, "Invalid conversation id");
     };
     let Some(snapshot) = chat.state(conversation_id).await else {
@@ -141,12 +131,9 @@ pub struct ResumeQuery {
 /// `GET /chat/{conversationId}/stream`: a disconnect drops only this subscriber.
 pub async fn resume_stream(
     State(chat): State<Arc<ChatService>>,
-    Path(conversation_id): Path<String>,
+    ZodUuid(conversation_id): ZodUuid,
     Query(query): Query<ResumeQuery>,
 ) -> Response {
-    let Some(conversation_id) = request::parse_zod_uuid(&conversation_id) else {
-        return zod_issues_400(&[request::conversation_id_param_issue()]);
-    };
     match chat.resume(conversation_id, query.run_id.as_deref()) {
         Resume::NoRun => StatusCode::NO_CONTENT.into_response(),
         // A newer turn won the state/stream race: the panel must hydrate again rather than
@@ -161,11 +148,8 @@ pub async fn resume_stream(
 /// `POST /chat/{conversationId}/stop`: no trusted-app check (TS parity).
 pub async fn stop(
     State(chat): State<Arc<ChatService>>,
-    Path(conversation_id): Path<String>,
+    ZodUuid(conversation_id): ZodUuid,
 ) -> Response {
-    let Some(conversation_id) = request::parse_zod_uuid(&conversation_id) else {
-        return zod_issues_400(&[request::conversation_id_param_issue()]);
-    };
     Json(server_api::StopChatResponse::new(
         chat.stop(conversation_id).await,
     ))
@@ -175,13 +159,10 @@ pub async fn stop(
 /// `DELETE /chat/{conversationId}`: trusted-app check only for ACP conversations.
 pub async fn delete_conversation_session(
     State(chat): State<Arc<ChatService>>,
-    trust_extension: Option<Extension<RequestTrust>>,
-    Path(conversation_id): Path<String>,
+    trust: RequestTrust,
+    ZodUuid(conversation_id): ZodUuid,
 ) -> Response {
-    let Some(conversation_id) = request::parse_zod_uuid(&conversation_id) else {
-        return zod_issues_400(&[request::conversation_id_param_issue()]);
-    };
-    if chat.is_acp_conversation(conversation_id) && !trust(trust_extension).trusted_app {
+    if chat.is_acp_conversation(conversation_id) && !trust.trusted_app {
         return forbidden();
     }
     let outcome = chat.delete(conversation_id).await;
@@ -220,71 +201,6 @@ fn ui_message_stream_response(chunks: ChunkStream) -> Response {
     response
 }
 
-/// Hono's `zValidator('json')` body read: a missing or non-JSON content type validates `{}`;
-/// malformed JSON is a 500 chat envelope (the TS `onError` does not special-case Hono's 400).
-async fn json_body(headers: &HeaderMap, body: Body) -> Result<Value, Response> {
-    let is_json = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(is_json_content_type);
-    if !is_json {
-        return Ok(json!({}));
-    }
-    let bytes = axum::body::to_bytes(body, MAX_CHAT_BODY_BYTES)
-        .await
-        .map_err(|_| errors::text_plain(StatusCode::PAYLOAD_TOO_LARGE, "Payload Too Large"))?;
-    serde_json::from_slice(&bytes).map_err(|_| {
-        errors::chat_envelope_500(&crate::chat::server_error(
-            "Malformed JSON in request body",
-        ))
-    })
-}
-
-/// Hono's `jsonRegex`, case-insensitive:
-/// `^application/([a-z-.]+\+)?json(;\s*[a-zA-Z0-9-]+=([^;]+))*$`.
-fn is_json_content_type(value: &str) -> bool {
-    let lower = value.to_ascii_lowercase();
-    let Some(rest) = lower.strip_prefix("application/") else {
-        return false;
-    };
-    let (media, params) = match rest.split_once(';') {
-        Some((media, params)) => (media, Some(params)),
-        None => (rest, None),
-    };
-    let media_ok = media == "json"
-        || media
-            .strip_suffix("+json")
-            .is_some_and(|suffix| {
-                !suffix.is_empty()
-                    && suffix
-                        .bytes()
-                        .all(|byte| byte.is_ascii_lowercase() || byte == b'-' || byte == b'.')
-            });
-    media_ok
-        && params.is_none_or(|params| {
-            params.split(';').all(|param| {
-                param.trim_start().split_once('=').is_some_and(|(name, value)| {
-                    !name.is_empty()
-                        && name
-                            .bytes()
-                            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
-                        && !value.is_empty()
-                })
-            })
-        })
-}
-
-/// 400 `{"success":false,"error":{"name":"ZodError","message":"<issues, 2-space JSON>"}}` with zod's
-/// full issue objects (the `@hono/zod-validator` default hook).
-fn zod_issues_400(issues: &[Value]) -> Response {
-    let message = serde_json::to_string_pretty(issues).unwrap_or_default();
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ "success": false, "error": { "name": "ZodError", "message": message } })),
-    )
-        .into_response()
-}
-
 /// JS `Number(string)` for the forms a path segment can take: trimmed decimal (with exponent),
 /// `0x`/`0o`/`0b` integers, `Infinity`; anything else is `NaN` (`None`). An all-space string is 0.
 fn js_number(text: &str) -> Option<f64> {
@@ -292,7 +208,14 @@ fn js_number(text: &str) -> Option<f64> {
     if trimmed.is_empty() {
         return Some(0.0);
     }
-    for (prefix, radix) in [("0x", 16), ("0X", 16), ("0o", 8), ("0O", 8), ("0b", 2), ("0B", 2)] {
+    for (prefix, radix) in [
+        ("0x", 16),
+        ("0X", 16),
+        ("0o", 8),
+        ("0O", 8),
+        ("0b", 2),
+        ("0B", 2),
+    ] {
         if let Some(digits) = trimmed.strip_prefix(prefix) {
             return u64::from_str_radix(digits, radix).ok().map(|n| n as f64);
         }
@@ -310,7 +233,10 @@ fn js_number(text: &str) -> Option<f64> {
         && unsigned
             .bytes()
             .all(|byte| byte.is_ascii_digit() || matches!(byte, b'.' | b'e' | b'E' | b'+' | b'-'))
-        && unsigned.bytes().next().is_some_and(|byte| byte.is_ascii_digit() || byte == b'.');
+        && unsigned
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_digit() || byte == b'.');
     if !valid {
         return None;
     }

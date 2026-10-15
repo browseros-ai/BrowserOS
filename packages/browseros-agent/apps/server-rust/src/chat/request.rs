@@ -127,38 +127,6 @@ impl ChatTurnRequest {
     }
 }
 
-/// `z.string().uuid()` in zod 4: RFC versions 1-8 and variant bits, plus the nil and (lowercase)
-/// max UUIDs. Stricter than `Uuid::parse_str`, which also takes simple, braced and urn forms.
-pub fn is_zod_uuid(value: &str) -> bool {
-    if value == "00000000-0000-0000-0000-000000000000"
-        || value == "ffffffff-ffff-ffff-ffff-ffffffffffff"
-    {
-        return true;
-    }
-    let bytes = value.as_bytes();
-    bytes.len() == 36
-        && bytes.iter().enumerate().all(|(index, &byte)| match index {
-            8 | 13 | 18 | 23 => byte == b'-',
-            14 => (b'1'..=b'8').contains(&byte),
-            19 => matches!(byte, b'8' | b'9' | b'a' | b'b' | b'A' | b'B'),
-            _ => byte.is_ascii_hexdigit(),
-        })
-}
-
-/// A path `conversationId` accepted by `ConversationIdParamSchema`.
-pub fn parse_zod_uuid(value: &str) -> Option<Uuid> {
-    if is_zod_uuid(value) {
-        Uuid::parse_str(value).ok()
-    } else {
-        None
-    }
-}
-
-/// The zod issue a `ConversationIdParamSchema` failure reports (`zValidator('param')` routes).
-pub fn conversation_id_param_issue() -> Value {
-    zod::uuid_issue(&[Value::from("conversationId")])
-}
-
 /// Parses a `/chat` body the way `ChatRequestSchema.safeParse` does. `Err` carries zod's issue
 /// array, ready for the 400 body.
 pub fn parse_chat_request(body: &Value) -> Result<ChatRequest, Vec<Value>> {
@@ -189,10 +157,14 @@ pub fn parse_chat_request(body: &Value) -> Result<ChatRequest, Vec<Value>> {
     if browseros_issues.is_empty()
         && let Some(fields) = input
     {
-        let provider_id = [target_provider_id, llm.provider_id, llm.inline.provider.clone()]
-            .into_iter()
-            .flatten()
-            .find(|id| !id.is_empty());
+        let provider_id = [
+            target_provider_id,
+            llm.provider_id,
+            llm.inline.provider.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .find(|id| !id.is_empty());
         return Ok(fields.into_request(
             RequestTarget::BrowserOs {
                 provider_id,
@@ -267,32 +239,67 @@ fn chat_input(object: &Map<String, Value>, issues: &mut zod::Issues) -> Option<C
     let at = |key: &str| [Value::from(key)];
     let conversation_id = zod::uuid(object.get("conversationId"), &at("conversationId"), issues);
     let message = zod::string(object.get("message"), &at("message"), issues, true);
-    let context_window_size =
-        zod::number(object.get("contextWindowSize"), &at("contextWindowSize"), issues);
-    let browser_context = browser_context(object.get("browserContext"), &at("browserContext"), issues);
-    let user_system_prompt =
-        zod::string(object.get("userSystemPrompt"), &at("userSystemPrompt"), issues, true);
-    let is_scheduled_task =
-        zod::boolean(object.get("isScheduledTask"), &at("isScheduledTask"), issues);
-    let user_working_dir =
-        zod::string_min1(object.get("userWorkingDir"), &at("userWorkingDir"), issues, true);
+    let context_window_size = zod::number(
+        object.get("contextWindowSize"),
+        &at("contextWindowSize"),
+        issues,
+    );
+    let browser_context =
+        browser_context(object.get("browserContext"), &at("browserContext"), issues);
+    let user_system_prompt = zod::string(
+        object.get("userSystemPrompt"),
+        &at("userSystemPrompt"),
+        issues,
+        true,
+    );
+    let is_scheduled_task = zod::boolean(
+        object.get("isScheduledTask"),
+        &at("isScheduledTask"),
+        issues,
+    );
+    let user_working_dir = zod::string_min1(
+        object.get("userWorkingDir"),
+        &at("userWorkingDir"),
+        issues,
+        true,
+    );
     let supports_images = zod::boolean(object.get("supportsImages"), &at("supportsImages"), issues);
-    let supports_reasoning =
-        zod::boolean(object.get("supportsReasoning"), &at("supportsReasoning"), issues);
+    let supports_reasoning = zod::boolean(
+        object.get("supportsReasoning"),
+        &at("supportsReasoning"),
+        issues,
+    );
     let mode = zod::option(object.get("mode"), &at("mode"), &["chat", "agent"], issues);
-    let origin = zod::option(object.get("origin"), &at("origin"), &["sidepanel", "newtab"], issues);
+    let origin = zod::option(
+        object.get("origin"),
+        &at("origin"),
+        &["sidepanel", "newtab"],
+        issues,
+    );
     let declined_apps = zod::string_array(object.get("declinedApps"), &at("declinedApps"), issues);
-    let selected_text = zod::string(object.get("selectedText"), &at("selectedText"), issues, true);
-    let selected_text_source =
-        selected_text_source(object.get("selectedTextSource"), &at("selectedTextSource"), issues);
+    let selected_text = zod::string(
+        object.get("selectedText"),
+        &at("selectedText"),
+        issues,
+        true,
+    );
+    let selected_text_source = selected_text_source(
+        object.get("selectedTextSource"),
+        &at("selectedTextSource"),
+        issues,
+    );
     let previous_conversation = previous_conversation(
         object.get("previousConversation"),
         &at("previousConversation"),
         issues,
     );
     let persist = zod::boolean(object.get("persist"), &at("persist"), issues);
-    let history_mode =
-        zod::option(object.get("historyMode"), &at("historyMode"), &["local", "cloud"], issues);
+    let history_mode = zod::option(
+        object.get("historyMode"),
+        &at("historyMode"),
+        &["local", "cloud"],
+        issues,
+    );
     let attachments = attachments(object.get("attachments"), &at("attachments"), issues);
     if issues.len() != before {
         return None;
@@ -449,11 +456,19 @@ fn browser_context(
         return None;
     };
     let mut context = BrowserContext::new();
-    context.window_id = zod::number(object.get("windowId"), &zod::child(path, "windowId"), issues);
+    context.window_id = zod::number(
+        object.get("windowId"),
+        &zod::child(path, "windowId"),
+        issues,
+    );
     context.active_tab = object
         .get("activeTab")
         .and_then(|tab| browser_tab(tab, &zod::child(path, "activeTab"), issues));
-    context.selected_tabs = tab_list(object.get("selectedTabs"), &zod::child(path, "selectedTabs"), issues);
+    context.selected_tabs = tab_list(
+        object.get("selectedTabs"),
+        &zod::child(path, "selectedTabs"),
+        issues,
+    );
     context.tabs = tab_list(object.get("tabs"), &zod::child(path, "tabs"), issues);
     context.enabled_mcp_servers = zod::string_array(
         object.get("enabledMcpServers"),
@@ -497,7 +512,12 @@ fn browser_tab(
     };
     let id = zod::required_number(object.get("id"), &zod::child(path, "id"), issues);
     let url = zod::string(object.get("url"), &zod::child(path, "url"), issues, true);
-    let title = zod::string(object.get("title"), &zod::child(path, "title"), issues, true);
+    let title = zod::string(
+        object.get("title"),
+        &zod::child(path, "title"),
+        issues,
+        true,
+    );
     let page_id = zod::number(object.get("pageId"), &zod::child(path, "pageId"), issues);
     let mut tab = server_api::BrowserTab::new(id?);
     tab.url = url;
@@ -517,7 +537,12 @@ fn selected_text_source(
         return None;
     };
     let url = zod::string(object.get("url"), &zod::child(path, "url"), issues, false);
-    let title = zod::string(object.get("title"), &zod::child(path, "title"), issues, false);
+    let title = zod::string(
+        object.get("title"),
+        &zod::child(path, "title"),
+        issues,
+        false,
+    );
     Some(SelectedTextSource::new(url?, title?))
 }
 
@@ -556,7 +581,12 @@ fn previous_conversation(
                 server_api::PreviousMessageRole::User
             }
         });
-        let content = zod::string(object.get("content"), &zod::child(path, "content"), issues, false);
+        let content = zod::string(
+            object.get("content"),
+            &zod::child(path, "content"),
+            issues,
+            false,
+        );
         Some(PreviousMessage::new(role?, content?))
     });
     if array_issues.is_empty() {
@@ -581,8 +611,12 @@ fn attachments(
             issues.invalid_type(path, "object", Some(item));
             return None;
         };
-        let media_type =
-            zod::string_min1(object.get("mediaType"), &zod::child(path, "mediaType"), issues, false);
+        let media_type = zod::string_min1(
+            object.get("mediaType"),
+            &zod::child(path, "mediaType"),
+            issues,
+            false,
+        );
         let data = zod::string_min1(object.get("data"), &zod::child(path, "data"), issues, false);
         Some(Attachment::new(media_type?, data?))
     })
@@ -631,16 +665,16 @@ fn headers(
 
 fn is_header_name(name: &str) -> bool {
     !name.is_empty()
-        && name.bytes().all(|byte| {
-            byte.is_ascii_alphanumeric() || b"!#$%&'*+.^_`|~-".contains(&byte)
-        })
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"!#$%&'*+.^_`|~-".contains(&byte))
 }
 
 /// `[\t\x20-\x7e\x80-\xff]*` over UTF-16 code units: anything above U+00FF fails.
 fn is_header_value(value: &str) -> bool {
-    value
-        .chars()
-        .all(|ch| ch == '\t' || ('\u{20}'..='\u{7e}').contains(&ch) || ('\u{80}'..='\u{ff}').contains(&ch))
+    value.chars().all(|ch| {
+        ch == '\t' || ('\u{20}'..='\u{7e}').contains(&ch) || ('\u{80}'..='\u{ff}').contains(&ch)
+    })
 }
 
 // ───── provider hydration (chat-provider-config.ts) and resolution (llm/config.ts) ─────
@@ -650,7 +684,9 @@ fn is_header_value(value: &str) -> bool {
 pub enum ProviderRecord {
     Llm(Box<ProviderRow>),
     /// A `kind = 'acp'` row: naming it on the browseros path is a 400.
-    CodingAgent { id: String },
+    CodingAgent {
+        id: String,
+    },
 }
 
 /// A browseros request after the stored row (if any) was laid over its inline fields.
@@ -876,7 +912,6 @@ fn config_error(message: &str) -> ChatError {
 mod zod {
     use serde_json::{Value, json};
 
-    pub(super) const UUID_PATTERN: &str = "/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/";
     pub(super) const HEADER_NAME_PATTERN: &str = "/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/";
     pub(super) const HEADER_VALUE_PATTERN: &str = "/^[\\t\\x20-\\x7e\\x80-\\xff]*(?![\\s\\S])/";
 
@@ -905,12 +940,12 @@ mod zod {
         }
     }
 
-    pub(super) fn uuid_issue(path: &[Value]) -> Value {
+    fn uuid_issue(path: &[Value]) -> Value {
         json!({
             "origin": "string",
             "code": "invalid_format",
             "format": "uuid",
-            "pattern": UUID_PATTERN,
+            "pattern": format!("/{}/", crate::http::extract::UUID_PATTERN),
             "path": path,
             "message": "Invalid UUID",
         })
@@ -949,7 +984,10 @@ mod zod {
 
         /// A schema's own type check (`z.string()`, `z.object()`, …): `expected` comes first.
         pub(super) fn invalid_type(&mut self, path: &[Value], expected: &str, got: Option<&Value>) {
-            let message = format!("Invalid input: expected {expected}, received {}", received(got));
+            let message = format!(
+                "Invalid input: expected {expected}, received {}",
+                received(got)
+            );
             self.push(
                 json!({ "expected": expected, "code": "invalid_type", "path": path, "message": message }),
                 true,
@@ -963,7 +1001,10 @@ mod zod {
             expected: &str,
             got: Option<&Value>,
         ) {
-            let message = format!("Invalid input: expected {expected}, received {}", received(got));
+            let message = format!(
+                "Invalid input: expected {expected}, received {}",
+                received(got)
+            );
             self.push(
                 json!({ "code": "invalid_type", "expected": expected, "path": path, "message": message }),
                 true,
@@ -1038,7 +1079,10 @@ mod zod {
 
         pub(super) fn no_matching_discriminator(&mut self, path: &[Value], options: &[&str]) {
             let quoted: Vec<String> = options.iter().map(|option| format!("'{option}'")).collect();
-            let message = format!("Invalid discriminator value. Expected {}", quoted.join(" | "));
+            let message = format!(
+                "Invalid discriminator value. Expected {}",
+                quoted.join(" | ")
+            );
             self.push(
                 json!({
                     "code": "invalid_union",
@@ -1099,9 +1143,13 @@ mod zod {
         Some(text)
     }
 
-    pub(super) fn uuid(value: Option<&Value>, path: &[Value], issues: &mut Issues) -> Option<uuid::Uuid> {
+    pub(super) fn uuid(
+        value: Option<&Value>,
+        path: &[Value],
+        issues: &mut Issues,
+    ) -> Option<uuid::Uuid> {
         let text = string(value, path, issues, false)?;
-        let parsed = super::parse_zod_uuid(&text);
+        let parsed = crate::http::extract::ZodUuid::parse(&text).map(|uuid| uuid.0);
         if parsed.is_none() {
             issues.invalid_uuid(path);
         }
@@ -1110,7 +1158,11 @@ mod zod {
 
     /// `z.string().url()`: the value is trimmed, then must parse as a WHATWG URL; the trimmed
     /// string is the output (zod 4 quirk).
-    pub(super) fn url(value: Option<&Value>, path: &[Value], issues: &mut Issues) -> Option<String> {
+    pub(super) fn url(
+        value: Option<&Value>,
+        path: &[Value],
+        issues: &mut Issues,
+    ) -> Option<String> {
         let text = string(value, path, issues, false)?;
         let trimmed = text.trim();
         if url::Url::parse(trimmed).is_err() {
@@ -1120,7 +1172,11 @@ mod zod {
         Some(trimmed.to_owned())
     }
 
-    pub(super) fn number(value: Option<&Value>, path: &[Value], issues: &mut Issues) -> Option<f64> {
+    pub(super) fn number(
+        value: Option<&Value>,
+        path: &[Value],
+        issues: &mut Issues,
+    ) -> Option<f64> {
         value.and_then(|value| required_number(Some(value), path, issues))
     }
 
@@ -1138,7 +1194,11 @@ mod zod {
         }
     }
 
-    pub(super) fn boolean(value: Option<&Value>, path: &[Value], issues: &mut Issues) -> Option<bool> {
+    pub(super) fn boolean(
+        value: Option<&Value>,
+        path: &[Value],
+        issues: &mut Issues,
+    ) -> Option<bool> {
         match value? {
             Value::Bool(flag) => Some(*flag),
             other => {
@@ -1207,6 +1267,8 @@ mod zod {
         path: &[Value],
         issues: &mut Issues,
     ) -> Option<Vec<String>> {
-        array(value, path, issues, |item, path, issues| string(Some(item), path, issues, false))
+        array(value, path, issues, |item, path, issues| {
+            string(Some(item), path, issues, false)
+        })
     }
 }

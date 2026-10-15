@@ -19,7 +19,13 @@ pub fn error_string(status: StatusCode, message: &str) -> Response {
 /// 400 `{"success":false,"error":{"name":"ZodError","message":"<pretty JSON array of issues>"}}`.
 pub fn zod_400(issues: &[ZodIssue]) -> Response {
     let issues: Vec<Value> = issues.iter().map(ZodIssue::wire_value).collect();
-    let message = serde_json::to_string_pretty(&issues).unwrap_or_default();
+    zod_issues_400(&issues)
+}
+
+/// The same 400 for issues already rendered in zod's own key order (`/chat`'s union schema needs
+/// orders `ZodIssue::wire_value` cannot produce: code-first `invalid_type`, `custom`, `invalid_key`).
+pub fn zod_issues_400(issues: &[Value]) -> Response {
+    let message = serde_json::to_string_pretty(issues).unwrap_or_default();
     (
         StatusCode::BAD_REQUEST,
         Json(json!({ "success": false, "error": { "name": "ZodError", "message": message } })),

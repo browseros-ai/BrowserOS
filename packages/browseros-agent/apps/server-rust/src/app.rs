@@ -6,9 +6,7 @@
 
 use crate::{
     activity::ServerActivity,
-    chat::{
-        AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationRuns, DbChatRecords,
-    },
+    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationRuns, DbChatRecords},
     chat::{BrowserOsEngineDeps, NoBrowser, RegistryLeases, klavis_state_name, production_models},
     config::Config,
     db::{self, Database},

@@ -53,7 +53,9 @@ struct MemoryRecords {
 }
 
 fn locked<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 #[async_trait::async_trait]
@@ -202,21 +204,35 @@ impl Harness {
             .route("/chat/{conversationId}/state", get(chat::state))
             .route("/chat/{conversationId}/stream", get(chat::resume_stream))
             .route("/chat/{conversationId}/stop", post(chat::stop))
-            .route("/chat/{conversationId}", delete(chat::delete_conversation_session))
+            .route(
+                "/chat/{conversationId}",
+                delete(chat::delete_conversation_session),
+            )
             .layer(Extension(RequestTrust { trusted_app }))
             .with_state(self.chat.clone())
     }
 
-    async fn send(&self, trusted: bool, request: Request<Body>) -> Result<Response<Body>, Box<dyn Error>> {
+    async fn send(
+        &self,
+        trusted: bool,
+        request: Request<Body>,
+    ) -> Result<Response<Body>, Box<dyn Error>> {
         Ok(self.router(trusted).oneshot(request).await?)
     }
 
-    async fn post_chat(&self, trusted: bool, body: &Value) -> Result<Response<Body>, Box<dyn Error>> {
-        self.send(trusted, json_request("POST", "/chat", body)?).await
+    async fn post_chat(
+        &self,
+        trusted: bool,
+        body: &Value,
+    ) -> Result<Response<Body>, Box<dyn Error>> {
+        self.send(trusted, json_request("POST", "/chat", body)?)
+            .await
     }
 
     fn scripted(&self) -> Result<&Arc<ScriptedEngine>, Box<dyn Error>> {
-        self.scripted.as_ref().ok_or_else(|| "no scripted engine".into())
+        self.scripted
+            .as_ref()
+            .ok_or_else(|| "no scripted engine".into())
     }
 }
 
@@ -229,7 +245,10 @@ fn json_request(method: &str, uri: &str, body: &Value) -> Result<Request<Body>, 
 }
 
 fn empty_request(method: &str, uri: &str) -> Result<Request<Body>, Box<dyn Error>> {
-    Ok(Request::builder().method(method).uri(uri).body(Body::empty())?)
+    Ok(Request::builder()
+        .method(method)
+        .uri(uri)
+        .body(Body::empty())?)
 }
 
 async fn body_bytes(response: Response<Body>) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -252,7 +271,10 @@ fn inline_body(conversation_id: Uuid) -> Value {
 }
 
 fn header<'a>(response: &'a Response<Body>, name: &str) -> Option<&'a str> {
-    response.headers().get(name).and_then(|value| value.to_str().ok())
+    response
+        .headers()
+        .get(name)
+        .and_then(|value| value.to_str().ok())
 }
 
 // ───── POST /chat ─────
@@ -278,7 +300,10 @@ async fn post_chat_answers_with_the_ui_message_stream() -> TestResult {
     assert_eq!(turns.len(), 1);
     assert_eq!(turns[0].conversation_id, conversation);
     let user = &turns[0].history[0];
-    assert_eq!(serde_json::to_value(user)?["parts"], json!([{ "type": "text", "text": "hello world" }]));
+    assert_eq!(
+        serde_json::to_value(user)?["parts"],
+        json!([{ "type": "text", "text": "hello world" }])
+    );
     Ok(())
 }
 
@@ -293,7 +318,10 @@ async fn rejects_a_second_turn_with_409_while_the_first_is_running() -> TestResu
 
     let second = h.post_chat(false, &inline_body(conversation)).await?;
     assert_eq!(second.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(second).await?, json!({ "error": "An agent turn is already running" }));
+    assert_eq!(
+        body_json(second).await?,
+        json!({ "error": "An agent turn is already running" })
+    );
 
     gate.notify_one();
     let body = String::from_utf8(body_bytes(first).await?)?;
@@ -364,7 +392,9 @@ async fn hydration_failures_are_400_with_the_ts_texts() -> TestResult {
         ),
         (
             json!({ "conversationId": Uuid::new_v4(), "target": { "type": "browseros", "providerId": acp_id } }),
-            &format!("Provider {acp_id} is a coding agent and cannot serve a browseros chat request"),
+            &format!(
+                "Provider {acp_id} is a coding agent and cannot serve a browseros chat request"
+            ),
         ),
     ];
     for (body, text) in cases {
@@ -383,7 +413,10 @@ async fn server_supplied_credentials_require_the_trusted_app() -> TestResult {
         "stored".into(),
         ProviderRecord::Llm(Box::new(provider_row("stored", "anthropic"))),
     );
-    *locked(&h.records.default_provider) = Some(ProviderRecord::Llm(Box::new(provider_row("stored", "anthropic"))));
+    *locked(&h.records.default_provider) = Some(ProviderRecord::Llm(Box::new(provider_row(
+        "stored",
+        "anthropic",
+    ))));
     let forbidden = [
         json!({ "conversationId": Uuid::new_v4(), "providerId": "stored" }),
         json!({ "conversationId": Uuid::new_v4(), "message": "uses the default" }),
@@ -414,7 +447,10 @@ async fn server_supplied_credentials_require_the_trusted_app() -> TestResult {
 async fn oauth_providers_without_a_login_fail_with_the_ts_envelope() -> TestResult {
     let h = harness().await?;
     let response = h
-        .post_chat(true, &json!({ "conversationId": Uuid::new_v4(), "provider": "chatgpt-pro" }))
+        .post_chat(
+            true,
+            &json!({ "conversationId": Uuid::new_v4(), "provider": "chatgpt-pro" }),
+        )
         .await?;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_json(response).await?;
@@ -436,13 +472,19 @@ async fn acp_targets_resolve_the_agent_after_the_run_gate() -> TestResult {
         .post_chat(true, &json!({ "conversationId": Uuid::new_v4(), "target": { "type": "claude", "agentId": Uuid::new_v4() } }))
         .await?;
     assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_json(unknown).await?, json!({ "error": "Unknown agent" }));
+    assert_eq!(
+        body_json(unknown).await?,
+        json!({ "error": "Unknown agent" })
+    );
 
     let mismatch = h
         .post_chat(true, &json!({ "conversationId": Uuid::new_v4(), "target": { "type": "codex", "agentId": claude } }))
         .await?;
     assert_eq!(mismatch.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(mismatch).await?, json!({ "error": "Agent type mismatch" }));
+    assert_eq!(
+        body_json(mismatch).await?,
+        json!({ "error": "Agent type mismatch" })
+    );
 
     let conversation = Uuid::new_v4();
     let ok = h
@@ -470,9 +512,19 @@ async fn acp_targets_resolve_the_agent_after_the_run_gate() -> TestResult {
     );
 
     // DELETE of an ACP conversation needs the trusted app.
-    let untrusted = h.send(false, empty_request("DELETE", &format!("/chat/{conversation}"))?).await?;
+    let untrusted = h
+        .send(
+            false,
+            empty_request("DELETE", &format!("/chat/{conversation}"))?,
+        )
+        .await?;
     assert_eq!(untrusted.status(), StatusCode::FORBIDDEN);
-    let deleted = h.send(true, empty_request("DELETE", &format!("/chat/{conversation}"))?).await?;
+    let deleted = h
+        .send(
+            true,
+            empty_request("DELETE", &format!("/chat/{conversation}"))?,
+        )
+        .await?;
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(h.acp.forgotten(), vec![conversation]);
     Ok(())
@@ -485,8 +537,18 @@ async fn an_engine_rejection_maps_to_its_status_and_restores_published_history()
     h.scripted()?.reject_next(ChatRejection::Busy);
     let busy = h.post_chat(false, &inline_body(conversation)).await?;
     assert_eq!(busy.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(busy).await?, json!({ "error": "An agent turn is already running" }));
-    let state = body_json(h.send(false, empty_request("GET", &format!("/chat/{conversation}/state"))?).await?).await?;
+    assert_eq!(
+        body_json(busy).await?,
+        json!({ "error": "An agent turn is already running" })
+    );
+    let state = body_json(
+        h.send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?,
+    )
+    .await?;
     assert_eq!(state["status"], json!("failed"));
     assert_eq!(state["messages"], json!([]));
     Ok(())
@@ -510,7 +572,11 @@ async fn validation_failures_match_the_ts_zod_bodies_byte_for_byte() -> TestResu
             }
         };
         let response = h.send(true, request).await?;
-        assert_eq!(response.status().as_u16(), case["status"].as_u64().unwrap_or_default() as u16, "{name}");
+        assert_eq!(
+            response.status().as_u16(),
+            case["status"].as_u64().unwrap_or_default() as u16,
+            "{name}"
+        );
         let body = String::from_utf8(body_bytes(response).await?)?;
         assert_eq!(body, case["body"].as_str().unwrap_or_default(), "{name}");
     }
@@ -529,7 +595,10 @@ async fn malformed_json_is_the_500_chat_envelope() -> TestResult {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let body = body_json(response).await?;
     assert_eq!(body["error"]["code"], json!("unknown"));
-    assert_eq!(body["error"]["message"], json!("Malformed JSON in request body"));
+    assert_eq!(
+        body["error"]["message"],
+        json!("Malformed JSON in request body")
+    );
     assert_eq!(body["error"]["name"], json!("InternalServerError"));
     assert_eq!(body["error"]["statusCode"], json!(500));
     Ok(())
@@ -540,22 +609,54 @@ async fn malformed_json_is_the_500_chat_envelope() -> TestResult {
 #[tokio::test]
 async fn state_reports_the_prepared_run_with_no_store() -> TestResult {
     let h = harness().await?;
-    let invalid = h.send(false, empty_request("GET", "/chat/nope/state")?).await?;
+    let invalid = h
+        .send(false, empty_request("GET", "/chat/nope/state")?)
+        .await?;
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
-    assert_eq!(body_json(invalid).await?, json!({ "error": "Invalid conversation id" }));
+    assert_eq!(
+        body_json(invalid).await?,
+        json!({ "error": "Invalid conversation id" })
+    );
 
     let conversation = Uuid::new_v4();
-    let missing = h.send(false, empty_request("GET", &format!("/chat/{conversation}/state"))?).await?;
+    let missing = h
+        .send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
-    assert_eq!(body_json(missing).await?, json!({ "error": "Conversation not found" }));
+    assert_eq!(
+        body_json(missing).await?,
+        json!({ "error": "Conversation not found" })
+    );
 
     body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
-    let state = h.send(false, empty_request("GET", &format!("/chat/{conversation}/state"))?).await?;
+    let state = h
+        .send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?;
     assert_eq!(state.status(), StatusCode::OK);
     assert_eq!(header(&state, "cache-control"), Some("no-store"));
     let body = body_json(state).await?;
-    let keys: Vec<&str> = body.as_object().ok_or("not an object")?.keys().map(String::as_str).collect();
-    assert_eq!(keys, ["conversationId", "runId", "status", "messages", "chunkCount"]);
+    let keys: Vec<&str> = body
+        .as_object()
+        .ok_or("not an object")?
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "conversationId",
+            "runId",
+            "status",
+            "messages",
+            "chunkCount"
+        ]
+    );
     assert_eq!(body["conversationId"], json!(conversation.to_string()));
     assert_eq!(body["status"], json!("completed"));
     assert_eq!(body["chunkCount"], json!(script().len()));
@@ -564,24 +665,52 @@ async fn state_reports_the_prepared_run_with_no_store() -> TestResult {
 }
 
 #[tokio::test]
-async fn resume_is_204_without_a_run_409_for_a_stale_run_and_replays_a_finished_run() -> TestResult {
+async fn resume_is_204_without_a_run_409_for_a_stale_run_and_replays_a_finished_run() -> TestResult
+{
     let h = harness().await?;
     let conversation = Uuid::new_v4();
-    let none = h.send(false, empty_request("GET", &format!("/chat/{conversation}/stream"))?).await?;
+    let none = h
+        .send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/stream"))?,
+        )
+        .await?;
     assert_eq!(none.status(), StatusCode::NO_CONTENT);
     assert!(body_bytes(none).await?.is_empty());
 
     body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
     let stale = h
-        .send(false, empty_request("GET", &format!("/chat/{conversation}/stream?runId={}", Uuid::new_v4()))?)
+        .send(
+            false,
+            empty_request(
+                "GET",
+                &format!("/chat/{conversation}/stream?runId={}", Uuid::new_v4()),
+            )?,
+        )
         .await?;
     assert_eq!(stale.status(), StatusCode::CONFLICT);
-    assert_eq!(body_json(stale).await?, json!({ "error": "Conversation run changed" }));
+    assert_eq!(
+        body_json(stale).await?,
+        json!({ "error": "Conversation run changed" })
+    );
 
-    let state = body_json(h.send(false, empty_request("GET", &format!("/chat/{conversation}/state"))?).await?).await?;
+    let state = body_json(
+        h.send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?,
+    )
+    .await?;
     let run_id = state["runId"].as_str().ok_or("no run id")?;
     let replay = h
-        .send(false, empty_request("GET", &format!("/chat/{conversation}/stream?runId={run_id}"))?)
+        .send(
+            false,
+            empty_request(
+                "GET",
+                &format!("/chat/{conversation}/stream?runId={run_id}"),
+            )?,
+        )
         .await?;
     assert_eq!(replay.status(), StatusCode::OK);
     assert_eq!(header(&replay, "x-vercel-ai-ui-message-stream"), Some("v1"));
@@ -593,7 +722,12 @@ async fn resume_is_204_without_a_run_409_for_a_stale_run_and_replays_a_finished_
 #[tokio::test]
 async fn a_client_disconnect_never_stops_the_run_but_stop_does() -> TestResult {
     let gate = Arc::new(Notify::new());
-    let h = harness_with(Arc::new(GatedEngine { gate: gate.clone() }), None, Duration::from_secs(5)).await?;
+    let h = harness_with(
+        Arc::new(GatedEngine { gate: gate.clone() }),
+        None,
+        Duration::from_secs(5),
+    )
+    .await?;
     let conversation = Uuid::new_v4();
 
     // Read the first frame, then hang up.
@@ -604,20 +738,51 @@ async fn a_client_disconnect_never_stops_the_run_but_stop_does() -> TestResult {
     drop(body);
 
     tokio::time::sleep(Duration::from_millis(30)).await;
-    let state = body_json(h.send(false, empty_request("GET", &format!("/chat/{conversation}/state"))?).await?).await?;
+    let state = body_json(
+        h.send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?,
+    )
+    .await?;
     assert_eq!(state["status"], json!("running"));
 
-    let stopped = h.send(false, empty_request("POST", &format!("/chat/{conversation}/stop"))?).await?;
+    let stopped = h
+        .send(
+            false,
+            empty_request("POST", &format!("/chat/{conversation}/stop"))?,
+        )
+        .await?;
     assert_eq!(body_json(stopped).await?, json!({ "stopped": true }));
-    let state = body_json(h.send(false, empty_request("GET", &format!("/chat/{conversation}/state"))?).await?).await?;
+    let state = body_json(
+        h.send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?,
+    )
+    .await?;
     assert_eq!(state["status"], json!("aborted"));
-    let replay = h.send(false, empty_request("GET", &format!("/chat/{conversation}/stream"))?).await?;
+    let replay = h
+        .send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/stream"))?,
+        )
+        .await?;
     let chunks = sse::parse(&body_bytes(replay).await?)?;
     assert_eq!(chunks.last(), Some(&server_rust::chat::stopped_chunk()));
 
-    let again = h.send(false, empty_request("POST", &format!("/chat/{conversation}/stop"))?).await?;
+    let again = h
+        .send(
+            false,
+            empty_request("POST", &format!("/chat/{conversation}/stop"))?,
+        )
+        .await?;
     assert_eq!(body_json(again).await?, json!({ "stopped": false }));
-    let invalid = h.send(false, empty_request("POST", "/chat/nope/stop")?).await?;
+    let invalid = h
+        .send(false, empty_request("POST", "/chat/nope/stop")?)
+        .await?;
     assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
     Ok(())
 }
@@ -625,10 +790,20 @@ async fn a_client_disconnect_never_stops_the_run_but_stop_does() -> TestResult {
 #[tokio::test]
 async fn a_resumed_stream_replays_then_tails_the_live_run() -> TestResult {
     let gate = Arc::new(Notify::new());
-    let h = harness_with(Arc::new(GatedEngine { gate: gate.clone() }), None, Duration::from_secs(5)).await?;
+    let h = harness_with(
+        Arc::new(GatedEngine { gate: gate.clone() }),
+        None,
+        Duration::from_secs(5),
+    )
+    .await?;
     let conversation = Uuid::new_v4();
     let original = h.post_chat(false, &inline_body(conversation)).await?;
-    let resumed = h.send(false, empty_request("GET", &format!("/chat/{conversation}/stream"))?).await?;
+    let resumed = h
+        .send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/stream"))?,
+        )
+        .await?;
     assert_eq!(resumed.status(), StatusCode::OK);
     let tail = tokio::spawn(async move {
         to_bytes(resumed.into_body(), usize::MAX)
@@ -659,7 +834,14 @@ async fn an_error_chunk_marks_the_run_failed() -> TestResult {
     let h = harness_with(engine.clone(), Some(engine), Duration::from_secs(5)).await?;
     let conversation = Uuid::new_v4();
     body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
-    let state = body_json(h.send(false, empty_request("GET", &format!("/chat/{conversation}/state"))?).await?).await?;
+    let state = body_json(
+        h.send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/state"))?,
+        )
+        .await?,
+    )
+    .await?;
     assert_eq!(state["status"], json!("failed"));
     // No assistant reply: nothing is persisted.
     assert!(locked(&h.records.saved).is_empty());
@@ -712,13 +894,20 @@ async fn history_hydrates_from_the_owning_target_or_previous_conversation() -> T
 
     // An ACP-owned row never bleeds into the built-in agent.
     let foreign = Uuid::new_v4();
-    locked(&h.records.conversations)
-        .insert(foreign, stored(TargetType::Acp, Some(Uuid::new_v4().to_string()), "acp history"));
+    locked(&h.records.conversations).insert(
+        foreign,
+        stored(
+            TargetType::Acp,
+            Some(Uuid::new_v4().to_string()),
+            "acp history",
+        ),
+    );
     body_bytes(h.post_chat(false, &inline_body(foreign)).await?).await?;
 
     // Unpersisted: the store is ignored and the client's projection seeds the history.
     let ephemeral = Uuid::new_v4();
-    locked(&h.records.conversations).insert(ephemeral, stored(TargetType::BrowserOs, None, "stored"));
+    locked(&h.records.conversations)
+        .insert(ephemeral, stored(TargetType::BrowserOs, None, "stored"));
     let mut body = inline_body(ephemeral);
     body["persist"] = json!(false);
     body["previousConversation"] = json!([{ "role": "user", "content": "from client" }, { "role": "assistant", "content": "  " }]);
@@ -729,14 +918,20 @@ async fn history_hydrates_from_the_owning_target_or_previous_conversation() -> T
         Ok(turns[turn]
             .history
             .iter()
-            .map(|message| serde_json::to_value(message).map(|value| value["parts"][0]["text"].clone()))
+            .map(|message| {
+                serde_json::to_value(message).map(|value| value["parts"][0]["text"].clone())
+            })
             .collect::<Result<_, _>>()?)
     };
     assert_eq!(texts(0)?, vec![json!("earlier"), json!("hello world")]);
     assert_eq!(texts(1)?, vec![json!("hello world")]);
     assert_eq!(texts(2)?, vec![json!("from client"), json!("hello world")]);
     // The unpersisted conversation was never written.
-    assert!(locked(&h.records.saved).iter().all(|saved| saved.id != ephemeral));
+    assert!(
+        locked(&h.records.saved)
+            .iter()
+            .all(|saved| saved.id != ephemeral)
+    );
     Ok(())
 }
 
@@ -752,7 +947,10 @@ async fn the_next_turn_continues_the_in_memory_history() -> TestResult {
         .iter()
         .map(|message| serde_json::to_value(message).map(|value| value["role"].clone()))
         .collect::<Result<_, _>>()?;
-    assert_eq!(roles, vec![json!("user"), json!("assistant"), json!("user")]);
+    assert_eq!(
+        roles,
+        vec![json!("user"), json!("assistant"), json!("user")]
+    );
     Ok(())
 }
 
@@ -762,7 +960,12 @@ async fn the_next_turn_continues_the_in_memory_history() -> TestResult {
 async fn delete_reports_found_and_not_found_sessions() -> TestResult {
     let h = harness().await?;
     let conversation = Uuid::new_v4();
-    let missing = h.send(false, empty_request("DELETE", &format!("/chat/{conversation}"))?).await?;
+    let missing = h
+        .send(
+            false,
+            empty_request("DELETE", &format!("/chat/{conversation}"))?,
+        )
+        .await?;
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     assert_eq!(
         body_json(missing).await?,
@@ -770,15 +973,27 @@ async fn delete_reports_found_and_not_found_sessions() -> TestResult {
     );
 
     body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
-    let deleted = h.send(false, empty_request("DELETE", &format!("/chat/{conversation}"))?).await?;
+    let deleted = h
+        .send(
+            false,
+            empty_request("DELETE", &format!("/chat/{conversation}"))?,
+        )
+        .await?;
     assert_eq!(deleted.status(), StatusCode::OK);
     assert_eq!(
         String::from_utf8(body_bytes(deleted).await?)?,
-        format!(r#"{{"success":true,"message":"Session {conversation} deleted","sessionCount":0}}"#)
+        format!(
+            r#"{{"success":true,"message":"Session {conversation} deleted","sessionCount":0}}"#
+        )
     );
     // The built-in engine is asked to forget on every DELETE (TS `sessionStore.delete`), found or not.
     assert_eq!(h.scripted()?.forgotten(), vec![conversation, conversation]);
-    let gone = h.send(false, empty_request("GET", &format!("/chat/{conversation}/stream"))?).await?;
+    let gone = h
+        .send(
+            false,
+            empty_request("GET", &format!("/chat/{conversation}/stream"))?,
+        )
+        .await?;
     assert_eq!(gone.status(), StatusCode::NO_CONTENT);
     Ok(())
 }
@@ -796,7 +1011,10 @@ async fn panels_stream_assignments_with_a_heartbeat_and_no_done() -> TestResult 
     let response = h.send(true, empty_request("GET", "/chat/panels")?).await?;
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(header(&response, "content-type"), Some("text/event-stream"));
-    assert_eq!(header(&response, "cache-control"), Some("no-cache, no-transform"));
+    assert_eq!(
+        header(&response, "cache-control"),
+        Some("no-cache, no-transform")
+    );
     assert_eq!(header(&response, "connection"), Some("keep-alive"));
     assert_eq!(header(&response, "x-vercel-ai-ui-message-stream"), None);
     let mut frames = response.into_body().into_data_stream();
@@ -834,18 +1052,36 @@ async fn deleting_a_panel_validates_the_tab_id_like_js_number() -> TestResult {
     let conversation = Uuid::new_v4();
     body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
     for bad in ["abc", "1.5", "-1", "Infinity"] {
-        let response = h.send(true, empty_request("DELETE", &format!("/chat/panels/{bad}"))?).await?;
+        let response = h
+            .send(
+                true,
+                empty_request("DELETE", &format!("/chat/panels/{bad}"))?,
+            )
+            .await?;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{bad}");
-        assert_eq!(body_json(response).await?, json!({ "error": "Invalid tab id" }));
+        assert_eq!(
+            body_json(response).await?,
+            json!({ "error": "Invalid tab id" })
+        );
     }
-    let untrusted = h.send(false, empty_request("DELETE", "/chat/panels/3")?).await?;
+    let untrusted = h
+        .send(false, empty_request("DELETE", "/chat/panels/3")?)
+        .await?;
     assert_eq!(untrusted.status(), StatusCode::FORBIDDEN);
-    let removed = h.send(true, empty_request("DELETE", "/chat/panels/0x3")?).await?;
+    let removed = h
+        .send(true, empty_request("DELETE", "/chat/panels/0x3")?)
+        .await?;
     assert_eq!(removed.status(), StatusCode::OK);
-    assert_eq!(String::from_utf8(body_bytes(removed).await?)?, r#"{"success":true}"#);
+    assert_eq!(
+        String::from_utf8(body_bytes(removed).await?)?,
+        r#"{"success":true}"#
+    );
     let panels = h.send(true, empty_request("GET", "/chat/panels")?).await?;
     let mut frames = panels.into_body().into_data_stream();
     let frame = frames.next().await.ok_or("no frame")??;
-    assert_eq!(String::from_utf8(frame.to_vec())?, "data: {\"assignments\":[]}\n\n");
+    assert_eq!(
+        String::from_utf8(frame.to_vec())?,
+        "data: {\"assignments\":[]}\n\n"
+    );
     Ok(())
 }

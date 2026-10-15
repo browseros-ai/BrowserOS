@@ -26,6 +26,13 @@ impl ServerActivity {
         ActivityGuard(&self.active)
     }
 
+    /// Owned form of [`Self::run_started`]: a chat run is registered by the request and driven by
+    /// a spawned task, so its reservation must move between them without a gap.
+    pub fn run_started_owned(self: &Arc<Self>) -> McpPostGuard {
+        self.active.fetch_add(1, Ordering::SeqCst);
+        McpPostGuard(self.clone())
+    }
+
     /// Held for the lifetime of one `/mcp` POST.
     pub fn mcp_post_started(&self) -> ActivityGuard<'_> {
         self.active.fetch_add(1, Ordering::SeqCst);
