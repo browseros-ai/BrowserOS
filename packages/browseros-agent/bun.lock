@@ -29,7 +29,8 @@
       "dependencies": {
         "@ai-sdk/react": "^4.0.117",
         "@browseros/diagnostics": "workspace:*",
-        "@browseros/server": "workspace:*",
+        "@browseros/server-api": "workspace:*",
+        "@browseros/server-api-client": "workspace:*",
         "@browseros/shared": "workspace:*",
         "@hookform/resolvers": "^5.9.1",
         "@lobehub/icons": "^2.48.0",
@@ -69,9 +70,7 @@
         "dayjs": "^1.11.23",
         "embla-carousel-react": "^8.6.0",
         "es-toolkit": "^1.52.0",
-        "eventsource-parser": "^3.1.1",
         "fuse.js": "^7.5.0",
-        "hono": "^4.13.9",
         "idb-keyval": "^6.3.0",
         "lucide-react": "^0.577.0",
         "motion": "^12.43.0",
@@ -386,6 +385,9 @@
     "packages/diagnostics": {
       "name": "@browseros/diagnostics",
       "version": "0.0.1",
+      "dependencies": {
+        "@browseros/server-api-client": "workspace:*",
+      },
       "devDependencies": {
         "@types/chrome": "^0.3.0",
         "@types/react": "^19.3.0",
