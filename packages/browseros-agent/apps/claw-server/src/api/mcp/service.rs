@@ -74,6 +74,7 @@ const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your cli
 const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
+const RUN_TOOL_NAME: &str = "run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
 const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
 const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
@@ -248,8 +249,9 @@ impl ClawMcpService {
     /// 2026-07-28 or later. Older peers negotiated `initialize`, still carry their
     /// identity in the handshake, and must keep receiving the schema unchanged.
     fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
+        let pursue = PursueOffering::read();
         let decorate = |tool: Tool| {
-            let tool = with_session_arg(tool);
+            let tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
             if declare_agent_name {
                 with_agent_name_arg(tool)
             } else {
@@ -267,7 +269,7 @@ impl ClawMcpService {
         tools.push(decorate(self.mark_skill_run_tool.clone()));
         // Offered only when the server has a credential for the decision model.
         // A tool that can only fail is worse than one that is not there.
-        if PursueOffering::read().is_offered() {
+        if pursue.is_offered() {
             tools.push(decorate(self.pursue_tool.clone()));
         }
         if self.state.agent_settings.human_help() == HumanHelp::On {
@@ -1350,8 +1352,12 @@ impl ServerHandler for ClawMcpService {
         if name == PURSUE_TOOL_NAME && PursueOffering::read().is_offered() {
             return Some(with_session_arg(self.pursue_tool.clone()));
         }
-        self.find_tool_index(name)
-            .map(|index| with_session_arg(self.catalog[index].to_mcp_tool()))
+        self.find_tool_index(name).map(|index| {
+            with_session_arg(with_pursue_fallback_note(
+                self.catalog[index].to_mcp_tool(),
+                PursueOffering::read(),
+            ))
+        })
     }
 
     async fn call_tool(
@@ -2220,6 +2226,35 @@ fn started_session_from(session: Arc<Session>, client: &ClientInfo) -> StartedSe
         session,
         agent_label,
     }
+}
+
+/// The opening sentence of `run`'s own description, which ranks it first.
+///
+/// Owned by the tool crate, which knows nothing about the decision loop and
+/// should not: a production build has no loop to rank. So the sentence is
+/// recast here, at the edge that already knows whether the loop is offered.
+const RUN_RANKED_FIRST: &str = "The primary way to drive the browser - prefer run for any task; the granular tools are the fallback.";
+
+/// What it is recast as while the decision loop is offered.
+const RUN_RANKED_AFTER_PURSUE: &str = "The fallback once pursue has come back unfinished twice, and the right first call for work that is a script rather than an outcome: pagination over many pages, bulk extraction, or anything needing a saved helper. The granular tools are the fallback to this.";
+
+/// Demotes `run` below `pursue` in its own description, leaving the rest of it.
+///
+/// A catalogue entry that still calls itself the primary way to drive the
+/// browser outranks any amount of instruction text that says otherwise: the
+/// description travels with the tool and the instructions do not.
+fn with_pursue_fallback_note(mut tool: Tool, pursue: PursueOffering) -> Tool {
+    if !pursue.is_offered() || tool.name != RUN_TOOL_NAME {
+        return tool;
+    }
+    if let Some(description) = tool.description.as_deref() {
+        tool.description = Some(
+            description
+                .replace(RUN_RANKED_FIRST, RUN_RANKED_AFTER_PURSUE)
+                .into(),
+        );
+    }
+    tool
 }
 
 fn with_session_arg(mut tool: Tool) -> Tool {
@@ -3251,6 +3286,60 @@ mod tests {
         assert!(names.contains(&"mark_skill_run".to_string()));
         assert!(names.contains(&"request_human_help".to_string()));
         assert!(names.contains(&"await_human_help".to_string()));
+        Ok(())
+    }
+
+    /// The recast is a string replace against a description owned by another
+    /// crate. If that crate rewords its opening sentence, the replace silently
+    /// does nothing and run keeps calling itself the primary way to drive the
+    /// browser while pursue is offered. This is the test that catches it.
+    #[tokio::test]
+    async fn run_still_opens_with_the_sentence_that_gets_recast() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        let run = service
+            .catalog
+            .iter()
+            .find(|tool| tool.name == RUN_TOOL_NAME)
+            .map(ToolDef::to_mcp_tool)
+            .ok_or_else(|| anyhow::anyhow!("run is missing from the catalogue"))?;
+        let description = run
+            .description
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("run has no description"))?;
+        assert_eq!(description.matches(RUN_RANKED_FIRST).count(), 1);
+
+        let absent = with_pursue_fallback_note(run.clone(), PursueOffering::Absent);
+        assert_eq!(absent.description.as_deref(), Some(description));
+
+        let offered = with_pursue_fallback_note(run, PursueOffering::Offered);
+        let offered = offered
+            .description
+            .as_deref()
+            .ok_or_else(|| anyhow::anyhow!("recast run has no description"))?;
+        assert!(offered.starts_with(RUN_RANKED_AFTER_PURSUE));
+        assert!(!offered.contains(RUN_RANKED_FIRST));
+        // Everything past the first sentence is the SDK reference, which the
+        // fallback still needs in full.
+        assert!(offered.contains("a bare engine, not Node and not a page"));
+        assert!(offered.contains("browser.open(url)"));
+        Ok(())
+    }
+
+    /// Only run is recast. A granular tool keeps its own description, because
+    /// its ranking relative to run did not change.
+    #[tokio::test]
+    async fn a_granular_tool_is_left_alone_by_the_recast() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        for tool in service.catalog.iter().map(ToolDef::to_mcp_tool) {
+            if tool.name == RUN_TOOL_NAME {
+                continue;
+            }
+            let before = tool.description.clone();
+            let after = with_pursue_fallback_note(tool, PursueOffering::Offered);
+            assert_eq!(after.description, before);
+        }
         Ok(())
     }
 
