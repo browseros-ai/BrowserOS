@@ -426,7 +426,18 @@ impl ClawMcpService {
 
         let jev = browseros_decide::client::Jev::new(token);
         let outcome = browseros_decide::pursue::advance(&jev, &driver, run).await;
-        let told = browseros_decide::report::tell(&outcome);
+        let mut told = browseros_decide::report::tell(&outcome);
+
+        // The page the run ended on, as the caller needs it rather than as a
+        // decision needed it. Arriving at the right page is then enough on its
+        // own: a caller gets the text whatever status the run ended with, and
+        // does not have to read back a page the run was just looking at.
+        if let Some(page) = told.page.as_mut()
+            && let Some(text) = driver.readable(PURSUE_REPLY_TEXT_BUDGET).await
+            && !text.is_empty()
+        {
+            page.text = text;
+        }
 
         let mut said = vec![told.said.clone()];
         if let Some(answer) = &told.answer
@@ -1760,6 +1771,14 @@ fn values_from(raw_args: &Value) -> Vec<browseros_decide::offer::NamedValue> {
 /// Built by hand rather than derived, because `Told` is the decision layer's
 /// shape and this is the wire's. Keeping them apart means a field can be
 /// renamed in one without silently changing the other's contract.
+/// How much of the page's text travels back to the caller.
+///
+/// Larger than the state budget a decision gets, and deliberately so: the two
+/// are read by different things. A small state is an accuracy measure for the
+/// model, while this is the answer the caller sent the run to fetch, and a
+/// caller that wants the whole page has the `read` tool.
+const PURSUE_REPLY_TEXT_BUDGET: usize = 4_000;
+
 fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
     let mut body = json!({
         "status": told.status,
