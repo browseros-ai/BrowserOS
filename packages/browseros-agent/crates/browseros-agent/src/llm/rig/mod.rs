@@ -29,7 +29,7 @@ use rig_core::message::AssistantContent;
 use rig_core::operation::Completion;
 use rig_core::streaming::{CompletionStream, Item, PartKind, StreamEvent};
 use serde_json::Value;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct RigModel {
@@ -116,6 +116,12 @@ struct OpenPart {
 /// Turns rig's part events into `ModelEvent`s. Part ids are `<random>_<part index>`: unique per
 /// call, so they stay unique across a turn's steps. Tool calls get our id at `Start` (rig names
 /// the provider's call id only at `End`); `ToolCall` pairs it with the provider's.
+///
+/// **End order = start order.** rig holds a Responses reasoning item open until the item it
+/// precedes completes, so its `End` follows that item's. A consumer that appends parts as they end
+/// (the AI SDK convention) would then replay a call before its reasoning, which the provider
+/// rejects or ignores. `*End` and `ToolCall` events are therefore released in part-start order:
+/// one that ends while an earlier part is still open waits for it (in practice, the next frame).
 struct Translator {
     /// `None` once the reply ended; dropping it closes the HTTP response.
     stream: Option<CompletionStream>,
@@ -123,6 +129,8 @@ struct Translator {
     provider: ProviderKind,
     prefix: String,
     open: HashMap<usize, OpenPart>,
+    /// Ended parts waiting for an earlier part to end, by part index.
+    ended: BTreeMap<usize, ModelEvent>,
     /// The reply's serialized `Origin`, read once, the first time a block needs it.
     origin: Option<Option<Value>>,
     queue: VecDeque<Result<ModelEvent, ModelError>>,
@@ -136,6 +144,7 @@ impl Translator {
             provider,
             prefix: format!("{:016x}", rand::random::<u64>()),
             open: HashMap::new(),
+            ended: BTreeMap::new(),
             origin: None,
             queue: VecDeque::new(),
         }
@@ -176,6 +185,9 @@ impl Translator {
         let Some(stream) = self.stream.take() else {
             return;
         };
+        // The reply ended: nothing is still open, whatever rig left unclosed.
+        self.open.clear();
+        self.release_ended();
         let finished = tokio::select! {
             biased;
             _ = self.cancel.cancelled() => Err(ModelError::Cancelled),
@@ -271,12 +283,12 @@ impl Translator {
             Some(part) => part.id.clone(),
             None => format!("{}_{index}", self.prefix),
         };
-        match content {
-            AssistantContent::Text(_) => self.push(ModelEvent::TextEnd {
+        let ended = match content {
+            AssistantContent::Text(_) => Some(ModelEvent::TextEnd {
                 id,
                 provider_metadata,
             }),
-            AssistantContent::Reasoning(_) => self.push(ModelEvent::ReasoningEnd {
+            AssistantContent::Reasoning(_) => Some(ModelEvent::ReasoningEnd {
                 id,
                 provider_metadata,
             }),
@@ -301,15 +313,31 @@ impl Translator {
                     .clone()
                     .or_else(|| (!streamed.trim().is_empty()).then_some(streamed))
                     .unwrap_or_else(|| call.function.arguments_value().to_string());
-                self.push(ModelEvent::ToolCall {
+                Some(ModelEvent::ToolCall {
                     id,
                     provider_call_id: call.id.wire().into_owned(),
                     tool_name,
                     input_json,
                     provider_metadata,
-                });
+                })
             }
-            _ => {}
+            _ => None,
+        };
+        if let Some(event) = ended {
+            self.ended.insert(index, event);
+        }
+        self.release_ended();
+    }
+
+    /// Emits the ended parts that no earlier, still-open part precedes, in part order.
+    fn release_ended(&mut self) {
+        let first_open = self.open.keys().min().copied();
+        while let Some(entry) = self.ended.first_entry() {
+            if first_open.is_some_and(|open| *entry.key() > open) {
+                break;
+            }
+            let event = entry.remove();
+            self.push(event);
         }
     }
 }

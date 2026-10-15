@@ -250,6 +250,7 @@ pub fn create_language_model(
 
 /// The provider seam. Adapters: `RigModel` (production), [`ScriptedModel`] (tests,
 /// `BROWSEROS_USE_MOCK_LLM`). One call = one model step; the loop owns retries and tool calls.
+/// A failure before the stream exists is the `Err`; any later failure is the stream's last item.
 #[async_trait::async_trait]
 pub trait LanguageModel: Send + Sync {
     fn provider(&self) -> ProviderKind;
@@ -257,7 +258,8 @@ pub trait LanguageModel: Send + Sync {
     /// Whether tool results may carry media (`anthropic`, `openai`, `azure`, `bedrock`,
     /// `google` + gemini-3); otherwise `messages::normalize_for_model` hoists it.
     fn supports_media_in_tool_results(&self) -> bool;
-    /// Cancelling the token must end the stream promptly and drop the HTTP response.
+    /// Cancelling the token must end the stream promptly and drop the HTTP response: the next
+    /// item is `Err(ModelError::Cancelled)` and the stream ends.
     async fn stream(
         &self,
         request: ModelRequest,
@@ -280,14 +282,26 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// The AI SDK `providerOptions` / top-level reasoning params, rendered into rig request params by
-/// the adapter.
+/// The TS `AgentReasoningConfig` object verbatim: an optional top-level `reasoning` level and/or
+/// AI SDK `providerOptions` namespaces (`{"providerOptions":{"openai":{…}}}`). Built by
+/// [`provider_options`]; the adapter renders it into the request body as each AI SDK provider
+/// does. Empty means no reasoning options (test-provider, refine-prompt).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderOptions(pub Map<String, Value>);
 
 pub type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent, ModelError>> + Send>>;
 
 /// One model step's events, provider-neutral. The loop maps these 1:1 onto `UiChunk`s.
+///
+/// - **Ids** are unique per call (so across a turn's steps). A tool call carries our `id` from
+///   `ToolInputStart` on; `ToolCall.provider_call_id` is the provider's own id, which the
+///   transcript must use as `tool_call_id` for the call and its result.
+/// - **Order.** `*End` and `ToolCall` arrive in part-start order, so appending parts to the
+///   step's assistant message as they end reproduces the provider's item order.
+/// - **`provider_metadata`** on `*End`/`ToolCall` is opaque provider data (signatures, encrypted
+///   reasoning). Store it verbatim as the matching `AssistantPart`'s `provider_options` (the AI SDK
+///   providerMetadata → providerOptions convention); the adapter replays it on the next step when
+///   the model is the one that produced it. It is JSON-safe to persist in UI messages.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ModelEvent {
     TextStart {
