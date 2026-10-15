@@ -12,6 +12,7 @@ repository = "https://github.com/browseros-ai/BrowserOS"
 # Generic ACP transport; the SDK is imported only by acp-client.
 agent-client-protocol = "=3.3.0"
 acp-client = { path = "crates/acp-client" }
+acp-agents = { path = "crates/acp-agents" }
 
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }

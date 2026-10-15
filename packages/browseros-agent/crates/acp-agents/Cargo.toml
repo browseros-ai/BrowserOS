@@ -1,0 +1,34 @@
+[package]
+name = "acp-agents"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "BrowserOS ACP agent policy, launch, session records, runtime, probe, and UI translation"
+
+[dependencies]
+acp-client.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+tokio-util.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+# A scripted ACP peer lets runtime tests cover busy locks, reattachment,
+# recovery, cancellation and idle close over real stdio without any model.
+[[bin]]
+name = "acp-agents-fake-agent"
+path = "tests/support/fake-agent.rs"
+test = false
+bench = false
+
+[lints]
+workspace = true

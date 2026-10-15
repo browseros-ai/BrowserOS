@@ -3,6 +3,23 @@
 version = 4
 
 [[package]]
+name = "acp-agents"
+version = "0.1.0"
+dependencies = [
+ "acp-client",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "acp-client"
 version = "0.1.0"
 dependencies = [
