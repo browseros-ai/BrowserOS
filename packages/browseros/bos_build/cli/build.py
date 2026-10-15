@@ -34,6 +34,7 @@ from ..core.resume import (
 from ..core.resolver import resolve_config, resolve_pipeline
 from ..lib.notify import slack_subscriber
 from ..release.lane import write_lane_manifest
+from ..release.server_resources import server_build_command, target_ids_for_lane
 from ..core.runner import StepExecutionError, run as run_pipeline
 from ..core.step import (
     all_steps,
@@ -439,6 +440,32 @@ def _execute_runs_with_checkout_lock(
         )
 
 
+def _server_build_lines(
+    product: str, arch_plans: List[Tuple[str, List[str]]]
+) -> List[str]:
+    """Show which server packager each source-mode lane runs.
+
+    The product's default server runtime picks it (BrowserOS builds the Rust
+    server), so the plan names the exact command rather than just the step.
+    """
+    lines = []
+    agent_root = Path("packages/browseros-agent")
+    for run_arch, steps in arch_plans:
+        if "prepare_server_resources" not in steps:
+            continue
+        try:
+            targets = target_ids_for_lane(get_platform(), run_arch)
+        except ValueError as exc:
+            lines.append(f"Server build ({run_arch}): {exc}")
+            continue
+        for target in targets:
+            command, _ = server_build_command(
+                product, target, agent_root, agent_root / "target"
+            )
+            lines.append(f"Server build ({target}): {' '.join(command)}")
+    return lines
+
+
 def _execute_runs(
     runs: List[Tuple[Context, List[str]]],
     *,
@@ -661,6 +688,7 @@ def _resolve_preset(
             header.append(f"From: {from_}")
         if extra_gn_args:
             header.append(f"GN arg overrides: {', '.join(extra_gn_args)}")
+        header.extend(_server_build_lines(switches.product, full_arch_plans))
 
         def build_runs() -> List[Tuple[Context, List[str]]]:
             try:

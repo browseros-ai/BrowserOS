@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from bos_build.release.server_resources import (
+    DEFAULT_SERVER_RUNTIME,
     ServerResourceBuilder,
     server_build_command,
     target_ids_for_lane,
@@ -43,37 +44,13 @@ class ServerTargetTest(unittest.TestCase):
             ("darwin-arm64", "darwin-x64"),
         )
 
-    def test_browseros_delegates_each_target_to_bun_builder(self) -> None:
+    def test_browseros_builds_the_rust_server_by_default(self) -> None:
         root = Path("/repo/packages/browseros-agent")
-        for target in (
-            "linux-x64",
-            "windows-x64",
-            "darwin-arm64",
-            "darwin-x64",
-        ):
+        self.assertEqual(DEFAULT_SERVER_RUNTIME, "rust")
+        for target in ("linux-x64", "windows-x64", "darwin-arm64", "darwin-x64"):
             with self.subTest(target=target):
                 command, artifact = server_build_command(
                     "browseros", target, root, root / "target"
-                )
-                self.assertEqual(
-                    command,
-                    (
-                        "bun",
-                        "scripts/build/server.ts",
-                        f"--target={target}",
-                        "--no-upload",
-                    ),
-                )
-                self.assertEqual(artifact, root / "dist/prod/server" / target)
-
-    def test_browseros_rust_runtime_is_opt_in(self) -> None:
-        # The Rust server is selected only when the caller asks for it; the TS
-        # builder stays the default (see the test above).
-        root = Path("/repo/packages/browseros-agent")
-        for target in ("linux-x64", "windows-x64", "darwin-arm64"):
-            with self.subTest(target=target):
-                command, artifact = server_build_command(
-                    "browseros", target, root, root / "target", server_runtime="rust"
                 )
                 self.assertEqual(
                     command,
@@ -85,6 +62,24 @@ class ServerTargetTest(unittest.TestCase):
                     ),
                 )
                 self.assertEqual(artifact, root / "dist/prod/server-rust" / target)
+
+    def test_browseros_typescript_runtime_stays_selectable(self) -> None:
+        root = Path("/repo/packages/browseros-agent")
+        for target in ("linux-x64", "windows-x64", "darwin-arm64", "darwin-x64"):
+            with self.subTest(target=target):
+                command, artifact = server_build_command(
+                    "browseros", target, root, root / "target", server_runtime="ts"
+                )
+                self.assertEqual(
+                    command,
+                    (
+                        "bun",
+                        "scripts/build/server.ts",
+                        f"--target={target}",
+                        "--no-upload",
+                    ),
+                )
+                self.assertEqual(artifact, root / "dist/prod/server" / target)
 
     def test_browserclaw_maps_targets_to_cargo_triples_and_runtime_names(self) -> None:
         root = Path("/repo/packages/browseros-agent")
@@ -119,6 +114,9 @@ class ServerResourceBuilderTest(unittest.TestCase):
         server_manifest = self.agent / "apps/server/package.json"
         server_manifest.parent.mkdir(parents=True)
         server_manifest.write_text('{"version":"0.0.128"}\n')
+        rust_manifest = self.agent / "apps/server-rust/Cargo.toml"
+        rust_manifest.parent.mkdir(parents=True)
+        rust_manifest.write_text('[package]\nname = "server-rust"\nversion = "0.1.0"\n')
         claw_manifest = self.agent / "apps/claw-server/Cargo.toml"
         claw_manifest.parent.mkdir(parents=True)
         claw_manifest.write_text(
@@ -192,6 +190,7 @@ class ServerResourceBuilderTest(unittest.TestCase):
             host_platform="linux",
             run=run,
             which=lambda name: f"/usr/bin/{name}",
+            server_runtime="ts",
         )
         result = builder.prepare(
             product="browseros",
@@ -211,6 +210,55 @@ class ServerResourceBuilderTest(unittest.TestCase):
             SOURCE_SHA,
         )
 
+    def test_rust_build_stages_complete_packager_output_at_cargo_version(self) -> None:
+        output = self.agent / "dist/prod/server-rust/darwin-arm64"
+        files = {
+            "resources/bin/browseros_server": b"rust-server",
+            "resources/bin/third_party/bun": b"bun",
+        }
+        commands = []
+
+        def run(command, cwd, env):
+            commands.append(command)
+            for relative, content in files.items():
+                path = output / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(content)
+            (output / "artifact-metadata.json").write_text(
+                json.dumps(_metadata("0.1.0", "darwin-arm64", files))
+            )
+
+        builder = ServerResourceBuilder(
+            self.repo,
+            host_platform="macos",
+            run=run,
+            which=lambda name: f"/usr/bin/{name}",
+        )
+        result = builder.prepare(
+            product="browseros",
+            target="darwin-arm64",
+            version="0.1.0",
+            source_sha=SOURCE_SHA,
+        )
+
+        self.assertEqual(commands[0][:2], ("bun", "scripts/build/server-rust.ts"))
+        self.assertEqual(result.version, "0.1.0")
+        self.assertEqual(
+            (result.destination / "resources/bin/third_party/bun").read_bytes(), b"bun"
+        )
+        # The TypeScript package version no longer identifies a BrowserOS release.
+        with self.assertRaisesRegex(ValueError, "source version 0.1.0"):
+            builder.prepare(
+                product="browseros",
+                target="darwin-arm64",
+                version="0.0.128",
+                source_sha=SOURCE_SHA,
+            )
+
+    def test_unknown_runtime_is_rejected(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Unknown server runtime"):
+            ServerResourceBuilder(self.repo, server_runtime="go")  # type: ignore[arg-type]
+
     def test_incompatible_host_and_missing_toolchain_fail_preflight(self) -> None:
         builder = ServerResourceBuilder(
             self.repo,
@@ -225,8 +273,17 @@ class ServerResourceBuilderTest(unittest.TestCase):
                 version="0.0.18",
                 source_sha=SOURCE_SHA,
             )
-        with self.assertRaisesRegex(RuntimeError, "install Bun"):
+        with self.assertRaisesRegex(RuntimeError, "requires a macOS host"):
             builder.preflight(product="browseros", target="linux-x64")
+        typescript = ServerResourceBuilder(
+            self.repo,
+            host_platform="linux",
+            run=lambda *args: None,
+            which=lambda name: None,
+            server_runtime="ts",
+        )
+        with self.assertRaisesRegex(RuntimeError, "install Bun"):
+            typescript.preflight(product="browseros", target="linux-x64")
 
     def test_source_manifest_must_match_requested_version(self) -> None:
         builder = ServerResourceBuilder(

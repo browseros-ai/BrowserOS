@@ -142,23 +142,19 @@ class ComponentReleaseCliTest(unittest.TestCase):
     def test_stamp_updates_only_selected_component_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            manifest = root / "packages/browseros-agent/apps/server/package.json"
-            lockfile = root / "packages/browseros-agent/bun.lock"
+            manifest = root / "packages/browseros-agent/apps/server-rust/Cargo.toml"
+            lockfile = root / "packages/browseros-agent/Cargo.lock"
+            typescript = root / "packages/browseros-agent/apps/server/package.json"
             manifest.parent.mkdir(parents=True)
-            manifest.write_text(
-                json.dumps({"name": "@browseros/server", "version": "0.0.127"})
-                + "\n"
-            )
-            lockfile.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text('[package]\nname = "server-rust"\nversion = "0.1.0"\n')
             lockfile.write_text(
-                "{\n"
-                '  "workspaces": {\n'
-                '    "apps/server": {\n'
-                '      "name": "@browseros/server",\n'
-                '      "version": "0.0.127",\n'
-                "    },\n"
-                "  },\n"
-                "}\n"
+                '[[package]]\nname = "claw-server"\nversion = "0.0.18"\n\n'
+                '[[package]]\nname = "server-rust"\nversion = "0.1.0"\n'
+            )
+            typescript.parent.mkdir(parents=True)
+            typescript.write_text(
+                json.dumps({"name": "@browseros/server", "version": "0.0.168"})
+                + "\n"
             )
             result = runner.invoke(
                 app,
@@ -169,15 +165,17 @@ class ComponentReleaseCliTest(unittest.TestCase):
                     "--component",
                     "server",
                     "--version",
-                    "0.0.128",
+                    "0.1.1",
                     "--repo-root",
                     str(root),
                 ],
             )
 
             self.assertEqual(result.exit_code, 0, result.output)
-            self.assertEqual(json.loads(manifest.read_text())["version"], "0.0.128")
-            self.assertIn('"version": "0.0.128"', lockfile.read_text())
+            self.assertIn('version = "0.1.1"', manifest.read_text())
+            self.assertIn('name = "server-rust"\nversion = "0.1.1"', lockfile.read_text())
+            self.assertIn('name = "claw-server"\nversion = "0.0.18"', lockfile.read_text())
+            self.assertEqual(json.loads(typescript.read_text())["version"], "0.0.168")
 
     def test_read_decodes_semver_safe_chrome_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

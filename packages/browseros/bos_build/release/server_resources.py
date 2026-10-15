@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Target-aware local server resource providers."""
+"""Target-aware local server resource providers.
+
+Source-mode browser builds call ServerResourceBuilder to compile and stage the
+server their product bundles. BrowserOS ships the Rust server; ``server_runtime``
+still selects the TypeScript builder for a build that must reproduce it.
+"""
 
 import hashlib
 import json
@@ -8,10 +13,9 @@ import platform
 import re
 import shutil
 import subprocess
-import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import AbstractSet, Callable, Mapping, Optional
+from typing import AbstractSet, Callable, Literal, Mapping, Optional
 
 from ..products.resource_sources import source_resources_for_product
 from ..products.server_binaries import ServerBundle, server_bundles_for_product
@@ -68,6 +72,14 @@ TARGETS: Mapping[str, ServerTarget] = {
 }
 
 
+ServerRuntime = Literal["rust", "ts"]
+
+# BrowserOS's shipped server. The release component version comes from the Rust
+# Cargo manifest, so "ts" only prepares a release after components.py points the
+# server component back at apps/server/package.json.
+DEFAULT_SERVER_RUNTIME: ServerRuntime = "rust"
+
+
 RunCommand = Callable[[tuple[str, ...], Path, Mapping[str, str]], None]
 Which = Callable[[str], Optional[str]]
 RustTargets = Callable[[], AbstractSet[str]]
@@ -119,7 +131,7 @@ def server_build_command(
     agent_root: Path,
     cargo_target_dir: Path,
     *,
-    server_runtime: str = "ts",
+    server_runtime: ServerRuntime = DEFAULT_SERVER_RUNTIME,
 ) -> tuple[tuple[str, ...], Path]:
     """Return the source builder command and its expected output."""
     try:
@@ -128,7 +140,9 @@ def server_build_command(
         raise ValueError(f"Unknown server target {target_id}") from exc
     bundle = _server_bundle(product)
     if product == "browseros" and server_runtime == "rust":
-        # Reuse the complete manifest stager so ACP's target-specific Bun is kept.
+        # The Rust packager emits the same directory contract as server.ts
+        # (metadata plus every manifest resource, including ACP's target Bun),
+        # so it goes through the Bun stager rather than the bare Cargo one.
         return (
             (
                 "bun", "scripts/build/server-rust.ts",
@@ -171,6 +185,14 @@ def server_build_command(
         ),
         binary,
     )
+
+
+def _typescript_server_version(agent_root: Path) -> str:
+    path = agent_root / "apps/server/package.json"
+    version = json.loads(path.read_text(encoding="utf-8")).get("version")
+    if not isinstance(version, str):
+        raise ValueError(f"Missing version in {path}")
+    return version
 
 
 def _metadata_digest(document: Mapping[str, object]) -> str:
@@ -289,7 +311,7 @@ class ServerResourceBuilder:
         which: Which = shutil.which,
         rust_targets: RustTargets = _default_rust_targets,
         cargo_target_dir: Optional[Path] = None,
-        server_runtime: str = "ts",
+        server_runtime: ServerRuntime = DEFAULT_SERVER_RUNTIME,
     ) -> None:
         if server_runtime not in {"ts", "rust"}:
             raise ValueError(f"Unknown server runtime {server_runtime}")
@@ -308,9 +330,13 @@ class ServerResourceBuilder:
     def _preflight(self, product: str, target: ServerTarget) -> ServerBundle:
         bundle = _server_bundle(product)
         if product == "browseros" and self.server_runtime == "rust":
-            # The shared local cross-compiler currently requires a macOS host.
+            # The shared Rust packager cross-compiles every target from macOS.
             if self.host_platform != "macos":
-                raise RuntimeError("The local BrowserOS Rust packager requires macOS")
+                raise RuntimeError(
+                    f"Cannot build {target.id}: the BrowserOS Rust server packager "
+                    f"requires a macOS host (current host is {self.host_platform}); "
+                    "use published server resources instead"
+                )
             for prerequisite in ("cargo", "rustup"):
                 if self.which(prerequisite) is None:
                     raise RuntimeError(f"Cannot build {target.id}: install {prerequisite}")
@@ -365,9 +391,8 @@ class ServerResourceBuilder:
         normalized_version = normalize_component_version(
             source.server_component, version
         )
-        if product == "browseros" and self.server_runtime == "rust":
-            manifest = self.agent_root / "apps/server-rust/Cargo.toml"
-            source_version = tomllib.loads(manifest.read_text())["package"]["version"]
+        if product == "browseros" and self.server_runtime == "ts":
+            source_version = _typescript_server_version(self.agent_root)
         else:
             source_version = read_component_version(
                 self.agent_root.parent.parent,

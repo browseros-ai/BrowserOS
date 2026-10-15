@@ -55,14 +55,17 @@ class AllocationRecord:
 
 
 COMPONENTS: Mapping[str, ComponentSpec] = {
+    # The shipped BrowserOS server is the Rust port. Its ID, tags, archive and R2
+    # identity are unchanged from the TypeScript server it replaced, and its
+    # Cargo version (0.1.x) continues above every TypeScript 0.0.x release.
+    # Reverting to TypeScript means restoring the apps/server package.json spec.
     "server": ComponentSpec(
         id="server",
         display_name="BrowserOS server",
         version_scheme="semver",
-        manifest_path=Path("packages/browseros-agent/apps/server/package.json"),
-        lockfile_path=Path("packages/browseros-agent/bun.lock"),
-        package_name="@browseros/server",
-        workspace_path="apps/server",
+        manifest_path=Path("packages/browseros-agent/apps/server-rust/Cargo.toml"),
+        lockfile_path=Path("packages/browseros-agent/Cargo.lock"),
+        package_name="server-rust",
         tag_prefix="agent-server/v",
         legacy_tag_prefixes=("browseros-server-v",),
     ),
@@ -133,6 +136,32 @@ def component_by_id(component_id: str) -> ComponentSpec:
         raise ValueError(f"Unknown component '{component_id}'. Valid: {valid}") from exc
 
 
+def _legacy_sources(spec: ComponentSpec) -> tuple[ComponentSpec, ...]:
+    """Earlier source layouts of a component, newest first."""
+    if spec.id == "claw-server-rust":
+        return (
+            replace(
+                spec,
+                manifest_path=Path(
+                    "packages/browseros-agent/apps/claw-server-rust/Cargo.toml"
+                ),
+                package_name="claw-server-rust",
+            ),
+        )
+    if spec.id == "server":
+        # Refs from before the Rust port shipped version the TypeScript package.
+        return (
+            replace(
+                spec,
+                manifest_path=Path("packages/browseros-agent/apps/server/package.json"),
+                lockfile_path=Path("packages/browseros-agent/bun.lock"),
+                package_name="@browseros/server",
+                workspace_path="apps/server",
+            ),
+        )
+    return ()
+
+
 def component_for_source(
     repo_root: Path, component_id: str, *, ref: str | None = None
 ) -> ComponentSpec:
@@ -142,14 +171,10 @@ def component_for_source(
     replay the old manifest and lockfile together to retain exact-tree proofs.
     """
     spec = component_by_id(component_id)
-    if component_id != "claw-server-rust":
+    legacy = _legacy_sources(spec)
+    if not legacy:
         return spec
-    legacy = replace(
-        spec,
-        manifest_path=Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml"),
-        package_name="claw-server-rust",
-    )
-    sources = (spec, legacy)
+    sources = (spec, *legacy)
     if ref is None:
         available = {
             source.manifest_path.as_posix()

@@ -133,6 +133,13 @@ class ShowPlanPresetTest(_ProfileMixin):
         self.assertEqual(result.exit_code, 0, combined(result))
         self.assertIn("resource_mode=source", result.output)
         self.assertIn("prepare_common_resources", plan_lines(result.output))
+        self.assertIn("scripts/build/server-rust.ts", result.output)
+
+    def test_published_mode_builds_no_server(self):
+        with scrubbed_env():
+            result = invoke("--preset", "release", "--show-plan")
+        self.assertEqual(result.exit_code, 0, combined(result))
+        self.assertNotIn("Server build", result.output)
 
     def test_prepared_resources_requires_source_mode(self):
         with scrubbed_env():
