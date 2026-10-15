@@ -83,8 +83,9 @@ const PURSUE_TOOL_NAME: &str = "pursue";
 /// Written against what was measured rather than against what sounds good. Each
 /// paragraph exists because a run failed without it: goals arriving one step at
 /// a time, fields that could not be typed because nothing supplied the text,
-/// questions about a page answered with a confident claim and no text, and
-/// callers reading a bare status word and learning nothing.
+/// callers reading a bare status word and learning nothing, and a caller that
+/// split an errand into "get there" and "read it", wrote the first half as the
+/// whole goal, and got a run that correctly stopped without reporting.
 const PURSUE_DESCRIPTION: &str = "\
 Pursue a whole outcome on one page. Every step is decided on the server, so one \
 call does the work of a snapshot, your reasoning, an act, and another snapshot, \
@@ -95,10 +96,16 @@ brand and sort them by price, lowest first\" rather than \"click the Corsair \
 checkbox\". It plans each step against the page as it is now. If you already \
 know the single control you want, `act` is cheaper and more direct.
 
-IT CAN ANSWER, NOT ONLY ACT. A goal like \"find out how many points the top \
-story has\" or \"check whether this page mentions a delivery date\" ends with \
-the page's text handed back to you, with nothing clicked. Ask for what you want \
-to know, not for the clicks you think would reveal it.
+ASK FOR WHAT YOU WANT TO KNOW, AND READ THE PAGE YOURSELF. A goal may describe \
+the whole outcome, including the part you want to find out: \"find the docs page \
+about the secure tunnel and get me to it\" works. It gets the page into the state \
+where the answer is visible, stops, and tells you which page to read. Then read \
+it, with whatever selector and format you want. It does not read for you, \
+because you know the goal and are not working to a byte budget.
+
+DO NOT SPLIT AN ERRAND IN TWO. \"Get there\" and then \"read it\" costs two calls \
+and gets no report from the first. One call does the first part and tells you to \
+do the second.
 
 IT CANNOT INVENT STRINGS, SO SUPPLY THEM. It chooses between things you give \
 it and never writes text of its own.
@@ -115,10 +122,8 @@ secret, use request_human_help so a person enters it in the browser.
 IT STOPS RATHER THAN GUESSING. Anything consequential needs high confidence \
 before it runs, so a run will hand back rather than submit, pay or delete on a \
 hunch. Read `status` to see which happened:
- - `satisfied`: it says the goal is visibly met on the page. That is a claim, \
-not evidence; check `url` and the action count.
- - `answered`: it read the page for you. The text is in the result and you \
-parse it. It cannot return \"312\" on its own.
+ - `satisfied`: the page now holds what the goal asked for. That is a claim, not \
+evidence: read the page to check it, and check `url` and `story`.
  - `too_risky_to_guess`, `nothing_offered`, `no_field_named`: it came back to \
 you, and the sentence says what it needs.
  - `not_confident`, `nothing_changed`, `budget_spent`: it stopped making \
@@ -126,12 +131,22 @@ progress. The sentence says what it tried.
  - `cancelled`: something outside the run stopped it. Not the same as running \
 out of steps, and worth retrying.
 
-WHAT THE RESULT TELLS YOU. `actions` is what it ran and `changed` is how many \
-of those moved the page; the two differing is the signal that something is not \
-working. `omitted` is how much of the page would not fit in one decision, so a \
-large number means the answer may not have been in front of it. \
-`unlabelledImages` counts pictures with no text label, which nothing here can \
-read: take a screenshot yourself if the goal depends on them.
+WHAT THE RESULT TELLS YOU. Read `story` first: it is what the run did, in \
+order, in sentences, including what observably moved on the page, so \"clicked \
+Add to cart, and \\\"0 items in cart\\\" became \\\"2 items in cart\\\"\". If the run did \
+not finish, `tryNext` is one line saying what to change about the goal before \
+you try again. `decided` is the same information as `story` with the numbers \
+attached: each decision's `margin` against the `needed` bar it had to clear, and \
+`weakest`, which names the judgement that decided the outcome. Compare `margin` \
+with `needed` rather than reading either alone.
+
+`actions` is what it ran and `changed` is how many of those moved the page; the \
+two differing is the signal that something is not working. `omitted` is how much \
+of the page would not fit in one decision, so a large number means the answer \
+may not have been in front of it. `page.obstructed` says what is covering the \
+page, if anything: read the page only once nothing is. `unlabelledImages` counts \
+pictures with no text label, which nothing here can read: take a screenshot \
+yourself if the goal depends on them.
 
 Needs JEV_TOKEN in the server's environment, and is not listed without one.";
 const AWAIT_HELP_DESCRIPTION: &str = "Keep waiting on an open human-help request. Call this repeatedly after request_human_help until the status is \"resolved\" (the human handed control back), \"cancelled\" (the run was stopped), or \"timed_out\" (no human responded in time). Do nothing else on the page while waiting.";
