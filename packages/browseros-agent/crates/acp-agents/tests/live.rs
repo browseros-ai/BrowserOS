@@ -82,12 +82,30 @@ async fn turn(
         .iter()
         .filter_map(|chunk| chunk["type"].as_str())
         .collect();
+    let tools: Vec<&Value> = chunks
+        .iter()
+        .filter(|chunk| {
+            chunk["type"]
+                .as_str()
+                .is_some_and(|kind| kind.starts_with("tool-"))
+        })
+        .collect();
     eprintln!(
-        "[{:?}] reply={reply:?}\n  chunk types={types:?}\n  last={}",
+        "[{:?}] reply={reply:?}\n  chunk types={types:?}\n  tools={tools:?}\n  last={}",
         agent.kind,
         chunks.last().unwrap_or(&Value::Null)
     );
     Ok((reply, chunks))
+}
+
+/// Extra pause between the turn and the runtime shutdown (`ACP_LIVE_SETTLE_MS`, default 0): the
+/// runtime itself must keep an immediately retired Claude session resumable.
+fn settle() -> Duration {
+    let millis = std::env::var("ACP_LIVE_SETTLE_MS")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    Duration::from_millis(millis)
 }
 
 async fn pong_then_recall(agent: AgentDefinition) -> TestResult {
@@ -108,6 +126,7 @@ async fn pong_then_recall(agent: AgentDefinition) -> TestResult {
         "Reply with exactly the single word pong and nothing else.",
     )
     .await?;
+    tokio::time::sleep(settle()).await;
     first.shutdown().await;
     assert!(
         reply.to_lowercase().contains("pong"),

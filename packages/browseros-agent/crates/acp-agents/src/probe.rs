@@ -205,7 +205,7 @@ async fn run_probe(spec: acp_client::LaunchSpec, cwd: PathBuf, timeout: Duration
             });
         }
     };
-    let options = session.config_options().to_vec();
+    let options = session.config_options();
     // acp-probe pokes the first option with its current value: success proves the method exists.
     let mut supports_config_option = false;
     if let Some(SessionConfigOption {
