@@ -21,6 +21,7 @@ uuid.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+tracing-subscriber.workspace = true
 
 # A scripted ACP peer lets runtime tests cover busy locks, reattachment,
 # recovery, cancellation and idle close over real stdio without any model.

@@ -41,7 +41,7 @@ struct Block {
 #[derive(Default)]
 struct ToolState {
     tool_name: String,
-    emitted: String,
+    last_summary: String,
     raw_input: Option<Value>,
     raw_output: Option<Value>,
     content: Option<Value>,
@@ -315,17 +315,13 @@ impl UiTranslator {
             Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
         );
         if !terminal {
-            // acpx-ai-provider `appendToolText`: send the suffix when the summary extends what was
-            // sent, the whole summary when it doesn't, nothing when it is unchanged.
-            let delta = summary
-                .strip_prefix(state.emitted.as_str())
-                .unwrap_or(&summary)
-                .to_owned();
-            if !delta.is_empty() {
-                state.emitted.push_str(&delta);
+            // The visible progress line, sent whole and only when it changes (spike §4.3). TS sent
+            // the same text but re-sent repeats, since it diffed against the concatenation.
+            if summary != state.last_summary {
+                state.last_summary = summary.clone();
                 chunks.push(UiChunk::ToolInputDelta {
                     tool_call_id: id,
-                    input_text_delta: delta,
+                    input_text_delta: summary,
                 });
             }
             return chunks;
@@ -334,10 +330,10 @@ impl UiTranslator {
             return chunks;
         };
         let input = state.raw_input.clone().unwrap_or_else(|| {
-            Value::String(if state.emitted.is_empty() {
+            Value::String(if state.last_summary.is_empty() {
                 summary.clone()
             } else {
-                state.emitted.clone()
+                state.last_summary.clone()
             })
         });
         chunks.push(UiChunk::ToolInputAvailable {

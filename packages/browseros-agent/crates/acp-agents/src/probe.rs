@@ -283,6 +283,7 @@ fn probe_error(error: AcpError, phase: Phase) -> ProbeErrorBody {
             None,
         ),
         AcpError::Rpc { code, message, .. } => body("unknown", message, Some(code)),
+        AcpError::AuthRequired { message, .. } => body("unknown", message, None),
         other => body("unknown", other.to_string(), None),
     }
 }

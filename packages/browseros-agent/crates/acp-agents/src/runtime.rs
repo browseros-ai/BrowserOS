@@ -63,7 +63,7 @@ pub const DEFAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(120);
 /// Reason on the `abort` chunk of a host stop; the same text AI SDK produced for the TS stop.
 pub const HOST_STOP_REASON: &str = "AbortError: Conversation stopped";
 /// After cancel or deadline, how long the agent may take to answer the prompt before its process is
-/// killed. Claude and Codex settled within 60 ms in the spike.
+/// killed (capped by the control timeout). Claude and Codex settled within 60 ms in the spike.
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 const SESSION_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -229,6 +229,7 @@ impl AcpRuntime {
             tx,
             cancel,
             turn_timeout: self.config.turn_timeout,
+            grace: CANCEL_GRACE.min(self.config.control_timeout),
             busy,
         };
         tokio::spawn(driver.run(turn));
@@ -353,9 +354,10 @@ impl AcpRuntime {
                 apply_controls(&live.session, &policy.controls).await?;
                 return Ok((live, false));
             }
+            // Awaited, like TS: the replacement may reattach to the very same agent session.
             tracing::debug!("Retiring ACP process after a policy change or exit");
             self.forget(key, &live);
-            tokio::spawn(retire(live));
+            retire(live).await;
         }
 
         let (live, reattached) = self.open(policy, &fingerprint, true).await?;
@@ -594,6 +596,7 @@ struct Driver {
     tx: mpsc::UnboundedSender<UiChunk>,
     cancel: CancellationToken,
     turn_timeout: Duration,
+    grace: Duration,
     busy: BusyGuard,
 }
 
@@ -605,6 +608,7 @@ impl Driver {
             tx,
             cancel,
             turn_timeout,
+            grace: grace_period,
             busy,
         } = self;
         let send = |chunks: Vec<UiChunk>| {
@@ -626,19 +630,19 @@ impl Driver {
                     canceller.cancel();
                     send(translator.finish(TurnEnd::CancelledByHost { reason: HOST_STOP_REASON.into() }));
                     ended = true;
-                    grace = Some(Box::pin(tokio::time::sleep(CANCEL_GRACE)));
+                    grace = Some(Box::pin(tokio::time::sleep(grace_period)));
                 }
                 () = &mut deadline, if !ended => {
                     canceller.cancel();
-                    let message = format!("ACP turn timed out after {}s", turn_timeout.as_secs());
+                    let message = format!("ACP turn timed out after {turn_timeout:?}");
                     send(translator.finish(TurnEnd::Failed { message }));
                     ended = true;
-                    grace = Some(Box::pin(tokio::time::sleep(CANCEL_GRACE)));
+                    grace = Some(Box::pin(tokio::time::sleep(grace_period)));
                 }
                 () = tx.closed(), if !ended => {
                     canceller.cancel();
                     ended = true;
-                    grace = Some(Box::pin(tokio::time::sleep(CANCEL_GRACE)));
+                    grace = Some(Box::pin(tokio::time::sleep(grace_period)));
                 }
                 () = wait(&mut grace) => {
                     tracing::warn!("ACP agent did not settle after cancellation; closing its process");
