@@ -2,7 +2,10 @@
 //! cancellation. Cancel is enqueued before waking pending permission policies;
 //! the prompt future is never dropped merely because the UI stopped reading.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use agent_client_protocol::{Agent, ConnectionTo};
 use tokio::sync::mpsc;
@@ -10,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     AcpError, AgentConnection,
+    connection::exited,
     process::lock,
     schema::{
         CancelNotification, CloseSessionRequest, ContentBlock, Meta, PromptRequest,
@@ -18,71 +22,78 @@ use crate::{
     },
 };
 
-/// Session metadata is the snapshot from new/load/resume. Subsequent agent
-/// changes arrive as turn updates; desired configuration is owned by the caller.
+/// One session lease with control metadata shared by every alias. Dispatch
+/// refreshes the snapshot even between turns; transcript updates remain scoped
+/// to the active turn and load replay never enters a later conversation.
 pub struct Session {
     conn: AgentConnection,
     id: SessionId,
-    modes: Option<SessionModeState>,
-    config: Vec<SessionConfigOption>,
+    snapshot: Arc<Mutex<SessionSnapshot>>,
+}
+
+/// Mutable control state lives independently of handles so notification dispatch
+/// can update every alias without extending the public connection lifetime.
+#[derive(Default)]
+pub(crate) struct SessionSnapshot {
+    pub(crate) modes: Option<SessionModeState>,
+    pub(crate) config: Vec<SessionConfigOption>,
 }
 
 impl Session {
     pub(crate) fn new(
         conn: AgentConnection,
         id: SessionId,
-        modes: Option<SessionModeState>,
-        config: Vec<SessionConfigOption>,
+        snapshot: Arc<Mutex<SessionSnapshot>>,
     ) -> Self {
-        Self {
-            conn,
-            id,
-            modes,
-            config,
-        }
+        Self { conn, id, snapshot }
     }
     pub fn id(&self) -> &SessionId {
         &self.id
     }
-    pub fn modes(&self) -> Option<&SessionModeState> {
-        self.modes.as_ref()
+    /// Clone the latest control state without retaining a dispatch lock.
+    pub fn modes(&self) -> Option<SessionModeState> {
+        lock(&self.snapshot).modes.clone()
     }
-    pub fn config_options(&self) -> &[SessionConfigOption] {
-        &self.config
+    /// Clone the latest full option list, including changes made between turns.
+    pub fn config_options(&self) -> Vec<SessionConfigOption> {
+        lock(&self.snapshot).config.clone()
     }
 
     pub async fn set_mode(&self, mode_id: &str) -> Result<(), AcpError> {
         self.conn
             .control(
                 "session/set_mode",
-                self.conn
-                    .inner
-                    .cx
-                    .send_request(SetSessionModeRequest::new(
-                        self.id.clone(),
-                        mode_id.to_owned(),
-                    ))
-                    .block_task(),
+                self.conn.inner.cx.send_request(SetSessionModeRequest::new(
+                    self.id.clone(),
+                    mode_id.to_owned(),
+                )),
             )
             .await?;
         Ok(())
     }
-    pub async fn set_config_option(&self, config_id: &str, value: &str) -> Result<(), AcpError> {
+    pub async fn set_config_option(
+        &self,
+        config_id: &str,
+        value: &str,
+    ) -> Result<Vec<SessionConfigOption>, AcpError> {
+        let snapshot = self.snapshot.clone();
         self.conn
-            .control(
+            .control_ordered(
                 "session/set_config_option",
                 self.conn
                     .inner
                     .cx
-                    .send_request(SetSessionConfigOptionRequest::new(
+                    .prepare_request(SetSessionConfigOptionRequest::new(
                         self.id.clone(),
                         config_id.to_owned(),
                         value,
-                    ))
-                    .block_task(),
+                    )),
+                move |response| {
+                    lock(&snapshot).config = response.config_options.clone();
+                    response.config_options
+                },
             )
-            .await?;
-        Ok(())
+            .await
     }
 
     pub fn prompt(&self, content: Vec<ContentBlock>) -> Result<Turn, AcpError> {
@@ -95,31 +106,34 @@ impl Session {
             .conn
             .inner
             .cx
-            .send_request(PromptRequest::new(self.id.clone(), content))
-            .block_task();
+            .send_request(PromptRequest::new(self.id.clone(), content));
         let canceller = TurnCanceller {
             session_id: self.id.clone(),
             cx: self.conn.inner.cx.clone(),
             state: active.clone(),
         };
-        let conn = self.conn.clone();
+        let state = self.conn.inner.state.clone();
+        let auth = self.conn.auth_methods();
         let id = self.id.clone();
         tokio::spawn(async move {
-            // waitpid may finish while stdout still contains the final updates
-            // and response. The SDK must drain that stream before exit becomes
-            // a turn error; racing the child watcher here would lose valid output.
+            let response = state.response(&auth, response);
+            tokio::pin!(response);
+            // Child exit and stdout EOF are independent: a descendant can keep
+            // stdout open forever. Allow buffered final output to drain, then
+            // terminate with the supervisor's status and captured diagnostics.
             let result = tokio::select! {
                 biased;
-                () = conn.inner.state.stop.cancelled() => Err(AcpError::Closed),
-                response = response => match response {
-                    Ok(response) => Ok(TurnOutcome { stop_reason: response.stop_reason, meta: response.meta }),
-                    Err(error) => Err(conn.map_error(error).await),
-                },
-            };
-            conn.inner
-                .state
-                .routes
-                .finish(&id, &active, TurnEvent::Done(result));
+                () = state.stop.cancelled() => Err(state.stopped_error()),
+                result = &mut response => result,
+                report = state.process.closed() => {
+                    tokio::select! {
+                        biased;
+                        () = state.stop.cancelled() => Err(state.stopped_error()),
+                        result = tokio::time::timeout(Duration::from_secs(1), &mut response) => result.unwrap_or_else(|_| Err(exited(report))),
+                    }
+                }
+            }.map(|response| TurnOutcome { stop_reason: response.stop_reason, meta: response.meta });
+            state.routes.finish(&id, &active, TurnEvent::Done(result));
         });
         Ok(Turn {
             events,
@@ -137,8 +151,7 @@ impl Session {
                     self.conn
                         .inner
                         .cx
-                        .send_request(CloseSessionRequest::new(self.id.clone()))
-                        .block_task(),
+                        .send_request(CloseSessionRequest::new(self.id.clone())),
                 )
                 .await?;
         }

@@ -68,6 +68,10 @@ impl Process {
             .ok_or_else(missing_pipe)
             .map_err(spawn_error)?;
         let pid = child.id();
+        // Construct outside the future: even a supervisor dropped before its
+        // first poll must kill descendants. Child::kill_on_drop reaches only
+        // the direct child, so it cannot enforce this process-group invariant.
+        let group_guard = ProcessGroupGuard(pid);
         let tail = Arc::new(Mutex::new(VecDeque::new()));
         let stderr_tail = tail.clone();
         let mut drain = tokio::spawn(async move {
@@ -101,13 +105,14 @@ impl Process {
         let (shutdown, mut requests) = mpsc::unbounded_channel();
         let report_tail = tail.clone();
         tokio::spawn(async move {
+            let mut group_guard = group_guard;
             let status = tokio::select! {
                 status = child.wait() => status.ok(),
                 grace = requests.recv() => {
                     match tokio::time::timeout(grace.unwrap_or(Duration::ZERO), child.wait()).await {
                         Ok(status) => status.ok(),
                         Err(_) => {
-                            kill_group(pid);
+                            group_guard.kill();
                             let _ = child.start_kill();
                             child.wait().await.ok()
                         }
@@ -116,7 +121,7 @@ impl Process {
             };
             // A wrapper may exit before its descendants. They retain our pipe
             // descriptors, so group cleanup is also required after normal exit.
-            kill_group(pid);
+            group_guard.kill();
             if tokio::time::timeout(Duration::from_secs(1), &mut drain)
                 .await
                 .is_err()
@@ -195,3 +200,17 @@ fn kill_group(pid: Option<u32>) {
 
 #[cfg(not(unix))]
 fn kill_group(_: Option<u32>) {}
+
+/// Synchronous fallback when runtime shutdown or task cancellation drops the
+/// supervisor. Disarming after cleanup avoids signaling a reused process ID.
+struct ProcessGroupGuard(Option<u32>);
+impl ProcessGroupGuard {
+    fn kill(&mut self) {
+        kill_group(self.0.take());
+    }
+}
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        self.kill();
+    }
+}

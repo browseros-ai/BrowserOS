@@ -611,10 +611,11 @@ async fn policy_also_answers_setup_permissions_and_failed_load_does_not_revive_c
     Ok(())
 }
 
-
 /// Consume the public stream, including its single terminal event, without
 /// requiring success; crash regressions assert on the actual error variant.
-async fn terminal(turn: &mut Turn) -> Result<Result<TurnOutcome, AcpError>, Box<dyn std::error::Error>> {
+async fn terminal(
+    turn: &mut Turn,
+) -> Result<Result<TurnOutcome, AcpError>, Box<dyn std::error::Error>> {
     tokio::time::timeout(Duration::from_secs(4), async {
         while let Some(event) = turn.next().await {
             if let TurnEvent::Done(result) = event {
@@ -623,7 +624,8 @@ async fn terminal(turn: &mut Turn) -> Result<Result<TurnOutcome, AcpError>, Box<
             }
         }
         Err("turn ended without Done".into())
-    }).await?
+    })
+    .await?
 }
 
 #[cfg(unix)]
@@ -632,13 +634,15 @@ async fn wait_for_file(path: &std::path::Path) -> Result<(), Box<dyn std::error:
         while !path.exists() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
 #[cfg(unix)]
-#[tokio::test]
-async fn dropping_handles_during_ignored_cancel_stops_agent() -> Result<(), Box<dyn std::error::Error>> {
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn dropping_handles_during_ignored_cancel_stops_agent()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
     let conn = connect(&dir, "ignore-cancel", Arc::new(ApproveAll)).await?;
     let pid = conn.pid().ok_or("missing pid")?;
@@ -655,7 +659,8 @@ async fn dropping_handles_during_ignored_cancel_stops_agent() -> Result<(), Box<
         while rustix::process::test_kill_process(pid).is_ok() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }).await?;
+    })
+    .await?;
     Ok(())
 }
 
@@ -670,7 +675,8 @@ impl Drop for EscapedChild {
 
 #[cfg(unix)]
 #[tokio::test]
-async fn inherited_stdout_cannot_hold_turn_open_after_exit() -> Result<(), Box<dyn std::error::Error>> {
+async fn inherited_stdout_cannot_hold_turn_open_after_exit()
+-> Result<(), Box<dyn std::error::Error>> {
     for cancel in [false, true] {
         let dir = TempDir::new()?;
         let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
@@ -679,35 +685,53 @@ async fn inherited_stdout_cannot_hold_turn_open_after_exit() -> Result<(), Box<d
         let ready = dir.path().join("stdout-holder-ready");
         wait_for_file(&ready).await?;
         let pid: i32 = std::fs::read_to_string(&ready)?.parse()?;
-        let _cleanup = EscapedChild(rustix::process::Pid::from_raw(pid).ok_or("invalid holder pid")?);
+        let _cleanup =
+            EscapedChild(rustix::process::Pid::from_raw(pid).ok_or("invalid holder pid")?);
         let report = tokio::time::timeout(Duration::from_secs(3), conn.closed()).await?;
         assert_eq!(report.status.and_then(|status| status.code()), Some(23));
-        if cancel { turn.canceller().cancel(); }
-        assert!(matches!(terminal(&mut turn).await?, Err(AcpError::Exited { status, stderr_tail })
-            if status.and_then(|status| status.code()) == Some(23) && stderr_tail == ["inherited stdout crash"]));
-        assert!(matches!(session.set_mode("code").await, Err(AcpError::Exited { .. })));
+        if cancel {
+            turn.canceller().cancel();
+        }
+        assert!(
+            matches!(terminal(&mut turn).await?, Err(AcpError::Exited { status, stderr_tail })
+            if status.and_then(|status| status.code()) == Some(23) && stderr_tail == ["inherited stdout crash"])
+        );
+        assert!(matches!(
+            session.set_mode("code").await,
+            Err(AcpError::Exited { .. })
+        ));
     }
     Ok(())
 }
 
 #[tokio::test]
-async fn transport_failures_are_closed_or_exited_and_retire_connection() -> Result<(), Box<dyn std::error::Error>> {
+async fn transport_failures_are_closed_or_exited_and_retire_connection()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
     let conn = connect(&dir, "crash-control", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
-    assert!(matches!(session.set_mode("code").await, Err(AcpError::Exited { status, stderr_tail })
-        if status.and_then(|status| status.code()) == Some(24) && stderr_tail == ["control crash"]));
+    assert!(
+        matches!(session.set_mode("code").await, Err(AcpError::Exited { status, stderr_tail })
+        if status.and_then(|status| status.code()) == Some(24) && stderr_tail == ["control crash"])
+    );
     let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
     let mut turn = session.prompt(text("broken-transport"))?;
-    assert!(matches!(terminal(&mut turn).await?, Err(AcpError::Closed | AcpError::Exited { .. })));
-    assert!(matches!(session.prompt(text("must not reuse")), Err(AcpError::Closed | AcpError::Exited { .. })));
+    assert!(matches!(
+        terminal(&mut turn).await?,
+        Err(AcpError::Closed | AcpError::Exited { .. })
+    ));
+    assert!(matches!(
+        session.prompt(text("must not reuse")),
+        Err(AcpError::Closed | AcpError::Exited { .. })
+    ));
     conn.shutdown(Duration::from_millis(10)).await;
     Ok(())
 }
 
 #[tokio::test]
-async fn config_setter_returns_agent_options_and_refreshes_snapshot() -> Result<(), Box<dyn std::error::Error>> {
+async fn config_setter_returns_agent_options_and_refreshes_snapshot()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
     let conn = connect(&dir, "returned-config", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
@@ -719,17 +743,26 @@ async fn config_setter_returns_agent_options_and_refreshes_snapshot() -> Result<
 }
 
 #[tokio::test]
-async fn idle_control_notifications_refresh_all_session_aliases() -> Result<(), Box<dyn std::error::Error>> {
+async fn idle_control_notifications_refresh_all_session_aliases()
+-> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
     let conn = connect(&dir, "idle-controls", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
-    let alias = conn.load_session(session.id().clone(), params(&dir)).await?;
+    let alias = conn
+        .load_session(session.id().clone(), params(&dir))
+        .await?;
     let mut turn = session.prompt(text("normal"))?;
     collect(&mut turn).await?;
     session.set_mode("code").await?;
     for current in [&session, &alias] {
-        assert_eq!(serde_json::to_value(current.modes())?["currentModeId"], "code");
-        assert_eq!(serde_json::to_value(current.config_options())?[0]["currentValue"], "agent-selected");
+        assert_eq!(
+            serde_json::to_value(current.modes())?["currentModeId"],
+            "code"
+        );
+        assert_eq!(
+            serde_json::to_value(current.config_options())?[0]["currentValue"],
+            "agent-selected"
+        );
     }
     // Idle control state is retained, but no idle transcript update is replayed.
     let mut turn = alias.prompt(text("normal"))?;
@@ -741,12 +774,34 @@ async fn idle_control_notifications_refresh_all_session_aliases() -> Result<(), 
 #[tokio::test]
 async fn permission_fallbacks_match_acpx_preferences() -> Result<(), Box<dyn std::error::Error>> {
     for (decision, prompt, expected) in [
-        (PermissionDecision::AllowOnce, "always-options", Some("allow-always")),
+        (
+            PermissionDecision::AllowOnce,
+            "always-options",
+            Some("allow-always"),
+        ),
         (PermissionDecision::AllowOnce, "reject-only", Some("reject")),
-        (PermissionDecision::RejectOnce, "always-options", Some("reject-always")),
+        (
+            PermissionDecision::RejectOnce,
+            "always-options",
+            Some("reject-always"),
+        ),
         (PermissionDecision::RejectOnce, "allow-only", None),
-        (PermissionDecision::AllowOnce, "reversed-options", Some("allow")),
-        (PermissionDecision::RejectOnce, "reversed-options", Some("reject")),
+        (
+            PermissionDecision::AllowOnce,
+            "reversed-options",
+            Some("allow"),
+        ),
+        (
+            PermissionDecision::RejectOnce,
+            "reversed-options",
+            Some("reject"),
+        ),
+        (PermissionDecision::AllowAlways, "allow-only", Some("allow")),
+        (
+            PermissionDecision::RejectAlways,
+            "reject-only",
+            Some("reject"),
+        ),
         (PermissionDecision::Cancel, "always-options", None),
     ] {
         let dir = TempDir::new()?;
@@ -755,9 +810,16 @@ async fn permission_fallbacks_match_acpx_preferences() -> Result<(), Box<dyn std
         let mut turn = session.prompt(text(prompt))?;
         let (updates, _) = collect(&mut turn).await?;
         let response = visible(&updates);
-        let outcome: serde_json::Value = serde_json::from_str(response.strip_prefix("permission pendingpermission:").ok_or("missing permission response")?)?;
+        let outcome: serde_json::Value = serde_json::from_str(
+            response
+                .strip_prefix("permission pendingpermission:")
+                .ok_or("missing permission response")?,
+        )?;
         match expected {
-            Some(option) => { assert_eq!(outcome["outcome"], "selected"); assert_eq!(outcome["optionId"], option); }
+            Some(option) => {
+                assert_eq!(outcome["outcome"], "selected");
+                assert_eq!(outcome["optionId"], option);
+            }
             None => assert_eq!(outcome["outcome"], "cancelled"),
         }
         conn.shutdown(Duration::from_secs(1)).await;
@@ -766,11 +828,19 @@ async fn permission_fallbacks_match_acpx_preferences() -> Result<(), Box<dyn std
 }
 
 #[tokio::test]
-async fn auth_words_do_not_override_rpc_codes_or_mcp_failures() -> Result<(), Box<dyn std::error::Error>> {
-    for (scenario, expected) in [("auth-invalid-params", -32602), ("auth-mcp", -32603), ("rpc-local-looking", -32603)] {
+async fn auth_words_do_not_override_rpc_codes_or_mcp_failures()
+-> Result<(), Box<dyn std::error::Error>> {
+    for (scenario, expected) in [
+        ("auth-invalid-params", -32602),
+        ("auth-mcp", -32603),
+        ("rpc-local-looking", -32603),
+    ] {
         let dir = TempDir::new()?;
         let conn = connect(&dir, scenario, Arc::new(ApproveAll)).await?;
-        assert!(matches!(conn.new_session(params(&dir)).await, Err(AcpError::Rpc { code, data: Some(_), .. }) if code == expected), "{scenario}");
+        assert!(
+            matches!(conn.new_session(params(&dir)).await, Err(AcpError::Rpc { code, data: Some(_), .. }) if code == expected),
+            "{scenario}"
+        );
         conn.shutdown(Duration::from_secs(1)).await;
     }
     Ok(())
@@ -799,9 +869,84 @@ fn dropping_runtime_kills_supervised_process_group() -> Result<(), Box<dyn std::
     std::thread::sleep(Duration::from_millis(100));
     let after = std::fs::read_to_string(&heartbeat)?;
     // Clean the reproduction up even on the unfixed implementation.
-    if let Some(pid) = handles.0.pid().and_then(|pid| i32::try_from(pid).ok()).and_then(rustix::process::Pid::from_raw) {
+    if let Some(pid) = handles
+        .0
+        .pid()
+        .and_then(|pid| i32::try_from(pid).ok())
+        .and_then(rustix::process::Pid::from_raw)
+    {
         let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
     }
     assert_eq!(before, after, "grandchild survived dropped supervisor");
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn config_response_cannot_overwrite_later_notification()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "post-config-update", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    for _ in 0..8 {
+        let returned = session.set_config_option("model", "requested").await?;
+        assert_eq!(serde_json::to_value(returned)?[0]["currentValue"], "fake");
+        // A later reply establishes that the batched notification was dispatched.
+        session.set_mode("code").await?;
+        assert_eq!(
+            serde_json::to_value(session.config_options())?[0]["currentValue"],
+            "newer-notification"
+        );
+    }
+    conn.shutdown(Duration::from_secs(1)).await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn genuine_rpc_error_survives_concurrent_child_exit() -> Result<(), Box<dyn std::error::Error>>
+{
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    let mut turn = session.prompt(text("rpc-error-then-exit"))?;
+    assert!(
+        matches!(terminal(&mut turn).await?, Err(AcpError::Rpc { code: -32602, message, data })
+        if message == "scripted invalid prompt" && data == Some(serde_json::json!({"detail":42})))
+    );
+    assert_eq!(
+        conn.closed().await.status.and_then(|status| status.code()),
+        Some(25)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn notifications_immediately_after_attachment_refresh_snapshots()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "immediate-controls", Arc::new(ApproveAll)).await?;
+    let mut sessions = vec![conn.new_session(params(&dir)).await?];
+    for stage in 0..3 {
+        if stage > 0 {
+            let id = sessions[0].id().clone();
+            sessions.push(if stage == 1 {
+                conn.load_session(id, params(&dir)).await?
+            } else {
+                conn.resume_session(id, params(&dir)).await?
+            });
+        }
+        // A later control reply provides a barrier after each attachment batch.
+        sessions[stage].set_mode("code").await?;
+        for session in &sessions {
+            assert_eq!(
+                serde_json::to_value(session.modes())?["currentModeId"],
+                "code"
+            );
+            assert_eq!(
+                serde_json::to_value(session.config_options())?[0]["currentValue"],
+                "after-attachment"
+            );
+        }
+    }
+    conn.shutdown(Duration::from_secs(1)).await;
     Ok(())
 }

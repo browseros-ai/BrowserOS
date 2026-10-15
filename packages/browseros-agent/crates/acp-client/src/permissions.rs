@@ -42,17 +42,24 @@ pub(crate) fn outcome(
     request: &RequestPermissionRequest,
     decision: PermissionDecision,
 ) -> RequestPermissionOutcome {
-    let kind = match decision {
-        PermissionDecision::AllowOnce => PermissionOptionKind::AllowOnce,
-        PermissionDecision::AllowAlways => PermissionOptionKind::AllowAlways,
-        PermissionDecision::RejectOnce => PermissionOptionKind::RejectOnce,
-        PermissionDecision::RejectAlways => PermissionOptionKind::RejectAlways,
+    use PermissionOptionKind::{AllowAlways, AllowOnce, RejectAlways, RejectOnce};
+    let preferred = match decision {
+        PermissionDecision::AllowOnce => [AllowOnce, AllowAlways],
+        PermissionDecision::AllowAlways => [AllowAlways, AllowOnce],
+        PermissionDecision::RejectOnce => [RejectOnce, RejectAlways],
+        PermissionDecision::RejectAlways => [RejectAlways, RejectOnce],
         PermissionDecision::Cancel => return RequestPermissionOutcome::Cancelled,
     };
-    request
-        .options
+    let option = preferred
         .iter()
-        .find(|option| option.kind == kind)
+        .find_map(|kind| request.options.iter().find(|option| option.kind == *kind));
+    // acpx approve-all ultimately accepts the first offered option, even when
+    // the agent offers only rejection. Reject policies never fall back to allow.
+    let option = option.or_else(|| match decision {
+        PermissionDecision::AllowOnce | PermissionDecision::AllowAlways => request.options.first(),
+        _ => None,
+    });
+    option
         .map(|option| {
             RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                 option.option_id.clone(),

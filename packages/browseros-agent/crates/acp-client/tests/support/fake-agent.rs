@@ -19,6 +19,29 @@ async fn send(out: &mut Stdout, value: Value) -> std::io::Result<()> {
 async fn reply(out: &mut Stdout, id: Value, result: Value) -> std::io::Result<()> {
     send(out, json!({"jsonrpc":"2.0", "id":id, "result":result})).await
 }
+async fn attachment_reply(
+    out: &mut Stdout,
+    id: Value,
+    result: Value,
+    session: &str,
+    immediate: bool,
+) -> std::io::Result<()> {
+    if !immediate {
+        return reply(out, id, result).await;
+    }
+    let mut config = session_info()["configOptions"].clone();
+    config[0]["currentValue"] = json!("after-attachment");
+    send(out, json!([
+        {"jsonrpc":"2.0", "id":id, "result":result},
+        {"jsonrpc":"2.0", "method":"session/update", "params":{
+            "sessionId":session, "update":{"sessionUpdate":"current_mode_update", "currentModeId":"code"}
+        }},
+        {"jsonrpc":"2.0", "method":"session/update", "params":{
+            "sessionId":session, "update":{"sessionUpdate":"config_option_update", "configOptions":config}
+        }}
+    ])).await
+}
+
 async fn update(out: &mut Stdout, session: &str, text: &str) -> std::io::Result<()> {
     send(out, json!({"jsonrpc":"2.0", "method":"session/update", "params":{
         "sessionId":session, "update":{"sessionUpdate":"agent_message_chunk", "content":{"type":"text", "text":text}}
@@ -133,21 +156,49 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         "options":[{"optionId":"allow", "name":"Allow", "kind":"allow_once"}]}})).await?;
                     continue;
                 }
-                if matches!(scenario.as_str(), "auth" | "rpc" | "auth-invalid-params" | "auth-mcp" | "rpc-local-looking") {
+                if matches!(
+                    scenario.as_str(),
+                    "auth" | "rpc" | "auth-invalid-params" | "auth-mcp" | "rpc-local-looking"
+                ) {
                     let (code, message, data) = match scenario.as_str() {
                         "auth" => (-32000, "scripted refusal", json!({"detail":42})),
-                        "auth-invalid-params" => (-32602, "authentication required: invalid login parameter", json!({"errorKind":"authentication_failed"})),
-                        "auth-mcp" => (-32603, "Failed to authenticate MCP server github: login required", json!({"errorKind":"authentication_failed"})),
-                        "rpc-local-looking" => (-32603, "Internal error", json!("oneshot canceled")),
+                        "auth-invalid-params" => (
+                            -32602,
+                            "authentication required: invalid login parameter",
+                            json!({"errorKind":"authentication_failed"}),
+                        ),
+                        "auth-mcp" => (
+                            -32603,
+                            "Failed to authenticate MCP server github: login required",
+                            json!({"errorKind":"authentication_failed"}),
+                        ),
+                        "rpc-local-looking" => {
+                            (-32603, "Internal error", json!("oneshot canceled"))
+                        }
                         _ => (-32602, "scripted refusal", json!({"detail":42})),
                     };
-                    send(&mut out, json!({"jsonrpc":"2.0", "id":id, "error":{
-                        "code":code, "message":message, "data":data}})).await?;
+                    send(
+                        &mut out,
+                        json!({"jsonrpc":"2.0", "id":id, "error":{
+                        "code":code, "message":message, "data":data}}),
+                    )
+                    .await?;
                 } else {
                     sessions += 1;
                     let mut result = session_info();
-                    result["sessionId"] = json!(format!("s{sessions}"));
-                    reply(&mut out, id, result).await?;
+                    if scenario == "immediate-controls" {
+                        result["modes"] = Value::Null;
+                    }
+                    let session_id = format!("s{sessions}");
+                    result["sessionId"] = json!(session_id);
+                    attachment_reply(
+                        &mut out,
+                        id,
+                        result,
+                        &session_id,
+                        scenario == "immediate-controls",
+                    )
+                    .await?;
                 }
             }
             "session/load" | "session/resume" => {
@@ -156,14 +207,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     continue;
                 }
                 update(&mut out, &session, "REPLAY MUST BE SWALLOWED").await?;
-                reply(&mut out, id, session_info()).await?;
+                attachment_reply(
+                    &mut out,
+                    id,
+                    session_info(),
+                    &session,
+                    scenario == "immediate-controls",
+                )
+                .await?;
             }
             "session/set_mode" | "session/set_config_option" => {
                 if scenario == "hang-control" {
                     continue;
                 }
                 if scenario == "crash-control" {
-                    eprintln!("control crash");
+                    let mut stderr = tokio::io::stderr();
+                    stderr.write_all(b"control crash\n").await?;
+                    stderr.flush().await?;
                     std::process::exit(24);
                 }
                 if scenario == "idle-controls" {
@@ -180,6 +240,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 controls.push(message["method"].as_str().unwrap_or_default().to_owned());
                 if message["method"] == "session/set_config_option" {
+                    if scenario == "post-config-update" {
+                        let mut latest = session_info()["configOptions"].clone();
+                        latest[0]["currentValue"] = json!("newer-notification");
+                        // A single read contains the reply then a newer update.
+                        // Setter continuation scheduling must not reverse them.
+                        send(&mut out, json!([
+                            {"jsonrpc":"2.0", "id":id, "result":{"configOptions":session_info()["configOptions"]}},
+                            {"jsonrpc":"2.0", "method":"session/update", "params":{
+                                "sessionId":session, "update":{"sessionUpdate":"config_option_update", "configOptions":latest}
+                            }}
+                        ])).await?;
+                        continue;
+                    }
                     reply(
                         &mut out,
                         id,
@@ -211,12 +284,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         while !std::path::Path::new("stdout-holder-ready").exists() {
                             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                         }
-                        eprintln!("inherited stdout crash");
+                        let mut stderr = tokio::io::stderr();
+                        stderr.write_all(b"inherited stdout crash\n").await?;
+                        stderr.flush().await?;
                         std::process::exit(23);
                     }
                     "broken-transport" => {
-                        out.write_all(b"not json\n").await?;
+                        out.write_all(b"\xff\n").await?;
                         out.flush().await?;
+                    }
+                    "rpc-error-then-exit" => {
+                        send(&mut out, json!({"jsonrpc":"2.0", "id":id, "error":{
+                            "code":-32602, "message":"scripted invalid prompt", "data":{"detail":42}
+                        }})).await?;
+                        std::process::exit(25);
                     }
                     "exit-after-result" => {
                         update(&mut out, &session, "final output before exit").await?;
@@ -262,7 +343,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             },
                         );
                     }
-                    "permission" | "missing-option" | "always-options" | "reject-only" | "allow-only" | "reversed-options" => {
+                    "permission" | "missing-option" | "always-options" | "reject-only"
+                    | "allow-only" | "reversed-options" => {
                         send(&mut out, json!({"jsonrpc":"2.0", "method":"session/update", "params":{
                             "sessionId":session, "update":{"sessionUpdate":"tool_call", "toolCallId":"t1", "title":"Fixture command", "status":"pending"}}})).await?;
                         let permission_id = format!("p-{session}");

@@ -2,9 +2,19 @@
 //! connection lifetime; the actor owns only shared routing/process state, avoiding
 //! a reference cycle that would otherwise keep stdin and the agent alive forever.
 
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    future::Future,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
-use agent_client_protocol::{Agent, ByteStreams, Client, ConnectionTo, Dispatch, Handled};
+use agent_client_protocol::{
+    Agent, ByteStreams, Client, ConnectionTo, Dispatch, Handled, PreparedRequest, SentRequest,
+};
 use tokio::sync::oneshot;
 use tokio_util::{
     compat::{TokioAsyncReadCompatExt, TokioAsyncWriteCompatExt},
@@ -14,12 +24,13 @@ use tokio_util::{
 use crate::{
     AcpError, AgentFeatures, ClientOptions, ExitReport, LaunchSpec, PermissionPolicy,
     ProtocolVersion, Session, SessionParams,
-    process::Process,
+    process::{Process, lock},
     routing::Routes,
     schema::{
         self, ClientCapabilities, FileSystemCapabilities, Implementation, InitializeRequest,
-        InitializeResponse, LoadSessionRequest, NewSessionRequest, RequestPermissionRequest,
-        RequestPermissionResponse, ResumeSessionRequest, SessionId, SessionNotification,
+        InitializeResponse, LoadSessionRequest, NewSessionRequest, RequestId,
+        RequestPermissionRequest, RequestPermissionResponse, ResumeSessionRequest, SessionId,
+        SessionNotification,
     },
 };
 
@@ -29,10 +40,17 @@ pub(crate) struct State {
     pub(crate) process: Process,
     pub(crate) routes: Arc<Routes>,
     pub(crate) stop: CancellationToken,
+    // Caller teardown must yield Closed even if the supervisor wins the race
+    // to reap. Driver failures instead preserve an already-available exit report.
+    shutdown_requested: AtomicBool,
+    // The SDK uses the same Error type for peer replies and local failures.
+    // Record wire provenance by request ID before routing the reply; matching
+    // messages or codes would misclassify a genuine agent "oneshot canceled".
+    error_responses: Mutex<HashSet<RequestId>>,
 }
 
-/// Lifetime lease held by connection handles, sessions, and draining prompt
-/// tasks. Releasing its final Arc starts teardown even without explicit shutdown.
+/// Lifetime lease held only by connection handles and sessions. Prompt tasks
+/// retain State instead, so an unresponsive turn cannot prevent final teardown.
 pub(crate) struct Inner {
     pub(crate) cx: ConnectionTo<Agent>,
     pub(crate) state: Arc<State>,
@@ -42,8 +60,7 @@ pub(crate) struct Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.state.stop.cancel();
-        self.state.process.stop(Duration::from_secs(1));
+        self.state.close(Duration::from_secs(1));
     }
 }
 
@@ -65,13 +82,16 @@ impl AgentConnection {
             process,
             routes: Arc::default(),
             stop: CancellationToken::new(),
+            shutdown_requested: AtomicBool::new(false),
+            error_responses: Mutex::default(),
         });
         // If connect is dropped during initialize, no public handle exists yet
         // to own teardown. This guard transfers that ownership only on success.
         let mut startup = ControlGuard::new(&state);
         let (ready, rx) = oneshot::channel();
         let actor_state = state.clone();
-        let notification_routes = state.routes.clone();
+        let dispatch_state = state.clone();
+        let driver_state = state.clone();
         let permission_state = state.clone();
         tokio::spawn(async move {
             let result = Client.builder()
@@ -84,12 +104,19 @@ impl AgentConnection {
                                 // Log the tag, never the transcript or tool input.
                                 let tag = raw.params.pointer("/update/sessionUpdate").and_then(|tag| tag.as_str()).map(str::to_owned);
                                 match serde_json::from_value::<SessionNotification>(raw.params) {
-                                    Ok(notification) => notification_routes.update(notification),
+                                    Ok(notification) => dispatch_state.routes.update(notification),
                                     Err(error) => tracing::warn!(method = %raw.method, ?tag, error_category = ?error.classify(), "Ignoring unparsed ACP notification"),
                                 }
                             } else {
                                 tracing::warn!(method = %raw.method, "Ignoring unknown ACP notification");
                             }
+                            Ok(Handled::Yes)
+                        }
+                        Dispatch::Response(result, router) => {
+                            if result.is_err() {
+                                lock(&dispatch_state.error_responses).insert(router.id().clone());
+                            }
+                            router.route_with_result(result)?;
                             Ok(Handled::Yes)
                         }
                         other => Ok(Handled::No { message: other, retry: false }),
@@ -130,6 +157,10 @@ impl AgentConnection {
                     Ok(())
                 }).await;
             if let Err(error) = result {
+                // A malformed/broken transport may end dispatch without EOF.
+                // Wake prompt and permission waiters even if the child lives.
+                driver_state.stop.cancel();
+                driver_state.process.stop(Duration::from_secs(1));
                 tracing::debug!(%error, "ACP connection driver stopped");
             }
         });
@@ -150,8 +181,7 @@ impl AgentConnection {
             &state,
             options.control_timeout,
             "initialize",
-            &[],
-            cx.send_request(request).block_task(),
+            state.response(&[], cx.send_request(request)),
         )
         .await?;
         if init.protocol_version != ProtocolVersion::V1 {
@@ -197,8 +227,7 @@ impl AgentConnection {
     /// Close the SDK's stdin writer, then allow `grace` for exit before the
     /// supervisor kills the process group. Other clones become unusable too.
     pub async fn shutdown(self, grace: Duration) -> ExitReport {
-        self.inner.state.stop.cancel();
-        self.inner.state.process.stop(grace);
+        self.inner.state.close(grace);
         self.closed().await
     }
 
@@ -207,22 +236,27 @@ impl AgentConnection {
         let request = NewSessionRequest::new(params.cwd)
             .mcp_servers(params.mcp_servers)
             .meta(params.meta);
-        let response = self
-            .control(
+        let routes = self.inner.state.routes.clone();
+        let (id, snapshot) = self
+            .control_ordered(
                 "session/new",
-                self.inner.cx.send_request(request).block_task(),
+                self.inner.cx.prepare_request(request),
+                move |response| {
+                    let snapshot = routes.attach(
+                        &response.session_id,
+                        response.modes,
+                        response.config_options.unwrap_or_default(),
+                    );
+                    (response.session_id, snapshot)
+                },
             )
             .await?;
-        Ok(Session::new(
-            self.clone(),
-            response.session_id,
-            response.modes,
-            response.config_options.unwrap_or_default(),
-        ))
+        Ok(Session::new(self.clone(), id, snapshot))
     }
 
-    /// No turn can register while load replay is being dispatched. Replayed and
-    /// idle updates are deliberately discarded, including after failed loads.
+    /// No turn can register while load replay is being dispatched. Replay and
+    /// idle transcript updates are discarded; controls after the accepted
+    /// attachment refresh the snapshot before later notifications are dispatched.
     pub async fn load_session(
         &self,
         id: SessionId,
@@ -236,19 +270,24 @@ impl AgentConnection {
         let request = LoadSessionRequest::new(id.clone(), params.cwd)
             .mcp_servers(params.mcp_servers)
             .meta(params.meta);
-        let response = self
-            .control(
+        let routes = self.inner.state.routes.clone();
+        let session_id = id.clone();
+        let snapshot = self
+            .control_ordered(
                 "session/load",
-                self.inner.cx.send_request(request).block_task(),
+                self.inner.cx.prepare_request(request),
+                move |response| {
+                    let snapshot = routes.attach(
+                        &session_id,
+                        response.modes,
+                        response.config_options.unwrap_or_default(),
+                    );
+                    loading.complete();
+                    snapshot
+                },
             )
             .await?;
-        loading.complete();
-        Ok(Session::new(
-            self.clone(),
-            id,
-            response.modes,
-            response.config_options.unwrap_or_default(),
-        ))
+        Ok(Session::new(self.clone(), id, snapshot))
     }
 
     pub async fn resume_session(
@@ -264,19 +303,24 @@ impl AgentConnection {
         let request = ResumeSessionRequest::new(id.clone(), params.cwd)
             .mcp_servers(params.mcp_servers)
             .meta(params.meta);
-        let response = self
-            .control(
+        let routes = self.inner.state.routes.clone();
+        let session_id = id.clone();
+        let snapshot = self
+            .control_ordered(
                 "session/resume",
-                self.inner.cx.send_request(request).block_task(),
+                self.inner.cx.prepare_request(request),
+                move |response| {
+                    let snapshot = routes.attach(
+                        &session_id,
+                        response.modes,
+                        response.config_options.unwrap_or_default(),
+                    );
+                    loading.complete();
+                    snapshot
+                },
             )
             .await?;
-        loading.complete();
-        Ok(Session::new(
-            self.clone(),
-            id,
-            response.modes,
-            response.config_options.unwrap_or_default(),
-        ))
+        Ok(Session::new(self.clone(), id, snapshot))
     }
 
     fn check_mcp(&self, params: &SessionParams) -> Result<(), AcpError> {
@@ -307,15 +351,43 @@ impl AgentConnection {
     pub(crate) async fn control<T>(
         &self,
         method: &'static str,
-        future: impl Future<Output = Result<T, schema::Error>>,
+        request: SentRequest<T>,
     ) -> Result<T, AcpError> {
         self.available()?;
         control(
             &self.inner.state,
             self.inner.options.control_timeout,
             method,
-            &self.auth_methods(),
-            future,
+            self.inner.state.response(&self.auth_methods(), request),
+        )
+        .await
+    }
+
+    /// Attachment/config replies establish snapshots at their wire position.
+    /// Ordered callbacks complete before the next notification is dispatched;
+    /// applying after an await could lose or overwrite newer control updates.
+    pub(crate) async fn control_ordered<T: Send + 'static, U: Send + 'static>(
+        &self,
+        method: &'static str,
+        request: PreparedRequest<T>,
+        apply: impl FnOnce(T) -> U + Send + 'static,
+    ) -> Result<U, AcpError> {
+        self.available()?;
+        let id = request.id().clone();
+        let (tx, rx) = oneshot::channel();
+        let published = request.on_receiving_result(async move |result| {
+            let _ = tx.send(result.map(apply));
+            Ok(())
+        });
+        let response = async {
+            published?;
+            rx.await.map_err(|_| schema::Error::internal_error())?
+        };
+        control(
+            &self.inner.state,
+            self.inner.options.control_timeout,
+            method,
+            self.inner.state.consume(&self.auth_methods(), id, response),
         )
         .await
     }
@@ -328,26 +400,20 @@ impl AgentConnection {
             .map(|method| method.id().to_string())
             .collect()
     }
-
-    pub(crate) async fn map_error(&self, error: schema::Error) -> AcpError {
-        map_error(&self.inner.state, &self.auth_methods(), error).await
-    }
 }
 
 async fn control<T>(
     state: &State,
     after: Duration,
     method: &'static str,
-    auth: &[String],
-    future: impl Future<Output = Result<T, schema::Error>>,
+    future: impl Future<Output = Result<T, AcpError>>,
 ) -> Result<T, AcpError> {
     let mut guard = ControlGuard::new(state);
     let result = tokio::select! {
         biased;
-        () = state.stop.cancelled() => Err(AcpError::Closed),
+        () = state.stop.cancelled() => Err(state.stopped_error()),
         result = tokio::time::timeout(after, future) => match result {
-            Ok(Ok(response)) => Ok(response),
-            Ok(Err(error)) => Err(map_error(state, auth, error).await),
+            Ok(result) => result,
             Err(_) => return Err(AcpError::Timeout { method, after }),
         },
     };
@@ -355,8 +421,57 @@ async fn control<T>(
     result
 }
 
-async fn map_error(state: &State, auth: &[String], error: schema::Error) -> AcpError {
-    if agent_client_protocol::is_incoming_transport_closed(&error) {
+impl State {
+    pub(crate) fn close(&self, grace: Duration) {
+        self.shutdown_requested.store(true, Ordering::Release);
+        self.stop.cancel();
+        self.process.stop(grace);
+    }
+
+    pub(crate) fn stopped_error(&self) -> AcpError {
+        if self.shutdown_requested.load(Ordering::Acquire) {
+            AcpError::Closed
+        } else {
+            self.process
+                .report()
+                .map(exited)
+                .unwrap_or(AcpError::Closed)
+        }
+    }
+
+    /// Consume a reply outside dispatch, remembering whether its error actually
+    /// came from the agent. This helper holds no public connection lease.
+    pub(crate) async fn response<T>(
+        &self,
+        auth: &[String],
+        request: SentRequest<T>,
+    ) -> Result<T, AcpError> {
+        let id = request.id().clone();
+        self.consume(auth, id, request.block_task()).await
+    }
+
+    async fn consume<T>(
+        &self,
+        auth: &[String],
+        id: RequestId,
+        response: impl Future<Output = Result<T, schema::Error>>,
+    ) -> Result<T, AcpError> {
+        let result = response.await;
+        let agent_error = lock(&self.error_responses).remove(&id);
+        match result {
+            Ok(value) => Ok(value),
+            Err(error) => Err(map_error(self, auth, error, agent_error).await),
+        }
+    }
+}
+
+async fn map_error(
+    state: &State,
+    auth: &[String],
+    error: schema::Error,
+    agent_error: bool,
+) -> AcpError {
+    if !agent_error {
         // stdout EOF can beat waitpid by a scheduler tick. Give the sole child
         // owner time to reap and finish the stderr tail before reporting a crash.
         if let Ok(report) =
@@ -377,13 +492,14 @@ async fn map_error(state: &State, auth: &[String], error: schema::Error) -> AcpE
             .and_then(|data| data.get("errorKind"))
             .and_then(|kind| kind.as_str())
             == Some("authentication_failed");
-    if code == -32000
-        || explicit_auth_failure
-        || (!auth.is_empty()
-            && (lower.contains("authentication")
-                || lower.contains("not authenticated")
-                || lower.contains("sign in")
-                || lower.contains("login required")))
+    // Invalid params remains a protocol error even when it mentions login.
+    // MCP authentication belongs to the named server, not this ACP agent.
+    let mcp_error = lower.contains("mcp")
+        || error
+            .data
+            .as_ref()
+            .is_some_and(|data| data.to_string().to_lowercase().contains("mcp"));
+    if code != -32602 && !mcp_error && (code == -32000 || (code == -32603 && explicit_auth_failure))
     {
         AcpError::AuthRequired {
             methods: auth.to_vec(),
@@ -422,8 +538,7 @@ impl<'a> ControlGuard<'a> {
 impl Drop for ControlGuard<'_> {
     fn drop(&mut self) {
         if !self.complete {
-            self.state.stop.cancel();
-            self.state.process.stop(Duration::ZERO);
+            self.state.close(Duration::ZERO);
         }
     }
 }
