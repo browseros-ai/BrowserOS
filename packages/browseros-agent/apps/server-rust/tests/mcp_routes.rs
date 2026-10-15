@@ -26,9 +26,8 @@ use server_rust::{
     config::{Config, EnvConfig},
     klavis::ScopeResolver,
     mcp::{
-        HostPages, HostTabs, LeaseScope, LeaseSource, LeaseSpec, MAX_BODY_BYTES, McpQuery,
-        McpServer, NO_ACTIVE_RUN, RunRegistry, ToolLeases, connector_scope,
-        conversation_of_session,
+        HostPages, HostTabs, LeaseScope, LeaseSpec, MAX_BODY_BYTES, McpQuery, McpServer,
+        NO_ACTIVE_RUN, RunRegistry, ToolLeases, connector_scope, conversation_of_session,
     },
 };
 use std::{
@@ -193,7 +192,6 @@ fn spec(conversation_id: Uuid, read_only: bool) -> LeaseSpec {
     LeaseSpec {
         conversation_id,
         read_only,
-        source: LeaseSource::Chat,
         client_slug: "browseros",
         task_label: "Compare flight prices".to_owned(),
         auto_group: true,

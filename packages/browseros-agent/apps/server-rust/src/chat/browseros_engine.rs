@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     klavis::ProxyState,
-    mcp::{LeaseError, LeaseSource, LeaseSpec, ToolLease, ToolLeases},
+    mcp::{LeaseError, LeaseSpec, ToolLease, ToolLeases},
 };
 use browseros_agent::{
     Agent, AgentBuildError, AgentConfig, TurnInput,
@@ -52,8 +52,6 @@ use tokio_util::sync::CancellationToken;
 use ui_message_stream::{ChunkStream, Role, UiChunk, UiMessage, UiPart};
 use uuid::Uuid;
 
-/// The header the loopback MCP client authenticates with (TS `BROWSEROS_TOOL_LEASE_HEADER`).
-const LEASE_HEADER: &str = "X-BrowserOS-Internal-Lease";
 /// Client label of the internal MCP source. A failure to connect it is fatal to the turn.
 const INTERNAL_MCP_LABEL: &str = "browseros";
 /// `AGENT_LIMITS.MAX_TURNS` (`stepCountIs(100)`).
@@ -512,7 +510,6 @@ impl Inner {
                 .mint(LeaseSpec {
                     conversation_id,
                     read_only: inputs.chat_mode,
-                    source: LeaseSource::Chat,
                     client_slug: "browseros",
                     task_label: task_label(user_text),
                     auto_group: !request.is_scheduled_task,
@@ -668,7 +665,10 @@ fn internal_mcp_endpoint(
     Ok(McpEndpoint {
         label: INTERNAL_MCP_LABEL.to_owned(),
         url,
-        headers: vec![(LEASE_HEADER.to_owned(), lease_token.to_owned())],
+        headers: vec![(
+            acp_agents::BROWSEROS_TOOL_LEASE_HEADER.to_owned(),
+            lease_token.to_owned(),
+        )],
         transport: McpTransport::StreamableHttp,
     })
 }
@@ -969,7 +969,10 @@ mod tests {
         );
         assert_eq!(
             endpoint.headers,
-            vec![(LEASE_HEADER.to_owned(), "tok".to_owned())]
+            vec![(
+                acp_agents::BROWSEROS_TOOL_LEASE_HEADER.to_owned(),
+                "tok".to_owned()
+            )]
         );
         assert_eq!(endpoint.transport, McpTransport::StreamableHttp);
         let read_only = internal_mcp_endpoint(9100, "tok", true).map_err(|e| e.0)?;

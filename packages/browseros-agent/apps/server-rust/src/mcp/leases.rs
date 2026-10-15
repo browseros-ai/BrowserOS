@@ -13,7 +13,6 @@ use browseros_core::WindowId;
 use browseros_mcp::{OutputFileAccess, output_file::create_browser_output_file_access};
 use browseros_mcp_host::{Admission, AdmittedCaller, SessionSpec, identity::ClientInfo};
 use http::{StatusCode, request::Parts};
-use serde_json::json;
 use std::{
     collections::{BTreeSet, HashMap},
     path::Path,
@@ -21,19 +20,9 @@ use std::{
 };
 use uuid::Uuid;
 
-/// The header the engines' MCP clients send (`S/lib/browser-tool-lease.ts:2`).
-pub const LEASE_HEADER: &str = "x-browseros-internal-lease";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LeaseSource {
-    Chat,
-    Acp,
-}
-
 pub struct LeaseSpec {
     pub conversation_id: Uuid,
     pub read_only: bool,
-    pub source: LeaseSource,
     /// `browseros` | `claude` | `codex` | `custom`; the session's tab-group prefix.
     pub client_slug: &'static str,
     pub task_label: String,
@@ -79,17 +68,12 @@ pub struct LeaseError(pub String);
 #[derive(Debug, Clone)]
 pub struct LeaseScope {
     conversation_id: Uuid,
-    source: LeaseSource,
     enabled_mcp_servers: Vec<String>,
 }
 
 impl LeaseScope {
     pub fn conversation_id(&self) -> Uuid {
         self.conversation_id
-    }
-
-    pub fn source(&self) -> LeaseSource {
-        self.source
     }
 
     /// Managed connectors the user enabled for this conversation (`enabledMcpServers`).
@@ -103,7 +87,6 @@ impl LeaseScope {
 struct LeaseState {
     conversation_id: Uuid,
     read_only: bool,
-    source: LeaseSource,
     auto_group: bool,
     /// Every lease of a conversation binds the same host session (`bound-<conversation>`),
     /// so its tabs, group and browser target survive lease re-mints and server-side turns.
@@ -133,7 +116,6 @@ impl LeaseState {
             auto_group: self.auto_group,
             host_data: Some(Arc::new(LeaseScope {
                 conversation_id: self.conversation_id,
-                source: self.source,
                 enabled_mcp_servers: context
                     .and_then(|context| context.enabled_mcp_servers.clone())
                     .unwrap_or_default(),
@@ -258,7 +240,6 @@ impl ToolLeases {
         let state = Arc::new(LeaseState {
             conversation_id: spec.conversation_id,
             read_only: spec.read_only,
-            source: spec.source,
             auto_group: spec.auto_group,
             session: Arc::new(session_spec(
                 spec.conversation_id,
@@ -346,9 +327,10 @@ impl Admission for ToolLeases {
         request: &Parts,
     ) -> Result<Option<AdmittedCaller>, Box<axum::response::Response>> {
         // Fetch `Headers.get` joins repeated headers with ", ", which no token matches.
+        // Header names are case-insensitive; this is the constant the engines' clients send.
         let token = request
             .headers
-            .get_all(LEASE_HEADER)
+            .get_all(acp_agents::BROWSEROS_TOOL_LEASE_HEADER)
             .iter()
             .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
             .reduce(|joined, next| format!("{joined}, {next}"));
@@ -366,14 +348,5 @@ impl Admission for ToolLeases {
 
 /// 401 with JSON-RPC `-32001` and a null id, before MCP parses anything (TS `mcp.ts:179-192`).
 fn invalid_lease_response(error: &InvalidLease) -> axum::response::Response {
-    use axum::response::IntoResponse;
-    (
-        StatusCode::UNAUTHORIZED,
-        axum::Json(json!({
-            "jsonrpc": "2.0",
-            "error": { "code": -32001, "message": error.to_string() },
-            "id": null,
-        })),
-    )
-        .into_response()
+    crate::http::errors::jsonrpc_error(StatusCode::UNAUTHORIZED, -32001, &error.to_string())
 }

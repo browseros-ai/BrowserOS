@@ -40,7 +40,7 @@ use super::{
 use crate::{
     config::Config,
     db::{self, AcpAgentRow},
-    mcp::{LeaseSource, LeaseSpec, ToolLeases},
+    mcp::{LeaseSpec, ToolLeases},
     paths::BrowserosPaths,
 };
 
@@ -143,7 +143,6 @@ impl AcpEngine {
             .mint(LeaseSpec {
                 conversation_id,
                 read_only,
-                source: LeaseSource::Acp,
                 client_slug: client_slug(row.kind),
                 task_label,
                 auto_group: !request.is_scheduled_task,

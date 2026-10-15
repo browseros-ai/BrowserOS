@@ -36,8 +36,8 @@ pub use branding::{branding, instructions};
 pub use connectors::connector_scope;
 pub use endpoint::{MAX_BODY_BYTES, is_json_content_type};
 pub use leases::{
-    InvalidLease, LEASE_HEADER, LeaseError, LeaseScope, LeaseSource, LeaseSpec, McpQuery,
-    ToolLease, ToolLeases, conversation_of_session,
+    InvalidLease, LeaseError, LeaseScope, LeaseSpec, McpQuery, ToolLease, ToolLeases,
+    conversation_of_session,
 };
 pub use pages::{HostPages, HostTabs};
 pub use runs::{NO_ACTIVE_RUN, RunRegistry};
