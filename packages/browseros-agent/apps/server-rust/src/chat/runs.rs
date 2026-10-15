@@ -44,11 +44,6 @@ use tokio_util::sync::CancellationToken;
 use ui_message_stream::{ChunkStream, UiChunk, UiMessage, UiMessageAssembler};
 use uuid::Uuid;
 
-/// How long a cancelled run's engine stream may keep draining (its `abort` chunk, tool
-/// unwinding) before the registry drops it. Engines are required to end promptly on cancel; this
-/// only bounds a misbehaving one, so `/stop` cannot hang on it.
-const STOP_GRACE: Duration = Duration::from_secs(2);
-
 pub struct RunPresentation {
     pub panel_tab_ids: Vec<u32>,
     pub panels_visible: bool,
@@ -411,31 +406,18 @@ impl ConversationRuns {
         }
     }
 
-    /// Drains the engine's stream into the replay log and the assembler. After a cancel the
-    /// stream may drain for [`STOP_GRACE`] (its `abort` chunk) before it is dropped.
+    /// Drains the engine's stream into the replay log and the assembler until it ends or the run
+    /// is cancelled. A cancel ends the log at once: TS `stop` cancels the registry's reader in the
+    /// same tick it aborts, so nothing the engine yields afterwards (its `abort` chunk, a racing
+    /// delta) ever reaches a subscriber, and the wire ends with `[DONE]`. Dropping the stream is
+    /// the engine's cancellation (HTTP bodies, tool tasks, leases, scheduled pages).
     async fn pump(&self, record: &RunRecord, mut chunks: ChunkStream, on_finish: OnFinish) {
         let mut assembler = UiMessageAssembler::new();
-        let mut grace_deadline = None;
         loop {
-            let next = if record.cancel.is_cancelled() {
-                let deadline =
-                    *grace_deadline.get_or_insert_with(|| tokio::time::Instant::now() + STOP_GRACE);
-                match tokio::time::timeout_at(deadline, chunks.next()).await {
-                    Ok(next) => next,
-                    Err(_) => {
-                        tracing::warn!(
-                            conversation_id = %record.conversation_id,
-                            "engine kept streaming after stop; dropping its stream"
-                        );
-                        None
-                    }
-                }
-            } else {
-                tokio::select! {
-                    biased;
-                    next = chunks.next() => next,
-                    () = record.cancel.cancelled() => continue,
-                }
+            let next = tokio::select! {
+                biased;
+                () = record.cancel.cancelled() => None,
+                next = chunks.next() => next,
             };
             let Some(chunk) = next else { break };
             assembler.push(&chunk);

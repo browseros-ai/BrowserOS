@@ -665,14 +665,16 @@ async fn runs_on_finish_before_subscribers_see_the_end() -> TestResult {
 }
 
 #[tokio::test]
-async fn stop_cancels_the_engine_drains_its_abort_and_returns_after_the_end() -> TestResult {
+async fn stop_cancels_the_engine_ends_the_log_at_the_cancel_and_returns_after_the_end() -> TestResult
+{
     let runs = runs();
     let conversation = Uuid::new_v4();
     let finished_status = Arc::new(Mutex::new(None));
     runs.start(conversation, presentation(&[]), {
         let finished_status = finished_status.clone();
         move |handle| async move {
-            // A well-behaved engine: streams until cancelled, then emits `abort` and ends.
+            // A well-behaved engine: streams until cancelled, then emits `abort` and ends. The
+            // registry must not log that `abort` (TS cancels its reader in the same tick).
             let cancel = handle.cancel().clone();
             let chunks: ChunkStream = Box::pin(futures_util::stream::unfold(0, move |step| {
                 let cancel = cancel.clone();
@@ -707,7 +709,7 @@ async fn stop_cancels_the_engine_drains_its_abort_and_returns_after_the_end() ->
     assert!(runs.stop(conversation).await);
     let snapshot = runs.snapshot(conversation).ok_or("no snapshot")?;
     assert_eq!(snapshot.status, RunStatus::Aborted);
-    assert_eq!(snapshot.chunk_count, 2);
+    assert_eq!(snapshot.chunk_count, 1);
     assert_eq!(
         *finished_status.lock().map_err(|_| "poisoned")?,
         Some(RunStatus::Aborted)
@@ -719,7 +721,7 @@ async fn stop_cancels_the_engine_drains_its_abort_and_returns_after_the_end() ->
     let replay = stream_of(runs.subscribe(conversation, None))?
         .collect::<Vec<_>>()
         .await;
-    assert_eq!(replay, vec![text_start(), stopped_chunk()]);
+    assert_eq!(replay, vec![text_start()]);
     Ok(())
 }
 

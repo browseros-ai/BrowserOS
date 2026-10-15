@@ -212,6 +212,7 @@ async fn harness_with_acp(
         oauth: token_manager(dir.path()).await?,
         tabs: None,
         use_mock_llm: false,
+        telemetry: server_rust::chat::ChatTelemetry::default(),
     });
     Ok(Harness {
         chat,
@@ -805,7 +806,9 @@ async fn a_client_disconnect_never_stops_the_run_but_stop_does() -> TestResult {
         )
         .await?;
     let chunks = sse::parse(&body_bytes(replay).await?)?;
-    assert_eq!(chunks.last(), Some(&server_rust::chat::stopped_chunk()));
+    // TS parity: the stopped run's log ends at the cancel, without the engine's `abort` chunk.
+    assert!(!chunks.contains(&server_rust::chat::stopped_chunk()));
+    assert!(!chunks.is_empty());
 
     let again = h
         .send(
@@ -1156,6 +1159,7 @@ async fn db_records_classify_acp_rows_and_persist_through_the_conversation_store
         ),
         tabs: None,
         use_mock_llm: false,
+        telemetry: server_rust::chat::ChatTelemetry::default(),
     });
     let router = Router::new()
         .route("/chat", post(chat::post_chat))
@@ -1483,6 +1487,7 @@ async fn imported_legacy_rows_keep_their_messages_through_a_chat_turn() -> TestR
         ),
         tabs: None,
         use_mock_llm: false,
+        telemetry: server_rust::chat::ChatTelemetry::default(),
     });
     let response = Router::new()
         .route("/chat", post(chat::post_chat))
@@ -1543,6 +1548,7 @@ async fn builtin_engine_setup_failures_are_classified_by_message() -> TestResult
             oauth: token_manager(dir.path()).await?,
             tabs: None,
             use_mock_llm: true,
+            telemetry: server_rust::chat::ChatTelemetry::default(),
         });
         let response = Router::new()
             .route("/chat", post(chat::post_chat))

@@ -8,7 +8,7 @@
 use crate::{
     activity::ServerActivity,
     chat::DbChatRecords,
-    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationRuns},
+    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ChatTelemetry, ConversationRuns},
     chat::{BrowserOsEngineDeps, RegistryLeases, klavis_state_name, production_models},
     config::Config,
     db::{self, Database},
@@ -194,6 +194,10 @@ impl AppState {
             oauth: oauth.clone(),
             tabs: Some(Arc::new(HostTabs(host.clone()))),
             use_mock_llm: config.env.use_mock_llm,
+            telemetry: ChatTelemetry {
+                metrics: metrics.clone(),
+                sentry: sentry.clone(),
+            },
         });
 
         Ok(Self(Arc::new(AppInner {
