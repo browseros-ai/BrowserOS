@@ -12,7 +12,12 @@ import {
   trustedOrigin,
   workspace,
 } from './boot'
-import { agentCases, cases, type RequestCase } from './http-cases'
+import {
+  agentCases,
+  cases,
+  fixedTimestampValues,
+  type RequestCase,
+} from './http-cases'
 import { diffBytes, Ids, normalizeHttp } from './wire'
 
 type Json = Record<string, unknown>
@@ -113,7 +118,7 @@ async function transcript(server: BootedServer) {
       name: request.name,
       status: response.status,
       headers: selectedHeaders,
-      body: normalizeHttp(value, ids, replacements),
+      body: normalizeHttp(value, ids, replacements, fixedTimestampValues),
     })
     return value as Json
   }

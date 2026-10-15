@@ -3,6 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { scenarios, startFakeProvider } from './fake-provider'
 import {
   diffBytes,
+  normalizeBuiltinConversation,
   normalizeHttp,
   normalizeSse,
   parseSse,
@@ -81,6 +82,41 @@ describe('wire oracle', () => {
     ).not.toEqual(normalizeHttp({ createdAt: 456, error: 'two', rows: [2, 1] }))
     expect(normalizeHttp({ createdAt: 123, a: 1 })).toEqual(
       normalizeHttp({ a: 1, createdAt: 456 }),
+    )
+  })
+  test('tests that only the approved built-in assistant message id difference is tolerated', () => {
+    const body = (id: string, role = 'assistant') => ({
+      conversation: {
+        messages: [{ id, role, parts: [{ type: 'text', text: 'Hello' }] }],
+      },
+    })
+    const uuid = '12345678-1234-4234-8234-123456789abc'
+    expect(normalizeBuiltinConversation(body(''))).toEqual(
+      normalizeBuiltinConversation(body(uuid)),
+    )
+    expect(normalizeBuiltinConversation(body('', 'user'))).not.toEqual(
+      normalizeBuiltinConversation(body(uuid, 'user')),
+    )
+    expect(normalizeBuiltinConversation(body('unexpected-id'))).not.toEqual(
+      normalizeBuiltinConversation(body('')),
+    )
+  })
+  test('tests that client-supplied timestamps cannot hide zero or seconds regressions', () => {
+    const fixed = new Set([1_700_000_000_000, 1_700_000_000_100])
+    const expected = {
+      startedAt: 1_700_000_000_000,
+      completedAt: 1_700_000_000_100,
+    }
+    expect(normalizeHttp(expected, undefined, undefined, fixed)).not.toEqual(
+      normalizeHttp(
+        { startedAt: 0, completedAt: 1_700_000_000 },
+        undefined,
+        undefined,
+        fixed,
+      ),
+    )
+    expect(normalizeHttp(expected, undefined, undefined, fixed)).toEqual(
+      expected,
     )
   })
   test('tests that the app AI SDK rejects missing chunk fields', async () => {
@@ -171,6 +207,44 @@ describe('fake upstream', () => {
       })
       expect(unknown.status).toBe(400)
     } finally {
+      await fake.stop()
+    }
+  })
+  test('tests that the long upstream pauses at four deltas even when a network reader coalesces frames', async () => {
+    const fake = startFakeProvider({ delayMs: 0, pauseLongAfterDeltas: 4 })
+    const abort = new AbortController()
+    try {
+      const response = await fetch(`${fake.url}/v1/chat/completions`, {
+        method: 'POST',
+        body: JSON.stringify({
+          model: 'long-stream',
+          stream: true,
+          messages: [],
+        }),
+        signal: abort.signal,
+      })
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('Missing fake body')
+      let raw = ''
+      const decoder = new TextDecoder()
+      while (!raw.includes('token-3 ')) {
+        const part = await reader.read()
+        raw += decoder.decode(part.value)
+      }
+      const pending = reader.read()
+      const extra = await Promise.race([
+        pending,
+        Bun.sleep(30).then(() => 'paused'),
+      ])
+      expect(extra).toBe('paused')
+      expect((raw.match(/token-/g) ?? []).length).toBe(4)
+      await reader.cancel()
+      abort.abort()
+      await pending.catch(() => {})
+      for (let i = 0; i < 20 && fake.activeStreams; i++) await Bun.sleep(5)
+      expect(fake.activeStreams).toBe(0)
+    } finally {
+      abort.abort()
       await fake.stop()
     }
   })

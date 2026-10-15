@@ -5,6 +5,7 @@ type Json = Record<string, unknown>
 interface Event {
   data: Json | '[DONE]'
   event?: string
+  textDelta?: boolean
 }
 const toolInput = {
   query: 'Compatibility fixture',
@@ -35,6 +36,7 @@ function calls(scenario: Scenario) {
 
 function chatEvents(scenario: Scenario, followup: boolean): Event[] {
   const chunk = (delta: Json, finish: string | null = null): Event => ({
+    textDelta: typeof delta.content === 'string' && delta.content.length > 0,
     data: {
       id: 'chatcmpl_compat',
       object: 'chat.completion.chunk',
@@ -110,7 +112,13 @@ function chatEvents(scenario: Scenario, followup: boolean): Event[] {
 function anthropicEvents(scenario: Scenario, followup: boolean): Event[] {
   const events: Event[] = []
   const push = (type: string, value: Json) =>
-    events.push({ event: type, data: { type, ...value } })
+    events.push({
+      event: type,
+      textDelta:
+        type === 'content_block_delta' &&
+        (value.delta as Json)?.type === 'text_delta',
+      data: { type, ...value },
+    })
   push('message_start', {
     message: {
       id: 'msg_compat',
@@ -199,6 +207,7 @@ function responsesEvents(scenario: Scenario, followup: boolean): Event[] {
   const push = (type: string, value: Json) =>
     events.push({
       event: type,
+      textDelta: type === 'response.output_text.delta',
       data: { type, sequence_number: sequence++, ...value },
     })
   const response = {

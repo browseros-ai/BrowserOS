@@ -17,7 +17,11 @@ type Json = Record<string, unknown>
 
 /** Each session header owns retry state; two compared servers cannot consume each other's 429. */
 export function startFakeProvider(
-  options: { port?: number; delayMs?: number } = {},
+  options: {
+    port?: number
+    delayMs?: number
+    pauseLongAfterDeltas?: number
+  } = {},
 ) {
   const attempts = new Map<string, number>()
   const active = new Set<symbol>()
@@ -83,13 +87,31 @@ export function startFakeProvider(
       const events = eventsFor(path, scenario, followup)
       const streamId = Symbol('upstream')
       active.add(streamId)
-      const finish = () => active.delete(streamId)
+      let resume: (() => void) | undefined
+      const finish = () => {
+        active.delete(streamId)
+        resume?.()
+      }
       request.signal.addEventListener('abort', finish, { once: true })
+      let textDeltas = 0
       let cursor = 0
       let cancelled = false
       const stream = new ReadableStream<Uint8Array>({
         async pull(controller) {
           // pull honors cancellation and backpressure, so /stop cannot leave an upstream timer running.
+          // A network read may coalesce arbitrarily many frames. Gate on upstream emission,
+          // not read boundaries, so /stop always observes the same transcript prefix under load.
+          if (
+            scenario === 'long-stream' &&
+            options.pauseLongAfterDeltas !== undefined &&
+            textDeltas >= options.pauseLongAfterDeltas
+          ) {
+            await new Promise<void>((resolve) => {
+              resume = resolve
+              if (cancelled || request.signal.aborted) resolve()
+            })
+            resume = undefined
+          }
           const delay =
             options.delayMs ?? (scenario === 'long-stream' ? 80 : 15)
           if (delay) await Bun.sleep(delay)
@@ -105,6 +127,7 @@ export function startFakeProvider(
             controller.close()
             return
           }
+          if (event.textDelta) textDeltas++
           const data =
             event.data === '[DONE]' ? event.data : JSON.stringify(event.data)
           controller.enqueue(

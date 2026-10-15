@@ -29,6 +29,11 @@ const job = {
   createdAt: 1_700_000_000_000,
 }
 
+// These are fixture inputs, not volatile server clocks. A seconds/zero/overwritten value must differ.
+export const fixedTimestampValues = new Set([
+  1_700_000_000_000, 1_700_000_000_100,
+])
+
 export const cases: RequestCase[] = [
   {
     name: 'health',

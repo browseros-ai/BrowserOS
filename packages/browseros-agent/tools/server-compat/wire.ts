@@ -165,6 +165,7 @@ export function normalizeHttp(
   value: unknown,
   ids = new Ids(),
   replacements: Array<[string, string]> = [],
+  fixedTimes: ReadonlySet<number> = new Set(),
 ): unknown {
   if (typeof value === 'string') {
     let result = value
@@ -172,13 +173,19 @@ export function normalizeHttp(
     return result
   }
   if (Array.isArray(value))
-    return value.map((item) => normalizeHttp(item, ids, replacements))
+    return value.map((item) =>
+      normalizeHttp(item, ids, replacements, fixedTimes),
+    )
   if (!value || typeof value !== 'object') return value
   return Object.fromEntries(
     Object.entries(value)
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([key, item]) => {
-        if (volatileTimes.has(key) && typeof item === 'number')
+        if (
+          volatileTimes.has(key) &&
+          typeof item === 'number' &&
+          !fixedTimes.has(item)
+        )
           return [key, '<time>']
         if (
           ['id', 'runId', 'requestId', 'messageId', 'toolCallId'].includes(
@@ -188,7 +195,35 @@ export function normalizeHttp(
           /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(item)
         )
           return [key, ids.id(key === 'toolCallId' ? 'tool' : 'uuid', item)]
-        return [key, normalizeHttp(item, ids, replacements)]
+        return [key, normalizeHttp(item, ids, replacements, fixedTimes)]
       }),
   )
+}
+
+/** F8 permits a generated built-in assistant id in history too; user ids and all message content stay observable. */
+export function normalizeBuiltinConversation(body: unknown): unknown {
+  const copy = structuredClone(body)
+  if (copy && typeof copy === 'object' && 'conversation' in copy) {
+    const conversation = copy.conversation
+    if (
+      conversation &&
+      typeof conversation === 'object' &&
+      'messages' in conversation &&
+      Array.isArray(conversation.messages)
+    ) {
+      for (const [index, message] of conversation.messages.entries()) {
+        if (
+          message &&
+          message.role === 'assistant' &&
+          typeof message.id === 'string' &&
+          (message.id === '' ||
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+              message.id,
+            ))
+        )
+          message.id = `<assistant:${index}>`
+      }
+    }
+  }
+  return normalizeHttp(copy)
 }

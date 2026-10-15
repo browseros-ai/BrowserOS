@@ -149,26 +149,28 @@ export async function bootServer(
   const root = await mkdtemp(join(tmpdir(), `server-compat-${kind}-`))
   const processes: ReturnType<typeof ownedProcess>[] = []
   const log: string[] = []
-  let stopped = false
-  const stop = async () => {
-    if (stopped) return
-    stopped = true
-    cleanups.delete(stop)
-    // Stop the server before CDP: TS exits on CDP loss, which would obscure its shutdown status.
-    const failures: unknown[] = []
-    for (const process of processes.reverse()) {
-      try {
-        await terminate(process.child, process.exited)
-      } catch (error) {
-        failures.push(error)
+  let stopping: Promise<void> | undefined
+  const stop = (): Promise<void> => {
+    // Keep the cleanup registered until it settles. A signal during an existing finally
+    // must join that same promise instead of exiting while children are still unwinding.
+    stopping ??= (async () => {
+      const failures: unknown[] = []
+      // Stop the server before CDP: TS exits on CDP loss, obscuring its shutdown status.
+      for (const process of [...processes].reverse()) {
+        try {
+          await terminate(process.child, process.exited)
+        } catch (error) {
+          failures.push(error)
+        }
       }
-    }
-    await writeFile(join(root, 'process.log'), log.join(''))
-    if (process.env.SERVER_COMPAT_KEEP_SANDBOX !== '1')
-      await rm(root, { recursive: true, force: true })
-    else console.log(`Sandbox retained: ${root}`)
-    if (failures.length)
-      throw new AggregateError(failures, 'Process teardown failed')
+      await writeFile(join(root, 'process.log'), log.join(''))
+      if (!failures.length && process.env.SERVER_COMPAT_KEEP_SANDBOX !== '1')
+        await rm(root, { recursive: true, force: true })
+      else console.log(`Sandbox retained: ${root}`)
+      if (failures.length)
+        throw new AggregateError(failures, 'Process teardown failed')
+    })().finally(() => cleanups.delete(stop))
+    return stopping
   }
   cleanups.add(stop)
   try {

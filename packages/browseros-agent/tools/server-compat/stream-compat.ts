@@ -13,7 +13,7 @@ import {
 import { type Scenario, scenarios, startFakeProvider } from './fake-provider'
 import {
   diffBytes,
-  normalizeHttp,
+  normalizeBuiltinConversation,
   normalizeSse,
   parseSse,
   validateChunks,
@@ -274,7 +274,10 @@ async function runScenario(
     post: normalizeSse(raw),
     replay: normalizeSse(replayRaw),
     headers: streamHeaders,
-    conversation: normalizeHttp(conversation),
+    conversation: {
+      status: conversation.status,
+      body: normalizeBuiltinConversation(conversation.body),
+    },
   }
 }
 
@@ -285,7 +288,7 @@ export async function main() {
     : await mkdtemp(join(tmpdir(), 'server-compat-streams-'))
   await mkdir(output, { recursive: true })
   console.log(`Artifacts: ${output}`)
-  const fake = startFakeProvider()
+  const fake = startFakeProvider({ pauseLongAfterDeltas: 4 })
   const results: Array<Map<string, unknown>> = []
   try {
     for (const [index, kind] of [a, b].entries()) {

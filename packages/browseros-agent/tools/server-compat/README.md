@@ -77,9 +77,9 @@ For each side the runner saves original POST SSE, active-run reconnect SSE and t
 response. It verifies full-prefix replay equals POST bytes, stale run IDs return 409, /status blocks updates
 during work and permits updates afterward, and no fake upstream stream survives completion or stop. It also
 captures initial `/chat/panels` state and its heartbeat. Assignment changes with real extension tabs are in
-the extension checklist, rather than simulated by this browserless chat fixture.
+the extension checklist, rather than simulated by this headless chat fixture.
 
-The stop scenario requests `/stop` after exactly four text deltas. **Observed TS behavior:** registry
+The stop scenario gates the fake upstream after exactly four text deltas until cancellation, then requests `/stop`. This remains deterministic when HTTP reads coalesce multiple frames. **Observed TS behavior:** registry
 cancellation closes the reader before the AI SDK publishes its abort chunk; the wire ends with `[DONE]`,
 and a first interrupted turn may have no persisted row. We assert the aborted run and upstream cancellation,
 retain the exact wire and persistence HTTP status/body, and compare them. We do not insert an abort chunk,
@@ -88,7 +88,7 @@ drop one from the other runtime or turn a missing conversation into an empty suc
 `wire.ts` requires canonical `data: JSON\n\n` framing and a final `[DONE]`. It preserves JSON key order,
 chunk order, null vs omitted values, whitespace/escaping and all text/error/tool payloads. It maps only
 text/reasoning IDs and tool-call IDs by first occurrence, preserving reference relationships. The two approved
-semantic deltas are F8 (only `start.messageId`) and, explicitly in ACP mode, F6 (only the provider-executed,
+semantic deltas are F8 (`start.messageId` and the generated built-in assistant ID in persisted history) and, explicitly in ACP mode, F6 (only the provider-executed,
 dynamic `tool-input-error` with the exact known error text). The built-in suite does not enable the ACP delta.
 
 Before normalization, **every** captured chunk crosses the app's own `uiMessageChunkSchema`; the same stream
@@ -99,9 +99,8 @@ upstream diagnostics, not suppressed failures.
 
 Persisted/HTTP JSON uses sorted object keys, correlation-preserving UUID maps, named server-root/URL
 substitutions, and numeric clock fields `createdAt`, `updatedAt`, `lastUsedAt`, `lastActiveAt`, `lastMessagedAt`,
-`startedAt`, `completedAt`, `timestamp`, `responseTime`. Arrays, absent/null fields, error contents and all
-other values remain observable. Clock normalization proves shape/content compatibility, not timestamp units
-or timing semantics; DB round-trip/time assertions belong to the persistence piece.
+`startedAt`, `completedAt`, `timestamp`, `responseTime`. The HTTP corpus pins its supplied timestamp values, which remain exact; zero, seconds or overwritten timestamps therefore fail. Arrays, absent/null fields, error contents and all
+other values remain observable. Generated-clock normalization proves shape/content compatibility; timestamp inputs stay pinned. Additional DB round-trip/time assertions belong to the persistence piece.
 
 ## HTTP checks
 
@@ -144,7 +143,7 @@ the driver checks that both files exist and that runtime/platform match, not tha
 true. Keep each journey's UI screenshot/snapshot and relevant server response/process receipt together.
 
 Every journey prints PASS/FAIL/SKIP with a reason. Any FAIL exits nonzero. Default checklist-only mode can
-exit zero with explicit SKIPs; `--required` fails on any SKIP or absent extension launch. This is deliberate:
+exit zero with explicit SKIPs; `--required` fails on any checklist SKIP or absent extension launch. This is deliberate:
 a printed checklist is useful overnight, and is never reported as completed end-to-end acceptance. Real-key
 chat, ACP CLIs, OAuth, connector credentials, supervision and macOS/Windows release journeys require separate
 live evidence. DB fixture/rollback work belongs to `make-db-fixture.ts` (P2), and the golden-agent work belongs
