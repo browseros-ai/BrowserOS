@@ -1274,7 +1274,10 @@ impl ServerHandler for ClawMcpService {
         implementation.title = Some(SERVER_TITLE.to_string());
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
-            .with_instructions(mcp_instructions(self.state.agent_settings.human_help()))
+            .with_instructions(mcp_instructions(
+                self.state.agent_settings.human_help(),
+                PursueOffering::read(),
+            ))
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -3111,14 +3114,21 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::On).as_str())
+            Some(mcp_instructions(HumanHelp::On, PursueOffering::read()).as_str())
         );
         let instructions = info
             .instructions
             .as_deref()
             .ok_or_else(|| anyhow::anyhow!("BrowserOS neo instructions missing"))?;
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
-        assert!(instructions.contains("Reach for run first"));
+        // Which tool the instructions name depends on whether the loop is
+        // offered, and a developer machine with a credential set is the one
+        // place that difference shows up in a test run.
+        if PursueOffering::read().is_offered() {
+            assert!(instructions.contains("Reach for pursue first"));
+        } else {
+            assert!(instructions.contains("Reach for run first"));
+        }
         assert!(instructions.contains("optional fallback for your client"));
         assert!(instructions.contains("Put your task\n  name in name_session."));
         assert!(instructions.contains("tabs group as <client>/<name>."));
@@ -3421,7 +3431,7 @@ mod tests {
 
         assert_eq!(
             service.get_info().instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::Off).as_str())
+            Some(mcp_instructions(HumanHelp::Off, PursueOffering::read()).as_str())
         );
         Ok(())
     }

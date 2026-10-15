@@ -562,7 +562,7 @@ mod tests {
         // shape is asserted instead: a blank or whitespace credential is no
         // credential, which is what keeps a half-set variable from advertising
         // a tool that cannot run.
-        assert_eq!(PursueOffering::Offered.is_offered(), true);
-        assert_eq!(PursueOffering::Absent.is_offered(), false);
+        assert!(PursueOffering::Offered.is_offered());
+        assert!(!PursueOffering::Absent.is_offered());
     }
 }
