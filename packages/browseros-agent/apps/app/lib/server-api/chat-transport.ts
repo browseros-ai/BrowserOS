@@ -18,7 +18,9 @@ export class ServerChatTransport extends DefaultChatTransport<UIMessage> {
       new Response(body, {
         headers: { 'content-type': 'text/event-stream' },
       }),
-      { signal: detach.signal },
+      // Stop/reconnect races can close a subscriber before DONE. Preserve the
+      // SDK's clean-EOF behavior here; scheduled runs keep the strict default.
+      { signal: detach.signal, requireDone: false },
     )
     let cancelled = false
     let started = false

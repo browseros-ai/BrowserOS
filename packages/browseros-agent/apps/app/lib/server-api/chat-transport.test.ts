@@ -1,6 +1,6 @@
 /** Exercise the installed SDK reducer and detachment through the shared reader. */
 import { describe, expect, it } from 'bun:test'
-import { readUIMessageStream } from 'ai'
+import { readUIMessageStream, type UIMessageChunk } from 'ai'
 import { ServerChatTransport } from './chat-transport'
 
 class InspectableTransport extends ServerChatTransport {
@@ -9,10 +9,10 @@ class InspectableTransport extends ServerChatTransport {
   }
 }
 
-function stream(events: unknown[], oneByte = false) {
+function stream(events: unknown[], oneByte = false, done = true) {
   const wire =
     events.map((event) => `data: ${JSON.stringify(event)}\r\n\r\n`).join('') +
-    'data: [DONE]\r\n\r\n'
+    (done ? 'data: [DONE]\r\n\r\n' : '')
   const bytes = new TextEncoder().encode(wire)
   return new ReadableStream<Uint8Array>({
     start(controller) {
@@ -25,6 +25,28 @@ function stream(events: unknown[], oneByte = false) {
 }
 
 describe('server chat transport', () => {
+  it('closes normally when a stop race ends the body without DONE', async () => {
+    const events: UIMessageChunk[] = [
+      { type: 'start' },
+      { type: 'abort', reason: 'Stopped' },
+    ]
+    expect(
+      await Array.fromAsync(
+        new InspectableTransport().decode(stream(events, true, false)),
+      ),
+    ).toEqual(events)
+  })
+
+  it('still rejects an invalid chunk when DONE is optional', async () => {
+    await expect(
+      Array.fromAsync(
+        new InspectableTransport().decode(
+          stream([{ type: 'text-delta', id: 't' }], false, false),
+        ),
+      ),
+    ).rejects.toMatchObject({ name: 'ServerApiError', code: 'invalid_stream' })
+  })
+
   it('feeds text, dynamic tools and metadata into the installed AI SDK reducer', async () => {
     const output = new InspectableTransport().decode(
       stream(

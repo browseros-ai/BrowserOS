@@ -9,7 +9,11 @@ import { isUiMessageChunk } from './generated/ui-message-chunk'
 
 export async function* readUiMessageStream(
   response: Response,
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal
+    /** Defaults to true; interactive SDK transports may accept clean EOF. */
+    requireDone?: boolean
+  } = {},
 ): AsyncGenerator<UiMessageChunk> {
   if (!response.ok) throw await ServerApiError.fromResponse(response)
   if (response.status === 204) return
@@ -29,7 +33,9 @@ export async function* readUiMessageStream(
     }
     yield chunk
   }
-  throw invalidStream(response, 'The chat stream ended before [DONE]')
+  if (options.requireDone ?? true) {
+    throw invalidStream(response, 'The chat stream ended before [DONE]')
+  }
 }
 
 /**

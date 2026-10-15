@@ -116,6 +116,67 @@ test('abort interrupts a pending read and releases its lock', async () => {
   expect(raw.body?.locked).toBe(false)
 })
 
+for (const options of [{}, { requireDone: true }]) {
+  test(`requires DONE on clean EOF with ${JSON.stringify(options)}`, async () => {
+    const raw = response([encoder.encode('data: {"type":"start"}\n\n')])
+    await expect(
+      Array.fromAsync(readUiMessageStream(raw, options)),
+    ).rejects.toMatchObject({
+      name: 'ServerApiError',
+      code: 'invalid_stream',
+      message: 'The chat stream ended before [DONE]',
+    })
+    expect(raw.body?.locked).toBe(false)
+  })
+}
+
+test('optional DONE permits clean EOF after a stop without a finish chunk', async () => {
+  const raw = response([
+    encoder.encode(
+      'data: {"type":"start"}\n\ndata: {"type":"abort","reason":"Stopped"}\n\n',
+    ),
+  ])
+  expect(
+    await Array.fromAsync(readUiMessageStream(raw, { requireDone: false })),
+  ).toEqual([{ type: 'start' }, { type: 'abort', reason: 'Stopped' }])
+  expect(raw.body?.locked).toBe(false)
+})
+
+test('optional DONE still propagates body read failures', async () => {
+  const failure = new Error('Connection dropped')
+  const raw = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.error(failure)
+      },
+    }),
+    { headers: { 'content-type': 'text/event-stream' } },
+  )
+  await expect(
+    Array.fromAsync(readUiMessageStream(raw, { requireDone: false })),
+  ).rejects.toBe(failure)
+  expect(raw.body?.locked).toBe(false)
+})
+
+for (const payload of [
+  'nope',
+  '{"type":"unknown"}',
+  '{"type":"text-delta","id":"t"}',
+]) {
+  test(`optional DONE still rejects invalid chunks: ${payload}`, async () => {
+    await expect(
+      Array.fromAsync(
+        readUiMessageStream(
+          response([encoder.encode(`data: ${payload}\n\n`)]),
+          {
+            requireDone: false,
+          },
+        ),
+      ),
+    ).rejects.toMatchObject({ name: 'ServerApiError', code: 'invalid_stream' })
+  })
+}
+
 for (const wire of [
   'data: nope\n\n',
   'data: {"type":"unknown"}\n\n',
