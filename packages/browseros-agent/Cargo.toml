@@ -17,6 +17,7 @@ harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 browseros-core = { path = "crates/browseros-core" }
 browseros-mcp = { path = "crates/browseros-mcp" }
+browseros-mcp-host = { path = "crates/browseros-mcp-host" }
 claw-api = { path = "crates/claw-api" }
 server-api = { path = "crates/server-api" }
 

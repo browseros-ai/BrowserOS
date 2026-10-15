@@ -95,8 +95,8 @@ impl TargetBindings {
     pub async fn load(store: JsonStore) -> AppResult<Arc<Self>> {
         let records = match store.read_json(FILE).await {
             Ok(records) => records,
-            Err(AppError::StorageNotFound(_)) => Records::default(),
-            Err(error) => return Err(error),
+            Err(browseros_mcp_host::HostError::StorageNotFound(_)) => Records::default(),
+            Err(error) => return Err(error.into()),
         };
         Ok(Arc::new(Self {
             records: Mutex::new(records),

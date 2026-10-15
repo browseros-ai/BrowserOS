@@ -3,6 +3,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
+use browseros_mcp_host::HostError;
 use claw_api::models::ApiError;
 use serde::Serialize;
 use std::{io, path::PathBuf};
@@ -122,6 +123,33 @@ impl IntoResponse for AppError {
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+/// The MCP host layer reports transport-free errors; claw keeps one HTTP-facing type.
+/// Variants map one-to-one, and an adapter error that was an `AppError` on the way in
+/// (claw's audit and ledger adapters) is recovered intact instead of being flattened.
+impl From<HostError> for AppError {
+    fn from(error: HostError) -> Self {
+        match error {
+            HostError::InvalidStoragePath(path) => Self::InvalidStoragePath(path),
+            HostError::StorageNotFound(path) => Self::StorageNotFound(path),
+            HostError::StorageCorrupt { path, source } => Self::StorageCorrupt { path, source },
+            HostError::Io { path, source } => Self::Io { path, source },
+            HostError::Json(source) => Self::Json(source),
+            HostError::Internal(message) => Self::Internal(message),
+            HostError::Adapter(source) => match source.downcast::<AppError>() {
+                Ok(app) => *app,
+                Err(other) => Self::Db(other),
+            },
+        }
+    }
+}
+
+/// Carries a claw adapter failure through the host layer; see `From<HostError>`.
+impl From<AppError> for HostError {
+    fn from(error: AppError) -> Self {
+        HostError::adapter(error)
+    }
+}
 
 /// Server-minted id for one HTTP request — never read from an inbound
 /// header. The `request_context` middleware creates it, stores it as a

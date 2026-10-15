@@ -438,6 +438,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "browseros-mcp-host"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "browseros-cdp",
+ "browseros-core",
+ "browseros-mcp",
+ "futures-util",
+ "pulldown-cmark",
+ "rand 0.9.4",
+ "rmcp",
+ "serde",
+ "serde-saphyr",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "ulid",
+ "uuid",
+]
+
+[[package]]
 name = "bs58"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -566,6 +591,7 @@ dependencies = [
  "browseros-cdp",
  "browseros-core",
  "browseros-mcp",
+ "browseros-mcp-host",
  "clap",
  "claw-api",
  "futures-util",

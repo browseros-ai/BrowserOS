@@ -3,10 +3,7 @@
 //! fails the start. The value is mirrored in an atomic because MCP `initialize`,
 //! `server/discover`, and `tools/list` read it synchronously.
 
-use crate::{
-    error::{AppError, AppResult},
-    storage::JsonStore,
-};
+use crate::{error::AppResult, storage::JsonStore};
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Mutex;
@@ -59,7 +56,7 @@ impl AgentSettingsStore {
     pub async fn load(files: JsonStore) -> Self {
         let human_help = match files.read_json::<SettingsFile>(AGENT_SETTINGS_FILE).await {
             Ok(file) => HumanHelp::from_enabled(file.human_help_enabled),
-            Err(AppError::StorageNotFound(_)) => HumanHelp::On,
+            Err(browseros_mcp_host::HostError::StorageNotFound(_)) => HumanHelp::On,
             Err(error) => {
                 tracing::warn!(%error, "agent settings unreadable; keeping human help on");
                 HumanHelp::On

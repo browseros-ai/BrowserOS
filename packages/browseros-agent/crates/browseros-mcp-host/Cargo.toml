@@ -1,0 +1,40 @@
+[package]
+name = "browseros-mcp-host"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+# Synthetic CDP peers and fixture builders shared with downstream hosts' tests.
+test-support = ["dep:tempfile"]
+
+[dependencies]
+browseros-cdp.workspace = true
+browseros-core.workspace = true
+browseros-mcp.workspace = true
+
+anyhow.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+rand.workspace = true
+rmcp.workspace = true
+pulldown-cmark.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+serde-saphyr.workspace = true
+tempfile = { workspace = true, optional = true }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+ulid.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+
+[lints]
+workspace = true

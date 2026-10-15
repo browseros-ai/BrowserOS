@@ -6,7 +6,7 @@ use super::slugify_client_name;
 
 // Keep full wire aliases here. Tab naming also derives their old bounded forms
 // from this table because those titles can survive a server upgrade.
-pub(crate) const CLIENT_ALIASES: [(&str, &str); 4] = [
+pub const CLIENT_ALIASES: [(&str, &str); 4] = [
     ("codex-mcp-client", "codex"),
     ("codex-posthog-dashboard", "codex"),
     ("codex-browserclaw", "codex"),
@@ -46,7 +46,7 @@ pub fn client_product_prefix(name: &str) -> Option<&'static str> {
 /// Removes only trailing numeric version segments. Interior digits and all-digit
 /// names remain intact, so unknown products retain their existing display spelling.
 #[must_use]
-pub(crate) fn unversioned_client_slug(slug: &str) -> &str {
+pub fn unversioned_client_slug(slug: &str) -> &str {
     let mut end = slug.len();
     for segment in slug.rsplit('-') {
         if segment.is_empty() || !segment.bytes().all(|byte| byte.is_ascii_digit()) {
