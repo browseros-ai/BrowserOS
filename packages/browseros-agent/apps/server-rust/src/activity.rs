@@ -1,6 +1,5 @@
 //! `ServerActivity`: what OTA readiness (`GET /status` `can_update`) is computed from — active
 //! chat runs plus in-flight `/mcp` POSTs (an axum layer on `/mcp` increments around each request).
-//! Owned by P3.
 
 use std::sync::{
     Arc,

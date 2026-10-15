@@ -841,7 +841,7 @@ async fn resume_compares_the_run_id_as_the_client_sent_it() -> TestResult {
     Ok(())
 }
 
-// ───── review regressions (P8-fix) ─────
+// ───── review regressions ─────
 
 /// The POST that started a run streams that run, even once the conversation has moved on to a
 /// newer turn (it used to subscribe by conversation id, and could pick up the next run).

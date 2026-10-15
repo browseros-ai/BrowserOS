@@ -1,7 +1,6 @@
 //! Chat-route response shapes the generated `server_api` models cannot express byte-faithfully:
 //! the generator types counts as `f64` (serde writes `3.0`, JS writes `3`) and the run snapshot's
 //! messages as the loose `ImportedMessage`. Field order is the TS objects' construction order.
-//! Owned by P8.
 
 use crate::chat::RunSnapshot;
 use serde::Serialize;

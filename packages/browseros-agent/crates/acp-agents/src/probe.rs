@@ -110,9 +110,8 @@ impl PermissionPolicy for CancelAll {
 
 /// Probe failures are part of the result (HTTP 200 with `error`), as in TS.
 ///
-/// DECIDED: return `Err(LaunchError)` when the command cannot be resolved (the spike signature
-/// returned a bare `ProbeResult`). WHY: TS throws there and the route answers
-/// `500 {"error":{"code":"wrapper_error",…}}`; the handler needs to tell the two apart.
+/// The one exception is a command that cannot be resolved: `Err(LaunchError)`, because TS throws
+/// there and the route answers `500 {"error":{"code":"wrapper_error",…}}`.
 pub async fn probe_agent(
     request: ProbeRequest,
     host: &HostEnvironment,

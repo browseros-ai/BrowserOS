@@ -9,11 +9,11 @@
 //!                                        browseros-mcp-host (shared with claw-server)
 //! ```
 //!
-//! Module owners after the S0 skeleton: process shell `config`/`paths`/`identity`/`activity`/
-//! `server_file`/`app`/`telemetry::logging`/`http::{mod,security,extract,errors,system}` (P3),
-//! `db` (P2), `chat` core (P8), CRUD routes (P9), `oauth` (P10), `klavis` + `mcp_manager` (P12),
-//! LLM tools + telemetry sinks (P13), `chat::browseros_engine` (P14), `mcp` (P15),
-//! `chat::acp_engine` + `/acpx/probe` (P16).
+//! Process shell: `config`, `paths`, `identity`, `server_file`, `activity` (OTA readiness) and
+//! `app` (the composition root). `http` is the route table and its handlers; `chat` runs turns;
+//! `mcp` serves the shared host at `/mcp`; `db` is the SQLite file shared with the TS server;
+//! `oauth`, `klavis` and `mcp_manager` own their integrations; `js` holds the JavaScript string
+//! semantics TS bakes into stored and wire values.
 
 pub mod activity;
 pub mod app;

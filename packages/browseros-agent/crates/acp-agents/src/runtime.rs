@@ -63,7 +63,7 @@ pub const DEFAULT_CONTROL_TIMEOUT: Duration = Duration::from_secs(120);
 /// Reason on the `abort` chunk of a host stop; the same text AI SDK produced for the TS stop.
 pub const HOST_STOP_REASON: &str = "AbortError: Conversation stopped";
 /// After cancel or deadline, how long the agent may take to answer the prompt before its process is
-/// killed (capped by the control timeout). Claude and Codex settled within 60 ms in the spike.
+/// killed (capped by the control timeout). Claude and Codex settle within 60 ms in practice.
 const CANCEL_GRACE: Duration = Duration::from_secs(10);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
 const SESSION_CLOSE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -728,7 +728,8 @@ fn compose_prompt(live: &Live, prompt: &TurnPrompt) -> Vec<ContentBlock> {
     content
 }
 
-/// Model, then reasoning effort, then the first accepted full-access mode (spike D6).
+/// Model, then reasoning effort, then the first accepted full-access mode (a model change may
+/// reset the mode, so mode goes last).
 async fn apply_controls(session: &Session, controls: &SessionControls) -> Result<(), AcpError> {
     if let Some(model) = &controls.model {
         match advertised_model_option(&session.config_options(), model) {
@@ -738,7 +739,7 @@ async fn apply_controls(session: &Session, controls: &SessionControls) -> Result
                     advertised_model_option(&echoed, model),
                     ModelOption::Current
                 ) {
-                    // Spike §6.2: an agent can accept the call yet keep its old model.
+                    // An agent can accept the call yet keep its old model.
                     return Err(AcpError::Unsupported("the requested model"));
                 }
             }

@@ -1,5 +1,6 @@
-//! `UiTranslator` against the spike §4.3 table, with updates built from wire JSON exactly as agents
-//! send them and chunks compared as wire JSON exactly as the extension receives them.
+//! `UiTranslator` against the `session/update` → chunk table, with updates built from wire JSON
+//! exactly as agents send them and chunks compared as wire JSON exactly as the extension
+//! receives them.
 
 use acp_agents::{TurnEnd, UiChunk, UiTranslator};
 use acp_client::schema::{SessionUpdate, StopReason};
@@ -275,8 +276,9 @@ fn a_silent_codex_system_error_becomes_an_error() -> TestResult {
     Ok(())
 }
 
-/// The F6 change is safe for history: the reducer that persists the assistant message (P1's port
-/// of `processUIMessageStream`) still ends with a static, provider-executed tool part.
+/// Dropping TS's spurious `tool-input-error` is safe for history: the reducer that persists the
+/// assistant message (`ui_message_stream`'s port of `processUIMessageStream`) still ends with a
+/// static, provider-executed tool part.
 #[test]
 fn the_persisted_message_keeps_a_static_provider_executed_tool_part() -> TestResult {
     let mut translator = UiTranslator::new();
@@ -314,7 +316,7 @@ fn the_persisted_message_keeps_a_static_provider_executed_tool_part() -> TestRes
     assert_eq!(tool["providerExecuted"], true);
     assert!(
         tool.get("errorText").is_none(),
-        "no F6 error residue: {tool}"
+        "no tool-input-error residue: {tool}"
     );
     Ok(())
 }

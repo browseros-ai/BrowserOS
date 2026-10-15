@@ -66,9 +66,6 @@ pub struct AcpEngine {
 impl AcpEngine {
     /// Production wiring: bundled resources, `<browserosDir>/agents/acp-sessions` records, the
     /// server's own port for the loopback `/mcp`, and the shared lease registry.
-    ///
-    /// DECIDED: `new` takes its dependencies (S0's stub took none). WHY: the engine cannot run
-    /// agents without the host environment, port and leases; `app.rs` passes them in one line.
     pub fn new(config: &Config, paths: &BrowserosPaths, leases: Arc<ToolLeases>) -> Self {
         let host = HostEnvironment::from_process(
             Some(config.resources_dir.clone()),

@@ -1,6 +1,6 @@
 //! `llm::provider_options` against the TS reasoning table: every case of
 //! `apps/server/src/agent/reasoning-config.test.ts`, plus the branches that file leaves out
-//! (recon A3: Gemini level/budget maps, Bedrock's 1024 floor, ChatGPT/Azure defaults).
+//! (Gemini level/budget maps, Bedrock's 1024 floor, ChatGPT/Azure defaults).
 
 use browseros_agent::llm::{
     ProviderKind, ProviderOptions, ReasoningEffort, ReasoningSettings, ReasoningSummary,

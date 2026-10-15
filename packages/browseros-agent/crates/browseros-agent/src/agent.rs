@@ -1,6 +1,6 @@
 //! The agent loop: builds a merged tool set from its sources, renders the system prompt, then runs
 //! turns as a step loop that emits `UiChunk`s exactly as `ai@7.0.114`'s `ToolLoopAgent` +
-//! `createAgentUIStream` do for the TS server (recon A4/A11; `stream-text.ts`,
+//! `createAgentUIStream` do for the TS server (`stream-text.ts`,
 //! `stream-language-model-call.ts`, `execute-tools-from-stream.ts`, `to-ui-message-chunk.ts`).
 //!
 //! ```text
@@ -22,11 +22,10 @@
 //! Semantics worth knowing before changing anything here:
 //! - **Tools start when the step's model stream finishes**, not when each call is parsed, and only
 //!   for finish reason `stop`/`tool-calls` (`execute-tools-from-stream.ts`). A step cut off by
-//!   `length` or an error never runs its browser side effects. DECIDED: this follows the SDK
-//!   source; the loop spike's "tools start eagerly" came from a recon assumption.
+//!   `length` or an error never runs its browser side effects. This follows the SDK source.
 //! - **Retries** (2, `retry-after-ms`/`retry-after` honoured within 0–60 s, else 2 s × 2ⁿ) happen
 //!   only before a step's first event, so nothing a client saw is ever repeated. A failure there,
-//!   retries exhausted, is the pre-stream shape: `error` and no `finish` (recon A11.4).
+//!   retries exhausted, is the pre-stream shape: `error` and no `finish`.
 //! - **Cancellation** is the run's token. Every wait selects on it (biased), the turn then emits
 //!   `abort{"reason":"AbortError: Conversation stopped"}` and nothing else. Tools and the model
 //!   get a child token; MCP sources forward it as `notifications/cancelled`. A dropped
@@ -87,7 +86,7 @@ pub struct TurnInput {
     /// Model-facing replacement text for that last user message (context notices, browser
     /// context wrapper and `<USER_QUERY>`).
     pub prompt_text: String,
-    /// `start.messageId` of the assistant message (fixes recon F8: TS persists `""`).
+    /// `start.messageId` of the assistant message (TS's own built-in turn persists `""`).
     pub message_id: String,
 }
 

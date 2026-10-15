@@ -22,10 +22,10 @@ test = false
 bench = false
 
 [dependencies]
-# ACP agents (P16): policy, sessions and the session/update → UiChunk runtime.
+# ACP agents: policy, sessions and the session/update → UiChunk runtime.
 acp-agents.workspace = true
 browseros-agent.workspace = true
-# P12: reuse the shared MCP catalog/provider seam and Strata client transport.
+# Klavis: the shared MCP catalog/provider seam and the Strata client transport.
 browseros-mcp.workspace = true
 browseros-mcp-host.workspace = true
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
@@ -56,26 +56,25 @@ tracing-subscriber = { workspace = true, features = ["json"] }
 url.workspace = true
 uuid.workspace = true
 
-# db (P2): the shared browseros.sqlite, drizzle catch-up hashes, Rust-owned migration ledger.
+# db: the shared browseros.sqlite, drizzle catch-up hashes, Rust-owned migration ledger.
 sea-orm.workspace = true
 sea-orm-migration.workspace = true
 sha2.workspace = true
 
-# P13: process telemetry uses the same SDKs as claw, with build-time public keys.
+# Process telemetry uses the same SDKs as claw, with build-time public keys.
 posthog-rs.workspace = true
 sentry.workspace = true
 time.workspace = true
 
-# mcp (P15): /mcp serves the shared host (browseros-mcp/-host and rmcp above, with P12)
-# through rmcp's tower service; native capabilities and page ids come from browseros-core.
+# mcp: /mcp serves the shared host (browseros-mcp/-host and rmcp above) through rmcp's tower
+# service; native capabilities and page ids come from browseros-core.
 browseros-core.workspace = true
 tower.workspace = true
 
 [dev-dependencies]
-# P14: rmcp test server standing in for loopback /mcp in tests/browseros_engine.rs.
+# rmcp test server standing in for loopback /mcp in tests/browseros_engine.rs.
 rmcp.workspace = true
-# P12: exercise LocalToolProvider through an actual shared host without CDP.
-# mcp (P15): the host's synthetic CDP peer drives /mcp tests without a browser.
+# The host's synthetic CDP peer drives /mcp and LocalToolProvider tests without a browser.
 browseros-mcp-host = { workspace = true, features = ["test-support"] }
 serde-saphyr.workspace = true
 tempfile.workspace = true

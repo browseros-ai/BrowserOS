@@ -1,9 +1,8 @@
 //! Composition root: builds every long-lived service once at startup (`AppState::start`) and
 //! mounts `http::ROUTES` (`build_router`). Construction order mirrors the process contract:
 //! paths → DB → identity → metrics → stores → OAuth/Klavis (background) → `/mcp` host (CDP
-//! reattach, non-fatal) → chat engines → chat service. Owned by P3; telemetry ownership (one
-//! PostHog sink, one Sentry guard per process) wired by I1; the `host`/`mcp` fields and their
-//! construction are P15's.
+//! reattach, non-fatal) → chat engines → chat service. Telemetry is process-wide: one PostHog
+//! sink and one Sentry guard, created by `main` and shared with every service that reports.
 
 use crate::{
     activity::ServerActivity,
@@ -248,7 +247,8 @@ impl AppState {
 }
 
 /// Mounts exactly `http::ROUTES` (the contract test relies on this being the only registration
-/// site) plus the plain-text 404 for unmatched paths and methods. P3 adds the middleware stack.
+/// site) plus the plain-text 404 for unmatched paths and methods, all behind the one ingress
+/// middleware (`http::security::ingress`).
 pub fn build_router(state: AppState) -> Router {
     let mut router = Router::new();
     for route in http::ROUTES {

@@ -16,8 +16,6 @@
 //! - Afterwards the in-memory copy is authoritative until `DELETE /chat/{id}` forgets it.
 //! - Persist: returns durable-save failures to the turn completion hook. A model reply alone
 //!   is not a successful persisted turn; the caller decides whether persistence is required.
-//!
-//! Owned by P8.
 
 use super::request::PreviousMessage;
 use crate::db::{AgentKind, DbResult, SaveRawConversation, TargetType};

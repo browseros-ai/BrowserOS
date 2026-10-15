@@ -128,8 +128,8 @@ impl ZodIssue {
         }
     }
     pub fn wire_value(&self) -> Value {
-        // P13's TS golden captures include record-key and custom-header issues. Zod inserts
-        // origin after code for invalid_key, and message before path for a custom issue;
+        // Record-key and custom-header issues (the LLM-tool routes) carry these codes. Zod
+        // inserts origin after code for invalid_key, and message before path for a custom issue;
         // those orders remain observable inside the JSON-stringified error message.
         if self.code == "invalid_key" || self.code == "custom" {
             let mut issue = serde_json::Map::new();

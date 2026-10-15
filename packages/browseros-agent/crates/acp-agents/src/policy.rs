@@ -81,9 +81,9 @@ pub struct TurnContext {
 /// model, reasoning effort, then the first accepted full-access mode. Agents reset these across
 /// reattachment (codex-acp drops both model and mode on load), and a model change may reset mode.
 ///
-/// DECIDED: split the spike's `config: Vec<(String, String)>` into `model` + `reasoning_effort`.
-/// WHY: their failure semantics differ: a rejected model is a failed (re)attach that triggers
-/// resume recovery, while a rejected effort only logs (TS `applyReasoningEffort`).
+/// `model` and `reasoning_effort` are separate because their failure semantics differ: a
+/// rejected model is a failed (re)attach that triggers resume recovery, while a rejected effort
+/// only logs (TS `applyReasoningEffort`).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SessionControls {
     /// Applied through the session's advertised model select option, and only when that option
@@ -145,7 +145,8 @@ fn launch_identity(spec: &LaunchSpec) -> Value {
 }
 
 /// SHA-256 of the canonical JSON (object keys sorted at every level). Launch fingerprints are
-/// persisted, so they must not change with serde_json's `preserve_order` feature (DECISIONS 17).
+/// persisted, so they must not change with serde_json's `preserve_order` feature (which feature
+/// unification turns on workspace-wide whenever one crate enables it).
 fn digest(value: &Value) -> String {
     let mut canonical = String::new();
     write_canonical(value, &mut canonical);
@@ -306,7 +307,7 @@ fn spawn_env(agent: &AgentDefinition) -> BTreeMap<String, String> {
 ///
 /// DECIDED: send this `_meta` on session/load and session/resume too (acpx 0.13.2 sends it only on
 /// session/new). WHY: otherwise a reattached Claude session loses the BrowserOS instructions,
-/// model and settingSources isolation; the spike proved Claude accepts it on load and resume.
+/// model and settingSources isolation; Claude accepts it on load and resume.
 fn session_meta(
     agent: &AgentDefinition,
     spec: &LaunchSpec,
@@ -385,7 +386,7 @@ fn controls(agent: &AgentDefinition) -> SessionControls {
     };
     SessionControls {
         // DECIDED: replay the model for every kind, Codex included (TS sets Codex's model only
-        // through CODEX_CONFIG). WHY: spike §3.4/§6.2: codex-acp loses its model across load and
+        // through CODEX_CONFIG). WHY: codex-acp loses its model across load and
         // silently fails the next turn; the advertised-value guard keeps this a no-op otherwise.
         model: non_empty(agent.model_id.as_ref()).map(str::to_owned),
         reasoning_effort: non_empty(agent.reasoning_effort.as_ref())

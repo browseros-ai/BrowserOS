@@ -2,7 +2,7 @@
 //! reasoning levels and config-option support (`acp_agents::probe_agent`), launched exactly as chat
 //! launches it. Port of `api/routes/acpx-probe.ts` + `probeAgent.ts`: the strict zod body, 200 with
 //! the probe JSON (probe failures ride inside it), and `500 wrapper_error` when the command cannot
-//! even be resolved. Owned by P16.
+//! even be resolved.
 
 use super::Json;
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};

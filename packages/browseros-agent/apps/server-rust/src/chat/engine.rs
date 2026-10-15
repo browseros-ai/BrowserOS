@@ -2,7 +2,7 @@
 //! `BrowserOsEngine` (built-in loop) or `AcpEngine` (external ACP agents), both emitting the same
 //! `UiChunk` vocabulary. The two-phase shape mirrors TS `createStream(signal) => ReadableStream`:
 //! `start_turn` resolves once the engine is prepared (errors become HTTP statuses), and the
-//! returned stream is the turn itself (errors become `error` chunks). Owned by P8.
+//! returned stream is the turn itself (errors become `error` chunks).
 
 use super::{
     request::{ChatTurnRequest, ResolvedBrowserContext},

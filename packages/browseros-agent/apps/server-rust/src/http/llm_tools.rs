@@ -1,6 +1,7 @@
 //! One-shot LLM calls used by the provider settings and scheduled-task editor. Provider
 //! selection and secret ownership stay here; the shared agent crate owns model transports.
-//! Unlike chat, each call substitutes a fresh UUID in custom headers (TS pipeline F11).
+//! Unlike chat, each call substitutes a fresh UUID for `{{conversationId}}` in custom headers, as
+//! the TS one-shot pipeline does.
 
 use super::Json;
 use crate::{AppState, db::ProviderRow, oauth::OAuthProvider};
@@ -165,7 +166,7 @@ async fn resolve_refine_provider(
                 )))
             };
         }
-        // P2's provider lookup covers both kinds and preserves the caller's exact id.
+        // The provider store's lookup covers both kinds and preserves the caller's exact id.
         // A second lookup through the UUID-based ACP store could normalize an unknown id.
         return Err(failure(&format!("Unknown provider {id}")));
     }

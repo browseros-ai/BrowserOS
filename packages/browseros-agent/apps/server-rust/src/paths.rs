@@ -1,6 +1,6 @@
 //! On-disk layout under the BrowserOS data dir (`$BROWSEROS_DIR` › `~/.browseros-dev` when
 //! `NODE_ENV=development` › `~/.browseros`): the shared SQLite file, tool output, ACP session
-//! records, MCP-host data. The same dir the TS server uses, so either binary can run. Owned by P3.
+//! records, MCP-host data. The same dir the TS server uses, so either binary can run.
 
 use crate::config::EnvConfig;
 use std::path::PathBuf;

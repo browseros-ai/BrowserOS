@@ -1,4 +1,5 @@
-//! The OAuth providers table: client ids, URLs, scopes and extra params verbatim (recon A2.5).
+//! The OAuth providers table: client ids, URLs, scopes and extra params verbatim from the TS
+//! server.
 
 use std::str::FromStr;
 

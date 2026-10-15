@@ -55,24 +55,10 @@ impl Metrics {
         Self::default()
     }
 
-    /// Initializes once after installation identity is resolved. Keys are compiled from the
-    /// same env name as Bun's INLINED_ENV; Chromium need not export them at runtime.
-    ///
-    /// Composition-root handoff (`app.rs` owns these lines): add `pub metrics: Metrics` to
-    /// `AppInner`, and immediately after `Identity::load` construct the process sink:
-    /// ```ignore
-    /// let metrics = Metrics::initialize(MetricsConfig {
-    ///     install_id: identity.install_id.clone(),
-    ///     browseros_version: config.instance.browseros_version.clone(),
-    ///     chromium_version: config.instance.chromium_version.clone(),
-    ///     server_version: Some(crate::VERSION.to_owned()),
-    ///     ..Default::default()
-    /// }).await;
-    /// ```
-    /// Move it into `AppInner { metrics, ... }`, call `state.metrics.capture("http_server.started",
-    /// json!({"version": crate::VERSION}))` after HTTP bind, and await
-    /// `self.metrics.shutdown()` in `AppState::stop` before the runtime exits. Chat/tool owners
-    /// receive a clone and keep the TS event names; tool and MCP counts roll up automatically.
+    /// The process sink, built once by `AppState::start` right after the installation identity
+    /// is loaded; every reporter holds a clone. The key is compiled in from the same env name
+    /// as Bun's INLINED_ENV, so Chromium need not export it at runtime. `AppState::stop` awaits
+    /// [`Self::shutdown`] so queued events are not lost.
     pub async fn initialize(config: MetricsConfig) -> Self {
         Self::initialize_with(config, BUILD_KEY, "https://us.i.posthog.com").await
     }

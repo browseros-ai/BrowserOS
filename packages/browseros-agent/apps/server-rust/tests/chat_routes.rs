@@ -1203,7 +1203,7 @@ async fn db_records_classify_acp_rows_and_persist_through_the_conversation_store
     Ok(())
 }
 
-// ───── review regressions (P8-fix) ─────
+// ───── review regressions ─────
 
 async fn state_json(h: &Harness, conversation: Uuid) -> Result<Value, Box<dyn Error>> {
     body_json(

@@ -17,8 +17,8 @@ use uuid::Uuid;
 
 use crate::db;
 
-/// A generated request after the TS route's validation and normalization. P3's extractor owns
-/// media types and malformed JSON; CRUD supplies the schema rules missing from generated DTOs.
+/// A generated request after the TS route's validation and normalization. `extract::ZodJson`
+/// owns media types and malformed JSON; CRUD supplies the schema rules missing from generated DTOs.
 pub struct CrudJson<T>(pub T);
 
 impl<S, T> FromRequest<S> for CrudJson<T>
@@ -35,7 +35,7 @@ where
     }
 }
 
-/// Generated models use JavaScript numbers; P2 represents SQLite integer columns as i64.
+/// Generated models use JavaScript numbers; the `db` stores represent SQLite integer columns as i64.
 /// Convert once here, truncating fractional units toward zero while keeping the surrounding
 /// optional/null patch states intact. Integer timestamps are returned as wire numbers again.
 pub fn store_integer(value: f64) -> i64 {

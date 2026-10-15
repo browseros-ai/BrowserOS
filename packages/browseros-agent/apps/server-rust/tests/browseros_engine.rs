@@ -1,4 +1,4 @@
-//! P14 acceptance: `BrowserOsEngine` driving the real built-in agent. A recording
+//! `BrowserOsEngine` driving the real built-in agent. A recording
 //! `LanguageModel` captures every model request. An rmcp streamable-HTTP server stands in for
 //! loopback `/mcp` and records the lease header and query of each request, and fakes record lease
 //! mints/revokes and background-page opens/closes. The suite covers session reuse, the one-rebuild-

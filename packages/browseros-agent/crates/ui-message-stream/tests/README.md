@@ -13,17 +13,17 @@ bun test crates/ui-message-stream/tests/schema.test.ts
 
 - `builtin`: runs `streamText` with `MockLanguageModelV3`, a dynamic MCP-style
   snapshot tool, a static schedule tool, an unknown tool, reasoning, text, and a
-  second model step. This reconstructs recon `agent-and-acp.md` A11.4/A11.5 using
+  second model step. This reconstructs the TS server's built-in turn using
   the real SDK translator and reducer. Error envelopes and tool outputs are fixed
-  test data. The final assistant id is deliberately `""` (recon F8).
-- `acp-legacy`: expands the abbreviated B4.9 captured sequence, fixes its UUID,
+  test data. The final assistant id is deliberately `""`, as TS persists it.
+- `acp-legacy`: expands an abbreviated captured TS ACP sequence, fixes its UUID,
   and sends it through the real SDK reducer/framer. This is a reconstruction of
   the documented capture, not a fresh ACP subprocess capture. The spurious
   input-error updates the existing static tool; its raw input is cleared by the
-  successful output. `acp` covers the corrected available-input sequence required
-  by DECISIONS 6.
-- `prestream-error`, `midstream-error`, `abort`: reconstruct A11.4's lifecycle
-  sequences. Interrupted text stays streaming, including after finish-step.
+  successful output. `acp` covers the corrected available-input sequence the Rust
+  ACP translator emits instead.
+- `prestream-error`, `midstream-error`, `abort`: reconstruct the TS error and abort
+  lifecycle sequences. Interrupted text stays streaming, including after finish-step.
 - `extensions`: exercises every other v7 variant, merged-stream overlap,
   metadata replacement/deep merge, approvals (including explicit null schema
   input), data upserts/transience, reset, and step-local/fallback tool lookup.
@@ -37,14 +37,14 @@ bun test crates/ui-message-stream/tests/schema.test.ts
 Rust compares each persisted snapshot and final message, then checks complete
 SSE bytes including `[DONE]` and key order. Each emitted fixture chunk must also
 deserialize into generated `server_api::models::UiMessageChunk`. Bun validates
-all the same payloads through C1's AJV schema and checks all 28 fixed types plus
+all the same payloads through the server-api contract's AJV schema and checks all 28 fixed types plus
 the open data namespace are represented.
 
-The reducer retains the skeleton's `push(&UiChunk)` interface. Because it cannot
+The reducer's interface is `push(&UiChunk)`. Because it cannot
 return a protocol error, malformed ordering freezes the reducer and exposes an
 additive `error()` accessor; it preserves the last valid message like the SDK's
 failure path. Error/abort chunks are ordinary input and do not freeze reduction.
-Before the first start, the message remains absent, per the skeleton contract.
+Before the first start, the message remains absent.
 
 `ryu-js` supplies ECMAScript number formatting for SSE; serde_json's default
 `1.0` / `1e-6` spelling differs from JSON.stringify's `1` / `0.000001`. Objects

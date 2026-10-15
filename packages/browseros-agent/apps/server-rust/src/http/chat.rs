@@ -7,7 +7,7 @@
 //!
 //! Handlers take `State<Arc<ChatService>>` (projected from `AppState` by `FromRef`) and the
 //! security middleware's [`RequestTrust`], so they can be mounted on a test router with a scripted
-//! service. Owned by P8.
+//! service.
 
 use super::Json;
 use super::{

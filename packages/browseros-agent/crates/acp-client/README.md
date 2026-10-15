@@ -140,9 +140,6 @@ independent of host credentials.
 - DECIDED: Test fixtures use a Cargo binary target and its `CARGO_BIN_EXE` path.
   WHY: This workspace separates Cargo's build directory and final artifact
   directory; deriving a sibling fixture path from the test executable is wrong.
-- DECIDED: Record the generated workspace lockfile changes with this crate.
-  WHY: The new pinned SDK and its transitive dependencies need reproducible
-  resolution for downstream pieces and locked workspace builds.
 - DECIDED: Return owned values from `modes()` and `config_options()`.
   WHY: Notifications mutate shared session state asynchronously; borrowing that
   mutable data after releasing its lock would be unsafe. Aliases share one snapshot.

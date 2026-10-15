@@ -220,16 +220,16 @@ impl Klavis {
 
     pub fn tool_provider(self: &Arc<Self>) -> Arc<dyn LocalToolProvider> {
         self.tool_provider_with_scope(Arc::new(|caller| ConnectorScope {
-            // Bound callers require P15's live-run resolver. Fail closed if the
-            // host forgot to wire it; anonymous external MCP clients need no run.
+            // Without a lease resolver no bound caller can be tied to a live run, so they
+            // fail closed; anonymous external MCP clients need no run.
             rejection: caller
                 .filter(|c| c.session.is_some())
                 .map(|_| "MCP tools require an active conversation run.".into()),
             ..Default::default()
         }))
     }
-    /// P15 maps its opaque lease to selected connectors and a live-run refusal.
-    /// The host never needs to expose its concrete lease type to this module.
+    /// `mcp::connector_scope` maps the caller's opaque lease to its selected connectors and a
+    /// live-run refusal, so this module never sees the concrete lease type.
     pub fn tool_provider_with_scope(
         self: &Arc<Self>,
         scope: ScopeResolver,

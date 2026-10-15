@@ -66,7 +66,7 @@ fn compared_pointers(provider: ProviderKind) -> &'static [&'static str] {
     }
 }
 
-/// Differences from TS that are deliberate (each recorded as a DECIDED in the commit):
+/// Differences from TS that are deliberate:
 /// - OpenAI/Azure Responses: rig asks for `reasoning.encrypted_content` whenever the body
 ///   reasons, so in-turn reasoning replays statelessly; TS relies on stored item ids.
 /// - Gemini: rig marks user parts `thought: false` and sends no `id` on our call/response parts

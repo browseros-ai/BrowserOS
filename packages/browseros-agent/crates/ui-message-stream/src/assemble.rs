@@ -65,7 +65,7 @@ impl UiMessageAssembler {
     }
 
     /// Applies a chunk in emission order. A `start` opens the message with an empty id unless
-    /// the engine supplies one (built-in turns intentionally persist `id: ""`, recon F8).
+    /// the engine supplies one (TS built-in turns persist `id: ""`).
     /// Malformed ordering freezes reduction; callers can inspect [`Self::error`].
     pub fn push(&mut self, chunk: &UiChunk) {
         if self.error.is_some() {
@@ -302,7 +302,7 @@ impl UiMessageAssembler {
                 ..
             } => {
                 // ACP's legacy invalid-tool chunk says dynamic:true after a static start. The
-                // existing part wins; otherwise one invocation would persist twice (recon F6).
+                // existing part wins; otherwise one invocation would persist twice.
                 let existing = find_tool(message, tool_call_id, None, false);
                 let dynamic = existing.map(|index| matches!(&message.parts[index], UiPart::Tool(part) if matches!(part.kind, ToolPartKind::Dynamic { .. }))).unwrap_or(dynamic.unwrap_or(false));
                 update_tool(

@@ -19,14 +19,10 @@ pub struct SentryGuard {
     client: Option<Arc<sentry::Client>>,
 }
 
-/// The process root calls this before CLI/config parsing and retains the guard through shutdown.
-/// Share `Arc<SentryGuard>` with app/chat owners when injecting scheduled-error capture; reuse
-/// that one guard rather than initializing a second client inside `AppState::start`. Its fatal
-/// path calls `guard.capture_startup_error(message)` before returning the existing exit code.
-/// In `app.rs`, add `pub sentry: Arc<SentryGuard>` to `AppInner`, accept the process's
-/// `sentry: Arc<SentryGuard>` in the constructor and move it into `AppInner { sentry, ... }`.
-/// The root retains its clone across config parsing and runtime shutdown; scheduled turns use
-/// `state.sentry.capture_scheduled_error(message)` to keep `request-type=schedule` explicit.
+/// The process's one Sentry client. `main` creates it before CLI/config parsing (so startup
+/// failures are reported), keeps it until the runtime has shut down (dropping it flushes), and
+/// shares it as `Arc<SentryGuard>` with the services that report: the HTTP layer for unhandled
+/// route errors and the chat service for scheduled-turn failures.
 pub fn init() -> SentryGuard {
     let Some(client) = BUILD_DSN.and_then(build_client) else {
         return SentryGuard::default();

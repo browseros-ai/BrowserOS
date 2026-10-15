@@ -22,8 +22,6 @@
 //!   the caller's cleanup ran; until then a POST for the conversation is 409.
 //! - Lock order is `RunsState` → `RunInner`; never acquire the registry lock while holding a
 //!   record's lock. Neither lock is held across an await.
-//!
-//! Owned by P8.
 
 use super::{PanelStream, Resume, engine::ChatRejection};
 use crate::activity::ServerActivity;

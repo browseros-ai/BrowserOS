@@ -4,8 +4,8 @@
 //! (`ai/src/ui-message-stream/to-ui-message-chunk.ts`) emits, because the stream-compat harness
 //! byte-diffs the Rust server's SSE against the TS server's. Optional keys are omitted; required
 //! JSON payloads keep explicit null, including `tool-output-available.output` for absent results.
-//! Variants cover every `ai@7.0.114` `UIMessageChunk` type (DECISIONS 14: the contract union is
-//! complete), including `data-*` chunks, whose open-ended type is the one untagged variant.
+//! Variants cover every `ai@7.0.114` `UIMessageChunk` type (the contract union is complete),
+//! including `data-*` chunks, whose open-ended type is the one untagged variant.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -289,7 +289,8 @@ mod tests {
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../contracts/server-api/fixtures")
     }
 
-    /// Every `chunk-*.json` fixture of C1's contract parses and re-serializes to the same JSON.
+    /// Every `chunk-*.json` fixture of the server-api contract parses and re-serializes to the
+    /// same JSON.
     #[test]
     fn contract_chunk_fixtures_round_trip() -> Result<(), Box<dyn std::error::Error>> {
         let mut seen = 0;

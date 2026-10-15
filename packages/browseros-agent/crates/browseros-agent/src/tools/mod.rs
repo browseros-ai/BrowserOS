@@ -111,7 +111,8 @@ impl ToolCatalog {
 }
 
 /// `JSON.stringify` of an object whose keys must come out in a fixed order no matter whether
-/// serde_json's `preserve_order` feature is on (DECISIONS 17): the nudge sentinels are parsed by
+/// serde_json's `preserve_order` feature is on (feature unification makes it workspace-wide
+/// whenever one crate enables it): the nudge sentinels are parsed by
 /// the app, but their text is also model-visible and byte-compared by the compat harness.
 pub(crate) fn ordered_json_object(entries: &[(&str, &Value)]) -> String {
     let body = entries

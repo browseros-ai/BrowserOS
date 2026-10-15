@@ -9,8 +9,6 @@
 //!                                                     │  per step: normalize_for_model → compaction::prepare_step
 //!                                                     └► llm::LanguageModel::stream ──► UiChunk stream
 //! ```
-//!
-//! Module owners: `llm` (P5), `messages`/`compaction`/`prompt` (P6), `agent` + `tools` (P7).
 
 mod agent;
 pub mod compaction;

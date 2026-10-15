@@ -1,5 +1,6 @@
-//! Process telemetry: file logging (`<executionDir>/browseros-server.log`, rotated; P3), Sentry
-//! for startup failures and panics, PostHog metrics with the TS event names (P13).
+//! Process telemetry: file logging (`<executionDir>/browseros-server.log`, rotated), Sentry for
+//! startup failures, panics and unhandled request errors, and PostHog metrics with the TS event
+//! names.
 
 pub mod logging;
 pub mod metrics;

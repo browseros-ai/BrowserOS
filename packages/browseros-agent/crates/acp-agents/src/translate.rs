@@ -1,8 +1,8 @@
-//! ACP `session/update` → AI SDK v7 UI message stream chunks (spike §4.3). Replaces three TS layers
+//! ACP `session/update` → AI SDK v7 UI message stream chunks. Replaces three TS layers
 //! in one pass: acpx's event normalization (`runtime.js` tool summaries, plan status text), the
 //! acpx-ai-provider `EventTranslator` (block/tool state), and AI SDK `streamText` +
 //! `toUIMessageStream` (step envelope, finish mapping). Deliberate change vs TS: completed tools
-//! emit `tool-input-available` instead of the spurious `tool-input-error` (recon F6).
+//! emit `tool-input-available` instead of the spurious `tool-input-error`.
 
 use std::collections::HashMap;
 
@@ -48,7 +48,8 @@ struct ToolState {
 }
 
 /// One turn's translation state: the open text/reasoning block, tool calls by id, the lazily
-/// emitted `start-step`, and Codex's silent `systemError` flag (spike §6.1).
+/// emitted `start-step`, and Codex's silent `systemError` flag (a failure it reports only in
+/// `_meta`).
 #[derive(Default)]
 pub struct UiTranslator {
     next_id: u64,
@@ -316,7 +317,7 @@ impl UiTranslator {
             Some(ToolCallStatus::Completed | ToolCallStatus::Failed)
         );
         if !terminal {
-            // The visible progress line, sent whole and only when it changes (spike §4.3). TS sent
+            // The visible progress line, sent whole and only when it changes. TS sent
             // the same text but re-sent repeats, since it diffed against the concatenation.
             if summary != state.last_summary {
                 state.last_summary = summary.clone();

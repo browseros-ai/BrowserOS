@@ -1,5 +1,6 @@
 //! The built-in agent loop against scripted models and in-memory tool sources: chunk order and
-//! shapes (recon A11.4), tool scheduling, retries, limits, cancellation and the transcript each
+//! shapes (TS's pre-stream and mid-stream error lifecycles), tool scheduling, retries, limits,
+//! cancellation and the transcript each
 //! step adds. Time is paused, so backoff and tool sleeps cost nothing.
 
 // Scripts hold `Result<ModelEvent, ModelError>` items by value, the shape `LanguageModel` streams;

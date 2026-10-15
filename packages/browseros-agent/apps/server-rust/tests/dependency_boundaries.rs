@@ -1,4 +1,4 @@
-//! Crate-graph rules of the server-rust design (design-claude Q1, DECISIONS 2/6), checked against
+//! Crate-graph rules of the server-rust design, checked against
 //! `cargo metadata` so a stray `Cargo.toml` line fails CI rather than eroding a seam:
 //! - `ui-message-stream` is pure vocabulary: no agent, MCP, browser or app crate.
 //! - `browseros-agent` reaches browser tools over loopback MCP, never through host/browser crates.

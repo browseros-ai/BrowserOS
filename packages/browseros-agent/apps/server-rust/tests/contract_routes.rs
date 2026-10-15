@@ -1,4 +1,4 @@
-//! The router serves exactly the (method, path) set of C1's OpenAPI contract
+//! The router serves exactly the (method, path) set of the OpenAPI contract
 //! (`contracts/server-api/openapi.yaml` + `paths/*.yaml`), parsed at test time so a contract
 //! change without a matching `http::ROUTES` change fails here. Both directions are checked: the
 //! static table against the spec, and the mounted router by sending each spec request through it.
@@ -109,8 +109,9 @@ fn concrete(path: &str) -> String {
 }
 
 /// Every spec route reaches a handler rather than the router fallback. Status codes are not
-/// asserted: they change as pieces replace the skeleton's 501s. Once P3 adds guards, requests
-/// here must carry whatever headers pass them, or a guard's 403 would mask a missing route.
+/// asserted (each route's own tests own those). The ingress guards answer before routing, so a
+/// guarded route's 403 proves nothing here; `route_table_equals_contract` covers those paths,
+/// and `build_router` mounts the table verbatim.
 #[tokio::test]
 async fn mounted_router_serves_every_contract_route() -> Result<(), Box<dyn std::error::Error>> {
     let config_dir = tempfile::tempdir()?;

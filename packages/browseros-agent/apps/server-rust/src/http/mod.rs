@@ -1,11 +1,11 @@
 //! The HTTP surface. Every route is registered in exactly one place, [`ROUTES`], which
-//! `app::build_router` mounts verbatim and `tests/contract_routes.rs` compares against C1's
-//! OpenAPI spec (`contracts/server-api`). Handlers live one module per contract path group.
+//! `app::build_router` mounts verbatim and `tests/contract_routes.rs` compares against the
+//! OpenAPI contract (`contracts/server-api`). Handlers live one module per contract path group.
 //!
-//! Cross-cutting behaviour (P3): middleware order is Hono's — CORS (no PUT in preflight) →
-//! trusted-origin guard → per-route [`Auth`] → handler; unmatched routes are a plain-text 404.
-//! In the S0 skeleton every handler answers 501 `{"error":"not implemented"}`; pieces replace
-//! handler bodies, never the table's shape.
+//! Cross-cutting behaviour lives in one middleware, `security::ingress`, in Hono's order:
+//! CORS (no PUT in preflight) → trusted-origin guard → trusted-app prefix guard → `/mcp`
+//! browser-fetch guard → handler; unmatched routes are a plain-text 404. The per-route [`Auth`]
+//! column documents that middleware and is held to it by a test.
 
 pub mod acpx_probe;
 pub mod agents;
@@ -31,7 +31,8 @@ use axum::{
 };
 use http::{Method, StatusCode};
 
-/// Which request-trust check a route runs (recon http-api.md §0 codes).
+/// Which request-trust check a route runs. `security::ingress` enforces these by path prefix;
+/// `tests/contract_routes.rs` holds the two in agreement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Auth {
     /// `O`: trusted-origin guard only.
@@ -384,7 +385,7 @@ pub static ROUTES: &[Route] = &[
         auth: Auth::Origin,
         mount: |m| on(m, mcp_manager::uninstall),
     },
-    // mcp.yaml — P15 swaps POST/DELETE for the lease layer + shared host's rmcp service.
+    // mcp.yaml: POST/DELETE are the shared host's rmcp service behind the lease admission.
     Route {
         method: Method::GET,
         path: "/mcp",

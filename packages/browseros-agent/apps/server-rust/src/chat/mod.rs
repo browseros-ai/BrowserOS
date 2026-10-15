@@ -18,9 +18,6 @@
 //! DELETE /chat/{id} ─► ChatService::delete (own task) ─► ConversationRuns::delete_with:
 //!   panels retired + 409 gate ─ stop, await end ─ cleanup (ACP + built-in forget, cache) ─ remove
 //! ```
-//!
-//! Owned by P8 (`mod`, `runs`, `history`, `request`, `engine`), P14 (`browseros_engine`),
-//! P16 (`acp_engine`).
 
 mod acp_engine;
 mod browseros_engine;
@@ -157,7 +154,7 @@ fn provider_record(row: crate::db::ProviderRow) -> ProviderRecord {
 }
 
 /// Chrome tab id → BrowserOS page id, against the live browser (TS `browser.resolveTabIds`).
-/// Implemented over the MCP host's `BrowserService` once it is wired (P15).
+/// Production adapter: `mcp::HostTabs`, over the shared host's `BrowserService`.
 #[async_trait::async_trait]
 pub trait TabResolver: Send + Sync {
     /// Tabs that do not resolve are simply absent from the map.
@@ -171,7 +168,7 @@ pub struct ChatDeps {
     pub browseros: Arc<dyn ChatEngine>,
     pub acp: Arc<dyn ChatEngine>,
     pub oauth: Arc<TokenManager>,
-    /// `None` until the browser is wired: page ids then pass through as the client sent them.
+    /// `None` (tests only): page ids pass through as the client sent them.
     pub tabs: Option<Arc<dyn TabResolver>>,
     /// `BROWSEROS_USE_MOCK_LLM=true`: no credential resolution (the engine swaps in the mock).
     pub use_mock_llm: bool,
@@ -305,7 +302,7 @@ impl ChatService {
             .await;
         // TS tags the request scope `request-type=schedule` and its error handler captures the
         // unhandled (500) failures; a scheduled turn has no user watching, so this is its only
-        // report. Interactive turns and 4xx rejections are not captured (P13's Sentry scope).
+        // report. Interactive turns and 4xx rejections are not captured.
         if let (true, Err(ChatRejection::Internal(error))) = (scheduled, &started) {
             self.telemetry
                 .sentry
@@ -554,7 +551,7 @@ impl ChatService {
 }
 
 /// This turn's user message as the client shows it: raw text (never the model-facing wrapper).
-/// Built-in turns carry one text part (attachments are ignored there, recon F9); ACP turns carry
+/// Built-in turns carry one text part (attachments are ignored there, as in TS); ACP turns carry
 /// the text (when non-empty) then the attachments as data-URL file parts, TS order.
 fn user_message(message: &str, input: &ChatTurnRequest, target: &TargetKey) -> UiMessage {
     let text = |text: &str| {

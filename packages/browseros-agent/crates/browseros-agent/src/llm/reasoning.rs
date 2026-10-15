@@ -1,5 +1,5 @@
-//! Per-provider reasoning options: an exact port of `agent/reasoning-config.ts:102-205`
-//! (recon A3). The output is the TS `AgentReasoningConfig` object verbatim — an optional
+//! Per-provider reasoning options: an exact port of `agent/reasoning-config.ts:102-205`.
+//! The output is the TS `AgentReasoningConfig` object verbatim — an optional
 //! top-level `reasoning` level (Anthropic) and/or AI SDK `providerOptions` namespaces — so it
 //! can be compared literally with the TS tests. The rig adapter (`rig::overlay`) renders it into
 //! the request body exactly as each AI SDK provider would.

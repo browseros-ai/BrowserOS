@@ -1,4 +1,5 @@
-//! P13 behavior checks against the real HTTP handlers, SQLite stores and a loopback provider.
+//! `/test-provider` and `/refine-prompt` against the real HTTP handlers, SQLite stores and a
+//! loopback provider.
 //! The fake speaks OpenAI streaming chunks, so partial/error/empty output crosses the same
 //! transport and generation path as the settings UI without spending a vendor credential.
 
@@ -70,15 +71,6 @@ impl Fixture {
         let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
             .await?
             .to_vec();
-        // Fail at the dependency seam instead of masking P5's placeholder as a route/status
-        // regression. This is an error, never a skipped test or a stub-specific success.
-        if let Ok(value) = serde_json::from_slice::<Value>(&bytes)
-            && let Some(message) = value.get("message").and_then(Value::as_str)
-            && (message.contains("provider is not implemented yet")
-                || message.contains("generate_text is not implemented yet"))
-        {
-            return Err(format!("BLOCKED BY P5: {message}; rebase feat/server-rust after the LLM implementation merges, then rerun llm_tools").into());
-        }
         Ok((status, bytes))
     }
 

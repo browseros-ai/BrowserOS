@@ -10,7 +10,7 @@
 //! defaults, the browseros `target` transform, unknown keys stripped — and on failure returns the
 //! exact zod 4.6.5 issue list (key order, nested unions, the "one non-aborted branch" rule), so a
 //! 400 body is byte-identical to the TS server's. Hydration and resolution port
-//! `chat-provider-config.ts` and `lib/clients/llm/config.ts`, error texts verbatim. Owned by P8.
+//! `chat-provider-config.ts` and `lib/clients/llm/config.ts`, error texts verbatim.
 
 use crate::{
     db::{AgentKind, ProviderRow},
@@ -104,7 +104,7 @@ pub struct ChatTurnRequest {
     pub previous_conversation: Vec<PreviousMessage>,
     pub persist: Option<bool>,
     pub history_mode: Option<HistoryMode>,
-    /// Used by ACP only; the built-in path ignores attachments (recon F9 parity).
+    /// Used by ACP only; the built-in path ignores attachments, as TS does.
     pub attachments: Vec<Attachment>,
     pub reasoning_effort: Option<String>,
     pub reasoning_summary: Option<String>,

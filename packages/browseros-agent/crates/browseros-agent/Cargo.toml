@@ -35,7 +35,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 tracing.workspace = true
 url.workspace = true
-# Loop + tool sources (P7): merged tool order, MCP transport probe and the legacy-SSE MCP
+# Loop + tool sources: merged tool order, MCP transport probe and the legacy-SSE MCP
 # transport rmcp 3 no longer ships, and the filesystem tools.
 base64.workspace = true
 globset.workspace = true

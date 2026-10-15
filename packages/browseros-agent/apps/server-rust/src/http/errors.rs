@@ -1,6 +1,6 @@
 //! One constructor per existing error body dialect (contract `responses.yaml`, `common.yaml`).
 //! Handlers never hand-build error JSON, so each dialect stays byte-identical everywhere it is
-//! used. P3 pins every body against the contract fixtures.
+//! used. Tests pin every body against the contract fixtures.
 
 use super::Json;
 use super::extract::ZodIssue;

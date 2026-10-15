@@ -313,7 +313,7 @@ pub(crate) fn build(config: &LlmConfig, http: &HttpStack) -> Result<RigModel, Ll
                 vec![
                     header("openai-intent", "conversation-edits")?,
                     // TS sends `user` on every step; rig's Copilot wire would send `agent` on
-                    // follow-ups. Old-wire parity wins (design-codex §4.3).
+                    // follow-ups. Old-wire parity wins.
                     header("x-initiator", "user")?,
                 ],
             )?;

@@ -1,6 +1,6 @@
 //! Process inputs: the CLI (`--version`, `--config <path>`), the Chromium-written sidecar
 //! `config.json` (parsed like `@browseros/shared/schemas/sidecar-config`), environment variables,
-//! and the exit-code contract Chromium's supervisor reads. Owned by P3.
+//! and the exit-code contract Chromium's supervisor reads.
 
 use serde_json::Value;
 use std::{
