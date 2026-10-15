@@ -216,7 +216,7 @@ async fn first_turn_seeds_and_applies_controls_then_reuses_the_process() -> Test
     assert_eq!(
         fx.calls(),
         [
-            format!("p1 spawn default cwd={}", workspace.canonicalize()?.display()),
+            format!("p1 spawn default cwd={}", display_cwd(&workspace)?),
             "p1 initialize".into(),
             "p1 new sess-p1-1 mcp=browseros@http://127.0.0.1:9/mcp#1,notes@http://127.0.0.1:9/notes#0 meta={\"claudeCode\":{\"options\":{\"model\":\"fake-pro\"}}}".into(),
             "p1 set_config sess-p1-1 model=fake-pro".into(),
@@ -635,4 +635,14 @@ async fn dropping_the_stream_cancels_the_turn_and_frees_the_conversation() -> Te
     }
     runtime.shutdown().await;
     Ok(())
+}
+
+/// The canonical path a child reports as its cwd: Windows `canonicalize` adds a verbatim `\\?\`
+/// prefix that `current_dir()` in the agent does not.
+fn display_cwd(path: &std::path::Path) -> std::io::Result<String> {
+    let canonical = path.canonicalize()?.display().to_string();
+    Ok(canonical
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical)
+        .to_owned())
 }

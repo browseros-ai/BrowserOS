@@ -60,11 +60,12 @@ async fn a_probe_reports_models_reasoning_and_config_support() -> TestResult {
         })
     );
     let calls = std::fs::read_to_string(&log)?;
-    let canonical_home = dir.path().canonicalize()?;
-    assert!(
-        calls.contains(&format!("cwd={}", canonical_home.display())),
-        "{calls}"
-    );
+    // Windows canonical paths carry a verbatim `\\?\` prefix the agent's current_dir() does not report.
+    let canonical_home = dir.path().canonicalize()?.display().to_string();
+    let canonical_home = canonical_home
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&canonical_home);
+    assert!(calls.contains(&format!("cwd={canonical_home}")), "{calls}");
     assert!(
         calls.contains("set_config sess-"),
         "the first option is poked with its own value"
@@ -101,33 +102,38 @@ async fn probe_failures_use_acp_probe_codes() -> TestResult {
         Some("spawn_failed")
     );
 
-    let crash = dir.path().join("crash.sh");
-    std::fs::write(&crash, "#!/bin/sh\necho boom >&2\nexit 3\n")?;
-    set_executable(&crash)?;
-    let result = probe_agent(
-        request(Some(crash.display().to_string()), DEFAULT_PROBE_TIMEOUT),
-        &host(&dir),
-    )
-    .await?;
-    let error = result.error.ok_or("crash error")?;
-    assert_eq!(error.code, "agent_crashed");
-    assert_eq!(
-        error.message,
-        "Agent exited (code=3, signal=null) before responding to initialize"
-    );
+    // Agent stand-ins below are POSIX shell scripts; on Windows they are not executable, so the
+    // probe correctly reports spawn_failed (covered above) and these cases only run on Unix.
+    #[cfg(unix)]
+    {
+        let crash = dir.path().join("crash.sh");
+        std::fs::write(&crash, "#!/bin/sh\necho boom >&2\nexit 3\n")?;
+        set_executable(&crash)?;
+        let result = probe_agent(
+            request(Some(crash.display().to_string()), DEFAULT_PROBE_TIMEOUT),
+            &host(&dir),
+        )
+        .await?;
+        let error = result.error.ok_or("crash error")?;
+        assert_eq!(error.code, "agent_crashed");
+        assert_eq!(
+            error.message,
+            "Agent exited (code=3, signal=null) before responding to initialize"
+        );
 
-    let hang = dir.path().join("hang.sh");
-    std::fs::write(&hang, "#!/bin/sh\nexec sleep 30\n")?;
-    set_executable(&hang)?;
-    let result = probe_agent(
-        request(Some(hang.display().to_string()), Duration::from_millis(300)),
-        &host(&dir),
-    )
-    .await?;
-    assert_eq!(
-        result.error.map(|error| error.code),
-        Some("initialize_timeout".into())
-    );
+        let hang = dir.path().join("hang.sh");
+        std::fs::write(&hang, "#!/bin/sh\nexec sleep 30\n")?;
+        set_executable(&hang)?;
+        let result = probe_agent(
+            request(Some(hang.display().to_string()), Duration::from_millis(300)),
+            &host(&dir),
+        )
+        .await?;
+        assert_eq!(
+            result.error.map(|error| error.code),
+            Some("initialize_timeout".into())
+        );
+    }
     Ok(())
 }
 
@@ -153,9 +159,4 @@ async fn an_unsplittable_command_is_a_launch_error() -> TestResult {
 fn set_executable(path: &std::path::Path) -> std::io::Result<()> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
-}
-
-#[cfg(not(unix))]
-fn set_executable(_: &std::path::Path) -> std::io::Result<()> {
-    Ok(())
 }
