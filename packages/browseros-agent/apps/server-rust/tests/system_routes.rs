@@ -64,7 +64,13 @@ async fn health_status_aliases_and_shutdown() -> Result {
     drop(guard);
     let guard = state.activity.mcp_post_started();
     assert!(!state.activity.can_update());
+    let overlapping_run = state.activity.run_started();
     drop(guard);
+    assert!(
+        !state.activity.can_update(),
+        "handoff leaves the overlapping chat reservation active"
+    );
+    drop(overlapping_run);
     assert!(state.activity.can_update());
     for method in ["GET", "HEAD", "PUT"] {
         let response = router

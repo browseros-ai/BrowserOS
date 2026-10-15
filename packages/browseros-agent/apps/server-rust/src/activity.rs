@@ -9,8 +9,10 @@ use std::sync::{
 
 #[derive(Debug, Default)]
 pub struct ServerActivity {
-    active_runs: AtomicUsize,
-    in_flight_mcp_posts: AtomicUsize,
+    // TS reads both counters on one event-loop turn. A single Rust counter
+    // preserves that atomic idle observation: separate loads could straddle a
+    // chat/MCP handoff and report idle although at least one was always active.
+    active: AtomicUsize,
 }
 
 impl ServerActivity {
@@ -20,26 +22,25 @@ impl ServerActivity {
 
     /// Held for the lifetime of one chat run; dropping it decrements.
     pub fn run_started(&self) -> ActivityGuard<'_> {
-        self.active_runs.fetch_add(1, Ordering::SeqCst);
-        ActivityGuard(&self.active_runs)
+        self.active.fetch_add(1, Ordering::SeqCst);
+        ActivityGuard(&self.active)
     }
 
     /// Held for the lifetime of one `/mcp` POST.
     pub fn mcp_post_started(&self) -> ActivityGuard<'_> {
-        self.in_flight_mcp_posts.fetch_add(1, Ordering::SeqCst);
-        ActivityGuard(&self.in_flight_mcp_posts)
+        self.active.fetch_add(1, Ordering::SeqCst);
+        ActivityGuard(&self.active)
     }
 
     /// The HTTP response body can outlive its handler future. An owned guard
     /// keeps OTA busy until the transport finishes or the caller disconnects.
     pub fn mcp_post_started_owned(self: &Arc<Self>) -> McpPostGuard {
-        self.in_flight_mcp_posts.fetch_add(1, Ordering::SeqCst);
+        self.active.fetch_add(1, Ordering::SeqCst);
         McpPostGuard(self.clone())
     }
 
     pub fn can_update(&self) -> bool {
-        self.active_runs.load(Ordering::SeqCst) == 0
-            && self.in_flight_mcp_posts.load(Ordering::SeqCst) == 0
+        self.active.load(Ordering::SeqCst) == 0
     }
 }
 
@@ -50,7 +51,7 @@ pub struct McpPostGuard(Arc<ServerActivity>);
 
 impl Drop for McpPostGuard {
     fn drop(&mut self) {
-        self.0.in_flight_mcp_posts.fetch_sub(1, Ordering::SeqCst);
+        self.0.active.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
