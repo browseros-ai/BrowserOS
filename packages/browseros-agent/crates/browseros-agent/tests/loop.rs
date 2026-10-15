@@ -2,6 +2,10 @@
 //! shapes (recon A11.4), tool scheduling, retries, limits, cancellation and the transcript each
 //! step adds. Time is paused, so backoff and tool sleeps cost nothing.
 
+// Scripts hold `Result<ModelEvent, ModelError>` items by value, the shape `LanguageModel` streams;
+// `ModelError` belongs to the llm module and its size is not this test's to change.
+#![allow(clippy::result_large_err)]
+
 use browseros_agent::{
     Agent, AgentBuildError, AgentConfig, ModelInfo, TurnInput,
     llm::{

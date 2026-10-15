@@ -3,9 +3,9 @@
 //! — only `filesystem_read`, limited to BrowserOS-generated tool output the lease was granted.
 //!
 //! Every tool returns TS's `FilesystemToolResult` (`{text, isError?, images?}`) as its wire output
-//! and never fails the call: errors, including path-boundary refusals, become `isError` results
-//! the model can read (`executeWithMetrics`). The disk work runs on the blocking pool; a cancelled
-//! call returns at once and abandons it (bash kills its child instead).
+//! and fails the call only when it is cancelled: errors, including path-boundary refusals, become
+//! `isError` results the model can read (`executeWithMetrics`). The disk work runs on the blocking
+//! pool; a cancelled call returns at once and abandons it (bash kills its child instead).
 
 mod bash;
 mod edit;
