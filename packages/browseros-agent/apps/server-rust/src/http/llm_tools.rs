@@ -24,8 +24,8 @@ pub async fn test_provider(
     State(state): State<AppState>,
     super::extract::ZodJson(body): super::extract::ZodJson<Value>,
 ) -> Response {
-    if let Err(response) = validate(&body, false) {
-        return response;
+    if let Err(issues) = validate(&body, false) {
+        return super::errors::zod_400(&issues);
     }
     let mut config = config_from_body(&body);
     if let Some(id) = nonempty_string(&body, "providerId") {
@@ -97,8 +97,8 @@ pub async fn refine_prompt(
     State(state): State<AppState>,
     super::extract::ZodJson(body): super::extract::ZodJson<Value>,
 ) -> Response {
-    if let Err(response) = validate(&body, true) {
-        return response;
+    if let Err(issues) = validate(&body, true) {
+        return super::errors::zod_400(&issues);
     }
     let row = match resolve_refine_provider(&state, &body).await {
         Ok(row) => row,
@@ -356,7 +356,7 @@ fn internal_error(message: &str) -> Response {
 
 // Issue order follows the Zod object's declared fields, rather than request key order. Unknown
 // keys are ignored, and optional fields still reject null; serde Option<T> cannot model that.
-fn validate(body: &Value, refine: bool) -> Result<(), Response> {
+fn validate(body: &Value, refine: bool) -> Result<(), Vec<super::extract::ZodIssue>> {
     let mut issues = Vec::new();
     if !body.is_object() {
         issues.push(invalid_type("object", Some(body), vec![]));
@@ -425,7 +425,7 @@ fn validate(body: &Value, refine: bool) -> Result<(), Response> {
     if issues.is_empty() {
         Ok(())
     } else {
-        Err(super::errors::zod_400(&issues))
+        Err(issues)
     }
 }
 
