@@ -3,13 +3,16 @@
 //! future type strings and legacy JSON. Zod rules (trimming, strict objects, UTF-16 lengths,
 //! headers, and ordered issues) run before decoding request models.
 
-use crate::http::Json;
+use crate::http::{
+    Json,
+    zod::{self, Issues},
+};
 use axum::{
     extract::{FromRequest, Request},
     response::{IntoResponse, Response},
 };
 use http::StatusCode;
-use serde::{Serialize, Serializer, de::DeserializeOwned, ser::SerializeMap};
+use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use server_api::models as api;
 use std::collections::HashSet;
@@ -67,8 +70,8 @@ impl IntoResponse for CrudError {
 pub fn decode<T: CrudRequest>(mut value: Value) -> Result<T, CrudError> {
     let mut issues = Issues::default();
     T::normalize(&mut value, &mut issues);
-    if !issues.0.is_empty() {
-        return Err(issues.response().into());
+    if !issues.is_empty() {
+        return Err(issues.into_response().into());
     }
     serde_json::from_value(value).map_err(|error| {
         internal_error(&format!(
@@ -76,71 +79,6 @@ pub fn decode<T: CrudRequest>(mut value: Value) -> Result<T, CrudError> {
         ))
         .into()
     })
-}
-
-/// Zod includes kind-specific metadata in an ordered pretty-printed JSON string. A plain
-/// `Value` would reorder its keys and change that string, even though the outer JSON is equal.
-struct Issue(Vec<(&'static str, Value)>);
-
-impl Serialize for Issue {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (key, value) in &self.0 {
-            map.serialize_entry(key, value)?;
-        }
-        map.end()
-    }
-}
-
-#[derive(Default)]
-pub struct Issues(Vec<Issue>);
-
-impl Issues {
-    fn push(&mut self, fields: Vec<(&'static str, Value)>, path: &[Value], message: String) {
-        let mut fields = fields;
-        fields.extend([("path", json!(path)), ("message", json!(message))]);
-        self.0.push(Issue(fields));
-    }
-
-    fn custom(&mut self, path: &[Value], message: &str) {
-        self.0.push(Issue(vec![
-            ("code", json!("custom")),
-            ("message", json!(message)),
-            ("path", json!(path)),
-        ]));
-    }
-
-    fn invalid_type(&mut self, expected: &str, actual: Option<&Value>, path: &[Value]) {
-        let received = match actual {
-            None => "undefined",
-            Some(Value::Null) => "null",
-            Some(Value::Bool(_)) => "boolean",
-            Some(Value::Number(_)) => "number",
-            Some(Value::String(_)) => "string",
-            Some(Value::Array(_)) => "array",
-            Some(Value::Object(_)) => "object",
-        };
-        self.push(
-            vec![
-                ("expected", json!(expected)),
-                ("code", json!("invalid_type")),
-            ],
-            path,
-            format!("Invalid input: expected {expected}, received {received}"),
-        );
-    }
-
-    fn response(&self) -> Response {
-        let message = serde_json::to_string_pretty(&self.0).unwrap_or_default();
-        (
-            StatusCode::BAD_REQUEST,
-            Json(api::ValidationError::new(
-                false,
-                api::ZodIssueError::new(api::ZodIssueErrorName::ZodError, message),
-            )),
-        )
-            .into_response()
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -483,18 +421,15 @@ fn js_whitespace(c: char) -> bool {
 const HEADER_NAME_PATTERN: &str = "/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/";
 const HEADER_VALUE_PATTERN: &str = "/^[\\t\\x20-\\x7e\\x80-\\xff]*(?![\\s\\S])/";
 
-fn regex_issue(pattern: &str, path: &[Value]) -> Issue {
-    Issue(vec![
-        ("origin", json!("string")),
-        ("code", json!("invalid_format")),
-        ("format", json!("regex")),
-        ("pattern", json!(pattern)),
-        ("path", json!(path)),
-        (
-            "message",
-            json!(format!("Invalid string: must match pattern {pattern}")),
-        ),
-    ])
+fn regex_issue(pattern: &str, path: &[Value]) -> Value {
+    json!({
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": pattern,
+        "path": path,
+        "message": format!("Invalid string: must match pattern {pattern}"),
+    })
 }
 
 fn headers(value: &mut Value, path: &[Value], issues: &mut Issues) {
@@ -504,7 +439,7 @@ fn headers(value: &mut Value, path: &[Value], issues: &mut Issues) {
     };
     let mut names = HashSet::new();
     let mut duplicates = Vec::new();
-    let start = issues.0.len();
+    let start = issues.len();
     let mut aborted = false;
     for (name, value) in values {
         let mut entry_path = path.to_vec();
@@ -514,8 +449,7 @@ fn headers(value: &mut Value, path: &[Value], issues: &mut Issues) {
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
         {
-            let issue =
-                serde_json::to_value(regex_issue(HEADER_NAME_PATTERN, &[])).unwrap_or(Value::Null);
+            let issue = regex_issue(HEADER_NAME_PATTERN, &[]);
             issues.push(
                 vec![
                     ("code", json!("invalid_key")),
@@ -534,9 +468,7 @@ fn headers(value: &mut Value, path: &[Value], issues: &mut Issues) {
                 .chars()
                 .all(|c| c == '\t' || matches!(c, '\u{20}'..='\u{7e}' | '\u{80}'..='\u{ff}'))
             {
-                issues
-                    .0
-                    .push(regex_issue(HEADER_VALUE_PATTERN, &entry_path));
+                issues.push_issue(regex_issue(HEADER_VALUE_PATTERN, &entry_path));
             }
         } else {
             issues.invalid_type("string", Some(value), &entry_path);
@@ -547,7 +479,7 @@ fn headers(value: &mut Value, path: &[Value], issues: &mut Issues) {
         }
     }
     // Zod superRefine still runs after refinements fail, but not after an invalid type/key.
-    if !aborted || issues.0.len() == start {
+    if !aborted || issues.len() == start {
         for path in duplicates {
             issues.custom(&path, "Duplicate header name");
         }
@@ -577,7 +509,7 @@ request!(api::CustomAcpAgentConfig, CUSTOM_CONFIG, true);
 
 impl CrudRequest for api::CreateAgentRequest {
     fn normalize(value: &mut Value, issues: &mut Issues) {
-        let start = issues.0.len();
+        let start = issues.len();
         object(value, CREATE_AGENT, true, &[], issues);
         // superRefine is skipped for structural errors, but runs after length and strict-key
         // errors. Only invoke it when the discriminator/config have valid structural types.
@@ -586,11 +518,10 @@ impl CrudRequest for api::CreateAgentRequest {
                 .get("type")
                 .and_then(Value::as_str)
                 .is_some_and(|v| ["custom", "claude", "codex"].contains(&v))
-            && !issues.0[start..].iter().any(|issue| {
-                issue.0.iter().any(|(key, value)| {
-                    *key == "code" && (value == "invalid_type" || value == "invalid_value")
-                })
-            });
+            && !issues
+                .since(start)
+                .iter()
+                .any(|issue| issue["code"] == "invalid_type" || issue["code"] == "invalid_value");
         if structurally_valid {
             let custom = value["type"] == "custom";
             let has_config = value.get("customConfig").is_some();
@@ -610,31 +541,13 @@ impl CrudRequest for api::CreateAgentRequest {
     }
 }
 
-/// UUID parsing must validate the textual form before `Uuid::parse_str`; the latter accepts
-/// simple/braced/URN representations that the shipped zod validator rejects.
+/// A `z.uuid()` path parameter, rejected with zod's 400.
 pub fn uuid_param(value: &str, name: &str) -> Result<Uuid, CrudError> {
-    let bytes = value.as_bytes();
-    let nil_or_max = value == "00000000-0000-0000-0000-000000000000"
-        || value == "ffffffff-ffff-ffff-ffff-ffffffffffff";
-    let regular = bytes.len() == 36
-        && bytes.iter().enumerate().all(|(index, b)| {
-            if [8, 13, 18, 23].contains(&index) {
-                *b == b'-'
-            } else {
-                b.is_ascii_hexdigit()
-            }
-        })
-        && matches!(bytes[14], b'1'..=b'8')
-        && matches!(bytes[19], b'8' | b'9' | b'a' | b'A' | b'b' | b'B');
-    if (nil_or_max || regular)
-        && let Ok(uuid) = Uuid::parse_str(value)
-    {
-        return Ok(uuid);
-    }
-    let mut issues = Issues::default();
-    issues.push(vec![("origin", json!("string")), ("code", json!("invalid_format")), ("format", json!("uuid")),
-        ("pattern", json!("/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/"))], &[json!(name)], "Invalid UUID".to_owned());
-    Err(issues.response().into())
+    zod::parse_uuid(value).ok_or_else(|| {
+        let mut issues = Issues::default();
+        issues.push_issue(zod::uuid_issue(&[json!(name)]));
+        issues.into_response().into()
+    })
 }
 
 pub fn internal_error(message: &str) -> Response {

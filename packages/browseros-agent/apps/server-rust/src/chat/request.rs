@@ -910,6 +910,7 @@ fn config_error(message: &str) -> ChatError {
 /// branch (`continue !== true`): type and enum failures do, string checks do not. That flag is
 /// what zod's union uses to pick a lone surviving branch.
 mod zod {
+    use crate::http::zod::{received, uuid_issue};
     use serde_json::{Value, json};
 
     pub(super) const HEADER_NAME_PATTERN: &str = "/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/";
@@ -925,30 +926,6 @@ mod zod {
         let mut path = path.to_vec();
         path.push(segment.into());
         path
-    }
-
-    /// zod's `received` word: `typeof`, with `null` and `array` split out.
-    fn received(value: Option<&Value>) -> &'static str {
-        match value {
-            None => "undefined",
-            Some(Value::Null) => "null",
-            Some(Value::Bool(_)) => "boolean",
-            Some(Value::Number(_)) => "number",
-            Some(Value::String(_)) => "string",
-            Some(Value::Array(_)) => "array",
-            Some(Value::Object(_)) => "object",
-        }
-    }
-
-    fn uuid_issue(path: &[Value]) -> Value {
-        json!({
-            "origin": "string",
-            "code": "invalid_format",
-            "format": "uuid",
-            "pattern": format!("/{}/", crate::http::extract::UUID_PATTERN),
-            "path": path,
-            "message": "Invalid UUID",
-        })
     }
 
     pub(super) fn union_issue(path: &[Value], branches: Vec<Vec<Value>>) -> Value {

@@ -155,15 +155,7 @@ fn validate(body: &Value, key: bool) -> Result<&str, Box<Response>> {
     }
 }
 fn type_issue(value: Option<&Value>, expected: &str, path: Vec<Value>) -> ZodIssue {
-    let received = match value {
-        None => "undefined",
-        Some(Value::Null) => "null",
-        Some(Value::Bool(_)) => "boolean",
-        Some(Value::Number(_)) => "number",
-        Some(Value::String(_)) => "string",
-        Some(Value::Array(_)) => "array",
-        Some(Value::Object(_)) => "object",
-    };
+    let received = super::zod::received(value);
     ZodIssue {
         code: "invalid_type".into(),
         path,

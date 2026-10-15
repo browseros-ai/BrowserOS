@@ -456,15 +456,7 @@ fn invalid_type(
     value: Option<&Value>,
     path: Vec<Value>,
 ) -> super::extract::ZodIssue {
-    let received = match value {
-        None => "undefined",
-        Some(Value::Null) => "null",
-        Some(Value::Array(_)) => "array",
-        Some(Value::Object(_)) => "object",
-        Some(Value::Bool(_)) => "boolean",
-        Some(Value::Number(_)) => "number",
-        Some(Value::String(_)) => "string",
-    };
+    let received = super::zod::received(value);
     super::extract::ZodIssue {
         code: "invalid_type".to_owned(),
         path,

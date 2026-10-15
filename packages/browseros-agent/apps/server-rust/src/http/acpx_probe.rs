@@ -12,11 +12,9 @@ use axum::{
     extract::State,
     response::{IntoResponse, Response},
 };
-use http::StatusCode;
-use serde::{Serialize, Serializer, ser::SerializeMap};
 use serde_json::{Value, json};
 
-use super::{errors, extract::ZodJson};
+use super::{errors, extract::ZodJson, zod::Issues};
 use crate::AppState;
 
 const MIN_TIMEOUT_MS: f64 = 1_000.0;
@@ -197,7 +195,7 @@ impl ProbeBody {
             );
         }
         match kind {
-            Some(kind) if issues.0.is_empty() => Ok(Self {
+            Some(kind) if issues.is_empty() => Ok(Self {
                 kind,
                 command,
                 env,
@@ -235,75 +233,4 @@ fn trimmed_string(value: Option<&Value>, field: &str, issues: &mut Issues) -> Op
 
 fn js_trim(value: &str) -> &str {
     value.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-}
-
-/// Zod issues as `@hono/zod-validator` reports them: `{"success":false,"error":{"name":
-/// "ZodError","message":<pretty JSON>}}`. Keys are kept in zod's order because the message is a
-/// string (a `custom` issue puts `message` before `path`, unlike every other kind).
-#[derive(Debug, Default)]
-pub struct Issues(Vec<Issue>);
-
-#[derive(Debug)]
-struct Issue(Vec<(&'static str, Value)>);
-
-impl Serialize for Issue {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(Some(self.0.len()))?;
-        for (key, value) in &self.0 {
-            map.serialize_entry(key, value)?;
-        }
-        map.end()
-    }
-}
-
-impl Issues {
-    fn push(&mut self, mut fields: Vec<(&'static str, Value)>, path: &[Value], message: String) {
-        fields.extend([("path", json!(path)), ("message", json!(message))]);
-        self.0.push(Issue(fields));
-    }
-
-    fn custom(&mut self, path: &[Value], message: &str) {
-        self.0.push(Issue(vec![
-            ("code", json!("custom")),
-            ("message", json!(message)),
-            ("path", json!(path)),
-        ]));
-    }
-
-    fn invalid_type(&mut self, expected: &str, actual: Option<&Value>, path: &[Value]) {
-        let received = match actual {
-            None => "undefined",
-            Some(Value::Null) => "null",
-            Some(Value::Bool(_)) => "boolean",
-            Some(Value::Number(_)) => "number",
-            Some(Value::String(_)) => "string",
-            Some(Value::Array(_)) => "array",
-            Some(Value::Object(_)) => "object",
-        };
-        self.push(
-            vec![
-                ("expected", json!(expected)),
-                ("code", json!("invalid_type")),
-            ],
-            path,
-            format!("Invalid input: expected {expected}, received {received}"),
-        );
-    }
-
-    /// The issues as zod's pretty-printed JSON message.
-    pub fn message(&self) -> String {
-        serde_json::to_string_pretty(&self.0).unwrap_or_default()
-    }
-}
-
-impl IntoResponse for Issues {
-    fn into_response(self) -> Response {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(
-                json!({"success": false, "error": {"name": "ZodError", "message": self.message()}}),
-            ),
-        )
-            .into_response()
-    }
 }

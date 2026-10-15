@@ -60,37 +60,9 @@ impl<T: ZodSchema + Send, S: Send + Sync> FromRequest<S> for ZodJson<T> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZodUuid(pub Uuid);
-/// Exact zod-4 UUID expression. Its lowercase-only max UUID alternative is intentional.
-pub const UUID_PATTERN: &str = "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$";
 impl ZodUuid {
     pub fn parse(value: &str) -> Option<Self> {
-        let bytes = value.as_bytes();
-        if bytes.len() != 36 {
-            return None;
-        }
-        let canonical = bytes.iter().enumerate().all(|(i, byte)| {
-            if [8, 13, 18, 23].contains(&i) {
-                *byte == b'-'
-            } else {
-                byte.is_ascii_hexdigit()
-            }
-        });
-        let variant = (b'1'..=b'8').contains(&bytes[14])
-            && matches!(bytes[19], b'8' | b'9' | b'a' | b'b' | b'A' | b'B');
-        (canonical
-            && (variant
-                || value == "00000000-0000-0000-0000-000000000000"
-                || value == "ffffffff-ffff-ffff-ffff-ffffffffffff"))
-            .then(|| Uuid::parse_str(value).ok().map(Self))
-            .flatten()
-    }
-    pub fn issue(path: Vec<Value>) -> ZodIssue {
-        ZodIssue {
-            code: "invalid_format".into(),
-            path,
-            message: "Invalid UUID".into(),
-            attributes: json!({"origin":"string","format":"uuid","pattern":format!("/{UUID_PATTERN}/")}),
-        }
+        super::zod::parse_uuid(value).map(Self)
     }
 }
 impl<S: Send + Sync> FromRequestParts<S> for ZodUuid {
@@ -104,7 +76,8 @@ impl<S: Send + Sync> FromRequestParts<S> for ZodUuid {
         let (name, value) = params.iter().next().ok_or_else(|| {
             super::errors::error_string(http::StatusCode::BAD_REQUEST, "Missing path parameter")
         })?;
-        Self::parse(value).ok_or_else(|| super::errors::zod_400(&[Self::issue(vec![json!(name)])]))
+        Self::parse(value)
+            .ok_or_else(|| super::errors::zod_issues_400(&[super::zod::uuid_issue(&[json!(name)])]))
     }
 }
 

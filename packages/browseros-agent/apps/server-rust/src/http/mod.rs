@@ -23,6 +23,7 @@ pub mod schedules;
 pub mod security;
 pub mod system;
 pub mod wire;
+pub mod zod;
 
 use crate::app::AppState;
 use axum::{
