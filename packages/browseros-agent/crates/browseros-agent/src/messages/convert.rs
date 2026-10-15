@@ -151,12 +151,11 @@ fn process_block(
             }
             _ if is_tool(part) => {
                 let name = tool_name(part);
-                let mut call = json!({"type": "tool-call", "toolCallId": part["toolCallId"], "toolName": name, "input": part["input"]});
-                if part["state"] == "output-error"
-                    && part["input"].is_null()
-                    && let Some(raw) = part.get("rawInput")
-                {
-                    call["input"] = raw.clone();
+                let mut call = json!({"type": "tool-call", "toolCallId": part["toolCallId"], "toolName": name});
+                if part["state"] == "output-error" && part["input"].is_null() {
+                    copy(&mut call, "input", part, "rawInput");
+                } else {
+                    copy(&mut call, "input", part, "input");
                 }
                 copy(&mut call, "providerExecuted", part, "providerExecuted");
                 let call_metadata =

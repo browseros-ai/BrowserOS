@@ -126,7 +126,12 @@ pub fn estimate_tokens(messages: &[ModelMessage]) -> u64 {
                     let (c, i) = match part {
                         AssistantPart::Text { text, .. }
                         | AssistantPart::Reasoning { text, .. } => (utf16(text), 0),
-                        AssistantPart::ToolCall { input, .. } => (utf16(&js_stringify(input)), 0),
+                        AssistantPart::ToolCall { input, .. } => (
+                            input
+                                .as_ref()
+                                .map_or(0, |value| utf16(&js_stringify(value))),
+                            0,
+                        ),
                         AssistantPart::ToolResult(result) => estimate_output(&result.output),
                         AssistantPart::ToolApprovalRequest {
                             approval_id,

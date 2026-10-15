@@ -2512,6 +2512,68 @@
           "content": []
         }
       ]
+    },
+    {
+      "name": "parse-error-without-input",
+      "history": [
+        {
+          "id": "fixture",
+          "role": "assistant",
+          "parts": [
+            {
+              "type": "dynamic-tool",
+              "toolName": "snapshot",
+              "toolCallId": "call",
+              "state": "output-error",
+              "errorText": "parse failed"
+            }
+          ]
+        }
+      ],
+      "catalog": [
+        {
+          "name": "snapshot",
+          "dynamic": true
+        },
+        {
+          "name": "suggest_schedule",
+          "dynamic": false
+        },
+        {
+          "name": "suggest_app_connection",
+          "dynamic": false
+        },
+        {
+          "name": "filesystem_read",
+          "dynamic": false
+        }
+      ],
+      "expected": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "tool-call",
+              "toolCallId": "call",
+              "toolName": "snapshot"
+            }
+          ]
+        },
+        {
+          "role": "tool",
+          "content": [
+            {
+              "type": "tool-result",
+              "toolCallId": "call",
+              "toolName": "snapshot",
+              "output": {
+                "type": "error-text",
+                "value": "parse failed"
+              }
+            }
+          ]
+        }
+      ]
     }
   ],
   "hygiene": [

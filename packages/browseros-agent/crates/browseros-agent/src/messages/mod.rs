@@ -114,7 +114,14 @@ pub enum AssistantPart {
     ToolCall {
         tool_call_id: String,
         tool_name: String,
-        input: Value,
+        // A parse failure can have neither parsed input nor deprecated rawInput. The SDK
+        // then omits input; preserve that distinction from an explicit JSON null.
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
+        input: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
         #[serde(default, skip_serializing_if = "Option::is_none")]

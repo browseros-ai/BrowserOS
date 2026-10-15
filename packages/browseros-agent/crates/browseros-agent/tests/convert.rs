@@ -87,3 +87,18 @@ fn media_hoisting_matches_ts_for_each_provider_capability() -> Result<(), Box<dy
     }
     Ok(())
 }
+
+#[test]
+fn native_media_transport_retains_provider_fields() -> Result<(), Box<dyn std::error::Error>> {
+    let wire = json!([{"role": "tool", "content": [{"type": "tool-result", "toolCallId": "c",
+    "toolName": "file", "output": {"type": "content", "value": [
+        {"type": "file-url", "url": "https://example.com/file", "mediaType": "application/pdf", "filename": "a.pdf"},
+        {"type": "text", "text": "caption", "providerOptions": {"vendor": {"cache": true}}}
+    ]}}]}]);
+    let messages = serde_json::from_value(wire.clone())?;
+    assert_eq!(
+        serde_json::to_value(normalize_for_model(messages, true, true))?,
+        wire
+    );
+    Ok(())
+}

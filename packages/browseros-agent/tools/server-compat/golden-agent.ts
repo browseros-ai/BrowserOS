@@ -310,6 +310,17 @@ conversionInputs.push(
     ],
   },
 )
+conversionInputs.push({
+  name: 'parse-error-without-input',
+  history: [
+    message('assistant', [
+      call('snapshot', 'output-error', {
+        input: undefined,
+        errorText: 'parse failed',
+      }),
+    ]),
+  ],
+})
 const conversion = []
 for (const input of conversionInputs) {
   conversion.push({

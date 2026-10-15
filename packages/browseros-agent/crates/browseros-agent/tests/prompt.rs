@@ -124,3 +124,23 @@ fn mcp_key_matches_ts_sorting_duplicates_and_klavis_default() {
     );
     assert_eq!(mcp_server_key(None, Some("ready")), "");
 }
+
+#[test]
+fn disconnected_workspace_tools_use_the_default_ts_prompt() -> Result<(), Box<dyn std::error::Error>>
+{
+    let fixture = fixtures()?;
+    let default_prompt = fixture["prompts"]
+        .as_array()
+        .ok_or("prompts")?
+        .last()
+        .ok_or("default prompt")?;
+    let inputs = PromptInputs {
+        workspace_dir: Some(PathBuf::from("/disconnected")),
+        ..Default::default()
+    };
+    assert_eq!(
+        system_prompt(&inputs, &BTreeSet::new()),
+        default_prompt["expected"].as_str().ok_or("expected")?
+    );
+    Ok(())
+}
