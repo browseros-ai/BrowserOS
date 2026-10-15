@@ -398,7 +398,10 @@ impl PageDriver {
                         json!({ "page": self.page }),
                     )
                     .await?;
-                Ok(answer(Some(text), false))
+                Ok(answer(
+                    Some(budgeted_within_fencing(&text, ANSWER_BUDGET)),
+                    false,
+                ))
             }
             Ask::Grep(pattern) => {
                 let text = self
@@ -408,7 +411,10 @@ impl PageDriver {
                         json!({ "page": self.page, "pattern": pattern }),
                     )
                     .await?;
-                Ok(answer(Some(text), false))
+                Ok(answer(
+                    Some(budgeted_within_fencing(&text, ANSWER_BUDGET)),
+                    false,
+                ))
             }
             // Counted here rather than asked for. The model is documented as
             // counting unreliably, with the error growing with the size of the
@@ -540,6 +546,44 @@ impl Driver for PageDriver {
             Move::Report(ask) => Ok(Performed::Answer(self.report(ask).await?)),
         }
     }
+}
+
+/// How much of an answer travels back to the caller.
+///
+/// Measured live: a run chose to hand back the lines matching its goal and
+/// returned 55,718 characters, which overflowed the caller's result limit and
+/// was spilled to a file instead of being read. The page that travels beside it
+/// was budgeted all along; the answer was not, and the two were the wrong way
+/// round.
+const ANSWER_BUDGET: usize = 8_000;
+
+/// Budgets fenced page content without breaking the fence.
+///
+/// The read and grep tools wrap their output in untrusted-content markers,
+/// which are a safety boundary around a block. Cutting the block in half loses
+/// the closing marker, so the markers are kept and the content between them is
+/// what gets cut.
+fn budgeted_within_fencing(text: &str, budget: usize) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let opens = lines
+        .iter()
+        .position(|line| line.trim_start().starts_with("[UNTRUSTED_PAGE_CONTENT"));
+    let closes = lines
+        .iter()
+        .rposition(|line| line.trim_start().starts_with("[END_UNTRUSTED_PAGE_CONTENT"));
+    let (Some(opens), Some(closes)) = (opens, closes) else {
+        return budgeted(text, budget);
+    };
+    if closes <= opens {
+        return budgeted(text, budget);
+    }
+    let inner = lines[opens + 1..closes].join("\n");
+    [
+        lines[opens],
+        budgeted(&inner, budget).as_str(),
+        lines[closes],
+    ]
+    .join("\n")
 }
 
 /// Drops the untrusted-content fencing the read tool wraps its output in.
@@ -723,7 +767,7 @@ mod tests {
 
 #[cfg(test)]
 mod reply_text_tests {
-    use super::{budgeted, without_fencing};
+    use super::{ANSWER_BUDGET, budgeted, budgeted_within_fencing, without_fencing};
 
     /// The read tool fences its output as untrusted. A budgeted slice of a
     /// fenced block loses the closing marker, so the fence comes off whole.
@@ -770,5 +814,42 @@ mod reply_text_tests {
         for budget in 1..text.len() {
             let _ = budgeted(text, budget);
         }
+    }
+
+    /// A cut answer keeps its fence, because the fence is a safety boundary and
+    /// half a boundary is worse than none.
+    #[test]
+    fn a_cut_answer_still_closes_its_fence() {
+        let open = "[UNTRUSTED_PAGE_CONTENT nonce=abc origin=https://example.test]";
+        let close = "[END_UNTRUSTED_PAGE_CONTENT nonce=abc]";
+        let body = (0..400)
+            .map(|index| format!("line {index} of a very long page"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let fenced = [open, body.as_str(), close].join("\n");
+        assert!(fenced.len() > ANSWER_BUDGET, "the fixture has to overflow");
+
+        let got = budgeted_within_fencing(&fenced, ANSWER_BUDGET);
+
+        assert!(got.starts_with(open), "the fence still opens");
+        assert!(
+            got.ends_with(close),
+            "and still closes, got tail {:?}",
+            &got[got.len().saturating_sub(60)..]
+        );
+        assert!(
+            got.contains("read the page for the rest"),
+            "and says it was cut"
+        );
+        assert!(got.len() < fenced.len(), "and is shorter than what it cut");
+    }
+
+    /// Unfenced text is budgeted plainly, so nothing depends on the fence
+    /// being there.
+    #[test]
+    fn unfenced_text_is_budgeted_plainly() {
+        let plain = "a\nb\nc\nd\ne\nf";
+        let got = budgeted_within_fencing(plain, 4);
+        assert!(got.contains("bytes shown"), "got {got:?}");
     }
 }
