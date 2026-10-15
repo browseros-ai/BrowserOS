@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react'
 import useDeepCompareEffect from 'use-deep-compare-effect'
+import { customServerEndpoints } from '@/lib/mcp/custom-server-endpoints'
 import { type McpServer, useMcpServers } from '@/lib/mcp/mcpServerStorage'
 import { usePersonalization } from '@/lib/personalization/personalizationStorage'
 import { useChatTargetSelection } from './use-chat-target-selection'
@@ -10,28 +11,18 @@ const constructMcpServers = (servers: McpServer[]) => {
     .map((each) => each.managedServerName)
 }
 
-const constructCustomServers = (servers: McpServer[]) => {
-  // Old storage can contain incomplete custom entries. Do not send a missing
-  // endpoint to either server: the HTTP contract requires an absolute URL.
-  return servers.flatMap((server) =>
-    server.type === 'custom' && server.config?.url
-      ? [{ name: server.displayName, url: server.config.url }]
-      : [],
-  )
-}
-
 export const useChatRefs = () => {
   const selection = useChatTargetSelection()
   const { servers: mcpServers } = useMcpServers()
   const { personalization } = usePersonalization()
 
   const enabledMcpServersRef = useRef(constructMcpServers(mcpServers))
-  const enabledCustomServersRef = useRef(constructCustomServers(mcpServers))
+  const enabledCustomServersRef = useRef(customServerEndpoints(mcpServers))
   const personalizationRef = useRef(personalization)
 
   useDeepCompareEffect(() => {
     enabledMcpServersRef.current = constructMcpServers(mcpServers)
-    enabledCustomServersRef.current = constructCustomServers(mcpServers)
+    enabledCustomServersRef.current = customServerEndpoints(mcpServers)
   }, [mcpServers])
 
   useEffect(() => {

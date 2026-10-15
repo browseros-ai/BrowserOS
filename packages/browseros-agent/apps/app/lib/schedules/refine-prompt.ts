@@ -24,8 +24,25 @@ export async function refinePrompt(params: {
         providerId: params.providerId,
       },
     }),
+    async (error, response) => {
+      const body: unknown = await response
+        ?.clone()
+        .json()
+        .catch(() => null)
+      return body &&
+        typeof body === 'object' &&
+        'message' in body &&
+        typeof body.message === 'string'
+        ? body.message
+        : `Request failed: ${error.status}`
+    },
   )
-  if (!data.success || !data.refined) throw new Error('Failed to refine prompt')
+  if (!data.success || !data.refined)
+    throw new Error(
+      'message' in data && typeof data.message === 'string'
+        ? data.message
+        : 'Failed to refine prompt',
+    )
 
   return data.refined
 }

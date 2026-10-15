@@ -2,9 +2,10 @@ import type { BrowserTab, UiMessageChunk } from '@browseros/server-api'
 import { readUiMessageStream } from '@browseros/server-api-client'
 import { chatErrorMessage } from '@browseros/shared/schemas/chat-error'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
+import { customServerEndpoints } from '@/lib/mcp/custom-server-endpoints'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
-import { serverApi } from '@/lib/server-api/client'
+import { serverApi, serverRequest } from '@/lib/server-api/client'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
@@ -65,42 +66,52 @@ export async function getChatServerResponse(
     .filter((s) => s.type === 'managed')
     .map((s) => s.managedServerName)
     .filter((name): name is string => !!name)
-  const customMcpServers = mcpServers.flatMap((server) =>
-    server.type === 'custom' && server.config?.url
-      ? [{ name: server.displayName, url: server.config.url }]
-      : [],
-  )
+  const customMcpServers = customServerEndpoints(mcpServers)
 
-  const response = await serverApi(agentServerUrl).createChat(
-    {
-      messages: [{ role: 'user', content: request.message }],
-      ...buildChatRequestBody({
-        providerId: request.providerId,
-        message: request.message,
-        conversationId,
-        mode: request.mode ?? 'agent',
-        browserContext:
-          request.activeTab ||
-          request.windowId ||
-          enabledMcpServers.length ||
-          customMcpServers.length
-            ? {
-                windowId: request.windowId,
-                activeTab: request.activeTab,
-                enabledMcpServers:
-                  enabledMcpServers.length > 0 ? enabledMcpServers : undefined,
-                customMcpServers:
-                  customMcpServers.length > 0 ? customMcpServers : undefined,
-              }
-            : undefined,
-        userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
-        isScheduledTask: true,
-      }),
+  const response = await serverRequest(
+    serverApi(agentServerUrl).createChat(
+      {
+        messages: [{ role: 'user', content: request.message }],
+        ...buildChatRequestBody({
+          providerId: request.providerId,
+          message: request.message,
+          conversationId,
+          mode: request.mode ?? 'agent',
+          browserContext:
+            request.activeTab ||
+            request.windowId ||
+            enabledMcpServers.length ||
+            customMcpServers.length
+              ? {
+                  windowId: request.windowId,
+                  activeTab: request.activeTab,
+                  enabledMcpServers:
+                    enabledMcpServers.length > 0
+                      ? enabledMcpServers
+                      : undefined,
+                  customMcpServers:
+                    customMcpServers.length > 0 ? customMcpServers : undefined,
+                }
+              : undefined,
+          userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
+          isScheduledTask: true,
+        }),
+      },
+      { signal: request.signal },
+    ),
+    async (error, failedResponse) => {
+      const body = await failedResponse
+        ?.clone()
+        .text()
+        .catch(() => '')
+      return (
+        (body ? chatErrorMessage(body) : '') ||
+        `Chat request failed: ${error.status} ${failedResponse?.statusText ?? ''}`
+      )
     },
-    { signal: request.signal },
   )
 
-  const parsed = await parseUIMessageStream(response)
+  const parsed = await parseUIMessageStream(response, request.signal)
 
   if (parsed.error) {
     throw new Error(parsed.error)
@@ -156,6 +167,7 @@ function processEvent(event: UiMessageChunk, state: StreamParseState): void {
 
 async function parseUIMessageStream(
   response: Response,
+  signal?: AbortSignal,
 ): Promise<ParsedStreamResult> {
   if (!response.body) {
     throw new Error('Response body is not readable')
@@ -172,7 +184,7 @@ async function parseUIMessageStream(
   }
 
   try {
-    for await (const event of readUiMessageStream(response)) {
+    for await (const event of readUiMessageStream(response, { signal })) {
       processEvent(event, state)
     }
 

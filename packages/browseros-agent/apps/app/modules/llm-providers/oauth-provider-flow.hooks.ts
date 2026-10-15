@@ -1,4 +1,5 @@
 import type { OAuthDeviceCode } from '@browseros/server-api'
+import { ServerApiError } from '@browseros/server-api-client'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -10,7 +11,7 @@ import { CHATGPT_PROVIDER_DISPLAY_NAME } from '@/lib/llm-providers/provider-disp
 import { getProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
-import { serverApi } from '@/lib/server-api/client'
+import { serverApi, serverRequest } from '@/lib/server-api/client'
 import { useOAuthStatus } from '@/modules/llm-providers/oauth-status.hooks'
 
 export interface OAuthProviderFlowConfig {
@@ -160,21 +161,45 @@ export function useOAuthProviderFlow(
     })
 
     startTokenPolling(auth, deviceData, codeVerifier, async (token) => {
-      await serverApi(serverUrl).http.POST('/oauth/{provider}/token', {
-        params: { path: { provider: config.providerType } },
-        body: { ...token },
-      })
+      await serverApi(serverUrl)
+        .http.POST('/oauth/{provider}/token', {
+          params: { path: { provider: config.providerType } },
+          body: { ...token },
+        })
+        .catch((error: unknown) => {
+          // This flow has always polled server auth status after an HTTP token
+          // response, including a rejection. Transport failures still propagate.
+          if (!(error instanceof ServerApiError)) throw error
+        })
       startPolling()
     })
   }
 
   async function handleServerAuth(agentServerUrl: string) {
     // Keep redirect-follow behavior and the final response URL for PKCE flows.
-    const { response: res } = await serverApi(agentServerUrl).http.GET(
-      '/oauth/{provider}/start',
-      {
+    const { response: res } = await serverRequest(
+      serverApi(agentServerUrl).http.GET('/oauth/{provider}/start', {
         params: { path: { provider: config.providerType } },
         parseAs: 'stream',
+      }),
+      async (error, response) => {
+        if (
+          response?.headers.get('content-type')?.includes('application/json')
+        ) {
+          const body: unknown = await response
+            .clone()
+            .json()
+            .catch(() => null)
+          if (
+            body &&
+            typeof body === 'object' &&
+            'error' in body &&
+            typeof body.error === 'string' &&
+            body.error
+          )
+            return body.error
+        }
+        return `Server returned ${error.status}`
       },
     )
 

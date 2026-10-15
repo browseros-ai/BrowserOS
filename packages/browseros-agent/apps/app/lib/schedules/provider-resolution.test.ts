@@ -212,3 +212,95 @@ describe('scheduled provider resolution', () => {
     ).toBeUndefined()
   })
 })
+
+function chatResponse(events: unknown[], done = true): Response {
+  return new Response(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join('') +
+      (done ? 'data: [DONE]\n\n' : ''),
+    {
+      headers: { 'content-type': 'text/event-stream' },
+    },
+  )
+}
+
+describe('scheduled shared stream consumption', () => {
+  it('keeps a missing finish as failure, even with a valid DONE marker', async () => {
+    globalThis.fetch = Object.assign(
+      mock(async () =>
+        chatResponse([{ type: 'text-delta', id: 't', delta: 'partial' }]),
+      ),
+      { preconnect: originalFetch.preconnect },
+    )
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+    await expect(getChatServerResponse({ message: 'Run' })).rejects.toThrow(
+      'Stream ended unexpectedly without completion. The task may have been interrupted.',
+    )
+  })
+
+  it('retains the real error on a legal early-error stream without finish', async () => {
+    globalThis.fetch = Object.assign(
+      mock(async () =>
+        chatResponse([
+          { type: 'start' },
+          { type: 'error', errorText: 'Provider refused the request' },
+        ]),
+      ),
+      { preconnect: originalFetch.preconnect },
+    )
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+    await expect(getChatServerResponse({ message: 'Run' })).rejects.toThrow(
+      'Provider refused the request',
+    )
+  })
+
+  it('accumulates tool outputs, errors and final text in run history', async () => {
+    globalThis.fetch = Object.assign(
+      mock(async () =>
+        chatResponse([
+          { type: 'text-delta', id: 't1', delta: 'Looking up' },
+          {
+            type: 'tool-input-available',
+            toolCallId: 'call-1',
+            toolName: 'lookup',
+            input: { query: 'news' },
+          },
+          {
+            type: 'tool-output-available',
+            toolCallId: 'call-1',
+            output: { content: [{ type: 'text', text: 'found' }] },
+          },
+          {
+            type: 'tool-input-available',
+            toolCallId: 'call-2',
+            toolName: 'click',
+            input: { id: 1 },
+          },
+          {
+            type: 'tool-output-error',
+            toolCallId: 'call-2',
+            errorText: 'Tab closed',
+          },
+          { type: 'text-delta', id: 't2', delta: 'Done' },
+          { type: 'finish', finishReason: 'stop' },
+        ]),
+      ),
+      { preconnect: originalFetch.preconnect },
+    )
+    const { getChatServerResponse } = await import('./getChatServerResponse')
+    const result = await getChatServerResponse({ message: 'Run' })
+    expect(result).toMatchObject({
+      text: 'Looking upDone',
+      finalResult: 'Done',
+      executionLog: 'Looking up\n\nDone',
+      toolCalls: [
+        {
+          id: 'call-1',
+          name: 'lookup',
+          input: { query: 'news' },
+          output: { content: [{ type: 'text', text: 'found' }] },
+        },
+        { id: 'call-2', name: 'click', error: 'Tab closed' },
+      ],
+    })
+  })
+})

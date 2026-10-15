@@ -50,7 +50,18 @@ async function callMutation(
       value !== null &&
       'success' in value &&
       value.success === false,
-    (error) => error.message || `Failed to ${action} agent: ${error.status}`,
+    async (error, response) => {
+      const body: unknown = await response
+        ?.clone()
+        .json()
+        .catch(() => null)
+      return body &&
+        typeof body === 'object' &&
+        'message' in body &&
+        typeof body.message === 'string'
+        ? body.message
+        : `Failed to ${action} agent: ${error.status}`
+    },
   )
 }
 

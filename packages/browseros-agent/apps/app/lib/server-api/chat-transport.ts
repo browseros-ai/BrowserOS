@@ -21,8 +21,10 @@ export class ServerChatTransport extends DefaultChatTransport<UIMessage> {
       { signal: detach.signal },
     )
     let cancelled = false
+    let started = false
     return new ReadableStream<UIMessageChunk>({
       async pull(controller) {
+        started = true
         try {
           const next = await chunks.next()
           if (cancelled) return
@@ -33,6 +35,10 @@ export class ServerChatTransport extends DefaultChatTransport<UIMessage> {
             controller.enqueue(next.value)
           }
         } catch (error) {
+          // A decoder/refinement failure must release the source just as a
+          // panel detach does. It cannot leave a subscriber reading forever.
+          detach.abort(error)
+          await chunks.return(undefined)
           if (!cancelled) controller.error(error)
         }
       },
@@ -41,6 +47,9 @@ export class ServerChatTransport extends DefaultChatTransport<UIMessage> {
         // Abort also interrupts a currently pending next(), so iterator.return
         // cannot hang waiting for another server event during panel teardown.
         detach.abort(reason)
+        // An async generator returned before its first next() never enters its
+        // finally block, so an immediate detach must cancel the untouched body.
+        if (!started) await body.cancel(reason)
         await chunks.return(undefined)
       },
     })

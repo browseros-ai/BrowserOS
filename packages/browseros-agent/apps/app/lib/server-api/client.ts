@@ -21,28 +21,40 @@ export async function getServerApi(): Promise<ServerApiClient> {
   return serverApi(await resolveAgentServerUrl())
 }
 
-/** Preserve each surface's existing HTTP error wording after shared decoding. */
-export async function serverData<T>(
-  request: Promise<{ data?: T }>,
-  message?: (error: ServerApiError, response?: Response) => string,
+type ErrorMessage = (
+  error: ServerApiError,
+  response?: Response,
+) => string | Promise<string>
+
+/** Preserve each surface's UI wording while keeping one normalized error type. */
+export async function serverRequest<T>(
+  request: Promise<T>,
+  message?: ErrorMessage,
 ): Promise<T> {
   try {
-    const { data } = await request
-    if (data === undefined) throw new Error('Server returned an empty response')
-    return data
+    return await request
   } catch (error) {
     if (message && error instanceof ServerApiError) {
       const response = errorResponses.get(error)
       const mapped = new ServerApiError({
         status: error.status,
         code: error.code,
-        message: message(error, response),
+        message: await message(error, response),
       })
       if (response) errorResponses.set(mapped, response)
       throw mapped
     }
     throw error
   }
+}
+
+export async function serverData<T>(
+  request: Promise<{ data?: T }>,
+  message?: ErrorMessage,
+): Promise<T> {
+  const { data } = await serverRequest(request, message)
+  if (data === undefined) throw new Error('Server returned an empty response')
+  return data
 }
 
 /** Idempotent deletion and missing-history reads share the same 404 rule. */
@@ -62,7 +74,7 @@ export async function serverResult<T>(
   baseUrl: string,
   request: (client: ServerApiClient) => Promise<{ data?: T }>,
   isResult: (value: unknown) => value is T,
-  message?: (error: ServerApiError, response?: Response) => string,
+  message?: ErrorMessage,
 ): Promise<T> {
   try {
     return await serverData(request(serverApi(baseUrl)), message)

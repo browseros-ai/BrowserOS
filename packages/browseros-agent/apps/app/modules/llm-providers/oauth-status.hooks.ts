@@ -1,4 +1,5 @@
 import type { OAuthStatus } from '@browseros/server-api'
+import { ServerApiError } from '@browseros/server-api-client'
 import { useEffect, useRef, useState } from 'react'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import { serverApi, serverData } from '@/lib/server-api/client'
@@ -60,9 +61,15 @@ export function useOAuthStatus(provider: string): UseOAuthStatusReturn {
   async function disconnect() {
     try {
       const serverUrl = await getAgentServerUrl()
-      await serverApi(serverUrl).http.DELETE('/oauth/{provider}', {
-        params: { path: { provider } },
-      })
+      await serverApi(serverUrl)
+        .http.DELETE('/oauth/{provider}', {
+          params: { path: { provider } },
+        })
+        .catch((error: unknown) => {
+          // Disconnect is best-effort: any HTTP response clears the local status,
+          // matching the existing UI while network failures leave it unchanged.
+          if (!(error instanceof ServerApiError)) throw error
+        })
       setStatus({ authenticated: false, provider })
     } catch {
       // Best-effort disconnect
