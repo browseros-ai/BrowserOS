@@ -3,7 +3,7 @@
 //! TS server sends the model; behaviour against the TS texts the model reads.
 
 use browseros_agent::{
-    messages::{ToolContentItem, ToolResultOutput},
+    messages::ToolResultOutput,
     tools::{FsScope, OutputGrants, ToolOutput, ToolSource, filesystem_tools, nudge_tools},
 };
 use serde_json::{Value, json};
@@ -709,19 +709,16 @@ async fn read_returns_images_as_media() -> TestResult {
             "images": [{ "data": "iVBORw==", "mimeType": "image/png" }],
         })
     );
+    // `toModelOutput` of `utils.ts`: the text, then each image as `image-data`.
     assert_eq!(
-        output.model,
-        ToolResultOutput::Content {
-            value: vec![
-                ToolContentItem::Text {
-                    text: "Image: pic.PNG (4 bytes)".to_owned()
-                },
-                ToolContentItem::Media {
-                    data: "iVBORw==".to_owned(),
-                    media_type: "image/png".to_owned()
-                },
-            ]
-        }
+        serde_json::to_value(&output.model)?,
+        json!({
+            "type": "content",
+            "value": [
+                { "type": "text", "text": "Image: pic.PNG (4 bytes)" },
+                { "type": "image-data", "data": "iVBORw==", "mediaType": "image/png" },
+            ],
+        })
     );
     Ok(())
 }

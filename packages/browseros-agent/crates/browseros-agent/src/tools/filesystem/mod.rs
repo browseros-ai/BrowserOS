@@ -99,11 +99,19 @@ impl FsResult {
         let model = if self.is_error {
             ToolResultOutput::ErrorText { value: self.text }
         } else if !self.images.is_empty() {
-            let mut items = vec![ToolContentItem::Text { text: self.text }];
-            items.extend(self.images.into_iter().map(|image| ToolContentItem::Media {
-                data: image.data,
-                media_type: image.mime_type,
-            }));
+            let mut items = vec![ToolContentItem::Text {
+                text: self.text,
+                extra: Map::new(),
+            }];
+            items.extend(
+                self.images
+                    .into_iter()
+                    .map(|image| ToolContentItem::ImageData {
+                        data: Value::String(image.data),
+                        media_type: image.mime_type,
+                        extra: Map::new(),
+                    }),
+            );
             ToolResultOutput::Content { value: items }
         } else if self.text.is_empty() {
             ToolResultOutput::Text {

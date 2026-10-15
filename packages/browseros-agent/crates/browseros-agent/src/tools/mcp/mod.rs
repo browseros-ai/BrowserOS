@@ -289,9 +289,11 @@ impl ToolSource for McpToolSource {
     }
 }
 
-/// `mcpToModelOutput`: text items stay text, images become media, anything else is its JSON text;
-/// a result without a `content` array goes back as JSON. `isError` results are ordinary outputs
-/// here — the model reads the error text, and the wire shows `output.isError: true`.
+/// `mcpToModelOutput`: text items stay text, images become `file` parts with inline data,
+/// anything else is its `JSON.stringify` text; a result without a `content` array goes back as
+/// JSON. `isError` results are ordinary outputs here — the model reads the error text, and the
+/// wire shows `output.isError: true`. Same codec as `messages::ui_to_model` uses for replayed
+/// history, so a tool result reads identically in its own turn and in later ones.
 fn mcp_to_model_output(result: &Value) -> ToolResultOutput {
     let Some(content) = result.get("content").and_then(Value::as_array) else {
         return ToolResultOutput::Json {
@@ -312,15 +314,19 @@ fn mcp_to_model_output(result: &Value) -> ToolResultOutput {
                     text: text
                         .as_str()
                         .map_or_else(|| text.to_string(), str::to_owned),
+                    extra: Map::new(),
                 },
-                (Some("image"), _, Some(Value::String(data)), Some(Value::String(mime))) => {
-                    ToolContentItem::Media {
-                        data: data.clone(),
+                (Some("image"), _, Some(data), Some(Value::String(mime))) => {
+                    ToolContentItem::File {
+                        data: serde_json::json!({ "type": "data", "data": data }),
                         media_type: mime.clone(),
+                        filename: None,
+                        extra: Map::new(),
                     }
                 }
                 _ => ToolContentItem::Text {
-                    text: part.to_string(),
+                    text: crate::messages::js_stringify(part),
+                    extra: Map::new(),
                 },
             }
         })

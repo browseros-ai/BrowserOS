@@ -10,9 +10,8 @@ use axum::{
     response::sse::{Event, Sse},
     routing::{get, post},
 };
-use browseros_agent::{
-    messages::{ToolContentItem, ToolResultOutput},
-    tools::{McpEndpoint, McpTransport, ToolKind, ToolSource, ToolSourceError, connect_mcp},
+use browseros_agent::tools::{
+    McpEndpoint, McpTransport, ToolKind, ToolSource, ToolSourceError, connect_mcp,
 };
 use futures_util::StreamExt;
 use rmcp::{
@@ -365,36 +364,25 @@ async fn calls_return_the_raw_result_and_the_model_output() -> TestResult {
         json!({ "content": [{ "type": "text", "text": "hi" }], "isError": false })
     );
     assert_eq!(
-        echo.model,
-        ToolResultOutput::Content {
-            value: vec![ToolContentItem::Text {
-                text: "hi".to_owned()
-            }]
-        }
+        serde_json::to_value(&echo.model)?,
+        json!({ "type": "content", "value": [{ "type": "text", "text": "hi" }] })
     );
 
     // An `isError` result is an ordinary output (the wire shows `output.isError`).
     let flaky = source.call("flaky", json!({}), token()).await?;
     assert_eq!(flaky.ui["isError"], json!(true));
 
+    // `mcpToModelOutput`: images become inline `file` data, other items their JSON text.
     let picture = source.call("picture", json!({}), token()).await?;
-    let ToolResultOutput::Content { value } = picture.model else {
-        return Err("expected content".into());
-    };
+    let model = serde_json::to_value(&picture.model)?;
     assert_eq!(
-        value[0],
-        ToolContentItem::Media {
-            data: "AAAA".to_owned(),
-            media_type: "image/png".to_owned()
-        }
+        model["value"][0],
+        json!({ "type": "file", "mediaType": "image/png", "data": { "type": "data", "data": "AAAA" } })
     );
-    let ToolContentItem::Text { text } = &value[1] else {
-        return Err("non-text content becomes its JSON text".into());
-    };
-    assert_eq!(
-        serde_json::from_str::<Value>(text)?["type"],
-        json!("resource_link")
-    );
+    assert_eq!(model["value"][1]["type"], json!("text"));
+    let linked: Value =
+        serde_json::from_str(model["value"][1]["text"].as_str().unwrap_or_default())?;
+    assert_eq!(linked["type"], json!("resource_link"));
 
     let Err(error) = source.call("boom", json!({}), token()).await else {
         return Err("a JSON-RPC error fails the call".into());

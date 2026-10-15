@@ -730,7 +730,7 @@ impl Turn {
                             content.push(AssistantPart::ToolCall {
                                 tool_call_id: transcript_id.clone(),
                                 tool_name: tool_name.clone(),
-                                input: input.clone(),
+                                input: Some(input.clone()),
                                 provider_executed: None,
                                 provider_options: provider_metadata.clone(),
                             });
@@ -762,11 +762,11 @@ impl Turn {
                             content.push(AssistantPart::ToolCall {
                                 tool_call_id: transcript_id.clone(),
                                 tool_name: tool_name.clone(),
-                                input: if invalid.input.is_object() {
+                                input: Some(if invalid.input.is_object() {
                                     invalid.input.clone()
                                 } else {
                                     json!({})
-                                },
+                                }),
                                 provider_executed: None,
                                 provider_options: provider_metadata.clone(),
                             });
