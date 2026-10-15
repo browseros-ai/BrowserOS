@@ -9,18 +9,22 @@ repository.workspace = true
 [features]
 default = ["bedrock"]
 # AWS Bedrock pulls in the AWS SDK; a feature so size-sensitive builds can measure or drop it.
-bedrock = ["dep:rig-bedrock"]
+bedrock = ["dep:rig-bedrock", "dep:aws-sdk-bedrockruntime"]
 
 [dependencies]
 ui-message-stream.workspace = true
 
 async-trait.workspace = true
+bytes.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
+# Copilot's vision-request image shrink (copilot-fetch.ts parity).
+image.workspace = true
 # Provider normalisation only: no rig type appears in this crate's public API.
 rig-core.workspace = true
 rig-reqwest.workspace = true
 rig-bedrock = { workspace = true, optional = true }
+aws-sdk-bedrockruntime = { workspace = true, optional = true }
 # MCP tool sources (internal /mcp over loopback + custom servers) are rmcp clients.
 rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest", "reqwest"] }
 serde.workspace = true
@@ -43,9 +47,11 @@ reqwest.workspace = true
 reqwest-eventsource.workspace = true
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
-# rmcp test servers (streamable HTTP and a legacy-SSE bridge) for tests/tools_mcp.rs.
+anyhow.workspace = true
+# Fake provider endpoints (tests/llm_wire.rs) and rmcp test servers (streamable HTTP and a
+# legacy-SSE bridge) for tests/tools_mcp.rs.
 axum.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true
 
 [lints]

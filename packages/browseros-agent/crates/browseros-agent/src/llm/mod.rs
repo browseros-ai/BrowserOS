@@ -1,19 +1,30 @@
 //! The provider layer: `LanguageModel` is the seam the loop calls; `RigModel` (production, over
-//! rig-core 0.44) and [`ScriptedModel`] (tests, `BROWSEROS_USE_MOCK_LLM`) are its adapters.
-//! Also owns credential-shaped config (`LlmConfig`), the reasoning-options table (TS
-//! `reasoning-config.ts`), the `ChatError` classifier and one-shot `generate_text` used by
-//! test-provider and refine-prompt. Implemented by P5; S0 ships signatures with stubs.
+//! rig-core 0.44, private module `rig`) and [`ScriptedModel`] (tests, `BROWSEROS_USE_MOCK_LLM`)
+//! are its adapters. Also owns credential-shaped config (`LlmConfig`), the reasoning-options
+//! table (TS `reasoning-config.ts`), the `ChatError` classifier, the retry rule the loop applies
+//! before a step's first event, and one-shot `generate_text` for test-provider and refine-prompt.
+//!
+//! ```text
+//!  LlmConfig ──create_language_model──► Arc<dyn LanguageModel>   (RigModel | ScriptedModel::mock)
+//!  ReasoningSettings ──provider_options──► ProviderOptions ─┐
+//!  ModelRequest { system, messages, tools, options } ───────┴─► stream() ─► ModelStream
+//!  ModelError ──to_chat_error──► ChatError ──chat_error_text──► errorText / HTTP 500 body
+//! ```
 
 mod chat_error;
+mod reasoning;
+mod rig;
 mod scripted;
 
 pub use chat_error::{ChatError, ChatErrorCode, chat_error_text, redact, to_chat_error};
-pub use scripted::ScriptedModel;
+pub use reasoning::provider_options;
+pub use scripted::{MOCK_LLM_RESPONSE_TEXT, ScriptedModel};
 
-use crate::messages::ModelMessage;
+use crate::messages::{ModelMessage, UserPart};
 use futures_core::Stream;
+use futures_util::StreamExt;
 use serde_json::{Map, Value};
-use std::{collections::BTreeMap, pin::Pin, str::FromStr, sync::Arc};
+use std::{collections::BTreeMap, pin::Pin, str::FromStr, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 /// The 13 `LLM_PROVIDERS` ids of `@browseros/shared/schemas/llm`.
@@ -70,8 +81,9 @@ impl ProviderKind {
     }
 }
 
+/// `Unknown provider: ${provider}` (`provider-factory.ts:231`).
 #[derive(Debug, thiserror::Error)]
-#[error("unknown LLM provider: {0}")]
+#[error("Unknown provider: {0}")]
 pub struct UnknownProvider(pub String);
 
 impl FromStr for ProviderKind {
@@ -135,28 +147,105 @@ pub struct ReasoningSettings {
 #[error("{0}")]
 pub struct LlmConfigError(pub String);
 
-/// The shared HTTP client stack every `RigModel` is built on (one connection pool; per-model
-/// header middleware for Copilot/Codex/OpenRouter quirks). Cheap to clone.
-#[derive(Debug, Clone, Default)]
+impl From<LlmConfigError> for ModelError {
+    /// A thrown construction `Error` in TS: classified by its message (`requires apiKey` →
+    /// `provider_config`, anything else → `unknown`).
+    fn from(error: LlmConfigError) -> Self {
+        ModelError::Other(error.0)
+    }
+}
+
+/// `CONVERSATION_ID_PLACEHOLDER` of `@browseros/shared/schemas/llm`.
+pub const CONVERSATION_ID_PLACEHOLDER: &str = "{{conversationId}}";
+
+/// `LLMHeadersSchema`: token-character names, tab/printable/Latin-1 values, no case-insensitive
+/// duplicates. `create_language_model` re-checks what `chat::request` validated.
+pub fn validate_headers(headers: &BTreeMap<String, String>) -> Result<(), LlmConfigError> {
+    const NAME_SYMBOLS: &str = "!#$%&'*+.^_`|~-";
+    let mut seen = std::collections::BTreeSet::new();
+    for (name, value) in headers {
+        let name_ok = !name.is_empty()
+            && name
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || NAME_SYMBOLS.contains(ch));
+        if !name_ok {
+            return Err(LlmConfigError(format!("Invalid header name: {name}")));
+        }
+        let value_ok = value.chars().all(|ch| {
+            ch == '\t' || ('\u{20}'..='\u{7e}').contains(&ch) || ('\u{80}'..='\u{ff}').contains(&ch)
+        });
+        if !value_ok {
+            return Err(LlmConfigError(format!("Invalid header value for {name}")));
+        }
+        if !seen.insert(name.to_ascii_lowercase()) {
+            return Err(LlmConfigError(format!("Duplicate header name: {name}")));
+        }
+    }
+    Ok(())
+}
+
+/// The shared HTTP client stack every `RigModel` is built on: one reqwest connection pool (the
+/// process-wide rig client; no request timeout, TS parity) under a per-model request policy (TS
+/// endpoint, headers, Codex/Copilot rewrites). Cheap to clone.
+#[derive(Debug, Clone)]
 pub struct HttpStack {
-    _private: (),
+    client: ::rig_core::http_client::DynHttpClient,
+    test_origin: Option<http::Uri>,
+}
+
+impl Default for HttpStack {
+    fn default() -> Self {
+        Self {
+            client: rig_reqwest::shared(),
+            test_origin: None,
+        }
+    }
 }
 
 impl HttpStack {
     pub fn new() -> Self {
         Self::default()
     }
+
+    /// Test seam: send every request to `origin` (`scheme://host:port`) while keeping the
+    /// provider's own path and query, so wire tests reach fixed endpoints (Codex, Copilot, Qwen,
+    /// Bedrock) on a local fake server. Production never sets it.
+    #[doc(hidden)]
+    pub fn with_test_origin(mut self, origin: &str) -> Result<Self, LlmConfigError> {
+        let uri = origin
+            .parse::<http::Uri>()
+            .ok()
+            .filter(|uri| uri.scheme().is_some() && uri.authority().is_some())
+            .ok_or_else(|| LlmConfigError(format!("Invalid test origin: {origin}")))?;
+        self.test_origin = Some(uri);
+        Ok(self)
+    }
+
+    pub(crate) fn client(&self) -> ::rig_core::http_client::DynHttpClient {
+        self.client.clone()
+    }
+
+    pub(crate) fn test_origin(&self) -> Option<&http::Uri> {
+        self.test_origin.as_ref()
+    }
 }
 
+/// `shouldUseMockLLM()`: the harness switch, read from the environment the harness sets.
+pub fn mock_llm_enabled() -> bool {
+    std::env::var("BROWSEROS_USE_MOCK_LLM").is_ok_and(|value| value == "true")
+}
+
+/// `createLanguageModel` (chat) and `createLLMProvider` (test/refine) in one: the mock switch,
+/// then the provider factory. `config.headers` get `{{conversationId}}` substituted with
+/// `config.conversation_id` (test/refine pass a random id, as TS does).
 pub fn create_language_model(
     config: &LlmConfig,
     http: &HttpStack,
 ) -> Result<Arc<dyn LanguageModel>, LlmConfigError> {
-    let _ = http;
-    Err(LlmConfigError(format!(
-        "{} provider is not implemented yet",
-        config.provider.as_str()
-    )))
+    if mock_llm_enabled() {
+        return Ok(Arc::new(ScriptedModel::mock()));
+    }
+    Ok(Arc::new(rig::build(config, http)?))
 }
 
 /// The provider seam. Adapters: `RigModel` (production), [`ScriptedModel`] (tests,
@@ -195,16 +284,6 @@ pub struct ToolDefinition {
 /// the adapter.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ProviderOptions(pub Map<String, Value>);
-
-/// Port of `reasoning-config.ts:102-205` (recon A3). S0 stub: no options.
-pub fn provider_options(
-    provider: ProviderKind,
-    model_id: &str,
-    settings: &ReasoningSettings,
-) -> ProviderOptions {
-    let _ = (provider, model_id, settings);
-    ProviderOptions::default()
-}
 
 pub type ModelStream = Pin<Box<dyn Stream<Item = Result<ModelEvent, ModelError>> + Send>>;
 
@@ -275,15 +354,17 @@ pub struct Usage {
     pub reasoning_tokens: Option<u64>,
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum ModelError {
+    /// An HTTP failure (AI SDK `APICallError`). `data` is boxed to keep `ModelError` small: it
+    /// rides in every `Result` the stream yields.
     #[error("{message}")]
     Api {
         status: u16,
         message: String,
         response_body: Option<String>,
         response_headers: Vec<(String, String)>,
-        data: Option<Value>,
+        data: Option<Box<Value>>,
         retryable: bool,
     },
     /// The "fetch failed" family: DNS, refused, reset, TLS.
@@ -291,22 +372,119 @@ pub enum ModelError {
     Connection(String),
     #[error("{0}")]
     InvalidPrompt(String),
+    /// `LoadAPIKeyError` / `NoSuchModelError` / an option the provider cannot honour.
     #[error("{0}")]
     Config(String),
+    /// Any other failure (a malformed reply, an in-band provider error event): classified by its
+    /// message, as TS classifies a plain thrown `Error`.
+    #[error("{0}")]
+    Other(String),
     #[error("cancelled")]
     Cancelled,
 }
 
-/// One-shot text generation for `/test-provider` and `/refine-prompt`.
+/// AI SDK `maxRetries`: two retries after the first attempt.
+pub const MAX_RETRIES: u32 = 2;
+
+impl ModelError {
+    /// Whether the AI SDK would retry it: a retryable HTTP status (408/409/429/5xx) or a network
+    /// failure (`Cannot connect to API` is retryable in the SDK).
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            Self::Api { retryable, .. } => *retryable,
+            Self::Connection(_) => true,
+            _ => false,
+        }
+    }
+}
+
+/// The wait before retry `attempt` (0-based) of a step that failed before its first event:
+/// `retry-after-ms`, else `retry-after` seconds, when within 0–60 s; otherwise 2 s × 2ⁿ
+/// (`retry-with-exponential-backoff.ts`).
+pub fn retry_delay(error: &ModelError, attempt: u32) -> Duration {
+    let backoff = Duration::from_millis(2_000u64.saturating_mul(2u64.saturating_pow(attempt)));
+    let ModelError::Api {
+        response_headers, ..
+    } = error
+    else {
+        return backoff;
+    };
+    let header = |name: &str| {
+        response_headers
+            .iter()
+            .find(|(key, _)| key.eq_ignore_ascii_case(name))
+            .and_then(|(_, value)| value.trim().parse::<f64>().ok())
+    };
+    let hinted_ms =
+        header("retry-after-ms").or_else(|| header("retry-after").map(|seconds| seconds * 1000.0));
+    match hinted_ms {
+        Some(ms) if (0.0..=60_000.0).contains(&ms) => Duration::from_millis(ms as u64),
+        _ => backoff,
+    }
+}
+
+/// One-shot text generation for `/test-provider` and `/refine-prompt`: `streamText` with one user
+/// message, no tools and no reasoning options, collecting the text deltas. A failure before the
+/// first event is retried like a loop step; a failure after it ends the call with that error (TS
+/// captures `onError` and rethrows once the text stream ends). Timeouts are the caller's
+/// (`TIMEOUTS.TEST_PROVIDER` / `REFINE_PROMPT`), applied by cancelling `cancel`.
 pub async fn generate_text(
     model: &dyn LanguageModel,
     system: Option<&str>,
     prompt: &str,
     cancel: CancellationToken,
 ) -> Result<String, ModelError> {
-    let _ = (system, prompt, cancel);
-    Err(ModelError::Config(format!(
-        "generate_text is not implemented yet for {}",
-        model.provider().as_str()
-    )))
+    let request = ModelRequest {
+        system: system.map(str::to_owned),
+        messages: vec![ModelMessage::User {
+            content: vec![UserPart::Text {
+                text: prompt.to_owned(),
+                provider_options: None,
+            }],
+        }],
+        tools: Vec::new(),
+        options: ProviderOptions::default(),
+    };
+    let mut attempt = 0;
+    let mut text = String::new();
+    'attempts: loop {
+        let mut stream = match model.stream(request.clone(), cancel.clone()).await {
+            Ok(stream) => stream,
+            Err(error) if error.is_retryable() && attempt < MAX_RETRIES => {
+                wait_retry(&error, &mut attempt, &cancel).await?;
+                continue;
+            }
+            Err(error) => return Err(error),
+        };
+        let mut received = false;
+        while let Some(item) = stream.next().await {
+            match item {
+                Ok(ModelEvent::TextDelta { delta, .. }) => {
+                    received = true;
+                    text.push_str(&delta);
+                }
+                Ok(_) => received = true,
+                Err(error) if !received && error.is_retryable() && attempt < MAX_RETRIES => {
+                    wait_retry(&error, &mut attempt, &cancel).await?;
+                    continue 'attempts;
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        return Ok(text);
+    }
+}
+
+async fn wait_retry(
+    error: &ModelError,
+    attempt: &mut u32,
+    cancel: &CancellationToken,
+) -> Result<(), ModelError> {
+    let delay = retry_delay(error, *attempt);
+    *attempt += 1;
+    tokio::select! {
+        biased;
+        _ = cancel.cancelled() => Err(ModelError::Cancelled),
+        _ = tokio::time::sleep(delay) => Ok(()),
+    }
 }

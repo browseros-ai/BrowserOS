@@ -88,6 +88,8 @@ indexmap = "2"
 reqwest-eventsource = "0.6"
 # browseros-agent filesystem tools (P7): Bun.Glob-compatible matching for find/grep.
 globset = "0.4"
+# browseros-agent::llm (P5): explicit-credential Bedrock clients. Same spec rig-bedrock resolves.
+aws-sdk-bedrockruntime = { version = "1.124", default-features = false, features = ["rt-tokio", "default-https-client"] }
 
 [workspace.lints.rust]
 unsafe_code = "deny"

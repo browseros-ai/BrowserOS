@@ -1,0 +1,2036 @@
+{
+  "anthropic-default/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://api.anthropic.com/v1/messages",
+      "method": "POST",
+      "headers": {
+        "anthropic-beta": "structured-outputs-2025-11-13",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/anthropic/4.0.63 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-api-key": "<redacted>",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 64000,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 19200
+        },
+        "system": [
+          {
+            "type": "text",
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "eager_input_streaming": true
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "stream": true
+      }
+    }
+  },
+  "anthropic-default/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://api.anthropic.com/v1/messages",
+      "method": "POST",
+      "headers": {
+        "anthropic-beta": "structured-outputs-2025-11-13",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/anthropic/4.0.63 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-api-key": "<redacted>",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 64000,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 19200
+        },
+        "system": [
+          {
+            "type": "text",
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What time is it?"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "Checking."
+              },
+              {
+                "type": "tool_use",
+                "id": "call_1",
+                "name": "get_time",
+                "input": {}
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": [
+                  {
+                    "type": "text",
+                    "text": "{\"utc\":\"2026-10-15T04:47:54Z\"}"
+                  },
+                  {
+                    "type": "image",
+                    "source": {
+                      "type": "base64",
+                      "media_type": "image/png",
+                      "data": "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII="
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "eager_input_streaming": true
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "stream": true
+      }
+    }
+  },
+  "anthropic-opus-max/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "anthropic",
+      "model": "claude-opus-4-8",
+      "apiKey": "k",
+      "reasoningEffort": "max"
+    },
+    "request": {
+      "url": "https://api.anthropic.com/v1/messages",
+      "method": "POST",
+      "headers": {
+        "anthropic-beta": "structured-outputs-2025-11-13",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/anthropic/4.0.63 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-api-key": "<redacted>"
+      },
+      "body": {
+        "model": "claude-opus-4-8",
+        "max_tokens": 128000,
+        "thinking": {
+          "type": "adaptive",
+          "display": "summarized"
+        },
+        "output_config": {
+          "effort": "xhigh"
+        },
+        "system": [
+          {
+            "type": "text",
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "eager_input_streaming": true
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "stream": true
+      }
+    }
+  },
+  "anthropic-sonnet-4-6-low/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-6",
+      "apiKey": "k",
+      "reasoningEffort": "low"
+    },
+    "request": {
+      "url": "https://api.anthropic.com/v1/messages",
+      "method": "POST",
+      "headers": {
+        "anthropic-beta": "structured-outputs-2025-11-13",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/anthropic/4.0.63 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-api-key": "<redacted>"
+      },
+      "body": {
+        "model": "claude-sonnet-4-6",
+        "max_tokens": 128000,
+        "thinking": {
+          "type": "adaptive",
+          "display": "summarized"
+        },
+        "output_config": {
+          "effort": "low"
+        },
+        "system": [
+          {
+            "type": "text",
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "eager_input_streaming": true
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "stream": true
+      }
+    }
+  },
+  "anthropic-haiku-high/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "anthropic",
+      "model": "claude-haiku-4-5",
+      "apiKey": "k",
+      "reasoningEffort": "high"
+    },
+    "request": {
+      "url": "https://api.anthropic.com/v1/messages",
+      "method": "POST",
+      "headers": {
+        "anthropic-beta": "structured-outputs-2025-11-13",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/anthropic/4.0.63 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-api-key": "<redacted>"
+      },
+      "body": {
+        "model": "claude-haiku-4-5",
+        "max_tokens": 64000,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 38400
+        },
+        "system": [
+          {
+            "type": "text",
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "eager_input_streaming": true
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "stream": true
+      }
+    }
+  },
+  "anthropic-unknown-model/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "anthropic",
+      "model": "my-proxy-model",
+      "apiKey": "k",
+      "baseUrl": "https://proxy.example/v1"
+    },
+    "request": {
+      "url": "https://proxy.example/v1/messages",
+      "method": "POST",
+      "headers": {
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/anthropic/4.0.63 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-api-key": "<redacted>"
+      },
+      "body": {
+        "model": "my-proxy-model",
+        "max_tokens": 5325,
+        "thinking": {
+          "type": "enabled",
+          "budget_tokens": 1229
+        },
+        "system": [
+          {
+            "type": "text",
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "eager_input_streaming": true
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "stream": true
+      }
+    }
+  },
+  "anthropic-no-reasoning/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": false,
+      "provider": "anthropic",
+      "model": "claude-sonnet-4-5",
+      "apiKey": "k"
+    },
+    "request": {
+      "url": "https://api.anthropic.com/v1/messages",
+      "method": "POST",
+      "headers": {
+        "anthropic-beta": "structured-outputs-2025-11-13",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/anthropic/4.0.63 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-api-key": "<redacted>"
+      },
+      "body": {
+        "model": "claude-sonnet-4-5",
+        "max_tokens": 64000,
+        "system": [
+          {
+            "type": "text",
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "tools": [
+          {
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "input_schema": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            },
+            "eager_input_streaming": true
+          }
+        ],
+        "tool_choice": {
+          "type": "auto"
+        },
+        "stream": true
+      }
+    }
+  },
+  "openai-default/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "openai",
+      "model": "gpt-5",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://api.openai.com/v1/responses",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai/4.0.75 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "gpt-5",
+        "input": [
+          {
+            "role": "developer",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "reasoning": {
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "openai-default/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "openai",
+      "model": "gpt-5",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://api.openai.com/v1/responses",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai/4.0.75 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "gpt-5",
+        "input": [
+          {
+            "role": "developer",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What time is it?"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Checking."
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_time",
+            "arguments": "{}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+              {
+                "type": "input_text",
+                "text": "{\"utc\":\"2026-10-15T04:47:54Z\"}"
+              },
+              {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII="
+              }
+            ]
+          }
+        ],
+        "reasoning": {
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "openai-high/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "openai",
+      "model": "gpt-5",
+      "apiKey": "k",
+      "reasoningEffort": "high"
+    },
+    "request": {
+      "url": "https://api.openai.com/v1/responses",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai/4.0.75 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "gpt-5",
+        "input": [
+          {
+            "role": "developer",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "azure-resource/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "azure",
+      "model": "o3",
+      "apiKey": "k",
+      "resourceName": "myres"
+    },
+    "request": {
+      "url": "https://myres.openai.azure.com/openai/v1/responses?api-version=v1",
+      "method": "POST",
+      "headers": {
+        "api-key": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/azure/4.0.79 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "o3",
+        "input": [
+          {
+            "role": "developer",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "reasoning": {
+          "effort": "medium",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "azure-base-url/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "azure",
+      "model": "my-deployment",
+      "apiKey": "k",
+      "baseUrl": "https://gateway.example/openai/v1"
+    },
+    "request": {
+      "url": "https://gateway.example/openai/v1/responses",
+      "method": "POST",
+      "headers": {
+        "api-key": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/azure/4.0.79 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "my-deployment",
+        "input": [
+          {
+            "role": "developer",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "reasoning": {
+          "effort": "medium",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "google-2.5-high/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "google",
+      "model": "gemini-2.5-pro",
+      "apiKey": "k",
+      "reasoningEffort": "high"
+    },
+    "request": {
+      "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+      "method": "POST",
+      "headers": {
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/google/4.0.80 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-goog-api-key": "<redacted>"
+      },
+      "body": {
+        "generationConfig": {
+          "thinkingConfig": {
+            "thinkingBudget": 24576,
+            "includeThoughts": true
+          }
+        },
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "systemInstruction": {
+          "parts": [
+            {
+              "text": "You are BrowserOS, a browser agent."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "name": "get_time",
+                "description": "Returns the current UTC time.",
+                "parametersJsonSchema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                }
+              }
+            ]
+          }
+        ],
+        "toolConfig": {
+          "functionCallingConfig": {
+            "mode": "AUTO"
+          }
+        }
+      }
+    }
+  },
+  "google-2.5-high/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "google",
+      "model": "gemini-2.5-pro",
+      "apiKey": "k",
+      "reasoningEffort": "high"
+    },
+    "request": {
+      "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+      "method": "POST",
+      "headers": {
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/google/4.0.80 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-goog-api-key": "<redacted>"
+      },
+      "body": {
+        "generationConfig": {
+          "thinkingConfig": {
+            "thinkingBudget": 24576,
+            "includeThoughts": true
+          }
+        },
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "What time is it?"
+              }
+            ]
+          },
+          {
+            "role": "model",
+            "parts": [
+              {
+                "text": "Checking."
+              },
+              {
+                "functionCall": {
+                  "id": "call_1",
+                  "name": "get_time",
+                  "args": {}
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "parts": [
+              {
+                "functionResponse": {
+                  "id": "call_1",
+                  "name": "get_time",
+                  "response": {
+                    "name": "get_time",
+                    "content": "{\"utc\":\"2026-10-15T04:47:54Z\"}"
+                  }
+                }
+              },
+              {
+                "inlineData": {
+                  "mimeType": "image/png",
+                  "data": "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII="
+                }
+              },
+              {
+                "text": "Tool executed successfully and returned this image as a response"
+              }
+            ]
+          }
+        ],
+        "systemInstruction": {
+          "parts": [
+            {
+              "text": "You are BrowserOS, a browser agent."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "name": "get_time",
+                "description": "Returns the current UTC time.",
+                "parametersJsonSchema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                }
+              }
+            ]
+          }
+        ],
+        "toolConfig": {
+          "functionCallingConfig": {
+            "mode": "AUTO"
+          }
+        }
+      }
+    }
+  },
+  "google-3-low/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "google",
+      "model": "gemini-3.5-flash",
+      "apiKey": "k",
+      "reasoningEffort": "low"
+    },
+    "request": {
+      "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:streamGenerateContent?alt=sse",
+      "method": "POST",
+      "headers": {
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/google/4.0.80 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-goog-api-key": "<redacted>"
+      },
+      "body": {
+        "generationConfig": {
+          "thinkingConfig": {
+            "includeThoughts": true,
+            "thinkingLevel": "low"
+          }
+        },
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "systemInstruction": {
+          "parts": [
+            {
+              "text": "You are BrowserOS, a browser agent."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "name": "get_time",
+                "description": "Returns the current UTC time.",
+                "parametersJsonSchema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                }
+              }
+            ]
+          }
+        ],
+        "toolConfig": {
+          "functionCallingConfig": {
+            "mode": "AUTO"
+          }
+        }
+      }
+    }
+  },
+  "google-2.0/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "google",
+      "model": "gemini-2.0-flash",
+      "apiKey": "k"
+    },
+    "request": {
+      "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:streamGenerateContent?alt=sse",
+      "method": "POST",
+      "headers": {
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/google/4.0.80 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-goog-api-key": "<redacted>"
+      },
+      "body": {
+        "generationConfig": {},
+        "contents": [
+          {
+            "role": "user",
+            "parts": [
+              {
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "systemInstruction": {
+          "parts": [
+            {
+              "text": "You are BrowserOS, a browser agent."
+            }
+          ]
+        },
+        "tools": [
+          {
+            "functionDeclarations": [
+              {
+                "name": "get_time",
+                "description": "Returns the current UTC time.",
+                "parametersJsonSchema": {
+                  "type": "object",
+                  "properties": {},
+                  "additionalProperties": false
+                }
+              }
+            ]
+          }
+        ],
+        "toolConfig": {
+          "functionCallingConfig": {
+            "mode": "AUTO"
+          }
+        }
+      }
+    }
+  },
+  "openrouter/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "openrouter",
+      "model": "anthropic/claude-sonnet-4.5",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://openrouter.ai/api/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openrouter/3.1.0 ai-sdk/provider-utils/5.0.42 runtime/bun/1.3.6",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "anthropic/claude-sonnet-4.5",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are BrowserOS, a browser agent."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          }
+        ],
+        "reasoning": {},
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "openrouter/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "openrouter",
+      "model": "anthropic/claude-sonnet-4.5",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://openrouter.ai/api/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openrouter/3.1.0 ai-sdk/provider-utils/5.0.42 runtime/bun/1.3.6",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "anthropic/claude-sonnet-4.5",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are BrowserOS, a browser agent."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          },
+          {
+            "role": "assistant",
+            "content": "Checking.",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "get_time",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"utc\":\"2026-10-15T04:47:54Z\"}"
+              },
+              {
+                "type": "image_url",
+                "image_url": {
+                  "url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII="
+                }
+              }
+            ],
+            "name": "get_time"
+          }
+        ],
+        "reasoning": {},
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "ollama/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "ollama",
+      "model": "gemma4",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "http://127.0.0.1:11434/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "gemma4",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "ollama/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "ollama",
+      "model": "gemma4",
+      "baseUrl": "http://127.0.0.1:11434/v1",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "http://127.0.0.1:11434/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-trace": "conv-conv-1"
+      },
+      "body": {
+        "model": "gemma4",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          },
+          {
+            "role": "assistant",
+            "content": "Checking.",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "get_time",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "[{\"type\":\"text\",\"text\":\"{\\\"utc\\\":\\\"2026-10-15T04:47:54Z\\\"}\"},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":{\"type\":\"data\",\"data\":\"iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII=\"}}]"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "lmstudio/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "lmstudio",
+      "model": "qwen3",
+      "baseUrl": "http://127.0.0.1:1234/v1",
+      "apiKey": "k"
+    },
+    "request": {
+      "url": "http://127.0.0.1:1234/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "qwen3",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "openai-compatible/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "openai-compatible",
+      "model": "llama-4",
+      "baseUrl": "https://compat.example/v1"
+    },
+    "request": {
+      "url": "https://compat.example/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "llama-4",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "moonshot/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "moonshot",
+      "model": "kimi-k2",
+      "baseUrl": "https://api.moonshot.ai/v1",
+      "apiKey": "k"
+    },
+    "request": {
+      "url": "https://api.moonshot.ai/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "kimi-k2",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "chatgpt-pro/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "chatgpt-pro",
+      "model": "gpt-6-astra",
+      "apiKey": "k",
+      "accountId": "acct_123",
+      "reasoningEffort": "high",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://chatgpt.com/backend-api/codex/responses",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "chatgpt-account-id": "acct_123",
+        "content-type": "application/json",
+        "openai-beta": "responses=experimental",
+        "originator": "browseros",
+        "user-agent": "ai-sdk/openai/4.0.75 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "gpt-6-astra",
+        "input": [
+          {
+            "role": "developer",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "store": false,
+        "include": ["reasoning.encrypted_content"],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true,
+        "instructions": "You are a helpful assistant."
+      }
+    }
+  },
+  "chatgpt-pro/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "chatgpt-pro",
+      "model": "gpt-6-astra",
+      "apiKey": "k",
+      "accountId": "acct_123",
+      "reasoningEffort": "high",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://chatgpt.com/backend-api/codex/responses",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "chatgpt-account-id": "acct_123",
+        "content-type": "application/json",
+        "openai-beta": "responses=experimental",
+        "originator": "browseros",
+        "user-agent": "ai-sdk/openai/4.0.75 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "gpt-6-astra",
+        "input": [
+          {
+            "role": "developer",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "input_text",
+                "text": "What time is it?"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": "Checking."
+          },
+          {
+            "type": "function_call",
+            "call_id": "call_1",
+            "name": "get_time",
+            "arguments": "{}"
+          },
+          {
+            "type": "function_call_output",
+            "call_id": "call_1",
+            "output": [
+              {
+                "type": "input_text",
+                "text": "{\"utc\":\"2026-10-15T04:47:54Z\"}"
+              },
+              {
+                "type": "input_image",
+                "image_url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII="
+              }
+            ]
+          }
+        ],
+        "store": false,
+        "include": ["reasoning.encrypted_content"],
+        "reasoning": {
+          "effort": "high",
+          "summary": "auto"
+        },
+        "tools": [
+          {
+            "type": "function",
+            "name": "get_time",
+            "description": "Returns the current UTC time.",
+            "parameters": {
+              "type": "object",
+              "properties": {},
+              "additionalProperties": false
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true,
+        "instructions": "You are a helpful assistant."
+      }
+    }
+  },
+  "github-copilot/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "github-copilot",
+      "model": "gpt-5-mini",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://api.githubcopilot.com/chat/completions",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "openai-intent": "conversation-edits",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-initiator": "user"
+      },
+      "body": {
+        "model": "gpt-5-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "github-copilot/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "github-copilot",
+      "model": "gpt-5-mini",
+      "apiKey": "k",
+      "headers": {
+        "X-Trace": "conv-{{conversationId}}"
+      }
+    },
+    "request": {
+      "url": "https://api.githubcopilot.com/chat/completions",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "openai-intent": "conversation-edits",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6",
+        "x-initiator": "user"
+      },
+      "body": {
+        "model": "gpt-5-mini",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          },
+          {
+            "role": "assistant",
+            "content": "Checking.",
+            "tool_calls": [
+              {
+                "id": "call_1",
+                "type": "function",
+                "function": {
+                  "name": "get_time",
+                  "arguments": "{}"
+                }
+              }
+            ]
+          },
+          {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": "[{\"type\":\"text\",\"text\":\"{\\\"utc\\\":\\\"2026-10-15T04:47:54Z\\\"}\"},{\"type\":\"file\",\"mediaType\":\"image/png\",\"data\":{\"type\":\"data\",\"data\":\"iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII=\"}}]"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "qwen-code/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "qwen-code",
+      "model": "coder-model",
+      "apiKey": "k"
+    },
+    "request": {
+      "url": "https://portal.qwen.ai/v1/chat/completions",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/openai-compatible/3.0.55 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6"
+      },
+      "body": {
+        "model": "coder-model",
+        "messages": [
+          {
+            "role": "system",
+            "content": "You are BrowserOS, a browser agent."
+          },
+          {
+            "role": "user",
+            "content": "What time is it?"
+          }
+        ],
+        "tools": [
+          {
+            "type": "function",
+            "function": {
+              "name": "get_time",
+              "description": "Returns the current UTC time.",
+              "parameters": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        ],
+        "tool_choice": "auto",
+        "stream": true
+      }
+    }
+  },
+  "bedrock-anthropic/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "bedrock",
+      "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "region": "us-east-1",
+      "accessKeyId": "AKIDEXAMPLE",
+      "secretAccessKey": "secret",
+      "reasoningEffort": "medium"
+    },
+    "request": {
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse-stream",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/amazon-bedrock/5.0.94 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6 ai-sdk/amazon-bedrock/5.0.94 runtime/bun/1.3.6",
+        "x-amz-date": "<redacted>"
+      },
+      "body": {
+        "system": [
+          {
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "additionalModelRequestFields": {
+          "thinking": {
+            "type": "enabled",
+            "budget_tokens": 8192
+          }
+        },
+        "additionalModelResponseFieldPaths": ["/delta/stop_sequence"],
+        "inferenceConfig": {
+          "maxTokens": 12288
+        },
+        "toolConfig": {
+          "tools": [
+            {
+              "toolSpec": {
+                "name": "get_time",
+                "description": "Returns the current UTC time.",
+                "inputSchema": {
+                  "json": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          ],
+          "toolChoice": {
+            "auto": {}
+          }
+        }
+      }
+    }
+  },
+  "bedrock-anthropic/continuation": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "bedrock",
+      "model": "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      "region": "us-east-1",
+      "accessKeyId": "AKIDEXAMPLE",
+      "secretAccessKey": "secret",
+      "reasoningEffort": "medium"
+    },
+    "request": {
+      "url": "https://bedrock-runtime.us-east-1.amazonaws.com/model/us.anthropic.claude-sonnet-4-5-20250929-v1%3A0/converse-stream",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/amazon-bedrock/5.0.94 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6 ai-sdk/amazon-bedrock/5.0.94 runtime/bun/1.3.6",
+        "x-amz-date": "<redacted>"
+      },
+      "body": {
+        "system": [
+          {
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "text": "What time is it?"
+              }
+            ]
+          },
+          {
+            "role": "assistant",
+            "content": [
+              {
+                "text": "Checking."
+              },
+              {
+                "toolUse": {
+                  "toolUseId": "call_1",
+                  "name": "get_time",
+                  "input": {}
+                }
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "toolResult": {
+                  "toolUseId": "call_1",
+                  "content": [
+                    {
+                      "text": "{\"utc\":\"2026-10-15T04:47:54Z\"}"
+                    },
+                    {
+                      "image": {
+                        "format": "png",
+                        "source": {
+                          "bytes": "iVBORw0KGgoAAAANSUhEUgAAADAAAAAgCAIAAADbtmxLAAAAOElEQVR4nO3OQQ0AMAgEMEQgB/8qJmYuOB5NKqD1ek6p+EBISEgoPRASEhJKD4SEhITSAyEhoWUfDmAIarwCNQUAAAAASUVORK5CYII="
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ],
+        "additionalModelRequestFields": {
+          "thinking": {
+            "type": "enabled",
+            "budget_tokens": 8192
+          }
+        },
+        "additionalModelResponseFieldPaths": ["/delta/stop_sequence"],
+        "inferenceConfig": {
+          "maxTokens": 12288
+        },
+        "toolConfig": {
+          "tools": [
+            {
+              "toolSpec": {
+                "name": "get_time",
+                "description": "Returns the current UTC time.",
+                "inputSchema": {
+                  "json": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          ],
+          "toolChoice": {
+            "auto": {}
+          }
+        }
+      }
+    }
+  },
+  "bedrock-nova/first-step": {
+    "config": {
+      "conversationId": "conv-1",
+      "supportsReasoning": true,
+      "provider": "bedrock",
+      "model": "amazon.nova-pro-v1:0",
+      "region": "us-west-2",
+      "accessKeyId": "AKIDEXAMPLE",
+      "secretAccessKey": "secret"
+    },
+    "request": {
+      "url": "https://bedrock-runtime.us-west-2.amazonaws.com/model/amazon.nova-pro-v1%3A0/converse-stream",
+      "method": "POST",
+      "headers": {
+        "authorization": "<redacted>",
+        "content-type": "application/json",
+        "user-agent": "ai-sdk/amazon-bedrock/5.0.94 ai-sdk/provider-utils/5.0.47 runtime/bun/1.3.6 ai-sdk/amazon-bedrock/5.0.94 runtime/bun/1.3.6",
+        "x-amz-date": "<redacted>"
+      },
+      "body": {
+        "system": [
+          {
+            "text": "You are BrowserOS, a browser agent."
+          }
+        ],
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "text": "What time is it?"
+              }
+            ]
+          }
+        ],
+        "toolConfig": {
+          "tools": [
+            {
+              "toolSpec": {
+                "name": "get_time",
+                "description": "Returns the current UTC time.",
+                "inputSchema": {
+                  "json": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                  }
+                }
+              }
+            }
+          ],
+          "toolChoice": {
+            "auto": {}
+          }
+        }
+      }
+    }
+  }
+}
