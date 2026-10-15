@@ -72,7 +72,7 @@ pub async fn store_token_with_manager(
     };
     // Hono c.req.json() throws for malformed JSON and null, but primitives/arrays simply
     // have no accessToken property. Check JS truthiness before any SQLite value conversion.
-    let body: Value = match serde_json::from_slice(body) {
+    let body: Value = match serde_json::from_slice::<Value>(body) {
         Ok(body) if !body.is_null() => body,
         _ => return text_plain(StatusCode::INTERNAL_SERVER_ERROR, "Failed to store token"),
     };
@@ -114,44 +114,64 @@ fn truthy(value: &Value) -> bool {
 }
 
 fn token_input(body: &Value) -> Result<TokenInput, ()> {
-    // Bun SQLite accepts string/number values for TEXT columns, but rejects booleans and
-    // structured JSON. Avoid adding schema validation that would turn these 500s into 400s.
+    // Bun SQLite converts scalar values for TEXT columns but rejects structured JSON. Avoid adding schema validation that would turn these 500s into 400s.
     fn sqlite_text(value: &Value) -> Result<String, ()> {
         match value {
             Value::String(s) => Ok(s.clone()),
             Value::Number(n) => Ok(n.to_string()),
+            Value::Bool(b) => Ok(if *b { "1" } else { "0" }.to_owned()),
             Value::Null => Ok(String::new()),
             _ => Err(()),
         }
     }
-    let expires = match body.get("expiresIn").unwrap_or(&Value::Null) {
-        Value::Null => 0.0,
-        Value::Bool(value) => {
-            if *value {
-                1.0
-            } else {
-                0.0
-            }
-        }
-        Value::Number(value) => value.as_f64().ok_or(())?,
-        Value::String(value) => {
-            if value.trim().is_empty() {
-                0.0
-            } else {
-                value.trim().parse::<f64>().map_err(|_| ())?
-            }
-        }
-        _ => return Err(()),
-    };
+    let expires_value = body.get("expiresIn").unwrap_or(&Value::Null);
+    let expires = js_number(expires_value)
+        .filter(|n| n.is_finite())
+        .ok_or(())?;
     Ok(TokenInput {
         access_token: sqlite_text(&body["accessToken"])?,
         refresh_token: Some(sqlite_text(
             body.get("refreshToken").unwrap_or(&Value::Null),
         )?),
-        expires_at: Some(if expires == 0.0 {
+        expires_at: Some(if !truthy(expires_value) {
             0
         } else {
             super::super::oauth::expires_at(expires)
         }),
     })
+}
+
+// JSON supplies no custom valueOf/toString hooks. Arrays coerce through their joined string;
+// objects coerce to NaN, which violates the existing NOT NULL expiry column in Bun SQLite.
+fn js_number(value: &Value) -> Option<f64> {
+    match value {
+        Value::Null => Some(0.0),
+        Value::Bool(value) => Some(if *value { 1.0 } else { 0.0 }),
+        Value::Number(value) => value.as_f64(),
+        Value::String(value) => {
+            let value = value.trim();
+            if value.is_empty() {
+                return Some(0.0);
+            }
+            for (prefix, radix) in [
+                ("0x", 16),
+                ("0X", 16),
+                ("0b", 2),
+                ("0B", 2),
+                ("0o", 8),
+                ("0O", 8),
+            ] {
+                if let Some(digits) = value.strip_prefix(prefix) {
+                    return i64::from_str_radix(digits, radix).ok().map(|n| n as f64);
+                }
+            }
+            value.parse().ok()
+        }
+        Value::Array(values) if values.is_empty() => Some(0.0),
+        Value::Array(values) if values.len() == 1 => match &values[0] {
+            Value::Bool(_) | Value::Object(_) => None,
+            value => js_number(value),
+        },
+        _ => None,
+    }
 }
