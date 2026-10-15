@@ -26,14 +26,14 @@ if [ "${1:-}" = "watch" ]; then
         ;;
     esac
   done
-  if [ "$has_claw" = true ] && [ "$has_rust" = true ]; then
+  if [ "$has_claw" = true ] || [ "$has_rust" = true ]; then
     needs_cargo=true
   fi
 fi
 
 if [ "$needs_cargo" = true ] && ! command -v cargo &>/dev/null; then
   echo ""
-  echo "  Cargo is required for dev:claw-rust:watch but is not installed."
+  echo "  Cargo is required for watch --claw or --rust but is not installed."
   echo "  Install Rust with:  brew install rustup && rustup-init"
   echo "  Or download from: https://rustup.rs/"
   echo ""

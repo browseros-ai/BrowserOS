@@ -1,21 +1,34 @@
+/** Cargo target selection and compilation shared by the two server packagers.
+ * Product descriptors own staging names; Cargo package/bin identities never leak
+ * into the browser's resource paths. Claw keeps its own telemetry marker checks.
+ */
 import { execFileSync } from 'node:child_process'
 import { readFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 
 import {
   type BuildTarget,
+  type CompiledServerBinary,
   type ProductCompiler,
   runCommand,
   type TargetId,
 } from '@browseros/build-server-tools'
 
-const BINARY_BASE_NAME = 'browseros-claw-server-rs'
-const PACKAGE_NAME = 'claw-server'
+const CLAW_BINARY: RustBinarySpec = {
+  package: 'claw-server',
+  bin: 'browseros-claw-server-rs',
+}
 const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
 const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='
 const POSTHOG_KEY_MARKER_PREFIX = 'browseros-claw-posthog-key='
 const MARKER_SUFFIX = ';'
+
+/** The only product-specific inputs to the shared Cargo compiler. */
+export interface RustBinarySpec {
+  package: string
+  bin: string
+}
 
 interface RustBuildSpec {
   rustTarget: string
@@ -94,7 +107,10 @@ const defaultProbe: RustToolchainProbe = {
   },
 }
 
-export function rustBuildInvocation(target: BuildTarget): RustBuildInvocation {
+export function rustBuildInvocation(
+  target: BuildTarget,
+  binary: RustBinarySpec = CLAW_BINARY,
+): RustBuildInvocation {
   const spec = RUST_BUILD_SPECS[target.id]
   const build =
     spec.driver === 'cargo'
@@ -110,11 +126,11 @@ export function rustBuildInvocation(target: BuildTarget): RustBuildInvocation {
       '--target',
       spec.buildTarget,
       '-p',
-      PACKAGE_NAME,
+      binary.package,
       '--bin',
-      BINARY_BASE_NAME,
+      binary.bin,
     ],
-    binaryName: `${BINARY_BASE_NAME}${spec.binaryExtension}`,
+    binaryName: `${binary.bin}${spec.binaryExtension}`,
     rustTarget: spec.rustTarget,
   }
 }
@@ -239,6 +255,33 @@ export async function validateCompiledBinary(
   }
 }
 
+/** Build into Cargo's target directory; resource staging remains the caller's job. */
+export async function compileRustBinaries(
+  binary: RustBinarySpec,
+  targets: BuildTarget[],
+  env: NodeJS.ProcessEnv,
+): Promise<CompiledServerBinary[]> {
+  await preflightRustBuild(targets)
+  const rootDir = process.cwd()
+  const cargoTargetDir = resolve(rootDir, env.CARGO_TARGET_DIR ?? 'target')
+  const compiled = []
+
+  for (const target of targets) {
+    const invocation = rustBuildInvocation(target, binary)
+    await runCommand('cargo', invocation.args, env, rootDir)
+    compiled.push({
+      target,
+      binaryPath: join(
+        cargoTargetDir,
+        invocation.rustTarget,
+        'release',
+        invocation.binaryName,
+      ),
+    })
+  }
+  return compiled
+}
+
 export const compileClawServerBinaries: ProductCompiler = async (
   product,
   targets,
@@ -246,28 +289,16 @@ export const compileClawServerBinaries: ProductCompiler = async (
   processEnv,
   version,
 ) => {
-  await preflightRustBuild(targets)
   const posthogKey = envVars.CLAW_POSTHOG_KEY
   if (!posthogKey) {
     throw new Error(`${product.label}: CLAW_POSTHOG_KEY is required`)
   }
-  const env = { ...processEnv, ...envVars }
-  const rootDir = process.cwd()
-  const cargoTargetDir = resolve(rootDir, env.CARGO_TARGET_DIR ?? 'target')
-  const compiled = []
-
-  for (const target of targets) {
-    const invocation = rustBuildInvocation(target)
-    await runCommand('cargo', invocation.args, env, rootDir)
-    const binaryPath = join(
-      cargoTargetDir,
-      invocation.rustTarget,
-      'release',
-      invocation.binaryName,
-    )
-    await validateCompiledBinary(binaryPath, version, posthogKey)
-    compiled.push({ target, binaryPath })
+  const compiled = await compileRustBinaries(CLAW_BINARY, targets, {
+    ...processEnv,
+    ...envVars,
+  })
+  for (const binary of compiled) {
+    await validateCompiledBinary(binary.binaryPath, version, posthogKey)
   }
-
   return compiled
 }

@@ -36,6 +36,8 @@
     "build:server": "FORCE_COLOR=1 bun scripts/build/server.ts --target=all",
     "build:server:ci": "FORCE_COLOR=1 bun scripts/build/server.ts --target=all --ci",
     "build:server:test": "FORCE_COLOR=1 bun scripts/build/server.ts --target=darwin-arm64 --no-upload",
+    "build:server-rust": "FORCE_COLOR=1 bun scripts/build/server-rust.ts --target=all",
+    "build:server-rust:test": "FORCE_COLOR=1 bun scripts/build/server-rust.ts --target=darwin-arm64 --no-upload",
     "build:claw-server": "FORCE_COLOR=1 bun scripts/build/claw-server.ts --target=all",
     "build:claw-server:ci": "FORCE_COLOR=1 bun scripts/build/claw-server.ts --target=all --ci",
     "build:claw-server:test": "FORCE_COLOR=1 bun scripts/build/claw-server.ts --target=darwin-arm64 --ci",

@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -31,19 +30,21 @@ var (
 	watchNew    bool
 	watchManual bool
 	watchClaw   bool
+	watchRust   bool
 )
 
 const (
 	watchRunLockMode           = "watch"
 	defaultClawWatchServerPort = 9200
 	defaultClawWatchStateDir   = ".browserclaw-dev"
-	rustClawWatchPollInterval  = time.Second
+	rustWatchPollInterval      = time.Second
 )
 
 func init() {
 	watchCmd.Flags().BoolVar(&watchNew, "new", false, "Use random available ports in 9000-9999 and create a fresh user-data directory")
 	watchCmd.Flags().BoolVar(&watchManual, "manual", false, "Build agent statically instead of WXT HMR mode")
 	watchCmd.Flags().BoolVar(&watchClaw, "claw", false, "Run the BrowserOS neo UI and standalone server")
+	watchCmd.Flags().BoolVar(&watchRust, "rust", false, "Run the BrowserOS Rust server instead of the TypeScript server")
 	rootCmd.AddCommand(watchCmd)
 }
 
@@ -57,7 +58,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if watchClaw {
+	if watchClaw || watchRust {
 		if err := ensureCargoPresent(); err != nil {
 			return err
 		}
@@ -177,7 +178,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if watchClaw {
 		procs = startClawWatch(ctx, &wg, root, env, p, reservations, userDataDir)
 	} else {
-		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual)
+		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual, watchRust)
 		if err != nil {
 			return err
 		}
@@ -213,6 +214,12 @@ func watchMode() (string, error) {
 	}
 	if watchClaw {
 		return "BrowserOS neo", nil
+	}
+	if watchManual && watchRust {
+		return "BrowserOS manual (Rust server)", nil
+	}
+	if watchRust {
+		return "BrowserOS (Rust server)", nil
 	}
 	if watchManual {
 		return "BrowserOS manual", nil
@@ -330,7 +337,7 @@ func logClawBrowserBinary(resolution browser.BinaryResolution) {
 }
 
 // startBrowserOSWatch supervises the BrowserOS agent extension plus server dev pair.
-func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, manual bool) ([]*proc.ManagedProc, error) {
+func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, manual bool, rust bool) ([]*proc.ManagedProc, error) {
 	var procs []*proc.ManagedProc
 	agentDir := filepath.Join(root, "apps/app")
 
@@ -375,7 +382,7 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 	sidecarPath := watchSidecarConfigPath(userDataDir, "browseros-server")
 	reservations.ReleaseServer()
 	reservations.ReleaseExtension()
-	procs = append(procs, proc.StartManaged(ctx, wg, proc.ProcConfig{
+	serverConfig := proc.ProcConfig{
 		Tag:     proc.TagServer,
 		Dir:     filepath.Join(root, "apps/server"),
 		Env:     env,
@@ -387,7 +394,15 @@ func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, e
 			}
 			return proc.KillPortAndWait(p.Server, 3*time.Second)
 		},
-	}))
+	}
+	if rust {
+		serverConfig = serverRustProcConfig(root, env, p, userDataDir, sidecarPath)
+	}
+	serverProc := proc.StartManaged(ctx, wg, serverConfig)
+	procs = append(procs, serverProc)
+	if rust {
+		startRustSourceWatcher(ctx, wg, root, "server-rust", rustServerWatchInputs(root, "server-rust"), serverProc)
+	}
 	return procs, nil
 }
 
@@ -464,83 +479,14 @@ func clawServerProcConfig(root string, env []string, p proc.Ports, userDataDir s
 	}
 }
 
+// startRustClawSourceWatcher keeps Claw on the shared Rust restart lifecycle.
 func startRustClawSourceWatcher(ctx context.Context, wg *sync.WaitGroup, root string, serverProc *proc.ManagedProc) {
-	inputs := rustClawWatchInputs(root)
-	proc.LogMsgf(proc.TagBuild, "Watching Rust claw-server sources (%d inputs)", len(inputs))
-
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		watchRustClawSources(ctx, root, inputs, serverProc)
-	}()
+	startRustSourceWatcher(ctx, wg, root, "claw-server", rustClawWatchInputs(root), serverProc)
 }
 
 func rustClawWatchInputs(root string) []string {
-	inputs := []string{
-		filepath.Join(root, "apps/claw-server/src"),
-		filepath.Join(root, "apps/claw-server/Cargo.toml"),
-		filepath.Join(root, "apps/claw-server/tests/fixtures/legacy-drizzle"),
-	}
-	for _, pattern := range []string{
-		filepath.Join(root, "crates", "*", "src"),
-		filepath.Join(root, "crates", "*", "Cargo.toml"),
-		filepath.Join(root, "crates", "*", "build.rs"),
-		filepath.Join(root, "crates", "*", "protocol"),
-	} {
-		matches, err := filepath.Glob(pattern)
-		if err == nil {
-			sort.Strings(matches)
-			inputs = append(inputs, matches...)
-		}
-	}
-	inputs = append(inputs,
-		filepath.Join(root, "Cargo.toml"),
-		filepath.Join(root, "Cargo.lock"),
-	)
-	return inputs
-}
-
-func watchRustClawSources(ctx context.Context, root string, inputs []string, serverProc *proc.ManagedProc) {
-	snapshot, err := snapshotRustWatchInputs(inputs)
-	if err != nil {
-		proc.LogMsgf(proc.TagBuild, "Warning: initial Rust watch scan failed: %v", err)
-	}
-
-	ticker := time.NewTicker(rustClawWatchPollInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			next, err := snapshotRustWatchInputs(inputs)
-			if err != nil {
-				proc.LogMsgf(proc.TagBuild, "Warning: Rust watch scan failed: %v", err)
-				continue
-			}
-			if snapshot == nil {
-				snapshot = next
-				continue
-			}
-			changed, path := rustWatchSnapshotChanged(snapshot, next)
-			snapshot = next
-			if !changed {
-				continue
-			}
-			displayPath := "watched inputs"
-			if path != "" {
-				displayPath, err = filepath.Rel(root, path)
-				if err != nil {
-					displayPath = path
-				}
-			}
-			proc.LogMsgf(proc.TagBuild, "Rust source changed (%s); restarting claw-server", displayPath)
-			if !serverProc.Restart() {
-				proc.LogMsg(proc.TagBuild, "Rust claw-server process is not running yet; restart will happen after the current launch attempt")
-			}
-		}
-	}
+	return append(rustServerWatchInputs(root, "claw-server"),
+		filepath.Join(root, "apps/claw-server/tests/fixtures/legacy-drizzle"))
 }
 
 type rustWatchedFile struct {
@@ -624,7 +570,7 @@ func waitForCDP(ctx context.Context, port int) {
 func ensureCargoPresent() error {
 	if _, err := exec.LookPath("cargo"); err != nil {
 		return fmt.Errorf("%s %s",
-			proc.ErrorColor.Sprint("Cargo is required for --claw but is not installed."),
+			proc.ErrorColor.Sprint("Cargo is required for --claw or --rust but is not installed."),
 			proc.DimColor.Sprintf("Install it with %s, or from %s.", proc.BoldColor.Sprint("brew install rustup"), proc.BoldColor.Sprint("https://rustup.rs")),
 		)
 	}
