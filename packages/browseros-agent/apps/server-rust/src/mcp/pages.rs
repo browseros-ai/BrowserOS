@@ -1,12 +1,13 @@
-//! The scheduled run's background page (`about:blank`, opened unfocused before the turn and
-//! closed after it) through the host's live browser connection. The page is opened by the
-//! server, not by an agent session, so it starts unowned and ungrouped, as TS's
-//! `browser.newPage(url, { background: true })` did.
+//! The chat layer's two direct uses of the browser, through the host's live connection:
+//! the scheduled run's background page (`about:blank`, opened unfocused before the turn and
+//! closed after it) and tab id → page id resolution for the request's browser context.
+//! The background page is opened by the server, not by an agent session, so it starts
+//! unowned and ungrouped, as TS's `browser.newPage(url, { background: true })` did.
 
-use crate::chat::BackgroundPages;
+use crate::chat::{BackgroundPages, TabResolver};
 use browseros_core::{BrowserSession, PageId, pages::NewPageOptions};
 use browseros_mcp_host::HostCtx;
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 /// [`BackgroundPages`] over the host's current CDP epoch. Every failure is reported, never
 /// retried: the engine falls back to the request's browser context, as TS did.
@@ -53,5 +54,30 @@ impl BackgroundPages for HostPages {
     async fn close(&self, page_id: u32) -> anyhow::Result<()> {
         self.browser().await?.pages.close(PageId(page_id)).await?;
         Ok(())
+    }
+}
+
+/// [`TabResolver`] over the host's live page registry (TS `browser.resolveTabIds`): the app
+/// names tabs by Chrome tab id, tools by page id. Without a browser nothing resolves.
+pub struct HostTabs(pub Arc<HostCtx>);
+
+#[async_trait::async_trait]
+impl TabResolver for HostTabs {
+    async fn resolve_tab_ids(&self, tab_ids: &[i64]) -> HashMap<i64, u32> {
+        let Some(browser) = self.0.browser().session().await else {
+            return HashMap::new();
+        };
+        let pages = match browser.pages.list().await {
+            Ok(pages) => pages,
+            Err(error) => {
+                tracing::warn!(%error, "could not list pages to resolve tab ids");
+                return HashMap::new();
+            }
+        };
+        pages
+            .into_iter()
+            .filter(|page| tab_ids.contains(&page.tab_id.0))
+            .map(|page| (page.tab_id.0, page.page_id.0))
+            .collect()
     }
 }

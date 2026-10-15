@@ -94,7 +94,7 @@ pub(super) async fn post(
     if !json_content {
         return unsupported_media_type();
     }
-    if let Err(rejection) = validate_message(&bytes) {
+    if let Some(rejection) = message_rejection(&bytes) {
         return rejection;
     }
     // rmcp re-checks both headers by prefix/substring of the first value only; hand it the
@@ -146,11 +146,12 @@ fn unsupported_media_type() -> Response {
     )
 }
 
-/// One JSON-RPC message rmcp can decode. rmcp has no batch support (batching left MCP in
-/// 2025-06-18), so a batch the SDK would have served is refused like a malformed message.
-fn validate_message(bytes: &Bytes) -> Result<(), Response> {
+/// The SDK's refusal for a body that is not one JSON-RPC message rmcp can decode. rmcp has
+/// no batch support (batching left MCP in 2025-06-18), so a batch the SDK would have served
+/// is refused like a malformed message.
+fn message_rejection(bytes: &Bytes) -> Option<Response> {
     let Ok(value) = serde_json::from_slice::<Value>(bytes) else {
-        return Err(rpc_error(
+        return Some(rpc_error(
             StatusCode::BAD_REQUEST,
             -32700,
             "Parse error: Invalid JSON",
@@ -160,15 +161,15 @@ fn validate_message(bytes: &Bytes) -> Result<(), Response> {
         .as_array()
         .is_some_and(|batch| batch.len() > MAX_BATCH)
     {
-        return Err(rpc_error(
+        return Some(rpc_error(
             StatusCode::BAD_REQUEST,
             -32600,
             &format!("Invalid Request: Batch must not exceed {MAX_BATCH} messages"),
         ));
     }
     serde_json::from_value::<ClientJsonRpcMessage>(value)
-        .map(|_| ())
-        .map_err(|_| {
+        .is_err()
+        .then(|| {
             rpc_error(
                 StatusCode::BAD_REQUEST,
                 -32700,

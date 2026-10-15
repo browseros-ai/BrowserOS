@@ -15,12 +15,14 @@
 //!        ├─ catalog tool: read-only refusal → navigate scheme → browser connected
 //!        │                → ConversationRunning → execute → effects (claims → PanelTabs
 //!        │                → runs.associate_tabs) → wire (structured opt-in)
-//!        └─ connector tool: GatedConnectors (run guard, read-only) → Klavis provider
+//!        └─ connector tool: Klavis provider, asking `connector_scope` for the lease's
+//!                           run refusal and selected connectors (then refusing read-only)
 //! ```
 //!
 //! The host also owns the browser link: `McpServer::start` begins CDP reattach (non-fatal,
-//! retried forever, unlike TS's exit), `/system/health` reports its live state, and
-//! [`HostPages`] opens scheduled runs' background pages through it.
+//! retried forever, unlike TS's exit), `/system/health` reports its live state, and the
+//! chat layer reaches the browser through it: [`HostPages`] opens scheduled runs'
+//! background pages and [`HostTabs`] resolves the app's tab ids to page ids.
 
 mod branding;
 mod connectors;
@@ -31,13 +33,13 @@ mod panel;
 mod runs;
 
 pub use branding::{branding, instructions};
-pub use connectors::CONNECTORS_READ_ONLY;
+pub use connectors::connector_scope;
 pub use endpoint::{MAX_BODY_BYTES, is_json_content_type};
 pub use leases::{
     InvalidLease, LEASE_HEADER, LeaseError, LeaseScope, LeaseSource, LeaseSpec, McpQuery,
     ToolLease, ToolLeases, conversation_of_session,
 };
-pub use pages::HostPages;
+pub use pages::{HostPages, HostTabs};
 pub use runs::{NO_ACTIVE_RUN, RunRegistry};
 
 use axum::{extract::Request, response::Response};
@@ -75,7 +77,8 @@ pub struct McpServer {
 
 impl McpServer {
     /// Opens the host core over `config` and plugs in server-rust's policy. Nothing runs
-    /// until [`McpServer::start`]. `connectors` is the Klavis tool provider, gated here.
+    /// until [`McpServer::start`]. `connectors` is the Klavis tool provider, built over
+    /// [`connector_scope`] so it applies this server's lease policy.
     pub async fn open(
         config: McpConfig,
         leases: Arc<ToolLeases>,
@@ -104,8 +107,8 @@ impl McpServer {
             .branding(branding())
             .tab_journal(Arc::new(panel::PanelTabs(runs.clone())))
             .guard(Arc::new(runs::ConversationRunning(runs.clone())));
-        if let Some(inner) = connectors {
-            builder = builder.tool_provider(Arc::new(connectors::GatedConnectors { inner, runs }));
+        if let Some(connectors) = connectors {
+            builder = builder.tool_provider(connectors);
         }
         let host = builder.build();
         // TS's transport: every request stateless with single-JSON replies (its internal ACP

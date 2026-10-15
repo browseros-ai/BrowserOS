@@ -15,7 +15,7 @@ use crate::{
     http,
     identity::{Identity, IdentityError},
     klavis::Klavis,
-    mcp::{HostPages, McpConfig, McpServer, ToolLeases},
+    mcp::{HostPages, HostTabs, McpConfig, McpServer, ToolLeases, connector_scope},
     mcp_manager::McpManagerService,
     oauth::TokenManager,
     paths::BrowserosPaths,
@@ -154,8 +154,7 @@ impl AppState {
 
         let runs = ConversationRuns::new(activity.clone(), PANEL_HEARTBEAT);
         let leases = ToolLeases::new(runs.clone());
-        // Klavis's connector tools join `/mcp` once its provider lands (P12): pass
-        // `Some(klavis.tool_provider())` here; the run/read-only gate is already in place.
+        let connectors = klavis.tool_provider_with_scope(connector_scope(leases.runs().clone()));
         let mcp = Arc::new(
             McpServer::open(
                 McpConfig {
@@ -166,7 +165,7 @@ impl AppState {
                     ),
                 },
                 leases.clone(),
-                None,
+                Some(connectors),
             )
             .await?,
         );
@@ -193,7 +192,7 @@ impl AppState {
             browseros,
             acp: acp.clone(),
             oauth: oauth.clone(),
-            tabs: None,
+            tabs: Some(Arc::new(HostTabs(host.clone()))),
             use_mock_llm: config.env.use_mock_llm,
         });
 

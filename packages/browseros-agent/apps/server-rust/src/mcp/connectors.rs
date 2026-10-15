@@ -1,37 +1,26 @@
 //! Managed connector tools (Klavis `connector_mcp_servers` + Strata proxies) on `/mcp`.
-//! The host calls runtime providers outside its catalog pipeline, so the two endpoint-wide
-//! guards are repeated here at that seam, as TS `authorizeCall` did
-//! (`browser-mcp-module.ts:167-186`): a lease needs an active run, then read-only refuses.
+//! Klavis's provider enforces the call policy itself; this is the lease-side half it asks
+//! for on every call: the conversation's selected connectors and, as TS `authorizeCall`
+//! did (`browser-mcp-module.ts:167-186`), a refusal while the lease's conversation is not
+//! running. Klavis refuses read-only callers after that.
 
-use super::runs::{RunRegistry, run_refusal};
-use browseros_mcp_host::{AdmittedCaller, LocalToolProvider, seams::LocalToolCall};
-use futures_util::future::BoxFuture;
-use rmcp::model::{CallToolResult, ContentBlock, Tool};
+use super::{leases::LeaseScope, runs::NO_ACTIVE_RUN, runs::RunRegistry};
+use crate::klavis::{ConnectorScope, ScopeResolver};
 use std::sync::Arc;
 
-pub const CONNECTORS_READ_ONLY: &str = "Managed connector tools are unavailable in read-only mode.";
-
-/// Wraps the Klavis provider with server-rust's call policy. Listing is unchanged: TS
-/// registered connector tools for every caller, read-only included, and refused at call.
-pub(super) struct GatedConnectors {
-    pub(super) inner: Arc<dyn LocalToolProvider>,
-    pub(super) runs: Arc<dyn RunRegistry>,
-}
-
-impl LocalToolProvider for GatedConnectors {
-    fn tools<'a>(&'a self, caller: Option<&'a AdmittedCaller>) -> BoxFuture<'a, Vec<Tool>> {
-        self.inner.tools(caller)
-    }
-
-    fn call<'a>(&'a self, name: &'a str, call: LocalToolCall<'a>) -> BoxFuture<'a, CallToolResult> {
-        if let Some(refusal) = run_refusal(self.runs.as_ref(), call.caller) {
-            return Box::pin(async move { refusal.into_call_tool_result() });
+/// Resolved per call, never cached from `tools/list`: a lease outlives its turns, so the
+/// run must be the live one. External clients (no lease) select nothing and need no run.
+pub fn connector_scope(runs: Arc<dyn RunRegistry>) -> ScopeResolver {
+    Arc::new(move |caller| {
+        let Some(lease) = caller.and_then(|caller| caller.host_data::<LeaseScope>()) else {
+            return ConnectorScope::default();
+        };
+        ConnectorScope {
+            selected_server_names: lease.enabled_mcp_servers().to_vec(),
+            rejection: runs
+                .active_run(lease.conversation_id())
+                .is_none()
+                .then(|| NO_ACTIVE_RUN.to_owned()),
         }
-        if call.caller.is_some_and(|caller| caller.read_only) {
-            return Box::pin(async {
-                CallToolResult::error(vec![ContentBlock::text(CONNECTORS_READ_ONLY)])
-            });
-        }
-        self.inner.call(name, call)
-    }
+    })
 }

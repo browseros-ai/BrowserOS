@@ -35,10 +35,7 @@ impl RunRegistry for ConversationRuns {
 
 /// `Some(refusal)` when `caller` holds a lease whose conversation is not running. Callers
 /// without a lease (external MCP clients) are never subject to the run guard.
-pub(super) fn run_refusal(
-    runs: &dyn RunRegistry,
-    caller: Option<&AdmittedCaller>,
-) -> Option<ToolResult> {
+fn run_refusal(runs: &dyn RunRegistry, caller: Option<&AdmittedCaller>) -> Option<ToolResult> {
     let lease = caller?.host_data::<LeaseScope>()?;
     runs.active_run(lease.conversation_id())
         .is_none()

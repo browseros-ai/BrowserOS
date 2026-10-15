@@ -22,11 +22,13 @@ use rmcp::model::{CallToolResult, ContentBlock, Tool};
 use serde_json::{Value, json};
 use server_rust::{
     AppState,
-    chat::{ActiveRun, BackgroundPages},
+    chat::{ActiveRun, BackgroundPages, TabResolver},
     config::{Config, EnvConfig},
+    klavis::ScopeResolver,
     mcp::{
-        CONNECTORS_READ_ONLY, HostPages, LeaseScope, LeaseSource, LeaseSpec, MAX_BODY_BYTES,
-        McpQuery, McpServer, NO_ACTIVE_RUN, RunRegistry, ToolLeases, conversation_of_session,
+        HostPages, HostTabs, LeaseScope, LeaseSource, LeaseSpec, MAX_BODY_BYTES, McpQuery,
+        McpServer, NO_ACTIVE_RUN, RunRegistry, ToolLeases, connector_scope,
+        conversation_of_session,
     },
 };
 use std::{
@@ -69,6 +71,7 @@ impl Runs {
             conversation_id,
             run_id: Uuid::new_v4(),
             panels_visible: true,
+            tab_group: None,
         };
         self.lock_active().insert(conversation_id, run.clone());
         run
@@ -100,8 +103,9 @@ impl RunRegistry for Runs {
     }
 }
 
-/// A Klavis-like provider: one connector tool that echoes the bound session.
-struct Connectors;
+/// A Klavis-shaped provider: it asks the server's `connector_scope` for the caller's policy
+/// on every call, as Klavis's own provider does, and echoes what it was told.
+struct Connectors(ScopeResolver);
 
 impl LocalToolProvider for Connectors {
     fn tools<'a>(&'a self, _caller: Option<&'a AdmittedCaller>) -> BoxFuture<'a, Vec<Tool>> {
@@ -119,9 +123,14 @@ impl LocalToolProvider for Connectors {
 
     fn call<'a>(&'a self, name: &'a str, call: LocalToolCall<'a>) -> BoxFuture<'a, CallToolResult> {
         Box::pin(async move {
+            let scope = (self.0)(call.caller);
+            if let Some(rejection) = scope.rejection {
+                return CallToolResult::error(vec![ContentBlock::text(rejection)]);
+            }
             CallToolResult::success(vec![ContentBlock::text(format!(
-                "{name} served {}",
-                call.session.id()
+                "{name} served {} for {:?}",
+                call.session.id(),
+                scope.selected_server_names
             ))])
         })
     }
@@ -149,10 +158,11 @@ async fn fixture(browser: Option<Arc<ProfileConnection>>) -> Result<Fixture> {
     .await?;
     let runs = Arc::new(Runs::default());
     let leases = ToolLeases::with_registry(runs.clone());
+    let connectors = Connectors(connector_scope(leases.runs().clone()));
     let server = Arc::new(McpServer::on_core(
         core,
         leases.clone(),
-        Some(Arc::new(Connectors)),
+        Some(Arc::new(connectors)),
     ));
     if let Some(browser) = browser {
         let session = test_support::current_session(browser);
@@ -627,7 +637,7 @@ async fn the_run_guard_follows_the_conversation_not_the_lease() -> Result {
     .await?;
     assert_eq!(
         text_of(&reply),
-        format!("connector_mcp_servers served bound-{conversation}")
+        format!("connector_mcp_servers served bound-{conversation} for []")
     );
 
     // When it stops, the lease is refused again; external clients never need a run.
@@ -640,33 +650,40 @@ async fn the_run_guard_follows_the_conversation_not_the_lease() -> Result {
 }
 
 #[tokio::test]
-async fn connector_tools_refuse_read_only_callers_after_the_run_guard() -> Result {
+async fn connector_scope_carries_the_run_refusal_and_selected_connectors() -> Result {
     let fixture = fixture(None).await?;
+    let scope = connector_scope(fixture.leases.runs().clone());
     let conversation = Uuid::new_v4();
-    let reader = fixture.leases.mint(spec(conversation, true)).await?;
-    let connector = call("connector_mcp_servers", json!({}));
+    let lease = fixture.leases.mint(spec(conversation, false)).await?;
+    let context: server_rust::chat::request::BrowserContext =
+        serde_json::from_value(json!({ "enabledMcpServers": ["Gmail", "Slack"] }))?;
+    lease.update_browser_context(Some(&context));
+    let caller = fixture
+        .leases
+        .resolve(Some(lease.token()), McpQuery::default())?;
 
-    let reply = rpc(
-        &fixture.router,
-        "/mcp",
-        Some(reader.token()),
-        connector.clone(),
-    )
-    .await?;
-    assert_eq!(text_of(&reply), NO_ACTIVE_RUN, "the run guard speaks first");
+    let stopped = scope(caller.as_ref());
+    assert_eq!(stopped.rejection.as_deref(), Some(NO_ACTIVE_RUN));
+    assert_eq!(stopped.selected_server_names, ["Gmail", "Slack"]);
     fixture.runs.start(conversation);
+    assert_eq!(scope(caller.as_ref()).rejection, None);
+
+    // External clients select nothing and need no run.
+    let anonymous = scope(None);
+    assert!(anonymous.rejection.is_none() && anonymous.selected_server_names.is_empty());
+
+    // Through /mcp, the provider sees the same lease policy.
     let reply = rpc(
         &fixture.router,
         "/mcp",
-        Some(reader.token()),
-        connector.clone(),
+        Some(lease.token()),
+        call("connector_mcp_servers", json!({})),
     )
     .await?;
-    assert_eq!(reply.body["result"]["isError"], true);
-    assert_eq!(text_of(&reply), CONNECTORS_READ_ONLY);
-    // An anonymous caller also gets the host's session-handle line appended.
-    let reply = rpc(&fixture.router, "/mcp?read_only=1", None, connector).await?;
-    assert_eq!(text_of(&reply).lines().next(), Some(CONNECTORS_READ_ONLY));
+    assert_eq!(
+        text_of(&reply),
+        format!(r#"connector_mcp_servers served bound-{conversation} for ["Gmail", "Slack"]"#)
+    );
     Ok(())
 }
 
@@ -873,7 +890,40 @@ async fn host_pages_open_find_and_close_a_background_page() -> Result {
     );
 
     // No browser: every operation fails, so the engine falls back to the request context.
-    let offline = HostPages(fixture(None).await?.server.host().clone());
-    assert!(offline.open_background("about:blank").await.is_err());
+    let offline = fixture(None).await?;
+    let offline_pages = HostPages(offline.server.host().clone());
+    assert!(offline_pages.open_background("about:blank").await.is_err());
+    assert!(
+        HostTabs(offline.server.host().clone())
+            .resolve_tab_ids(&[101])
+            .await
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn host_tabs_resolve_chrome_tab_ids_to_page_ids() -> Result {
+    let fixture = fixture(Some(ProfileConnection::new().with_default_profile())).await?;
+    let browser = fixture
+        .server
+        .host()
+        .browser()
+        .session()
+        .await
+        .ok_or("no browser")?;
+    let expected: HashMap<i64, u32> = browser
+        .pages
+        .list()
+        .await?
+        .into_iter()
+        .filter(|page| [101, 104].contains(&page.tab_id.0))
+        .map(|page| (page.tab_id.0, page.page_id.0))
+        .collect();
+    assert_eq!(expected.len(), 2);
+    let resolved = HostTabs(fixture.server.host().clone())
+        .resolve_tab_ids(&[101, 104, 999])
+        .await;
+    assert_eq!(resolved, expected, "unknown tabs are simply absent");
     Ok(())
 }
