@@ -413,7 +413,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 // the next decision can see.
                 run.spent += 1;
                 let scroll = Decision::scroll_down();
-                let _ = driver.perform(&Move::Act(scroll)).await;
+                let _ = driver.perform(&Move::Act(Box::new(scroll))).await;
                 // Scrolling changed what the page shows, so the view in hand
                 // describes a position the run is no longer at. Dropping it
                 // makes the next iteration observe, which is the point of
@@ -803,7 +803,7 @@ fn resolve(
                 let text = supplied.clone()?;
                 let mut filled = decision.clone();
                 filled.value = Some(text);
-                return Some(Move::Act(filled));
+                return Some(Move::Act(Box::new(filled)));
             }
             if how == How::Submit {
                 // The field is the one the previous step typed into, which this
@@ -819,13 +819,13 @@ fn resolve(
                 let mut submitting = decision.clone();
                 submitting.target = run.last_acted.clone();
                 submitting.key = Some("Enter".to_string());
-                return Some(Move::Act(submitting));
+                return Some(Move::Act(Box::new(submitting)));
             }
             // A select is not the same case. Its value came from the control's
             // own options, flattened into the question as one option per
             // control and value, so it is already the literal thing the page
             // expects rather than a name standing in for it.
-            Some(Move::Act(decision.clone()))
+            Some(Move::Act(Box::new(decision.clone())))
         }
         Operation::Navigate => {
             let key = decision.target.as_deref()?;

@@ -35,7 +35,11 @@ pub enum Journey {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Move {
     /// Changes the page. The loop looks again and carries on.
-    Act(Decision),
+    ///
+    /// Boxed because a decision carries a judgement per argument and every
+    /// other move here carries almost nothing, so holding one inline made the
+    /// whole enum the size of its largest variant at every call site.
+    Act(Box<Decision>),
     /// Changes which page the run is on.
     Travel(Journey),
     /// Re-reads the page without changing it.
