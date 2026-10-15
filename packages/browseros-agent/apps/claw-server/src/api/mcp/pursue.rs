@@ -40,9 +40,9 @@ use crate::ids::SessionId;
 /// catalogue and the instructions correct from the moment the environment has
 /// the credential. The managed skill is the one exception and says so where it
 /// is loaded: it is written to disk once per launch.
-// Both live in services so the skill loader, which is also a service, can ask
-// the same question without reaching up into this layer.
-pub use crate::services::pursue_offering::{PursueOffering, credential};
+// Both live in config so the skill loader, which is a service, can ask the same
+// question without reaching up into this layer.
+pub use crate::config::{PursueOffering, credential};
 
 /// How long to let a page keep changing before reading it anyway.
 ///

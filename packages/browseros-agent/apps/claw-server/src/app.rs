@@ -116,7 +116,12 @@ impl AppState {
         let feedback_invites = Arc::new(crate::db::feedback_invite::FeedbackInviteRepository::new(
             database.clone(),
         ));
-        let skill = load_browserclaw_skill(&config.resources_dir)?;
+        // Read once, here, because the installed skill is a file on disk that
+        // reconcile keeps in step with whatever this decided at launch. A
+        // server that gains the credential later needs a restart for installed
+        // skills to follow it.
+        let skill =
+            load_browserclaw_skill(&config.resources_dir, crate::config::PursueOffering::read())?;
         let harness = Arc::new(HarnessService::new_with_managed_skill(
             config.browserclaw_dir.join("mcp-manager"),
             config.browserclaw_dir.join("harness-integrations"),

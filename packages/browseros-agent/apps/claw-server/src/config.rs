@@ -279,6 +279,15 @@ fn clean_string(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A blank or whitespace credential is no credential, which is what keeps a
+    /// half-set variable from advertising a tool that cannot run. Asserted as a
+    /// shape rather than through the environment, which no test here owns.
+    #[test]
+    fn the_offering_is_a_yes_or_a_no() {
+        assert!(super::PursueOffering::Offered.is_offered());
+        assert!(!super::PursueOffering::Absent.is_offered());
+    }
+
     use super::{Cli, CliAction, Config, ConfigEnv};
     use clap::{Parser, error::ErrorKind};
     use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
@@ -521,4 +530,46 @@ mod tests {
         assert_eq!(cfg.public_base_url(), "http://127.0.0.1:9444");
         Ok(())
     }
+}
+
+// The decision loop is one environment variable away from being a different
+// product, and more than one layer needs the answer: the MCP catalogue, the
+// server instructions, run's own description and the managed skill all behave
+// differently when it is present. It sits with the other configuration because
+// the skill loader is a service and must not reach up into the API layer to ask.
+/// Whether the decision loop is offered by this server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PursueOffering {
+    /// There is a credential, so the loop can run and is advertised.
+    Offered,
+    /// There is none. Everything behaves exactly as it did before the loop
+    /// existed, which is what every production install sees.
+    Absent,
+}
+
+impl PursueOffering {
+    /// Asks the environment, now.
+    #[must_use]
+    pub fn read() -> Self {
+        if credential().is_some() {
+            Self::Offered
+        } else {
+            Self::Absent
+        }
+    }
+
+    #[must_use]
+    pub fn is_offered(self) -> bool {
+        self == Self::Offered
+    }
+}
+
+/// The credential itself, for the one place that builds a client with it.
+///
+/// Separate from [`PursueOffering`] because the value is a secret and the answer
+/// to "should this exist" is not. Never logged.
+pub fn credential() -> Option<String> {
+    std::env::var("JEV_TOKEN")
+        .ok()
+        .filter(|token| !token.trim().is_empty())
 }

@@ -10,7 +10,6 @@ pub mod harness_skills;
 pub mod help;
 pub mod helpers;
 pub mod profiles;
-pub mod pursue_offering;
 pub mod recordings;
 pub mod replay;
 pub mod run_failures;
