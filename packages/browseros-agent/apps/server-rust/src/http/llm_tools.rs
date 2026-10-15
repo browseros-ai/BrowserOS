@@ -370,11 +370,10 @@ fn js_trim(text: &str) -> &str {
     })
 }
 
+/// A provider-store read failed. TS lets it throw into `app.onError`, which answers the chat
+/// envelope of a plain `Error` (`unknown`, retryable), not a provider-config error.
 fn internal_error(message: &str) -> Response {
-    super::errors::chat_envelope_500(&llm::to_chat_error(
-        &llm::ModelError::Config(message.to_owned()),
-        None,
-    ))
+    super::errors::chat_envelope_500(&super::errors::thrown_error(message))
 }
 
 // Issue order follows the Zod object's declared fields, rather than request key order. Unknown

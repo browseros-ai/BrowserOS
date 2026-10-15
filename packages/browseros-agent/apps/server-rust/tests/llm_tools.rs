@@ -175,6 +175,39 @@ impl FakeProvider {
     }
 }
 
+/// A provider-store failure is not a provider-config problem: TS lets the read throw into
+/// `app.onError`, whose `toChatError` classifies a plain `Error` as `unknown` and retryable.
+#[tokio::test]
+async fn provider_store_failure_answers_the_plain_error_envelope() -> TestResult {
+    use sea_orm::sqlx::{Connection as _, sqlite::SqliteConnection};
+    let fixture = Fixture::new().await?;
+    let db_file = fixture.state.paths.db_file.display().to_string();
+    let mut sqlite = SqliteConnection::connect(&format!("sqlite://{db_file}")).await?;
+    sea_orm::sqlx::query("DROP TABLE providers")
+        .execute(&mut sqlite)
+        .await?;
+    sqlite.close().await?;
+
+    let fake = FakeProvider::start("ok", false).await?;
+    let mut body = fake.inline();
+    body["providerId"] = json!("saved");
+    for (path, body) in [
+        ("/test-provider", body),
+        (
+            "/refine-prompt",
+            json!({"prompt":"check prices", "name":"Prices", "providerId":"saved"}),
+        ),
+    ] {
+        let (status, body) = fixture.post(path, body).await?;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{path}: {body}");
+        assert_eq!(body["error"]["code"], "unknown", "{path}: {body}");
+        assert_eq!(body["error"]["title"], "Something went wrong");
+        assert_eq!(body["error"]["retryable"], true);
+        assert_eq!(body["error"]["name"], "InternalServerError");
+    }
+    Ok(())
+}
+
 #[tokio::test]
 async fn provider_test_streams_preview_and_reports_time() -> TestResult {
     let fixture = Fixture::new().await?;
