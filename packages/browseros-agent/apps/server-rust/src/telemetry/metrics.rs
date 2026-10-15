@@ -81,8 +81,19 @@ impl Metrics {
             tracing::warn!("invalid PostHog configuration; metrics disabled");
             return Self::disabled();
         };
+        // posthog-rs unwraps its reqwest client builder, and reqwest's platform verifier fails
+        // on hosts without a system CA store (minimal Linux images), which would panic the whole
+        // server at startup. Telemetry must never take the server down: build the client on its
+        // own task so a panic there only disables metrics.
+        let client = match tokio::spawn(posthog_rs::client(options)).await {
+            Ok(client) => client,
+            Err(error) => {
+                tracing::warn!(%error, "PostHog client failed to initialize; metrics disabled");
+                return Self::disabled();
+            }
+        };
         let active = Arc::new(Active {
-            client: posthog_rs::client(options).await,
+            client,
             install_id: install_id.to_owned(),
             config,
             rollup: Mutex::new(Rollup::default()),
