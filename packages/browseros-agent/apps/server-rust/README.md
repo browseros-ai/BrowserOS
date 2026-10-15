@@ -13,38 +13,46 @@ apps/app ──server-api-client──► apps/server-rust (axum) ──► chat
                                          browseros-mcp-host (shared with claw-server) → browseros-mcp → core → cdp
 ```
 
+Both chat engines speak one vocabulary, `UiChunk` (`crates/ui-message-stream`), and both reach
+browser tools the same way: an MCP client over loopback `/mcp` carrying a lease minted per
+conversation, so admission, read-only mode and tab ownership are enforced in one place.
+
 ## Run
 
 ```sh
-cargo run -p server-rust -- --version
-cargo run -p server-rust -- --config ../../config.dev.json   # from apps/server-rust
+cargo run -p server-rust --bin browseros-server-rs -- --version
+cargo run -p server-rust --bin browseros-server-rs -- --config ../../config.dev.json
+tools/dev/run.sh watch --rust --new     # from packages/browseros-agent: BrowserOS + extension + this server
+bun run build:server-rust:test          # darwin-arm64 resources zip
 ```
+
+## Verify
 
 The HTTP contract is `contracts/server-api` (OpenAPI). `tests/contract_routes.rs` fails if the
 route table drifts from it; `tests/dependency_boundaries.rs` fails if the crate graph breaks a seam.
+Parity with the TypeScript server is checked against a real BrowserOS by the compatibility harness:
 
 ```sh
-cargo test -p server-rust --test contract_routes --test dependency_boundaries
+cargo test -p server-rust
+bun run tools/server-compat/http-compat.ts   --a ts --b rust
+bun run tools/server-compat/stream-compat.ts --a ts --b rust
 ```
 
 ## Module map
 
-| Module | Role | Owner |
-|---|---|---|
-| `main`, `config`, `paths`, `identity`, `activity`, `server_file`, `app` | process contract, sidecar, data dir, composition root | P3 |
-| `http::{mod, security, extract, errors, system}`, `http::wire` | the single `ROUTES` table, request trust, zod-style extractors, error dialects | P3 |
-| `db` | shared SQLite (drizzle catch-up + sea-orm), five stores | P2 |
-| `chat::{mod, runs, history, request, engine}`, `http::chat` | `ChatService`, run registry, display history, the `ChatEngine` seam | P8 |
-| `chat::browseros_engine` | built-in agent adapter over `browseros-agent` | P14 |
-| `chat::acp_engine`, `http::acpx_probe` | ACP adapter over `acp-agents` | P16 |
-| `http::{conversations, agents, providers, schedules}` | CRUD routes | P9 |
-| `oauth`, `http::oauth` | ChatGPT/Copilot/Qwen OAuth, `:1455` callback listener | P10 |
-| `klavis`, `mcp_manager`, `http::{klavis, mcp_manager}` | connectors, third-party MCP installs | P12 |
-| `http::llm_tools`, `telemetry::{sentry, metrics}` | test-provider, refine-prompt, telemetry | P13 |
-| `mcp`, `http::mcp` | tool leases and adapters at `browseros-mcp-host`'s seams | P15 |
+| Module | Role |
+|---|---|
+| `main`, `config`, `paths`, `identity`, `activity`, `server_file`, `app` | process contract, sidecar config, data dir, `/status` activity, composition root |
+| `http::{mod, security, extract, errors, system}`, `http::wire` | the single `ROUTES` table, request trust (origin/loopback), zod-compatible extractors, error dialects |
+| `db` | the shared SQLite file: drizzle catch-up that keeps TS rollback possible, sea-orm stores, backup and corruption salvage |
+| `chat::{mod, runs, history, request, engine}`, `http::chat` | `ChatService`, the run registry (409/replay/stop/panels), append-only history, the `ChatEngine` seam |
+| `chat::browseros_engine` | built-in agent adapter over `browseros-agent` |
+| `chat::acp_engine`, `http::acpx_probe` | external agents (Claude Code, Codex, custom) over `acp-agents` |
+| `http::{conversations, agents, providers, schedules}` | CRUD routes |
+| `oauth`, `http::oauth` | ChatGPT/Copilot/Qwen OAuth and the `:1455` callback listener |
+| `klavis`, `mcp_manager`, `http::{klavis, mcp_manager}` | managed connectors and third-party MCP installs |
+| `http::llm_tools`, `telemetry` | test-provider, refine-prompt, Sentry and PostHog |
+| `mcp`, `http::mcp` | tool leases and the server's adapters at `browseros-mcp-host`'s seams |
 
-Shared crates: `crates/ui-message-stream` (the `UiChunk`/`UiMessage` wire vocabulary both engines
-emit) and `crates/browseros-agent` (the built-in agent loop over rig-core).
-
-In the S0 skeleton every route answers 501 `{"error":"not implemented"}`; the pieces above replace
-handler bodies without changing the table.
+Design decisions and their reasoning live in the overnight decision record (`DECISIONS.md` in the
+project's `.llm/server-rust/design/`).
