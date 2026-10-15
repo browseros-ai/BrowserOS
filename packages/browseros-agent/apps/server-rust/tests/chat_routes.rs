@@ -1472,7 +1472,11 @@ async fn imported_legacy_rows_keep_their_messages_through_a_chat_turn() -> TestR
         records: Arc::new(server_rust::chat::DbChatRecords::new(&db)),
         browseros: Arc::new(ScriptedEngine::new(script())),
         acp: Arc::new(ScriptedEngine::new(script())),
-        oauth: token_manager(dir.path()).await?,
+        oauth: TokenManager::new(
+            db.oauth_tokens(),
+            "browseros-test".to_owned(),
+            reqwest::Client::new(),
+        ),
         tabs: None,
         use_mock_llm: false,
     });
