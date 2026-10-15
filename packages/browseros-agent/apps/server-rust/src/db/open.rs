@@ -4,8 +4,10 @@
 //!    overwriting) and a fresh one is created; claw-server's recovery, which beats the TS
 //!    server's crash loop and keeps the bytes. Any other failure aborts startup untouched.
 //! 2. Before the first Rust open of an existing file, `browseros.sqlite{,-wal,-shm}` are copied to
-//!    `browseros.sqlite.pre-rust.bak{,-wal,-shm}`, once (an existing backup is never replaced).
-//!    No connection is open yet, so the copy is the file exactly as the TS server left it.
+//!    `browseros.sqlite.pre-rust.bak{,-wal,-shm}`, once: an existing backup is never replaced.
+//!    The rule is "file exists, backup does not", so a Rust-created file also gets one copy on
+//!    its second open; probing for the Rust ledger first would mean opening the file before
+//!    copying it. No connection is open yet, so the copy is the file as the last server left it.
 //! 3. The drizzle catch-up runs on its own connection, because it switches foreign-key
 //!    enforcement for that connection only.
 //! 4. The pool (one connection: TS's write serialization, without SQLite write-upgrade
