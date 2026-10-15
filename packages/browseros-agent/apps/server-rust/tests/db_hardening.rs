@@ -37,7 +37,9 @@ async fn rust_instances_exclude_each_other_until_close() -> anyhow::Result<()> {
     let (_dir, paths) = stage(None)?;
     let (db, _) = open(&paths).await?;
     assert!(
-        open(&paths).await.is_err(),
+        tokio::time::timeout(std::time::Duration::from_secs(4), open(&paths))
+            .await?
+            .is_err(),
         "a second Rust instance opened the same DB"
     );
     db.close().await?;
@@ -366,6 +368,34 @@ async fn corrupt_table_does_not_prevent_other_tables_from_being_salvaged() -> an
             .with_file_name("browseros.sqlite.pre-rust.bak")
             .exists()
     );
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn lock_acquisition_waits_for_an_inherited_descriptor_to_close() -> anyhow::Result<()> {
+    let (_dir, paths) = stage(None)?;
+    let holder = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(paths.browseros_dir.join("server-rust-db.lock"))?;
+    holder.try_lock()?;
+    // A dup models a child that inherited the open file description before exec. Closing the
+    // parent's handle alone must not make the next startup fail before the child releases it.
+    let inherited = holder.try_clone()?;
+    drop(holder);
+    let opening = open(&paths);
+    tokio::pin!(opening);
+    assert!(
+        tokio::time::timeout(std::time::Duration::from_millis(75), &mut opening)
+            .await
+            .is_err(),
+        "startup did not wait for the temporary lock holder"
+    );
+    drop(inherited);
+    let (db, _) = tokio::time::timeout(std::time::Duration::from_secs(3), opening).await??;
     db.close().await?;
     Ok(())
 }

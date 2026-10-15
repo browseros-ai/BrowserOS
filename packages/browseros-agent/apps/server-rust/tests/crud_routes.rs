@@ -914,3 +914,75 @@ async fn tests_that_each_crud_body_preserves_its_zod_validation_rules() -> TestR
     }
     Ok(())
 }
+
+#[tokio::test]
+async fn stored_unknown_rows_remain_visible_and_valid_uuid_paths_keep_their_case() -> TestResult {
+    use sea_orm::sqlx::{self, Connection};
+    let server = Server::new().await?;
+    let mut db = sqlx::SqliteConnection::connect_with(
+        &sqlx::sqlite::SqliteConnectOptions::new().filename(&server.state.paths.db_file),
+    )
+    .await?;
+    let uppercase = "AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA";
+    let lowercase = uppercase.to_ascii_lowercase();
+    let messages = json!([{"legacy":true}, ["legacy array"], "unvalidated old value"]);
+    for id in [uppercase, lowercase.as_str(), "legacy-id"] {
+        sqlx::query("INSERT INTO providers(id,kind,type,name,created_at,updated_at) VALUES(?,'acp','future-agent',?,1,1)")
+            .bind(id).bind(id).execute(&mut db).await?;
+        sqlx::query("INSERT INTO conversations(id,messages,target_type,last_messaged_at,created_at,updated_at) VALUES(?,?,'future-target',1,1,1)")
+            .bind(id).bind(messages.to_string()).execute(&mut db).await?;
+    }
+    for (collection, field, kind_field, kind) in [
+        ("agents", "agent", "type", "future-agent"),
+        (
+            "conversations",
+            "conversation",
+            "targetType",
+            "future-target",
+        ),
+    ] {
+        let listed = server
+            .ok("GET", &format!("/{collection}"), Value::Null)
+            .await?;
+        let rows = listed[collection].as_array().ok_or("missing collection")?;
+        assert_eq!(rows.len(), 3);
+        for id in [uppercase, lowercase.as_str(), "legacy-id"] {
+            let row = rows
+                .iter()
+                .find(|row| row["id"] == id)
+                .ok_or("stored id disappeared")?;
+            assert_eq!(row[kind_field], kind);
+            assert!(row.get("modelId").is_none());
+            assert!(row.get("origin").is_none());
+        }
+        let detail = server
+            .ok("GET", &format!("/{collection}/{uppercase}"), Value::Null)
+            .await?;
+        assert_eq!(detail[field]["id"], uppercase);
+        assert_eq!(detail[field][kind_field], kind);
+        if collection == "conversations" {
+            assert_eq!(detail[field]["messages"], messages);
+        }
+        // TS accepts uppercase UUID text but does not normalize it for the storage lookup.
+        assert_eq!(
+            server
+                .ok("DELETE", &format!("/{collection}/{uppercase}"), Value::Null)
+                .await?,
+            json!({"success":true})
+        );
+        assert_eq!(
+            server
+                .ok("GET", &format!("/{collection}/{lowercase}"), Value::Null)
+                .await?[field]["id"],
+            lowercase
+        );
+        for method in ["GET", "DELETE"] {
+            let (status, body) = server
+                .request(method, &format!("/{collection}/legacy-id"), Value::Null)
+                .await?;
+            assert_zod(status, &body)?;
+        }
+    }
+    db.close().await?;
+    Ok(())
+}

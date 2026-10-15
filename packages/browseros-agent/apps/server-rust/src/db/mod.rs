@@ -143,15 +143,7 @@ impl Database {
             })?;
         // OS advisory locks survive stale lock files and release on crash. TS does not take
         // this lock: BEGIN IMMEDIATE still arbitrates the OTA overlap with its SQLite writer.
-        lock.try_lock().map_err(|error| match error {
-            std::fs::TryLockError::WouldBlock => {
-                DbError::InstanceLocked(lock_path.display().to_string())
-            }
-            std::fs::TryLockError::Error(source) => DbError::Io {
-                context: "take database instance lock".into(),
-                source,
-            },
-        })?;
+        acquire_instance_lock(&lock, &lock_path).await?;
         let (connection, outcome) = open::open(&paths.db_file).await?;
         let read_only = matches!(outcome, MigrationOutcome::DatabaseAhead { .. });
         match &outcome {
@@ -206,5 +198,30 @@ impl Database {
 
     pub fn oauth_tokens(&self) -> OAuthTokenStore {
         OAuthTokenStore::new(self.clone())
+    }
+}
+
+/// A departing process (or a forked child before exec) may briefly retain a duplicate lock
+/// descriptor. Bound startup waiting without weakening exclusion against a live Rust server.
+async fn acquire_instance_lock(lock: &File, path: &std::path::Path) -> DbResult<()> {
+    use std::time::Duration;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    loop {
+        match lock.try_lock() {
+            Ok(()) => return Ok(()),
+            Err(std::fs::TryLockError::WouldBlock) => {
+                let now = tokio::time::Instant::now();
+                if now >= deadline {
+                    return Err(DbError::InstanceLocked(path.display().to_string()));
+                }
+                tokio::time::sleep_until((now + Duration::from_millis(20)).min(deadline)).await;
+            }
+            Err(std::fs::TryLockError::Error(source)) => {
+                return Err(DbError::Io {
+                    context: "take database instance lock".into(),
+                    source,
+                });
+            }
+        }
     }
 }

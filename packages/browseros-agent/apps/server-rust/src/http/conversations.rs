@@ -7,31 +7,34 @@ use axum::{
     extract::{FromRequest, Path, Request, State},
     response::{IntoResponse, Response},
 };
+use serde_json::json;
 use server_api::models as api;
 
 use super::wire::crud::{self, CrudJson};
 use crate::{AppState, db};
 
 pub async fn list(State(state): State<AppState>) -> Response {
-    match state.conversations.list().await {
-        Ok(rows) => Json(api::ConversationList::new(
-            rows.into_iter().map(crud::conversation_summary).collect(),
-        ))
-        .into_response(),
+    match state.conversations.list_stored().await {
+        Ok(rows) => {
+            let summaries = rows
+                .into_iter()
+                .map(crud::stored_conversation_summary)
+                .collect::<Vec<_>>();
+            Json(json!({"conversations": summaries})).into_response()
+        }
         Err(error) => crud::db_error(error),
     }
 }
 
 pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let id = match crud::uuid_param(&id, "conversationId") {
-        Ok(id) => id,
-        Err(response) => return response.into_response(),
-    };
-    match state.conversations.get(id).await {
-        Ok(Some(row)) => match crud::conversation_detail(row) {
-            Ok(row) => Json(api::ConversationResponse::new(row)).into_response(),
-            Err(response) => response.into_response(),
-        },
+    // Preserve TS validation without normalizing a case-sensitive persisted identifier.
+    if let Err(response) = crud::uuid_param(&id, "conversationId") {
+        return response.into_response();
+    }
+    match state.conversations.get_stored(&id).await {
+        Ok(Some(row)) => {
+            Json(json!({"conversation": crud::stored_conversation_detail(row)})).into_response()
+        }
         Ok(None) => crud::not_found("Unknown conversation"),
         Err(error) => crud::db_error(error),
     }
@@ -86,9 +89,11 @@ pub async fn import(
 }
 
 pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let id = match crud::uuid_param(&id, "conversationId") {
-        Ok(id) => id,
-        Err(response) => return response.into_response(),
-    };
-    crud::deleted(state.conversations.delete(id).await, "Unknown conversation")
+    if let Err(response) = crud::uuid_param(&id, "conversationId") {
+        return response.into_response();
+    }
+    crud::deleted(
+        state.conversations.delete(&id).await,
+        "Unknown conversation",
+    )
 }

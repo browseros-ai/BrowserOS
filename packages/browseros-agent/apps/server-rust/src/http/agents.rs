@@ -8,18 +8,20 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use http::StatusCode;
+use serde_json::json;
 use server_api::models as api;
 
 use super::wire::crud::{self, CrudJson};
 use crate::{AppState, db};
 
 pub async fn list(State(state): State<AppState>) -> Response {
-    match state.agents.list().await {
-        // The store owns updatedAt DESC ordering; sorting again would change tie behavior.
-        Ok(rows) => Json(api::AgentList::new(
-            rows.into_iter().map(crud::agent).collect(),
-        ))
-        .into_response(),
+    match state.agents.list_stored().await {
+        // Lossless reads retain legacy ids and future kinds. The generated execution enum is
+        // closed, so the read projection carries stored strings just as the TS route does.
+        Ok(rows) => {
+            Json(json!({"agents": rows.into_iter().map(crud::stored_agent).collect::<Vec<_>>()}))
+                .into_response()
+        }
         Err(error) => crud::db_error(error),
     }
 }
@@ -77,12 +79,13 @@ pub async fn create(
 }
 
 pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let id = match crud::uuid_param(&id, "agentId") {
-        Ok(id) => id,
-        Err(response) => return response.into_response(),
-    };
-    match state.agents.get(id).await {
-        Ok(Some(row)) => Json(api::AgentResponse::new(crud::agent(row))).into_response(),
+    // Validation is TS's UUID rule, but lookup uses the original text: Zod does not normalize
+    // uppercase ids, and SQLite treats those as distinct from lowercase rows.
+    if let Err(response) = crud::uuid_param(&id, "agentId") {
+        return response.into_response();
+    }
+    match state.agents.get_stored(&id).await {
+        Ok(Some(row)) => Json(json!({"agent": crud::stored_agent(row)})).into_response(),
         Ok(None) => crud::not_found("Unknown agent"),
         Err(error) => crud::db_error(error),
     }
@@ -146,13 +149,13 @@ pub async fn update(
 }
 
 pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Response {
-    let id = match crud::uuid_param(&id, "agentId") {
+    let runtime_id = match crud::uuid_param(&id, "agentId") {
         Ok(id) => id,
         Err(response) => return response.into_response(),
     };
-    match state.agents.delete(id).await {
+    match state.agents.delete(&id).await {
         Ok(true) => {
-            state.acp.close_all_for_agent(id, true).await;
+            state.acp.close_all_for_agent(runtime_id, true).await;
             Json(api::SuccessResponse::new(true)).into_response()
         }
         Ok(false) => crud::not_found("Unknown agent"),

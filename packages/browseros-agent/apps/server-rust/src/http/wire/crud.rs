@@ -712,26 +712,7 @@ pub fn deleted(result: db::DbResult<bool>, message: &str) -> Response {
 /// `/agents` parses and validates persisted config, omitting malformed legacy values. The
 /// `/providers` projection instead returns the untouched string, including invalid JSON.
 pub fn agent(row: db::AcpAgentRow) -> api::Agent {
-    let custom_config = row
-        .custom_config
-        .as_deref()
-        .filter(|raw| !raw.is_empty())
-        .and_then(|raw| {
-            let value = match serde_json::from_str(raw) {
-                Ok(value) => value,
-                Err(_) => {
-                    tracing::warn!(agent_id = %row.id, "Ignoring unparseable custom agent config");
-                    return None;
-                }
-            };
-            match decode::<api::CustomAcpAgentConfig>(value) {
-                Ok(config) => Some(Box::new(config)),
-                Err(_) => {
-                    tracing::warn!(agent_id = %row.id, "Ignoring malformed custom agent config");
-                    None
-                }
-            }
-        });
+    let custom_config = stored_agent_config(row.custom_config.as_deref(), &row.id);
     api::Agent {
         id: row.id.to_string(),
         name: row.name,
@@ -769,30 +750,64 @@ pub fn conversation_summary(row: db::ConversationSummary) -> api::ConversationSu
     }
 }
 
-pub fn conversation_detail(
-    row: db::StoredConversation,
-) -> Result<api::ConversationDetail, CrudError> {
-    let summary = conversation_summary(row.summary);
-    let messages = serde_json::to_value(row.messages)
-        .and_then(serde_json::from_value)
-        .map_err(|error| CrudError::from(internal_error(&error.to_string())))?;
-    Ok(api::ConversationDetail {
-        id: summary.id,
-        last_user_message: summary.last_user_message,
-        origin: summary.origin,
-        target_type: match summary.target_type {
-            api::ConversationSummaryTargetType::Browseros => {
-                api::ConversationDetailTargetType::Browseros
+/// Management reads are deliberately open to future stored type strings. Generated DTOs
+/// still validate requests/execution, but cannot represent all rows that TS can persist.
+pub fn stored_agent(row: db::StoredAgentRow) -> Value {
+    let config = stored_agent_config(row.custom_config.as_deref(), &row.id);
+    omit_null_fields(json!({
+        "id": row.id, "name": row.name, "type": row.kind.as_str(),
+        "modelId": row.model_id, "reasoningEffort": row.reasoning_effort,
+        "workingDirectory": row.working_directory.map(|path| path.to_string_lossy().into_owned()),
+        "customConfig": config, "createdAt": row.created_at as f64, "updatedAt": row.updated_at as f64,
+    }))
+}
+
+pub fn stored_conversation_summary(row: db::StoredConversationSummary) -> Value {
+    omit_null_fields(json!({
+        "id": row.id, "lastUserMessage": row.last_user_message, "origin": row.origin,
+        "targetType": row.target_type.as_str(), "agentId": row.agent_id,
+        "lastMessagedAt": row.last_messaged_at as f64,
+        "createdAt": row.created_at as f64, "updatedAt": row.updated_at as f64,
+    }))
+}
+
+pub fn stored_conversation_detail(row: db::StoredConversationRecord) -> Value {
+    let mut summary = stored_conversation_summary(row.summary);
+    if let Some(object) = summary.as_object_mut() {
+        // TS returns parsed history verbatim, including legacy messages outside today's DTO.
+        object.insert("messages".into(), Value::Array(row.messages));
+    }
+    summary
+}
+
+/// SQLite NULL maps to JS undefined in these projections, so JSON omits just the outer field.
+/// Nested nulls inside stored config/history remain untouched.
+fn omit_null_fields(mut value: Value) -> Value {
+    if let Some(object) = value.as_object_mut() {
+        object.retain(|_, value| !value.is_null());
+    }
+    value
+}
+
+fn stored_agent_config(
+    raw: Option<&str>,
+    id: impl std::fmt::Display,
+) -> Option<Box<api::CustomAcpAgentConfig>> {
+    raw.filter(|raw| !raw.is_empty()).and_then(|raw| {
+        let value = match serde_json::from_str(raw) {
+            Ok(value) => value,
+            Err(_) => {
+                tracing::warn!(agent_id = %id, "Ignoring unparseable custom agent config");
+                return None;
             }
-            api::ConversationSummaryTargetType::Claude => api::ConversationDetailTargetType::Claude,
-            api::ConversationSummaryTargetType::Codex => api::ConversationDetailTargetType::Codex,
-            api::ConversationSummaryTargetType::Custom => api::ConversationDetailTargetType::Custom,
-        },
-        agent_id: summary.agent_id,
-        last_messaged_at: summary.last_messaged_at,
-        created_at: summary.created_at,
-        updated_at: summary.updated_at,
-        messages,
+        };
+        match decode::<api::CustomAcpAgentConfig>(value) {
+            Ok(config) => Some(Box::new(config)),
+            Err(_) => {
+                tracing::warn!(agent_id = %id, "Ignoring malformed custom agent config");
+                None
+            }
+        }
     })
 }
 
