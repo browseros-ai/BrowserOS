@@ -110,6 +110,20 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
         self.assertIn(
             "source mode requires prepared-resources-artifact", validate["run"]
         )
+        self.assertIn(
+            "BrowserOS source mode packages the Rust server on macOS only",
+            validate["run"],
+        )
+
+    def test_macos_source_lane_installs_rust_for_every_product(self):
+        steps = self.load_workflow("release-macos.yml")["jobs"]["build"]["steps"]
+        toolchain = next(
+            step for step in steps if step.get("name") == "Setup Rust server toolchain"
+        )
+        self.assertEqual(
+            toolchain["if"], "steps.inputs.outputs.resource_mode == 'source'"
+        )
+        self.assertIn("rustup target add x86_64-apple-darwin", toolchain["run"])
 
     def test_source_lane_checks_out_and_verifies_exact_candidate(self):
         steps = self.build_steps()

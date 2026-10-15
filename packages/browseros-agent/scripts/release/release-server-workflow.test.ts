@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
-import { browserosServerBuildProduct } from '../build/server/descriptor'
+import { CROSS_TOOL_VERSION } from '../build/claw-server/compiler'
+import { serverRustBuildProduct } from '../build/server-rust/descriptor'
 
 const repoRoot = resolve(import.meta.dir, '../../../..')
 const workflow = readFileSync(
@@ -67,11 +68,18 @@ describe('release-server workflow', () => {
 
   it('builds and attaches every immutable versioned artifact first', () => {
     const build = section('  build-publish:', '  finalize:')
-    expect(browserosServerBuildProduct.env.defaultR2UploadPrefix).toBe(
+    expect(serverRustBuildProduct.env.defaultR2UploadPrefix).toBe(
       'artifacts/server',
     )
+    expect(serverRustBuildProduct.archiveBaseName).toBe(
+      'browseros-server-resources',
+    )
     expect(build).toContain(
-      'bun scripts/build/server.ts --target=all --upload --versioned-only',
+      'bun scripts/build/server-rust.ts --target=all --upload --versioned-only',
+    )
+    expect(build).not.toContain('scripts/build/server.ts')
+    expect(build).toContain(
+      `${serverRustBuildProduct.distRoot}/browseros-server-resources-*.zip`,
     )
     expect(build).toContain('RELEASE_SHA:')
     expect(build).toContain('Expected 5 server resource zips')
@@ -83,6 +91,26 @@ describe('release-server workflow', () => {
       'browseros release component stamp --component server',
     )
     expect(build).not.toContain('package["version"] = version')
+  })
+
+  it('cross-compiles the Rust server with the packager toolchain', () => {
+    const build = section('  build-publish:', '  finalize:')
+    expect(build).toContain('runs-on: macos-14')
+    for (const triple of [
+      'aarch64-apple-darwin',
+      'x86_64-apple-darwin',
+      'aarch64-unknown-linux-gnu',
+      'x86_64-unknown-linux-gnu',
+      'x86_64-pc-windows-msvc',
+    ]) {
+      expect(build).toContain(triple)
+    }
+    expect(build).toContain(`CROSS_TOOL_VERSION: "${CROSS_TOOL_VERSION}"`)
+    expect(build).toContain('cargo install --locked cargo-zigbuild')
+    expect(build).toContain('cargo install --locked cargo-xwin')
+    expect(build).toContain('ZIG_SHA256:')
+    expect(build).not.toContain('mapfile -t')
+    expect(build).not.toContain('wine')
   })
 
   it('finalizes only after verifying assets and versioned objects', () => {
@@ -115,6 +143,15 @@ describe('release-server workflow', () => {
       '- finalize',
     )
     expect(section('  reflect-version:')).toContain('- finalize')
+  })
+
+  it('reflects the released version into the Rust Cargo package', () => {
+    const reflection = section('  reflect-version:')
+    expect(reflection).toContain(
+      'cargo_toml="packages/browseros-agent/apps/server-rust/Cargo.toml"',
+    )
+    expect(reflection).toContain('lock="packages/browseros-agent/Cargo.lock"')
+    expect(reflection).not.toContain('apps/server/package.json')
   })
 
   it('merges reflection PRs through the verified release helper', () => {

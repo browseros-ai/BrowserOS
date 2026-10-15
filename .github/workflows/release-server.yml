@@ -236,13 +236,18 @@ jobs:
               --notes-file "$notes"
           fi
 
+  # The shipped server is the Rust port (apps/server-rust). The shared Rust
+  # packager cross-compiles all five targets from one macOS host: Cargo for
+  # darwin, cargo-zigbuild for linux (glibc 2.17), cargo-xwin for windows.
   build-publish:
     needs: prepare
     if: needs.prepare.outputs.mode == 'build'
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    runs-on: macos-14
+    timeout-minutes: 150
     env:
       BROWSEROS_CONFIG_URL: ${{ secrets.BROWSEROS_CONFIG_URL }}
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+      HOMEBREW_NO_INSTALL_CLEANUP: "1"
       LOG_LEVEL: info
       NODE_ENV: production
       POSTHOG_API_KEY: ${{ secrets.POSTHOG_API_KEY }}
@@ -282,15 +287,41 @@ jobs:
         with:
           bun-version-file: packages/browseros-agent/package.json
 
-      - name: Install Wine
+      - name: Setup Rust
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends wine
-          if ! command -v wine >/dev/null; then
-            sudo ln -s /usr/lib/wine/wine64 /usr/local/bin/wine
-          fi
-          wine --version
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add \
+            aarch64-apple-darwin \
+            x86_64-apple-darwin \
+            aarch64-unknown-linux-gnu \
+            x86_64-unknown-linux-gnu \
+            x86_64-pc-windows-msvc
+          rustc --version
+          cargo --version
+
+      # Versions match the cross tools scripts/build/claw-server/compiler.ts
+      # preflights, and the Zig the local packager was proven with.
+      - name: Install cross-compilation tools
+        env:
+          CROSS_TOOL_VERSION: "0.23.0"
+          ZIG_VERSION: "0.15.2"
+          ZIG_SHA256: 3cc2bab367e185cdfb27501c4b30b1b0653c28d9f73df8dc91488e66ece5fa6b
+        run: |
+          set -euo pipefail
+          brew install cmake llvm nasm
+          zig_dir="$RUNNER_TEMP/zig-aarch64-macos-$ZIG_VERSION"
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl -fsSL -o "$archive" "https://ziglang.org/download/$ZIG_VERSION/zig-aarch64-macos-$ZIG_VERSION.tar.xz"
+          echo "$ZIG_SHA256  $archive" | shasum -a 256 -c -
+          tar -xJf "$archive" -C "$RUNNER_TEMP"
+          echo "$zig_dir" >> "$GITHUB_PATH"
+          # Appended, not prepended: Xcode's clang must keep building darwin;
+          # only cargo-xwin's clang-cl, lld-link and llvm-lib come from here.
+          echo "LLVM_BIN=$(brew --prefix llvm)/bin" >> "$GITHUB_ENV"
+          cargo install --locked cargo-zigbuild --version "$CROSS_TOOL_VERSION"
+          cargo install --locked cargo-xwin --version "$CROSS_TOOL_VERSION"
 
       - name: Install browseros-agent dependencies
         working-directory: packages/browseros-agent
@@ -302,7 +333,10 @@ jobs:
 
       - name: Build and upload immutable server resources
         working-directory: packages/browseros-agent
-        run: bun scripts/build/server.ts --target=all --upload --versioned-only
+        run: |
+          set -euo pipefail
+          export PATH="$PATH:$LLVM_BIN"
+          bun scripts/build/server-rust.ts --target=all --upload --versioned-only
 
       - name: Attach zips to private draft
         working-directory: packages/browseros-agent
@@ -310,7 +344,9 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find dist/prod/server -maxdepth 1 -name 'browseros-server-resources-*.zip' | sort)
+          # macOS bash 3.2 has no mapfile; a sorted glob gives the same list.
+          shopt -s nullglob
+          assets=(dist/prod/server-rust/browseros-server-resources-*.zip)
           if [ "${#assets[@]}" -ne 5 ]; then
             echo "::error::Expected 5 server resource zips, found ${#assets[@]}"
             exit 1
@@ -569,12 +605,12 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          package_json="packages/browseros-agent/apps/server/package.json"
-          lock="packages/browseros-agent/bun.lock"
+          cargo_toml="packages/browseros-agent/apps/server-rust/Cargo.toml"
+          lock="packages/browseros-agent/Cargo.lock"
           branch="chore-bump-server-v${VERSION}"
           git fetch origin "$DEFAULT_BRANCH" --no-tags
           git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"
-          current="$(jq -er '.version' "$package_json")"
+          current="$(python3 -c 'import sys, tomllib; print(tomllib.load(open(sys.argv[1], "rb"))["package"]["version"])' "$cargo_toml")"
           if [ "$current" != "$VERSION" ]; then
             newest="$(printf '%s\n%s\n' "$current" "$VERSION" | sort -V | tail -n 1)"
             if [ "$newest" = "$current" ]; then
@@ -585,7 +621,7 @@ jobs:
           uv run --directory packages/browseros browseros release component stamp \
             --component server \
             --version "$VERSION"
-          if git diff --quiet -- "$package_json" "$lock"; then exit 0; fi
+          if git diff --quiet -- "$cargo_toml" "$lock"; then exit 0; fi
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
             pr_url="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url // ""')"
             if [ -z "$pr_url" ]; then
@@ -598,7 +634,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add "$package_json" "$lock"
+          git add "$cargo_toml" "$lock"
           git commit -m "chore: bump server version to ${VERSION}"
           head_sha="$(git rev-parse HEAD)"
           git push origin "$branch"

@@ -296,8 +296,10 @@ jobs:
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros-agent
         run: bun ci
 
-      - name: Setup BrowserOS neo server toolchain
-        if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browserclaw'
+      # Both products' servers are Rust: BrowserOS via scripts/build/server-rust.ts,
+      # BrowserOS neo via Cargo directly.
+      - name: Setup Rust server toolchain
+        if: steps.inputs.outputs.resource_mode == 'source'
         run: |
           set -euo pipefail
           rustup toolchain install stable --profile minimal

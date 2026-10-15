@@ -18,7 +18,8 @@ const CLAW_BINARY: RustBinarySpec = {
   package: 'claw-server',
   bin: 'browseros-claw-server-rs',
 }
-const CROSS_TOOL_VERSION = '0.23.0'
+/** cargo-zigbuild/cargo-xwin version; release workflows install exactly this. */
+export const CROSS_TOOL_VERSION = '0.23.0'
 const LINUX_GLIBC_VERSION = '2.17'
 const VERSION_MARKER_PREFIX = 'browseros-claw-server-version='
 const POSTHOG_KEY_MARKER_PREFIX = 'browseros-claw-posthog-key='

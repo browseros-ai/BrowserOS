@@ -178,6 +178,12 @@ jobs:
                 echo "::error::source mode requires prepared-resources-artifact"
                 exit 1
               fi
+              # BrowserOS ships the Rust server, whose packager cross-compiles
+              # from macOS only. Fail before the Chromium checkout, not after.
+              if [ "$PRODUCT" = "browseros" ]; then
+                echo "::error::BrowserOS source mode packages the Rust server on macOS only; use resource-mode published on $PLATFORM"
+                exit 1
+              fi
               ;;
             *)
               echo "::error::resource-mode must be published or source"
