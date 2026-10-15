@@ -48,6 +48,9 @@ pub struct Seen {
     pub controls: Vec<Shown>,
     /// The page's text, budgeted.
     pub text: String,
+    /// What is covering the page, if anything, because a caller told to read a
+    /// page a dialog is over reads the dialog.
+    pub obstructed: Option<String>,
     /// Controls that exist and are not in `controls`, so a caller knows the
     /// list is partial rather than complete.
     pub omitted: usize,
@@ -71,6 +74,7 @@ fn seen(view: &PageView, omitted: usize) -> Seen {
             })
             .collect(),
         text: view.text.clone(),
+        obstructed: view.obstructed(),
         omitted,
     }
 }

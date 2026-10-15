@@ -458,6 +458,30 @@ impl PageView {
         moved.into_iter().map(|(_, one)| one).take(most).collect()
     }
 
+    /// What is covering this page, if anything.
+    ///
+    /// A caller told to read a page that a dialog is covering reads the dialog.
+    /// So the one thing a reply has to say about a page it is handing over is
+    /// whether the page is the thing on screen.
+    #[must_use]
+    pub fn obstructed(&self) -> Option<String> {
+        self.controls
+            .iter()
+            .find(|control| {
+                matches!(control.role.as_str(), "dialog" | "alertdialog")
+                    || (control.state.expanded == Some(true)
+                        && matches!(control.role.as_str(), "combobox" | "listbox"))
+            })
+            .map(|control| {
+                let what = if control.name.trim().is_empty() {
+                    control.role.clone()
+                } else {
+                    format!("{} {:?}", control.role, control.name)
+                };
+                format!("a {what} is open over the page")
+            })
+    }
+
     /// Whether this page offers a way to search itself.
     ///
     /// Asked when the model has just said nothing listed can advance the goal,
@@ -1704,5 +1728,56 @@ mod tests {
         );
 
         assert!(before.what_moved(&after, "do something", 3).is_empty());
+    }
+
+    /// The docs-site case. A run ended with its search dialog open over the
+    /// page it had reached, and a caller told to read that page would have read
+    /// the dialog.
+    #[test]
+    fn a_dialog_over_the_page_is_reported() {
+        let mut dialog = named("e9", "dialog", "Search the API docs");
+        dialog.clickable = false;
+        let view = PageView::from_snapshot_parts(
+            "https://docs.test/guides/webhooks",
+            "Webhooks",
+            "",
+            vec![named("e1", "link", "Home"), dialog],
+        );
+
+        assert_eq!(
+            view.obstructed().as_deref(),
+            Some("a dialog \"Search the API docs\" is open over the page")
+        );
+    }
+
+    /// An ordinary page says nothing, because saying something would make
+    /// every reply carry a caveat it does not need.
+    #[test]
+    fn an_unobstructed_page_says_nothing() {
+        let view = PageView::from_snapshot_parts(
+            "https://docs.test/",
+            "Docs",
+            "",
+            vec![named("e1", "link", "Home"), named("e2", "link", "Guides")],
+        );
+
+        assert!(view.obstructed().is_none());
+    }
+
+    /// An expanded dropdown is over the page too, which is what a half-used
+    /// select looks like when a run stops on one.
+    #[test]
+    fn an_expanded_dropdown_counts_as_covering_the_page() {
+        let mut open = named("e5", "combobox", "Sort by");
+        open.state.expanded = Some(true);
+        let view = PageView::from_snapshot_parts("https://shop.test/", "Shop", "", vec![open]);
+
+        assert!(
+            view.obstructed()
+                .as_deref()
+                .is_some_and(|what| what.contains("Sort by")),
+            "got {:?}",
+            view.obstructed()
+        );
     }
 }

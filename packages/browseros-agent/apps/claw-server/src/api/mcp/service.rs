@@ -1849,6 +1849,7 @@ fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
             "title": page.title,
             "text": page.text,
             "omitted": page.omitted,
+            "obstructed": page.obstructed,
             "controls": page
                 .controls
                 .iter()
@@ -1900,6 +1901,7 @@ fn pursue_output_schema() -> Value {
                     "url": { "type": "string" },
                     "title": { "type": "string" },
                     "text": { "type": "string", "description": "The page's text, budgeted rather than complete." },
+                    "obstructed": { "type": ["string", "null"], "description": "What is covering the page, if anything. A page with a dialog over it is not the page you would be reading." },
                     "omitted": { "type": "integer", "description": "Controls that exist and are not listed, so you know the list is partial." },
                     "controls": {
                         "type": "array",
