@@ -255,10 +255,11 @@ impl PageDriver {
             let Ok(text) = self.run(self.reach.read, Operation::Read, args).await else {
                 continue;
             };
-            let text = budgeted(&without_fencing(&text), budget);
-            if !text.trim().is_empty() {
-                return Some(text);
+            let stripped = without_fencing(&text);
+            if read_nothing(&stripped) {
+                continue;
             }
+            return Some(budgeted(&stripped, budget));
         }
         None
     }
@@ -607,14 +608,30 @@ fn without_fencing(text: &str) -> String {
     text.lines()
         .filter(|line| {
             let line = line.trim_start();
+            // The fence, and the server's own advice to the agent. Neither is
+            // page content, and the advice is what made an empty read look
+            // like a full one: a page with no main content came back as the
+            // marker plus two notes, which is not empty and is not the page.
             !line.starts_with("[UNTRUSTED_PAGE_CONTENT")
                 && !line.starts_with("[END_UNTRUSTED_PAGE_CONTENT")
                 && !line.starts_with("Untrusted page content follows.")
+                && !line.starts_with("--- Additional context")
+                && !line.starts_with("Tip: this session")
+                && !line.starts_with("Note: page ")
         })
         .collect::<Vec<_>>()
         .join("\n")
         .trim()
         .to_string()
+}
+
+/// Whether a read came back with nothing on it.
+///
+/// The read tool says so with a marker rather than with an empty body, so a
+/// selector that matched nothing returns text that is not the page.
+fn read_nothing(text: &str) -> bool {
+    let text = text.trim();
+    text.is_empty() || text == "(empty)"
 }
 
 /// Cuts text to a budget on a character boundary, saying how much went.
@@ -778,7 +795,7 @@ mod tests {
 
 #[cfg(test)]
 mod reply_text_tests {
-    use super::{ANSWER_BUDGET, budgeted, budgeted_within_fencing, without_fencing};
+    use super::{ANSWER_BUDGET, budgeted, budgeted_within_fencing, read_nothing, without_fencing};
 
     /// The read tool fences its output as untrusted. A budgeted slice of a
     /// fenced block loses the closing marker, so the fence comes off whole.
@@ -862,5 +879,37 @@ mod reply_text_tests {
         let plain = "a\nb\nc\nd\ne\nf";
         let got = budgeted_within_fencing(plain, 4);
         assert!(got.contains("bytes shown"), "got {got:?}");
+    }
+
+    /// The read tool says a selector matched nothing with a marker, not with an
+    /// empty body, and it adds its own advice to the agent. Measured live: a
+    /// page with no main content came back as the marker plus two notes, which
+    /// is not empty and is not the page, so the fallback never fired.
+    #[test]
+    fn a_read_that_found_nothing_is_recognised_as_nothing() {
+        let got = [
+            "(empty)",
+            "Tip: this session is \"jev-e2e/snappy-lemur\" — rename it with name_session",
+            "Note: page 4 was opened by jev-e2e in an earlier session.",
+        ]
+        .join("\n");
+
+        assert!(read_nothing(&without_fencing(&got)));
+        assert!(read_nothing(""));
+        assert!(!read_nothing("# Secure MCP Tunnel"));
+    }
+
+    /// The server's advice is not page content and does not belong in the text
+    /// handed to the caller.
+    #[test]
+    fn the_servers_own_advice_is_not_page_content() {
+        let got = [
+            "# A heading",
+            "Tip: this session is \"x\"",
+            "Note: page 2 was opened by y",
+        ]
+        .join("\n");
+
+        assert_eq!(without_fencing(&got), "# A heading");
     }
 }
