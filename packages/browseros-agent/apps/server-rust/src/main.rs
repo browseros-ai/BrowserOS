@@ -6,12 +6,13 @@ use server_rust::{
     AppState, VERSION, build_router,
     config::{self, CliAction, Config, EnvConfig, exit},
     server_file::ServerFile,
-    telemetry,
+    telemetry::{self, sentry::SentryGuard},
 };
 use std::{
     io::Write,
     net::{Ipv4Addr, SocketAddr},
     path::Path,
+    sync::Arc,
     time::Duration,
 };
 use tokio_util::sync::CancellationToken;
@@ -20,6 +21,10 @@ fn main() {
     std::process::exit(run());
 }
 fn run() -> i32 {
+    // Before anything can fail: the panic hook and startup captures need the client, and the
+    // guard's drop (after the runtime has shut down) is what flushes queued events.
+    let sentry = Arc::new(telemetry::sentry::init());
+    // CLI usage errors are commander exits in TS and are not reported.
     let action = match config::parse_cli(std::env::args_os().skip(1)) {
         Ok(action) => action,
         Err(error) => return fatal(&error.to_string(), exit::GENERAL),
@@ -34,21 +39,25 @@ fn run() -> i32 {
             .build()
         {
             Ok(runtime) => {
-                let code = runtime.block_on(serve(&config));
+                let code = runtime.block_on(serve(&config, &sentry));
                 // Runtime drop otherwise waits indefinitely for blocking jobs,
                 // even after the async service drain met Chromium's deadline.
                 runtime.shutdown_timeout(Duration::from_millis(250));
                 code
             }
-            Err(error) => fatal(&format!("failed to start runtime: {error}"), exit::GENERAL),
+            Err(error) => startup_failure(
+                &sentry,
+                &format!("failed to start runtime: {error}"),
+                exit::GENERAL,
+            ),
         },
     }
 }
-async fn serve(config_path: &Path) -> i32 {
+async fn serve(config_path: &Path, sentry: &Arc<SentryGuard>) -> i32 {
     let env = EnvConfig::from_env();
     let config = match Config::load(config_path, &env) {
         Ok(config) => config,
-        Err(error) => return fatal(&error.to_string(), exit::GENERAL),
+        Err(error) => return startup_failure(sentry, &error.to_string(), exit::GENERAL),
     };
     telemetry::logging::init_file(&env, &config.execution_dir);
     if std::env::var("BROWSEROS_AI_SDK_DEVTOOLS").as_deref() == Ok("true") {
@@ -59,17 +68,17 @@ async fn serve(config_path: &Path) -> i32 {
     // listener does. Chromium advances ports only on this distinct exit code.
     match std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
         Ok(probe) => drop(probe),
-        Err(error) => return bind_failure(port, &error),
+        Err(error) => return bind_failure(sentry, port, &error),
     }
-    let state = match AppState::start(config).await {
+    let state = match AppState::start_with_sentry(config, sentry.clone()).await {
         Ok(state) => state,
-        Err(error) => return fatal(&error.to_string(), exit::GENERAL),
+        Err(error) => return startup_failure(sentry, &error.to_string(), exit::GENERAL),
     };
     let listener = match tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
         Ok(listener) => listener,
         Err(error) => {
             let _ = tokio::time::timeout(Duration::from_secs(1), state.stop()).await;
-            return bind_failure(port, &error);
+            return bind_failure(sentry, port, &error);
         }
     };
     let server_file = ServerFile::with_config(&state.config, &state.identity);
@@ -91,6 +100,10 @@ async fn serve(config_path: &Path) -> i32 {
     let mcp_manager = state.mcp_manager.clone();
     let reconcile = tokio::spawn(async move { mcp_manager.self_heal().await });
     tracing::info!(port, version = VERSION, "http_server.started");
+    state.metrics.capture(
+        "http_server.started",
+        serde_json::json!({ "version": VERSION }),
+    );
     let code = tokio::select! {
         () = state.shutdown.triggered() => exit::SUCCESS,
         () = termination_signal() => exit::SIGNAL,
@@ -117,18 +130,25 @@ async fn serve(config_path: &Path) -> i32 {
     server_file.remove().await;
     code
 }
-fn bind_failure(port: u16, error: &std::io::Error) -> i32 {
+fn bind_failure(sentry: &SentryGuard, port: u16, error: &std::io::Error) -> i32 {
     if error.kind() == std::io::ErrorKind::AddrInUse {
+        // Expected: Chromium retries on the next port. TS does not report it either.
         fatal(
             &format!("Port {port} is already in use. Chromium should try a different port."),
             exit::PORT_CONFLICT,
         )
     } else {
-        fatal(
+        startup_failure(
+            sentry,
             &format!("Failed to start HTTP server on port {port}: {error}"),
             exit::GENERAL,
         )
     }
+}
+/// Reports a fatal startup error (TS `Sentry.captureException` in index.ts/main.ts), then exits.
+fn startup_failure(sentry: &SentryGuard, message: &str, code: i32) -> i32 {
+    sentry.capture_startup_error(message);
+    fatal(message, code)
 }
 async fn termination_signal() {
     #[cfg(unix)]

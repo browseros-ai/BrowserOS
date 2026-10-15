@@ -1,12 +1,13 @@
 //! Composition root: builds every long-lived service once at startup (`AppState::start`) and
 //! mounts `http::ROUTES` (`build_router`). Construction order mirrors the process contract:
-//! paths → DB → identity → stores → OAuth/Klavis (background) → chat engines → chat service.
-//! The `browseros-mcp-host` `HostCtx` field and its construction lines are added by P15.
-//! Owned by P3.
+//! paths → DB → identity → metrics → stores → OAuth/Klavis (background) → chat engines → chat
+//! service. The `browseros-mcp-host` `HostCtx` field and its construction lines are added by P15.
+//! Owned by P3; telemetry ownership (one PostHog sink, one Sentry guard per process) wired by I1.
 
 use crate::{
     activity::ServerActivity,
-    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationRuns, DbChatRecords},
+    chat::DbChatRecords,
+    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ChatTelemetry, ConversationRuns},
     chat::{BrowserOsEngineDeps, NoBrowser, RegistryLeases, klavis_state_name, production_models},
     config::Config,
     db::{self, Database},
@@ -17,6 +18,10 @@ use crate::{
     mcp_manager::McpManagerService,
     oauth::TokenManager,
     paths::BrowserosPaths,
+    telemetry::{
+        metrics::{Metrics, MetricsConfig},
+        sentry::SentryGuard,
+    },
 };
 use axum::{Router, middleware, routing::MethodFilter};
 use browseros_agent::llm::HttpStack;
@@ -52,6 +57,12 @@ pub struct AppInner {
     /// Concrete (not `dyn ChatEngine`): `/agents` needs `close_all_for_agent`.
     pub acp: Arc<AcpEngine>,
     pub http: HttpStack,
+    /// PostHog sink (disabled without an install id or a build-time key). Cloned into the chat
+    /// owner for `chat.request`; flushed by `stop`.
+    pub metrics: Metrics,
+    /// The process root's one Sentry client. Shared, never re-initialized here, so startup and
+    /// scheduled-turn captures go through the same redacting client the panic hook uses.
+    pub sentry: Arc<SentryGuard>,
     pub shutdown: ShutdownSignal,
 }
 
@@ -95,12 +106,31 @@ pub enum StartupError {
 }
 
 impl AppState {
+    /// Composes the app without Sentry (tests and embedders). The process root uses
+    /// [`AppState::start_with_sentry`] so its guard outlives config parsing and runtime shutdown.
     pub async fn start(config: Config) -> Result<Self, StartupError> {
+        Self::start_with_sentry(config, Arc::new(SentryGuard::default())).await
+    }
+
+    pub async fn start_with_sentry(
+        config: Config,
+        sentry: Arc<SentryGuard>,
+    ) -> Result<Self, StartupError> {
         let paths = BrowserosPaths::new(config.browseros_dir.clone());
         paths.prepare().await?;
         let activity = Arc::new(ServerActivity::new());
         let (db, _outcome) = Database::open(&paths).await?;
         let identity = Identity::load(&config, &paths).await?;
+        // After identity: the sink needs the install id, and without one it stays disabled
+        // (TS skips events when installation identity is unavailable).
+        let metrics = Metrics::initialize(MetricsConfig {
+            install_id: identity.install_id.clone(),
+            browseros_version: config.instance.browseros_version.clone(),
+            chromium_version: config.instance.chromium_version.clone(),
+            server_version: Some(crate::VERSION.to_owned()),
+            ..Default::default()
+        })
+        .await;
         let client = reqwest::Client::builder().build()?;
         let http = HttpStack::new();
 
@@ -142,6 +172,10 @@ impl AppState {
             oauth: oauth.clone(),
             tabs: None,
             use_mock_llm: config.env.use_mock_llm,
+            telemetry: ChatTelemetry {
+                metrics: metrics.clone(),
+                sentry: sentry.clone(),
+            },
         });
 
         Ok(Self(Arc::new(AppInner {
@@ -163,6 +197,8 @@ impl AppState {
             chat,
             acp,
             http,
+            metrics,
+            sentry,
             shutdown: ShutdownSignal::new(),
         })))
     }
@@ -179,7 +215,9 @@ impl AppState {
         tokio::join!(
             self.oauth.shutdown(),
             self.klavis.stop(),
-            self.acp.shutdown()
+            self.acp.shutdown(),
+            // Bounded by its own 2 s SDK timeout; queued events would otherwise be lost.
+            self.metrics.shutdown()
         );
     }
 }
