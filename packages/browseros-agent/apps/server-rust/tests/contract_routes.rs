@@ -146,7 +146,7 @@ async fn test_state(dir: &Path) -> Result<server_rust::AppState, Box<dyn std::er
     let config_path = dir.join("config.json");
     std::fs::write(
         &config_path,
-        r#"{"ports":{"server":0,"cdp":0},"directories":{"resources":".","execution":"."}}"#,
+        r#"{"ports":{"server":9999,"cdp":9998},"directories":{"resources":".","execution":"."}}"#,
     )?;
     let env = server_rust::config::EnvConfig {
         browseros_dir: Some(dir.join("browseros")),
