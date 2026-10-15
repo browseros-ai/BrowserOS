@@ -426,25 +426,9 @@ impl ClawMcpService {
 
         let jev = browseros_decide::client::Jev::new(token);
         let outcome = browseros_decide::pursue::advance(&jev, &driver, run).await;
-        let mut told = browseros_decide::report::tell(&outcome);
-
-        // The page the run ended on, as the caller needs it rather than as a
-        // decision needed it. Arriving at the right page is then enough on its
-        // own: a caller gets the text whatever status the run ended with, and
-        // does not have to read back a page the run was just looking at.
-        if let Some(page) = told.page.as_mut()
-            && let Some(text) = driver.readable(PURSUE_REPLY_TEXT_BUDGET).await
-            && !text.is_empty()
-        {
-            page.text = text;
-        }
+        let told = browseros_decide::report::tell(&outcome);
 
         let mut said = vec![told.said.clone()];
-        if let Some(answer) = &told.answer
-            && let Some(text) = &answer.text
-        {
-            said.push(format!("\nWhat it found ({}):\n{text}", answer.asked));
-        }
         if told.omitted > 0 {
             said.push(format!(
                 "\nIt chose between {} controls; {} more were on the page and did not fit.",
@@ -1771,14 +1755,6 @@ fn values_from(raw_args: &Value) -> Vec<browseros_decide::offer::NamedValue> {
 /// Built by hand rather than derived, because `Told` is the decision layer's
 /// shape and this is the wire's. Keeping them apart means a field can be
 /// renamed in one without silently changing the other's contract.
-/// How much of the page's text travels back to the caller.
-///
-/// Larger than the state budget a decision gets, and deliberately so: the two
-/// are read by different things. A small state is an accuracy measure for the
-/// model, while this is the answer the caller sent the run to fetch, and a
-/// caller that wants the whole page has the `read` tool.
-const PURSUE_REPLY_TEXT_BUDGET: usize = 4_000;
-
 fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
     let mut body = json!({
         "status": told.status,
@@ -1833,13 +1809,6 @@ fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
             })
             .collect::<Vec<_>>(),
     });
-    if let Some(answer) = &told.answer {
-        body["answer"] = json!({
-            "asked": answer.asked,
-            "text": answer.text,
-            "pictured": answer.pictured,
-        });
-    }
     if let Some(goal_met) = told.goal_met {
         body["goalMet"] = json!(goal_met);
     }
@@ -1847,7 +1816,6 @@ fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
         body["page"] = json!({
             "url": page.url,
             "title": page.title,
-            "text": page.text,
             "omitted": page.omitted,
             "obstructed": page.obstructed,
             "controls": page
@@ -1881,26 +1849,15 @@ fn pursue_output_schema() -> Value {
         "properties": {
             "status": {
                 "type": "string",
-                "description": "One word to branch on: satisfied, answered, blocked, budget_spent, cancelled, nothing_changed, not_confident, browser_kept_failing, only_waiting, nothing_offered, too_risky_to_guess, no_field_named, asked_too_often, unverifiable."
+                "description": "One word to branch on: satisfied, blocked, budget_spent, cancelled, nothing_changed, not_confident, going_in_circles, browser_kept_failing, only_waiting, nothing_offered, too_risky_to_guess, no_field_named, asked_too_often, unverifiable. On satisfied the page holds what the goal asked for: read it."
             },
             "said": { "type": "string", "description": "One sentence, true of what actually happened." },
-            "answer": {
-                "type": "object",
-                "description": "What a report handed back, when one ended the run. The text is raw: this model cannot write a string, so pulling the answer out of the page is yours to do.",
-                "properties": {
-                    "asked": { "type": "string" },
-                    "text": { "type": ["string", "null"] },
-                    "pictured": { "type": "boolean" }
-                },
-                "required": ["asked", "pictured"]
-            },
             "page": {
                 "type": "object",
                 "description": "The page it ended on. Read the controls: if it could not finish, these are what it had to choose between, and naming one of them in a new goal is how you get further than rewording.",
                 "properties": {
                     "url": { "type": "string" },
                     "title": { "type": "string" },
-                    "text": { "type": "string", "description": "The page's text, budgeted rather than complete." },
                     "obstructed": { "type": ["string", "null"], "description": "What is covering the page, if anything. A page with a dialog over it is not the page you would be reading." },
                     "omitted": { "type": "integer", "description": "Controls that exist and are not listed, so you know the list is partial." },
                     "controls": {

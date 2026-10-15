@@ -10,7 +10,6 @@
 //! wrong, and measured live, that is exactly what one got twice in a single
 //! errand.
 
-use crate::drive::Answer;
 use crate::gate::Handback;
 use crate::pursue::{Outcome, Status, Stuck};
 use crate::view::PageView;
@@ -46,8 +45,6 @@ pub struct Seen {
     pub title: String,
     /// Every control the last decision could choose from.
     pub controls: Vec<Shown>,
-    /// The page's text, budgeted.
-    pub text: String,
     /// What is covering the page, if anything, because a caller told to read a
     /// page a dialog is over reads the dialog.
     pub obstructed: Option<String>,
@@ -73,7 +70,6 @@ fn seen(view: &PageView, omitted: usize) -> Seen {
                 state: control.state.describe(),
             })
             .collect(),
-        text: view.text.clone(),
         obstructed: view.obstructed(),
         omitted,
     }
@@ -86,12 +82,6 @@ pub struct Told {
     pub status: String,
     /// One sentence, for a person to read. True of what actually happened.
     pub said: String,
-    /// What a report handed back, when one ended the run.
-    ///
-    /// The text is raw, not parsed. A model that cannot write a string can
-    /// never return "312 points", so pulling the answer out of the page is the
-    /// caller's job, and pretending otherwise here would just move the lie.
-    pub answer: Option<Answer>,
     /// Actions that actually ran, which is not the same as decisions asked for.
     pub actions: usize,
     /// How many of those changed the page.
@@ -158,7 +148,6 @@ pub fn tell(outcome: &Outcome) -> Told {
     Told {
         status: outcome.status.as_str().to_string(),
         said: said(outcome, actions, changed, try_next.as_deref()),
-        answer: outcome.answer.clone(),
         actions,
         changed,
         decisions: outcome.decisions,
@@ -240,7 +229,7 @@ fn try_next(outcome: &Outcome) -> Option<String> {
         }
         Status::Blocked(_) => "Nothing on this page can do that. It may need a different page.",
         Status::BudgetSpent => "Raise maxSteps, or split the goal in two.",
-        Status::Satisfied | Status::Answered | Status::Cancelled => return None,
+        Status::Satisfied | Status::Cancelled => return None,
         Status::NeedsInput(_, _) => return None,
     }
     .to_string();
@@ -343,7 +332,6 @@ fn ran(decided: &crate::pursue::Decided, step: Option<&crate::pursue::Step>) -> 
         },
         ("DONE", _) => "said the goal was met".to_string(),
         ("BLOCKED", _) => "said nothing on this page could do it".to_string(),
-        ("REPORT", _) => "handed the page back".to_string(),
         (operation, _) => operation.to_lowercase(),
     };
 
@@ -380,22 +368,6 @@ fn said(outcome: &Outcome, actions: usize, changed: usize, try_next: Option<&str
         Status::Satisfied => format!(
             "{did}{moved}, and then said every requirement of the goal was visible on the page."
         ),
-        // A report ends a run, it does not describe it. This arm used to assert
-        // that nothing on the page had been changed, which was a claim about
-        // the whole run made by the sentence for its last step. Measured live:
-        // a run added an item to a cart and then reported, and told the caller
-        // in the same object as `changed: 1` that it had changed nothing. The
-        // caller read that and concluded the errand had failed.
-        Status::Answered => {
-            let what = outcome
-                .answer
-                .as_ref()
-                .map_or("something", |answer| answer.asked.as_str());
-            format!(
-                "{did}{moved}, then answered the goal by choosing to {what} the page. The result \
-                 is attached."
-            )
-        }
         Status::Blocked(why) => format!("{did}{moved}, then stopped: {why}."),
         Status::Stalled(stuck) => format!(
             "{did}{moved}, then stopped making progress ({}).",
@@ -423,7 +395,6 @@ impl Told {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::drive::Answer;
     use crate::gate::Handback;
     use crate::pursue::{Status, Step, Stuck};
     use crate::vocabulary::{How, Operation};
@@ -506,7 +477,6 @@ mod tests {
             url_before: "https://example.test/".to_string(),
             url_after: "https://example.test/after".to_string(),
             title: "A page".to_string(),
-            answer: None,
             goal_met: Some(0.81),
             unlabelled_images: 3,
             ended_on: None,
@@ -656,36 +626,6 @@ mod tests {
         assert!(told.wants_the_caller());
     }
 
-    /// Renamed from an_answered_run_says_nothing_was_changed, which asserted
-    /// the sentence said that unconditionally. It is only true when the run
-    /// took no action, and a run that acted and then reported was telling the
-    /// caller it had done nothing.
-    #[test]
-    fn an_answered_run_hands_the_text_back_raw() {
-        let mut got = outcome(Status::Answered, vec![]);
-        got.answer = Some(Answer {
-            asked: "read".to_string(),
-            text: Some("312 points by someone".to_string()),
-            pictured: false,
-        });
-        let told = tell(&got);
-
-        assert_eq!(told.status, "answered");
-        assert!(
-            told.said.starts_with("It took no action"),
-            "this run genuinely took none, got {:?}",
-            told.said
-        );
-        assert_eq!(
-            told.answer
-                .as_ref()
-                .and_then(|answer| answer.text.as_deref()),
-            Some("312 points by someone"),
-            "the text travels raw; pulling the number out is the caller's job"
-        );
-        assert!(!told.wants_the_caller(), "the run did its job");
-    }
-
     /// How much of the page a decision could not see is part of judging its
     /// answer, so it travels on every ending.
     #[test]
@@ -726,90 +666,6 @@ mod tests {
     fn a_run_that_did_nothing_does_not_claim_it_did() {
         let told = tell(&outcome(Status::BudgetSpent, vec![]));
         assert!(told.said.starts_with("It took no action"), "{}", told.said);
-    }
-
-    /// Measured live: a run clicked an add-to-cart button and then reported,
-    /// and the sentence said it had changed nothing in the same object that
-    /// said it had changed one thing. The caller read the sentence.
-    #[test]
-    fn a_report_after_an_action_does_not_claim_the_run_changed_nothing() {
-        let mut got = outcome(Status::Answered, vec![step(true), step(false)]);
-        got.answer = Some(Answer {
-            asked: "grep".to_string(),
-            text: Some("two matching lines".to_string()),
-            pictured: false,
-        });
-
-        let told = tell(&got);
-
-        assert_eq!(told.actions, 2);
-        assert_eq!(told.changed, 1);
-        assert!(
-            !told.said.contains("Nothing on the page was changed"),
-            "got {:?}",
-            told.said
-        );
-        assert!(
-            told.said
-                .starts_with("It took 2 actions, 1 of which changed the page"),
-            "the sentence counts what the run did, got {:?}",
-            told.said
-        );
-        assert!(
-            told.said.contains("choosing to grep"),
-            "got {:?}",
-            told.said
-        );
-    }
-
-    /// A report that was the whole run still reads as one.
-    #[test]
-    fn a_report_with_no_actions_before_it_says_so() {
-        let mut got = outcome(Status::Answered, vec![]);
-        got.answer = Some(Answer {
-            asked: "read".to_string(),
-            text: Some("the page".to_string()),
-            pictured: false,
-        });
-
-        let told = tell(&got);
-
-        assert!(
-            told.said
-                .starts_with("It took no action, then answered the goal"),
-            "got {:?}",
-            told.said
-        );
-    }
-
-    /// The amazon case as the caller would read it back: what it typed, that
-    /// it submitted, and that the cart moved.
-    #[test]
-    fn the_story_reads_as_what_the_run_did() {
-        let mut got = outcome(Status::Satisfied, vec![]);
-        got.trail = vec![
-            filled("sensodyne toothpaste", "https://amazon.test/"),
-            submitted("https://amazon.test/s?k=sensodyne+toothpaste"),
-            clicked_and_moved("0 items in cart", "2 items in cart"),
-        ];
-        got.decided = vec![
-            decision_that_ran("ACT", Some("FILL"), Some("Search Amazon.in")),
-            decision_that_ran("ACT", Some("SUBMIT"), None),
-            decision_that_ran("ACT", Some("CLICK"), Some("Add to cart")),
-        ];
-
-        let told = tell(&got);
-
-        assert_eq!(
-            told.story,
-            vec![
-                "typed \"sensodyne toothpaste\" into Search Amazon.in".to_string(),
-                "submitted it, and the page became https://amazon.test/s?k=sensodyne+toothpaste"
-                    .to_string(),
-                "clicked Add to cart, and \"0 items in cart\" became \"2 items in cart\""
-                    .to_string(),
-            ]
-        );
     }
 
     /// A refused decision says which judgement was close and by how much,
@@ -995,6 +851,36 @@ mod tests {
     #[test]
     fn a_run_that_finished_is_given_no_advice() {
         assert!(tell(&outcome(Status::Satisfied, vec![])).try_next.is_none());
-        assert!(tell(&outcome(Status::Answered, vec![])).try_next.is_none());
+        assert!(tell(&outcome(Status::Cancelled, vec![])).try_next.is_none());
+    }
+
+    /// The amazon case as the caller would read it back: what it typed, that
+    /// it submitted, and that the cart moved.
+    #[test]
+    fn the_story_reads_as_what_the_run_did() {
+        let mut got = outcome(Status::Satisfied, vec![]);
+        got.trail = vec![
+            filled("sensodyne toothpaste", "https://amazon.test/"),
+            submitted("https://amazon.test/s?k=sensodyne+toothpaste"),
+            clicked_and_moved("0 items in cart", "2 items in cart"),
+        ];
+        got.decided = vec![
+            decision_that_ran("ACT", Some("FILL"), Some("Search Amazon.in")),
+            decision_that_ran("ACT", Some("SUBMIT"), None),
+            decision_that_ran("ACT", Some("CLICK"), Some("Add to cart")),
+        ];
+
+        let told = tell(&got);
+
+        assert_eq!(
+            told.story,
+            vec![
+                "typed \"sensodyne toothpaste\" into Search Amazon.in".to_string(),
+                "submitted it, and the page became https://amazon.test/s?k=sensodyne+toothpaste"
+                    .to_string(),
+                "clicked Add to cart, and \"0 items in cart\" became \"2 items in cart\""
+                    .to_string(),
+            ]
+        );
     }
 }

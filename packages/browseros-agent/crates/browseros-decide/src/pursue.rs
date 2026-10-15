@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
 use crate::client::{Jev, JevError, Question};
-use crate::drive::{Answer, Ask, Driver, Journey, Move, Performed};
+use crate::drive::{Driver, Journey, Move};
 use crate::gate::{self, Decision, Handback, Verdict};
 use crate::kind::Kind;
 use crate::offer::Destination;
@@ -19,7 +19,7 @@ use crate::run::{Budget, DECLINE_LIMIT, NAVIGATION_LIMIT, Run, STALL_LIMIT, WAIT
 use crate::space::ActionSpace;
 use crate::space::Candidate;
 use crate::view::{Moved, PageView};
-use crate::vocabulary::{How, Operation, Telling};
+use crate::vocabulary::{How, Operation};
 
 /// Where a decision comes from.
 ///
@@ -104,9 +104,6 @@ pub enum Status {
     /// was met", which is not true of anything and should have been impossible
     /// to say.
     Cancelled,
-    /// The run answered a question about the page and stopped, which is what a
-    /// report is for.
-    Answered,
 }
 
 impl Status {
@@ -120,7 +117,6 @@ impl Status {
             Self::NeedsInput(handback, _) => handback.as_str(),
             Self::BudgetSpent => "budget_spent",
             Self::Cancelled => "cancelled",
-            Self::Answered => "answered",
         }
     }
 }
@@ -216,8 +212,6 @@ pub struct Outcome {
     /// caller could do nothing with a failure but reword its goal and hope. A
     /// caller holding control names has something concrete to change.
     pub ended_on: Option<PageView>,
-    /// What a report handed back, when one ended the run.
-    pub answer: Option<Answer>,
     /// How likely the last decision thought the goal was already satisfied.
     ///
     /// Reported, never acted on. A completion claim is not evidence.
@@ -247,18 +241,10 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
 
     loop {
         if driver.stopped() {
-            return end(&run, Status::Cancelled, last, &space, trail, None, goal_met);
+            return end(&run, Status::Cancelled, last, &space, trail, goal_met);
         }
         if run.out_of_steps() || started.elapsed().as_secs() >= run.budget.max_seconds {
-            return end(
-                &run,
-                Status::BudgetSpent,
-                last,
-                &space,
-                trail,
-                None,
-                goal_met,
-            );
+            return end(&run, Status::BudgetSpent, last, &space, trail, goal_met);
         }
 
         // The previous iteration read the page after it acted, and nothing has
@@ -276,7 +262,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         None,
                         &space,
                         trail,
-                        None,
                         goal_met,
                     );
                 }
@@ -324,7 +309,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     Some(view),
                     &space,
                     trail,
-                    None,
                     goal_met,
                 );
             }
@@ -359,15 +343,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         ));
 
         if decision.operation == Operation::Done {
-            return end(
-                &run,
-                Status::Satisfied,
-                Some(view),
-                &space,
-                trail,
-                None,
-                goal_met,
-            );
+            return end(&run, Status::Satisfied, Some(view), &space, trail, goal_met);
         }
         if decision.operation == Operation::Blocked {
             return end(
@@ -376,7 +352,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 Some(view),
                 &space,
                 trail,
-                None,
                 goal_met,
             );
         }
@@ -411,7 +386,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     Some(view),
                     &space,
                     trail,
-                    None,
                     goal_met,
                 );
             }
@@ -424,7 +398,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         Some(view),
                         &space,
                         trail,
-                        None,
                         goal_met,
                     );
                 }
@@ -444,7 +417,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         }
         run.declined = 0;
 
-        let Some(next) = resolve(&decision, &run, &supplied, &view) else {
+        let Some(next) = resolve(&decision, &run, &supplied) else {
             return end(
                 &run,
                 Status::NeedsInput(
@@ -454,7 +427,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 Some(view),
                 &space,
                 trail,
-                None,
                 goal_met,
             );
         };
@@ -470,7 +442,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     Some(view),
                     &space,
                     trail,
-                    None,
                     goal_met,
                 );
             }
@@ -484,7 +455,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     Some(view),
                     &space,
                     trail,
-                    None,
                     goal_met,
                 );
             }
@@ -539,8 +509,11 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         run.last_acted = decision.target.clone();
         let before = view.fingerprint;
 
-        let performed = match driver.perform(&next).await {
-            Ok(performed) => performed,
+        // What the tool said about itself is not read. Whether the page moved
+        // is decided by looking again, which is authoritative and needs no
+        // agreement with another component about how it words a result.
+        match driver.perform(&next).await {
+            Ok(_) => {}
             Err(error) => {
                 run.remember(format!("tried to act and the browser refused: {error}"));
                 run.retire_last();
@@ -551,7 +524,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         Some(view),
                         &space,
                         trail,
-                        None,
                         goal_met,
                     );
                 }
@@ -559,19 +531,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 continue;
             }
         };
-
-        if let Performed::Answer(answer) = performed {
-            trail.push(step_of(&decision, false, &view.url, Vec::new()));
-            return end(
-                &run,
-                Status::Answered,
-                Some(view),
-                &space,
-                trail,
-                Some(answer),
-                goal_met,
-            );
-        }
 
         if matches!(next, Move::Travel(_)) {
             run.travelled = true;
@@ -630,7 +589,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         after.or(Some(view)),
                         &space,
                         trail,
-                        None,
                         goal_met,
                     );
                 }
@@ -650,7 +608,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     after.or(Some(view)),
                     &space,
                     trail,
-                    None,
                     goal_met,
                 );
             }
@@ -824,12 +781,7 @@ async fn search<O: Oracle>(
 }
 
 /// Turns a judged decision into something the driver can run.
-fn resolve(
-    decision: &Decision,
-    run: &Run,
-    supplied: &Option<String>,
-    view: &PageView,
-) -> Option<Move> {
+fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<Move> {
     match decision.operation {
         Operation::Act => {
             let how = decision.how?;
@@ -884,47 +836,11 @@ fn resolve(
             let page = decision.target.as_deref()?.parse().ok()?;
             Some(Move::Travel(Journey::Tab(page)))
         }
-        Operation::Snapshot => Some(Move::Resnapshot),
         Operation::Wait => Some(Move::Settle),
-        // A report with no second answer reads the page, because that is the
-        // one of the three that needs nothing chosen and cannot be wrong about
-        // what it was asked for.
-        Operation::Report => Some(Move::Report(match decision.telling {
-            // A needle that matches nothing hands back nothing, and one that
-            // matches everything hands back the page with extra steps. Where no
-            // word of the goal discriminates, reading is the honest answer.
-            Some(Telling::Matching) => match needle_for(&run.goal, view) {
-                Some(needle) => Ask::Grep(needle),
-                None => Ask::Read,
-            },
-            Some(Telling::HowMany) => match needle_for(&run.goal, view) {
-                Some(needle) => Ask::Count(needle),
-                None => Ask::Read,
-            },
-            Some(Telling::Text) | None => Ask::Read,
-        })),
-        Operation::Read => Some(Move::Report(Ask::Read)),
-        Operation::Grep => Some(Move::Report(Ask::Grep(pattern_for(&run.goal)))),
-        Operation::Count => Some(Move::Report(Ask::Count(pattern_for(&run.goal)))),
-        Operation::CheckState => Some(Move::Report(Ask::State {
-            reference: decision.target.clone()?,
-            state: decision
-                .state
-                .clone()
-                .unwrap_or_else(|| "visible".to_string()),
-        })),
-        Operation::Screenshot => Some(Move::Report(Ask::Picture)),
-        Operation::Evaluate => Some(Move::Report(Ask::Evaluate(pattern_for(&run.goal)))),
+
         Operation::Done | Operation::Blocked => None,
     }
 }
-
-/// Words too common to say anything about what a goal is asking for.
-const NOISE: &[&str] = &[
-    "the", "and", "for", "with", "this", "that", "from", "how", "many", "does", "what", "find",
-    "out", "page", "are", "was", "its", "into", "than", "then", "there", "here", "about",
-    "whether",
-];
 
 /// What to search this page for, chosen by how well it narrows this page.
 ///
@@ -935,54 +851,10 @@ const NOISE: &[&str] = &[
 ///
 /// So the candidates are scored against what is actually on the page, and the
 /// most selective one that still matches something wins. `None` means no word
-/// of the goal narrows this page, and the caller reads it instead.
-fn needle_for(goal: &str, view: &PageView) -> Option<String> {
-    let mut haystack = String::with_capacity(view.text.len() + 256);
-    haystack.push_str(&view.text.to_lowercase());
-    for control in &view.controls {
-        haystack.push('\n');
-        haystack.push_str(&control.name.to_lowercase());
-    }
-
-    let lines: Vec<&str> = haystack.lines().collect();
-    let total = lines.len().max(1);
-
-    let mut best: Option<(usize, String)> = None;
-    for word in goal.split(|character: char| !character.is_alphanumeric()) {
-        if word.len() <= 3 || NOISE.contains(&word.to_lowercase().as_str()) {
-            continue;
-        }
-        let lowered = word.to_lowercase();
-        let hits = lines
-            .iter()
-            .filter(|line| line.contains(lowered.as_str()))
-            .count();
-        // Absent narrows nothing because it finds nothing. Present on nearly
-        // every line narrows nothing either.
-        if hits == 0 || hits * 2 > total {
-            continue;
-        }
-        if best.as_ref().is_none_or(|(fewest, _)| hits < *fewest) {
-            best = Some((hits, word.to_string()));
-        }
-    }
-    best.map(|(_, word)| word)
-}
-
 /// What to search the page for, derived from the goal in code.
 ///
 /// The model cannot write a pattern, so this is the only way a search can be
 /// aimed at anything. The longest distinctive word is a better needle than the
-/// whole goal, which would match nothing.
-fn pattern_for(goal: &str) -> String {
-    goal.split(|character: char| !character.is_alphanumeric())
-        .filter(|word| word.len() > 3)
-        .filter(|word| !NOISE.contains(&word.to_lowercase().as_str()))
-        .max_by_key(|word| word.len())
-        .unwrap_or("")
-        .to_string()
-}
-
 /// The key a destination is chosen by, which is its label made safe.
 #[must_use]
 pub fn key_for(label: &str) -> String {
@@ -1092,7 +964,6 @@ fn end(
     view: Option<PageView>,
     space: &ActionSpace,
     trail: Vec<Step>,
-    answer: Option<Answer>,
     goal_met: Option<f64>,
 ) -> Outcome {
     Outcome {
@@ -1114,77 +985,8 @@ fn end(
             .as_ref()
             .map(|view| view.title.clone())
             .unwrap_or_default(),
-        answer,
         goal_met,
         unlabelled_images: view.as_ref().map_or(0, |view| view.unlabelled_images),
         ended_on: view,
-    }
-}
-
-#[cfg(test)]
-mod needle_tests {
-    use super::needle_for;
-    use crate::view::{Control, ControlState, Moved, PageView};
-
-    fn named(reference: &str, role: &str, name: &str) -> Control {
-        Control {
-            reference: reference.to_string(),
-            clickable: false,
-            role: role.to_string(),
-            name: name.to_string(),
-            value: None,
-            state: ControlState::default(),
-            options: Vec::new(),
-            guard: 0,
-        }
-    }
-
-    /// The amazon case. The goal named a Sensodyne toothpaste on a page of
-    /// toothpaste results, and the old rule took the goal's longest word,
-    /// "Toothpaste", which was on nearly every line and matched 55,718
-    /// characters.
-    #[test]
-    fn the_needle_is_the_word_that_narrows_this_page() {
-        let view = PageView::from_snapshot_parts(
-            "https://shop.test/s?k=toothpaste",
-            "toothpaste",
-            "",
-            vec![
-                named("e1", "link", "Colgate Toothpaste Total"),
-                named("e2", "link", "Colgate Toothpaste Fresh"),
-                named("e3", "link", "Sensodyne Toothpaste Fresh Gel"),
-                named("e4", "link", "Pepsodent Toothpaste"),
-            ],
-        );
-
-        let needle = needle_for("add the Sensodyne Toothpaste Fresh Gel to the cart", &view);
-
-        assert_eq!(
-            needle.as_deref(),
-            Some("Sensodyne"),
-            "the word that picks out one listing, not the one on every listing"
-        );
-    }
-
-    /// A word on every line narrows nothing, and neither does a word on none.
-    /// With no word that narrows, reading the page is the honest answer.
-    #[test]
-    fn no_word_that_narrows_means_no_needle() {
-        let view = PageView::from_snapshot_parts(
-            "https://shop.test/",
-            "shop",
-            "",
-            vec![
-                named("e1", "link", "Toothpaste one"),
-                named("e2", "link", "Toothpaste two"),
-            ],
-        );
-
-        assert_eq!(needle_for("count the toothpaste", &view), None);
-        assert_eq!(
-            needle_for("find the helicopter", &view),
-            None,
-            "a word the page does not have finds nothing"
-        );
     }
 }

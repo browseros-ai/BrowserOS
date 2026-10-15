@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::time::Duration;
 
 use browseros_decide::client::{Answer as RawAnswer, JevError, Question, Response, Usage};
-use browseros_decide::drive::{ActError, Answer, Driver, Move, Performed};
+use browseros_decide::drive::{ActError, Driver, Move, Performed};
 use browseros_decide::gate::Handback;
 use browseros_decide::offer::{Destination, NamedValue};
 use browseros_decide::pursue::{Oracle, Status, Stuck, advance};
@@ -143,8 +143,6 @@ struct Fake {
     /// References whose click this page swallows: the action reports success
     /// and nothing changes.
     inert: Vec<String>,
-    /// Tools this browser does not have.
-    missing: Vec<Operation>,
     /// Controls that move the fingerprint and nothing else.
     toggles: Vec<String>,
     /// How many arrangements this page cycles through, if it cycles.
@@ -154,8 +152,6 @@ struct Fake {
     /// Controls whose effect appears only after this many further looks, which
     /// is what a panel behind a timeout looks like from here.
     slow: Vec<(String, usize)>,
-    /// What a report hands back.
-    reports: String,
 }
 
 impl Fake {
@@ -167,11 +163,9 @@ impl Fake {
             pending: RefCell::new(None),
             inert: Vec::new(),
             slow: Vec::new(),
-            missing: Vec::new(),
             toggles: Vec::new(),
             cycle: None,
             acted: RefCell::new(0),
-            reports: "312 points by someone 2 hours ago".to_string(),
         }
     }
 
@@ -195,12 +189,6 @@ impl Fake {
     /// looks like, and is a change that is also a return.
     fn toggling(mut self, references: &[&str]) -> Self {
         self.toggles = references.iter().map(|r| (*r).to_string()).collect();
-        self
-    }
-
-    /// A browser that does not ship a tool, which a peer legitimately may not.
-    fn without(mut self, tools: &[Operation]) -> Self {
-        self.missing = tools.to_vec();
         self
     }
 
@@ -253,16 +241,6 @@ impl Driver for Fake {
     async fn perform(&self, act: &Move) -> Result<Performed, ActError> {
         self.ran.borrow_mut().push(act.clone());
         match act {
-            Move::Report(ask) => {
-                if self.missing.contains(&Operation::Grep) && ask.as_str() == "grep" {
-                    return Err(ActError::NotOffered(Operation::Grep));
-                }
-                Ok(Performed::Answer(Answer {
-                    asked: ask.as_str().to_string(),
-                    text: Some(self.reports.clone()),
-                    pictured: ask.as_str() == "screenshot",
-                }))
-            }
             Move::Act(decision) => {
                 let aimed = decision.target.clone().unwrap_or_default();
                 if self.inert.contains(&aimed) {
@@ -304,7 +282,7 @@ impl Driver for Fake {
                 page.url = "https://example.test/elsewhere".to_string();
                 Ok(Performed::Moved)
             }
-            Move::Resnapshot | Move::Settle => Ok(Performed::Unmoved),
+            Move::Settle => Ok(Performed::Unmoved),
         }
     }
 }
@@ -390,18 +368,19 @@ async fn a_run_that_cannot_retire_anything_still_stops_rather_than_looping() {
     );
 }
 
-/// The Hacker News case. Asked for a number printed on the page, the old
-/// vocabulary had no way to read, so it answered DONE at high confidence and
-/// returned nothing.
+/// The live failure the vocabulary was widened for, restated now that the
+/// widening has been undone. Asked how many points a story has, the loop can
+/// say the answer is on this page and stop; counting it is the caller's job,
+/// and the caller is the only one of the two that can read a number anyway.
 #[tokio::test]
-async fn a_question_about_the_page_is_answered_with_text_rather_than_a_claim() {
+async fn a_question_about_the_page_ends_on_the_page_that_answers_it() {
     let view = page(
         "https://news.example.test/",
         1,
         vec![control("e1", "link", "A story")],
     );
     let driver = Fake::new(view);
-    let oracle = Scripted::new(vec![vec![("operation", choice("READ", 0.88))]]);
+    let oracle = Scripted::new(vec![vec![("operation", choice("DONE", 0.88))]]);
 
     let outcome = advance(
         &oracle,
@@ -410,25 +389,31 @@ async fn a_question_about_the_page_is_answered_with_text_rather_than_a_claim() {
     )
     .await;
 
-    assert_eq!(outcome.status, Status::Answered);
-    let answer = outcome.answer.expect("a report hands something back");
-    assert_eq!(answer.asked, "read");
+    assert_eq!(outcome.status, Status::Satisfied);
+    assert_eq!(
+        outcome.url_after, "https://news.example.test/",
+        "and it says which page to read"
+    );
     assert!(
-        answer.text.unwrap().contains("312 points"),
-        "the caller gets the text, which is the only thing that can carry a number"
+        browseros_decide::report::tell(&outcome).try_next.is_none(),
+        "a run that finished has nothing to advise"
     );
 }
 
-/// A report ends the run, so nothing runs after it.
+/// An ending ends the run, so nothing runs after it and nothing is asked of
+/// the browser for it either: it touches no page.
 #[tokio::test]
-async fn nothing_happens_after_a_report() {
+async fn nothing_happens_after_an_ending() {
     let view = page("https://example.test/", 1, vec![control("e1", "link", "A")]);
     let driver = Fake::new(view);
-    let oracle = Scripted::new(vec![vec![("operation", choice("READ", 0.9))]]);
+    let oracle = Scripted::new(vec![vec![("operation", choice("DONE", 0.9))]]);
 
     advance(&oracle, &driver, run_for("read the page")).await;
 
-    assert_eq!(driver.ran().len(), 1, "the loop had nowhere to continue to");
+    assert!(
+        driver.ran().is_empty(),
+        "the loop had nowhere to continue to"
+    );
 }
 
 /// Looking at more of the page does not make a submit any safer.
@@ -506,25 +491,6 @@ async fn a_run_the_gate_keeps_declining_stops() {
     let outcome = advance(&oracle, &driver, run_for("do something")).await;
 
     assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
-}
-
-/// A browser without a tool never gets asked for it, and the rest of the loop
-/// still works.
-#[tokio::test]
-async fn a_browser_missing_a_tool_is_never_offered_it() {
-    let view = page("https://example.test/", 1, vec![control("e1", "link", "A")]);
-    let driver = Fake::new(view);
-    let oracle = Scripted::new(vec![vec![("operation", choice("READ", 0.9))]]);
-    let run = run_for("read the page").offering(Offered {
-        unavailable: vec![Operation::Grep, Operation::Evaluate],
-        ..Offered::default()
-    });
-
-    let outcome = advance(&oracle, &driver, run).await;
-
-    assert_eq!(outcome.status, Status::Answered);
-    let heads = oracle.heads_asked();
-    assert!(heads[0].contains(&"operation".to_string()));
 }
 
 /// A value the caller supplied is what gets typed. The model picks which one,
@@ -1195,111 +1161,6 @@ async fn a_decision_that_ran_is_on_the_record_as_having_run() {
         ran[0].why.is_none(),
         "nothing to explain about a move that ran"
     );
-}
-
-/// The OpenAI docs case. A run was sent to read a guide, arrived at exactly
-/// the right page, and could not end: READ, GREP, COUNT and SCREENSHOT were
-/// four near synonyms on one head, so no report led by the margin it needed.
-/// Asked in as many words to "read back this guide", it declined three times
-/// and returned not_confident with no answer, and the caller read the page
-/// itself on its next call.
-///
-/// One REPORT competes with WAIT, RELOAD, DONE and BLOCKED rather than with
-/// three siblings that mean nearly the same thing.
-#[tokio::test]
-async fn an_informational_goal_can_end_by_reporting() {
-    let view = page(
-        "https://example.test/guides/secure-mcp-tunnel",
-        1,
-        vec![control("e1", "link", "Back to guides")],
-    );
-    let driver = Fake::new(view);
-    let oracle = Scripted::new(vec![vec![
-        ("operation", spread("REPORT", 0.62, 0.11)),
-        ("report_how", spread("TEXT", 0.80, 0.12)),
-    ]]);
-
-    let outcome = advance(&oracle, &driver, run_for("read back how the tunnel works")).await;
-
-    assert_eq!(outcome.status, Status::Answered);
-    let answer = outcome.answer.expect("a report hands something back");
-    assert_eq!(answer.asked, "read");
-    assert!(answer.text.is_some(), "and the text travels with it");
-
-    let heads = oracle.heads_asked();
-    assert!(
-        heads[0].contains(&"report_how".to_string()),
-        "the second question is asked, got {:?}",
-        heads[0]
-    );
-    assert!(
-        !heads[0].contains(&"target".to_string()) || outcome.decided[0].target.is_none(),
-        "a report aims at nothing on the page"
-    );
-}
-
-/// Which of the three to hand back is a judgement like any other, so it is
-/// gated like any other: a report whose second head is a coin flip is not run.
-#[tokio::test]
-async fn a_report_that_cannot_say_what_to_hand_back_is_not_run() {
-    let view = page(
-        "https://example.test/",
-        1,
-        vec![control("e1", "link", "Something")],
-    );
-    let driver = Fake::new(view);
-    let coin_flip = || {
-        vec![
-            ("operation", spread("REPORT", 0.90, 0.02)),
-            ("report_how", spread("MATCHING", 0.34, 0.33)),
-        ]
-    };
-    let oracle = Scripted::new(vec![coin_flip(), coin_flip(), coin_flip()]);
-
-    let outcome = advance(&oracle, &driver, run_for("find out the price")).await;
-
-    assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
-    assert_eq!(
-        outcome.decided[0].weakest,
-        Some("what to hand back"),
-        "and it says which judgement it was"
-    );
-}
-
-/// A run whose browser has no grep is offered no way to match, and reporting
-/// still works. The rule is the operation head's rule applied one level down:
-/// an option that cannot be carried out still competes for the answer.
-#[tokio::test]
-async fn a_browser_without_grep_is_offered_no_way_to_match() {
-    let view = page(
-        "https://example.test/",
-        1,
-        vec![control("e1", "link", "Something")],
-    );
-    let driver = Fake::new(view).without(&[Operation::Grep]);
-    let oracle = Scripted::new(vec![vec![
-        ("operation", spread("REPORT", 0.70, 0.08)),
-        ("report_how", spread("TEXT", 0.80, 0.10)),
-    ]]);
-    let run = run_for("read the page").offering(Offered {
-        unavailable: vec![Operation::Grep],
-        ..Offered::default()
-    });
-
-    let outcome = advance(&oracle, &driver, run).await;
-
-    assert_eq!(outcome.status, Status::Answered);
-    assert_eq!(outcome.answer.expect("something came back").asked, "read");
-
-    let offered = browseros_decide::questions::tellings(browseros_decide::questions::Surface {
-        unavailable: &[Operation::Grep],
-        ..Default::default()
-    });
-    assert!(
-        !offered.contains(&browseros_decide::vocabulary::Telling::Matching),
-        "matching needs grep, got {offered:?}"
-    );
-    assert!(offered.contains(&browseros_decide::vocabulary::Telling::Text));
 }
 
 /// The OpenAI docs case, the other half. The page offered

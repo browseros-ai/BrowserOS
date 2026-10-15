@@ -1,17 +1,14 @@
 //! What the loop can ask the browser to do.
 //!
-//! The trait this replaces had four methods, and that was the ceiling on the
-//! whole design. The browser offers nine tools; three of them were reachable as
-//! decisions, `screenshot` and `tabs` were called by code without the model ever
-//! choosing them, and `read`, `grep` and `evaluate` were not wired in at all.
-//! Widening the vocabulary without widening this would have produced options
-//! that could not be executed.
+//! One entry point for running a move rather than a method per tool, so adding
+//! a way of acting is one match arm here and one option in the vocabulary.
 //!
-//! The split between acting and reporting is in the types rather than in a
-//! comment, because it is not a convention anyone should be free to break. A
-//! decision model can neither carry text to a later step nor return it, so a
-//! move that produces text has nowhere to continue to. [`Performed::Answer`]
-//! leaves the loop no continue arm, and the compiler keeps it that way.
+//! What this no longer carries is worth saying, because it was half the file.
+//! The loop used to be able to read, grep, count, check a state and take a
+//! picture, and hand what came back to the caller. Every one of those is a tool
+//! the caller already has and can aim better: it knows the goal, it can pick a
+//! selector, and it is not working to a byte budget. So the types here describe
+//! acting on a page and nothing else, and no move produces a value.
 
 use crate::gate::Decision;
 use crate::offer::Destination;
@@ -32,6 +29,12 @@ pub enum Journey {
 }
 
 /// What the loop asks the browser for.
+///
+/// Three things, where there were five. The two that went were a re-read, which
+/// the loop does at the top of every iteration anyway, and a report, which was
+/// the only move that produced something rather than doing something. Observing
+/// the page is the caller's job now: it has the same tools, it knows the goal,
+/// and it is not working to a byte budget.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Move {
     /// Changes the page. The loop looks again and carries on.
@@ -42,69 +45,8 @@ pub enum Move {
     Act(Box<Decision>),
     /// Changes which page the run is on.
     Travel(Journey),
-    /// Re-reads the page without changing it.
-    Resnapshot,
     /// Waits for the page to settle.
     Settle,
-    /// Produces something only the caller can use. There is nowhere to continue
-    /// to, so the run ends here.
-    Report(Ask),
-}
-
-/// A question about the page whose answer only the caller can use.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Ask {
-    /// Hand back the page's text.
-    Read,
-    /// Hand back the lines matching this.
-    ///
-    /// The pattern comes from code, derived from the goal's distinctive words,
-    /// because the model cannot write one.
-    Grep(String),
-    /// Hand back how many things match this, counted in code.
-    ///
-    /// Counting is documented as unreliable in the model and the error grows
-    /// with the size of the thing counted, so it is done here instead.
-    Count(String),
-    /// Hand back whether one control is in this state.
-    State { reference: String, state: String },
-    /// Hand back a picture, for meaning the accessibility tree does not carry.
-    Picture,
-    /// Hand back what a script computed.
-    ///
-    /// The script comes from code for the same reason the pattern does. Lowest
-    /// value of the five, and the last worth wiring up.
-    Evaluate(String),
-}
-
-impl Ask {
-    /// A short word a caller can branch on.
-    #[must_use]
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Read => "read",
-            Self::Grep(_) => "grep",
-            Self::Count(_) => "count",
-            Self::State { .. } => "check_state",
-            Self::Picture => "screenshot",
-            Self::Evaluate(_) => "evaluate",
-        }
-    }
-}
-
-/// What the caller gets back from a report.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct Answer {
-    /// What was asked, so the caller knows how to read the rest.
-    pub asked: String,
-    /// The text, for everything but a picture.
-    pub text: Option<String>,
-    /// Whether a picture was taken and handed over separately.
-    ///
-    /// The image itself does not travel through this crate: it is a protocol
-    /// content block, and keeping it out of here is what lets the whole decision
-    /// layer stay testable without a browser.
-    pub pictured: bool,
 }
 
 /// What running a [`Move`] produced.
@@ -120,8 +62,6 @@ pub enum Performed {
     /// an errand sat inside an image caption whose click the page's own photo
     /// viewer intercepted, and the run spent every step it had on it.
     Unmoved,
-    /// Terminal. The caller gets this and the run is over.
-    Answer(Answer),
 }
 
 /// Why a move could not be run.
@@ -194,20 +134,6 @@ pub trait Driver {
 mod tests {
     use super::*;
 
-    #[test]
-    fn an_ask_names_itself_for_the_caller() {
-        assert_eq!(Ask::Read.as_str(), "read");
-        assert_eq!(Ask::Grep("rust".to_string()).as_str(), "grep");
-        assert_eq!(
-            Ask::State {
-                reference: "e1".to_string(),
-                state: "checked".to_string()
-            }
-            .as_str(),
-            "check_state"
-        );
-    }
-
     /// Gone and covered are deliberately one case. Treating "is covered by" as
     /// retryable is what let a run spend four attempts on one control.
     #[test]
@@ -220,7 +146,7 @@ mod tests {
 
     #[test]
     fn a_missing_tool_says_which_one() {
-        let refused = ActError::NotOffered(Operation::Grep);
-        assert!(refused.to_string().contains("GREP"));
+        let refused = ActError::NotOffered(Operation::Navigate);
+        assert!(refused.to_string().contains("NAVIGATE"));
     }
 }

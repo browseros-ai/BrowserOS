@@ -22,7 +22,7 @@ use crate::client::Question;
 use crate::offer::{Destination, NamedValue, OpenTab};
 use crate::space::{ActionSpace, NONE_OF_THESE};
 use crate::view::PageView;
-use crate::vocabulary::{self, Direction, How, Operation, PRESS_KEYS, STATES, Telling};
+use crate::vocabulary::{self, Direction, How, Operation, PRESS_KEYS};
 
 /// How many destinations one question may offer.
 ///
@@ -41,9 +41,7 @@ pub const FILL_VALUE: &str = "fill_value";
 pub const DESTINATION: &str = "destination";
 pub const TAB: &str = "tab";
 pub const PRESS_KEY: &str = "press_key";
-pub const STATE_WHAT: &str = "state_what";
 pub const GOAL_MET: &str = "goal_met";
-pub const REPORT_HOW: &str = "report_how";
 
 /// Roles each way of acting can aim at. Narrowing a head's options is both
 /// cheaper, since every head repeats its list as input tokens, and more honest,
@@ -140,26 +138,6 @@ pub fn state(view: &PageView, space: &ActionSpace, recent: &[String], retired: u
     })
 }
 
-/// Which ways of reporting this browser can actually carry out.
-///
-/// A peer that does not ship `grep` should get a working loop with matching
-/// left out rather than an option it cannot run, which is the same rule that
-/// governs the operation head. Counting reads the page and counts in code, so
-/// it needs `read` rather than `grep`.
-#[must_use]
-pub fn tellings(surface: Surface<'_>) -> Vec<Telling> {
-    let mut tellings = Vec::new();
-    if !surface.unavailable.contains(&Operation::Read) {
-        tellings.push(Telling::Text);
-        tellings.push(Telling::HowMany);
-    }
-    if !surface.unavailable.contains(&Operation::Grep) {
-        tellings.push(Telling::Matching);
-    }
-    tellings.sort_unstable();
-    tellings
-}
-
 /// Which moves are worth offering for this page.
 ///
 /// A move with nothing to aim at is left out rather than offered and refused,
@@ -178,22 +156,14 @@ pub fn available(space: &ActionSpace, view: &PageView, surface: Surface<'_>) -> 
     // defensible, but no errand in the measured set reached for it. It stays
     // implemented and unoffered, which is what the vocabulary does with any
     // move the browser cannot perform.
-    // One REPORT rather than READ, GREP, COUNT and SCREENSHOT. Four near
-    // synonyms divided one probability mass four ways, so no report ever led by
-    // the margin it needed and an informational goal had no way to end. Which
-    // of them to hand back is `report_how`, read only when REPORT wins.
     let mut moves = vec![
         Operation::Done,
         Operation::Blocked,
         Operation::Wait,
         Operation::Reload,
     ];
-    if !tellings(surface).is_empty() {
-        moves.push(Operation::Report);
-    }
     if !space.offered.is_empty() {
         moves.push(Operation::Act);
-        moves.push(Operation::CheckState);
     }
     if !surface.destinations.is_empty() {
         moves.push(Operation::Navigate);
@@ -321,27 +291,6 @@ pub fn build(
         },
     );
 
-    // Asked only when there is a choice to make. A one-option Choice is not a
-    // judgement, and with nothing asked the loop reads the page, which is the
-    // one way of reporting that needs nothing chosen.
-    let tellings = tellings(surface);
-    if moves.contains(&Operation::Report) && tellings.len() >= 2 {
-        questions.insert(
-            REPORT_HOW.to_string(),
-            Question::Choice {
-                instructions: ask(
-                    goal,
-                    "Assume the next move hands something about this page back to the caller. \
-                     What should it hand back?",
-                ),
-                criteria: tellings
-                    .iter()
-                    .map(|telling| (telling.as_str().to_string(), json!(telling.description())))
-                    .collect(),
-            },
-        );
-    }
-
     if moves.contains(&Operation::Act) && ways.len() >= 2 {
         questions.insert(
             ACT_HOW.to_string(),
@@ -363,7 +312,7 @@ pub fn build(
     // tokens for one step against 4,700 once each carried only what it could
     // act on. Narrowing by the ways actually on offer gets the same saving
     // without the repetition.
-    if moves.contains(&Operation::Act) || moves.contains(&Operation::CheckState) {
+    if moves.contains(&Operation::Act) {
         let roles = roles_for(ways);
         let criteria = space.options_for(&roles);
         if criteria.len() >= 2 {
@@ -510,27 +459,6 @@ pub fn build(
         );
     }
 
-    if moves.contains(&Operation::CheckState) {
-        questions.insert(
-            STATE_WHAT.to_string(),
-            Question::Choice {
-                instructions: ask(
-                    goal,
-                    "Assume the next move checks one control's state. Which state matters here?",
-                ),
-                criteria: STATES
-                    .iter()
-                    .map(|state| {
-                        (
-                            (*state).to_string(),
-                            json!(format!("Whether the control is {state}.")),
-                        )
-                    })
-                    .collect(),
-            },
-        );
-    }
-
     questions
 }
 
@@ -604,37 +532,40 @@ mod tests {
         ActionSpace::build(view, goal, None, &[])
     }
 
+    /// A page with nothing to act on can still be ended on, which is how an
+    /// informational goal finishes now: the loop says the page holds what was
+    /// asked for and the caller reads it.
     #[test]
-    fn a_page_with_no_controls_can_still_be_read_and_reported_on() {
+    fn a_page_with_no_controls_can_still_be_ended_on() {
         let view = view_with(Vec::new());
         let space = space_for(&view, "how many points does the top story have");
         let moves = available(&space, &view, Surface::default());
 
-        assert!(moves.contains(&Operation::Report), "{moves:?}");
+        assert!(moves.contains(&Operation::Done), "{moves:?}");
+        assert!(moves.contains(&Operation::Blocked), "{moves:?}");
         assert!(!moves.contains(&Operation::Act), "nothing to act on");
     }
 
+    /// A browser that cannot navigate is offered no way to move between
+    /// pages, which is the rule that remains now that nothing in the
+    /// vocabulary observes: an option that cannot run still competes for the
+    /// answer.
     #[test]
-    fn a_browser_without_grep_is_never_offered_grep() {
+    fn a_browser_that_cannot_navigate_is_never_offered_it() {
         let view = view_with(vec![control("e1", "link", "Something")]);
         let space = space_for(&view, "open something");
         let surface = Surface {
-            unavailable: &[Operation::Grep, Operation::Evaluate],
+            unavailable: &[Operation::Navigate, Operation::Tabs],
             ..Surface::default()
         };
         let moves = available(&space, &view, surface);
 
-        assert!(!moves.contains(&Operation::Grep));
-        assert!(!moves.contains(&Operation::Evaluate));
+        assert!(!moves.contains(&Operation::Navigate));
+        assert!(!moves.contains(&Operation::Tabs));
         assert!(
-            moves.contains(&Operation::Report),
+            moves.contains(&Operation::Act),
             "the rest of the loop still works"
         );
-        // Reporting survives without grep, and matching does not: the way of
-        // reporting the browser cannot carry out is the one withheld.
-        let offered = tellings(surface);
-        assert!(!offered.contains(&Telling::Matching));
-        assert!(offered.contains(&Telling::Text));
     }
 
     #[test]

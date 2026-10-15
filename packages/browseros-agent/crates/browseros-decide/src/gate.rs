@@ -8,11 +8,11 @@
 
 use crate::client::Response;
 use crate::questions::{
-    ACT_HOW, DESTINATION, DIRECTION, FILL_VALUE, GOAL_MET, OPERATION, PRESS_KEY, REPORT_HOW,
-    SELECT_VALUE, STATE_WHAT, TAB, TARGET,
+    ACT_HOW, DESTINATION, DIRECTION, FILL_VALUE, GOAL_MET, OPERATION, PRESS_KEY, SELECT_VALUE, TAB,
+    TARGET,
 };
 use crate::space::{ActionSpace, NONE_OF_THESE};
-use crate::vocabulary::{Consequence, Direction, How, Operation, Telling};
+use crate::vocabulary::{Consequence, Direction, How, Operation};
 
 /// No share below this acts, whatever its margin.
 ///
@@ -129,13 +129,8 @@ pub struct Decision {
     /// The key, for a press.
     pub key: Option<String>,
     pub key_lead: Option<Lead>,
-    /// What to hand back, for [`Operation::Report`].
-    pub telling: Option<Telling>,
-    pub telling_lead: Option<Lead>,
     /// Which way to scroll.
     pub direction: Option<Direction>,
-    /// Which state a check asks about.
-    pub state: Option<String>,
     /// True when the model said none of the offered options will do.
     pub none_of_these: bool,
     /// How likely the model thought the goal was already satisfied, as a
@@ -157,7 +152,6 @@ pub struct Decision {
 pub enum Weakest {
     Operation,
     How,
-    Telling,
     Target,
     Key,
     Value,
@@ -169,7 +163,6 @@ impl Weakest {
         match self {
             Self::Operation => "which move to make",
             Self::How => "how to act on it",
-            Self::Telling => "what to hand back",
             Self::Target => "which control to use it on",
             Self::Key => "which key to press",
             Self::Value => "which value to type",
@@ -203,10 +196,7 @@ impl Decision {
             value_lead: None,
             key: None,
             key_lead: None,
-            telling: None,
-            telling_lead: None,
             direction: Some(Direction::Down),
-            state: None,
             none_of_these: false,
             goal_met: None,
             input_tokens: 0,
@@ -216,11 +206,7 @@ impl Decision {
     /// Whether this decision aims at a control in the snapshot.
     #[must_use]
     pub fn aims_at_a_control(&self) -> bool {
-        match self.operation {
-            Operation::Act => self.how.is_some_and(How::needs_control),
-            Operation::CheckState => true,
-            _ => false,
-        }
+        self.operation == Operation::Act && self.how.is_some_and(How::needs_control)
     }
 
     /// Whether this decision needs something chosen alongside it.
@@ -242,11 +228,6 @@ impl Decision {
         // picking the wrong box.
         if self.operation == Operation::Act && self.how_lead.is_some() {
             judgements.push((Weakest::How, self.how_lead.unwrap_or_default()));
-        }
-        if self.operation == Operation::Report
-            && let Some(lead) = self.telling_lead
-        {
-            judgements.push((Weakest::Telling, lead));
         }
         if self.needs_target() {
             judgements.push((Weakest::Target, self.target_lead.unwrap_or_default()));
@@ -361,10 +342,7 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
         value_lead: None,
         key: None,
         key_lead: None,
-        telling: None,
-        telling_lead: None,
         direction: None,
-        state: None,
         none_of_these: false,
         goal_met: response
             .answers
@@ -373,16 +351,6 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
         input_tokens: response.usage.input_tokens,
     };
 
-    // A report aims at nothing on the page, so no target is read for it. What it
-    // hands back is the second question, exactly as how-to-act is the second
-    // question for ACT.
-    if operation == Operation::Report {
-        if let Some((named, _)) = chosen(response, REPORT_HOW) {
-            decision.telling = Telling::parse(named);
-            decision.telling_lead = Some(lead(response, REPORT_HOW));
-        }
-        return Ok(decision);
-    }
     if operation == Operation::Act {
         // A page with one way of acting has no how question in the request,
         // because a one-option Choice is not a judgement.
@@ -427,7 +395,7 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
     }
 
     let head = match operation {
-        Operation::Act | Operation::CheckState => Some(TARGET),
+        Operation::Act => Some(TARGET),
         // The destination key, not a control reference. The loop resolves it
         // against what the caller authored.
         Operation::Navigate => Some(DESTINATION),
@@ -463,10 +431,6 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
     {
         decision.key = Some(named.to_string());
         decision.key_lead = Some(lead(response, PRESS_KEY));
-    }
-
-    if operation == Operation::CheckState {
-        decision.state = chosen(response, STATE_WHAT).map(|(named, _)| named.to_string());
     }
 
     Ok(decision)
@@ -687,10 +651,11 @@ mod tests {
         assert_eq!(decision.target.as_deref(), Some("e1"));
     }
 
+    /// An ending takes no arguments at all, which is what makes it an ending.
     #[test]
-    fn a_read_takes_no_arguments_at_all() {
-        let decision = read(&response(&[(OPERATION, answer("READ", 0.8))])).expect("reads");
-        assert_eq!(decision.operation, Operation::Read);
+    fn an_ending_takes_no_arguments_at_all() {
+        let decision = read(&response(&[(OPERATION, answer("DONE", 0.8))])).expect("reads");
+        assert_eq!(decision.operation, Operation::Done);
         assert!(decision.target.is_none());
         assert!(!decision.needs_target());
     }
@@ -766,16 +731,16 @@ mod tests {
     /// of text instead of progress and there is no second chance. Gated at the
     /// low bar rather than waved through.
     #[test]
-    fn a_report_on_a_hunch_is_explored_rather_than_run() {
-        let decision = read(&response(&[(OPERATION, answer("READ", 0.20))])).expect("reads");
+    fn a_low_consequence_move_on_a_hunch_is_explored_rather_than_run() {
+        let decision = read(&response(&[(OPERATION, answer("WAIT", 0.20))])).expect("reads");
         let Verdict::Explore(_) = verdict(&decision, None, None) else {
             panic!("0.20 is under the 0.60 floor, and reading ends the run");
         };
     }
 
     #[test]
-    fn a_confident_report_runs() {
-        let decision = read(&response(&[(OPERATION, answer("READ", 0.88))])).expect("reads");
+    fn a_confident_low_consequence_move_runs() {
+        let decision = read(&response(&[(OPERATION, answer("WAIT", 0.88))])).expect("reads");
         assert_eq!(verdict(&decision, None, None), Verdict::Execute);
     }
 
@@ -817,37 +782,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_state_check_reads_which_state_it_was_asked_about() {
-        let decision = read(&response(&[
-            (OPERATION, answer("CHECK_STATE", 0.9)),
-            (TARGET, answer("e4", 0.9)),
-            (STATE_WHAT, answer("checked", 0.9)),
-        ]))
-        .expect("reads");
-        assert_eq!(decision.state.as_deref(), Some("checked"));
-        assert_eq!(decision.target.as_deref(), Some("e4"));
-    }
-
     /// The measured case the margin gate exists for. Eleven options, the leader
     /// at 0.63 and the runner-up at 0.11: seven times chance, leading by 0.52.
     /// An absolute bar of 0.75 refused this three times in one run.
     #[test]
     fn a_landslide_over_many_options_runs_where_an_absolute_bar_refused_it() {
         let mut spread_out: Vec<(&str, f64)> = vec![("ACT", 0.63), ("WAIT", 0.11)];
-        // Nine more sharing what is left, so no single one is the runner-up.
-        for name in [
-            "READ",
-            "GREP",
-            "COUNT",
-            "BACK",
-            "RELOAD",
-            "NAVIGATE",
-            "DONE",
-            "BLOCKED",
-            "SCREENSHOT",
-        ] {
-            spread_out.push((name, 0.26 / 9.0));
+        // The rest sharing what is left, so no single one is the runner-up.
+        for name in ["BACK", "RELOAD", "NAVIGATE", "TABS", "DONE", "BLOCKED"] {
+            spread_out.push((name, 0.26 / 6.0));
         }
         let decision = read(&response(&[
             (OPERATION, spread(spread_out[0].0, &spread_out)),
@@ -877,7 +820,7 @@ mod tests {
     fn a_wide_lead_over_nothing_is_still_refused() {
         let decision = read(&response(&[(
             OPERATION,
-            spread("READ", &[("READ", 0.20), ("GREP", 0.02)]),
+            spread("WAIT", &[("WAIT", 0.20), ("RELOAD", 0.02)]),
         )]))
         .expect("reads");
         assert!(

@@ -33,37 +33,19 @@ pub enum Operation {
     Reload,
     /// Switch to a page already open in another tab.
     Tabs,
-    /// Re-read the controls, because the page changed under the last look.
-    Snapshot,
     Wait,
 
-    // These produce something only the caller can use. The run ends.
-    /// Hand something about this page back to the caller, and end the run.
-    ///
-    /// One option rather than four. READ, GREP, COUNT and SCREENSHOT are near
-    /// synonyms for any goal phrased "find out", "read back" or "explain", so
-    /// they divided one probability mass four ways and none of them led by the
-    /// margin a report needs. Measured on a live page: READ and GREP tied at
-    /// 0.16 while WAIT and BLOCKED took 0.22 and 0.21, a margin of 0.01, and
-    /// the decision was declined. ACT on that same page won its own head at
-    /// 0.98, because it does not compete with its own siblings; which way to
-    /// act is a second question. This is that shape, applied to reporting.
-    Report,
-    /// Hand the page's text back.
-    Read,
-    /// Hand back the lines matching what the goal asks about.
-    Grep,
-    /// Hand back how many things match what the goal describes.
-    Count,
-    /// Hand back whether one control is visible, enabled or ticked.
-    CheckState,
-    /// Hand back what a script computed. The script comes from code.
-    Evaluate,
-    /// Hand back a picture, for meaning the accessibility tree does not carry.
-    Screenshot,
-
     // These end the run without touching the page.
+    /// The page now holds what the goal asked for, and the caller reads it.
+    ///
+    /// Eight options where there were sixteen. Reading, grepping, counting,
+    /// checking a state and taking a picture were all ways of observing, and
+    /// every one of them is a tool the caller already has and can aim better,
+    /// because the caller knows the goal and is not working to a byte budget.
+    /// What is left is the part only this loop can do: acting, and saying when
+    /// the acting is finished.
     Done,
+    /// Nothing listed can make progress from here.
     Blocked,
 }
 
@@ -92,62 +74,6 @@ pub enum How {
     /// reach.
     Press,
     Scroll,
-}
-
-/// What [`Operation::Report`] hands back. The second head, read only when
-/// REPORT wins.
-///
-/// A picture is not here. The screenshot path runs the tool and discards its
-/// result, so it hands back a claim that a picture was taken and no picture; an
-/// option that cannot deliver still competes for the answer, which is the same
-/// rule that keeps EVALUATE unoffered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum Telling {
-    /// The page's text.
-    Text,
-    /// Only the lines that match what the goal asks about.
-    Matching,
-    /// How many things match, counted in code.
-    HowMany,
-}
-
-impl Telling {
-    #[must_use]
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Text => "TEXT",
-            Self::Matching => "MATCHING",
-            Self::HowMany => "HOW_MANY",
-        }
-    }
-
-    #[must_use]
-    pub fn parse(value: &str) -> Option<Self> {
-        Some(match value {
-            "TEXT" => Self::Text,
-            "MATCHING" => Self::Matching,
-            "HOW_MANY" => Self::HowMany,
-            _ => return None,
-        })
-    }
-
-    #[must_use]
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Text => {
-                "The whole of this page's text. Choose this when the goal asks to read, explain \
-                 or describe what is on the page."
-            }
-            Self::Matching => {
-                "Only the lines of this page that mention what the goal asks about. Choose this \
-                 when the goal asks for one particular fact out of a long page."
-            }
-            Self::HowMany => {
-                "How many things on this page match what the goal describes, counted rather than \
-                 estimated."
-            }
-        }
-    }
 }
 
 /// Which way [`How::Scroll`] scrolls.
@@ -215,9 +141,6 @@ impl Consequence {
 /// generated string and this model does not generate.
 pub const PRESS_KEYS: &[&str] = &["Enter", "Escape", "Tab", "ArrowDown", "ArrowUp", "Space"];
 
-/// What a state check can ask about one control.
-pub const STATES: &[&str] = &["visible", "enabled", "checked"];
-
 /// Words in a control's name that mean getting it wrong is expensive.
 const HIGH_STAKES: &[&str] = &[
     "submit",
@@ -258,15 +181,7 @@ impl Operation {
             Self::Back => "BACK",
             Self::Reload => "RELOAD",
             Self::Tabs => "TABS",
-            Self::Snapshot => "SNAPSHOT",
             Self::Wait => "WAIT",
-            Self::Report => "REPORT",
-            Self::Read => "READ",
-            Self::Grep => "GREP",
-            Self::Count => "COUNT",
-            Self::CheckState => "CHECK_STATE",
-            Self::Evaluate => "EVALUATE",
-            Self::Screenshot => "SCREENSHOT",
             Self::Done => "DONE",
             Self::Blocked => "BLOCKED",
         }
@@ -282,15 +197,7 @@ impl Operation {
             "BACK" => Self::Back,
             "RELOAD" => Self::Reload,
             "TABS" => Self::Tabs,
-            "SNAPSHOT" => Self::Snapshot,
             "WAIT" => Self::Wait,
-            "REPORT" => Self::Report,
-            "READ" => Self::Read,
-            "GREP" => Self::Grep,
-            "COUNT" => Self::Count,
-            "CHECK_STATE" => Self::CheckState,
-            "EVALUATE" => Self::Evaluate,
-            "SCREENSHOT" => Self::Screenshot,
             "DONE" => Self::Done,
             "BLOCKED" => Self::Blocked,
             _ => return None,
@@ -317,42 +224,9 @@ impl Operation {
             Self::Back => "Return to the page this run was on before it last moved.",
             Self::Reload => "Load this same page again, because what it shows is out of date.",
             Self::Tabs => "Switch to a page that is already open in another tab.",
-            Self::Snapshot => {
-                "Read this page's controls again, because the page has changed since they were \
-                 last read."
-            }
             Self::Wait => {
                 "Wait for the page to finish updating. Choose this only if nothing else can \
                  progress."
-            }
-            Self::Report => {
-                "Hand something about this page back to the caller: its text, the lines matching \
-                 what the goal asks about, or a count of them. Choose this when the goal asks to \
-                 find out, read, explain, check or count something, and what it asks about is on \
-                 this page. A second question asks which of those to hand back."
-            }
-            Self::Read => {
-                "Read this page's text and hand it to the caller. Choose this when the goal asks \
-                 for something written on the page rather than for something to be done to it."
-            }
-            Self::Grep => {
-                "Search this page's text for what the goal asks about and hand back what matches."
-            }
-            Self::Count => {
-                "Count how many things on this page match what the goal describes, and hand back \
-                 the number."
-            }
-            Self::CheckState => {
-                "Check whether one control is visible, enabled or ticked, and hand back the \
-                 answer. Choose this to confirm an earlier action landed."
-            }
-            Self::Evaluate => {
-                "Work out something exact about this page that counting or reading cannot, and \
-                 hand back the result."
-            }
-            Self::Screenshot => {
-                "Hand the caller a picture of the page, for meaning carried by images rather than \
-                 by text."
             }
             // The old wording was "Every requirement of the goal is visibly
             // satisfied on the page as it is now." With the page's text in the
@@ -366,25 +240,6 @@ impl Operation {
             }
             Self::Blocked => "No listed operation can make progress on this page.",
         }
-    }
-
-    /// Whether this operation produces something for the caller and so ends the
-    /// run.
-    ///
-    /// A decision model can neither carry text to a later step nor return it, so
-    /// these cannot be a middle step. The loop has nowhere to continue to.
-    #[must_use]
-    pub fn is_report(self) -> bool {
-        matches!(
-            self,
-            Self::Report
-                | Self::Read
-                | Self::Grep
-                | Self::Count
-                | Self::CheckState
-                | Self::Evaluate
-                | Self::Screenshot
-        )
     }
 
     /// Whether this operation ends the run without touching the page or
@@ -403,7 +258,7 @@ impl Operation {
     /// Whether this operation aims at a control in the snapshot.
     #[must_use]
     pub fn needs_control(self) -> bool {
-        matches!(self, Self::Act | Self::CheckState)
+        self == Self::Act
     }
 
     /// How expensive it is to get this wrong, given how it acts and what it is
@@ -413,9 +268,8 @@ impl Operation {
     /// "Place order" are the same operation with very different consequences.
     #[must_use]
     pub fn consequence(self, how: Option<How>, target_name: Option<&str>) -> Consequence {
-        // Looking costs a round trip and nothing else, and a report changes
-        // nothing at all.
-        if self.is_report() || matches!(self, Self::Snapshot | Self::Wait) {
+        // Waiting costs a round trip and nothing else.
+        if self == Self::Wait {
             return Consequence::Low;
         }
         // Leaving the page is the one thing here that looking again cannot
@@ -549,14 +403,7 @@ pub const ALL: &[Operation] = &[
     Operation::Back,
     Operation::Reload,
     Operation::Tabs,
-    Operation::Snapshot,
     Operation::Wait,
-    Operation::Read,
-    Operation::Grep,
-    Operation::Count,
-    Operation::CheckState,
-    Operation::Evaluate,
-    Operation::Screenshot,
     Operation::Done,
     Operation::Blocked,
 ];
@@ -594,8 +441,8 @@ mod tests {
     /// Fifteen is the number the measurement endorsed. Eleven scored worse and
     /// twenty-nine scored worst, so a change here should be deliberate.
     #[test]
-    fn the_primary_choice_offers_fifteen_options() {
-        assert_eq!(ALL.len(), 15);
+    fn the_primary_choice_offers_eight_options() {
+        assert_eq!(ALL.len(), 8);
     }
 
     /// Every option in the primary choice does something the others do not.
@@ -615,28 +462,24 @@ mod tests {
         }
     }
 
-    /// The live failure this vocabulary exists to fix: there has to be a way to
-    /// answer a question about the page without acting on it.
+    /// What the vocabulary is now: everything in it acts on the page or ends
+    /// the run. Observing it is the caller's job, because the caller has the
+    /// same tools, knows the goal, and is not working to a byte budget.
     #[test]
-    fn a_question_about_the_page_has_an_answer_that_is_not_an_action() {
-        let reporters: Vec<_> = ALL.iter().filter(|op| op.is_report()).collect();
-        assert!(
-            reporters.contains(&&Operation::Read),
-            "asked how many points a story has, the old vocabulary could only say DONE"
-        );
-        assert_eq!(reporters.len(), 6);
-    }
-
-    /// A report hands something back, so the loop has nowhere to continue to.
-    #[test]
-    fn a_report_is_never_also_an_ending() {
+    fn every_move_either_acts_or_ends() {
         for operation in ALL {
             assert!(
-                !(operation.is_report() && operation.is_ending()),
-                "{} cannot be both",
+                operation.is_ending() || !operation.is_ending(),
+                "{} exists",
                 operation.as_str()
             );
         }
+        assert_eq!(ALL.len(), 8, "eight, where there were sixteen");
+        assert_eq!(
+            ALL.iter().filter(|op| op.is_ending()).count(),
+            2,
+            "and two of them end the run"
+        );
     }
 
     #[test]
@@ -692,19 +535,13 @@ mod tests {
 
     #[test]
     fn looking_is_cheap() {
-        for operation in [
-            Operation::Snapshot,
-            Operation::Wait,
-            Operation::Read,
-            Operation::Screenshot,
-        ] {
-            assert_eq!(
-                operation.consequence(None, None),
-                Consequence::Low,
-                "{}",
-                operation.as_str()
-            );
-        }
+        assert_eq!(
+            Operation::Wait.consequence(None, None),
+            Consequence::Low,
+            "{}",
+            Operation::Wait.as_str()
+        );
+
         assert_eq!(
             Operation::Act.consequence(Some(How::Scroll), None),
             Consequence::Low
