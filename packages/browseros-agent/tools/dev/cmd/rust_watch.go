@@ -21,7 +21,8 @@ func serverRustProcConfig(root string, env []string, p proc.Ports, userDataDir s
 		Dir:     root,
 		Env:     env,
 		Restart: true,
-		Cmd:     []string{"cargo", "run", "-p", "server-rust", "--", "--config", sidecarPath},
+		// server-rust also builds a test-only ACP peer binary, so `cargo run` must name the server.
+		Cmd: []string{"cargo", "run", "-p", "server-rust", "--bin", "browseros-server-rs", "--", "--config", sidecarPath},
 		BeforeStart: func() error {
 			// The supervisor reaps its process group before restarting. Do not kill
 			// by port here: a new listener could belong to another dev session.

@@ -38,7 +38,7 @@ func TestRustServerWritesBrowserOSSidecarBeforeEachLaunch(t *testing.T) {
 	path := watchSidecarConfigPath(profile, "browseros-server")
 	ports := proc.Ports{CDP: 9012, Server: 9123, Extension: 9321}
 	cfg := serverRustProcConfig(root, []string{"NODE_ENV=development"}, ports, profile, path)
-	if cfg.Dir != root || !cfg.Restart || strings.Join(cfg.Cmd, " ") != "cargo run -p server-rust -- --config "+path {
+	if cfg.Dir != root || !cfg.Restart || strings.Join(cfg.Cmd, " ") != "cargo run -p server-rust --bin browseros-server-rs -- --config "+path {
 		t.Fatalf("unexpected Cargo supervisor config: %+v", cfg)
 	}
 	for range 2 {

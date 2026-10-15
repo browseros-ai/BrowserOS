@@ -265,7 +265,18 @@ export async function bootServer(
         ? [process.execPath, 'apps/server/src/index.ts', '--config', config]
         : process.env.SERVER_RUST_BINARY
           ? [resolve(process.env.SERVER_RUST_BINARY), '--config', config]
-          : ['cargo', 'run', '-p', 'server-rust', '--', '--config', config]
+          : // server-rust also builds a test-only ACP peer, so name the server binary.
+            [
+              'cargo',
+              'run',
+              '-p',
+              'server-rust',
+              '--bin',
+              'browseros-server-rs',
+              '--',
+              '--config',
+              config,
+            ]
     assertStarting()
     const server = ownedProcess(command, env, log)
     processes.push(server)
