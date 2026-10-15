@@ -111,7 +111,10 @@ pub async fn refine_prompt(
         if row.model_id.as_deref().is_none_or(str::is_empty) {
             return super::errors::success_false(StatusCode::BAD_REQUEST, NO_LLM);
         }
-        config = config_from_row(&row, config.upstream_provider);
+        config = match config_from_row(&row, config.upstream_provider) {
+            Ok(config) => config,
+            Err(message) => return super::errors::success_false(StatusCode::BAD_REQUEST, &message),
+        };
     }
     if config.model.is_empty() {
         return super::errors::success_false(StatusCode::BAD_REQUEST, NO_LLM);
@@ -158,21 +161,8 @@ async fn resolve_refine_provider(
                 )))
             };
         }
-        // The stores split LLM and ACP rows. An explicitly named coding agent must fail,
-        // whereas a coding-agent default is allowed to fall back to the first LLM row.
-        if let Ok(agent_id) = Uuid::parse_str(id)
-            && agent_id.to_string() == id
-            && state
-                .agents
-                .get(agent_id)
-                .await
-                .map_err(|e| internal_error(&e.to_string()))?
-                .is_some()
-        {
-            return Err(failure(&format!(
-                "Provider {id} is a coding agent and cannot refine a prompt"
-            )));
-        }
+        // P2's provider lookup covers both kinds and preserves the caller's exact id.
+        // A second lookup through the UUID-based ACP store could normalize an unknown id.
         return Err(failure(&format!("Unknown provider {id}")));
     }
     if nonempty_string(body, "provider").is_some() && nonempty_string(body, "model").is_some() {
@@ -189,13 +179,10 @@ async fn resolve_refine_provider(
     }
     let rows = state
         .providers
-        .list()
+        .list_llm()
         .await
         .map_err(|e| internal_error(&e.to_string()))?;
-    let row = rows
-        .into_iter()
-        .find(is_llm)
-        .ok_or_else(|| failure(NO_LLM))?;
+    let row = rows.into_iter().next().ok_or_else(|| failure(NO_LLM))?;
     // TS lists public rows then re-reads credentials. Preserve that second lookup: deletion
     // between the two reads means no LLM, rather than using a row that no longer exists.
     state
@@ -208,7 +195,7 @@ async fn resolve_refine_provider(
 }
 
 fn is_llm(row: &ProviderRow) -> bool {
-    row.provider_type.parse::<ProviderKind>().is_ok()
+    row.kind == "llm"
 }
 
 fn merge_stored_credentials(config: &mut LlmConfig, row: &ProviderRow) {
@@ -238,7 +225,16 @@ fn merge_stored_credentials(config: &mut LlmConfig, row: &ProviderRow) {
     }
 }
 
-fn config_from_row(row: &ProviderRow, upstream_provider: Option<String>) -> LlmConfig {
+fn config_from_row(
+    row: &ProviderRow,
+    upstream_provider: Option<String>,
+) -> Result<LlmConfig, String> {
+    // Kind and provider dialect are independent in the unified store. A stale/unknown LLM
+    // type must produce the TS factory error, rather than being mistaken for an ACP agent.
+    let provider = row
+        .provider_type
+        .parse::<ProviderKind>()
+        .map_err(|_| format!("Unknown provider: {}", row.provider_type))?;
     let mut config = config_from_body(&json!({
         "provider": row.provider_type, "model": row.model_id,
         "headers": row.headers,
@@ -251,7 +247,8 @@ fn config_from_row(row: &ProviderRow, upstream_provider: Option<String>) -> LlmC
     config.secret_access_key = row.secret_access_key.clone();
     config.session_token = row.session_token.clone();
     config.upstream_provider = upstream_provider;
-    config
+    config.provider = provider;
+    Ok(config)
 }
 
 fn config_from_body(body: &Value) -> LlmConfig {

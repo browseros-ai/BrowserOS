@@ -41,11 +41,11 @@ impl Fixture {
         Ok(Self { state, _dir: dir })
     }
 
-    async fn post(
+    async fn send(
         &self,
         path: &str,
         body: Value,
-    ) -> Result<(StatusCode, Value), Box<dyn std::error::Error>> {
+    ) -> Result<(StatusCode, Vec<u8>), Box<dyn std::error::Error>> {
         let response = server_rust::build_router(self.state.clone())
             .oneshot(
                 Request::post(path)
@@ -62,7 +62,27 @@ impl Fixture {
             )
             .await?;
         let status = response.status();
-        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await?;
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await?
+            .to_vec();
+        // Fail at the dependency seam instead of masking P5's placeholder as a route/status
+        // regression. This is an error, never a skipped test or a stub-specific success.
+        if let Ok(value) = serde_json::from_slice::<Value>(&bytes)
+            && let Some(message) = value.get("message").and_then(Value::as_str)
+            && (message.contains("provider is not implemented yet")
+                || message.contains("generate_text is not implemented yet"))
+        {
+            return Err(format!("BLOCKED BY P5: {message}; rebase feat/server-rust after the LLM implementation merges, then rerun llm_tools").into());
+        }
+        Ok((status, bytes))
+    }
+
+    async fn post(
+        &self,
+        path: &str,
+        body: Value,
+    ) -> Result<(StatusCode, Value), Box<dyn std::error::Error>> {
+        let (status, bytes) = self.send(path, body).await?;
         Ok((status, serde_json::from_slice(&bytes)?))
     }
 
@@ -75,8 +95,8 @@ impl Fixture {
                     provider_type: "openai-compatible".to_owned(),
                     name: id.to_owned(),
                     model_id: Some(model.to_owned()),
-                    base_url: Some(fake.url.clone()),
-                    api_key: Some("saved-key".to_owned()),
+                    base_url: Some(Some(fake.url.clone())),
+                    api_key: Some(Some("saved-key".to_owned())),
                     context_window: Some(128_000),
                     ..Default::default()
                 },
@@ -187,27 +207,9 @@ async fn provider_test_streams_preview_and_reports_time() -> TestResult {
 async fn provider_preview_preserves_js_split_surrogate() -> TestResult {
     let fixture = Fixture::new().await?;
     let fake = FakeProvider::start(&format!("{}😀", "a".repeat(99)), false).await?;
-    let response = server_rust::build_router(fixture.state.clone())
-        .oneshot(
-            Request::post("/test-provider")
-                .extension(axum::extract::ConnectInfo(
-                    "127.0.0.1:12345".parse::<std::net::SocketAddr>()?,
-                ))
-                .header("host", "127.0.0.1")
-                .header(
-                    "origin",
-                    "chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk",
-                )
-                .header("content-type", "application/json")
-                .body(Body::from(fake.inline().to_string()))?,
-        )
-        .await?;
-    assert_eq!(response.status(), StatusCode::OK);
-    let body = String::from_utf8(
-        axum::body::to_bytes(response.into_body(), 1024 * 1024)
-            .await?
-            .to_vec(),
-    )?;
+    let (status, bytes) = fixture.send("/test-provider", fake.inline()).await?;
+    assert_eq!(status, StatusCode::OK);
+    let body = String::from_utf8(bytes)?;
     assert!(
         body.contains(&format!(r#"{}\ud83d...\"""#, "a".repeat(99))),
         "{body}"
@@ -335,14 +337,14 @@ async fn every_saved_credential_field_pins_the_destination() -> TestResult {
             name: id.clone(),
             model_id: Some("model".to_owned()),
             context_window: Some(128_000),
-            base_url: Some(saved.url.clone()),
+            base_url: Some(Some(saved.url.clone())),
             ..Default::default()
         };
         match field {
-            "apiKey" => row.api_key = Some("saved-key".to_owned()),
-            "accessKeyId" => row.access_key_id = Some("saved-access".to_owned()),
-            "secretAccessKey" => row.secret_access_key = Some("saved-secret".to_owned()),
-            _ => row.session_token = Some("saved-session".to_owned()),
+            "apiKey" => row.api_key = Some(Some("saved-key".to_owned())),
+            "accessKeyId" => row.access_key_id = Some(Some("saved-access".to_owned())),
+            "secretAccessKey" => row.secret_access_key = Some(Some("saved-secret".to_owned())),
+            _ => row.session_token = Some(Some("saved-session".to_owned())),
         }
         fixture.state.providers.upsert_llm(&id, row).await?;
         let mut body = other.inline();
@@ -370,7 +372,7 @@ async fn absent_saved_endpoint_fields_clear_untrusted_inline_selectors() -> Test
                 name: "Azure".to_owned(),
                 model_id: Some("model".to_owned()),
                 context_window: Some(128_000),
-                api_key: Some("saved-key".to_owned()),
+                api_key: Some(Some("saved-key".to_owned())),
                 ..Default::default()
             },
         )
@@ -450,8 +452,7 @@ async fn refinement_resolves_named_then_inline_then_default_then_first_llm() -> 
 }
 
 #[tokio::test]
-async fn refinement_rejects_unknown_or_coding_agent_and_falls_back_from_coding_default()
--> TestResult {
+async fn refinement_rejects_missing_unknown_or_explicit_coding_agent() -> TestResult {
     let fixture = Fixture::new().await?;
     let fake = FakeProvider::start("refined", false).await?;
     let base = json!({"name":"Morning", "prompt":"Read the news"});
@@ -489,14 +490,70 @@ async fn refinement_rejects_unknown_or_coding_agent_and_falls_back_from_coding_d
             agent.id
         )
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn refinement_falls_back_from_coding_agent_default() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("refined", false).await?;
+    fixture.save("first", &fake, "first-model").await?;
+    let agent = fixture
+        .state
+        .agents
+        .create(CreateAgent {
+            kind: AgentKind::Claude,
+            name: "Claude".to_owned(),
+            model_id: None,
+            reasoning_effort: None,
+            working_directory: None,
+            custom_config: None,
+        })
+        .await?;
     fixture
         .state
         .providers
         .set_default(&agent.id.to_string())
         .await?;
-    let (status, body) = fixture.post("/refine-prompt", base).await?;
+    let (status, body) = fixture
+        .post(
+            "/refine-prompt",
+            json!({"name":"Morning", "prompt":"Read the news"}),
+        )
+        .await?;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert_eq!(fake.calls()[0].1["model"], "first-model");
+    Ok(())
+}
+
+#[tokio::test]
+async fn unknown_stored_llm_type_is_not_mistaken_for_a_coding_agent() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture
+        .state
+        .providers
+        .upsert_llm(
+            "future",
+            UpsertProvider {
+                provider_type: "future-provider".to_owned(),
+                name: "Future".to_owned(),
+                model_id: Some("model".to_owned()),
+                context_window: Some(128_000),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let (status, body) = fixture
+        .post(
+            "/refine-prompt",
+            json!({"providerId":"future", "name":"Morning", "prompt":"Read the news"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"success":false,"message":"Unknown provider: future-provider"})
+    );
     Ok(())
 }
 
