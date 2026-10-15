@@ -236,11 +236,22 @@ impl HostMcpService {
             })
             .map(|tool| self.decorate(caller, declare_agent_name, tool))
             .collect::<Vec<_>>();
+        // A session the host labels (the BrowserOS server's lease: one per conversation) is
+        // named by the host: the next request's binding re-applies its label, so a rename would
+        // silently revert. Such callers are not offered `name_session`, as TS's lease callers
+        // never were.
+        let host_named = caller
+            .and_then(|caller| caller.session.as_ref())
+            .is_some_and(|spec| spec.label.is_some());
         tools.extend(
             self.host
                 .local_tools
                 .iter()
                 .filter(|entry| entry.tool.listed())
+                .filter(|entry| {
+                    !(host_named
+                        && entry.definition.name == super::name_session::NAME_SESSION_TOOL_NAME)
+                })
                 .filter(|entry| {
                     !read_only
                         || admission::is_read_only_tool(entry.definition.annotations.as_ref())
