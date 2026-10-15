@@ -32,6 +32,17 @@ fn session_info() -> Value {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenario = std::env::args().nth(1).unwrap_or_default();
+    if scenario == "grandchild-hang" {
+        let mut count = 0_u64;
+        loop {
+            std::fs::write("grandchild-heartbeat", count.to_string())?;
+            count += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+    // Retain child handles for the life of the wrapper; subprocesses inherit
+    // the group created by acp-client and must be stopped by group cleanup.
+    let mut descendants = Vec::new();
     let mut input = BufReader::new(tokio::io::stdin()).lines();
     let mut out = tokio::io::stdout();
     let mut sessions = 0;
@@ -39,12 +50,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut permissions = HashMap::<String, Pending>::new();
     let mut cancels = HashMap::<String, usize>::new();
     let mut controls = Vec::new();
+    let mut pending_new = None;
     while let Some(line) = input.next_line().await? {
         let message: Value = serde_json::from_str(&line)?;
         let id = message["id"].clone();
         let params = &message["params"];
         let session = params["sessionId"].as_str().unwrap_or_default().to_owned();
         if message.get("method").is_none() {
+            if id == "new-permission" {
+                if let Some(control_id) = pending_new.take() {
+                    if message["result"]["outcome"]["optionId"] != "allow" {
+                        send(&mut out, json!({"jsonrpc":"2.0", "id":control_id, "error":{"code":-32602, "message":"setup permission denied"}})).await?;
+                    } else {
+                        let mut result = session_info();
+                        result["sessionId"] = json!("setup-session");
+                        reply(&mut out, control_id, result).await?;
+                    }
+                }
+                continue;
+            }
             if let Some(request) = permissions.remove(&id.to_string()) {
                 let result = &message["result"]["outcome"];
                 update(&mut out, &request.session, &format!("permission:{result}")).await?;
@@ -62,8 +86,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if scenario == "hang-init" {
                     continue;
                 }
+                if scenario == "auth-init" {
+                    send(&mut out, json!({"jsonrpc":"2.0", "id":id, "error":{
+                        "code":-32603, "message":"Internal error: Failed to authenticate: OAuth session expired and could not be refreshed",
+                        "data":{"errorKind":"authentication_failed"}}})).await?;
+                    continue;
+                }
                 if scenario == "crash-init" {
-                    tokio::io::stderr().write_all(b"startup crash\n").await?;
+                    let mut stderr = tokio::io::stderr();
+                    stderr.write_all(b"startup crash\n").await?;
+                    stderr.flush().await?;
                     std::process::exit(18);
                 }
                 // Fail immediately if the host accidentally opens the fs/PTY surface.
@@ -85,6 +117,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "authMethods":[{"id":"fake-login", "name":"Fake login"}], "agentInfo":{"name":"fake", "version":"1"}})).await?;
             }
             "session/new" => {
+                if scenario == "setup-permission" {
+                    pending_new = Some(id);
+                    send(&mut out, json!({"jsonrpc":"2.0", "id":"new-permission", "method":"session/request_permission", "params":{
+                        "sessionId":"setup-session", "toolCall":{"toolCallId":"setup"},
+                        "options":[{"optionId":"allow", "name":"Allow", "kind":"allow_once"}]}})).await?;
+                    continue;
+                }
                 if scenario == "auth" || scenario == "rpc" {
                     send(&mut out, json!({"jsonrpc":"2.0", "id":id, "error":{
                         "code":if scenario == "auth" {-32000} else {-32602}, "message":"scripted refusal", "data":{"detail":42}}})).await?;
@@ -96,6 +135,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
             "session/load" | "session/resume" => {
+                if scenario == "load-failure" {
+                    send(&mut out, json!({"jsonrpc":"2.0", "id":id, "error":{"code":-32602, "message":"cannot reload"}})).await?;
+                    continue;
+                }
                 update(&mut out, &session, "REPLAY MUST BE SWALLOWED").await?;
                 reply(&mut out, id, session_info()).await?;
             }
@@ -121,10 +164,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "session/prompt" => {
                 let prompt = params["prompt"][0]["text"].as_str().unwrap_or_default();
                 match prompt {
+                    "exit-after-result" => {
+                        update(&mut out, &session, "final output before exit").await?;
+                        reply(&mut out, id, json!({"stopReason":"end_turn"})).await?;
+                        std::process::exit(0);
+                    }
+                    "grandchild" => {
+                        let child = tokio::process::Command::new(std::env::current_exe()?)
+                            .arg("grandchild-hang")
+                            .stdin(std::process::Stdio::null())
+                            .stdout(std::process::Stdio::null())
+                            .stderr(std::process::Stdio::null())
+                            .spawn()?;
+                        descendants.push(child);
+                        update(&mut out, &session, "grandchild spawned").await?;
+                        reply(&mut out, id, json!({"stopReason":"end_turn"})).await?;
+                    }
+                    "long-stderr" => {
+                        let mut stderr = tokio::io::stderr();
+                        stderr.write_all(&vec![b'x'; 20000]).await?;
+                        stderr.write_all(b"TAIL").await?;
+                        stderr.flush().await?;
+                        std::process::exit(19);
+                    }
                     "crash" => {
-                        tokio::io::stderr()
+                        // Tokio's stderr adapter uses blocking work internally;
+                        // flush before immediate exit so the fixture guarantees
+                        // these bytes actually reached the client's pipe.
+                        let mut stderr = tokio::io::stderr();
+                        stderr
                             .write_all(b"first diagnostic\nsecond diagnostic\ncrash detail\n")
                             .await?;
+                        stderr.flush().await?;
                         std::process::exit(17);
                     }
                     "hang" => {
@@ -146,7 +217,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         } else {
                             json!([
                             {"optionId":"allow", "name":"Allow", "kind":"allow_once"},
-                            {"optionId":"reject", "name":"Reject", "kind":"reject_once"}])
+                            {"optionId":"reject", "name":"Reject", "kind":"reject_once"},
+                            {"optionId":"allow-always", "name":"Always allow", "kind":"allow_always"},
+                            {"optionId":"reject-always", "name":"Always reject", "kind":"reject_always"}])
                         };
                         send(&mut out, json!({"jsonrpc":"2.0", "id":permission_id, "method":"session/request_permission", "params":{
                             "sessionId":session, "toolCall":{"toolCallId":"t1"}, "options":options}})).await?;
@@ -163,6 +236,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     _ => {
                         send(&mut out, json!({"jsonrpc":"2.0", "method":"session/update", "params":{
                             "sessionId":session, "update":{"sessionUpdate":"future_unknown_tag", "secret":"never log payload"}}})).await?;
+                        send(
+                            &mut out,
+                            json!({"jsonrpc":"2.0", "method":"session/update", "params":{
+                            "sessionId":session, "update":"never log payload"}}),
+                        )
+                        .await?;
                         update(&mut out, "unowned-session", "WRONG SESSION").await?;
                         let text = if prompt == "environment" {
                             format!(

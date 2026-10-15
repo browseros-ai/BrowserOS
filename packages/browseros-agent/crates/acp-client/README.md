@@ -54,7 +54,7 @@ Explicit `shutdown(grace)` closes stdin, allows the child to exit, and then kill
 its process group on Unix. It affects all connection clones and sessions. The
 last connection handle also starts supervised cleanup. `closed()` waits for child
 reaping and bounded stderr capture; stderr is retained for diagnostics, never
-forwarded into the conversation. Individual retained lines are capped at 8 KiB.
+forwarded into the conversation. Each retained line keeps at most the final 8 KiB of incoming bytes.
 Non-Unix systems terminate the direct child; descendant-group cleanup is Unix
 only.
 

@@ -10,7 +10,6 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     AcpError, AgentConnection,
-    connection::exited,
     process::lock,
     schema::{
         CancelNotification, CloseSessionRequest, ContentBlock, Meta, PromptRequest,
@@ -106,9 +105,11 @@ impl Session {
         let conn = self.conn.clone();
         let id = self.id.clone();
         tokio::spawn(async move {
+            // waitpid may finish while stdout still contains the final updates
+            // and response. The SDK must drain that stream before exit becomes
+            // a turn error; racing the child watcher here would lose valid output.
             let result = tokio::select! {
                 biased;
-                report = conn.inner.state.process.closed() => Err(exited(report)),
                 () = conn.inner.state.stop.cancelled() => Err(AcpError::Closed),
                 response = response => match response {
                     Ok(response) => Ok(TurnOutcome { stop_reason: response.stop_reason, meta: response.meta }),
@@ -196,6 +197,8 @@ struct Lifecycle {
     cancel_sent: bool,
 }
 
+/// Shared by the route, prompt task, cancellers, and permission responders. Its
+/// lifecycle lock orders cancel/approval/finish without holding the dispatch loop.
 pub(crate) struct TurnState {
     pub(crate) tx: mpsc::UnboundedSender<TurnEvent>,
     pub(crate) permission_stop: CancellationToken,

@@ -23,12 +23,16 @@ use crate::{
     },
 };
 
+/// Actor-owned state deliberately excludes the public handle, so no Arc cycle
+/// can prevent the last handle from closing stdin and supervising process exit.
 pub(crate) struct State {
     pub(crate) process: Process,
     pub(crate) routes: Arc<Routes>,
     pub(crate) stop: CancellationToken,
 }
 
+/// Lifetime lease held by connection handles, sessions, and draining prompt
+/// tasks. Releasing its final Arc starts teardown even without explicit shutdown.
 pub(crate) struct Inner {
     pub(crate) cx: ConnectionTo<Agent>,
     pub(crate) state: Arc<State>,
@@ -81,7 +85,7 @@ impl AgentConnection {
                                 let tag = raw.params.pointer("/update/sessionUpdate").and_then(|tag| tag.as_str()).map(str::to_owned);
                                 match serde_json::from_value::<SessionNotification>(raw.params) {
                                     Ok(notification) => notification_routes.update(notification),
-                                    Err(error) => tracing::warn!(method = %raw.method, ?tag, %error, "Ignoring unparsed ACP notification"),
+                                    Err(error) => tracing::warn!(method = %raw.method, ?tag, error_category = ?error.classify(), "Ignoring unparsed ACP notification"),
                                 }
                             } else {
                                 tracing::warn!(method = %raw.method, "Ignoring unknown ACP notification");
@@ -94,11 +98,12 @@ impl AgentConnection {
                 .on_receive_request(async move |request: RequestPermissionRequest, responder, cx| {
                     let policy = permissions.clone();
                     let active = permission_state.routes.permission_turn(&request.session_id);
-                    let Some(active) = active else {
-                        return responder.respond(RequestPermissionResponse::new(schema::RequestPermissionOutcome::Cancelled));
-                    };
-                    let stop = active.permission_stop.clone();
+                    // Some agents ask during new/load before a Turn exists.
+                    // Those requests still use policy and connection teardown;
+                    // turn-scoped requests additionally serialize with cancel.
                     let connection_stop = permission_state.stop.clone();
+                    let stop = active.as_ref().map(|active| active.permission_stop.clone())
+                        .unwrap_or_else(|| connection_stop.child_token());
                     cx.spawn(async move {
                         let decision = tokio::select! {
                             biased;
@@ -106,7 +111,11 @@ impl AgentConnection {
                             () = connection_stop.cancelled() => crate::PermissionDecision::Cancel,
                             decision = policy.decide(&request) => decision,
                         };
-                        if let Err(error) = active.permission_response(&request, decision, responder) {
+                        let result = match active {
+                            Some(active) => active.permission_response(&request, decision, responder),
+                            None => responder.respond(RequestPermissionResponse::new(crate::permissions::outcome(&request, decision))),
+                        };
+                        if let Err(error) = result {
                             tracing::debug!(%error, "ACP permission requester already closed");
                         }
                         Ok(())
@@ -223,7 +232,7 @@ impl AgentConnection {
             return Err(AcpError::Unsupported("session/load"));
         }
         self.check_mcp(&params)?;
-        let _loading = self.inner.state.routes.loading(&id)?;
+        let mut loading = self.inner.state.routes.loading(&id)?;
         let request = LoadSessionRequest::new(id.clone(), params.cwd)
             .mcp_servers(params.mcp_servers)
             .meta(params.meta);
@@ -233,6 +242,7 @@ impl AgentConnection {
                 self.inner.cx.send_request(request).block_task(),
             )
             .await?;
+        loading.complete();
         Ok(Session::new(
             self.clone(),
             id,
@@ -250,7 +260,7 @@ impl AgentConnection {
             return Err(AcpError::Unsupported("session/resume"));
         }
         self.check_mcp(&params)?;
-        let _loading = self.inner.state.routes.loading(&id)?;
+        let mut loading = self.inner.state.routes.loading(&id)?;
         let request = ResumeSessionRequest::new(id.clone(), params.cwd)
             .mcp_servers(params.mcp_servers)
             .meta(params.meta);
@@ -260,6 +270,7 @@ impl AgentConnection {
                 self.inner.cx.send_request(request).block_task(),
             )
             .await?;
+        loading.complete();
         Ok(Session::new(
             self.clone(),
             id,
@@ -333,7 +344,6 @@ async fn control<T>(
     let mut guard = ControlGuard::new(state);
     let result = tokio::select! {
         biased;
-        report = state.process.closed() => Err(exited(report)),
         () = state.stop.cancelled() => Err(AcpError::Closed),
         result = tokio::time::timeout(after, future) => match result {
             Ok(Ok(response)) => Ok(response),
@@ -350,7 +360,7 @@ async fn map_error(state: &State, auth: &[String], error: schema::Error) -> AcpE
         // stdout EOF can beat waitpid by a scheduler tick. Give the sole child
         // owner time to reap and finish the stderr tail before reporting a crash.
         if let Ok(report) =
-            tokio::time::timeout(Duration::from_millis(250), state.process.closed()).await
+            tokio::time::timeout(Duration::from_millis(1250), state.process.closed()).await
         {
             return exited(report);
         }

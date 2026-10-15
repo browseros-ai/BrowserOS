@@ -16,6 +16,8 @@ use crate::{
     session::{TurnEvent, TurnState},
 };
 
+/// Registry shared by notification dispatch and public session operations. The
+/// lock covers routing decisions only; neither SDK IO nor policy futures await it.
 #[derive(Default)]
 pub(crate) struct Routes(Mutex<HashMap<SessionId, Route>>);
 
@@ -34,7 +36,6 @@ impl Routes {
             return Err(AcpError::TurnInProgress);
         }
         route.loading = true;
-        route.closed = false;
         Ok(Loading {
             routes: self.clone(),
             id: id.clone(),
@@ -103,6 +104,15 @@ impl Routes {
 pub(crate) struct Loading {
     routes: Arc<Routes>,
     id: SessionId,
+}
+impl Loading {
+    pub(crate) fn complete(&mut self) {
+        // Reopen a closed alias only after the agent accepted reattachment;
+        // an RPC refusal must not revive handles to a closed session.
+        if let Some(route) = lock(&self.routes.0).get_mut(&self.id) {
+            route.closed = false;
+        }
+    }
 }
 impl Drop for Loading {
     fn drop(&mut self) {

@@ -194,6 +194,14 @@ async fn cancel_is_idempotent_drains_and_old_cancellers_cannot_cancel_next_turn(
     Ok(())
 }
 
+struct ChoicePolicy(PermissionDecision);
+impl PermissionPolicy for ChoicePolicy {
+    fn decide(&self, _: &RequestPermissionRequest) -> BoxFuture<'static, PermissionDecision> {
+        let decision = self.0;
+        Box::pin(async move { decision })
+    }
+}
+
 struct PendingPolicy;
 impl PermissionPolicy for PendingPolicy {
     fn decide(&self, _: &RequestPermissionRequest) -> BoxFuture<'static, PermissionDecision> {
@@ -226,6 +234,21 @@ async fn permission_decisions_choose_only_offered_options() -> Result<(), Box<dy
             "allow",
         ),
         (Arc::new(RejectAll), "permission", "reject"),
+        (
+            Arc::new(ChoicePolicy(PermissionDecision::AllowAlways)),
+            "permission",
+            "allow-always",
+        ),
+        (
+            Arc::new(ChoicePolicy(PermissionDecision::RejectAlways)),
+            "permission",
+            "reject-always",
+        ),
+        (
+            Arc::new(ChoicePolicy(PermissionDecision::Cancel)),
+            "permission",
+            "cancelled",
+        ),
         (Arc::new(ApproveAll), "missing-option", "cancelled"),
     ] {
         let dir = TempDir::new()?;
@@ -249,6 +272,10 @@ async fn spawn_environment_and_exit_diagnostics() -> Result<(), Box<dyn std::err
         AgentConnection::connect(missing, options(), Arc::new(ApproveAll)).await,
         Err(AcpError::Spawn { .. })
     ));
+    assert!(
+        matches!(AgentConnection::connect(fake_spec(&dir, "crash-init")?, options(), Arc::new(ApproveAll)).await,
+        Err(AcpError::Exited { status, stderr_tail }) if status.and_then(|status| status.code()) == Some(18) && stderr_tail == ["startup crash"])
+    );
     let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
     let mut env = session.prompt(text("environment"))?;
@@ -277,6 +304,10 @@ async fn spawn_environment_and_exit_diagnostics() -> Result<(), Box<dyn std::err
 #[tokio::test]
 async fn errors_capabilities_and_control_timeouts() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
+    assert!(
+        matches!(AgentConnection::connect(fake_spec(&dir, "auth-init")?, options(), Arc::new(ApproveAll)).await,
+        Err(AcpError::AuthRequired { methods, message }) if methods.is_empty() && message.contains("OAuth session expired"))
+    );
     for scenario in ["auth", "rpc"] {
         let conn = connect(&dir, scenario, Arc::new(ApproveAll)).await?;
         let result = conn.new_session(params(&dir)).await;
@@ -310,6 +341,19 @@ async fn errors_capabilities_and_control_timeouts() -> Result<(), Box<dyn std::e
         conn.resume_session("x".into(), params(&dir)).await,
         Err(AcpError::Unsupported("session/resume"))
     ));
+    for server in [
+        serde_json::json!({"type":"http", "name":"unsupported", "url":"http://127.0.0.1:9", "headers":[]}),
+        serde_json::json!({"type":"sse", "name":"unsupported", "url":"http://127.0.0.1:9", "headers":[]}),
+    ] {
+        let mut unsupported = params(&dir);
+        unsupported
+            .mcp_servers
+            .push(serde_json::from_value(server)?);
+        assert!(matches!(
+            conn.new_session(unsupported).await,
+            Err(AcpError::Unsupported(_))
+        ));
+    }
     let session = conn.new_session(params(&dir)).await?;
     session.close().await?;
     conn.shutdown(Duration::from_secs(1)).await;
@@ -419,5 +463,150 @@ async fn unknown_notifications_are_logged_without_payload_and_turn_survives()
         "missing fallback warning: {log}"
     );
     assert!(!log.contains("never log payload"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropping_turn_drains_before_releasing_session_and_shutdown_finishes_active_turn()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    let mut abandoned = session.prompt(text("hang"))?;
+    next_text(&mut abandoned, "started").await?;
+    drop(abandoned);
+    let mut next = tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            match session.prompt(text("normal")) {
+                Ok(turn) => return Ok::<_, AcpError>(turn),
+                Err(AcpError::TurnInProgress) => tokio::time::sleep(Duration::from_millis(5)).await,
+                Err(error) => return Err(error),
+            }
+        }
+    })
+    .await??;
+    assert_eq!(
+        collect(&mut next).await?.1.meta.ok_or("missing meta")?["cancels"],
+        1
+    );
+    let mut active = session.prompt(text("hang"))?;
+    next_text(&mut active, "started").await?;
+    let waiter = conn.clone();
+    conn.shutdown(Duration::from_secs(1)).await;
+    assert!(matches!(
+        active.next().await,
+        Some(TurnEvent::Done(Err(
+            AcpError::Closed | AcpError::Exited { .. }
+        )))
+    ));
+    assert!(waiter.closed().await.status.is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn dropping_control_future_retires_ambiguous_connection()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "hang-control", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    assert!(
+        tokio::time::timeout(Duration::from_millis(30), session.set_mode("code"))
+            .await
+            .is_err()
+    );
+    tokio::time::timeout(Duration::from_secs(3), conn.closed()).await?;
+    assert!(matches!(
+        session.prompt(text("must not reuse")),
+        Err(AcpError::Closed | AcpError::Exited { .. })
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn unterminated_stderr_is_bounded_and_preserves_tail()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    let mut turn = session.prompt(text("long-stderr"))?;
+    match tokio::time::timeout(Duration::from_secs(3), turn.next()).await? {
+        Some(TurnEvent::Done(Err(AcpError::Exited { stderr_tail, .. }))) => {
+            assert_eq!(stderr_tail.len(), 1);
+            assert_eq!(stderr_tail[0].len(), 8192);
+            assert!(stderr_tail[0].ends_with("TAIL"));
+        }
+        other => return Err(format!("expected bounded exit report, got {other:?}").into()),
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn shutdown_kills_wrapper_grandchildren() -> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "ignore-eof", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    let mut turn = session.prompt(text("grandchild"))?;
+    collect(&mut turn).await?;
+    let heartbeat = dir.path().join("grandchild-heartbeat");
+    tokio::time::timeout(Duration::from_secs(3), async {
+        while !heartbeat.exists() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await?;
+    conn.shutdown(Duration::from_millis(30)).await;
+    let before = std::fs::read_to_string(&heartbeat)?;
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        std::fs::read_to_string(heartbeat)?,
+        before,
+        "grandchild kept running after process group shutdown"
+    );
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn final_response_is_drained_before_observing_process_exit()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    for _ in 0..8 {
+        let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
+        let session = conn.new_session(params(&dir)).await?;
+        let mut turn = session.prompt(text("exit-after-result"))?;
+        let (updates, result) = collect(&mut turn).await?;
+        assert_eq!(visible(&updates), "final output before exit");
+        assert_eq!(result.stop_reason, StopReason::EndTurn);
+        assert!(
+            conn.closed()
+                .await
+                .status
+                .is_some_and(|status| status.success())
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn policy_also_answers_setup_permissions_and_failed_load_does_not_revive_closed_alias()
+-> Result<(), Box<dyn std::error::Error>> {
+    let dir = TempDir::new()?;
+    let conn = connect(&dir, "setup-permission", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    assert_eq!(session.id().to_string(), "setup-session");
+    conn.shutdown(Duration::from_secs(1)).await;
+
+    let conn = connect(&dir, "load-failure", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    session.close().await?;
+    assert!(matches!(
+        conn.load_session(session.id().clone(), params(&dir)).await,
+        Err(AcpError::Rpc { .. })
+    ));
+    assert!(matches!(
+        session.prompt(text("closed")),
+        Err(AcpError::Closed)
+    ));
+    conn.shutdown(Duration::from_secs(1)).await;
     Ok(())
 }
