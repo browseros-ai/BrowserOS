@@ -40,41 +40,9 @@ use crate::ids::SessionId;
 /// catalogue and the instructions correct from the moment the environment has
 /// the credential. The managed skill is the one exception and says so where it
 /// is loaded: it is written to disk once per launch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PursueOffering {
-    /// There is a credential, so the loop can run and is advertised.
-    Offered,
-    /// There is none. Everything behaves exactly as it did before the loop
-    /// existed, which is what every production install sees.
-    Absent,
-}
-
-impl PursueOffering {
-    /// Asks the environment, now.
-    #[must_use]
-    pub fn read() -> Self {
-        if credential().is_some() {
-            Self::Offered
-        } else {
-            Self::Absent
-        }
-    }
-
-    #[must_use]
-    pub fn is_offered(self) -> bool {
-        self == Self::Offered
-    }
-}
-
-/// The credential itself, for the one place that builds a client with it.
-///
-/// Separate from [`PursueOffering`] because the value is a secret and the answer
-/// to "should this exist" is not. Never logged.
-pub fn credential() -> Option<String> {
-    std::env::var("JEV_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty())
-}
+// Both live in services so the skill loader, which is also a service, can ask
+// the same question without reaching up into this layer.
+pub use crate::services::pursue_offering::{PursueOffering, credential};
 
 /// How long to let a page keep changing before reading it anyway.
 ///
@@ -552,17 +520,5 @@ mod tests {
             !covered_or_gone("the page is still loading"),
             "that one is worth waiting for"
         );
-    }
-
-    /// The offering is the one question four surfaces ask, so it has to answer
-    /// from the environment and not from a cached guess.
-    #[test]
-    fn the_offering_follows_the_environment() {
-        // Not a parallel-safe test to write with std::env::set_var, so the
-        // shape is asserted instead: a blank or whitespace credential is no
-        // credential, which is what keeps a half-set variable from advertising
-        // a tool that cannot run.
-        assert!(PursueOffering::Offered.is_offered());
-        assert!(!PursueOffering::Absent.is_offered());
     }
 }
