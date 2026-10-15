@@ -556,6 +556,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             changed,
             after.as_ref().map_or(&view.url, |view| &view.url),
             moved,
+            supplied.as_deref(),
         ));
         run.remember(said(&decision, changed));
 
@@ -887,12 +888,23 @@ fn keyed_values(run: &Run) -> Vec<(String, &crate::offer::NamedValue)> {
         .collect()
 }
 
-fn step_of(decision: &Decision, changed: bool, url: &str, moved: Vec<Moved>) -> Step {
+fn step_of(
+    decision: &Decision,
+    changed: bool,
+    url: &str,
+    moved: Vec<Moved>,
+    typed: Option<&str>,
+) -> Step {
     Step {
         operation: decision.operation,
         how: decision.how,
         target: decision.target.clone(),
-        value: decision.value.clone(),
+        // What was actually typed, not the name the caller filed it under. The
+        // model chooses a value by its name because it cannot write a string,
+        // and the substitution happens on the decision the driver is handed.
+        // Recording the name here told a caller it had typed "search term"
+        // when it had typed "MCP tunnel".
+        value: typed.map(str::to_string).or_else(|| decision.value.clone()),
         confidence: decision.confidence(),
         page_changed: changed,
         url_after: url.to_string(),

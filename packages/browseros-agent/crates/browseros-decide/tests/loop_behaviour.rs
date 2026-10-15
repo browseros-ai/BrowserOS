@@ -1537,3 +1537,37 @@ async fn a_run_reaching_new_pages_is_not_called_a_circle() {
         "six steps, six new pages, no circle"
     );
 }
+
+/// The record has to say what was typed, not the name the caller filed it
+/// under. The model picks a value by name because it cannot write a string,
+/// and a story that reports the name tells the caller it typed "search term".
+#[tokio::test]
+async fn the_story_says_what_was_typed_not_what_it_was_called() {
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![control("e1", "searchbox", "Search")],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![
+        vec![
+            ("operation", choice("ACT", 0.95)),
+            ("act_how", choice("FILL", 0.95)),
+            ("target", choice("e1", 0.95)),
+            ("fill_value", choice("search term", 0.95)),
+        ],
+        vec![("operation", choice("DONE", 0.95))],
+    ]);
+    let run = run_for("search for the tunnel docs").offering(Offered {
+        values: vec![NamedValue::new("search term", "MCP tunnel")],
+        ..Offered::default()
+    });
+
+    let outcome = advance(&oracle, &driver, run).await;
+
+    let told = browseros_decide::report::tell(&outcome);
+    assert_eq!(
+        told.story[0], "typed \"MCP tunnel\" into Search",
+        "the text, not the key it was chosen by"
+    );
+}
