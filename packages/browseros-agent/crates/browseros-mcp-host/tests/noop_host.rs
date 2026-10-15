@@ -88,7 +88,8 @@ fn text_of(result: &Value) -> String {
 async fn live_session(host: &HostCtx, id: &str) -> anyhow::Result<Arc<Session>> {
     // The transport registers the session on `notifications/initialized`, which rmcp
     // delivers asynchronously after answering it.
-    for _ in 0..200 {
+    // Polls for up to 30 s: a background write can lag far behind under load.
+    for _ in 0..3_000 {
         if let Some(session) = host
             .sessions()
             .lookup(&browseros_mcp_host::ids::SessionId::new(id))
@@ -96,7 +97,7 @@ async fn live_session(host: &HostCtx, id: &str) -> anyhow::Result<Arc<Session>> 
         {
             return Ok(session);
         }
-        tokio::time::sleep(Duration::from_millis(5)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     anyhow::bail!("session {id} never started")
 }

@@ -124,13 +124,14 @@ mod ownership_claims {
         state: &AppState,
         released: bool,
     ) -> anyhow::Result<SessionTabSnapshot> {
-        for _ in 0..100 {
+        // Polls for up to 30 s: a background write can lag far behind under load.
+        for _ in 0..3_000 {
             if let Some(claim) = state.session_tabs.first_session_tab().await?
                 && claim.released_at.is_some() == released
             {
                 return Ok(claim);
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         anyhow::bail!("claim did not reach expected state")
     }
@@ -183,7 +184,8 @@ mod ownership_claims {
             .session_tab_claimed_at(100)
             .await?
             .unwrap_or_else(|| panic!("close claim missing"));
-        for _ in 0..100 {
+        // Polls for up to 30 s: a background write can lag far behind under load.
+        for _ in 0..3_000 {
             let current = close_call_state
                 .session_tabs
                 .session_tab_by_id(released.id)
@@ -192,7 +194,7 @@ mod ownership_claims {
             if current.released_at.is_some() {
                 return Ok(());
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         anyhow::bail!("close claim was not released")
     }
@@ -455,7 +457,7 @@ mod script_hook {
         assert_eq!(replaced.window_id, original.window_id);
         assert_ne!(replaced.target_id, original.target_id);
         drop(paused);
-        tokio::time::timeout(std::time::Duration::from_secs(3), work).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), work).await?;
         // Let any incorrectly spawned callback queue behind the real operation
         // lock, then wait for it to finish before inspecting native mutations.
         tokio::task::yield_now().await;

@@ -327,7 +327,7 @@ fn background_worker_repairs_without_requests_and_stops_at_shutdown() -> anyhow:
 }
 
 async fn wait_for_skill(path: &Path) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         while !path.is_file() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }

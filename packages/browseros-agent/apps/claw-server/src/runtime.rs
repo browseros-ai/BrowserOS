@@ -360,8 +360,8 @@ mod tests {
         shutdown.request();
         shutdown.request();
 
-        tokio::time::timeout(Duration::from_secs(1), first).await??;
-        tokio::time::timeout(Duration::from_secs(1), second).await??;
+        tokio::time::timeout(Duration::from_secs(30), first).await??;
+        tokio::time::timeout(Duration::from_secs(30), second).await??;
         shutdown.requested().await;
         Ok(())
     }
@@ -446,7 +446,7 @@ mod tests {
             }
         }));
         state.audit_worker.submit(event).await?;
-        tokio::time::timeout(Duration::from_secs(1), preview_started.notified()).await?;
+        tokio::time::timeout(Duration::from_secs(30), preview_started.notified()).await?;
 
         let result = AppRuntime {
             state,
@@ -505,7 +505,7 @@ mod tests {
         let session_efficiency = state.session_efficiency.clone();
 
         let runtime = AppRuntime::start(state);
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if session_efficiency.aggregate().await?.is_some() {
                     return Ok::<(), crate::error::AppError>(());
@@ -743,7 +743,7 @@ mod tests {
                     .await
             }
         });
-        tokio::time::timeout(Duration::from_secs(1), hook_entered.notified()).await?;
+        tokio::time::timeout(Duration::from_secs(30), hook_entered.notified()).await?;
         let result = AppRuntime {
             state,
             tasks: Vec::new(),

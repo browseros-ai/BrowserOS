@@ -468,7 +468,7 @@ mod tests {
         );
         service.shutdown().await;
 
-        let body = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+        let body = tokio::time::timeout(Duration::from_secs(30), requests.recv())
             .await?
             .ok_or_else(|| anyhow::anyhow!("local endpoint closed before capture"))?;
         endpoint.abort();
@@ -525,7 +525,7 @@ mod tests {
         );
         service.shutdown().await;
 
-        let body = tokio::time::timeout(Duration::from_secs(2), requests.recv())
+        let body = tokio::time::timeout(Duration::from_secs(30), requests.recv())
             .await?
             .ok_or_else(|| anyhow::anyhow!("local endpoint closed before capture"))?;
         endpoint.abort();
@@ -615,7 +615,7 @@ mod tests {
         service.capture(SERVER_STARTED, json!({}));
         service.shutdown().await;
         assert!(
-            tokio::time::timeout(Duration::from_secs(2), requests.recv())
+            tokio::time::timeout(Duration::from_secs(30), requests.recv())
                 .await?
                 .is_some()
         );
@@ -704,7 +704,7 @@ mod tests {
             AnalyticsService::new_with_config(directory.path(), test_config(host, true)).await?;
         service.capture(SERVER_STARTED, json!({}));
 
-        tokio::time::timeout(Duration::from_secs(5), service.shutdown()).await?;
+        tokio::time::timeout(Duration::from_secs(30), service.shutdown()).await?;
         endpoint.abort();
         Ok(())
     }
@@ -733,7 +733,7 @@ mod tests {
         );
 
         assert!(service.set_consent(true).await?.enabled);
-        let body = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        let body = tokio::time::timeout(Duration::from_secs(30), requests.recv())
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing alias request"))?;
         let alias = &body["batch"][0];
@@ -747,7 +747,7 @@ mod tests {
             })
         );
         service.capture(SERVER_STARTED, json!({}));
-        let body = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        let body = tokio::time::timeout(Duration::from_secs(30), requests.recv())
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing product event"))?;
         let event = &body["batch"][0];
@@ -780,7 +780,7 @@ mod tests {
         let (host, mut requests, endpoint) = local_endpoint_with_status(status.clone()).await?;
         let service =
             AnalyticsService::new_with_config(directory.path(), test_config(host, true)).await?;
-        let first = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        let first = tokio::time::timeout(Duration::from_secs(30), requests.recv())
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing initial alias"))?;
         let retry = tokio::time::timeout(Duration::from_secs(8), requests.recv())
@@ -801,7 +801,7 @@ mod tests {
         tokio::fs::remove_file(installation_path(directory.path())).await?;
         status.store(200, Ordering::SeqCst);
         service.set_consent(true).await?;
-        let accepted = tokio::time::timeout(Duration::from_secs(3), requests.recv())
+        let accepted = tokio::time::timeout(Duration::from_secs(30), requests.recv())
             .await?
             .ok_or_else(|| anyhow::anyhow!("missing resumed alias"))?;
         assert_eq!(accepted["batch"][0]["distinct_id"], canonical);

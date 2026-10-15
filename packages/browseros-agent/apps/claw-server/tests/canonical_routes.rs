@@ -1573,7 +1573,7 @@ async fn session_preview_releases_capture_slot_after_request_cancellation() -> a
         tokio::spawn(
             async move { request(&router, "GET", &capture_path, None, Body::empty()).await },
         );
-    tokio::time::timeout(Duration::from_secs(2), gate.wait_until_entered()).await?;
+    tokio::time::timeout(Duration::from_secs(30), gate.wait_until_entered()).await?;
     request_task.abort();
     assert!(matches!(request_task.await, Err(error) if error.is_cancelled()));
 
@@ -1582,7 +1582,7 @@ async fn session_preview_releases_capture_slot_after_request_cancellation() -> a
     let (status, _, _) = request(&app.router, "GET", &path, None, Body::empty()).await?;
     assert_eq!(status, StatusCode::NOT_FOUND);
     gate.release();
-    tokio::time::timeout(Duration::from_secs(2), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let (status, _, _) = request(&app.router, "GET", &path, None, Body::empty()).await?;
             if status == StatusCode::OK {

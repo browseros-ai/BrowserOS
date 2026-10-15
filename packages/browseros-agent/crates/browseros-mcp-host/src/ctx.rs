@@ -193,7 +193,9 @@ impl HostCtx {
 
     /// The live session bound to `spec`, minted (or re-minted after it ended) under the
     /// spec's deterministic id. Idempotent, so an admission hook may call it per request.
-    /// A changed `label` renames the session and retitles its tab group.
+    /// A changed `label` renames the session and retitles its tab group. A session stopped
+    /// through `Sessions::cancel_by_session` (a cockpit Stop) stays stopped: a re-mint
+    /// answers, but its browser target refuses execution, as Stop promises.
     pub async fn bind_session(&self, spec: &SessionSpec) -> HostResult<Arc<Session>> {
         let profiles = self.profiles.profiles().await?;
         let agent = crate::identity::ClientIdentity::resolve(&spec.client, &profiles);

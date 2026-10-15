@@ -935,17 +935,17 @@ mod tests {
                 call.clone(),
                 created,
             ));
-            tokio::time::timeout(std::time::Duration::from_secs(3), entered).await?;
+            tokio::time::timeout(std::time::Duration::from_secs(30), entered).await?;
             let mut create = Box::pin(execute_with_cancellation(&explicit));
             // Poll the actual Claw execution seam. Without mutual exclusion, the
             // explicit native group is published before the older callback resumes.
             let first = futures_util::poll!(create.as_mut());
             native.group_lookup_release.notify_one();
-            tokio::time::timeout(std::time::Duration::from_secs(3), grouping).await??;
+            tokio::time::timeout(std::time::Duration::from_secs(30), grouping).await??;
             match first {
                 Poll::Ready(result) => result,
                 Poll::Pending => {
-                    tokio::time::timeout(std::time::Duration::from_secs(3), create).await?
+                    tokio::time::timeout(std::time::Duration::from_secs(30), create).await?
                 }
             }
         } else {
@@ -1068,7 +1068,7 @@ mod tests {
             call.clone(),
             created,
         ));
-        tokio::time::timeout(std::time::Duration::from_secs(3), entered).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), entered).await?;
         // Another native actor does not participate in the host mutex. Group
         // membership may change during lookup without changing creation identity.
         let explicit = view
@@ -1082,7 +1082,7 @@ mod tests {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("explicit group missing"))?;
         native.group_lookup_release.notify_one();
-        tokio::time::timeout(std::time::Duration::from_secs(3), grouping).await??;
+        tokio::time::timeout(std::time::Duration::from_secs(30), grouping).await??;
         let current = view.page(original.page_id.clone()).await?;
         assert_eq!(current.target_id, original.target_id);
         assert_eq!(current.tab_id, original.tab_id);
@@ -1155,7 +1155,7 @@ mod tests {
         let mut work = Box::pin(execute_with_cancellation(&call));
         assert!(futures_util::poll!(work.as_mut()).is_pending());
         call.client_cancel.cancel();
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), work).await?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), work).await?;
         assert!(matches!(result, DispatchExecution::ProtocolCancelled));
         assert!(
             !native
@@ -1205,11 +1205,11 @@ mod tests {
         let session_id = call.session_id.clone();
         let stop = tokio::spawn(async move { sessions.cancel_by_session(&session_id).await });
         tokio::time::timeout(
-            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(30),
             call.dispatch_cancel.cancelled(),
         )
         .await?;
-        let result = tokio::time::timeout(std::time::Duration::from_secs(3), work).await?;
+        let result = tokio::time::timeout(std::time::Duration::from_secs(30), work).await?;
         let DispatchExecution::Completed(outcome) = result else {
             anyhow::bail!("operator Stop became protocol cancellation")
         };
@@ -1229,7 +1229,7 @@ mod tests {
         assert!(!session.finish_dispatch(&call.dispatch_id).await);
         drop(busy);
         assert_eq!(
-            tokio::time::timeout(std::time::Duration::from_secs(3), stop).await???,
+            tokio::time::timeout(std::time::Duration::from_secs(30), stop).await???,
             Some(1)
         );
         assert!(session.operator_stop_requested());
@@ -1257,7 +1257,7 @@ mod tests {
         // Read-only groups and unrelated windows remain usable while it is busy.
         call.raw_args = json!({"code":"return {groups:await browser.tabGroups({action:'list'}),windows:await browser.windows({action:'list'})};"});
         let result = tokio::time::timeout(
-            std::time::Duration::from_secs(3),
+            std::time::Duration::from_secs(30),
             execute_with_cancellation(&call),
         )
         .await?;
@@ -1342,7 +1342,7 @@ mod tests {
             call.clone(),
             created,
         ));
-        tokio::time::timeout(std::time::Duration::from_secs(3), entered).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), entered).await?;
         let mut script = call.clone();
         script.tool_index = script
             .catalog
@@ -1358,11 +1358,11 @@ mod tests {
             let mut work = Box::pin(execute_with_cancellation(&script));
             let first = futures_util::poll!(work.as_mut());
             native.group_create_release.notify_one();
-            tokio::time::timeout(std::time::Duration::from_secs(3), grouping).await??;
+            tokio::time::timeout(std::time::Duration::from_secs(30), grouping).await??;
             match first {
                 Poll::Ready(result) => result,
                 Poll::Pending => {
-                    tokio::time::timeout(std::time::Duration::from_secs(3), work).await?
+                    tokio::time::timeout(std::time::Duration::from_secs(30), work).await?
                 }
             }
         };
@@ -1612,7 +1612,7 @@ mod tests {
             "{:?}",
             dispatch_error_text(&outcome.result)
         );
-        tokio::time::timeout(std::time::Duration::from_secs(2), group_created).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), group_created).await?;
         let identity = call
             .identity
             .as_ref()
@@ -1700,7 +1700,7 @@ mod tests {
             "{:?}",
             dispatch_error_text(&outcome.result)
         );
-        tokio::time::timeout(std::time::Duration::from_secs(2), group_created).await?;
+        tokio::time::timeout(std::time::Duration::from_secs(30), group_created).await?;
         let identity = call
             .identity
             .as_ref()

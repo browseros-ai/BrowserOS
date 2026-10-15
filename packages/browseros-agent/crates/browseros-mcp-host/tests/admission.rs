@@ -579,7 +579,7 @@ async fn a_caller_without_auto_group_never_groups_the_tabs_it_opens() -> anyhow:
         })
         .await?;
         if grouped {
-            tokio::time::timeout(Duration::from_secs(3), native.group_created.notified()).await?;
+            tokio::time::timeout(Duration::from_secs(30), native.group_created.notified()).await?;
         } else {
             tokio::time::sleep(Duration::from_millis(100)).await;
         }

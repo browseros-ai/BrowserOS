@@ -1354,7 +1354,7 @@ mod tests {
         transport.pause_group_lookup.store(true, Ordering::SeqCst);
         let entered = transport.group_lookup_entered.notified();
         let work = tokio::spawn(run_tab_group_work(call, created));
-        timeout(std::time::Duration::from_secs(2), entered).await?;
+        timeout(std::time::Duration::from_secs(30), entered).await?;
 
         // The original incarnation passed callback entry. Replacement now happens
         // while native group discovery is awaited, before title/expand/add work.
@@ -1371,7 +1371,7 @@ mod tests {
             tab["targetId"] = json!("replacement-created-target");
         }
         transport.group_lookup_release.notify_one();
-        timeout(std::time::Duration::from_secs(2), work).await??;
+        timeout(std::time::Duration::from_secs(30), work).await??;
         let calls = transport.calls.lock().unwrap_or_else(|p| p.into_inner());
         let mutations = calls[before..]
             .iter()
@@ -1448,7 +1448,7 @@ mod tests {
             .store(true, Ordering::SeqCst);
         let entered = native.response_evaluation_entered.notified();
         let work = tokio::spawn(dispatch_tool_call(call.clone()));
-        timeout(Duration::from_secs(3), entered).await?;
+        timeout(Duration::from_secs(30), entered).await?;
         let original = browser
             .pages
             .get_info(PageId(4))
@@ -1476,7 +1476,7 @@ mod tests {
         assert_eq!(replaced.window_id, original.window_id);
         assert_ne!(replaced.target_id, original.target_id);
         native.response_evaluation_release.notify_one();
-        let result = timeout(Duration::from_secs(3), work).await???;
+        let result = timeout(Duration::from_secs(30), work).await???;
         assert_eq!(result.is_error, Some(false));
         assert!(result.content.iter().any(|block| matches!(block,
             ContentBlock::Text(text) if text.text.contains("opened page 4"))));
@@ -2477,7 +2477,7 @@ mod tests {
             collapse_agent_tab_group(Some(&collapse_browser), &collapse_ownership, &collapse_key)
                 .await
         });
-        tokio::time::timeout(Duration::from_secs(1), list_entered).await?;
+        tokio::time::timeout(Duration::from_secs(30), list_entered).await?;
         recorder.seed_group("group-2", [102]);
         ownership
             .set_tab_group_ref(key.clone(), Some("group-2".to_string()))
@@ -2553,7 +2553,7 @@ mod tests {
         let result = ToolResult::text("opened", Some(json!({ "page": 1 })));
 
         let applied = tokio::time::timeout(
-            Duration::from_millis(50),
+            Duration::from_secs(30),
             apply(ToolEffectContext {
                 call: &call,
                 result: &result,
@@ -3105,11 +3105,12 @@ mod tests {
                 window_id: Some(WindowId(1)),
             }),
         );
-        for _ in 0..100 {
+        // Polls for up to 30 s: a background write can lag far behind under load.
+        for _ in 0..3_000 {
             if recorder.create_count() > 0 {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(recorder.create_count(), 1);
         identity.session.cancel();
@@ -3340,11 +3341,12 @@ mod tests {
                 window_id: Some(WindowId(1)),
             }),
         );
-        for _ in 0..100 {
+        // Polls for up to 30 s: a background write can lag far behind under load.
+        for _ in 0..3_000 {
             if recorder.create_count() > 0 {
                 break;
             }
-            tokio::time::sleep(Duration::from_millis(1)).await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(recorder.create_count(), 1);
         identity

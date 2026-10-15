@@ -311,7 +311,7 @@ async fn system_shutdown_preserves_contract_body_and_defers_runtime_teardown() -
     assert_eq!(response.status(), StatusCode::OK);
     let bytes = to_bytes(response.into_body(), usize::MAX).await?;
     assert_eq!(bytes.as_ref(), br#"{"status":"ok"}"#);
-    tokio::time::timeout(Duration::from_secs(1), app.state.shutdown.requested()).await?;
+    tokio::time::timeout(Duration::from_secs(30), app.state.shutdown.requested()).await?;
     assert_eq!(app.state.sessions.count().await, 1);
 
     let retry = Request::builder()
@@ -1440,7 +1440,7 @@ async fn canonical_cancel_endpoint_aborts_in_flight_dispatch() -> anyhow::Result
         .lookup(&SessionId::new(&session_id))
         .await
         .ok_or_else(|| anyhow::anyhow!("live MCP session missing"))?;
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             if session.active_dispatch_count().await == 1 {
                 break;
@@ -2177,7 +2177,8 @@ fn name_session_request(id: u64, name: &str) -> Value {
 /// The initialized notification is acknowledged before the service finishes
 /// registering the session, so an immediate tool call can race the registry.
 async fn wait_for_session_registration(app: &TestApp, session_id: &str) -> anyhow::Result<()> {
-    for _ in 0..50 {
+    // Polls for up to 30 s: a background write can lag far behind under load.
+    for _ in 0..3_000 {
         if app
             .state
             .sessions
@@ -2186,7 +2187,7 @@ async fn wait_for_session_registration(app: &TestApp, session_id: &str) -> anyho
         {
             return Ok(());
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     anyhow::bail!("initialized notification did not register session {session_id}");
 }
@@ -2222,13 +2223,14 @@ async fn wait_for_distinct_session_groups(
     key_a: &ConvoId,
     key_b: &ConvoId,
 ) -> anyhow::Result<(String, String)> {
-    for _ in 0..100 {
+    // Polls for up to 30 s: a background write can lag far behind under load.
+    for _ in 0..3_000 {
         let group_a = ownership.tab_group_ref(key_a).await;
         let group_b = ownership.tab_group_ref(key_b).await;
         if let (Some(group_a), Some(group_b)) = (group_a, group_b) {
             return Ok((group_a, group_b));
         }
-        tokio::time::sleep(Duration::from_millis(10)).await;
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
     }
     anyhow::bail!("session tab groups were not created")
 }

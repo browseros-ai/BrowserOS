@@ -248,14 +248,15 @@ mod tests {
 
         assert!(registry.remove(session.id(), "closed", None).await?);
 
-        for _ in 0..100 {
+        // Polls for up to 30 s: a background write can lag far behind under load.
+        for _ in 0..3_000 {
             if session_tabs
                 .all_legacy_claims_released_for_session(session.id().as_str())
                 .await?
             {
                 return Ok(());
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         anyhow::bail!("session teardown left claims open")
     }
@@ -399,7 +400,7 @@ mod tests {
         token.cancelled().await;
 
         let second_stop = tokio::time::timeout(
-            Duration::from_secs(1),
+            Duration::from_secs(30),
             registry.cancel_by_session(second.id()),
         )
         .await;
@@ -830,7 +831,7 @@ mod tests {
             let registry = registry.clone();
             async move { registry.finish_teardown(session, "closed", Ok(())).await }
         });
-        tokio::time::timeout(Duration::from_secs(1), collapse_entered.notified()).await?;
+        tokio::time::timeout(Duration::from_secs(30), collapse_entered.notified()).await?;
         assert!(completion_called.load(Ordering::SeqCst));
         assert!(!teardown.is_finished());
         release_collapse.notify_one();

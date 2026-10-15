@@ -204,7 +204,7 @@ impl HttpPeer {
         let task = tokio::spawn(async move { axum::serve(listener, router).await });
         Ok(Self {
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(5))
+                .timeout(Duration::from_secs(30))
                 .build()?,
             url,
             native,

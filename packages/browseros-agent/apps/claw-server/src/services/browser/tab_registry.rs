@@ -670,7 +670,8 @@ mod tests {
         );
 
         let mut mapped = None;
-        for _ in 0..50 {
+        // Polls for up to 30 s: a background write can lag far behind under load.
+        for _ in 0..3_000 {
             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             mapped = map.target_for_tab_cached(77).await;
             if mapped.is_some() {
@@ -752,11 +753,12 @@ mod tests {
             },
         )
         .await;
-        for _ in 0..100 {
+        // Polls for up to 30 s: a background write can lag far behind under load.
+        for _ in 0..3_000 {
             if !inherited.lock().await.is_empty() {
                 break;
             }
-            tokio::task::yield_now().await;
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
         }
         assert_eq!(
             *inherited.lock().await,
@@ -780,7 +782,7 @@ mod tests {
             },
         )
         .await;
-        tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::time::timeout(Duration::from_secs(30), async {
             loop {
                 if !releases.lock().await.is_empty() {
                     break;

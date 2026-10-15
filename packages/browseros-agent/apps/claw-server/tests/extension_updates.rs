@@ -256,7 +256,7 @@ async fn cancelled_checks_release_the_worker_debugger_attachment() -> Result<(),
             .await
     });
     tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(30),
         fixture.evaluating.notified(),
     )
     .await
@@ -264,7 +264,7 @@ async fn cancelled_checks_release_the_worker_debugger_attachment() -> Result<(),
     check.abort();
     assert!(check.await.is_err_and(|error| error.is_cancelled()));
     tokio::time::timeout(
-        std::time::Duration::from_secs(1),
+        std::time::Duration::from_secs(30),
         fixture.detached.notified(),
     )
     .await

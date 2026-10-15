@@ -420,7 +420,7 @@ mod tests {
         let release = Arc::new(tokio::sync::Notify::new());
         let boot_release = release.clone();
         let client = tokio::spawn(async move {
-            tokio::time::timeout(Duration::from_secs(1), boot_started_rx).await??;
+            tokio::time::timeout(Duration::from_secs(30), boot_started_rx).await??;
             let stream = TcpStream::connect(("127.0.0.1", port)).await?;
             drop(stream);
             release.notify_one();

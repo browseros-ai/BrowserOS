@@ -717,8 +717,10 @@ mod tests {
             BrowserSessionHooks::default(),
         );
 
+        // Generous for a loaded machine, yet below the 5 s reconnect delay a regression
+        // would wait out, so the check still catches one.
         let Ok(records) = tokio::time::timeout(
-            Duration::from_millis(100),
+            Duration::from_secs(2),
             service.snapshot(Some(session.as_ref())),
         )
         .await
