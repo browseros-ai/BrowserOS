@@ -87,7 +87,9 @@ pub enum UiChunk {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<Value>,
     },
+    /// `kind` is namespaced (`<provider>.<name>`).
     Custom {
+        #[serde(deserialize_with = "namespaced_kind")]
         kind: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<Value>,
@@ -214,8 +216,8 @@ pub enum UiChunk {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    /// `messageMetadata` is required but may be `null`.
     MessageMetadata {
-        #[serde(default)]
         message_metadata: Value,
     },
     /// `data-<name>` chunks. Untagged, so it must stay the last variant: serde tries it only when
@@ -231,10 +233,21 @@ pub struct DataChunk {
     pub kind: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
-    #[serde(default)]
+    /// Required but may be `null`.
     pub data: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transient: Option<bool>,
+}
+
+fn namespaced_kind<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let kind = String::deserialize(deserializer)?;
+    if kind.contains('.') {
+        Ok(kind)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "custom chunk kind `{kind}` is not `<namespace>.<name>`"
+        )))
+    }
 }
 
 fn data_type<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
@@ -292,6 +305,40 @@ mod tests {
             seen >= 18,
             "expected the contract's chunk fixtures, found {seen}"
         );
+        Ok(())
+    }
+
+    /// The contract's extra examples (`tests/ui-stream-examples.json`): every additional chunk
+    /// round-trips, every malformed known chunk is rejected.
+    #[test]
+    fn contract_stream_examples() -> Result<(), Box<dyn std::error::Error>> {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../contracts/server-api/tests/ui-stream-examples.json");
+        let examples: Value = serde_json::from_str(&std::fs::read_to_string(path)?)?;
+        let list = |key: &str| {
+            examples
+                .get(key)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let additional = list("additionalChunks");
+        assert!(
+            !additional.is_empty(),
+            "no additionalChunks in the examples"
+        );
+        for original in additional {
+            let chunk: UiChunk = serde_json::from_value(original.clone())
+                .map_err(|error| format!("{original}: {error}"))?;
+            assert!(!matches!(chunk, UiChunk::Data(ref data) if !data.kind.starts_with("data-")));
+            assert_eq!(serde_json::to_value(&chunk)?, original);
+        }
+        for malformed in list("malformedChunks") {
+            assert!(
+                serde_json::from_value::<UiChunk>(malformed.clone()).is_err(),
+                "accepted malformed chunk {malformed}"
+            );
+        }
         Ok(())
     }
 
