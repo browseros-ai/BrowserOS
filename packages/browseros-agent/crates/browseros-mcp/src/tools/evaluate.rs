@@ -219,7 +219,9 @@ fn safe_stringify(value: &Value) -> String {
     if let Some(value) = value.as_str() {
         return value.to_string();
     }
-    serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+    // Sorted keys: the rendered text is truncated to `maxChars`, so key order decides what
+    // survives and must not depend on serde_json's build-wide map feature.
+    crate::canonical_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
 }
 
 fn exception_message(exception: ExceptionDetails) -> String {

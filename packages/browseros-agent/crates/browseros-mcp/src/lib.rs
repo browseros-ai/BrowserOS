@@ -1,8 +1,9 @@
 //! BrowserOS browser tools and a thin rmcp server matching `packages/browser-mcp`.
 //!
 //! Hosts that own dispatch policy can implement `ServerHandler` directly over [`catalog`] and
-//! [`execute_tool`], as `apps/claw-server/src/api/mcp` does.
+//! [`execute_tool`], as `browseros-mcp-host` does for claw-server and server-rust.
 
+pub mod canonical_json;
 pub mod constants;
 pub mod downloads_api;
 pub mod format;

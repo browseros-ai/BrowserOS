@@ -969,8 +969,11 @@ fn result_is_error(result_meta: Option<&str>) -> bool {
         })
 }
 
+/// Sorted keys: the stored text is truncated to a byte cap, so key order decides which
+/// arguments survive, and it must not depend on serde_json's build-wide map feature.
 fn safe_stringify(value: &serde_json::Value) -> String {
-    serde_json::to_string(value).unwrap_or_else(|_| "\"<unserialisable>\"".to_string())
+    browseros_mcp::canonical_json::to_string(value)
+        .unwrap_or_else(|_| "\"<unserialisable>\"".to_string())
 }
 
 pub fn bounded_args_json(value: &serde_json::Value) -> String {
@@ -983,10 +986,15 @@ pub fn result_meta(
     structured_content: &serde_json::Value,
     content_block_count: usize,
 ) -> String {
+    // Sorted explicitly: serde_json's map order is a build-wide feature, and a crate that
+    // turns on `preserve_order` (agent-client-protocol does) would otherwise make the stored
+    // keys follow insertion order whenever both are built together.
     let structured_keys: Vec<String> = structured_content
         .as_object()
         .map(|obj| {
-            obj.keys()
+            let mut keys = obj.keys().collect::<Vec<_>>();
+            keys.sort_unstable();
+            keys.into_iter()
                 .take(RESULT_STRUCTURED_KEYS_MAX)
                 .map(|key| bounded_json_string(key))
                 .collect()
