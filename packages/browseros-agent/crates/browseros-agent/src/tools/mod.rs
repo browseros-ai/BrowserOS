@@ -1,16 +1,25 @@
 //! Tool sources for the built-in agent. Every tool reaches the loop through one seam,
 //! [`ToolSource`]: browser tools arrive as MCP over loopback `/mcp` with a lease header (never as
 //! Rust calls into `browseros-mcp-host`), plus custom MCP servers, the filesystem tools and the
-//! nudge tools. Merged in TS order: internal MCP → custom MCP → filesystem → nudges.
-//! Implemented by P7; S0 stubs fail to connect and refuse calls.
+//! nudge tools. `Agent::build` merges them in TS order: internal MCP → custom MCP → filesystem →
+//! nudges (`ai-sdk-agent.ts:268-281`).
+//!
+//! The split of responsibilities mirrors the AI SDK's `tool()` / `dynamicTool()`: a source owns a
+//! tool's description, JSON schema, execution and `toModelOutput`; the loop owns parsing the
+//! model's input, validation of static tools' inputs, ordering and error chunks.
 
 mod filesystem;
 mod mcp;
 mod nudges;
+mod schema;
 
 pub use filesystem::{FsScope, OutputGrants, filesystem_tools};
 pub use mcp::{McpEndpoint, McpTransport, connect_mcp};
 pub use nudges::nudge_tools;
+
+pub(crate) use nudges::{SUGGEST_APP_CONNECTION, SUGGEST_SCHEDULE};
+
+pub(crate) use schema::validate_static_input;
 
 use crate::messages::ToolResultOutput;
 use serde_json::Value;
@@ -101,42 +110,14 @@ impl ToolCatalog {
     }
 }
 
-/// The S0 placeholder behind every constructor in this module until P7 lands real sources.
-struct UnimplementedSource {
-    label: String,
-}
-
-#[async_trait::async_trait]
-impl ToolSource for UnimplementedSource {
-    fn label(&self) -> &str {
-        &self.label
-    }
-
-    async fn tools(&self) -> Result<Vec<ToolSpec>, ToolSourceError> {
-        Err(ToolSourceError::Unavailable {
-            label: self.label.clone(),
-            message: "not implemented yet".to_owned(),
-        })
-    }
-
-    async fn call(
-        &self,
-        name: &str,
-        input: Value,
-        cancel: CancellationToken,
-    ) -> Result<ToolOutput, ToolCallError> {
-        let _ = (input, cancel);
-        Err(ToolCallError(format!(
-            "{name}: tool source \"{}\" is not implemented yet",
-            self.label
-        )))
-    }
-
-    async fn close(&self) {}
-}
-
-fn unimplemented_source(label: &str) -> Arc<dyn ToolSource> {
-    Arc::new(UnimplementedSource {
-        label: label.to_owned(),
-    })
+/// `JSON.stringify` of an object whose keys must come out in a fixed order no matter whether
+/// serde_json's `preserve_order` feature is on (DECISIONS 17): the nudge sentinels are parsed by
+/// the app, but their text is also model-visible and byte-compared by the compat harness.
+pub(crate) fn ordered_json_object(entries: &[(&str, &Value)]) -> String {
+    let body = entries
+        .iter()
+        .map(|(key, value)| format!("{}:{}", Value::from(*key), value))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!("{{{body}}}")
 }

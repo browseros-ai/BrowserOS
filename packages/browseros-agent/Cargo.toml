@@ -86,6 +86,8 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg",
 ignore = "0.4"
 indexmap = "2"
 reqwest-eventsource = "0.6"
+# browseros-agent filesystem tools (P7): Bun.Glob-compatible matching for find/grep.
+globset = "0.4"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
