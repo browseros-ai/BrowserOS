@@ -1,0 +1,144 @@
+{
+  "schema": [
+    {
+      "type": "index",
+      "name": "conversations_last_messaged_at_idx",
+      "tbl_name": "conversations",
+      "sql": "CREATE INDEX `conversations_last_messaged_at_idx` ON `conversations` (`last_messaged_at`)"
+    },
+    {
+      "type": "index",
+      "name": "oauth_tokens_browseros_id_idx",
+      "tbl_name": "oauth_tokens",
+      "sql": "CREATE INDEX `oauth_tokens_browseros_id_idx` ON `oauth_tokens` (`browseros_id`)"
+    },
+    {
+      "type": "index",
+      "name": "providers_kind_updated_at_idx",
+      "tbl_name": "providers",
+      "sql": "CREATE INDEX `providers_kind_updated_at_idx` ON `providers` (`kind`,`updated_at`)"
+    },
+    {
+      "type": "index",
+      "name": "providers_one_default",
+      "tbl_name": "providers",
+      "sql": "CREATE UNIQUE INDEX `providers_one_default` ON `providers` (`is_default`) WHERE \"providers\".\"is_default\" = 1"
+    },
+    {
+      "type": "index",
+      "name": "scheduled_job_runs_job_id_idx",
+      "tbl_name": "scheduled_job_runs",
+      "sql": "CREATE INDEX `scheduled_job_runs_job_id_idx` ON `scheduled_job_runs` (`job_id`)"
+    },
+    {
+      "type": "index",
+      "name": "scheduled_job_runs_started_at_idx",
+      "tbl_name": "scheduled_job_runs",
+      "sql": "CREATE INDEX `scheduled_job_runs_started_at_idx` ON `scheduled_job_runs` (`started_at`)"
+    },
+    {
+      "type": "index",
+      "name": "scheduled_jobs_enabled_idx",
+      "tbl_name": "scheduled_jobs",
+      "sql": "CREATE INDEX `scheduled_jobs_enabled_idx` ON `scheduled_jobs` (`enabled`)"
+    },
+    {
+      "type": "table",
+      "name": "__drizzle_migrations",
+      "tbl_name": "__drizzle_migrations",
+      "sql": "CREATE TABLE \"__drizzle_migrations\" (\n\t\t\t\tid SERIAL PRIMARY KEY,\n\t\t\t\thash text NOT NULL,\n\t\t\t\tcreated_at numeric\n\t\t\t)"
+    },
+    {
+      "type": "table",
+      "name": "conversations",
+      "tbl_name": "conversations",
+      "sql": "CREATE TABLE `conversations` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`messages` text NOT NULL,\n\t`last_user_message` text,\n\t`origin` text,\n\t`target_type` text NOT NULL,\n\t`agent_id` text,\n\t`last_messaged_at` integer NOT NULL,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL\n)"
+    },
+    {
+      "type": "table",
+      "name": "oauth_tokens",
+      "tbl_name": "oauth_tokens",
+      "sql": "CREATE TABLE `oauth_tokens` (\n\t`browseros_id` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`access_token` text NOT NULL,\n\t`refresh_token` text NOT NULL,\n\t`expires_at` integer NOT NULL,\n\t`email` text,\n\t`account_id` text,\n\t`updated_at` integer NOT NULL,\n\tPRIMARY KEY(`browseros_id`, `provider`)\n)"
+    },
+    {
+      "type": "table",
+      "name": "providers",
+      "tbl_name": "providers",
+      "sql": "CREATE TABLE `providers` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`kind` text NOT NULL,\n\t`type` text NOT NULL,\n\t`name` text NOT NULL,\n\t`model_id` text,\n\t`reasoning_effort` text,\n\t`is_default` integer DEFAULT false NOT NULL,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\t`base_url` text,\n\t`supports_images` integer DEFAULT true NOT NULL,\n\t`context_window` integer,\n\t`temperature` real DEFAULT 0.2 NOT NULL,\n\t`api_key` text,\n\t`access_key_id` text,\n\t`secret_access_key` text,\n\t`session_token` text,\n\t`resource_name` text,\n\t`region` text,\n\t`reasoning_summary` text,\n\t`working_directory` text,\n\t`custom_config` text, `headers` text,\n\tCONSTRAINT \"providers_llm_requires_model_and_context\" CHECK(\"providers\".\"kind\" <> 'llm' OR (\"providers\".\"model_id\" IS NOT NULL AND \"providers\".\"context_window\" IS NOT NULL))\n)"
+    },
+    {
+      "type": "table",
+      "name": "scheduled_job_runs",
+      "tbl_name": "scheduled_job_runs",
+      "sql": "CREATE TABLE `scheduled_job_runs` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`job_id` text NOT NULL,\n\t`status` text NOT NULL,\n\t`started_at` integer NOT NULL,\n\t`completed_at` integer,\n\t`result` text,\n\t`final_result` text,\n\t`execution_log` text,\n\t`tool_calls` text,\n\t`error` text,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tFOREIGN KEY (`job_id`) REFERENCES `scheduled_jobs`(`id`) ON UPDATE no action ON DELETE cascade\n)"
+    },
+    {
+      "type": "table",
+      "name": "scheduled_jobs",
+      "tbl_name": "scheduled_jobs",
+      "sql": "CREATE TABLE \"scheduled_jobs\" (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`query` text NOT NULL,\n\t`schedule_type` text NOT NULL,\n\t`schedule_time` text,\n\t`schedule_interval` integer,\n\t`enabled` integer DEFAULT true NOT NULL,\n\t`provider_id` text,\n\t`last_run_at` integer,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tFOREIGN KEY (`provider_id`) REFERENCES `providers`(`id`) ON UPDATE no action ON DELETE set null\n)"
+    }
+  ],
+  "drizzleMigrations": [
+    {
+      "hash": "aadfc2e86410febb11a974d25d99d5f7196aa797d9635ced9a18cd4eeb503b61",
+      "created_at": 1777750582590
+    },
+    {
+      "hash": "19e693f7b1adcd1d932fa6cf5638b5b158c66ea5de4f154bc59311f4d6f71261",
+      "created_at": 1777752799806
+    },
+    {
+      "hash": "02b11bf1dc34a5a289efd216233a48f0b7b950cfc33eaa7ebe6dcbb15d07f75c",
+      "created_at": 1777902205667
+    },
+    {
+      "hash": "34387e59aa1f0d6dc44c95836d2363b72982663c50d05d0c67ee58c211209f52",
+      "created_at": 1781916712443
+    },
+    {
+      "hash": "76d3a9d6c383995df79b6d8f66ae1bedd0b97b1f44e90c047d8853666bbcc9fd",
+      "created_at": 1785893663690
+    },
+    {
+      "hash": "44a8d4afc62cc58f0f958f633e5262331370d1e1538981b69c1ec2cb807a3154",
+      "created_at": 1785900211901
+    },
+    {
+      "hash": "e9a01f94d41f7718c66039a8483302f6db7c7de946f99987a6dd2e78613bce90",
+      "created_at": 1786538823114
+    },
+    {
+      "hash": "561eb1075d7487ffe0394e587eef7ba35ccd892e3e3b53acace579cb0477576b",
+      "created_at": 1787580067090
+    },
+    {
+      "hash": "1e36c60be880a222ae150858c5248a433556bd974c52164c42d1955e84ba6606",
+      "created_at": 1788319873053
+    },
+    {
+      "hash": "188a9503d889be46926bd6d4d660a1c016c90fac71447c25eec73e421b90fc96",
+      "created_at": 1788413695569
+    },
+    {
+      "hash": "9e5731582228e0de16bb28f5465cfd62ec2662822f43122f84b8039dd2c0cf0b",
+      "created_at": 1788426799725
+    },
+    {
+      "hash": "eb0fa2687c80caf919248f28cda5cd955e01a671b2104308b4d04ec55d450611",
+      "created_at": 1788426855683
+    },
+    {
+      "hash": "5e1894d0aebf4a5b708425f565795b01e4efdb997a1e1e6fc6479f229bd022da",
+      "created_at": 1788724664440
+    },
+    {
+      "hash": "a56bd0e97b0297bf0933b9b06d7e3862957727999762f0834f30e7b42da69a09",
+      "created_at": 1790095966768
+    },
+    {
+      "hash": "bc71831be007936b7d04aa24c4496a06517e204a78d35af93935f3fc97eb49f9",
+      "created_at": 1790235209541
+    }
+  ]
+}

@@ -1,0 +1,1165 @@
+{
+  "drizzleMigrations": [
+    {
+      "hash": "aadfc2e86410febb11a974d25d99d5f7196aa797d9635ced9a18cd4eeb503b61",
+      "created_at": 1777750582590
+    },
+    {
+      "hash": "19e693f7b1adcd1d932fa6cf5638b5b158c66ea5de4f154bc59311f4d6f71261",
+      "created_at": 1777752799806
+    },
+    {
+      "hash": "02b11bf1dc34a5a289efd216233a48f0b7b950cfc33eaa7ebe6dcbb15d07f75c",
+      "created_at": 1777902205667
+    },
+    {
+      "hash": "34387e59aa1f0d6dc44c95836d2363b72982663c50d05d0c67ee58c211209f52",
+      "created_at": 1781916712443
+    },
+    {
+      "hash": "76d3a9d6c383995df79b6d8f66ae1bedd0b97b1f44e90c047d8853666bbcc9fd",
+      "created_at": 1785893663690
+    },
+    {
+      "hash": "44a8d4afc62cc58f0f958f633e5262331370d1e1538981b69c1ec2cb807a3154",
+      "created_at": 1785900211901
+    },
+    {
+      "hash": "e9a01f94d41f7718c66039a8483302f6db7c7de946f99987a6dd2e78613bce90",
+      "created_at": 1786538823114
+    },
+    {
+      "hash": "561eb1075d7487ffe0394e587eef7ba35ccd892e3e3b53acace579cb0477576b",
+      "created_at": 1787580067090
+    },
+    {
+      "hash": "1e36c60be880a222ae150858c5248a433556bd974c52164c42d1955e84ba6606",
+      "created_at": 1788319873053
+    },
+    {
+      "hash": "188a9503d889be46926bd6d4d660a1c016c90fac71447c25eec73e421b90fc96",
+      "created_at": 1788413695569
+    },
+    {
+      "hash": "9e5731582228e0de16bb28f5465cfd62ec2662822f43122f84b8039dd2c0cf0b",
+      "created_at": 1788426799725
+    },
+    {
+      "hash": "eb0fa2687c80caf919248f28cda5cd955e01a671b2104308b4d04ec55d450611",
+      "created_at": 1788426855683
+    },
+    {
+      "hash": "5e1894d0aebf4a5b708425f565795b01e4efdb997a1e1e6fc6479f229bd022da",
+      "created_at": 1788724664440
+    },
+    {
+      "hash": "a56bd0e97b0297bf0933b9b06d7e3862957727999762f0834f30e7b42da69a09",
+      "created_at": 1790095966768
+    },
+    {
+      "hash": "bc71831be007936b7d04aa24c4496a06517e204a78d35af93935f3fc97eb49f9",
+      "created_at": 1790235209541
+    }
+  ],
+  "schema": [
+    {
+      "type": "index",
+      "name": "conversations_last_messaged_at_idx",
+      "tbl_name": "conversations",
+      "sql": "CREATE INDEX `conversations_last_messaged_at_idx` ON `conversations` (`last_messaged_at`)"
+    },
+    {
+      "type": "index",
+      "name": "oauth_tokens_browseros_id_idx",
+      "tbl_name": "oauth_tokens",
+      "sql": "CREATE INDEX `oauth_tokens_browseros_id_idx` ON `oauth_tokens` (`browseros_id`)"
+    },
+    {
+      "type": "index",
+      "name": "providers_kind_updated_at_idx",
+      "tbl_name": "providers",
+      "sql": "CREATE INDEX `providers_kind_updated_at_idx` ON `providers` (`kind`,`updated_at`)"
+    },
+    {
+      "type": "index",
+      "name": "providers_one_default",
+      "tbl_name": "providers",
+      "sql": "CREATE UNIQUE INDEX `providers_one_default` ON `providers` (`is_default`) WHERE \"providers\".\"is_default\" = 1"
+    },
+    {
+      "type": "index",
+      "name": "scheduled_job_runs_job_id_idx",
+      "tbl_name": "scheduled_job_runs",
+      "sql": "CREATE INDEX `scheduled_job_runs_job_id_idx` ON `scheduled_job_runs` (`job_id`)"
+    },
+    {
+      "type": "index",
+      "name": "scheduled_job_runs_started_at_idx",
+      "tbl_name": "scheduled_job_runs",
+      "sql": "CREATE INDEX `scheduled_job_runs_started_at_idx` ON `scheduled_job_runs` (`started_at`)"
+    },
+    {
+      "type": "index",
+      "name": "scheduled_jobs_enabled_idx",
+      "tbl_name": "scheduled_jobs",
+      "sql": "CREATE INDEX `scheduled_jobs_enabled_idx` ON `scheduled_jobs` (`enabled`)"
+    },
+    {
+      "type": "table",
+      "name": "__drizzle_migrations",
+      "tbl_name": "__drizzle_migrations",
+      "sql": "CREATE TABLE \"__drizzle_migrations\" (\n\t\t\t\tid SERIAL PRIMARY KEY,\n\t\t\t\thash text NOT NULL,\n\t\t\t\tcreated_at numeric\n\t\t\t)"
+    },
+    {
+      "type": "table",
+      "name": "conversations",
+      "tbl_name": "conversations",
+      "sql": "CREATE TABLE `conversations` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`messages` text NOT NULL,\n\t`last_user_message` text,\n\t`origin` text,\n\t`target_type` text NOT NULL,\n\t`agent_id` text,\n\t`last_messaged_at` integer NOT NULL,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL\n)"
+    },
+    {
+      "type": "table",
+      "name": "oauth_tokens",
+      "tbl_name": "oauth_tokens",
+      "sql": "CREATE TABLE `oauth_tokens` (\n\t`browseros_id` text NOT NULL,\n\t`provider` text NOT NULL,\n\t`access_token` text NOT NULL,\n\t`refresh_token` text NOT NULL,\n\t`expires_at` integer NOT NULL,\n\t`email` text,\n\t`account_id` text,\n\t`updated_at` integer NOT NULL,\n\tPRIMARY KEY(`browseros_id`, `provider`)\n)"
+    },
+    {
+      "type": "table",
+      "name": "providers",
+      "tbl_name": "providers",
+      "sql": "CREATE TABLE `providers` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`kind` text NOT NULL,\n\t`type` text NOT NULL,\n\t`name` text NOT NULL,\n\t`model_id` text,\n\t`reasoning_effort` text,\n\t`is_default` integer DEFAULT false NOT NULL,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\t`base_url` text,\n\t`supports_images` integer DEFAULT true NOT NULL,\n\t`context_window` integer,\n\t`temperature` real DEFAULT 0.2 NOT NULL,\n\t`api_key` text,\n\t`access_key_id` text,\n\t`secret_access_key` text,\n\t`session_token` text,\n\t`resource_name` text,\n\t`region` text,\n\t`reasoning_summary` text,\n\t`working_directory` text,\n\t`custom_config` text, `headers` text,\n\tCONSTRAINT \"providers_llm_requires_model_and_context\" CHECK(\"providers\".\"kind\" <> 'llm' OR (\"providers\".\"model_id\" IS NOT NULL AND \"providers\".\"context_window\" IS NOT NULL))\n)"
+    },
+    {
+      "type": "table",
+      "name": "scheduled_job_runs",
+      "tbl_name": "scheduled_job_runs",
+      "sql": "CREATE TABLE `scheduled_job_runs` (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`job_id` text NOT NULL,\n\t`status` text NOT NULL,\n\t`started_at` integer NOT NULL,\n\t`completed_at` integer,\n\t`result` text,\n\t`final_result` text,\n\t`execution_log` text,\n\t`tool_calls` text,\n\t`error` text,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tFOREIGN KEY (`job_id`) REFERENCES `scheduled_jobs`(`id`) ON UPDATE no action ON DELETE cascade\n)"
+    },
+    {
+      "type": "table",
+      "name": "scheduled_jobs",
+      "tbl_name": "scheduled_jobs",
+      "sql": "CREATE TABLE \"scheduled_jobs\" (\n\t`id` text PRIMARY KEY NOT NULL,\n\t`name` text NOT NULL,\n\t`query` text NOT NULL,\n\t`schedule_type` text NOT NULL,\n\t`schedule_time` text,\n\t`schedule_interval` integer,\n\t`enabled` integer DEFAULT true NOT NULL,\n\t`provider_id` text,\n\t`last_run_at` integer,\n\t`created_at` integer NOT NULL,\n\t`updated_at` integer NOT NULL,\n\tFOREIGN KEY (`provider_id`) REFERENCES `providers`(`id`) ON UPDATE no action ON DELETE set null\n)"
+    }
+  ],
+  "providers": [
+    {
+      "id": "openai-main",
+      "kind": "llm",
+      "type": "openai",
+      "name": "OpenAI",
+      "modelId": "gpt-5",
+      "reasoningEffort": "high",
+      "isDefault": false,
+      "createdAt": 1792047610971,
+      "updatedAt": 1792047610971,
+      "baseUrl": null,
+      "headers": {
+        "X-Zeta": "z",
+        "X-Alpha": "a"
+      },
+      "supportsImages": false,
+      "contextWindow": 128000,
+      "temperature": 0.7,
+      "apiKey": "sk-fixture-openai",
+      "accessKeyId": null,
+      "secretAccessKey": null,
+      "sessionToken": null,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": "auto",
+      "workingDirectory": null,
+      "customConfig": null
+    },
+    {
+      "id": "anthropic-1",
+      "kind": "llm",
+      "type": "anthropic",
+      "name": "Claude",
+      "modelId": "claude-opus",
+      "reasoningEffort": null,
+      "isDefault": true,
+      "createdAt": 1700000000000,
+      "updatedAt": 1792047610972,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 200000,
+      "temperature": 0.2,
+      "apiKey": "sk-ant-fixture",
+      "accessKeyId": null,
+      "secretAccessKey": null,
+      "sessionToken": null,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null
+    },
+    {
+      "id": "bedrock-1",
+      "kind": "llm",
+      "type": "bedrock",
+      "name": "Bedrock",
+      "modelId": "anthropic.claude",
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610973,
+      "updatedAt": 1792047610973,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 100000,
+      "temperature": 0.2,
+      "apiKey": null,
+      "accessKeyId": "AKIAFIXTURE",
+      "secretAccessKey": "secret-fixture",
+      "sessionToken": "session-fixture",
+      "resourceName": null,
+      "region": "us-west-2",
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null
+    },
+    {
+      "id": "azure-1",
+      "kind": "llm",
+      "type": "azure",
+      "name": "Azure",
+      "modelId": "gpt-4o",
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610973,
+      "updatedAt": 1792047610973,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 64000,
+      "temperature": 0.2,
+      "apiKey": "",
+      "accessKeyId": null,
+      "secretAccessKey": null,
+      "sessionToken": null,
+      "resourceName": "my-resource",
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null
+    },
+    {
+      "id": "ollama-local",
+      "kind": "llm",
+      "type": "ollama",
+      "name": "Ollama",
+      "modelId": "llama3",
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610973,
+      "updatedAt": 1792047610973,
+      "baseUrl": "http://localhost:11434",
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 8192,
+      "temperature": 0.2,
+      "apiKey": null,
+      "accessKeyId": null,
+      "secretAccessKey": null,
+      "sessionToken": null,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null
+    },
+    {
+      "id": "d2fc8b4c-536d-4163-871e-f52861cc706d",
+      "kind": "acp",
+      "type": "claude",
+      "name": "Claude Code",
+      "modelId": "opus",
+      "reasoningEffort": "high",
+      "isDefault": false,
+      "createdAt": 1792047610975,
+      "updatedAt": 1792047610975,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": null,
+      "temperature": 0.2,
+      "apiKey": null,
+      "accessKeyId": null,
+      "secretAccessKey": null,
+      "sessionToken": null,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": "/tmp/work dir",
+      "customConfig": null
+    },
+    {
+      "id": "df784d39-89f7-4e3e-833c-6547387d6d4d",
+      "kind": "acp",
+      "type": "codex",
+      "name": "Codex",
+      "modelId": null,
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610976,
+      "updatedAt": 1792047610976,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": null,
+      "temperature": 0.2,
+      "apiKey": null,
+      "accessKeyId": null,
+      "secretAccessKey": null,
+      "sessionToken": null,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null
+    },
+    {
+      "id": "9b9cf4aa-5a07-4a51-9cd2-d84c33e8a81c",
+      "kind": "acp",
+      "type": "custom",
+      "name": "Mine",
+      "modelId": null,
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610976,
+      "updatedAt": 1792047610976,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": null,
+      "temperature": 0.2,
+      "apiKey": null,
+      "accessKeyId": null,
+      "secretAccessKey": null,
+      "sessionToken": null,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": "{\"command\":\"my-agent --acp\",\"env\":{\"TOKEN\":\"fixture\"},\"fullAccessModes\":[\"yolo\"],\"icon\":\"bot\"}"
+    }
+  ],
+  "publicProviders": [
+    {
+      "id": "openai-main",
+      "kind": "llm",
+      "type": "openai",
+      "name": "OpenAI",
+      "modelId": "gpt-5",
+      "reasoningEffort": "high",
+      "isDefault": false,
+      "createdAt": 1792047610971,
+      "updatedAt": 1792047610971,
+      "baseUrl": null,
+      "headers": {
+        "X-Zeta": "z",
+        "X-Alpha": "a"
+      },
+      "supportsImages": false,
+      "contextWindow": 128000,
+      "temperature": 0.7,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": "auto",
+      "workingDirectory": null,
+      "customConfig": null,
+      "hasApiKey": true,
+      "hasAccessKeyId": false,
+      "hasSecretAccessKey": false,
+      "hasSessionToken": false
+    },
+    {
+      "id": "anthropic-1",
+      "kind": "llm",
+      "type": "anthropic",
+      "name": "Claude",
+      "modelId": "claude-opus",
+      "reasoningEffort": null,
+      "isDefault": true,
+      "createdAt": 1700000000000,
+      "updatedAt": 1792047610972,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 200000,
+      "temperature": 0.2,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null,
+      "hasApiKey": true,
+      "hasAccessKeyId": false,
+      "hasSecretAccessKey": false,
+      "hasSessionToken": false
+    },
+    {
+      "id": "bedrock-1",
+      "kind": "llm",
+      "type": "bedrock",
+      "name": "Bedrock",
+      "modelId": "anthropic.claude",
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610973,
+      "updatedAt": 1792047610973,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 100000,
+      "temperature": 0.2,
+      "resourceName": null,
+      "region": "us-west-2",
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null,
+      "hasApiKey": false,
+      "hasAccessKeyId": true,
+      "hasSecretAccessKey": true,
+      "hasSessionToken": true
+    },
+    {
+      "id": "azure-1",
+      "kind": "llm",
+      "type": "azure",
+      "name": "Azure",
+      "modelId": "gpt-4o",
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610973,
+      "updatedAt": 1792047610973,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 64000,
+      "temperature": 0.2,
+      "resourceName": "my-resource",
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null,
+      "hasApiKey": false,
+      "hasAccessKeyId": false,
+      "hasSecretAccessKey": false,
+      "hasSessionToken": false
+    },
+    {
+      "id": "ollama-local",
+      "kind": "llm",
+      "type": "ollama",
+      "name": "Ollama",
+      "modelId": "llama3",
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610973,
+      "updatedAt": 1792047610973,
+      "baseUrl": "http://localhost:11434",
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": 8192,
+      "temperature": 0.2,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null,
+      "hasApiKey": false,
+      "hasAccessKeyId": false,
+      "hasSecretAccessKey": false,
+      "hasSessionToken": false
+    },
+    {
+      "id": "d2fc8b4c-536d-4163-871e-f52861cc706d",
+      "kind": "acp",
+      "type": "claude",
+      "name": "Claude Code",
+      "modelId": "opus",
+      "reasoningEffort": "high",
+      "isDefault": false,
+      "createdAt": 1792047610975,
+      "updatedAt": 1792047610975,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": null,
+      "temperature": 0.2,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": "/tmp/work dir",
+      "customConfig": null,
+      "hasApiKey": false,
+      "hasAccessKeyId": false,
+      "hasSecretAccessKey": false,
+      "hasSessionToken": false
+    },
+    {
+      "id": "df784d39-89f7-4e3e-833c-6547387d6d4d",
+      "kind": "acp",
+      "type": "codex",
+      "name": "Codex",
+      "modelId": null,
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610976,
+      "updatedAt": 1792047610976,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": null,
+      "temperature": 0.2,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": null,
+      "hasApiKey": false,
+      "hasAccessKeyId": false,
+      "hasSecretAccessKey": false,
+      "hasSessionToken": false
+    },
+    {
+      "id": "9b9cf4aa-5a07-4a51-9cd2-d84c33e8a81c",
+      "kind": "acp",
+      "type": "custom",
+      "name": "Mine",
+      "modelId": null,
+      "reasoningEffort": null,
+      "isDefault": false,
+      "createdAt": 1792047610976,
+      "updatedAt": 1792047610976,
+      "baseUrl": null,
+      "headers": null,
+      "supportsImages": true,
+      "contextWindow": null,
+      "temperature": 0.2,
+      "resourceName": null,
+      "region": null,
+      "reasoningSummary": null,
+      "workingDirectory": null,
+      "customConfig": "{\"command\":\"my-agent --acp\",\"env\":{\"TOKEN\":\"fixture\"},\"fullAccessModes\":[\"yolo\"],\"icon\":\"bot\"}",
+      "hasApiKey": false,
+      "hasAccessKeyId": false,
+      "hasSecretAccessKey": false,
+      "hasSessionToken": false
+    }
+  ],
+  "defaultProviderId": "anthropic-1",
+  "agents": [
+    {
+      "id": "9b9cf4aa-5a07-4a51-9cd2-d84c33e8a81c",
+      "name": "Mine",
+      "type": "custom",
+      "customConfig": {
+        "command": "my-agent --acp",
+        "env": {
+          "TOKEN": "fixture"
+        },
+        "fullAccessModes": [
+          "yolo"
+        ],
+        "icon": "bot"
+      },
+      "createdAt": 1792047610976,
+      "updatedAt": 1792047610976
+    },
+    {
+      "id": "df784d39-89f7-4e3e-833c-6547387d6d4d",
+      "name": "Codex",
+      "type": "codex",
+      "createdAt": 1792047610976,
+      "updatedAt": 1792047610976
+    },
+    {
+      "id": "d2fc8b4c-536d-4163-871e-f52861cc706d",
+      "name": "Claude Code",
+      "type": "claude",
+      "modelId": "opus",
+      "reasoningEffort": "high",
+      "workingDirectory": "/tmp/work dir",
+      "createdAt": 1792047610975,
+      "updatedAt": 1792047610975
+    }
+  ],
+  "conversationSummaries": [
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "lastUserMessage": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "targetType": "claude",
+      "agentId": "d2fc8b4c-536d-4163-871e-f52861cc706d",
+      "lastMessagedAt": 1792047610978,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978
+    },
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "lastUserMessage": "Open the docs page",
+      "origin": "sidepanel",
+      "targetType": "browseros",
+      "lastMessagedAt": 1792047610978,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978
+    },
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "lastUserMessage": "legacy question",
+      "targetType": "codex",
+      "lastMessagedAt": 1600000000000,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978
+    }
+  ],
+  "conversations": [
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "lastUserMessage": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "targetType": "claude",
+      "agentId": "d2fc8b4c-536d-4163-871e-f52861cc706d",
+      "lastMessagedAt": 1792047610978,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978,
+      "messages": [
+        {
+          "id": "u2",
+          "role": "user",
+          "parts": [
+            {
+              "type": "file",
+              "mediaType": "image/png",
+              "url": "data:,"
+            },
+            {
+              "type": "text",
+              "text": "  éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé  "
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "11111111-1111-4111-8111-111111111111",
+      "lastUserMessage": "Open the docs page",
+      "origin": "sidepanel",
+      "targetType": "browseros",
+      "lastMessagedAt": 1792047610978,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978,
+      "messages": [
+        {
+          "id": "u1",
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "Open the docs page"
+            }
+          ]
+        },
+        {
+          "id": "a1",
+          "role": "assistant",
+          "metadata": {
+            "model": "gpt-5"
+          },
+          "parts": [
+            {
+              "type": "step-start"
+            },
+            {
+              "type": "reasoning",
+              "text": "thinking",
+              "state": "done"
+            },
+            {
+              "type": "dynamic-tool",
+              "toolName": "navigate",
+              "toolCallId": "call-1",
+              "state": "output-available",
+              "input": {
+                "url": "https://example.com"
+              },
+              "output": null,
+              "callProviderMetadata": {
+                "openai": {
+                  "itemId": "x"
+                }
+              }
+            },
+            {
+              "type": "tool-suggest_schedule",
+              "toolCallId": "call-2",
+              "state": "output-error",
+              "input": {
+                "query": "daily"
+              },
+              "errorText": "nope",
+              "rawInput": {
+                "legacy": true
+              }
+            },
+            {
+              "type": "data-progress",
+              "id": "p1",
+              "data": {
+                "pct": 50
+              }
+            },
+            {
+              "type": "text",
+              "text": "Done.",
+              "state": "done",
+              "extraKey": 1
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "lastUserMessage": "legacy question",
+      "targetType": "codex",
+      "lastMessagedAt": 1600000000000,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978,
+      "messages": [
+        {
+          "legacy": true,
+          "role": "user",
+          "parts": [
+            {
+              "type": "text",
+              "text": "legacy question"
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": "unstructured"
+        }
+      ]
+    }
+  ],
+  "jobs": [
+    {
+      "id": "job-daily",
+      "name": "Daily digest",
+      "query": "summarize",
+      "scheduleType": "daily",
+      "scheduleTime": "09:30",
+      "scheduleInterval": null,
+      "enabled": true,
+      "providerId": "openai-main",
+      "lastRunAt": null,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978
+    },
+    {
+      "id": "job-hourly",
+      "name": "Hourly",
+      "query": "check",
+      "scheduleType": "hourly",
+      "scheduleTime": null,
+      "scheduleInterval": 2,
+      "enabled": false,
+      "providerId": null,
+      "lastRunAt": 1750000000000,
+      "createdAt": 1792047610978,
+      "updatedAt": 1792047610978
+    },
+    {
+      "id": "job-minutes",
+      "name": "Minutes",
+      "query": "poll",
+      "scheduleType": "minutes",
+      "scheduleTime": null,
+      "scheduleInterval": 15,
+      "enabled": true,
+      "providerId": null,
+      "lastRunAt": null,
+      "createdAt": 1792047610979,
+      "updatedAt": 1792047610979
+    }
+  ],
+  "runs": [
+    {
+      "id": "run-hourly",
+      "jobId": "job-hourly",
+      "status": "failed",
+      "startedAt": 1760100000000,
+      "completedAt": null,
+      "result": null,
+      "finalResult": "final",
+      "executionLog": "log",
+      "toolCalls": null,
+      "error": "boom",
+      "createdAt": 1792047610982,
+      "updatedAt": 1792047610982
+    },
+    {
+      "id": "run-19",
+      "jobId": "job-daily",
+      "status": "running",
+      "startedAt": 1760001140000,
+      "completedAt": null,
+      "result": "result 19",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610982,
+      "updatedAt": 1792047610982
+    },
+    {
+      "id": "run-18",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760001080000,
+      "completedAt": 1760001110000,
+      "result": "result 18",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610982,
+      "updatedAt": 1792047610982
+    },
+    {
+      "id": "run-17",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760001020000,
+      "completedAt": 1760001050000,
+      "result": "result 17",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610982,
+      "updatedAt": 1792047610982
+    },
+    {
+      "id": "run-16",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000960000,
+      "completedAt": 1760000990000,
+      "result": "result 16",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610981,
+      "updatedAt": 1792047610981
+    },
+    {
+      "id": "run-15",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000900000,
+      "completedAt": 1760000930000,
+      "result": "result 15",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": [
+        {
+          "id": "tc-15",
+          "name": "navigate",
+          "input": {
+            "url": "https://example.com"
+          },
+          "output": {
+            "ok": true
+          },
+          "timestamp": "2025-10-14T00:00:00.000Z"
+        }
+      ],
+      "error": null,
+      "createdAt": 1792047610981,
+      "updatedAt": 1792047610981
+    },
+    {
+      "id": "run-14",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000840000,
+      "completedAt": 1760000870000,
+      "result": "result 14",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610981,
+      "updatedAt": 1792047610981
+    },
+    {
+      "id": "run-13",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000780000,
+      "completedAt": 1760000810000,
+      "result": "result 13",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610981,
+      "updatedAt": 1792047610981
+    },
+    {
+      "id": "run-12",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000720000,
+      "completedAt": 1760000750000,
+      "result": "result 12",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610981,
+      "updatedAt": 1792047610981
+    },
+    {
+      "id": "run-11",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000660000,
+      "completedAt": 1760000690000,
+      "result": "result 11",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610981,
+      "updatedAt": 1792047610981
+    },
+    {
+      "id": "run-10",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000600000,
+      "completedAt": 1760000630000,
+      "result": "result 10",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": [
+        {
+          "id": "tc-10",
+          "name": "navigate",
+          "input": {
+            "url": "https://example.com"
+          },
+          "output": {
+            "ok": true
+          },
+          "timestamp": "2025-10-14T00:00:00.000Z"
+        }
+      ],
+      "error": null,
+      "createdAt": 1792047610980,
+      "updatedAt": 1792047610980
+    },
+    {
+      "id": "run-09",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000540000,
+      "completedAt": 1760000570000,
+      "result": "result 9",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610980,
+      "updatedAt": 1792047610980
+    },
+    {
+      "id": "run-08",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000480000,
+      "completedAt": 1760000510000,
+      "result": "result 8",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610980,
+      "updatedAt": 1792047610980
+    },
+    {
+      "id": "run-07",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000420000,
+      "completedAt": 1760000450000,
+      "result": "result 7",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610980,
+      "updatedAt": 1792047610980
+    },
+    {
+      "id": "run-06",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000360000,
+      "completedAt": 1760000390000,
+      "result": "result 6",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610980,
+      "updatedAt": 1792047610980
+    },
+    {
+      "id": "run-05",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000300000,
+      "completedAt": 1760000330000,
+      "result": "result 5",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": [
+        {
+          "id": "tc-5",
+          "name": "navigate",
+          "input": {
+            "url": "https://example.com"
+          },
+          "output": {
+            "ok": true
+          },
+          "timestamp": "2025-10-14T00:00:00.000Z"
+        }
+      ],
+      "error": null,
+      "createdAt": 1792047610980,
+      "updatedAt": 1792047610980
+    },
+    {
+      "id": "run-04",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000240000,
+      "completedAt": 1760000270000,
+      "result": "result 4",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610980,
+      "updatedAt": 1792047610980
+    },
+    {
+      "id": "run-03",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000180000,
+      "completedAt": 1760000210000,
+      "result": "result 3",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610979,
+      "updatedAt": 1792047610979
+    },
+    {
+      "id": "run-02",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000120000,
+      "completedAt": 1760000150000,
+      "result": "result 2",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610979,
+      "updatedAt": 1792047610979
+    },
+    {
+      "id": "run-01",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000060000,
+      "completedAt": 1760000090000,
+      "result": "result 1",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": null,
+      "error": null,
+      "createdAt": 1792047610979,
+      "updatedAt": 1792047610979
+    },
+    {
+      "id": "run-00",
+      "jobId": "job-daily",
+      "status": "completed",
+      "startedAt": 1760000000000,
+      "completedAt": 1760000030000,
+      "result": "result 0",
+      "finalResult": null,
+      "executionLog": null,
+      "toolCalls": [
+        {
+          "id": "tc-0",
+          "name": "navigate",
+          "input": {
+            "url": "https://example.com"
+          },
+          "output": {
+            "ok": true
+          },
+          "timestamp": "2025-10-14T00:00:00.000Z"
+        }
+      ],
+      "error": null,
+      "createdAt": 1792047610979,
+      "updatedAt": 1792047610979
+    }
+  ],
+  "oauthTokens": [
+    {
+      "browserosId": "install-fixture",
+      "provider": "chatgpt-pro",
+      "tokens": {
+        "accessToken": "access-fixture",
+        "refreshToken": "refresh-fixture",
+        "expiresAt": 1900000000000,
+        "email": "user@example.com",
+        "accountId": "acct-1"
+      },
+      "status": {
+        "authenticated": true,
+        "email": "user@example.com",
+        "provider": "chatgpt-pro"
+      }
+    },
+    {
+      "browserosId": "install-fixture",
+      "provider": "github-copilot",
+      "tokens": {
+        "accessToken": "gho-fixture",
+        "refreshToken": "gho-refresh",
+        "expiresAt": 1900000000000
+      },
+      "status": {
+        "authenticated": true,
+        "provider": "github-copilot"
+      }
+    }
+  ]
+}
