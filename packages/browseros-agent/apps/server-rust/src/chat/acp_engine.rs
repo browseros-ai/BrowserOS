@@ -366,7 +366,7 @@ fn build_prompt(
     let prompt_text = match request
         .user_system_prompt
         .as_deref()
-        .map(js_trim)
+        .map(crate::js::trim)
         .filter(|prompt| !prompt.is_empty())
     {
         Some(system) => format!("{system}\n\n{user_content}"),
@@ -620,11 +620,6 @@ fn percent_decode(value: &str) -> Result<Vec<u8>, String> {
     }
     std::str::from_utf8(&out).map_err(|_| "URI malformed".to_owned())?;
     Ok(out)
-}
-
-/// JS `String.prototype.trim` (Unicode whitespace plus the BOM).
-fn js_trim(value: &str) -> &str {
-    value.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

@@ -22,6 +22,7 @@ pub mod config;
 pub mod db;
 pub mod http;
 pub mod identity;
+pub mod js;
 pub mod klavis;
 pub mod mcp;
 pub mod mcp_manager;

@@ -9,8 +9,8 @@ use super::{
     Database, DbError, DbResult,
     decode::Columns,
     entities::providers::{ActiveModel, Column, Entity},
-    js,
 };
+use crate::js;
 use sea_orm::{
     ActiveValue::Set,
     ColumnTrait, DbErr, EntityTrait, FromQueryResult, QueryFilter, QueryResult,

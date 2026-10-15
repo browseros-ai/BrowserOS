@@ -184,7 +184,7 @@ impl ProbeBody {
         // The refinement sees the parsed value: a trimmed-empty command is still "missing".
         let command_missing = match object.get("command") {
             None | Some(Value::Null | Value::Bool(false)) => true,
-            Some(Value::String(text)) => js_trim(text).is_empty(),
+            Some(Value::String(text)) => crate::js::trim(text).is_empty(),
             Some(Value::Number(number)) => number.as_f64() == Some(0.0),
             Some(_) => false,
         };
@@ -214,7 +214,7 @@ fn trimmed_string(value: Option<&Value>, field: &str, issues: &mut Issues) -> Op
         issues.invalid_type("string", Some(value), &[json!(field)]);
         return None;
     };
-    let text = js_trim(text);
+    let text = crate::js::trim(text);
     if text.is_empty() {
         issues.push(
             vec![
@@ -229,8 +229,4 @@ fn trimmed_string(value: Option<&Value>, field: &str, issues: &mut Issues) -> Op
         return None;
     }
     Some(text.to_owned())
-}
-
-fn js_trim(value: &str) -> &str {
-    value.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
 }

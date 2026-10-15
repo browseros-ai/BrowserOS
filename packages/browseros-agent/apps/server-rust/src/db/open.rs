@@ -367,7 +367,7 @@ impl Drop for TemporaryFile {
 
 /// Renames the unusable file (and its WAL/SHM) to `browseros.sqlite.corrupt-<ms>.bak*`.
 async fn set_aside(path: &Path) -> Result<PathBuf, DbError> {
-    let stamp = super::js::now_ms();
+    let stamp = crate::js::now_ms();
     let aside = with_suffix(
         path,
         &format!(".corrupt-{stamp}-{}.bak", uuid::Uuid::new_v4()),

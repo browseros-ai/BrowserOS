@@ -3,7 +3,10 @@
 //! and device pollers are cancelled on shutdown, avoiding application/task ownership cycles.
 
 use super::{CallbackServer, OAuthProvider, ProviderSpec};
-use crate::db::{OAuthTokenStore, OAuthTokens};
+use crate::{
+    db::{OAuthTokenStore, OAuthTokens},
+    js::now_ms,
+};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use futures_util::{
     FutureExt,
@@ -12,11 +15,7 @@ use futures_util::{
 use serde::Serialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -661,13 +660,6 @@ fn random_verifier() -> String {
 }
 fn challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
-}
-pub(crate) fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .min(i64::MAX as u128) as i64
 }
 pub(crate) fn expires_at(seconds: f64) -> i64 {
     now_ms().saturating_add((seconds * 1000.0) as i64)

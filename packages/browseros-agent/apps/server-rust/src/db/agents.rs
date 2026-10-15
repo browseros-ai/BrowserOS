@@ -6,9 +6,9 @@
 use super::{
     Database, DbError, DbResult,
     entities::providers::{ActiveModel, Column, Entity},
-    js,
     providers::ProviderRow,
 };
+use crate::js;
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, sea_query::Expr,
 };

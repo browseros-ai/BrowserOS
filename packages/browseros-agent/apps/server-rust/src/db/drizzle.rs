@@ -175,7 +175,7 @@ async fn newest_created_at(connection: &mut SqliteConnection) -> Result<Option<f
         "null" => 0.0,
         "text" => {
             let text: String = row.try_get("created_at")?;
-            let text = super::js::trim(&text);
+            let text = crate::js::trim(&text);
             if text.is_empty() {
                 0.0
             } else {

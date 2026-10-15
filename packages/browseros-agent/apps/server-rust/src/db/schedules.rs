@@ -10,8 +10,8 @@ use super::{
     Database, DbError, DbResult,
     decode::Columns,
     entities::{scheduled_job_runs as runs, scheduled_jobs as jobs},
-    js,
 };
+use crate::js;
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, FromQueryResult,
     QueryFilter, QueryOrder, QueryResult, QuerySelect, sea_query::OnConflict,

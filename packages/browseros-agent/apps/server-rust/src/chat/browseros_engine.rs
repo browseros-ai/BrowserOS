@@ -769,8 +769,7 @@ fn last_user_text(history: &[UiMessage]) -> String {
 fn task_label(message: &str) -> String {
     let lower = message.to_lowercase();
     let words = word_runs(&lower).take(5).collect::<Vec<_>>().join("-");
-    let units = words.encode_utf16().take(40).collect::<Vec<_>>();
-    let task = String::from_utf16_lossy(&units);
+    let task = crate::js::utf16_prefix(&words, 40);
     if task.is_empty() {
         "task".to_owned()
     } else {

@@ -26,7 +26,6 @@ mod conversations;
 mod decode;
 mod drizzle;
 mod entities;
-mod js;
 mod migrator;
 mod oauth_tokens;
 mod open;

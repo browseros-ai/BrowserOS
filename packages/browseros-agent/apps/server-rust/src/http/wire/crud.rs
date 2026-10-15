@@ -3,9 +3,12 @@
 //! future type strings and legacy JSON. Zod rules (trimming, strict objects, UTF-16 lengths,
 //! headers, and ordered issues) run before decoding request models.
 
-use crate::http::{
-    Json,
-    zod::{self, Issues},
+use crate::{
+    http::{
+        Json,
+        zod::{self, Issues},
+    },
+    js,
 };
 use axum::{
     extract::{FromRequest, Request},
@@ -334,15 +337,9 @@ fn validate(value: &mut Value, kind: Kind, path: &[Value], issues: &mut Issues) 
                 issues.invalid_type("string", Some(value), path);
                 return;
             };
-            // JS trim includes BOM but excludes Rust's NEL whitespace. JS and zod lengths
-            // count UTF-16 code units, so astral symbols count twice.
-            let text = if trim {
-                text.trim_matches(js_whitespace)
-            } else {
-                text
-            }
-            .to_owned();
-            let len = text.encode_utf16().count();
+            // JS and zod lengths count UTF-16 code units, so astral symbols count twice.
+            let text = if trim { js::trim(text) } else { text }.to_owned();
+            let len = js::utf16_len(&text);
             if len < min {
                 issues.push(
                     vec![
@@ -412,10 +409,6 @@ fn validate(value: &mut Value, kind: Kind, path: &[Value], issues: &mut Issues) 
         Kind::Headers => headers(value, path, issues),
         _ => issues.invalid_type(expected(kind), Some(value), path),
     }
-}
-
-fn js_whitespace(c: char) -> bool {
-    matches!(c, '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
 }
 
 const HEADER_NAME_PATTERN: &str = "/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/";
@@ -557,7 +550,7 @@ pub fn internal_error(message: &str) -> Response {
 
 /// Builds the TS unknown-error envelope from text that is already safe for the wire.
 fn error_envelope(scrubbed: &str) -> Response {
-    let scrubbed = scrubbed.trim_matches(js_whitespace);
+    let scrubbed = js::trim(scrubbed);
     let message = if scrubbed.is_empty() {
         "An unexpected error occurred."
     } else {

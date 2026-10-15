@@ -6,8 +6,8 @@ use super::{
     Database, DbResult,
     decode::Columns,
     entities::oauth_tokens::{ActiveModel, Column, Entity},
-    js,
 };
+use crate::js;
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, FromQueryResult, QueryFilter, QueryResult,
     sea_query::OnConflict,

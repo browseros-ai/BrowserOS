@@ -11,8 +11,8 @@ use super::{
     agents::AgentKind,
     decode::Columns,
     entities::conversations::{ActiveModel, Column, Entity},
-    js,
 };
+use crate::js;
 use sea_orm::{
     ActiveValue::Set, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, QueryOrder,
     QueryResult, QuerySelect, sea_query::OnConflict,

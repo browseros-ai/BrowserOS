@@ -134,8 +134,8 @@ pub async fn refine_prompt(
     )
     .await
     {
-        Ok(text) if !js_trim(&text).is_empty() => {
-            Json(json!({"success": true, "refined": js_trim(&text)})).into_response()
+        Ok(text) if !crate::js::trim(&text).is_empty() => {
+            Json(json!({"success": true, "refined": crate::js::trim(&text)})).into_response()
         }
         Ok(_) => super::errors::success_false(
             StatusCode::BAD_REQUEST,
@@ -359,15 +359,6 @@ fn string<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
 
 fn nonempty_string<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     string(body, key).filter(|value| !value.is_empty())
-}
-
-fn js_trim(text: &str) -> &str {
-    // ECMAScript trims BOM but not NEL (U+0085); Rust's str::trim does the reverse.
-    text.trim_matches(|c| {
-        matches!(c,
-        '\u{0009}'..='\u{000d}' | ' ' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}'
-        | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
-    })
 }
 
 /// A provider-store read failed. TS lets it throw into `app.onError`, which answers the chat

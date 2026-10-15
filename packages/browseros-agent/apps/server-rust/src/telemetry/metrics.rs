@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     sync::{Arc, Mutex},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -255,12 +255,7 @@ impl Rollup {
 }
 
 fn now_ms() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis()
-        .try_into()
-        .unwrap_or(u64::MAX)
+    u64::try_from(crate::js::now_ms()).unwrap_or_default()
 }
 
 fn timestamp(milliseconds: u64) -> String {
