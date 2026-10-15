@@ -9,6 +9,10 @@ license = "AGPL-3.0-or-later"
 repository = "https://github.com/browseros-ai/BrowserOS"
 
 [workspace.dependencies]
+# Generic ACP transport; the SDK is imported only by acp-client.
+agent-client-protocol = "=3.3.0"
+acp-client = { path = "crates/acp-client" }
+
 harness-integrations = { path = "crates/harness-integrations" }
 browseros-cdp = { path = "crates/browseros-cdp" }
 browseros-core = { path = "crates/browseros-core" }
@@ -52,7 +56,7 @@ socket2 = "0.6"
 url = "2"
 base64 = "0.22"
 imagesize = "0.15"
-tokio-util = { version = "0.7", features = ["rt"] }
+tokio-util = { version = "0.7", features = ["rt", "compat"] }
 regex = "1"
 rand = "0.9"
 uuid = { version = "1", features = ["v4", "serde"] }

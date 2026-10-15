@@ -1,0 +1,34 @@
+[package]
+name = "acp-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+agent-client-protocol.workspace = true
+futures-util.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["io-std"] }
+tokio-util.workspace = true
+tracing.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["process"] }
+
+[dev-dependencies]
+tempfile.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true
+
+# An executable fixture lets integration tests exercise real stdio/process
+# lifetime without invoking a shell, network, or any installed coding agent.
+[[bin]]
+name = "acp-client-fake-agent"
+path = "tests/support/fake-agent.rs"
+test = false
+bench = false
