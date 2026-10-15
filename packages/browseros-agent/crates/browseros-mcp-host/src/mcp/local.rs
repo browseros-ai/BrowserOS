@@ -6,12 +6,26 @@ use crate::{
     ids::DispatchId,
     mcp::dispatch::{operator_cancellation_result, session_gone_message},
     seams::{LocalToolCall, LocalToolContext},
+    sessions::Session,
 };
 use browseros_mcp::ToolResult;
 use rmcp::model::{CallToolResult, ContentBlock};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
+
+/// Completes a local dispatch; the operator cancellation wins if Stop reached it first.
+pub(crate) async fn finish_local_dispatch(
+    session: &Session,
+    dispatch_id: &DispatchId,
+    result: ToolResult,
+) -> ToolResult {
+    if !session.finish_dispatch(dispatch_id).await && session.operator_stop_requested() {
+        operator_cancellation_result()
+    } else {
+        result
+    }
+}
 
 impl LocalToolCall<'_> {
     /// Registers one dispatch with the session. `None` means teardown already stopped
@@ -27,14 +41,9 @@ impl LocalToolCall<'_> {
     /// Completes a dispatch from [`Self::begin`]. If Stop won the race, the operator
     /// cancellation replaces the tool's own result, exactly as for catalog tools.
     pub async fn finish(&self, dispatch_id: &DispatchId, result: ToolResult) -> CallToolResult {
-        if !self.session.finish_dispatch(dispatch_id).await
-            && self.session.operator_stop_requested()
-        {
-            operator_cancellation_result()
-        } else {
-            result
-        }
-        .into_call_tool_result()
+        finish_local_dispatch(self.session, dispatch_id, result)
+            .await
+            .into_call_tool_result()
     }
 
     /// The refusal for a call whose session stopped accepting dispatches.
@@ -69,5 +78,62 @@ impl LocalToolCall<'_> {
                 warn!(error = %error, "local tool audit submission failed");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        identity::{ClientIdentity, ConversationIdentity},
+        ids::SessionId,
+    };
+    use std::sync::Arc;
+
+    fn usage_session() -> Arc<Session> {
+        Session::new(
+            SessionId::new("usage-session"),
+            ClientIdentity::Ephemeral {
+                slug: "codex".to_string(),
+                label: "Codex".to_string(),
+            },
+            ConversationIdentity::new("codex", "usage-test".to_string()),
+            "Codex".to_string(),
+            tokio::time::Instant::now(),
+        )
+    }
+
+    #[tokio::test]
+    async fn local_tool_returns_cancellation_when_operator_stop_wins() -> anyhow::Result<()> {
+        let session = usage_session();
+        let dispatch_id = DispatchId::new();
+        assert!(
+            session
+                .try_register_dispatch(dispatch_id.clone(), CancellationToken::new())
+                .await
+        );
+        session.request_operator_stop();
+        assert_eq!(session.stop_dispatches().await, 1);
+
+        let result = finish_local_dispatch(
+            session.as_ref(),
+            &dispatch_id,
+            ToolResult::text("renamed", None),
+        )
+        .await;
+
+        assert!(result.is_error);
+        assert_eq!(
+            result
+                .structured_content
+                .as_ref()
+                .and_then(|value| value["cancellationKind"].as_str()),
+            Some("cockpit.operator-cancelled")
+        );
+        assert_eq!(
+            session.pending_operator_cancellation_audits().await,
+            [dispatch_id]
+        );
+        Ok(())
     }
 }

@@ -215,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn helper_discovery_projects_owned_tabs_through_captured_profile() -> anyhow::Result<()> {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::test_support::{ProfileConnection, tool_call};
         use browseros_core::PageId;
         let call = tool_call("run", json!({"code":"return 1"})).await?;
         let transport = ProfileConnection::new();
@@ -224,7 +224,7 @@ mod tests {
             tabs[0]["url"] = json!("https://eng.synthetic.invalid/");
             tabs[1]["url"] = json!("https://ops.synthetic.invalid/");
         }
-        let browser = crate::mcp::test_support::current_session(transport);
+        let browser = crate::test_support::current_session(transport);
         browser.pages.list().await?;
         let caller = call
             .identity

@@ -41,11 +41,9 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_trimmed_javascript_scheme_with_ts_text() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call(
-            "navigate",
-            json!({ "url": "  JaVaScRiPt:alert(1)" }),
-        )
-        .await?;
+        let call =
+            crate::test_support::tool_call("navigate", json!({ "url": "  JaVaScRiPt:alert(1)" }))
+                .await?;
         let result = guard(&call)
             .await
             .unwrap_or_else(|| ToolResult::error("missing"));

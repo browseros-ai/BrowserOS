@@ -8,16 +8,16 @@ use crate::{
     db::{AuditLog, audit_log::ToolDispatchRow},
     services::helpers::{self, HelperMeta},
 };
+use browseros_core::{BrowserSession, PageId};
 use browseros_mcp_host::{
     mcp::dispatch::{ARBITRARY_SCRIPT_TOOLS, ToolObserverContext},
     seams::DispatchObserver,
 };
-use std::sync::Arc;
-use browseros_core::{BrowserSession, PageId};
 use futures_util::future::BoxFuture;
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
+use std::sync::Arc;
 use tracing::warn;
 
 /// A distilled flow with fewer than this many actions is not worth a helper; more
@@ -37,7 +37,10 @@ impl DispatchObserver for DistillObserver {
         "distill"
     }
 
-    fn observe<'a>(&'a self, context: ToolObserverContext<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+    fn observe<'a>(
+        &'a self,
+        context: ToolObserverContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
         distill(&self.audit_log, context)
     }
 }
@@ -135,7 +138,6 @@ fn distill<'a>(
         Ok(())
     })
 }
-
 
 /// How the distilled helper's host is resolved: directly from an opening
 /// navigation URL, or from the page id the flow drove.

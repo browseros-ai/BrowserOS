@@ -38,14 +38,16 @@ use std::{path::PathBuf, sync::Arc};
 
 /// `_meta` key claw's stateless session handle rides under.
 pub const NEO_SESSION_META_KEY: &str = "com.browseros.neo/session";
+pub const NEO_SERVER_NAME: &str = "browseros-neo";
+pub const NEO_SERVER_TITLE: &str = "BrowserOS neo";
 
 /// The "BrowserOS neo" identity. Instructions follow the live human-help setting, so a
 /// client that initializes after the user flips it gets the matching guidance.
 #[must_use]
 pub fn neo_branding(agent_settings: Arc<AgentSettingsStore>) -> HostBranding {
     HostBranding {
-        server_name: "browseros-neo".to_string(),
-        server_title: "BrowserOS neo".to_string(),
+        server_name: NEO_SERVER_NAME.to_string(),
+        server_title: NEO_SERVER_TITLE.to_string(),
         server_version: VERSION.to_string(),
         product_name: "BrowserOS neo".to_string(),
         session_meta_key: NEO_SESSION_META_KEY.to_string(),

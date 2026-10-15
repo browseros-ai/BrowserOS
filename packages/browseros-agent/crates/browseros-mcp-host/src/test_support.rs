@@ -1,23 +1,30 @@
+//! Fixtures for host-layer tests, shared with downstream hosts behind the
+//! `test-support` feature: a `HostCtx` on no-op adapters over a temp data root, a
+//! ready-made `ToolCall` for one live session, and a synthetic CDP peer that models
+//! BrowserOS's native tab, window, profile and group domains.
+
 use crate::{
-    AppState,
-    api::mcp::dispatch::{ToolCall, ToolIdentity, linked_cancel_token},
-    config::Config,
+    branding::HostBranding,
+    ctx::{HostCore, HostCoreConfig, HostCtx},
     identity::{ClientIdentity, ConversationIdentity},
     ids::SessionId,
-    services::sessions::{Session, TaskTargetStore},
+    mcp::dispatch::{ToolCall, ToolIdentity, linked_cancel_token},
+    sessions::{Session, TaskTargetStore},
 };
 use serde_json::Value;
-use std::{sync::Arc, time::Duration};
+use std::{path::Path, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
 /// The first native release with profile targeting. Host fixtures model that browser unless a
 /// test is about an older or unknown one.
-pub(crate) fn current_native() -> browseros_core::NativeCapabilities {
+#[must_use]
+pub fn current_native() -> browseros_core::NativeCapabilities {
     browseros_core::NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
 }
 
 /// A browser session on `connection` that models the current native (profile targeting on).
-pub(crate) fn current_session(
+#[must_use]
+pub fn current_session(
     connection: Arc<dyn browseros_core::CdpConnection>,
 ) -> Arc<browseros_core::BrowserSession> {
     browseros_core::BrowserSession::new_with_native(
@@ -27,28 +34,55 @@ pub(crate) fn current_session(
     )
 }
 
-pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolCall> {
-    let dir = tempfile::tempdir()?;
-    let root = dir.path().join("browserclaw");
-    let home = dir.path().join("home");
-    let _persisted = dir.keep();
-    let config = Arc::new(Config {
-        server_port: 9200,
+/// claw's product identity, so host-layer assertions keep the exact agent-facing text
+/// they were written against before the extraction.
+#[must_use]
+pub fn fixture_branding() -> HostBranding {
+    HostBranding {
+        server_name: "browseros-neo".to_string(),
+        server_title: "BrowserOS neo".to_string(),
+        server_version: env!("CARGO_PKG_VERSION").to_string(),
+        product_name: "BrowserOS neo".to_string(),
+        session_meta_key: "com.browseros.neo/session".to_string(),
+        instructions: Arc::new(browseros_mcp::browser_mcp_instructions),
+    }
+}
+
+/// A host over `data_root` with no-op adapters. Building a second host over the same
+/// root models a server restart: persisted target bindings survive, live maps do not.
+pub async fn host_at(data_root: &Path) -> anyhow::Result<Arc<HostCtx>> {
+    let core = HostCore::open(HostCoreConfig {
         cdp_port: 49337,
-        proxy_port: None,
-        resources_dir: root.join("resources"),
-        browserclaw_dir: root,
+        data_root: data_root.to_path_buf(),
+        native: current_native(),
         session_idle: Duration::from_secs(300),
         session_retention: Duration::from_secs(7_200),
         session_sweep_interval: Duration::from_secs(60),
-        replay_retention_days: 7,
-        dev_mode: false,
-        native: crate::config::NativeIdentity {
-            capabilities: current_native(),
-            asserted: false,
-        },
-    });
-    let state = AppState::new_with_home(config, home).await?;
+    })
+    .await?;
+    Ok(HostCtx::builder(core).branding(fixture_branding()).build())
+}
+
+/// A host over a fresh temp data root that outlives the test process's interest in it.
+pub async fn host() -> anyhow::Result<Arc<HostCtx>> {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("browserclaw");
+    let _persisted = dir.keep();
+    host_at(&root).await
+}
+
+/// A `ToolCall` for `tool_name` on a fresh host, admitted for one live session (`s1`,
+/// a Codex conversation) with no browser attached.
+pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolCall> {
+    tool_call_on(host().await?, tool_name, raw_args).await
+}
+
+/// `tool_call` on a host the caller built (claw's tests pass their composed host).
+pub async fn tool_call_on(
+    host: Arc<HostCtx>,
+    tool_name: &str,
+    raw_args: Value,
+) -> anyhow::Result<ToolCall> {
     let session = Session::new(
         SessionId::new("s1"),
         ClientIdentity::Ephemeral {
@@ -59,7 +93,7 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
         "Codex".to_string(),
         tokio::time::Instant::now(),
     );
-    state.sessions.insert_for_testing(session.clone()).await;
+    host.sessions.insert_for_testing(session.clone()).await;
     let catalog = Arc::new(browseros_mcp::catalog());
     let tool_index = catalog
         .iter()
@@ -74,7 +108,7 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
     );
     let ownership_key = session.convo_id().clone();
     let target_store = Arc::new(TaskTargetStore {
-        bindings: state.targets.clone(),
+        bindings: host.targets.clone(),
         session: session.id().clone(),
     });
     Ok(ToolCall::new(
@@ -95,14 +129,14 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
         client_cancel,
         dispatch_cancel,
         None,
-        state,
+        host,
         browseros_mcp::output_file::create_browser_output_file_access(),
     ))
 }
 
 /// Synthetic CDP peer for host integration tests. It models native catalog,
 /// tab/window identity and group movement so routing errors have visible effects.
-pub(crate) struct ProfileConnection {
+pub struct ProfileConnection {
     events: tokio::sync::broadcast::Sender<browseros_cdp::CdpEvent>,
     pub profiles: std::sync::Mutex<Vec<Value>>,
     pub windows: std::sync::Mutex<Vec<Value>>,
@@ -132,7 +166,8 @@ pub(crate) struct ProfileConnection {
 }
 
 impl ProfileConnection {
-    pub(crate) fn new() -> Arc<Self> {
+    #[must_use]
+    pub fn new() -> Arc<Self> {
         let (events, _) = tokio::sync::broadcast::channel(8);
         Arc::new(Self {
             events,
@@ -168,7 +203,7 @@ impl ProfileConnection {
         })
     }
 
-    pub(crate) fn reconnect(&self) {
+    pub fn reconnect(&self) {
         let mut epoch = self
             .dispatch_epoch
             .lock()
@@ -388,7 +423,8 @@ impl ProfileConnection {
     /// Adds the browser's original profile (directory "Default", renamed "Personal") with
     /// one normal window that is not the focused one, as a capable native has. The base
     /// fixture without it models a browser whose Default profile is gone.
-    pub(crate) fn with_default_profile(self: Arc<Self>) -> Arc<Self> {
+    #[must_use]
+    pub fn with_default_profile(self: Arc<Self>) -> Arc<Self> {
         self.profiles
             .lock()
             .unwrap_or_else(|p| p.into_inner())
@@ -419,11 +455,8 @@ impl ProfileConnection {
             "browserProfileId":profile, "liveBrowserContextId":format!("ctx-{profile}")})
     }
 
-    pub(crate) fn binding(
-        profile: &str,
-        revision: u64,
-        window: i64,
-    ) -> browseros_core::TargetBinding {
+    #[must_use]
+    pub fn binding(profile: &str, revision: u64, window: i64) -> browseros_core::TargetBinding {
         browseros_core::TargetBinding {
             intent: browseros_core::TargetIntent {
                 browser_profile_id: browseros_core::BrowserProfileId::from(profile.to_string()),

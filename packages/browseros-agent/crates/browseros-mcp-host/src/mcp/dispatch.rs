@@ -26,8 +26,10 @@ use std::{sync::Arc, time::Instant};
 use tokio_util::sync::CancellationToken;
 use tracing::warn;
 
-const CANCELLATION_REASON: &str = "Operation cancelled by the User";
-const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
+/// The in-band result text when the operator's Stop wins a dispatch.
+pub const CANCELLATION_REASON: &str = "Operation cancelled by the User";
+/// The protocol error when the client abandons a dispatch.
+pub const CLIENT_CANCELLATION_ERROR: &str = "Request cancelled by client";
 pub const ARBITRARY_SCRIPT_TOOLS: &[&str] = &["run", "evaluate"];
 const DISPATCH_ERROR_TEXT_MAX: usize = 200;
 
@@ -49,8 +51,9 @@ pub struct ToolIdentity {
 
 /// Creation-time identity and dispatch capability for detached grouping. The view
 /// retains the original transport epoch even when the creating call was unbound.
+#[doc(hidden)]
 #[derive(Clone)]
-pub(crate) struct CreatedPageCapture {
+pub struct CreatedPageCapture {
     pub page: PageInfo,
     pub view: BrowserView,
 }
@@ -91,7 +94,8 @@ pub struct ToolCall {
     pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
     /// Original snapshots and deep dispatch guards, captured before detached grouping.
     /// A reusable PageId must never let a later callback adopt its replacement tab.
-    pub(crate) created_page_snapshots:
+    #[doc(hidden)]
+    pub created_page_snapshots:
         Arc<tokio::sync::Mutex<std::collections::BTreeMap<u32, CreatedPageCapture>>>,
 }
 
@@ -503,7 +507,9 @@ async fn run_guards<G: DispatchGuard>(call: &ToolCall, guards: &[G]) -> Option<T
     None
 }
 
-async fn run_effects<E: DispatchEffect>(
+// Public for hosts that test their own effects and observers stage by stage.
+#[doc(hidden)]
+pub async fn run_effects<E: DispatchEffect>(
     context: ToolEffectContext<'_>,
     effects: &[E],
 ) -> ToolResult {
@@ -532,7 +538,8 @@ async fn run_effects<E: DispatchEffect>(
     result
 }
 
-async fn run_observers<O: DispatchObserver>(context: ToolObserverContext<'_>, observers: &[O]) {
+#[doc(hidden)]
+pub async fn run_observers<O: DispatchObserver>(context: ToolObserverContext<'_>, observers: &[O]) {
     for observer in observers {
         if let Err(error) = observer
             .observe(ToolObserverContext {
@@ -692,7 +699,8 @@ pub fn operator_cancellation_result() -> ToolResult {
     }
 }
 
-fn wire_result(result: ToolResult, has_output_schema: bool) -> CallToolResult {
+#[doc(hidden)]
+pub fn wire_result(result: ToolResult, has_output_schema: bool) -> CallToolResult {
     // Ordered effects retain structured content internally; the default BrowserClaw
     // wire envelope exposes content blocks only. The exception is a tool that
     // advertises an output_schema (e.g. `run`): a spec-compliant client rejects the
@@ -772,6 +780,40 @@ pub fn linked_cancel_token(
 mod tests {
     use super::*;
 
+    const NO_GUARDS: &[ToolGuard] = &[];
+
+    const NO_EFFECTS: &[NamedToolEffect] = &[];
+
+    #[test]
+    fn default_pipeline_keeps_ownership_out_of_the_guards() {
+        let effect_names = DEFAULT_EFFECTS
+            .iter()
+            .map(|effect| effect.name)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            effect_names,
+            [
+                "ownership-claims",
+                "tabs-list-view",
+                "tab-activity",
+                "tab-groups",
+                "session-naming",
+                "page-ownership-notice",
+                "scope-notice",
+                "helper-discovery",
+            ]
+        );
+        // Ownership must never gate a dispatch. It is a label telling an agent whose
+        // tab it is looking at, and agents are allowed to use the user's tabs and other
+        // agents' tabs. This assertion exists so the guard that used to refuse them
+        // cannot be reintroduced without someone deleting this line on purpose.
+        assert_eq!(
+            DEFAULT_GUARDS.len(),
+            2,
+            "a guard was added. Ownership must not be one of them: it informs, it never blocks"
+        );
+    }
+
     #[tokio::test]
     async fn deferred_grouping_preserves_explicit_group_update() -> anyhow::Result<()> {
         assert_deferred_grouping_preserves_explicit_group("update", true).await
@@ -797,13 +839,13 @@ mod tests {
         grouping_first: bool,
     ) -> anyhow::Result<()> {
         use crate::{
-            api::mcp::test_support::{ProfileConnection, tool_call},
-            services::sessions::{ScopedGroupKey, TabGroup},
+            sessions::{ScopedGroupKey, TabGroup},
+            test_support::{ProfileConnection, tool_call},
         };
         use browseros_core::{WindowId, pages::NewPageOptions, target::BrowserView};
         use std::{sync::atomic::Ordering, task::Poll};
         let native = ProfileConnection::new();
-        let browser = crate::mcp::test_support::current_session(native.clone());
+        let browser = crate::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -941,13 +983,13 @@ mod tests {
     #[tokio::test]
     async fn deferred_grouping_observes_new_native_group_during_lookup() -> anyhow::Result<()> {
         use crate::{
-            api::mcp::test_support::{ProfileConnection, tool_call},
-            services::sessions::{ScopedGroupKey, TabGroup},
+            sessions::{ScopedGroupKey, TabGroup},
+            test_support::{ProfileConnection, tool_call},
         };
         use browseros_core::{WindowId, pages::NewPageOptions, target::BrowserView};
         use std::sync::atomic::Ordering;
         let native = ProfileConnection::new();
-        let browser = crate::mcp::test_support::current_session(native.clone());
+        let browser = crate::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1042,11 +1084,11 @@ mod tests {
 
     async fn queued_group_call(
         script: bool,
-    ) -> anyhow::Result<(ToolCall, Arc<crate::mcp::test_support::ProfileConnection>)> {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+    ) -> anyhow::Result<(ToolCall, Arc<crate::test_support::ProfileConnection>)> {
+        use crate::test_support::{ProfileConnection, tool_call};
         use browseros_core::target::BrowserView;
         let native = ProfileConnection::new();
-        let browser = crate::mcp::test_support::current_session(native.clone());
+        let browser = crate::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = if script {
             tool_call(
@@ -1236,11 +1278,11 @@ mod tests {
     async fn assert_run_deferred_grouping_preserves_explicit_group(
         action: &str,
     ) -> anyhow::Result<()> {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::test_support::{ProfileConnection, tool_call};
         use browseros_core::{pages::NewPageOptions, target::BrowserView};
         use std::{sync::atomic::Ordering, task::Poll};
         let native = ProfileConnection::new();
-        let browser = crate::mcp::test_support::current_session(native.clone());
+        let browser = crate::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1347,9 +1389,9 @@ mod tests {
 
     #[tokio::test]
     async fn stale_binding_blocks_execution_while_management_recovers() -> anyhow::Result<()> {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = crate::mcp::test_support::current_session(transport.clone());
+        let browser = crate::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"list"})).await?;
         let binding = call
@@ -1429,7 +1471,7 @@ mod tests {
     #[tokio::test]
     async fn older_native_runs_saved_binding_unbound_and_refuses_hidden_tools() -> anyhow::Result<()>
     {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
         let older = BrowserSession::new_with_native(
             transport.clone(),
@@ -1507,9 +1549,9 @@ mod tests {
     #[tokio::test]
     async fn unselected_run_uses_the_default_profile_and_keeps_it_after_rebind()
     -> anyhow::Result<()> {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new().with_default_profile();
-        let browser = crate::mcp::test_support::current_session(transport.clone());
+        let browser = crate::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call(
             "run",
@@ -1586,9 +1628,9 @@ mod tests {
 
     #[tokio::test]
     async fn run_creation_and_hook_keep_admitted_view_after_rebind() -> anyhow::Result<()> {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = crate::mcp::test_support::current_session(transport.clone());
+        let browser = crate::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call(
             "run",
@@ -1662,25 +1704,26 @@ mod tests {
         assert_eq!(creation.1["browserContextId"], "ctx-eng");
         Ok(())
     }
-    use crate::db::audit_log::ListDispatchesQuery;
-    use browseros_mcp::token_estimate::{
-        TOKEN_ESTIMATOR_VERSION, estimate_tool_input_tokens, estimate_tool_output_tokens,
-    };
+
     use std::sync::{
         LazyLock, Mutex,
         atomic::{AtomicUsize, Ordering},
     };
+
     use tokio::sync::Notify;
 
     static EFFECT_CALLS: AtomicUsize = AtomicUsize::new(0);
+
     static OBSERVER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
     static GUARD_OBSERVER_CALLS: AtomicUsize = AtomicUsize::new(0);
-    static CLIENT_OBSERVER_CALLS: AtomicUsize = AtomicUsize::new(0);
+
     static EFFECT_ORDER: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+
     static OBSERVED_RESULT: Mutex<Option<String>> = Mutex::new(None);
-    static LATE_EFFECT_ENTERED: LazyLock<Notify> = LazyLock::new(Notify::new);
-    static LATE_EFFECT_RELEASE: LazyLock<Notify> = LazyLock::new(Notify::new);
+
     static FINISH_OBSERVER_ENTERED: LazyLock<Notify> = LazyLock::new(Notify::new);
+
     static FINISH_OBSERVER_RELEASE: LazyLock<Notify> = LazyLock::new(Notify::new);
 
     fn record_effect(name: &'static str) {
@@ -1776,27 +1819,6 @@ mod tests {
         })
     }
 
-    fn client_counting_observer(
-        context: ToolObserverContext<'_>,
-    ) -> BoxFuture<'_, anyhow::Result<()>> {
-        Box::pin(async move {
-            let _ = context;
-            CLIENT_OBSERVER_CALLS.fetch_add(1, Ordering::SeqCst);
-            Ok(())
-        })
-    }
-
-    fn audit_then_wait_observer(
-        context: ToolObserverContext<'_>,
-    ) -> BoxFuture<'_, anyhow::Result<()>> {
-        Box::pin(async move {
-            observers::audit::apply(context).await?;
-            LATE_EFFECT_ENTERED.notify_one();
-            LATE_EFFECT_RELEASE.notified().await;
-            Ok(())
-        })
-    }
-
     fn first_ordered_effect(
         context: ToolEffectContext<'_>,
     ) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
@@ -1830,8 +1852,7 @@ mod tests {
     #[tokio::test]
     async fn tabs_flags_default_to_list() -> anyhow::Result<()> {
         let call =
-            crate::mcp::test_support::tool_call("tabs", Value::Object(serde_json::Map::new()))
-                .await?;
+            crate::test_support::tool_call("tabs", Value::Object(serde_json::Map::new())).await?;
         assert_eq!(
             call.flags,
             ToolFlags {
@@ -1844,7 +1865,7 @@ mod tests {
 
     #[tokio::test]
     async fn effect_failure_keeps_latest_good_result() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -1875,7 +1896,7 @@ mod tests {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clear();
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -1920,7 +1941,7 @@ mod tests {
         *OBSERVED_RESULT
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let initial = ToolResult::text("initial", None);
         let result = run_effects(
             ToolEffectContext {
@@ -1968,78 +1989,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn terminal_audit_counts_the_final_wire_content_once() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        let initial = ToolResult::text("initial", Some(json!({ "internal": true })));
-        let final_result = run_effects(
-            ToolEffectContext {
-                call: &call,
-                result: &initial,
-                cancelled: false,
-                duration_ms: 1,
-            },
-            &[
-                NamedToolEffect {
-                    name: "replace",
-                    run: replacement_effect,
-                },
-                NamedToolEffect {
-                    name: "session-naming",
-                    run: effects::session_naming::apply,
-                },
-            ],
-        )
-        .await;
-        run_observers(
-            ToolObserverContext {
-                call: &call,
-                result: &final_result,
-                cancelled: false,
-                duration_ms: 1,
-            },
-            &[NamedToolObserver {
-                name: "audit",
-                run: observers::audit::apply,
-            }],
-        )
-        .await;
-        call.host
-            .audit_worker
-            .flush_session(call.session_id.as_str())
-            .await?;
-        let wire = wire_result(final_result.clone(), false);
-        assert_eq!(wire.content.len(), 2);
-        assert_eq!(wire.structured_content, None);
-
-        let row = call
-            .host
-            .audit_log
-            .list_dispatches(ListDispatchesQuery::default())
-            .await?
-            .rows
-            .into_iter()
-            .next()
-            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
-        assert_eq!(row.token_estimator_version, TOKEN_ESTIMATOR_VERSION);
-        assert_eq!(
-            row.tool_input_token_estimate,
-            estimate_tool_input_tokens(call.tool().name, &call.raw_args)
-        );
-        assert_eq!(
-            row.tool_output_token_estimate,
-            estimate_tool_output_tokens(&wire.content)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn guard_rejection_skips_effects() -> anyhow::Result<()> {
         EFFECT_CALLS.store(0, Ordering::SeqCst);
         GUARD_OBSERVER_CALLS.store(0, Ordering::SeqCst);
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let result = dispatch_tool_call_with(
             call,
-            &[rejecting_guard],
+            &[rejecting_guard as ToolGuard],
             &[NamedToolEffect {
                 name: "count",
                 run: counting_effect,
@@ -2059,7 +2015,7 @@ mod tests {
 
     #[tokio::test]
     async fn finish_dispatch_waits_for_observer_submission() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let session = call
             .identity
             .as_ref()
@@ -2068,8 +2024,8 @@ mod tests {
             .clone();
         let dispatch = tokio::spawn(dispatch_tool_call_with(
             call,
-            &[],
-            &[],
+            NO_GUARDS,
+            NO_EFFECTS,
             &[NamedToolObserver {
                 name: "blocking",
                 run: blocking_observer,
@@ -2085,151 +2041,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stopped_session_rejects_browser_dispatch_before_effects() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        let session = call
-            .identity
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("tool call identity missing"))?
-            .session
-            .clone();
-        session.stop_dispatches().await;
-
-        let result = dispatch_tool_call_with(
-            call.clone(),
-            &[],
-            &[],
-            &[NamedToolObserver {
-                name: "audit",
-                run: observers::audit::apply,
-            }],
-        )
-        .await;
-
-        let Err(error) = result else {
-            panic!("stopped session must reject dispatch");
-        };
-        assert_eq!(
-            error.message.as_ref(),
-            "BrowserOS neo session is no longer live"
-        );
-        assert!(
-            call.host
-                .audit_log
-                .list_dispatches(ListDispatchesQuery::default())
-                .await?
-                .rows
-                .is_empty()
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn stop_winning_after_audit_rewrites_the_dispatch_as_cancelled() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        let session = call
-            .identity
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("tool call identity missing"))?
-            .session
-            .clone();
-        let dispatched_call = call.clone();
-        let dispatch = tokio::spawn(async move {
-            dispatch_tool_call_with(
-                dispatched_call,
-                &[],
-                &[],
-                &[NamedToolObserver {
-                    name: "audit",
-                    run: audit_then_wait_observer,
-                }],
-            )
-            .await
-        });
-
-        LATE_EFFECT_ENTERED.notified().await;
-        let sessions = call.host.sessions.clone();
-        let session_id = session.id().clone();
-        let cancel = tokio::spawn(async move { sessions.cancel_by_session(&session_id).await });
-        call.dispatch_cancel.cancelled().await;
-        LATE_EFFECT_RELEASE.notify_one();
-        let result = dispatch.await??;
-        assert_eq!(cancel.await??, Some(1));
-
-        assert_eq!(
-            result
-                .content
-                .first()
-                .and_then(|block| block.as_text())
-                .map(|text| text.text.as_str()),
-            Some(CANCELLATION_REASON)
-        );
-        let rows = call
-            .host
-            .audit_log
-            .list_dispatches(ListDispatchesQuery::default())
-            .await?
-            .rows;
-        assert_eq!(rows.len(), 1);
-        let meta: Value = serde_json::from_str(
-            rows[0]
-                .result_meta
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("result metadata missing"))?,
-        )?;
-        assert_eq!(meta["cancelled"], true);
-        assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
-        assert_eq!(rows[0].token_estimator_version, TOKEN_ESTIMATOR_VERSION);
-        assert_eq!(
-            rows[0].tool_input_token_estimate,
-            estimate_tool_input_tokens(call.tool().name, &call.raw_args)
-        );
-        assert_eq!(
-            rows[0].tool_output_token_estimate,
-            estimate_tool_output_tokens(&result.content)
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn passthrough_guard_returns_no_rejection() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        assert!(run_guards(&call, &[passthrough_guard]).await.is_none());
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        assert!(
+            run_guards(&call, &[passthrough_guard as ToolGuard])
+                .await
+                .is_none()
+        );
         Ok(())
-    }
-
-    #[test]
-    fn production_pipeline_keeps_audit_in_the_observer_lane() {
-        let effect_names = EFFECTS.iter().map(|effect| effect.name).collect::<Vec<_>>();
-        assert_eq!(
-            effect_names,
-            [
-                "ownership-claims",
-                "tabs-list-view",
-                "tab-activity",
-                "tab-groups",
-                "session-naming",
-                "page-ownership-notice",
-                "scope-notice",
-                "helper-discovery",
-            ]
-        );
-        // Ownership must never gate a dispatch. It is a label telling an agent whose
-        // tab it is looking at, and agents are allowed to use the user's tabs and other
-        // agents' tabs. This assertion exists so the guard that used to refuse them
-        // cannot be reintroduced without someone deleting this line on purpose.
-        assert_eq!(
-            GUARDS.len(),
-            2,
-            "a guard was added. Ownership must not be one of them: it informs, it never blocks"
-        );
-        assert_eq!(
-            OBSERVERS
-                .iter()
-                .map(|observer| observer.name)
-                .collect::<Vec<_>>(),
-            ["audit", "run_failure"]
-        );
     }
 
     #[test]
@@ -2263,120 +2082,5 @@ mod tests {
         let wire = wire_result(operator_cancellation_result(), false);
         assert_eq!(wire.is_error, Some(true));
         assert_eq!(wire.structured_content, None);
-    }
-
-    #[tokio::test]
-    async fn operator_cancellation_returns_and_audits_operator_result() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        let session = call
-            .identity
-            .as_ref()
-            .unwrap_or_else(|| unreachable!())
-            .session
-            .clone();
-        call.dispatch_cancel.cancel();
-        let result = dispatch_tool_call_with(
-            call.clone(),
-            &[],
-            &[],
-            &[NamedToolObserver {
-                name: "audit",
-                run: observers::audit::apply,
-            }],
-        )
-        .await
-        .unwrap_or_else(|error| panic!("operator cancellation should stay in-band: {error:?}"));
-        call.host
-            .audit_worker
-            .flush_session(call.session_id.as_str())
-            .await?;
-        assert_eq!(result.is_error, Some(true));
-        assert_eq!(
-            result
-                .content
-                .first()
-                .and_then(|block| block.as_text())
-                .map(|text| text.text.as_str()),
-            Some(CANCELLATION_REASON)
-        );
-        let rows = call
-            .host
-            .audit_log
-            .list_dispatches(ListDispatchesQuery::default())
-            .await?
-            .rows;
-        assert_eq!(rows.len(), 1);
-        let meta: Value = serde_json::from_str(
-            rows[0]
-                .result_meta
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("result metadata missing"))?,
-        )?;
-        assert_eq!(meta["isError"], true);
-        assert_eq!(meta["cancelled"], true);
-        assert_eq!(meta["cancellationKind"], "cockpit.operator-cancelled");
-        assert_eq!(rows[0].token_estimator_version, TOKEN_ESTIMATOR_VERSION);
-        assert_eq!(
-            rows[0].tool_input_token_estimate,
-            estimate_tool_input_tokens(call.tool().name, &call.raw_args)
-        );
-        assert_eq!(
-            rows[0].tool_output_token_estimate,
-            estimate_tool_output_tokens(&result.content)
-        );
-        let summary = call
-            .host
-            .audit_log
-            .get_task_summary(call.session_id.as_str())
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("task summary missing"))?;
-        assert_eq!(summary.error_count, 0);
-        assert_eq!(session.stop_dispatches().await, 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn client_cancellation_skips_effects_and_operator_result() -> anyhow::Result<()> {
-        CLIENT_OBSERVER_CALLS.store(0, Ordering::SeqCst);
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        let session = call
-            .identity
-            .as_ref()
-            .unwrap_or_else(|| unreachable!())
-            .session
-            .clone();
-        call.client_cancel.cancel();
-        let result = dispatch_tool_call_with(
-            call.clone(),
-            &[],
-            &[],
-            &[
-                NamedToolObserver {
-                    name: "audit",
-                    run: observers::audit::apply,
-                },
-                NamedToolObserver {
-                    name: "count",
-                    run: client_counting_observer,
-                },
-            ],
-        )
-        .await;
-        let Err(error) = result else {
-            panic!("client cancellation should be a protocol error");
-        };
-        assert_eq!(error.message.as_ref(), CLIENT_CANCELLATION_ERROR);
-        assert!(
-            call.host
-                .audit_log
-                .list_dispatches(ListDispatchesQuery::default())
-                .await?
-                .rows
-                .is_empty()
-        );
-        assert_eq!(session.stop_dispatches().await, 0);
-        assert!(call.dispatch_cancel.is_cancelled());
-        assert_eq!(CLIENT_OBSERVER_CALLS.load(Ordering::SeqCst), 0);
-        Ok(())
     }
 }

@@ -152,6 +152,15 @@ impl HostCtx {
         self.sessions.analytics()
     }
 
+    /// A registered local tool by name (`name_session` or one the host added).
+    #[must_use]
+    pub fn local_tool(&self, name: &str) -> Option<Arc<dyn LocalTool>> {
+        self.local_tools
+            .iter()
+            .find(|tool| tool.definition().name == name)
+            .cloned()
+    }
+
     /// Names of the dispatch effects in run order (built-ins, then the host's).
     #[must_use]
     pub fn effect_names(&self) -> Vec<&'static str> {

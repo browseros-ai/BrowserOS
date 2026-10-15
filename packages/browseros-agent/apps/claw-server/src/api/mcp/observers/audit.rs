@@ -50,7 +50,10 @@ impl DispatchObserver for AuditObserver {
     }
 
     /// Converts the final tool outcome into a bounded event and admits it to the audit worker.
-    fn observe<'a>(&'a self, context: ToolObserverContext<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+    fn observe<'a>(
+        &'a self,
+        context: ToolObserverContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
         Box::pin(async move {
             let Some(event) = build_event(
                 self,
@@ -283,20 +286,20 @@ impl AuditObserver {
     /// are non-fatal.
     async fn persist_screenshot(&self, session_id: &str, dispatch_id: &DispatchId, row_id: i64) {
         let bytes = match self.visuals.capture(session_id, None).await {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return,
-        Err(error) => {
-            warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot capture failed");
+            Ok(Some(bytes)) => bytes,
+            Ok(None) => return,
+            Err(error) => {
+                warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot capture failed");
+                return;
+            }
+        };
+        if let Err(error) = self.screenshots.write(session_id, row_id, &bytes).await {
+            warn!(error = %error, dispatch_id = %dispatch_id, "session screenshot write failed");
             return;
         }
-    };
-    if let Err(error) = self.screenshots.write(session_id, row_id, &bytes).await {
-        warn!(error = %error, dispatch_id = %dispatch_id, "session screenshot write failed");
-        return;
-    }
-    if let Err(error) = self.audit_log.mark_screenshot(row_id).await {
-        warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot marker failed");
-    }
+        if let Err(error) = self.audit_log.mark_screenshot(row_id).await {
+            warn!(error = %error, dispatch_id = %dispatch_id, "audit screenshot marker failed");
+        }
     }
 }
 
@@ -344,7 +347,6 @@ fn bounded_text(value: &str, max_bytes: usize) -> String {
     format!("{}~", &value[..end])
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +358,15 @@ mod tests {
     use rmcp::model::ContentBlock;
     use serde_json::json;
 
+    fn observer(state: &crate::AppState) -> AuditObserver {
+        AuditObserver {
+            audit_worker: state.audit_worker.clone(),
+            audit_log: state.audit_log.clone(),
+            visuals: state.visuals.clone(),
+            screenshots: state.screenshots.clone(),
+        }
+    }
+
     fn png_header(width: u32, height: u32) -> String {
         let mut bytes = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
         bytes.extend_from_slice(&width.to_be_bytes());
@@ -365,16 +376,18 @@ mod tests {
 
     #[tokio::test]
     async fn records_ordinary_errors_and_cancellations() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let (call, state) =
+            crate::api::mcp::test_support::claw_tool_call("tabs", json!({ "action": "list" }))
+                .await?;
         let failed = ToolResult::error("failed");
-        apply(ToolObserverContext {
-            call: &call,
-            result: &failed,
-            cancelled: false,
-            duration_ms: 4,
-        })
-        .await?;
+        observer(&state)
+            .observe(ToolObserverContext {
+                call: &call,
+                result: &failed,
+                cancelled: false,
+                duration_ms: 4,
+            })
+            .await?;
 
         let cancelled = ToolResult {
             content: vec![ContentBlock::text("Operation cancelled by the User")],
@@ -384,20 +397,20 @@ mod tests {
                 "cancellationKind": "cockpit.operator-cancelled"
             })),
         };
-        apply(ToolObserverContext {
-            call: &call,
-            result: &cancelled,
-            cancelled: true,
-            duration_ms: 5,
-        })
-        .await?;
-        call.state
+        observer(&state)
+            .observe(ToolObserverContext {
+                call: &call,
+                result: &cancelled,
+                cancelled: true,
+                duration_ms: 5,
+            })
+            .await?;
+        state
             .audit_worker
             .flush_session(call.session_id.as_str())
             .await?;
 
-        let rows = call
-            .state
+        let rows = state
             .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
@@ -429,8 +442,9 @@ mod tests {
 
     #[tokio::test]
     async fn local_tool_uses_the_shared_mixed_content_estimator() -> anyhow::Result<()> {
-        let call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let (call, state) =
+            crate::api::mcp::test_support::claw_tool_call("tabs", json!({ "action": "list" }))
+                .await?;
         let session = &call
             .identity
             .as_ref()
@@ -447,7 +461,7 @@ mod tests {
         };
 
         record_local_tool_dispatch(
-            &call.state,
+            &state.audit_worker,
             LocalToolDispatch {
                 session,
                 agent_label: "Codex",
@@ -459,13 +473,12 @@ mod tests {
             },
         )
         .await?;
-        call.state
+        state
             .audit_worker
             .flush_session(call.session_id.as_str())
             .await?;
 
-        let row = call
-            .state
+        let row = state
             .audit_log
             .list_dispatches(ListDispatchesQuery::default())
             .await?
@@ -484,9 +497,11 @@ mod tests {
 
     #[tokio::test]
     async fn event_bounds_variable_size_fields_before_submission() -> anyhow::Result<()> {
-        let mut call =
-            crate::api::mcp::test_support::tool_call("tabs", json!({ "value": "x".repeat(9000) }))
-                .await?;
+        let (mut call, state) = crate::api::mcp::test_support::claw_tool_call(
+            "tabs",
+            json!({ "value": "x".repeat(9000) }),
+        )
+        .await?;
         call.page_snapshot = Some(browseros_core::pages::PageInfo {
             page_id: PageId(7),
             tab_id: browseros_core::TabId(8),
@@ -509,7 +524,7 @@ mod tests {
                 "x".repeat(9000): "y"
             })),
         );
-        let event = build_event(&call, &result, 1, false)
+        let event = build_event(&observer(&state), &call, &result, 1, false)
             .await
             .ok_or_else(|| anyhow::anyhow!("event missing"))?;
 

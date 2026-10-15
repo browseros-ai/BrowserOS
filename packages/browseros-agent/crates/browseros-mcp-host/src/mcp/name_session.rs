@@ -239,3 +239,147 @@ fn name_session_tool() -> Tool {
             .idempotent(true),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rmcp::handler::server::ServerHandler;
+
+    #[tokio::test]
+    async fn name_session_schema_and_annotations_are_registered_locally() -> anyhow::Result<()> {
+        let call = crate::test_support::tool_call("tabs", json!({})).await?;
+        let service = crate::mcp::HostMcpService::new(call.host);
+        let listed = service
+            .listed_tools(false)
+            .into_iter()
+            .find(|tool| tool.name == NAME_SESSION_TOOL_NAME)
+            .ok_or_else(|| anyhow::anyhow!("name_session missing from list"))?;
+        let fetched = service
+            .get_tool(NAME_SESSION_TOOL_NAME)
+            .ok_or_else(|| anyhow::anyhow!("name_session missing from get_tool"))?;
+
+        assert_eq!(listed, fetched);
+        assert_eq!(
+            listed.description.as_deref(),
+            Some(NAME_SESSION_DESCRIPTION)
+        );
+        assert_eq!(
+            Value::Object(listed.input_schema.as_ref().clone()),
+            json!({
+                "type": "object",
+                "properties": {
+                    "name": { "type": "string", "maxLength": 64 },
+                    "category": {
+                        "type": "string",
+                        "enum": TASK_CATEGORY_VALUES,
+                        "description": NAME_SESSION_CATEGORY_DESCRIPTION
+                    },
+                    "summary": {
+                        "type": "string",
+                        "maxLength": SUMMARY_MAX_LEN,
+                        "description": NAME_SESSION_SUMMARY_DESCRIPTION
+                    },
+                    "session": {
+                        "type": "string",
+                        "description": crate::mcp::session_arg_description("com.browseros.neo/session")
+                    }
+                },
+                "required": ["name"]
+            })
+        );
+        assert_eq!(
+            listed.annotations,
+            Some(
+                ToolAnnotations::with_title("Name session")
+                    .read_only(false)
+                    .destructive(false)
+                    .idempotent(true)
+            )
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn scrub_summary_drops_structural_pii_and_keeps_prose() {
+        let raw = "Downloaded invoices for john@acme.com from \
+                   https://billing.acme.com/portal ref 4155551234 saved to /home/user/out.pdf";
+        let clean = scrub_summary(raw);
+        assert!(!clean.contains('@'));
+        assert!(!clean.contains("://"));
+        assert!(!clean.contains('/'));
+        assert!(!clean.contains("4155551234"));
+        assert!(!clean.to_ascii_lowercase().contains("acme.com"));
+        assert!(clean.contains("Downloaded"));
+        assert!(clean.contains("invoices"));
+    }
+
+    #[test]
+    fn scrub_summary_caps_length() {
+        let raw = "word ".repeat(200);
+        assert!(scrub_summary(&raw).chars().count() <= SUMMARY_MAX_LEN);
+    }
+
+    #[test]
+    fn with_scrubbed_summary_replaces_summary_and_keeps_other_args() {
+        let raw = "Emailed john@acme.com the invoices";
+        let clean = scrub_summary(raw);
+        let sanitized =
+            with_scrubbed_summary(&json!({ "name": "invoice sync", "summary": raw }), &clean);
+        // The recorded dispatch args carry the scrubbed copy, never the raw one.
+        assert_eq!(sanitized["summary"].as_str(), Some(clean.as_str()));
+        assert!(!clean.contains('@'));
+        assert!(!clean.to_ascii_lowercase().contains("acme.com"));
+        // Unrelated arguments are preserved verbatim.
+        assert_eq!(sanitized["name"].as_str(), Some("invoice sync"));
+    }
+
+    #[tokio::test]
+    async fn name_session_validates_and_renames_without_a_browser() -> anyhow::Result<()> {
+        let call = crate::test_support::tool_call("tabs", json!({})).await?;
+        let session = call
+            .identity
+            .as_ref()
+            .map(|identity| identity.session.clone())
+            .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+        let generated = session.generated_label().to_string();
+
+        let first = rename_session(
+            Some(session.as_ref()),
+            &json!({ "name": "  Invoice Processing!!!  " }),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            first.response,
+            format!("renamed to codex/invoice-processing (was codex/{generated})")
+        );
+        assert_eq!(session.label().await, "invoice-processing");
+
+        let second = rename_session(
+            Some(session.as_ref()),
+            &json!({ "name": "Quarterly Reporting" }),
+        )
+        .await
+        .map_err(anyhow::Error::msg)?;
+        assert_eq!(
+            second.response,
+            "renamed to codex/quarterly-reporting (was codex/invoice-processing)"
+        );
+
+        let current = session.label().await;
+        assert_eq!(
+            rename_session(Some(session.as_ref()), &json!({ "name": "!!!" })).await,
+            Err("name must contain a usable session name")
+        );
+        assert_eq!(
+            rename_session(Some(session.as_ref()), &json!({ "name": "x".repeat(65) })).await,
+            Err("name must be at most 64 characters")
+        );
+        assert_eq!(session.label().await, current);
+        assert_eq!(
+            rename_session(None, &json!({ "name": "invoice processing" })).await,
+            Err("unable to resolve this session")
+        );
+        Ok(())
+    }
+}

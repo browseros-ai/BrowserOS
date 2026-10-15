@@ -972,7 +972,7 @@ async fn mcp_name_session_lists_and_renames_while_disconnected() -> anyhow::Resu
                 },
                 "session": {
                     "type": "string",
-                    "description": claw_server::api::mcp::SESSION_ARG_DESCRIPTION
+                    "description": claw_server::api::mcp::SESSION_ARG_DESCRIPTION.as_str()
                 }
             },
             "required": ["name"]

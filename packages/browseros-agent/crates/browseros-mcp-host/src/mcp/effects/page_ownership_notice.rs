@@ -192,7 +192,7 @@ mod tests {
     /// note has to say it can take it back.
     #[tokio::test]
     async fn an_own_earlier_session_is_named_as_reclaimable() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call(
+        let call = crate::test_support::tool_call(
             "evaluate",
             serde_json::json!({ "page": 7, "code": "return 1" }),
         )
@@ -237,7 +237,7 @@ mod tests {
     /// attribution left is the slug on the conversation id.
     #[tokio::test]
     async fn an_own_retired_session_is_still_named_as_reclaimable() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call(
+        let call = crate::test_support::tool_call(
             "evaluate",
             serde_json::json!({ "page": 7, "code": "return 1" }),
         )
@@ -276,7 +276,7 @@ mod tests {
     /// This is the assertion the old guard failed.
     #[tokio::test]
     async fn another_conversations_page_is_usable_and_labelled() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
+        let call = crate::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
         call.host
             .sessions
             .ownership()
@@ -298,7 +298,7 @@ mod tests {
     /// A page with no claim at all is one the user opened. Agents may use those too.
     #[tokio::test]
     async fn a_user_tab_is_usable_and_identified_as_theirs() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 3 })).await?;
+        let call = crate::test_support::tool_call("navigate", json!({ "page": 3 })).await?;
         let ok = ToolResult::text("navigated", None);
 
         let annotated = run(&call, &ok)
@@ -313,7 +313,7 @@ mod tests {
     /// The common case stays quiet. Silence means the page is yours.
     #[tokio::test]
     async fn your_own_page_is_not_annotated() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 9 })).await?;
+        let call = crate::test_support::tool_call("navigate", json!({ "page": 9 })).await?;
         let owner = call
             .identity
             .as_ref()
@@ -335,8 +335,7 @@ mod tests {
     /// would be told nothing about the tabs its script actually used.
     #[tokio::test]
     async fn a_run_script_reports_the_foreign_pages_it_touched() -> anyhow::Result<()> {
-        let call =
-            crate::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
+        let call = crate::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
         {
             let mut pages = call
                 .foreign_pages
@@ -364,8 +363,7 @@ mod tests {
     /// A script that stayed in its own tabs is not annotated.
     #[tokio::test]
     async fn a_run_script_in_its_own_tabs_is_quiet() -> anyhow::Result<()> {
-        let call =
-            crate::mcp::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
+        let call = crate::test_support::tool_call("run", json!({ "code": "return 1" })).await?;
         let ok = ToolResult::text("script returned 1", None);
         assert!(run(&call, &ok).await.is_none());
         Ok(())
@@ -375,7 +373,7 @@ mod tests {
     /// somebody else's error.
     #[tokio::test]
     async fn a_failed_call_is_left_untouched() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
+        let call = crate::test_support::tool_call("navigate", json!({ "page": 7 })).await?;
         call.host
             .sessions
             .ownership()

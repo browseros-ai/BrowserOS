@@ -4,8 +4,7 @@
 //! lets the reporter decide, so there is one place to read to know what can leave.
 
 use crate::{
-    analytics::AnalyticsService, clock::now_epoch_ms,
-    services::run_failures::RunFailureReporter,
+    analytics::AnalyticsService, clock::now_epoch_ms, services::run_failures::RunFailureReporter,
 };
 use browseros_mcp_host::{
     mcp::dispatch::{ToolObserverContext, dispatch_error_text},
@@ -28,7 +27,10 @@ impl DispatchObserver for RunFailureObserver {
         "run_failure"
     }
 
-    fn observe<'a>(&'a self, context: ToolObserverContext<'a>) -> BoxFuture<'a, anyhow::Result<()>> {
+    fn observe<'a>(
+        &'a self,
+        context: ToolObserverContext<'a>,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
         Box::pin(async move {
             if context.call.tool().name != REPORTED_TOOL {
                 return Ok(());

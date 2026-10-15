@@ -9,6 +9,10 @@ pub mod observers;
 mod prompt;
 
 #[cfg(test)]
+mod pipeline_tests;
+#[cfg(test)]
+mod tab_journal_tests;
+#[cfg(test)]
 pub mod test_support;
 
 use crate::AppState;
@@ -20,6 +24,8 @@ use rmcp::transport::streamable_http_server::{
 use std::sync::LazyLock;
 
 pub use browseros_mcp_host::HostMcpService as ClawMcpService;
+// The shared layer's modules, at the paths claw's code and tests have always used.
+pub use browseros_mcp_host::mcp::{dispatch, effects, guards, helper_runtime, naming, script_hook};
 
 /// The `session` argument description claw serves. Re-exported so the route tests
 /// assert against the real text instead of keeping a copy of it, which is what let the

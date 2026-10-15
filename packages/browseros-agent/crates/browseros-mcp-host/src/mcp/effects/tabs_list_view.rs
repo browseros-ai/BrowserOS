@@ -201,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn the_group_id_reaches_the_rendered_text_for_the_callers_own_tabs() -> anyhow::Result<()>
     {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
         call.host
             .sessions
@@ -243,8 +243,8 @@ mod tests {
     #[tokio::test]
     async fn annotates_all_tabs_in_three_ownership_buckets_and_prunes_stale_claims()
     -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
-        let transport = crate::mcp::test_support::ProfileConnection::new();
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let transport = crate::test_support::ProfileConnection::new();
         // Include a fourth global page; the result below projects a different order.
         let fourth = transport.tabs.lock().unwrap_or_else(|p| p.into_inner())[0].clone();
         let mut fourth = fourth;
@@ -359,7 +359,7 @@ mod tests {
 
     #[tokio::test]
     async fn projected_listing_prunes_only_after_fresh_global_inventory() -> anyhow::Result<()> {
-        use crate::mcp::test_support::{ProfileConnection, tool_call};
+        use crate::test_support::{ProfileConnection, tool_call};
         use std::sync::atomic::Ordering;
         let call = tool_call("tabs", json!({"action":"list"})).await?;
         let transport = ProfileConnection::new();
@@ -413,7 +413,7 @@ mod tests {
 
     #[tokio::test]
     async fn empty_tabs_list_keeps_the_ts_empty_state() -> anyhow::Result<()> {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let call = crate::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
         let result = ToolResult::text("all tabs", Some(json!({ "pages": [] })));
         let annotated = apply(ToolEffectContext {
             call: &call,

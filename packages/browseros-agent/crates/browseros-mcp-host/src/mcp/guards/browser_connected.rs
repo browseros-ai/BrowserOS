@@ -51,7 +51,7 @@ mod tests {
     #[tokio::test]
     async fn a_link_that_never_connected_says_retry_and_may_mention_starting() -> anyhow::Result<()>
     {
-        let call = crate::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let call = crate::test_support::tool_call("tabs", json!({})).await?;
         let result = guard(&call)
             .await
             .unwrap_or_else(|| ToolResult::error("the guard must reject without a session"));
