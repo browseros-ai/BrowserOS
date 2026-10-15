@@ -38,6 +38,11 @@ tracing-subscriber = { workspace = true, features = ["json"] }
 url.workspace = true
 uuid.workspace = true
 
+# db (P2): the shared browseros.sqlite, drizzle catch-up hashes, Rust-owned migration ledger.
+sea-orm.workspace = true
+sea-orm-migration.workspace = true
+sha2.workspace = true
+
 [dev-dependencies]
 serde-saphyr.workspace = true
 tempfile.workspace = true

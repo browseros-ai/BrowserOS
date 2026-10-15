@@ -1,12 +1,30 @@
 //! Persistence over the SQLite file the TS server also uses (`<browserosDir>/db/browseros.sqlite`).
-//! `Database::open` runs a drizzle-compatible catch-up over the frozen TS migrations (keeping
-//! `__drizzle_migrations`, so a rolled-back TS server still opens the file) and then sea-orm's
-//! migrator; the five stores are concrete types over one write connection. Implemented by P2;
-//! S0 ships an inert handle whose stores return `DbError::Unavailable`.
+//!
+//! Either server binary may run against this file on any launch (OTA swaps them independently),
+//! so the Rust side never takes the file over. [`Database::open`] backs it up once, replays the TS
+//! server's frozen drizzle migrations exactly as drizzle would (keeping `__drizzle_migrations`,
+//! so a rolled-back TS server opens the file as a no-op), then runs the Rust-owned sea-orm ledger
+//! (`seaql_migrations`, additive-only while the TS server can still run):
+//!
+//! ```text
+//! open.rs ── set aside if corrupt ─ pre-rust backup ─► drizzle.rs catch-up (one tx, FKs off)
+//!         ─► migrator.rs ledger ─► column check ─► one-connection pool ─► the five stores
+//! ```
+//!
+//! The stores are concrete types over that single connection, which serializes writes the way
+//! the TS per-store write queues did. They keep drizzle's encodings (booleans `0/1`, epoch-ms
+//! integers, JSON as `JSON.stringify` text) and decode leniently (`decode.rs`), because every row
+//! may have been written by the TS server.
 
 mod agents;
 mod conversations;
+mod decode;
+mod drizzle;
+mod entities;
+mod js;
+mod migrator;
 mod oauth_tokens;
+mod open;
 mod providers;
 mod schedules;
 
@@ -22,16 +40,27 @@ pub use schedules::{
 };
 
 use crate::paths::BrowserosPaths;
+use sea_orm::{DatabaseConnection, DbErr};
+use std::fmt;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DbError {
-    /// The S0 stub's answer to every query, until P2 lands the real layer.
-    #[error("database unavailable: {0}")]
-    Unavailable(&'static str),
     #[error("database error: {0}")]
     Query(String),
     #[error("database migration failed: {0}")]
     Migration(String),
+    #[error("{context}: {source}")]
+    Io {
+        context: String,
+        #[source]
+        source: std::io::Error,
+    },
+}
+
+impl From<DbErr> for DbError {
+    fn from(error: DbErr) -> Self {
+        Self::Query(error.to_string())
+    }
 }
 
 pub type DbResult<T> = Result<T, DbError>;
@@ -39,25 +68,57 @@ pub type DbResult<T> = Result<T, DbError>;
 /// What `open` did to the file; logged at startup and reported by diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MigrationOutcome {
+    /// The file did not exist: every drizzle migration and the Rust ledger were applied.
     Created,
     UpToDate,
     Migrated {
         drizzle_applied: usize,
         rust_applied: usize,
     },
+    /// The file carries migrations this build does not know (drizzle hashes from a newer TS
+    /// server, or Rust ledger entries from a newer Rust server). Nothing of ours was replayed over
+    /// them; the server runs read-forward on what is, by the additive-only rule, a superset schema.
+    DatabaseAhead {
+        unknown: Vec<String>,
+    },
 }
 
-/// The shared connection handle. Cloning shares the one write connection.
-#[derive(Debug, Clone, Default)]
+/// The shared connection handle. Cloning shares the one connection.
+#[derive(Clone)]
 pub struct Database {
-    _private: (),
+    connection: DatabaseConnection,
+}
+
+impl fmt::Debug for Database {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Database").finish_non_exhaustive()
+    }
 }
 
 impl Database {
-    /// S0 stub: opens nothing, so the skeleton can boot and serve 501s.
+    /// Opens `paths.db_file`, creating it when absent, and brings it to the current schema
+    /// (see the module docs for the order and why `__drizzle_migrations` is kept).
     pub async fn open(paths: &BrowserosPaths) -> Result<(Self, MigrationOutcome), DbError> {
-        let _ = paths;
-        Ok((Self::default(), MigrationOutcome::UpToDate))
+        let (connection, outcome) = open::open(&paths.db_file).await?;
+        match &outcome {
+            MigrationOutcome::DatabaseAhead { unknown } => tracing::warn!(
+                unknown = unknown.join(", "),
+                "database was migrated by a newer BrowserOS server; starting read-forward"
+            ),
+            outcome => tracing::info!(?outcome, "database ready"),
+        }
+        Ok((Self { connection }, outcome))
+    }
+
+    /// Closes the connection; later store calls fail. For shutdown and tests that hand the file
+    /// to another process.
+    pub async fn close(&self) -> DbResult<()> {
+        self.connection.clone().close().await?;
+        Ok(())
+    }
+
+    pub(in crate::db) fn connection(&self) -> &DatabaseConnection {
+        &self.connection
     }
 
     pub fn providers(&self) -> ProviderStore {
@@ -80,5 +141,3 @@ impl Database {
         OAuthTokenStore::new(self.clone())
     }
 }
-
-const STUB: &str = "the database layer is not implemented yet";

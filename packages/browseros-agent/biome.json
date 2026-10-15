@@ -14,7 +14,9 @@
       "!packages/claw-api/src/generated",
       "!contracts/claw-mcp/fixtures/pages",
       "!crates/browseros-core/tests/data/captured",
-      "!apps/server/src/lib/db/migrations"
+      "!apps/server/src/lib/db/migrations",
+      "!apps/server-rust/migrations",
+      "!apps/server-rust/tests/fixtures/ts-db"
     ]
   },
   "formatter": {
