@@ -18,10 +18,7 @@ pub fn error_string(status: StatusCode, message: &str) -> Response {
 
 /// 400 `{"success":false,"error":{"name":"ZodError","message":"<pretty JSON array of issues>"}}`.
 pub fn zod_400(issues: &[ZodIssue]) -> Response {
-    let issues: Vec<Value> = issues
-        .iter()
-        .map(|issue| json!({ "code": issue.code, "path": issue.path, "message": issue.message }))
-        .collect();
+    let issues: Vec<Value> = issues.iter().map(ZodIssue::wire_value).collect();
     let message = serde_json::to_string_pretty(&issues).unwrap_or_default();
     (
         StatusCode::BAD_REQUEST,
@@ -35,7 +32,10 @@ pub fn chat_envelope_500(error: &ChatError) -> Response {
     let mut body = serde_json::to_value(error).unwrap_or_else(|_| json!({}));
     if let Some(object) = body.as_object_mut() {
         object.insert("name".to_owned(), json!("InternalServerError"));
-        object.insert("statusCode".to_owned(), json!(500));
+        object.insert(
+            "statusCode".to_owned(),
+            json!(error.status_code.unwrap_or(500)),
+        );
     }
     (
         StatusCode::INTERNAL_SERVER_ERROR,
@@ -58,9 +58,33 @@ pub fn forbidden_origin() -> Response {
         .into_response()
 }
 
-/// 403 from `/mcp`'s browser-fetch rejection. P3/P15 pin the exact text.
+/// Hono's malformed-JSON HTTPException falls through the generic error handler.
+pub fn malformed_json() -> Response {
+    chat_envelope_500(&ChatError {
+        code: browseros_agent::llm::ChatErrorCode::Unknown,
+        title: "Something went wrong".into(),
+        message: "Malformed JSON in request body".into(),
+        retryable: true,
+        provider: None,
+        status_code: None,
+        docs_url: None,
+        retry_after_seconds: None,
+        details: Some("Malformed JSON in request body".into()),
+    })
+}
+
+/// 403 from `/mcp`'s browser-fetch rejection.
 pub fn forbidden_browser_request() -> Response {
-    error_string(StatusCode::FORBIDDEN, "Forbidden")
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({"error": {
+            "name": "ForbiddenBrowserRequest",
+            "message": "Browser requests are not allowed on this endpoint",
+            "code": "FORBIDDEN_BROWSER_REQUEST",
+            "statusCode": 403
+        }})),
+    )
+        .into_response()
 }
 
 /// `{"success":false,"message":"…"}`.

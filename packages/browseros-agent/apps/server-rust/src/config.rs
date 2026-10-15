@@ -2,7 +2,7 @@
 //! `config.json` (parsed like `@browseros/shared/schemas/sidecar-config`), environment variables,
 //! and the exit-code contract Chromium's supervisor reads. Owned by P3.
 
-use serde::Deserialize;
+use serde_json::Value;
 use std::{
     ffi::OsString,
     path::{Path, PathBuf},
@@ -45,9 +45,17 @@ pub fn parse_cli(args: impl IntoIterator<Item = OsString>) -> Result<CliAction, 
     while let Some(arg) = iter.next() {
         if arg == "--config" {
             let path = iter.next().ok_or(CliError::ConfigPathMissing)?;
+            let path = path.to_string_lossy();
+            let path = path.trim();
+            if path.is_empty() || path.starts_with('-') {
+                return Err(CliError::ConfigPathMissing);
+            }
             config = Some(PathBuf::from(path));
         } else if let Some(path) = arg.to_str().and_then(|arg| arg.strip_prefix("--config=")) {
-            config = Some(PathBuf::from(path));
+            if path.trim().is_empty() {
+                return Err(CliError::ConfigPathMissing);
+            }
+            config = Some(PathBuf::from(path.trim()));
         } else {
             return Err(CliError::UnknownArgument(
                 arg.to_string_lossy().into_owned(),
@@ -139,98 +147,195 @@ pub enum ConfigError {
     Invalid { path: PathBuf, message: String },
 }
 
-#[derive(Deserialize)]
-struct SidecarFile {
-    ports: SidecarPorts,
-    directories: SidecarDirectories,
-    #[serde(default)]
-    flags: SidecarFlags,
-    #[serde(default)]
-    instance: SidecarInstance,
-}
-
-#[derive(Deserialize)]
-struct SidecarPorts {
-    server: PortValue,
-    cdp: PortValue,
-    #[serde(default)]
-    proxy: Option<PortValue>,
-}
-
-/// Ports arrive as integers or numeric strings.
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum PortValue {
-    Number(u16),
-    Text(String),
-}
-
-#[derive(Deserialize)]
-struct SidecarDirectories {
-    resources: String,
-    execution: String,
-}
-
-#[derive(Deserialize, Default)]
-struct SidecarFlags {
-    #[serde(default)]
-    allow_remote_in_mcp: bool,
-}
-
-#[derive(Deserialize, Default)]
-struct SidecarInstance {
-    client_id: Option<String>,
-    install_id: Option<String>,
-    browseros_version: Option<String>,
-    chromium_version: Option<String>,
-}
-
 impl Config {
-    /// Reads and normalizes the sidecar. S0 covers the shape; P3 pins every TS error text and
-    /// edge case (blank directories, out-of-range ports) with tests.
+    /// Validate the optional sidecar sections before requiring the server's four
+    /// fields, matching shared/sidecar-config then config.ts projection order.
     pub fn load(path: &Path, env: &EnvConfig) -> Result<Self, ConfigError> {
-        let invalid = |message: String| ConfigError::Invalid {
-            path: path.to_path_buf(),
-            message,
-        };
-        let text = std::fs::read_to_string(path).map_err(|source| ConfigError::Read {
-            path: path.to_path_buf(),
+        let path = absolute_path(path).map_err(|source| ConfigError::Read {
+            path: path.to_owned(),
             source,
         })?;
-        let file: SidecarFile =
-            serde_json::from_str(&text).map_err(|error| invalid(error.to_string()))?;
-        let port = |name: &str, value: PortValue| -> Result<u16, ConfigError> {
-            match value {
-                PortValue::Number(port) => Ok(port),
-                PortValue::Text(text) => text
-                    .trim()
-                    .parse()
-                    .map_err(|_| invalid(format!("ports.{name} must be a port number"))),
-            }
+        let invalid = |message: String| ConfigError::Invalid {
+            path: path.clone(),
+            message,
         };
-        let base = path.parent().map(Path::to_path_buf).unwrap_or_default();
-        let dir = |value: &str| base.join(value.trim());
-        Ok(Self {
-            server_port: port("server", file.ports.server)?,
-            cdp_port: port("cdp", file.ports.cdp)?,
-            proxy_port: file
-                .ports
-                .proxy
-                .map(|proxy| port("proxy", proxy))
-                .transpose()?,
-            resources_dir: dir(&file.directories.resources),
-            execution_dir: dir(&file.directories.execution),
-            allow_remote_in_mcp: file.flags.allow_remote_in_mcp,
-            instance: InstanceInfo {
-                client_id: file.instance.client_id,
-                install_id: file.instance.install_id,
-                browseros_version: file.instance.browseros_version,
-                chromium_version: file.instance.chromium_version,
-            },
-            browseros_dir: crate::paths::resolve_browseros_dir(env),
-            env: env.clone(),
-        })
+        let text = std::fs::read_to_string(&path).map_err(|source| ConfigError::Read {
+            path: path.clone(),
+            source,
+        })?;
+        let file: Value = serde_json::from_str(&text)
+            .map_err(|error| invalid(format!("Sidecar config file error: {error}")))?;
+        if !file.is_object() {
+            return Err(invalid(
+                "Invalid sidecar configuration: config must be an object".into(),
+            ));
+        }
+        for section in ["ports", "directories", "flags", "instance", "replay"] {
+            if let Some(value) = file.get(section)
+                && !value.is_object()
+            {
+                return Err(invalid(format!(
+                    "Invalid sidecar configuration: {section} must be an object"
+                )));
+            }
+        }
+        let port = |name: &str| -> Result<Option<u16>, ConfigError> {
+            let Some(value) = file.get("ports").and_then(|ports| ports.get(name)) else {
+                return Ok(None);
+            };
+            let port = match value {
+                Value::Number(number) => number
+                    .as_f64()
+                    .filter(|n| n.fract() == 0.0 && *n >= 1.0 && *n <= 65535.0)
+                    .map(|n| n as u16),
+                Value::String(text) => {
+                    let text = text.trim();
+                    (!text.is_empty() && text.bytes().all(|b| b.is_ascii_digit()))
+                        .then(|| text.parse::<u16>().ok().filter(|port| *port > 0))
+                        .flatten()
+                }
+                _ => None,
+            };
+            port.map(Some).ok_or_else(|| invalid(format!("Invalid sidecar configuration:\n  - ports.{name}: must be an integer port between 1 and 65535")))
+        };
+        let server_port = port("server")?;
+        let cdp_port = port("cdp")?;
+        let proxy_port = port("proxy")?;
+        let dir = |name: &str| -> Result<Option<PathBuf>, ConfigError> {
+            let Some(value) = file
+                .get("directories")
+                .and_then(|directories| directories.get(name))
+            else {
+                return Ok(None);
+            };
+            let text = value.as_str().map(str::trim).filter(|text| !text.is_empty()).ok_or_else(|| invalid(format!("Invalid sidecar configuration:\n  - directories.{name}: must be a non-empty path")))?;
+            Ok(Some(normalize_path(
+                &path.parent().unwrap_or(Path::new(".")).join(text),
+            )))
+        };
+        let resources_dir = dir("resources")?;
+        let execution_dir = dir("execution")?;
+        let allow_remote_in_mcp = match file.pointer("/flags/allow_remote_in_mcp") {
+            Some(value) => value.as_bool().ok_or_else(|| {
+                invalid(
+                    "Invalid sidecar configuration: flags.allow_remote_in_mcp must be a boolean"
+                        .into(),
+                )
+            })?,
+            None => false,
+        };
+        let instance = |name: &str| -> Result<Option<String>, ConfigError> {
+            file.get("instance")
+                .and_then(|instance| instance.get(name))
+                .map(|value| {
+                    value.as_str().map(str::to_owned).ok_or_else(|| {
+                        invalid(format!(
+                            "Invalid sidecar configuration: instance.{name} must be a string"
+                        ))
+                    })
+                })
+                .transpose()
+        };
+        let instance = InstanceInfo {
+            client_id: instance("client_id")?,
+            install_id: instance("install_id")?,
+            browseros_version: instance("browseros_version")?,
+            chromium_version: instance("chromium_version")?,
+        };
+        if let Some(value) = file.pointer("/replay/retentionDays")
+            && !value
+                .as_f64()
+                .is_some_and(|number| number.is_finite() && number > 0.0 && number.fract() == 0.0)
+        {
+            return Err(invalid(
+                "Invalid sidecar configuration: replay.retentionDays must be a positive integer"
+                    .into(),
+            ));
+        }
+        let missing: Vec<&str> = [
+            ("ports.server", server_port.is_none()),
+            ("ports.cdp", cdp_port.is_none()),
+            ("directories.resources", resources_dir.is_none()),
+            ("directories.execution", execution_dir.is_none()),
+        ]
+        .into_iter()
+        .filter_map(|(name, missing)| missing.then_some(name))
+        .collect();
+        if !missing.is_empty() {
+            return Err(invalid(format!(
+                "Invalid server sidecar configuration:\n{}",
+                missing
+                    .iter()
+                    .map(|name| format!("  - {name}: Required"))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            )));
+        }
+        if env.node_env.as_deref() == Some("production") {
+            let missing: Vec<&str> = [
+                ("SENTRY_DSN", option_env!("SENTRY_DSN")),
+                ("POSTHOG_API_KEY", option_env!("POSTHOG_API_KEY")),
+            ]
+            .into_iter()
+            .filter_map(|(name, value)| {
+                value
+                    .filter(|value| !value.is_empty())
+                    .is_none()
+                    .then_some(name)
+            })
+            .collect();
+            if !missing.is_empty() {
+                return Err(invalid(format!(
+                    "Missing required environment variables for production:\n{}",
+                    missing
+                        .iter()
+                        .map(|name| format!("  - {name}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )));
+            }
+        }
+        // All four are proved present above; no fallback ports may escape into production.
+        match (server_port, cdp_port, resources_dir, execution_dir) {
+            (Some(server_port), Some(cdp_port), Some(resources_dir), Some(execution_dir)) => {
+                Ok(Self {
+                    server_port,
+                    cdp_port,
+                    proxy_port,
+                    resources_dir,
+                    execution_dir,
+                    allow_remote_in_mcp,
+                    instance,
+                    browseros_dir: crate::paths::resolve_browseros_dir(env),
+                    env: env.clone(),
+                })
+            }
+            _ => Err(invalid("Invalid server sidecar configuration".into())),
+        }
     }
+}
+
+fn absolute_path(path: &Path) -> std::io::Result<PathBuf> {
+    Ok(normalize_path(&if path.is_absolute() {
+        path.to_owned()
+    } else {
+        std::env::current_dir()?.join(path)
+    }))
+}
+
+/// Lexical resolution like node:path.resolve: directories need not exist yet.
+fn normalize_path(path: &Path) -> PathBuf {
+    let mut output = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                output.pop();
+            }
+            component => output.push(component.as_os_str()),
+        }
+    }
+    output
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use crate::{
     oauth::TokenManager,
     paths::BrowserosPaths,
 };
-use axum::{Router, routing::MethodFilter};
+use axum::{Router, middleware, routing::MethodFilter};
 use browseros_agent::llm::HttpStack;
 use std::{ops::Deref, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
@@ -33,6 +33,7 @@ pub struct AppState(Arc<AppInner>);
 
 pub struct AppInner {
     pub config: Config,
+    pub origins: http::security::OriginPolicy,
     pub paths: BrowserosPaths,
     pub identity: Identity,
     pub activity: Arc<ServerActivity>,
@@ -82,6 +83,8 @@ impl ShutdownSignal {
 
 #[derive(Debug, thiserror::Error)]
 pub enum StartupError {
+    #[error("failed to prepare server directories: {0}")]
+    Paths(#[from] std::io::Error),
     #[error(transparent)]
     Identity(#[from] IdentityError),
     #[error(transparent)]
@@ -93,6 +96,7 @@ pub enum StartupError {
 impl AppState {
     pub async fn start(config: Config) -> Result<Self, StartupError> {
         let paths = BrowserosPaths::new(config.browseros_dir.clone());
+        paths.prepare().await?;
         let identity = Identity::load(&config, &paths).await?;
         let activity = Arc::new(ServerActivity::new());
         let (db, _outcome) = Database::open(&paths).await?;
@@ -126,6 +130,7 @@ impl AppState {
         });
 
         Ok(Self(Arc::new(AppInner {
+            origins: http::security::OriginPolicy::new(&config.env),
             providers: db.providers(),
             agents: db.agents(),
             conversations: db.conversations(),
@@ -146,6 +151,22 @@ impl AppState {
             shutdown: ShutdownSignal::new(),
         })))
     }
+
+    /// Until P15 attaches the shared host, no browser is injected and health must
+    /// report disconnected. P15 replaces this read with host.browser().link_status().
+    pub async fn cdp_connected(&self) -> bool {
+        false
+    }
+
+    /// Bounded by the process owner's deadline; dropping HTTP clients never stops
+    /// detached work, so service cleanup belongs to process shutdown instead.
+    pub async fn stop(&self) {
+        tokio::join!(
+            self.oauth.shutdown(),
+            self.klavis.stop(),
+            self.acp.shutdown()
+        );
+    }
 }
 
 /// Mounts exactly `http::ROUTES` (the contract test relies on this being the only registration
@@ -161,5 +182,9 @@ pub fn build_router(state: AppState) -> Router {
     router
         .fallback(http::not_found)
         .method_not_allowed_fallback(http::not_found)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            http::security::ingress,
+        ))
         .with_state(state)
 }

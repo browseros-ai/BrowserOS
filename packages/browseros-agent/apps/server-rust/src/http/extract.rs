@@ -1,23 +1,145 @@
-//! Request extractors that reproduce the TS (Hono + zod) input quirks: `ZodJson<T>` (non-JSON
-//! content-type → `{}`; validation failure → 400 ZodError body; malformed JSON → 500 chat
-//! envelope) and `ZodUuid` (the exact zod-4 uuid regex, stricter than `Uuid::parse_str` in some
-//! ways and looser in others). Implemented by P3; S0 ships the types.
+//! Input compatibility belongs at this seam: Hono treats non-JSON bodies as {},
+//! malformed JSON escapes as a 500, and route-owned schemas supply full Zod issues.
+//! Keeping validation explicit avoids pretending serde enforces Zod defaults/constraints.
 
+use axum::{
+    body::to_bytes,
+    extract::{FromRequest, FromRequestParts, Path, Request},
+    response::Response,
+};
+use http::request::Parts;
 use serde::Serialize;
+use serde_json::{Value, json};
+use std::collections::HashMap;
 use uuid::Uuid;
 
-/// A JSON body validated the zod way. Implements `FromRequest` once P3 lands.
 #[derive(Debug, Clone)]
 pub struct ZodJson<T>(pub T);
 
-/// A path uuid accepted by zod 4's regex (versions 1-8, RFC variant, nil and max).
+/// Route bodies implement their TS schema here, including transforms, defaults,
+/// stripping and strictness. Value is the raw JSON adapter for hand-written schemas.
+pub trait ZodSchema: Sized {
+    fn validate(value: Value) -> Result<Self, Vec<ZodIssue>>;
+}
+impl ZodSchema for Value {
+    fn validate(value: Value) -> Result<Self, Vec<ZodIssue>> {
+        Ok(value)
+    }
+}
+impl<T: ZodSchema + Send, S: Send + Sync> FromRequest<S> for ZodJson<T> {
+    type Rejection = Response;
+    async fn from_request(request: Request, _: &S) -> Result<Self, Self::Rejection> {
+        let content_type = request
+            .headers()
+            .get(http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("");
+        let media_type = content_type.split(';').next().unwrap_or("").trim();
+        let json_type = media_type == "application/json"
+            || (media_type.starts_with("application/") && media_type.ends_with("+json"));
+        let value = if json_type {
+            // Hono has no application-level JSON size limit. MCP owns its SDK limit separately.
+            let bytes = to_bytes(request.into_body(), usize::MAX)
+                .await
+                .map_err(|_| super::errors::malformed_json())?;
+            serde_json::from_slice(&bytes).map_err(|_| super::errors::malformed_json())?
+        } else {
+            json!({})
+        };
+        T::validate(value)
+            .map(Self)
+            .map_err(|issues| super::errors::zod_400(&issues))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZodUuid(pub Uuid);
+/// Exact zod-4 UUID expression. Its lowercase-only max UUID alternative is intentional.
+pub const UUID_PATTERN: &str = "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$";
+impl ZodUuid {
+    pub fn parse(value: &str) -> Option<Self> {
+        let bytes = value.as_bytes();
+        if bytes.len() != 36 {
+            return None;
+        }
+        let canonical = bytes.iter().enumerate().all(|(i, byte)| {
+            if [8, 13, 18, 23].contains(&i) {
+                *byte == b'-'
+            } else {
+                byte.is_ascii_hexdigit()
+            }
+        });
+        let variant = (b'1'..=b'8').contains(&bytes[14])
+            && matches!(bytes[19], b'8' | b'9' | b'a' | b'b' | b'A' | b'B');
+        (canonical
+            && (variant
+                || value == "00000000-0000-0000-0000-000000000000"
+                || value == "ffffffff-ffff-ffff-ffff-ffffffffffff"))
+            .then(|| Uuid::parse_str(value).ok().map(Self))
+            .flatten()
+    }
+    pub fn issue(path: Vec<Value>) -> ZodIssue {
+        ZodIssue {
+            code: "invalid_format".into(),
+            path,
+            message: "Invalid UUID".into(),
+            attributes: json!({"origin":"string","format":"uuid","pattern":format!("/{UUID_PATTERN}/")}),
+        }
+    }
+}
+impl<S: Send + Sync> FromRequestParts<S> for ZodUuid {
+    type Rejection = Response;
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let Path(params) = Path::<HashMap<String, String>>::from_request_parts(parts, state)
+            .await
+            .map_err(|_| {
+                super::errors::error_string(http::StatusCode::BAD_REQUEST, "Invalid path parameter")
+            })?;
+        let (name, value) = params.iter().next().ok_or_else(|| {
+            super::errors::error_string(http::StatusCode::BAD_REQUEST, "Missing path parameter")
+        })?;
+        Self::parse(value).ok_or_else(|| super::errors::zod_400(&[Self::issue(vec![json!(name)])]))
+    }
+}
 
-/// One entry of a zod error's issue array, rendered into the 400 body's `message`.
+/// Zod carries schema-specific fields before path/message (expected, minimum,
+/// pattern, union errors, etc.). Preserve them; a three-field issue loses wire data.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ZodIssue {
     pub code: String,
-    pub path: Vec<serde_json::Value>,
+    pub path: Vec<Value>,
     pub message: String,
+    #[serde(flatten)]
+    pub attributes: Value,
+}
+impl ZodIssue {
+    pub fn new(code: impl Into<String>, path: Vec<Value>, message: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            path,
+            message: message.into(),
+            attributes: json!({}),
+        }
+    }
+    pub fn wire_value(&self) -> Value {
+        let mut issue = serde_json::Map::new();
+        // Zod's field insertion order is visible inside its JSON-stringified message.
+        if let Some(origin) = self.attributes.get("origin") {
+            issue.insert("origin".into(), origin.clone());
+        }
+        if let Some(expected) = self.attributes.get("expected") {
+            issue.insert("expected".into(), expected.clone());
+        }
+        issue.insert("code".into(), json!(self.code));
+        if let Some(attributes) = self.attributes.as_object() {
+            for (key, value) in attributes {
+                if key != "origin" && key != "expected" {
+                    issue.insert(key.clone(), value.clone());
+                }
+            }
+        }
+        issue.insert("path".into(), json!(self.path));
+        issue.insert("message".into(), json!(self.message));
+        Value::Object(issue)
+    }
 }

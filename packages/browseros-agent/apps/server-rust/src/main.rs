@@ -1,6 +1,6 @@
-//! `browseros-server-rs` (staged as `resources/bin/browseros_server`): parses the CLI, loads the
-//! sidecar, starts `AppState`, binds `127.0.0.1:<ports.server>` and serves until shutdown.
-//! Exit codes are the Chromium supervisor contract (`config::exit`). Owned by P3.
+//! Chromium's process protocol: resolve CLI/sidecar, probe the port, compose services,
+//! bind on IPv4 LAN, publish discovery, and clean up within its five-second grace.
+//! Shutdown exits 0 while signals exit 3 so Chromium can distinguish intentional stops.
 
 use server_rust::{
     AppState, VERSION, build_router,
@@ -12,16 +12,13 @@ use std::{
     io::Write,
     net::{Ipv4Addr, SocketAddr},
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicI32, Ordering},
-    },
+    time::Duration,
 };
+use tokio_util::sync::CancellationToken;
 
 fn main() {
     std::process::exit(run());
 }
-
 fn run() -> i32 {
     let action = match config::parse_cli(std::env::args_os().skip(1)) {
         Ok(action) => action,
@@ -41,74 +38,96 @@ fn run() -> i32 {
         },
     }
 }
-
 async fn serve(config_path: &Path) -> i32 {
     let env = EnvConfig::from_env();
-    telemetry::logging::init(&env);
     let config = match Config::load(config_path, &env) {
         Ok(config) => config,
         Err(error) => return fatal(&error.to_string(), exit::GENERAL),
     };
+    telemetry::logging::init_file(&env, &config.execution_dir);
+    if std::env::var("BROWSEROS_AI_SDK_DEVTOOLS").as_deref() == Ok("true") {
+        tracing::warn!("BROWSEROS_AI_SDK_DEVTOOLS is unsupported in Rust");
+    }
     let port = config.server_port;
+    // Probe loopback separately before the LAN bind, just as TS's exclusive net
+    // listener does. Chromium advances ports only on this distinct exit code.
+    match std::net::TcpListener::bind((Ipv4Addr::LOCALHOST, port)) {
+        Ok(probe) => drop(probe),
+        Err(error) => return bind_failure(port, &error),
+    }
     let state = match AppState::start(config).await {
         Ok(state) => state,
         Err(error) => return fatal(&error.to_string(), exit::GENERAL),
     };
-    let listener =
-        match tokio::net::TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port))).await {
-            Ok(listener) => listener,
-            Err(error) if error.kind() == std::io::ErrorKind::AddrInUse => {
-                return fatal(
-                    &format!(
-                        "Port {port} is already in use. Chromium should try a different port."
-                    ),
-                    exit::PORT_CONFLICT,
-                );
-            }
-            Err(error) => return fatal(&error.to_string(), exit::GENERAL),
-        };
-    let server_file = ServerFile::new(&state.paths.browseros_dir);
+    let listener = match tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            state.stop().await;
+            return bind_failure(port, &error);
+        }
+    };
+    let server_file = ServerFile::with_config(&state.config, &state.identity);
+    let stop_http = CancellationToken::new();
+    let server_stop = stop_http.clone();
+    let router = build_router(state.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    let mut server = tokio::spawn(async move {
+        axum::serve(listener, router)
+            .with_graceful_shutdown(server_stop.cancelled_owned())
+            .await
+    });
+    // The listener and HTTP owner now exist; failed discovery is a warning, never
+    // an excuse to kill an otherwise healthy server (TS parity).
     if let Err(error) = server_file.write(port).await {
-        tracing::warn!(%error, "failed to write server.json");
+        tracing::warn!(%error,"Failed to write server config for auto-discovery");
     }
     tracing::info!(port, version = VERSION, "http_server.started");
-
-    // Which exit code the process ends with is decided by what stopped the server: the shutdown
-    // route exits 0, a termination signal exits 3.
-    let exit_code = Arc::new(AtomicI32::new(exit::SUCCESS));
-    let signal_code = exit_code.clone();
-    let shutdown = state.shutdown.clone();
-    let result = axum::serve(listener, build_router(state))
-        .with_graceful_shutdown(async move {
-            tokio::select! {
-                () = shutdown.triggered() => {}
-                () = termination_signal() => signal_code.store(exit::SIGNAL, Ordering::SeqCst),
-            }
-        })
-        .await;
+    let code = tokio::select! {
+        () = state.shutdown.triggered() => exit::SUCCESS,
+        () = termination_signal() => exit::SIGNAL,
+        result = &mut server => {
+            tracing::error!(?result,"HTTP server stopped unexpectedly");
+            server_file.remove().await;
+            let _ = tokio::time::timeout(Duration::from_secs(1),state.stop()).await;
+            return exit::GENERAL;
+        }
+    };
+    stop_http.cancel();
+    // Idle keep-alives and SSE clients must not consume Chromium's entire grace.
+    // Graceful drain flushes the shutdown response; the deadline bounds stuck work.
+    if tokio::time::timeout(Duration::from_secs(3), &mut server)
+        .await
+        .is_err()
+    {
+        server.abort();
+        let _ = server.await;
+    }
+    let _ = tokio::time::timeout(Duration::from_secs(1), state.stop()).await;
     server_file.remove().await;
-    match result {
-        Ok(()) => exit_code.load(Ordering::SeqCst),
-        Err(error) => fatal(&error.to_string(), exit::GENERAL),
+    code
+}
+fn bind_failure(port: u16, error: &std::io::Error) -> i32 {
+    if error.kind() == std::io::ErrorKind::AddrInUse {
+        fatal(
+            &format!("Port {port} is already in use. Chromium should try a different port."),
+            exit::PORT_CONFLICT,
+        )
+    } else {
+        fatal(
+            &format!("Failed to start HTTP server on port {port}: {error}"),
+            exit::GENERAL,
+        )
     }
 }
-
 async fn termination_signal() {
     #[cfg(unix)]
     if let Ok(mut terminate) =
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
     {
-        tokio::select! {
-            _ = tokio::signal::ctrl_c() => {}
-            _ = terminate.recv() => {}
-        }
+        tokio::select! { _ = tokio::signal::ctrl_c() => {}, _ = terminate.recv() => {} }
         return;
     }
     let _ = tokio::signal::ctrl_c().await;
 }
-
-/// Chromium does not capture stderr reliably, but the TS server's `[FATAL]` lines are what
-/// operators grep for; keep the prefix.
 fn fatal(message: &str, code: i32) -> i32 {
     let _ = writeln!(std::io::stderr().lock(), "[FATAL] {message}");
     code
