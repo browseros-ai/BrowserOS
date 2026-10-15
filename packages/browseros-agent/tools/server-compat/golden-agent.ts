@@ -5,12 +5,16 @@
  */
 import { createRequire } from 'node:module'
 import { resolve } from 'node:path'
-import { MockMCPTransport } from '../../apps/server/node_modules/@ai-sdk/mcp/src/tool/mock-mcp-transport'
+import type {
+  JSONRPCMessage,
+  MCPTransport,
+} from '../../apps/server/node_modules/@ai-sdk/mcp'
 import {
   computeBudget,
   createCompactionPrepareStep,
   estimateTokens,
   getCurrentTokenCount,
+  type StepWithUsage,
 } from '../../apps/server/src/agent/compaction'
 import { stripBinaryContent } from '../../apps/server/src/agent/compaction/content'
 import { formatUserMessage } from '../../apps/server/src/agent/format-message'
@@ -41,10 +45,27 @@ type ModelMessage = import('../../apps/server/node_modules/ai').ModelMessage
 type UIMessage = import('../../apps/server/node_modules/ai').UIMessage
 type Json = Record<string, unknown>
 
+/** Only discovery is faked: the returned tools retain the production SDK output codec. */
+class GoldenTransport implements MCPTransport {
+  onmessage?: (message: JSONRPCMessage) => void
+  async start() {}
+  async close() {}
+  async send(message: JSONRPCMessage) {
+    if (!('id' in message) || !('method' in message)) return
+    const result =
+      message.method === 'initialize'
+        ? {
+            protocolVersion: '2025-06-18',
+            capabilities: { tools: {} },
+            serverInfo: { name: 'golden', version: '1' },
+          }
+        : { tools: [{ name: 'snapshot', inputSchema: { type: 'object' } }] }
+    this.onmessage?.({ jsonrpc: '2.0', id: message.id, result })
+  }
+}
+
 const client = await createMCPClient({
-  transport: new MockMCPTransport({
-    overrideTools: [{ name: 'snapshot', inputSchema: { type: 'object' } }],
-  }),
+  transport: new GoldenTransport(),
 })
 const tools = {
   ...(await client.tools()),
@@ -294,7 +315,7 @@ for (const input of conversionInputs) {
   conversion.push({
     ...input,
     catalog,
-    expected: await convertToModelMessages(input.history, {
+    expected: await convertToModelMessages(input.history as UIMessage[], {
       tools,
       ignoreIncompleteToolCalls: true,
     }),
@@ -624,10 +645,12 @@ const prepareInputs: Json[] = [
 ]
 const prepare = []
 for (const input of prepareInputs) {
-  if (input.withoutTrailing) input.messages = input.messages.slice(0, 3)
+  if (input.withoutTrailing)
+    input.messages = (input.messages as ModelMessage[]).slice(0, 3)
   const messages = input.messages as ModelMessage[]
-  const steps = input.steps ?? []
-  const budget = computeBudget(input.window)
+  const steps = (input.steps ?? []) as StepWithUsage[]
+  const window = input.window as number
+  const budget = computeBudget(window)
   const current = getCurrentTokenCount(steps, messages, budget.overhead)
   const c1 = pruneMessages({
     messages: stripBinaryContent(messages),
@@ -636,7 +659,7 @@ for (const input of prepareInputs) {
   })
   const c2 = pruneMessages({ messages: c1, reasoning: 'all', toolCalls: 'all' })
   const expected = (
-    await createCompactionPrepareStep({ contextWindow: input.window })({
+    await createCompactionPrepareStep({ contextWindow: window })({
       messages,
       steps,
     })
