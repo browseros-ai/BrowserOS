@@ -31,7 +31,8 @@ http.workspace = true
 reqwest.workspace = true
 regex.workspace = true
 serde.workspace = true
-# Preserve JS object insertion order when HTTP/chat payloads cross the stream seam.
+# Preserve JS object insertion order in HTTP/chat payloads, raw customConfig strings, and
+# nested Zod issue strings; reordering keys changes those string-valued wire fields.
 serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 tokio.workspace = true
