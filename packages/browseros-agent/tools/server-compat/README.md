@@ -132,7 +132,7 @@ bun run tools/server-compat/e2e/driver.ts --a rust \
 The driver uses `scripts/dev/inspect-ui.ts` from the **test-ui skill**: targets, accessibility snapshot,
 and screenshot over this run's CDP port. It never reuses element IDs after a render or connects to an owner
 browser. It stops its owned browser/server after inspection. For interactive journeys, run the isolated
-`tools/dev/run.sh watch --new` (add `--rust` for Rust), preserve its temporary HOME/profile, and follow the
+`tools/dev/run.sh watch --new` (Rust by default; add `--ts` for TypeScript), preserve its temporary HOME/profile, and follow the
 instructions in `e2e/checklist.ts` with `BROWSEROS_CDP_PORT` set to that run's printed port. Supervision/exit-code
 journeys specifically require that dev supervisor: the boot helper disables the bundled server supervisor.
 Never install MCP configs, OAuth credentials or connectors into an owner's HOME as part of these checks.

@@ -21,7 +21,7 @@ cd apps/server && bun run test:browser
 cd apps/server && bun run test:tools
 ```
 
-Tool, browser, and integration tests may require a running BrowserOS/CDP target. For local server artifact checks, prefer `bun run build:server:test`; use `bun scripts/build/server.ts --target=all --no-upload` when you need all targets without R2 upload.
+Tool, browser, and integration tests may require a running BrowserOS/CDP target. BrowserOS ships the Rust port (`apps/server-rust`); this TypeScript server is kept buildable for comparison and rollback. For local artifact checks of this server, prefer `bun run build:server-ts:test`; use `bun scripts/build/server.ts --target=all --no-upload` when you need all targets without R2 upload.
 
 ## Entry points
 

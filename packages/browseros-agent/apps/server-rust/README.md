@@ -1,8 +1,8 @@
 # server-rust
 
-`apps/server-rust` is the Rust port of `apps/server`: same binary contract (`--version`,
-`--config <sidecar>`, exit codes 0/1/2/3), same routes, bodies, status codes and SSE bytes, same
-`~/.browseros` data. Browser tools are shared with claw-server through `crates/browseros-mcp-host`.
+`apps/server-rust` is the Rust port of `apps/server` and the server BrowserOS ships: same binary
+contract (`--version`, `--config <sidecar>`, exit codes 0/1/2/3), same routes, bodies, status codes
+and SSE bytes, same `~/.browseros` data. Browser tools are shared with claw-server through `crates/browseros-mcp-host`.
 Package `server-rust`, binary `browseros-server-rs`, staged as `resources/bin/browseros_server`.
 
 ```
@@ -22,9 +22,26 @@ conversation, so admission, read-only mode and tab ownership are enforced in one
 ```sh
 cargo run -p server-rust --bin browseros-server-rs -- --version
 cargo run -p server-rust --bin browseros-server-rs -- --config ../../config.dev.json
-tools/dev/run.sh watch --rust --new     # from packages/browseros-agent: BrowserOS + extension + this server
-bun run build:server-rust:test          # darwin-arm64 resources zip
+tools/dev/run.sh watch --new     # from packages/browseros-agent: BrowserOS + extension + this server
+bun run build:server:test        # darwin-arm64 resources zip
 ```
+
+## Shipping
+
+This is the BrowserOS server release. Release component `server` versions this crate's
+`Cargo.toml` (0.1.x, above every TypeScript `agent-server/v0.0.x` tag) under the same tag prefix,
+archive names (`browseros-server-resources-<target>.zip`) and R2 prefix (`artifacts/server`), so
+Chromium's download, signing and OTA paths are unchanged. `release-server.yml` builds all five
+targets with `bun scripts/build/server-rust.ts --target=all --upload --versioned-only` on one
+macOS runner; source-mode browser builds use the same packager (macOS hosts only). `bun run
+build:server*` and `tools/dev/run.sh watch` default to it.
+
+The TypeScript server stays in `apps/server` and still builds: `bun run build:server-ts:test`,
+`tools/dev/run.sh watch --ts`. To ship it again, revert the three flip commits ("ship the Rust
+server as the BrowserOS server component", "release the BrowserOS server from the Rust
+packager", "default the dev loop and build scripts to the Rust server"); the first two alone
+restore the release path. Allocation never goes backwards, so the next TypeScript release is
+numbered above the newest published Rust version (0.0.168 after 0.1.3 releases as 0.1.4).
 
 ## Verify
 

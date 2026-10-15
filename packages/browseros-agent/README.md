@@ -62,23 +62,23 @@ A new package that omits this looks green in your editor and then fails CI with 
 
 ```bash
 bun run build                 # server and agent
-bun run build:server          # server resource artifacts for every target, uploads zips to R2
+bun run build:server          # BrowserOS Rust server resources for every target, uploads zips to R2
+bun run build:server-ts       # the previous TypeScript server, same artifact names
 bun run build:claw-server     # five-platform BrowserOS neo Rust resources, uploads zips to R2
 bun run build:agent           # the extension
 ```
 
-`build:server` emits under `dist/prod/server/<target>/`, with zips at `dist/prod/server/`. The underlying script takes options directly:
+`build:server` packages `apps/server-rust` and emits under `dist/prod/server-rust/<target>/`, with zips at `dist/prod/server-rust/` (the TypeScript `build:server-ts` uses `dist/prod/server/`). The underlying script takes options directly:
 
 ```bash
-bun scripts/build/server.ts --target=all
-bun scripts/build/server.ts --target=darwin-arm64,linux-x64
-bun scripts/build/server.ts --target=all --manifest=scripts/build/config/server-prod-resources.json
-bun scripts/build/server.ts --target=all --no-upload
+bun scripts/build/server-rust.ts --target=all
+bun scripts/build/server-rust.ts --target=darwin-arm64,linux-x64
+bun scripts/build/server-rust.ts --target=all --no-upload
 ```
 
-### BrowserOS neo Rust artifacts
+### Rust server artifacts
 
-The Rust builder runs on macOS and produces the same five resource zips as `release-claw-server.yml`: macOS ARM64 and x64, Linux ARM64 and x64, and Windows x64. Darwin targets use Cargo and Xcode, Linux targets use Zig with a glibc 2.17 floor, and Windows uses the MSVC ABI through `cargo-xwin`.
+Both Rust servers (BrowserOS and BrowserOS neo) share one builder. It runs on macOS and produces five resource zips: macOS ARM64 and x64, Linux ARM64 and x64, and Windows x64. Darwin targets use Cargo and Xcode, Linux targets use Zig with a glibc 2.17 floor, and Windows uses the MSVC ABI through `cargo-xwin`.
 
 One-time host toolchain:
 

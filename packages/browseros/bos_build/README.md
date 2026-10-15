@@ -299,7 +299,7 @@ its own package file:
 
 | Bundle | Version source | Workflow | Tag |
 | --- | --- | --- | --- |
-| BrowserOS agent server | `packages/browseros-agent/apps/server/package.json` | `release-server.yml` | `agent-server/v*` |
+| BrowserOS agent server | `packages/browseros-agent/apps/server-rust/Cargo.toml` | `release-server.yml` | `agent-server/v*` |
 | BrowserClaw server | `.../apps/claw-server/Cargo.toml` | `release-claw-server.yml` | `claw-server/v*` |
 | BrowserOS onboarding | `.../apps/app-onboard/package.json` | `release-app-onboard.yml` | `app-onboard/v*` |
 | BrowserClaw onboarding | `.../apps/claw-onboard/package.json` | `release-claw-onboard.yml` | `claw-onboard/v*` |
