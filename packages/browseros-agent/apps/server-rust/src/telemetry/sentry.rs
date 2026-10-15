@@ -21,8 +21,8 @@ pub struct SentryGuard {
 
 /// The process's one Sentry client. `main` creates it before CLI/config parsing (so startup
 /// failures are reported), keeps it until the runtime has shut down (dropping it flushes), and
-/// shares it as `Arc<SentryGuard>` with the services that report: the HTTP layer for unhandled
-/// route errors and the chat service for scheduled-turn failures.
+/// shares it as `Arc<SentryGuard>` with `http::security::ingress`, which reports every request
+/// that ended on TS's unhandled-error path (`app.onError`, the `/mcp` catch).
 pub fn init() -> SentryGuard {
     let Some(client) = BUILD_DSN.and_then(build_client) else {
         return SentryGuard::default();
@@ -67,7 +67,7 @@ fn install_panic_hook(client: &Arc<sentry::Client>) {
                     .copied()
                     .or_else(|| info.payload().downcast_ref::<String>().map(String::as_str))
                     .unwrap_or("non-string panic payload");
-                client.capture_event(event("panic", message, None), None);
+                client.capture_event(event("panic", message, &[]), None);
             }
             // Preserve the application's previous hook; ownership is never taken back on
             // guard drop, which could overwrite a hook installed by another module later.
@@ -83,15 +83,17 @@ impl SentryGuard {
 
     pub fn capture_startup_error(&self, message: &str) {
         if let Some(client) = &self.client {
-            client.capture_event(event("startup", message, None), None);
+            client.capture_event(event("startup", message, &[]), None);
         }
     }
 
-    /// A scheduled chat failure is explicitly tagged without inheriting prompts, URLs or
-    /// user identity from an ambient hub. Callers pass only the failure message.
-    pub fn capture_scheduled_error(&self, message: &str) {
+    /// A request that ended on TS's unhandled-error path, with the scope tags TS sets there
+    /// (`route`, `method`, `request-type` for chat; `route=mcp`, `leased` for `/mcp`). Only
+    /// the failure message and these tags are sent: no prompts, URLs or user identity from an
+    /// ambient hub.
+    pub fn capture_request_error(&self, message: &str, tags: &[(&str, &str)]) {
         if let Some(client) = &self.client {
-            client.capture_event(event("chat", message, Some("schedule")), None);
+            client.capture_event(event("request", message, tags), None);
         }
     }
 }
@@ -104,11 +106,7 @@ impl Drop for SentryGuard {
     }
 }
 
-fn event(
-    kind: &str,
-    message: &str,
-    request_type: Option<&str>,
-) -> sentry::protocol::Event<'static> {
+fn event(kind: &str, message: &str, tags: &[(&str, &str)]) -> sentry::protocol::Event<'static> {
     // Build by allowlist, as claw does. Exception chains, request bodies, stack locals and
     // breadcrumbs can contain secrets; omitting them is stronger than recursive scrubbing.
     let mut event = sentry::protocol::Event::new();
@@ -120,10 +118,8 @@ fn event(
     event.logger = Some(kind.to_owned());
     event.message = Some(browseros_agent::llm::redact(message));
     event.tags.insert("surface".to_owned(), "server".to_owned());
-    if let Some(request_type) = request_type {
-        event
-            .tags
-            .insert("request-type".to_owned(), request_type.to_owned());
+    for (name, value) in tags {
+        event.tags.insert((*name).to_owned(), (*value).to_owned());
     }
     event
 }
@@ -147,9 +143,9 @@ mod tests {
     #[test]
     fn explicit_events_are_redacted_and_have_no_ambient_state() -> anyhow::Result<()> {
         let event = event(
-            "chat",
+            "request",
             "bad Bearer abcdefghijklmnopqrstuvwxyz and sk-abcdefghijklmnopqrstuv",
-            Some("schedule"),
+            &[("request-type", "schedule")],
         );
         let encoded = serde_json::to_value(event)?;
         assert!(!encoded.to_string().contains("abcdefghijklmnopqrstuvwxyz"));

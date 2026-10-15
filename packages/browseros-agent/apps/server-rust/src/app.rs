@@ -7,7 +7,7 @@
 use crate::{
     activity::ServerActivity,
     chat::DbChatRecords,
-    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ChatTelemetry, ConversationRuns},
+    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationRuns},
     chat::{BrowserOsEngineDeps, RegistryLeases, klavis_state_name, production_models},
     config::Config,
     db::{self, Database},
@@ -61,9 +61,9 @@ pub struct AppInner {
     pub http: HttpStack,
     /// PostHog sink (disabled without an install id or a build-time key); flushed by `stop`.
     pub metrics: Metrics,
-    /// The process root's one Sentry client. Shared, never re-initialized here, so startup,
-    /// route-error and scheduled-turn captures go through the same redacting client the panic
-    /// hook uses.
+    /// The process root's one Sentry client. Shared, never re-initialized here, so startup and
+    /// request-error captures (`http::security::ingress`) go through the same redacting client
+    /// the panic hook uses.
     pub sentry: Arc<SentryGuard>,
     pub shutdown: ShutdownSignal,
 }
@@ -151,7 +151,8 @@ impl AppState {
 
         let runs = ConversationRuns::new(activity.clone(), PANEL_HEARTBEAT);
         let leases = ToolLeases::new(runs.clone());
-        let connectors = klavis.tool_provider_with_scope(connector_scope(leases.runs().clone()));
+        let connectors = klavis
+            .tool_provider_with_scope(connector_scope(leases.runs().clone()), metrics.clone());
         let mcp = Arc::new(
             McpServer::open(
                 McpConfig {
@@ -163,6 +164,7 @@ impl AppState {
                 },
                 leases.clone(),
                 Some(connectors),
+                metrics.clone(),
             )
             .await?,
         );
@@ -191,10 +193,7 @@ impl AppState {
             oauth: oauth.clone(),
             tabs: Some(Arc::new(HostTabs(host.clone()))),
             use_mock_llm: config.env.use_mock_llm,
-            telemetry: ChatTelemetry {
-                metrics: metrics.clone(),
-                sentry: sentry.clone(),
-            },
+            metrics: metrics.clone(),
         });
 
         Ok(Self(Arc::new(AppInner {

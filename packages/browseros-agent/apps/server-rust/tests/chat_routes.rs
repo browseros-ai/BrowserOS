@@ -29,7 +29,7 @@ use server_rust::{
         AcpAgentRow, AgentKind, ConversationSummary, Database, DbError, DbResult,
         ImportConversation, ProviderRow, SaveRawConversation, StoredConversation, TargetType,
     },
-    http::{chat, security::RequestTrust},
+    http::{chat, errors, security::RequestTrust},
     mcp::ToolLeases,
     oauth::TokenManager,
     paths::BrowserosPaths,
@@ -216,7 +216,7 @@ async fn harness_with_acp(
         oauth: token_manager(dir.path()).await?,
         tabs: None,
         use_mock_llm: false,
-        telemetry: server_rust::chat::ChatTelemetry::default(),
+        metrics: server_rust::telemetry::metrics::Metrics::disabled(),
     });
     Ok(Harness {
         chat,
@@ -492,6 +492,17 @@ async fn oauth_providers_without_a_login_fail_with_the_ts_envelope() -> TestResu
         )
         .await?;
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    // The 500 is TS's `app.onError` path: the ingress reports it to Sentry, tagged as chat.
+    let unhandled = response
+        .extensions()
+        .get::<errors::Unhandled>()
+        .ok_or("the 500 is not marked unhandled")?;
+    assert_eq!(
+        unhandled.scope,
+        errors::UnhandledScope::Route {
+            request_type: Some("chat")
+        }
+    );
     let body = body_json(response).await?;
     assert_eq!(
         body["error"]["message"],
@@ -1163,7 +1174,7 @@ async fn db_records_classify_acp_rows_and_persist_through_the_conversation_store
         ),
         tabs: None,
         use_mock_llm: false,
-        telemetry: server_rust::chat::ChatTelemetry::default(),
+        metrics: server_rust::telemetry::metrics::Metrics::disabled(),
     });
     let router = Router::new()
         .route("/chat", post(chat::post_chat))
@@ -1495,7 +1506,7 @@ async fn imported_legacy_rows_keep_their_messages_through_a_chat_turn() -> TestR
         ),
         tabs: None,
         use_mock_llm: false,
-        telemetry: server_rust::chat::ChatTelemetry::default(),
+        metrics: server_rust::telemetry::metrics::Metrics::disabled(),
     });
     let response = Router::new()
         .route("/chat", post(chat::post_chat))
@@ -1556,7 +1567,7 @@ async fn builtin_engine_setup_failures_are_classified_by_message() -> TestResult
             oauth: token_manager(dir.path()).await?,
             tabs: None,
             use_mock_llm: true,
-            telemetry: server_rust::chat::ChatTelemetry::default(),
+            metrics: server_rust::telemetry::metrics::Metrics::disabled(),
         });
         let response = Router::new()
             .route("/chat", post(chat::post_chat))
@@ -1775,7 +1786,7 @@ async fn a_real_sqlite_busy_save_fails_the_turn_without_creating_history() -> Te
         ),
         tabs: None,
         use_mock_llm: false,
-        telemetry: server_rust::chat::ChatTelemetry::default(),
+        metrics: server_rust::telemetry::metrics::Metrics::disabled(),
     });
     let mut ts = sqlx::SqliteConnection::connect_with(
         &sqlx::sqlite::SqliteConnectOptions::new().filename(&paths.db_file),

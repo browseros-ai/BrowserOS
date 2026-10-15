@@ -26,7 +26,7 @@ use super::{
 };
 use crate::{
     klavis::ProxyState,
-    mcp::{LeaseError, LeaseSpec, ToolLease, ToolLeases},
+    mcp::{LeaseError, LeaseSource, LeaseSpec, ToolLease, ToolLeases},
 };
 use browseros_agent::{
     Agent, AgentBuildError, AgentConfig, TurnInput,
@@ -510,6 +510,7 @@ impl Inner {
                 .mint(LeaseSpec {
                     conversation_id,
                     read_only: inputs.chat_mode,
+                    source: LeaseSource::Chat,
                     client_slug: "browseros",
                     task_label: task_label(user_text),
                     auto_group: !request.is_scheduled_task,

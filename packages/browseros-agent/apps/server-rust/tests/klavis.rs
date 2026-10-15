@@ -340,13 +340,16 @@ async fn tools_cross_real_shared_host_with_schemas_results_and_policy() -> Resul
         session_sweep_interval: Duration::from_secs(60),
     })
     .await?;
-    let provider = klavis.tool_provider_with_scope(Arc::new(|caller| ConnectorScope {
-        selected_server_names: vec!["Gmail".into(), "Gmail".into(), "Slack".into()],
-        rejection: caller
-            .and_then(|c| c.host_data::<AtomicBool>())
-            .filter(|active| !active.load(Ordering::SeqCst))
-            .map(|_| "MCP tools require an active conversation run.".into()),
-    }));
+    let provider = klavis.tool_provider_with_scope(
+        Arc::new(|caller| ConnectorScope {
+            selected_server_names: vec!["Gmail".into(), "Gmail".into(), "Slack".into()],
+            rejection: caller
+                .and_then(|c| c.host_data::<AtomicBool>())
+                .filter(|active| !active.load(Ordering::SeqCst))
+                .map(|_| "MCP tools require an active conversation run.".into()),
+        }),
+        server_rust::telemetry::metrics::Metrics::disabled(),
+    );
     let tools = provider.tools(None).await;
     assert_eq!(tools.len(), 2);
     assert_eq!(

@@ -38,7 +38,33 @@ pub fn thrown_error(message: &str) -> ChatError {
     to_chat_error(&ModelError::Other(message.to_owned()), None)
 }
 
+/// Response extension marking a response as TS's unhandled-error path, so `security::ingress`
+/// reports it to Sentry the way TS's `app.onError` and `/mcp` catch do. Never on the wire.
+#[derive(Debug, Clone)]
+pub struct Unhandled {
+    pub message: String,
+    pub scope: UnhandledScope,
+}
+
+/// The Sentry scope TS had set when the error reached its handler.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnhandledScope {
+    /// `app.onError`: tagged `route` (the path) and `method`; `/chat` also sets
+    /// `request-type` (`chat` | `schedule`) before it hands the turn over.
+    Route { request_type: Option<&'static str> },
+    /// `/mcp`'s own catch: tagged `route=mcp` and whether the caller held a lease.
+    Mcp { leased: bool },
+}
+
+impl Unhandled {
+    pub fn attach(self, response: &mut Response) {
+        response.extensions_mut().insert(self);
+    }
+}
+
 /// HTTP 500 chat envelope; an upstream statusCode remains in the body for the client card.
+/// This is the body of TS's `app.onError`, so every response built here is reported as
+/// [`Unhandled`].
 pub fn chat_envelope_500(error: &ChatError) -> Response {
     let mut body = serde_json::to_value(error).unwrap_or_else(|_| json!({}));
     if let Some(object) = body.as_object_mut() {
@@ -48,11 +74,17 @@ pub fn chat_envelope_500(error: &ChatError) -> Response {
             json!(error.status_code.unwrap_or(500)),
         );
     }
-    (
+    let mut response = (
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({ "error": body })),
     )
-        .into_response()
+        .into_response();
+    Unhandled {
+        message: error.message.clone(),
+        scope: UnhandledScope::Route { request_type: None },
+    }
+    .attach(&mut response);
+    response
 }
 
 /// 403 from the trusted-origin guard (nested `HttpAgentError` envelope).

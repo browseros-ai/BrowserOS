@@ -5,7 +5,9 @@
 //! Cross-cutting behaviour lives in one middleware, `security::ingress`, in Hono's order:
 //! CORS (no PUT in preflight) → trusted-origin guard → trusted-app prefix guard → `/mcp`
 //! browser-fetch guard → handler; unmatched routes are a plain-text 404. The per-route [`Auth`]
-//! column documents that middleware and is held to it by a test.
+//! column documents that middleware and is held to it by a test. On the way out the same
+//! middleware reports every response marked [`errors::Unhandled`] to Sentry, as TS's
+//! `app.onError` does.
 
 pub mod acpx_probe;
 pub mod agents;

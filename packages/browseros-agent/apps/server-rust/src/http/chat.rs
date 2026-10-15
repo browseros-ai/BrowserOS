@@ -54,9 +54,24 @@ pub async fn post_chat(
         Ok(request) => request,
         Err(issues) => return errors::zod_issues_400(&issues),
     };
+    // TS tags its Sentry scope with the request type before handing the turn over, so an
+    // unhandled failure of a scheduled turn (no user watching) is told apart in reports.
+    let request_type = if request.input.is_scheduled_task {
+        "schedule"
+    } else {
+        "chat"
+    };
     match chat.start(request, trust).await {
         Ok(chunks) => ui_message_stream_response(chunks),
-        Err(rejection) => rejection_response(rejection),
+        Err(rejection) => {
+            let mut response = rejection_response(rejection);
+            if let Some(unhandled) = response.extensions_mut().get_mut::<errors::Unhandled>() {
+                unhandled.scope = errors::UnhandledScope::Route {
+                    request_type: Some(request_type),
+                };
+            }
+            response
+        }
     }
 }
 

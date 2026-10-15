@@ -20,9 +20,28 @@ use std::{
 };
 use uuid::Uuid;
 
+/// Which engine minted a lease. TS reports it as the `source` of the lease's tool calls in
+/// `tool_executed` (`mcp` for a caller without a lease), which feeds the usage rollup's
+/// per-source counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LeaseSource {
+    Chat,
+    Acp,
+}
+
+impl LeaseSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Acp => "acp",
+        }
+    }
+}
+
 pub struct LeaseSpec {
     pub conversation_id: Uuid,
     pub read_only: bool,
+    pub source: LeaseSource,
     /// `browseros` | `claude` | `codex` | `custom`; the session's tab-group prefix.
     pub client_slug: &'static str,
     pub task_label: String,
@@ -68,12 +87,17 @@ pub struct LeaseError(pub String);
 #[derive(Debug, Clone)]
 pub struct LeaseScope {
     conversation_id: Uuid,
+    source: LeaseSource,
     enabled_mcp_servers: Vec<String>,
 }
 
 impl LeaseScope {
     pub fn conversation_id(&self) -> Uuid {
         self.conversation_id
+    }
+
+    pub fn source(&self) -> LeaseSource {
+        self.source
     }
 
     /// Managed connectors the user enabled for this conversation (`enabledMcpServers`).
@@ -87,6 +111,7 @@ impl LeaseScope {
 struct LeaseState {
     conversation_id: Uuid,
     read_only: bool,
+    source: LeaseSource,
     auto_group: bool,
     /// Every lease of a conversation binds the same host session (`bound-<conversation>`),
     /// so its tabs, group and browser target survive lease re-mints and server-side turns.
@@ -116,6 +141,7 @@ impl LeaseState {
             auto_group: self.auto_group,
             host_data: Some(Arc::new(LeaseScope {
                 conversation_id: self.conversation_id,
+                source: self.source,
                 enabled_mcp_servers: context
                     .and_then(|context| context.enabled_mcp_servers.clone())
                     .unwrap_or_default(),
@@ -240,6 +266,7 @@ impl ToolLeases {
         let state = Arc::new(LeaseState {
             conversation_id: spec.conversation_id,
             read_only: spec.read_only,
+            source: spec.source,
             auto_group: spec.auto_group,
             session: Arc::new(session_spec(
                 spec.conversation_id,

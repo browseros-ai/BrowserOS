@@ -26,8 +26,9 @@ use server_rust::{
     config::{Config, EnvConfig},
     klavis::ScopeResolver,
     mcp::{
-        HostPages, HostTabs, LeaseScope, LeaseSpec, MAX_BODY_BYTES, McpQuery, McpServer,
-        NO_ACTIVE_RUN, RunRegistry, ToolLeases, connector_scope, conversation_of_session,
+        HostPages, HostTabs, LeaseScope, LeaseSource, LeaseSpec, MAX_BODY_BYTES, McpQuery,
+        McpServer, NO_ACTIVE_RUN, RunRegistry, ToolLeases, connector_scope,
+        conversation_of_session,
     },
 };
 use std::{
@@ -161,6 +162,7 @@ async fn fixture(browser: Option<Arc<ProfileConnection>>) -> Result<Fixture> {
         core,
         leases.clone(),
         Some(Arc::new(connectors)),
+        server_rust::telemetry::metrics::Metrics::disabled(),
     ));
     if let Some(browser) = browser {
         let session = test_support::current_session(browser);
@@ -192,6 +194,7 @@ fn spec(conversation_id: Uuid, read_only: bool) -> LeaseSpec {
     LeaseSpec {
         conversation_id,
         read_only,
+        source: LeaseSource::Chat,
         client_slug: "browseros",
         task_label: "Compare flight prices".to_owned(),
         auto_group: true,

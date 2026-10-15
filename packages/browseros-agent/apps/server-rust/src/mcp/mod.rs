@@ -19,6 +19,10 @@
 //!                           run refusal and selected connectors (then refusing read-only)
 //! ```
 //!
+//! Telemetry follows TS's `/mcp`: `mcp.request` per admitted POST, `tool_executed` per catalog
+//! dispatch (the [`telemetry`] observer) and per connector call, and a `/mcp`-scoped Sentry
+//! report when the transport fails internally.
+//!
 //! The host also owns the browser link: `McpServer::start` begins CDP reattach (non-fatal,
 //! retried forever, unlike TS's exit), `/system/health` reports its live state, and the
 //! chat layer reaches the browser through it: [`HostPages`] opens scheduled runs'
@@ -31,17 +35,19 @@ mod leases;
 mod pages;
 mod panel;
 mod runs;
+mod telemetry;
 
 pub use branding::{branding, instructions};
 pub use connectors::connector_scope;
 pub use endpoint::{MAX_BODY_BYTES, is_json_content_type};
 pub use leases::{
-    InvalidLease, LeaseError, LeaseScope, LeaseSpec, McpQuery, ToolLease, ToolLeases,
+    InvalidLease, LeaseError, LeaseScope, LeaseSource, LeaseSpec, McpQuery, ToolLease, ToolLeases,
     conversation_of_session,
 };
 pub use pages::{HostPages, HostTabs};
 pub use runs::{NO_ACTIVE_RUN, RunRegistry};
 
+use crate::telemetry::metrics::Metrics;
 use axum::{extract::Request, response::Response};
 use browseros_core::NativeCapabilities;
 use browseros_mcp_host::{
@@ -72,17 +78,20 @@ pub struct McpServer {
     host: Arc<HostCtx>,
     leases: Arc<ToolLeases>,
     transport: endpoint::Transport,
+    metrics: Metrics,
     background: CancellationToken,
 }
 
 impl McpServer {
     /// Opens the host core over `config` and plugs in server-rust's policy. Nothing runs
     /// until [`McpServer::start`]. `connectors` is the Klavis tool provider, built over
-    /// [`connector_scope`] so it applies this server's lease policy.
+    /// [`connector_scope`] so it applies this server's lease policy. `metrics` is the
+    /// process's PostHog sink.
     pub async fn open(
         config: McpConfig,
         leases: Arc<ToolLeases>,
         connectors: Option<Arc<dyn LocalToolProvider>>,
+        metrics: Metrics,
     ) -> Result<Self, HostError> {
         let core = HostCore::open(HostCoreConfig {
             cdp_port: config.cdp_port,
@@ -93,7 +102,7 @@ impl McpServer {
             session_sweep_interval: SESSION_SWEEP_INTERVAL,
         })
         .await?;
-        Ok(Self::on_core(core, leases, connectors))
+        Ok(Self::on_core(core, leases, connectors, metrics))
     }
 
     /// [`McpServer::open`] over a core the caller built (tests attach a synthetic browser).
@@ -101,12 +110,14 @@ impl McpServer {
         core: HostCore,
         leases: Arc<ToolLeases>,
         connectors: Option<Arc<dyn LocalToolProvider>>,
+        metrics: Metrics,
     ) -> Self {
         let runs = leases.runs().clone();
         let mut builder = HostCtx::builder(core)
             .branding(branding())
             .tab_journal(Arc::new(panel::PanelTabs(runs.clone())))
-            .guard(Arc::new(runs::ConversationRunning(runs.clone())));
+            .guard(Arc::new(runs::ConversationRunning(runs.clone())))
+            .observer(Arc::new(telemetry::ToolTelemetry(metrics.clone())));
         if let Some(connectors) = connectors {
             builder = builder.tool_provider(connectors);
         }
@@ -120,6 +131,7 @@ impl McpServer {
             host,
             leases,
             transport,
+            metrics,
             background: CancellationToken::new(),
         }
     }
@@ -143,7 +155,13 @@ impl McpServer {
 
     /// `POST /mcp`.
     pub async fn post(&self, request: Request) -> Response {
-        endpoint::post(self.leases.as_ref(), &self.transport, request).await
+        endpoint::post(
+            self.leases.as_ref(),
+            &self.transport,
+            &self.metrics,
+            request,
+        )
+        .await
     }
 
     /// Stops reattaching and ends every live session (their groups are kept collapsed).

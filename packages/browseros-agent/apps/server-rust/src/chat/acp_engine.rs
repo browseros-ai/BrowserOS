@@ -40,7 +40,7 @@ use crate::{
     config::Config,
     db::{self, AcpAgentRow},
     http::errors::thrown_error,
-    mcp::{LeaseSpec, ToolLeases},
+    mcp::{LeaseSource, LeaseSpec, ToolLeases},
     paths::BrowserosPaths,
 };
 
@@ -143,6 +143,7 @@ impl AcpEngine {
             .mint(LeaseSpec {
                 conversation_id,
                 read_only,
+                source: LeaseSource::Acp,
                 client_slug: row.kind.as_str(),
                 task_label,
                 auto_group: !request.is_scheduled_task,

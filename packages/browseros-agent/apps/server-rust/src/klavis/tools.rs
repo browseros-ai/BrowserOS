@@ -3,11 +3,12 @@
 //! as TS. Lease policy is resolved by the product that owns the opaque caller.
 
 use super::Klavis;
+use crate::telemetry::metrics::Metrics;
 use browseros_mcp_host::{AdmittedCaller, LocalToolProvider, seams::LocalToolCall};
 use futures_util::future::BoxFuture;
 use rmcp::model::{CallToolRequestParams, CallToolResult, ContentBlock, Tool};
 use serde_json::{Value, json};
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 use tokio_util::sync::CancellationToken;
 
 const HELPER: &str = "connector_mcp_servers";
@@ -25,6 +26,7 @@ pub type ScopeResolver = Arc<dyn Fn(Option<&AdmittedCaller>) -> ConnectorScope +
 pub(super) struct Provider {
     pub klavis: Arc<Klavis>,
     pub scope: ScopeResolver,
+    pub metrics: Metrics,
 }
 
 impl LocalToolProvider for Provider {
@@ -74,6 +76,7 @@ impl LocalToolProvider for Provider {
             let Some(dispatch) = call.begin(cancel.clone()).await else {
                 return call.session_gone();
             };
+            let started = Instant::now();
             let result = tokio::select! {
                 biased;
                 _ = call.request_cancel.cancelled() => error("Klavis tool call cancelled"),
@@ -81,6 +84,16 @@ impl LocalToolProvider for Provider {
                 _ = self.klavis.cancel.cancelled() => error("Klavis proxy stopped"),
                 result = self.execute(name, call.args, scope) => result,
             };
+            // TS reports connector calls with `source: 'mcp'` whoever the caller is.
+            self.metrics.capture(
+                "tool_executed",
+                json!({
+                    "tool_name": name,
+                    "source": "mcp",
+                    "duration_ms": started.elapsed().as_millis() as u64,
+                    "success": result.is_error != Some(true),
+                }),
+            );
             // Finish bookkeeping without translating the remote result: ToolResult
             // would flatten structuredContent, image blocks, and upstream isError.
             if !call.session.finish_dispatch(&dispatch).await

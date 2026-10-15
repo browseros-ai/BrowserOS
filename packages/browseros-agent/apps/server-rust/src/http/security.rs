@@ -141,6 +141,25 @@ fn protected_prefix(path: &str) -> bool {
     })
 }
 
+/// Sentry for a response that ended on TS's unhandled-error path, with the scope TS had then.
+fn report_unhandled(state: &AppState, unhandled: &errors::Unhandled, method: &Method, path: &str) {
+    let sentry = &state.sentry;
+    match unhandled.scope {
+        errors::UnhandledScope::Route { request_type } => {
+            let mut tags = vec![("route", path), ("method", method.as_str())];
+            tags.extend(request_type.map(|kind| ("request-type", kind)));
+            sentry.capture_request_error(&unhandled.message, &tags);
+        }
+        errors::UnhandledScope::Mcp { leased } => sentry.capture_request_error(
+            &unhandled.message,
+            &[
+                ("route", "mcp"),
+                ("leased", if leased { "true" } else { "false" }),
+            ],
+        ),
+    }
+}
+
 /// One middleware owns ordering including fallback paths. A route-only layer would
 /// miss auth on unknown protected descendants and return 404 where Hono returns 403.
 pub async fn ingress(State(state): State<AppState>, mut request: Request, next: Next) -> Response {
@@ -175,7 +194,11 @@ pub async fn ingress(State(state): State<AppState>, mut request: Request, next: 
     } else {
         let activity = (request.method() == Method::POST && request.uri().path() == "/mcp")
             .then(|| state.activity.reserve());
+        let (method, path) = (request.method().clone(), request.uri().path().to_owned());
         let response = next.run(request).await;
+        if let Some(unhandled) = response.extensions().get::<errors::Unhandled>() {
+            report_unhandled(&state, unhandled, &method, &path);
+        }
         if let Some(activity) = activity {
             let (parts, body) = response.into_parts();
             // rmcp may execute while its response stream is being polled. Moving

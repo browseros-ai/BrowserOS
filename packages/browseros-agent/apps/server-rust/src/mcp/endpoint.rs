@@ -21,10 +21,14 @@
 //! The SDK's modern (2026-07-28) leg skips the Accept check and orders 415 before 406; rmcp
 //! enforces Accept on both eras, so this layer does too, with the SDK's body.
 
+use crate::{
+    http::errors::{Unhandled, UnhandledScope},
+    telemetry::metrics::Metrics,
+};
 use axum::{
     body::{Body, Bytes},
     extract::Request,
-    response::{IntoResponse, Response},
+    response::Response,
 };
 use browseros_mcp_host::{Admission, HostMcpService};
 use futures_util::StreamExt;
@@ -52,17 +56,21 @@ const EVENT_STREAM: &str = "text/event-stream";
 pub(super) async fn post(
     admission: &dyn Admission,
     transport: &Transport,
+    metrics: &Metrics,
     request: Request,
 ) -> Response {
     let (mut parts, body) = request.into_parts();
     // A refused lease never reaches MCP: TS validates it before the SDK reads the body.
-    match admission.admit(&parts) {
+    let leased = match admission.admit(&parts) {
         Ok(Some(caller)) => {
             parts.extensions.insert(caller);
+            true
         }
-        Ok(None) => {}
+        Ok(None) => false,
         Err(refusal) => return *refusal,
-    }
+    };
+    // TS counts every POST past the lease check, before the SDK's own rejections.
+    metrics.capture("mcp.request", json!({ "leased": leased }));
     let json_content =
         is_json_content_type(joined(&parts.headers, header::CONTENT_TYPE).as_deref());
     let bytes = match read_body(&parts.headers, body).await {
@@ -115,27 +123,34 @@ pub(super) async fn post(
         Err(never) => match never {},
     };
     if response.status() == StatusCode::INTERNAL_SERVER_ERROR && !is_json_response(&response) {
-        tracing::error!("Error handling MCP request");
-        return rpc_error(
+        let detail = axum::body::to_bytes(response.into_body(), MAX_BODY_BYTES)
+            .await
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default();
+        tracing::error!(%detail, "Error handling MCP request");
+        let mut response = rpc_error(
             StatusCode::INTERNAL_SERVER_ERROR,
             -32603,
             "Internal server error",
         );
+        // TS's `/mcp` catch reports to Sentry with its own scope before answering -32603.
+        Unhandled {
+            message: if detail.is_empty() {
+                "Error handling MCP request".to_owned()
+            } else {
+                detail
+            },
+            scope: UnhandledScope::Mcp { leased },
+        }
+        .attach(&mut response);
+        return response;
     }
     response
 }
 
 /// `{"jsonrpc":"2.0","error":{code,message},"id":null}`, the SDK's transport error body.
 fn rpc_error(status: StatusCode, code: i64, message: &str) -> Response {
-    (
-        status,
-        axum::Json(json!({
-            "jsonrpc": "2.0",
-            "error": { "code": code, "message": message },
-            "id": null,
-        })),
-    )
-        .into_response()
+    crate::http::errors::jsonrpc_error(status, code, message)
 }
 
 fn unsupported_media_type() -> Response {

@@ -7,6 +7,7 @@ mod client;
 mod session;
 mod tools;
 
+use crate::telemetry::metrics::Metrics;
 use browseros_mcp_host::LocalToolProvider;
 use client::{Client, Strata, auth_url};
 use serde::Serialize;
@@ -218,25 +219,33 @@ impl Klavis {
             .clone()
     }
 
+    /// The connector tools without a lease policy or telemetry (`/mcp-manager/tools` lists
+    /// them through this).
     pub fn tool_provider(self: &Arc<Self>) -> Arc<dyn LocalToolProvider> {
-        self.tool_provider_with_scope(Arc::new(|caller| ConnectorScope {
-            // Without a lease resolver no bound caller can be tied to a live run, so they
-            // fail closed; anonymous external MCP clients need no run.
-            rejection: caller
-                .filter(|c| c.session.is_some())
-                .map(|_| "MCP tools require an active conversation run.".into()),
-            ..Default::default()
-        }))
+        self.tool_provider_with_scope(
+            Arc::new(|caller| ConnectorScope {
+                // Without a lease resolver no bound caller can be tied to a live run, so they
+                // fail closed; anonymous external MCP clients need no run.
+                rejection: caller
+                    .filter(|c| c.session.is_some())
+                    .map(|_| "MCP tools require an active conversation run.".into()),
+                ..Default::default()
+            }),
+            Metrics::disabled(),
+        )
     }
     /// `mcp::connector_scope` maps the caller's opaque lease to its selected connectors and a
-    /// live-run refusal, so this module never sees the concrete lease type.
+    /// live-run refusal, so this module never sees the concrete lease type. Each call that
+    /// passes the policy reports `tool_executed` to `metrics`, as TS's connector adapters do.
     pub fn tool_provider_with_scope(
         self: &Arc<Self>,
         scope: ScopeResolver,
+        metrics: Metrics,
     ) -> Arc<dyn LocalToolProvider> {
         Arc::new(tools::Provider {
             klavis: self.clone(),
             scope,
+            metrics,
         })
     }
     pub async fn stop(&self) {
