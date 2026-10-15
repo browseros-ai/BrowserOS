@@ -13,22 +13,43 @@ import (
 	"browseros-dev/proc"
 )
 
-func TestRustWatchModePreservesProductAndManualSelection(t *testing.T) {
-	oldManual, oldClaw, oldRust := watchManual, watchClaw, watchRust
-	t.Cleanup(func() { watchManual, watchClaw, watchRust = oldManual, oldClaw, oldRust })
+func TestWatchModeDefaultsToRustServerAndKeepsTypeScriptSelectable(t *testing.T) {
+	oldManual, oldClaw, oldRust, oldTS := watchManual, watchClaw, watchRust, watchTS
+	t.Cleanup(func() { watchManual, watchClaw, watchRust, watchTS = oldManual, oldClaw, oldRust, oldTS })
 	for _, tc := range []struct {
-		manual, claw, rust bool
-		want               string
+		manual, claw, rust, ts bool
+		want                   string
 	}{
-		{false, false, false, "BrowserOS"},
-		{false, false, true, "BrowserOS (Rust server)"},
-		{true, false, true, "BrowserOS manual (Rust server)"},
-		{false, true, true, "BrowserOS neo"},
+		{false, false, false, false, "BrowserOS"},
+		{false, false, true, false, "BrowserOS"},
+		{true, false, false, false, "BrowserOS manual"},
+		{true, false, true, false, "BrowserOS manual"},
+		{false, false, false, true, "BrowserOS (TypeScript server)"},
+		{true, false, false, true, "BrowserOS manual (TypeScript server)"},
+		{false, true, false, false, "BrowserOS neo"},
+		{false, true, true, false, "BrowserOS neo"},
 	} {
-		watchManual, watchClaw, watchRust = tc.manual, tc.claw, tc.rust
+		watchManual, watchClaw, watchRust, watchTS = tc.manual, tc.claw, tc.rust, tc.ts
 		got, err := watchMode()
 		if err != nil || got != tc.want {
 			t.Fatalf("watchMode(%+v) = %q, %v", tc, got, err)
+		}
+	}
+}
+
+func TestWatchModeRejectsTypeScriptWithRustOrClaw(t *testing.T) {
+	oldManual, oldClaw, oldRust, oldTS := watchManual, watchClaw, watchRust, watchTS
+	t.Cleanup(func() { watchManual, watchClaw, watchRust, watchTS = oldManual, oldClaw, oldRust, oldTS })
+	for _, tc := range []struct {
+		claw, rust bool
+		want       string
+	}{
+		{false, true, "--ts cannot be combined with --rust"},
+		{true, false, "--ts cannot be combined with --claw"},
+	} {
+		watchManual, watchClaw, watchRust, watchTS = false, tc.claw, tc.rust, true
+		if _, err := watchMode(); err == nil || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("watchMode(claw=%v rust=%v ts) error = %v, want %q", tc.claw, tc.rust, err, tc.want)
 		}
 	}
 }

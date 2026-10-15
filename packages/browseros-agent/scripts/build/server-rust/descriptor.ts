@@ -1,6 +1,6 @@
-/** Describe the opt-in Rust artifact using the deployed BrowserOS server identity.
- * Cargo owns the version; the runtime basename and archive/R2 names stay compatible
- * with Chromium's existing download, launch, signing, and OTA paths.
+/** Describe the shipped BrowserOS server artifact, built from the Rust port.
+ * Cargo owns the version; the runtime basename and archive/R2 names are the ones the
+ * TypeScript server used, so Chromium's download, launch, signing, and OTA paths hold.
  */
 import type { ResourceBuildProductDescriptor } from '@browseros/build-server-tools'
 
@@ -15,8 +15,6 @@ export const serverRustBuildProduct: ResourceBuildProductDescriptor = {
   stagedBinaryBaseName: 'browseros_server',
   archiveBaseName: 'browseros-server-resources',
   defaultManifestPath: 'scripts/build/config/server-rust-prod-resources.json',
-  // Publishing under the deployed identity is an explicit owner decision.
-  defaultUpload: false,
   includeArtifactIdentity: true,
   archiveFilesOnly: true,
   expectedArtifactFiles: (target) => {

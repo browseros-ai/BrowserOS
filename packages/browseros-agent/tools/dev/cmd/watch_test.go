@@ -389,7 +389,7 @@ func TestEnsureCargoPresentMissingMessage(t *testing.T) {
 	}
 
 	msg := err.Error()
-	if !strings.Contains(msg, "Cargo is required for --claw") {
+	if !strings.Contains(msg, "Cargo is required to run the Rust server") || !strings.Contains(msg, "--ts") {
 		t.Fatalf("expected missing Cargo message, got %q", msg)
 	}
 	if !strings.Contains(msg, "rustup.rs") {

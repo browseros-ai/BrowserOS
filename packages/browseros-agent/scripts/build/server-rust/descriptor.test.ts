@@ -14,13 +14,23 @@ import { serverRustBuildProduct } from './descriptor'
 const root = resolve(import.meta.dir, '../../..')
 
 describe('BrowserOS Rust packaging contract', () => {
-  it('keeps production publication opt-in and uses the deployed archive identity', () => {
+  it('publishes like the server it replaced, under the deployed archive identity', () => {
     const args = parseBuildArgs([], serverRustBuildProduct)
-    expect(args.upload).toBe(false)
+    expect(args.upload).toBe(true)
     expect(args.targets).toHaveLength(5)
-    expect(parseBuildArgs(['--upload'], serverRustBuildProduct).upload).toBe(
-      true,
+    expect(parseBuildArgs(['--no-upload'], serverRustBuildProduct).upload).toBe(
+      false,
     )
+    // The release workflow's exact invocation.
+    expect(
+      parseBuildArgs(
+        ['--target=all', '--upload', '--versioned-only'],
+        serverRustBuildProduct,
+      ),
+    ).toMatchObject({ upload: true, versionedOnly: true, ci: false })
+    expect(
+      parseBuildArgs(['--target=all', '--ci'], serverRustBuildProduct),
+    ).toMatchObject({ upload: false, ci: true })
     expect(serverRustBuildProduct).toMatchObject({
       archiveBaseName: 'browseros-server-resources',
       stagedBinaryBaseName: 'browseros_server',

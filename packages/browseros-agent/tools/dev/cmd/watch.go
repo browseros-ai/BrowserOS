@@ -30,7 +30,9 @@ var (
 	watchNew    bool
 	watchManual bool
 	watchClaw   bool
-	watchRust   bool
+	// watchRust is accepted for older scripts; the Rust server is already the default.
+	watchRust bool
+	watchTS   bool
 )
 
 const (
@@ -44,7 +46,8 @@ func init() {
 	watchCmd.Flags().BoolVar(&watchNew, "new", false, "Use random available ports in 9000-9999 and create a fresh user-data directory")
 	watchCmd.Flags().BoolVar(&watchManual, "manual", false, "Build agent statically instead of WXT HMR mode")
 	watchCmd.Flags().BoolVar(&watchClaw, "claw", false, "Run the BrowserOS neo UI and standalone server")
-	watchCmd.Flags().BoolVar(&watchRust, "rust", false, "Run the BrowserOS Rust server instead of the TypeScript server")
+	watchCmd.Flags().BoolVar(&watchTS, "ts", false, "Run the TypeScript BrowserOS server (apps/server) instead of the Rust server")
+	watchCmd.Flags().BoolVar(&watchRust, "rust", false, "Run the Rust BrowserOS server (the default; kept for older scripts)")
 	rootCmd.AddCommand(watchCmd)
 }
 
@@ -58,7 +61,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-	if watchClaw || watchRust {
+	if watchClaw || !watchTS {
 		if err := ensureCargoPresent(); err != nil {
 			return err
 		}
@@ -178,7 +181,7 @@ func runWatch(cmd *cobra.Command, args []string) error {
 	if watchClaw {
 		procs = startClawWatch(ctx, &wg, root, env, p, reservations, userDataDir)
 	} else {
-		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual, watchRust)
+		procs, err = startBrowserOSWatch(ctx, &wg, root, env, p, reservations, userDataDir, watchManual, !watchTS)
 		if err != nil {
 			return err
 		}
@@ -212,14 +215,20 @@ func watchMode() (string, error) {
 	if watchManual && watchClaw {
 		return "", fmt.Errorf("--manual cannot be combined with --claw")
 	}
+	if watchTS && watchRust {
+		return "", fmt.Errorf("--ts cannot be combined with --rust")
+	}
+	if watchTS && watchClaw {
+		return "", fmt.Errorf("--ts cannot be combined with --claw")
+	}
 	if watchClaw {
 		return "BrowserOS neo", nil
 	}
-	if watchManual && watchRust {
-		return "BrowserOS manual (Rust server)", nil
+	if watchManual && watchTS {
+		return "BrowserOS manual (TypeScript server)", nil
 	}
-	if watchRust {
-		return "BrowserOS (Rust server)", nil
+	if watchTS {
+		return "BrowserOS (TypeScript server)", nil
 	}
 	if watchManual {
 		return "BrowserOS manual", nil
@@ -337,6 +346,7 @@ func logClawBrowserBinary(resolution browser.BinaryResolution) {
 }
 
 // startBrowserOSWatch supervises the BrowserOS agent extension plus server dev pair.
+// rust selects the shipped Rust server; false runs the TypeScript server under bun --watch.
 func startBrowserOSWatch(ctx context.Context, wg *sync.WaitGroup, root string, env []string, p proc.Ports, reservations *proc.PortReservations, userDataDir string, manual bool, rust bool) ([]*proc.ManagedProc, error) {
 	var procs []*proc.ManagedProc
 	agentDir := filepath.Join(root, "apps/app")
@@ -570,7 +580,7 @@ func waitForCDP(ctx context.Context, port int) {
 func ensureCargoPresent() error {
 	if _, err := exec.LookPath("cargo"); err != nil {
 		return fmt.Errorf("%s %s",
-			proc.ErrorColor.Sprint("Cargo is required for --claw or --rust but is not installed."),
+			proc.ErrorColor.Sprint("Cargo is required to run the Rust server (watch, or watch --claw) but is not installed; pass --ts for the TypeScript server."),
 			proc.DimColor.Sprintf("Install it with %s, or from %s.", proc.BoldColor.Sprint("brew install rustup"), proc.BoldColor.Sprint("https://rustup.rs")),
 		)
 	}

@@ -12,28 +12,21 @@ if ! command -v go &>/dev/null; then
   exit 1
 fi
 
+# watch runs a Rust server (BrowserOS or neo) unless --ts selects the TypeScript one.
 needs_cargo=false
-has_claw=false
-has_rust=false
 if [ "${1:-}" = "watch" ]; then
+  needs_cargo=true
   for arg in "$@"; do
-    case "$arg" in
-      --claw)
-        has_claw=true
-        ;;
-      --rust)
-        has_rust=true
-        ;;
-    esac
+    if [ "$arg" = "--ts" ]; then
+      needs_cargo=false
+    fi
   done
-  if [ "$has_claw" = true ] || [ "$has_rust" = true ]; then
-    needs_cargo=true
-  fi
 fi
 
 if [ "$needs_cargo" = true ] && ! command -v cargo &>/dev/null; then
   echo ""
-  echo "  Cargo is required for watch --claw or --rust but is not installed."
+  echo "  Cargo is required for watch (the Rust server) but is not installed."
+  echo "  Pass --ts to run the TypeScript server instead."
   echo "  Install Rust with:  brew install rustup && rustup-init"
   echo "  Or download from: https://rustup.rs/"
   echo ""

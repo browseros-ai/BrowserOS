@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 
-// Opt-in packaging entrypoint. The server release continues to invoke server.ts.
+// Packages the shipped BrowserOS server (apps/server-rust); server.ts still builds the TS one.
 import { runCompiledResourceBuild } from '@browseros/build-server-tools'
 
 import { compileServerRustBinaries } from './server-rust/compiler'
