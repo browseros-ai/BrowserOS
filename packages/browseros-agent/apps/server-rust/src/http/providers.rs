@@ -72,7 +72,7 @@ pub async fn upsert(
             .headers
             .map(|headers| headers.map(|headers| headers.into_iter().collect())),
         supports_images: input.supports_images,
-        context_window: Some(input.context_window),
+        context_window: Some(crud::store_integer(input.context_window)),
         temperature: input.temperature,
         // Keep omission, null, and empty distinct until the write transaction. Pre-reading and
         // merging credentials here would lose concurrent updates and cannot express a clear.
@@ -84,7 +84,7 @@ pub async fn upsert(
         region: input.region,
         reasoning_effort: input.reasoning_effort,
         reasoning_summary: input.reasoning_summary,
-        created_at: input.created_at,
+        created_at: input.created_at.map(crud::store_integer),
     };
     match state.providers.upsert_llm(&id, input).await {
         Ok(row) => Json(api::ProviderResponse::new(crud::provider(row))).into_response(),

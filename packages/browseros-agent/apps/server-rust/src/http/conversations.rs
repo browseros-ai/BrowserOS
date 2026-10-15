@@ -25,12 +25,12 @@ pub async fn list(State(state): State<AppState>) -> Response {
 pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let id = match crud::uuid_param(&id, "conversationId") {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     match state.conversations.get(id).await {
         Ok(Some(row)) => match crud::conversation_detail(row) {
             Ok(row) => Json(api::ConversationResponse::new(row)).into_response(),
-            Err(response) => response,
+            Err(response) => response.into_response(),
         },
         Ok(None) => crud::not_found("Unknown conversation"),
         Err(error) => crud::db_error(error),
@@ -44,12 +44,12 @@ pub async fn import(
 ) -> Response {
     let id = match crud::uuid_param(&id, "conversationId") {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     let CrudJson(input) =
         match CrudJson::<api::ImportConversationRequest>::from_request(request, &state).await {
             Ok(input) => input,
-            Err(response) => return response,
+            Err(response) => return response.into_response(),
         };
     let messages = match input
         .messages
@@ -70,7 +70,7 @@ pub async fn import(
             api::ImportConversationRequestTargetType::Codex => db::TargetType::Codex,
         },
         agent_id: input.agent_id,
-        last_messaged_at: input.last_messaged_at,
+        last_messaged_at: input.last_messaged_at.map(crud::store_integer),
     };
     match state.conversations.import_if_absent(id, input).await {
         Ok(row) => {
@@ -88,7 +88,7 @@ pub async fn import(
 pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let id = match crud::uuid_param(&id, "conversationId") {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     crud::deleted(state.conversations.delete(id).await, "Unknown conversation")
 }

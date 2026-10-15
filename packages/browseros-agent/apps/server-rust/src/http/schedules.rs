@@ -50,11 +50,15 @@ pub async fn upsert_job(
         query: input.query,
         schedule_type: schedule_type(input.schedule_type).to_owned(),
         schedule_time: input.schedule_time,
-        schedule_interval: input.schedule_interval,
+        schedule_interval: input
+            .schedule_interval
+            .map(|value| value.map(crud::store_integer)),
         enabled: input.enabled,
         provider_id: input.provider_id,
-        last_run_at: input.last_run_at,
-        created_at: input.created_at,
+        last_run_at: input
+            .last_run_at
+            .map(|value| value.map(crud::store_integer)),
+        created_at: input.created_at.map(crud::store_integer),
     };
     match state.schedules.upsert_job(&id, input).await {
         Ok(row) => Json(api::ScheduledJobResponse::new(crud::job(row))).into_response(),
@@ -80,7 +84,7 @@ pub async fn list_runs(State(state): State<AppState>) -> Response {
                 .collect::<Result<Vec<_>, _>>()
             {
                 Ok(rows) => Json(api::ScheduledJobRunList::new(rows)).into_response(),
-                Err(response) => response,
+                Err(response) => response.into_response(),
             }
         }
         Err(error) => crud::db_error(error),
@@ -91,7 +95,7 @@ pub async fn get_run(State(state): State<AppState>, Path(id): Path<String>) -> R
     match state.schedules.get_run(&id).await {
         Ok(Some(row)) => match crud::run(row) {
             Ok(row) => Json(api::ScheduledJobRunResponse::new(row)).into_response(),
-            Err(response) => response,
+            Err(response) => response.into_response(),
         },
         Ok(None) => crud::not_found("Unknown run"),
         Err(error) => crud::db_error(error),
@@ -119,21 +123,23 @@ pub async fn upsert_run(
             api::UpsertScheduledJobRunRequestStatus::Failed => "failed",
         }
         .to_owned(),
-        started_at: input.started_at,
-        completed_at: input.completed_at,
+        started_at: crud::store_integer(input.started_at),
+        completed_at: input
+            .completed_at
+            .map(|value| value.map(crud::store_integer)),
         result: input.result,
         final_result: input.final_result,
         execution_log: input.execution_log,
         tool_calls,
         error: input.error,
-        created_at: input.created_at,
+        created_at: input.created_at.map(crud::store_integer),
     };
     // The store returns the saved row even if this write prunes that same old run. Pruning
     // only on insert would let repeated completion writes grow a job past the 15-row cap.
     match state.schedules.upsert_run(&id, input).await {
         Ok(row) => match crud::run(row) {
             Ok(row) => Json(api::ScheduledJobRunResponse::new(row)).into_response(),
-            Err(response) => response,
+            Err(response) => response.into_response(),
         },
         Err(error) => crud::db_error(error),
     }

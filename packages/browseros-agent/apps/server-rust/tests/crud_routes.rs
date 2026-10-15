@@ -5,6 +5,7 @@
 use axum::{
     Router,
     body::{Body, to_bytes},
+    response::IntoResponse,
 };
 use http::{Request, StatusCode};
 use serde_json::{Value, json};
@@ -30,7 +31,7 @@ impl Server {
         let path = dir.path().join("config.json");
         std::fs::write(
             &path,
-            r#"{"ports":{"server":0,"cdp":0},"directories":{"resources":".","execution":"."}}"#,
+            r#"{"ports":{"server":19444,"cdp":19445},"directories":{"resources":".","execution":"."}}"#,
         )?;
         let env = EnvConfig {
             browseros_dir: Some(dir.path().join("browseros")),
@@ -103,6 +104,12 @@ fn daily_job() -> Value {
     json!({"name":"Job", "query":"Work", "scheduleType":"daily", "scheduleTime":"09:00"})
 }
 
+// OpenAPI DTOs serialize number fields as f64; compare JSON numbers by their numeric value,
+// including the explicit HTTP-to-i64 normalization required by the merged store contract.
+fn assert_number(actual: &Value, expected: f64) {
+    assert_eq!(actual.as_f64(), Some(expected), "{actual}");
+}
+
 fn assert_zod(status: StatusCode, value: &Value) -> Result<Vec<Value>, Box<dyn std::error::Error>> {
     assert_eq!(status, StatusCode::BAD_REQUEST, "{value}");
     assert_eq!(value["success"], false);
@@ -158,7 +165,7 @@ async fn tests_that_conversation_import_preserves_unvalidated_messages_and_never
     let input = json!({"messages":messages,"origin":"legacy","targetType":"codex","agentId":"agent","lastMessagedAt":42.5,"ignored":true});
     let imported = server.ok("PUT", &path, input).await?;
     assert_eq!(imported["imported"], true);
-    assert_eq!(imported["conversation"]["lastMessagedAt"], 42.5);
+    assert_number(&imported["conversation"]["lastMessagedAt"], 42.0);
     assert_eq!(imported["conversation"]["targetType"], "codex");
     assert_eq!(imported["conversation"]["agentId"], "agent");
     assert_eq!(imported["conversation"]["lastUserMessage"], "hello");
@@ -204,7 +211,7 @@ async fn tests_that_provider_put_returns_raw_secrets_and_gets_redact_all_four() 
     let saved = server.ok("PUT", "/providers/first", provider()).await?;
     assert_eq!(saved["provider"]["apiKey"], "test-secret");
     assert_eq!(saved["provider"]["kind"], "llm");
-    assert_eq!(saved["provider"]["createdAt"], 12);
+    assert_number(&saved["provider"]["createdAt"], 12.0);
     assert!(saved["provider"].get("hasApiKey").is_none());
     for key in [
         "baseUrl",
@@ -261,8 +268,8 @@ async fn tests_that_provider_credentials_preserve_blanks_and_clear_only_on_null(
     assert_eq!(saved["provider"]["accessKeyId"], "access");
     assert_eq!(saved["provider"]["secretAccessKey"], Value::Null);
     assert_eq!(saved["provider"]["sessionToken"], Value::Null);
-    assert_eq!(saved["provider"]["createdAt"], 12);
-    assert_eq!(saved["provider"]["contextWindow"], 1024.5);
+    assert_number(&saved["provider"]["createdAt"], 12.0);
+    assert_number(&saved["provider"]["contextWindow"], 1024.0);
     assert_eq!(saved["provider"]["isDefault"], true);
     assert_eq!(
         saved["provider"]["headers"]["X-Session"],
@@ -443,18 +450,18 @@ async fn tests_that_schedule_validation_checks_changed_cadence_and_preserves_par
     input["lastRunAt"] = json!(4.5);
     input["createdAt"] = json!(7.5);
     let saved = server.ok("PUT", "/scheduled-jobs/j", input).await?;
-    assert_eq!(saved["job"]["createdAt"], 7.5);
+    assert_number(&saved["job"]["createdAt"], 7.0);
     assert_eq!(saved["job"]["scheduleInterval"], Value::Null);
     assert_eq!(saved["job"]["providerId"], Value::Null);
     let mut update = daily_job();
     update["createdAt"] = json!(500);
     let saved = server.ok("PUT", "/scheduled-jobs/j", update).await?;
-    assert_eq!(saved["job"]["createdAt"], 7.5);
+    assert_number(&saved["job"]["createdAt"], 7.0);
     assert_eq!(
         saved["job"]["enabled"], false,
         "omitted enabled preserves an existing false"
     );
-    assert_eq!(saved["job"]["lastRunAt"], 4.5);
+    assert_number(&saved["job"]["lastRunAt"], 4.0);
     Ok(())
 }
 
@@ -470,7 +477,7 @@ async fn tests_that_runs_prune_to_fifteen_on_every_write_and_cascade_on_job_dele
                 json!({"jobId":"j","status":"running","startedAt":index,"createdAt":3.5}),
             )
             .await?;
-        assert_eq!(saved["run"]["createdAt"], 3.5);
+        assert_number(&saved["run"]["createdAt"], 3.0);
         for field in [
             "completedAt",
             "result",
@@ -487,8 +494,9 @@ async fn tests_that_runs_prune_to_fifteen_on_every_write_and_cascade_on_job_dele
     assert_eq!(runs["runs"][0]["id"], "r19");
     assert_eq!(runs["runs"][14]["id"], "r5");
     let saved = server.ok("PUT", "/scheduled-job-runs/r19", json!({"jobId":"j","status":"completed","startedAt":19.5,"completedAt":20.5,"finalResult":"done","toolCalls":[{"id":"call","name":"tool","input":null,"output":{"ok":true},"timestamp":"now","ignored":true}]})).await?;
-    assert_eq!(saved["run"]["createdAt"], 3.5);
-    assert_eq!(saved["run"]["startedAt"], 19.5);
+    assert_number(&saved["run"]["createdAt"], 3.0);
+    assert_number(&saved["run"]["startedAt"], 19.0);
+    assert_number(&saved["run"]["completedAt"], 20.0);
     assert!(saved["run"]["toolCalls"][0].get("ignored").is_none());
     assert_eq!(
         server
@@ -525,6 +533,14 @@ async fn tests_that_foreign_key_failures_use_500_envelope_and_provider_delete_se
         assert_eq!(value["error"]["statusCode"], 500);
         assert!(value["error"]["code"].is_string());
         assert!(value["error"]["message"].is_string());
+        assert_eq!(
+            value,
+            json!({"error": {
+                "code":"unknown", "title":"Something went wrong",
+                "message":"FOREIGN KEY constraint failed", "retryable":true,
+                "details":"FOREIGN KEY constraint failed", "name":"InternalServerError", "statusCode":500,
+            }})
+        );
     }
     server.ok("PUT", "/providers/unknown", provider()).await?;
     server.ok("PUT", "/scheduled-jobs/j", job).await?;
@@ -656,7 +672,7 @@ async fn tests_that_validation_issue_strings_match_zod_goldens() -> TestResult {
     for (input, expected) in cases {
         let response = match decode::<api::CreateAgentRequest>(input) {
             Ok(_) => return Err("invalid input was accepted".into()),
-            Err(response) => response,
+            Err(response) => response.into_response(),
         };
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
         let body: Value =
@@ -730,7 +746,7 @@ async fn tests_that_unchanged_legacy_invalid_cadence_remains_writable() -> TestR
         .ok("PUT", "/scheduled-jobs/legacy", input.clone())
         .await?;
     assert_eq!(saved["job"]["enabled"], false);
-    assert_eq!(saved["job"]["lastRunAt"], 8);
+    assert_number(&saved["job"]["lastRunAt"], 8.0);
     let mut changed = input;
     changed["scheduleInterval"] = json!(1);
     let (status, body) = server

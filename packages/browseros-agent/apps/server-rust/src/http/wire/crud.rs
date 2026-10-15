@@ -7,7 +7,7 @@ use axum::{
     extract::{FromRequest, Request},
     response::{IntoResponse, Response},
 };
-use http::{StatusCode, header};
+use http::StatusCode;
 use serde::{Serialize, Serializer, de::DeserializeOwned, ser::SerializeMap};
 use serde_json::{Value, json};
 use server_api::models as api;
@@ -16,8 +16,8 @@ use uuid::Uuid;
 
 use crate::db;
 
-/// A generated request after the TS route's validation and normalization. Body decoding is
-/// local to CRUD so generated DTOs remain policy-free and the shared extractor stays generic.
+/// A generated request after the TS route's validation and normalization. P3's extractor owns
+/// media types and malformed JSON; CRUD supplies the schema rules missing from generated DTOs.
 pub struct CrudJson<T>(pub T);
 
 impl<S, T> FromRequest<S> for CrudJson<T>
@@ -28,54 +28,17 @@ where
     type Rejection = Response;
 
     async fn from_request(request: Request, state: &S) -> Result<Self, Self::Rejection> {
-        // Hono ignores the bytes without a JSON media type. In particular, a syntactically
-        // valid body with no Content-Type must fail as an empty object, not return 415.
-        let is_json = request
-            .headers()
-            .get(header::CONTENT_TYPE)
-            .and_then(|value| value.to_str().ok())
-            .is_some_and(json_content_type);
-        let value = if is_json {
-            let _ = state;
-            // Hono has no body-size cap here. Using axum's Json extractor would introduce its
-            // default 2 MiB limit and reject large legacy conversation imports.
-            let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
-                .await
-                .map_err(|_| internal_error("Malformed JSON in request body"))?;
-            serde_json::from_slice(&bytes)
-                .map_err(|_| internal_error("Malformed JSON in request body"))?
-        } else {
-            json!({})
-        };
-        decode(value).map(Self)
+        let super::super::extract::ZodJson(value) =
+            super::super::extract::ZodJson::<Value>::from_request(request, state).await?;
+        decode(value).map(Self).map_err(IntoResponse::into_response)
     }
 }
 
-fn json_content_type(value: &str) -> bool {
-    // The shipped Hono validator's regex permits letters/dots/hyphens in a +json subtype,
-    // and requires key=value for every parameter; MIME parsers accept a wider language.
-    let mut parts = value.split(';');
-    let media = parts.next().unwrap_or_default().to_ascii_lowercase();
-    let valid_media = media == "application/json"
-        || media
-            .strip_prefix("application/")
-            .and_then(|subtype| subtype.strip_suffix("+json"))
-            .is_some_and(|subtype| {
-                !subtype.is_empty()
-                    && subtype
-                        .bytes()
-                        .all(|b| b.is_ascii_lowercase() || b == b'-' || b == b'.')
-            });
-    valid_media
-        && parts.all(|part| {
-            part.trim_start_matches(js_whitespace)
-                .split_once('=')
-                .is_some_and(|(name, value)| {
-                    !name.is_empty()
-                        && !value.is_empty()
-                        && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-                })
-        })
+/// Generated models use JavaScript numbers; P2 represents SQLite integer columns as i64.
+/// Convert once here, truncating fractional units toward zero while keeping the surrounding
+/// optional/null patch states intact. Integer timestamps are returned as wire numbers again.
+pub fn store_integer(value: f64) -> i64 {
+    value as i64
 }
 
 /// The explicit route rules are deliberately kept outside generated code. Regeneration must
@@ -84,16 +47,33 @@ pub trait CrudRequest: DeserializeOwned {
     fn normalize(value: &mut Value, issues: &mut Issues);
 }
 
-pub fn decode<T: CrudRequest>(mut value: Value) -> Result<T, Response> {
+/// Box only the rejection path so helpers keep small Result values while carrying an exact
+/// already-rendered HTTP response across the validation/projection-to-handler handoff.
+pub struct CrudError(Box<Response>);
+
+impl From<Response> for CrudError {
+    fn from(response: Response) -> Self {
+        Self(Box::new(response))
+    }
+}
+
+impl IntoResponse for CrudError {
+    fn into_response(self) -> Response {
+        *self.0
+    }
+}
+
+pub fn decode<T: CrudRequest>(mut value: Value) -> Result<T, CrudError> {
     let mut issues = Issues::default();
     T::normalize(&mut value, &mut issues);
     if !issues.0.is_empty() {
-        return Err(issues.response());
+        return Err(issues.response().into());
     }
     serde_json::from_value(value).map_err(|error| {
         internal_error(&format!(
             "Validated CRUD body did not match generated contract: {error}"
         ))
+        .into()
     })
 }
 
@@ -631,7 +611,7 @@ impl CrudRequest for api::CreateAgentRequest {
 
 /// UUID parsing must validate the textual form before `Uuid::parse_str`; the latter accepts
 /// simple/braced/URN representations that the shipped zod validator rejects.
-pub fn uuid_param(value: &str, name: &str) -> Result<Uuid, Response> {
+pub fn uuid_param(value: &str, name: &str) -> Result<Uuid, CrudError> {
     let bytes = value.as_bytes();
     let nil_or_max = value == "00000000-0000-0000-0000-000000000000"
         || value == "ffffffff-ffff-ffff-ffff-ffffffffffff";
@@ -653,11 +633,16 @@ pub fn uuid_param(value: &str, name: &str) -> Result<Uuid, Response> {
     let mut issues = Issues::default();
     issues.push(vec![("origin", json!("string")), ("code", json!("invalid_format")), ("format", json!("uuid")),
         ("pattern", json!("/^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$/"))], &[json!(name)], "Invalid UUID".to_owned());
-    Err(issues.response())
+    Err(issues.response().into())
 }
 
 pub fn internal_error(message: &str) -> Response {
     let scrubbed = browseros_agent::llm::redact(message);
+    error_envelope(&scrubbed)
+}
+
+/// Builds the TS unknown-error envelope from text that is already safe for the wire.
+fn error_envelope(scrubbed: &str) -> Response {
     let scrubbed = scrubbed.trim_matches(js_whitespace);
     let message = if scrubbed.is_empty() {
         "An unexpected error occurred."
@@ -686,7 +671,7 @@ pub fn internal_error(message: &str) -> Response {
     super::super::errors::chat_envelope_500(&browseros_agent::llm::ChatError {
         code: browseros_agent::llm::ChatErrorCode::Unknown,
         title: "Something went wrong".to_owned(),
-        message: message.clone(),
+        message,
         retryable: true,
         provider: None,
         status_code: None,
@@ -703,11 +688,13 @@ pub fn db_error(error: db::DbError) -> Response {
     };
     // SeaORM/sqlx adds transport context around SQLite errors. Bun exposes the SQLite message
     // itself; retain that exact message for the two intentionally unhandled FK failures.
-    internal_error(if message.contains("FOREIGN KEY constraint failed") {
-        "FOREIGN KEY constraint failed"
+    if message.contains("FOREIGN KEY constraint failed") {
+        // This fixed SQLite diagnostic contains no request values or credentials. Do not
+        // feed it through provider-specific redaction/classification, which may change it.
+        error_envelope("FOREIGN KEY constraint failed")
     } else {
-        &message
-    })
+        internal_error(&message)
+    }
 }
 
 pub fn not_found(message: &str) -> Response {
@@ -769,7 +756,7 @@ pub fn conversation_summary(row: db::ConversationSummary) -> api::ConversationSu
         id: row.id.to_string(),
         last_user_message: row.last_user_message,
         origin: row.origin,
-        target_type: match row.target_type.unwrap_or(db::TargetType::BrowserOs) {
+        target_type: match row.target_type {
             db::TargetType::BrowserOs => api::ConversationSummaryTargetType::Browseros,
             db::TargetType::Claude => api::ConversationSummaryTargetType::Claude,
             db::TargetType::Codex => api::ConversationSummaryTargetType::Codex,
@@ -784,11 +771,11 @@ pub fn conversation_summary(row: db::ConversationSummary) -> api::ConversationSu
 
 pub fn conversation_detail(
     row: db::StoredConversation,
-) -> Result<api::ConversationDetail, Response> {
+) -> Result<api::ConversationDetail, CrudError> {
     let summary = conversation_summary(row.summary);
     let messages = serde_json::to_value(row.messages)
         .and_then(serde_json::from_value)
-        .map_err(|error| internal_error(&error.to_string()))?;
+        .map_err(|error| CrudError::from(internal_error(&error.to_string())))?;
     Ok(api::ConversationDetail {
         id: summary.id,
         last_user_message: summary.last_user_message,
@@ -823,7 +810,7 @@ pub fn provider(row: db::ProviderRow) -> api::Provider {
         is_default: row.is_default,
         base_url: row.base_url,
         headers: row.headers.map(|headers| headers.into_iter().collect()),
-        supports_images: row.supports_images.unwrap_or(true),
+        supports_images: row.supports_images,
         context_window: row.context_window.map(|value| value as f64),
         temperature: row.temperature,
         api_key: row.api_key,
@@ -899,17 +886,17 @@ pub fn job(row: db::ScheduledJobRow) -> api::ScheduledJob {
     }
 }
 
-pub fn run(row: db::ScheduledRunRow) -> Result<api::ScheduledJobRun, Response> {
+pub fn run(row: db::ScheduledRunRow) -> Result<api::ScheduledJobRun, CrudError> {
     let tool_calls = row
         .tool_calls
         .map(serde_json::from_value)
         .transpose()
-        .map_err(|error| internal_error(&error.to_string()))?;
+        .map_err(|error| CrudError::from(internal_error(&error.to_string())))?;
     let status = match row.status.as_str() {
         "running" => api::ScheduledJobRunStatus::Running,
         "completed" => api::ScheduledJobRunStatus::Completed,
         "failed" => api::ScheduledJobRunStatus::Failed,
-        _ => return Err(internal_error("Unknown scheduled run status")),
+        _ => return Err(internal_error("Unknown scheduled run status").into()),
     };
     Ok(api::ScheduledJobRun {
         id: row.id,

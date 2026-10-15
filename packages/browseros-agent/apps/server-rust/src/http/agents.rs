@@ -79,7 +79,7 @@ pub async fn create(
 pub async fn get(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let id = match crud::uuid_param(&id, "agentId") {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     match state.agents.get(id).await {
         Ok(Some(row)) => Json(api::AgentResponse::new(crud::agent(row))).into_response(),
@@ -97,7 +97,7 @@ pub async fn update(
     // UUID's 400 into a 500. Keep this ordering explicit at the body-consuming seam.
     let id = match crud::uuid_param(&id, "agentId") {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     let CrudJson(input) = match <CrudJson<api::UpdateAgentRequest> as axum::extract::FromRequest<
         AppState,
@@ -105,7 +105,7 @@ pub async fn update(
     .await
     {
         Ok(input) => input,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     match state.agents.get(id).await {
         Ok(Some(row)) if input.custom_config.is_some() && row.kind != db::AgentKind::Custom => {
@@ -148,7 +148,7 @@ pub async fn update(
 pub async fn delete(State(state): State<AppState>, Path(id): Path<String>) -> Response {
     let id = match crud::uuid_param(&id, "agentId") {
         Ok(id) => id,
-        Err(response) => return response,
+        Err(response) => return response.into_response(),
     };
     match state.agents.delete(id).await {
         Ok(true) => {
