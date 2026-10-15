@@ -291,8 +291,11 @@ async fn spawn_environment_and_exit_diagnostics() -> Result<(), Box<dyn std::err
     let mut env = session.prompt(text("environment"))?;
     let (updates, _) = collect(&mut env).await?;
     assert!(visible(&updates).contains("overlay-value:"));
-    // macOS may canonicalize /var to /private/var in current_dir().
-    assert!(visible(&updates).contains(&dir.path().canonicalize()?.display().to_string()));
+    // macOS may canonicalize /var to /private/var in current_dir(); Windows canonical paths carry a
+    // verbatim `\\?\` prefix that the child's current_dir() does not report.
+    let cwd = dir.path().canonicalize()?.display().to_string();
+    let cwd = cwd.strip_prefix(r"\\?\").unwrap_or(&cwd);
+    assert!(visible(&updates).contains(cwd));
     let mut crash = session.prompt(text("crash"))?;
     match tokio::time::timeout(WAIT_CAP, crash.next()).await? {
         Some(TurnEvent::Done(Err(AcpError::Exited {
@@ -413,6 +416,9 @@ async fn shutdown_escalates_and_last_handle_drop_reaps() -> Result<(), Box<dyn s
     let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
     let pid = conn.pid().ok_or("missing PID")?;
     drop(conn);
+    // Only Unix can probe a reaped PID cheaply; elsewhere the drop guard is covered by shutdown above.
+    #[cfg(not(unix))]
+    let _ = pid;
     #[cfg(unix)]
     {
         let pid = rustix::process::Pid::from_raw(i32::try_from(pid)?).ok_or("invalid PID")?;
