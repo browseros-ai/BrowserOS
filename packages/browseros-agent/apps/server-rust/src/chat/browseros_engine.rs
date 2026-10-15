@@ -186,25 +186,6 @@ pub trait BackgroundPages: Send + Sync {
     async fn close(&self, page_id: u32) -> anyhow::Result<()>;
 }
 
-/// The [`BackgroundPages`] adapter used until the shared host's browser is wired in. Scheduled
-/// runs then fall back to the request's browser context, as TS does when `newPage` fails.
-pub struct NoBrowser;
-
-#[async_trait::async_trait]
-impl BackgroundPages for NoBrowser {
-    async fn open_background(&self, url: &str) -> anyhow::Result<u32> {
-        anyhow::bail!("browser is not connected; cannot open {url}")
-    }
-
-    async fn window_of(&self, page_id: u32) -> anyhow::Result<Option<i64>> {
-        anyhow::bail!("browser is not connected; cannot look up page {page_id}")
-    }
-
-    async fn close(&self, page_id: u32) -> anyhow::Result<()> {
-        anyhow::bail!("browser is not connected; cannot close page {page_id}")
-    }
-}
-
 /// Everything the engine is built from.
 pub struct BrowserOsEngineDeps {
     pub models: ModelFactory,

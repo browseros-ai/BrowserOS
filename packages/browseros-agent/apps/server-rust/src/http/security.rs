@@ -232,6 +232,9 @@ mod tests {
             .filter(|route| protected_prefix(route.path) != (route.auth == Auth::TrustedApp))
             .map(|route| format!("{} {} ({:?})", route.method, route.path, route.auth))
             .collect();
-        assert!(drift.is_empty(), "route auth drifted from protected_prefix: {drift:?}");
+        assert!(
+            drift.is_empty(),
+            "route auth drifted from protected_prefix: {drift:?}"
+        );
     }
 }

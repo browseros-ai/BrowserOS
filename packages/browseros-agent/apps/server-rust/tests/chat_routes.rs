@@ -5,6 +5,10 @@
 //! (Hono 4.13 + `@hono/zod-validator` over `ChatRequestSchema`/`ConversationIdParamSchema`),
 //! so those comparisons are byte-for-byte against the TS server.
 
+mod chat_support;
+
+use chat_support::{NoBrowser, ScriptedEngine};
+
 use axum::{
     Extension, Router,
     body::{Body, to_bytes},
@@ -18,8 +22,8 @@ use server_rust::{
     activity::ServerActivity,
     chat::{
         BrowserOsEngine, BrowserOsEngineDeps, ChatDeps, ChatEngine, ChatRecords, ChatRejection,
-        ChatService, ConversationRuns, ModelFactory, NoBrowser, ProviderRecord, RegistryLeases,
-        ScriptedEngine, Turn, production_models,
+        ChatService, ConversationRuns, ModelFactory, ProviderRecord, RegistryLeases, Turn,
+        production_models,
     },
     db::{
         AcpAgentRow, AgentKind, ConversationSummary, Database, DbError, DbResult,
