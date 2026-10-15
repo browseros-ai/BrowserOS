@@ -136,9 +136,15 @@ pub struct Run {
     /// typed the caller's value into the same search box six times, seeing the
     /// box already hold that value on every look, so the value being visible is
     /// not enough on its own.
-    pub repeating: Option<String>,
+    /// What the last step aimed at: its reference, and what it was called.
+    pub repeating: Option<(String, Option<String>)>,
     /// Consecutive steps that left the page as it was.
     pub unchanged: u32,
+    /// Consecutive steps that changed the page and got no closer.
+    pub circling: u32,
+    /// The best completion score this run has seen, so a step is only credited
+    /// for improving on the run's high-water mark rather than on the last step.
+    pub closest: f64,
     /// Consecutive decisions the gate declined.
     pub declined: u32,
     /// How many times the run has moved between pages.
@@ -160,6 +166,14 @@ pub struct Run {
 
 /// How many steps in a row may leave the page unchanged before the run stops.
 pub const STALL_LIMIT: u32 = 3;
+
+/// How many steps may change the page without getting anywhere.
+///
+/// Higher than [`STALL_LIMIT`] because changing the page is weaker evidence of
+/// a loop than failing to: a real errand opens a panel, reads it and closes it,
+/// and all three steps are progress. Measured live, a run that was genuinely
+/// circling did it three times over eleven steps before its budget ran out.
+pub const CIRCLING_LIMIT: u32 = 4;
 /// How many decisions in a row the gate may decline before the run stops.
 pub const DECLINE_LIMIT: u32 = 3;
 /// How many times one run may move between pages.
@@ -183,6 +197,8 @@ impl Run {
             last_acted: None,
             repeating: None,
             unchanged: 0,
+            circling: 0,
+            closest: 0.0,
             declined: 0,
             navigations: 0,
             waits: 0,
@@ -233,13 +249,41 @@ impl Run {
     /// Whether this is the second time running that the run would aim here.
     ///
     /// Records the aim either way, so the caller can act on the answer.
-    pub fn aiming_again_at(&mut self, target: Option<&str>) -> bool {
+    ///
+    /// A reference is not a control. A page that re-renders mints a new
+    /// reference for the same control, and keying on the reference alone let a
+    /// run type the same string into what it believed were three different
+    /// search boxes. Measured live on a docs site: `e72`, then `e105`, then
+    /// `e220`, all the same box, all "MCP tunnel", eleven actions and no
+    /// progress.
+    ///
+    /// A name is not a control either. A results page carries sixty-five
+    /// buttons called "Add to cart" and they are sixty-five different controls,
+    /// so matching on the name alone would forbid a run from acting on the
+    /// second of them.
+    ///
+    /// What tells the two apart is whether the control aimed at last time is
+    /// still there. Gone, and an identically named one in its place, is a
+    /// re-render. Still there, and a different one chosen, is a different
+    /// control. `last_still_there` says which.
+    pub fn aiming_again_at(
+        &mut self,
+        target: Option<&str>,
+        name: Option<&str>,
+        last_still_there: bool,
+    ) -> bool {
         let Some(target) = target else {
             self.repeating = None;
             return false;
         };
-        let again = self.repeating.as_deref() == Some(target);
-        self.repeating = Some(target.to_string());
+        let again = self.repeating.as_ref().is_some_and(|(was, was_called)| {
+            was == target
+                || (!last_still_there
+                    && name.is_some_and(|name| {
+                        !name.trim().is_empty() && was_called.as_deref() == Some(name)
+                    }))
+        });
+        self.repeating = Some((target.to_string(), name.map(str::to_string)));
         again
     }
 
@@ -291,24 +335,36 @@ mod tests {
     #[test]
     fn aiming_at_the_same_control_twice_running_is_noticed() {
         let mut run = Run::new("x", Budget::default());
-        assert!(!run.aiming_again_at(Some("e1")), "the first time is fine");
-        assert!(run.aiming_again_at(Some("e1")), "the second is not");
+        assert!(
+            !run.aiming_again_at(Some("e1"), None, true),
+            "the first time is fine"
+        );
+        assert!(
+            run.aiming_again_at(Some("e1"), None, true),
+            "the second is not"
+        );
     }
 
     #[test]
     fn aiming_somewhere_else_in_between_clears_it() {
         let mut run = Run::new("x", Budget::default());
-        run.aiming_again_at(Some("e1"));
-        run.aiming_again_at(Some("e2"));
-        assert!(!run.aiming_again_at(Some("e1")), "not twice in a row");
+        run.aiming_again_at(Some("e1"), None, true);
+        run.aiming_again_at(Some("e2"), None, true);
+        assert!(
+            !run.aiming_again_at(Some("e1"), None, true),
+            "not twice in a row"
+        );
     }
 
     #[test]
     fn a_move_with_no_target_clears_the_repeat() {
         let mut run = Run::new("x", Budget::default());
-        run.aiming_again_at(Some("e1"));
-        assert!(!run.aiming_again_at(None), "scrolling is not aiming");
-        assert!(!run.aiming_again_at(Some("e1")));
+        run.aiming_again_at(Some("e1"), None, true);
+        assert!(
+            !run.aiming_again_at(None, None, true),
+            "scrolling is not aiming"
+        );
+        assert!(!run.aiming_again_at(Some("e1"), None, true));
     }
 
     #[test]
@@ -380,5 +436,46 @@ mod tests {
             run.known.target.as_ref().map(|f| f.reference.as_str()),
             Some("e5")
         );
+    }
+
+    /// The docs-site case. A page that re-renders mints a new reference for the
+    /// same control, and keying on the reference alone let a run type the same
+    /// string into what it thought were three different search boxes.
+    #[test]
+    fn a_control_that_came_back_with_a_new_reference_is_the_same_control() {
+        let mut run = Run::new("search the docs", Budget::default());
+
+        assert!(!run.aiming_again_at(Some("e72"), Some("Search"), true));
+        // The dialog re-rendered: e72 is gone and an identically named box is
+        // here as e105.
+        assert!(
+            run.aiming_again_at(Some("e105"), Some("Search"), false),
+            "the box is the box, whatever it is called this time"
+        );
+    }
+
+    /// And the other way. A results page carries sixty-five buttons called
+    /// "Add to cart" and they are sixty-five different controls, so a run that
+    /// acts on the second of them is not repeating itself.
+    #[test]
+    fn two_controls_that_share_a_name_are_two_controls() {
+        let mut run = Run::new("add two things", Budget::default());
+
+        assert!(!run.aiming_again_at(Some("e128"), Some("Add to cart"), true));
+        assert!(
+            !run.aiming_again_at(Some("e134"), Some("Add to cart"), true),
+            "the first one is still on the page, so this is a different button"
+        );
+    }
+
+    /// An unnamed control cannot be recognised by name, so the reference is all
+    /// there is and the old rule stands.
+    #[test]
+    fn an_unnamed_control_is_matched_by_reference_alone() {
+        let mut run = Run::new("click it", Budget::default());
+
+        assert!(!run.aiming_again_at(Some("e1"), Some(""), true));
+        assert!(!run.aiming_again_at(Some("e2"), Some(""), false));
+        assert!(run.aiming_again_at(Some("e2"), Some(""), false));
     }
 }

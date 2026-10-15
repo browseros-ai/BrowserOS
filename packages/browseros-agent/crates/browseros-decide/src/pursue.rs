@@ -58,6 +58,13 @@ pub enum Stuck {
     BrowserKeptFailing,
     /// The run kept choosing to wait, which makes no observable progress.
     OnlyWaiting,
+    /// Actions ran, the page changed every time, and nothing got closer.
+    ///
+    /// Distinct from [`Stuck::NothingChanged`] because the page changing is
+    /// exactly what made this invisible. Measured live: eleven actions, eleven
+    /// changes, nothing retired, and the run opened the same search dialog
+    /// three times before its budget ran out.
+    GoingInCircles,
 }
 
 impl Stuck {
@@ -69,6 +76,7 @@ impl Stuck {
             Self::NotConfident => "not_confident",
             Self::BrowserKeptFailing => "browser_kept_failing",
             Self::OnlyWaiting => "only_waiting",
+            Self::GoingInCircles => "going_in_circles",
         }
     }
 }
@@ -466,7 +474,20 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         // the page says about it. A live errand typed the caller's value into
         // the same search box six times over, and on every look the box already
         // held that value, so the control's own state is not enough to stop it.
-        if decision.aims_at_a_control() && run.aiming_again_at(decision.target.as_deref()) {
+        // Whether the control the last step aimed at is still on this page. Gone,
+        // with an identically named one in its place, is one control through a
+        // re-render rather than two controls.
+        let last_still_there = run
+            .repeating
+            .as_ref()
+            .is_some_and(|(was, _)| view.control(was).is_some());
+        if decision.aims_at_a_control()
+            && run.aiming_again_at(
+                decision.target.as_deref(),
+                target_name.as_deref(),
+                last_still_there,
+            )
+        {
             // Spends a step even though nothing was run. The decision was paid
             // for, and without this the guard is unbounded: a run whose control
             // is already retired would set it aside again forever.
@@ -542,6 +563,36 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
 
         if changed {
             run.unchanged = 0;
+            // The page moved. Whether the run got anywhere is a different
+            // question, and the one the loop could not previously ask: every
+            // guard it had was built on change. A step that leaves the url, the
+            // completion score and the size of the page where they were has
+            // changed something and arrived nowhere.
+            let arrived = after.as_ref().is_some_and(|now| {
+                let url_moved = now.url != view.url;
+                let size_moved = now.controls.len() != view.controls.len();
+                url_moved || size_moved
+            });
+            let closer = goal_met.is_some_and(|now| now > run.closest + 0.05);
+            if arrived || closer {
+                run.circling = 0;
+                if let Some(now) = goal_met {
+                    run.closest = run.closest.max(now);
+                }
+            } else {
+                run.circling += 1;
+                if run.circling >= crate::run::CIRCLING_LIMIT {
+                    return end(
+                        &run,
+                        Status::Stalled(Stuck::GoingInCircles),
+                        after.or(Some(view)),
+                        &space,
+                        trail,
+                        None,
+                        goal_met,
+                    );
+                }
+            }
         } else {
             // Whatever that was aimed at did nothing. Retire it rather than let
             // the loop spend its whole budget on one dead reference, and do not
