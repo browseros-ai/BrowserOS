@@ -1,0 +1,107 @@
+//! One constructor per existing error body dialect (contract `responses.yaml`, `common.yaml`).
+//! Handlers never hand-build error JSON, so each dialect stays byte-identical everywhere it is
+//! used. P3 pins every body against the contract fixtures.
+
+use super::extract::ZodIssue;
+use axum::{
+    Json,
+    response::{IntoResponse, Response},
+};
+use browseros_agent::llm::ChatError;
+use http::{StatusCode, header};
+use serde_json::{Value, json};
+
+/// `{"error":"…"}`.
+pub fn error_string(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// 400 `{"success":false,"error":{"name":"ZodError","message":"<pretty JSON array of issues>"}}`.
+pub fn zod_400(issues: &[ZodIssue]) -> Response {
+    let issues: Vec<Value> = issues
+        .iter()
+        .map(|issue| json!({ "code": issue.code, "path": issue.path, "message": issue.message }))
+        .collect();
+    let message = serde_json::to_string_pretty(&issues).unwrap_or_default();
+    (
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "success": false, "error": { "name": "ZodError", "message": message } })),
+    )
+        .into_response()
+}
+
+/// 500 chat envelope: the `ChatError` plus `name: "InternalServerError"`, `statusCode: 500`.
+pub fn chat_envelope_500(error: &ChatError) -> Response {
+    let mut body = serde_json::to_value(error).unwrap_or_else(|_| json!({}));
+    if let Some(object) = body.as_object_mut() {
+        object.insert("name".to_owned(), json!("InternalServerError"));
+        object.insert("statusCode".to_owned(), json!(500));
+    }
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": body })),
+    )
+        .into_response()
+}
+
+/// 403 from the trusted-origin guard (nested `HttpAgentError` envelope).
+pub fn forbidden_origin() -> Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(json!({ "error": {
+            "name": "ForbiddenOrigin",
+            "message": "Origin not allowed",
+            "code": "FORBIDDEN_ORIGIN",
+            "statusCode": 403,
+        }})),
+    )
+        .into_response()
+}
+
+/// 403 from `/mcp`'s browser-fetch rejection. P3/P15 pin the exact text.
+pub fn forbidden_browser_request() -> Response {
+    error_string(StatusCode::FORBIDDEN, "Forbidden")
+}
+
+/// `{"success":false,"message":"…"}`.
+pub fn success_false(status: StatusCode, message: &str) -> Response {
+    (
+        status,
+        Json(json!({ "success": false, "message": message })),
+    )
+        .into_response()
+}
+
+/// `{"message":"…"}`.
+pub fn message_only(status: StatusCode, message: &str) -> Response {
+    (status, Json(json!({ "message": message }))).into_response()
+}
+
+pub fn text_plain(status: StatusCode, body: &str) -> Response {
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/plain; charset=UTF-8")],
+        body.to_owned(),
+    )
+        .into_response()
+}
+
+/// `/acpx/probe` failures: `{"error":{"code":"wrapper_error","message":"…"}}`.
+pub fn probe_wrapper_error(message: &str) -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": { "code": "wrapper_error", "message": message } })),
+    )
+        .into_response()
+}
+
+/// JSON-RPC error with `id: null` (`/mcp` lease rejection is 401 / -32001).
+pub fn jsonrpc_error(status: StatusCode, code: i64, message: &str) -> Response {
+    (
+        status,
+        Json(
+            json!({ "jsonrpc": "2.0", "error": { "code": code, "message": message }, "id": null }),
+        ),
+    )
+        .into_response()
+}

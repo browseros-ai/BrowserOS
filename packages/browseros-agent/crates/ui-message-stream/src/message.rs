@@ -35,7 +35,8 @@ pub enum UiPart {
     Text(TextPart),
     Reasoning(ReasoningPart),
     StepStart,
-    Tool(ToolPart),
+    /// Boxed: a tool part is several times larger than every other variant.
+    Tool(Box<ToolPart>),
     File(FilePart),
     Other(Map<String, Value>),
 }
@@ -326,7 +327,7 @@ impl Serialize for UiPart {
                 part: &Map::new(),
             }
             .serialize(serializer),
-            UiPart::Tool(part) => ToolPartWire::from(part).serialize(serializer),
+            UiPart::Tool(part) => ToolPartWire::from(part.as_ref()).serialize(serializer),
             UiPart::File(part) => Tagged { kind: "file", part }.serialize(serializer),
             UiPart::Other(map) => map.serialize(serializer),
         }
@@ -351,16 +352,11 @@ impl<'de> Deserialize<'de> for UiPart {
             "reasoning" => UiPart::Reasoning(decode(map)?),
             "step-start" => UiPart::StepStart,
             "file" => UiPart::File(decode(map)?),
-            "dynamic-tool" => UiPart::Tool(
+            tool if tool == "dynamic-tool" || tool.starts_with("tool-") => UiPart::Tool(Box::new(
                 decode::<ToolPartWire, D::Error>(map)?
                     .into_part()
                     .map_err(D::Error::custom)?,
-            ),
-            tool if tool.starts_with("tool-") => UiPart::Tool(
-                decode::<ToolPartWire, D::Error>(map)?
-                    .into_part()
-                    .map_err(D::Error::custom)?,
-            ),
+            )),
             _ => UiPart::Other(map),
         })
     }
@@ -393,11 +389,9 @@ mod tests {
         let message: UiMessage = serde_json::from_value(stored.clone())?;
         assert!(matches!(
             &message.parts[3],
-            UiPart::Tool(ToolPart {
-                kind: ToolPartKind::Dynamic { .. },
-                output: Some(Value::Null),
-                ..
-            })
+            UiPart::Tool(part)
+                if matches!(part.kind, ToolPartKind::Dynamic { .. })
+                    && part.output == Some(Value::Null)
         ));
         assert!(matches!(&message.parts[6], UiPart::Other(_)));
         assert_eq!(serde_json::to_value(&message)?, stored);

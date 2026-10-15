@@ -1,0 +1,46 @@
+[package]
+name = "server-rust"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "browseros-server-rs"
+path = "src/main.rs"
+
+[dependencies]
+browseros-agent.workspace = true
+harness-integrations.workspace = true
+server-api.workspace = true
+ui-message-stream.workspace = true
+
+anyhow.workspace = true
+async-trait.workspace = true
+axum.workspace = true
+futures-core.workspace = true
+futures-util.workspace = true
+http.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+url.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+serde-saphyr.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
+tower.workspace = true
+
+[lints]
+workspace = true
