@@ -241,15 +241,26 @@ impl PageDriver {
     /// the docs page it was sent for, handed back 419 bytes of chrome, and the
     /// caller read the same page itself on its next call.
     pub async fn readable(&self, budget: usize) -> Option<String> {
-        let text = self
-            .run(
-                self.reach.read,
-                Operation::Read,
-                json!({ "page": self.page }),
-            )
-            .await
-            .ok()?;
-        Some(budgeted(&without_fencing(&text), budget))
+        // The page's main content first, then the whole page. A documentation
+        // site carries its entire navigation tree in the markup, and measured
+        // on one of them a whole-page read spent all 4,000 bytes on lists of
+        // links to other pages: the guide the run was sent to fetch was not in
+        // its own reply. The caller of that failed run worked around it by
+        // calling read itself with this very selector.
+        for selector in [Some("main"), None] {
+            let mut args = json!({ "page": self.page });
+            if let Some(selector) = selector {
+                args["selector"] = json!(selector);
+            }
+            let Ok(text) = self.run(self.reach.read, Operation::Read, args).await else {
+                continue;
+            };
+            let text = budgeted(&without_fencing(&text), budget);
+            if !text.trim().is_empty() {
+                return Some(text);
+            }
+        }
+        None
     }
 
     async fn run(
