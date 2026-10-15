@@ -140,11 +140,6 @@ pub fn state(view: &PageView, space: &ActionSpace, recent: &[String], retired: u
     })
 }
 
-/// Which moves are worth offering for this page.
-///
-/// A move with nothing to aim at is left out rather than offered and refused,
-/// since an option that cannot be acted on still competes for the answer.
-#[must_use]
 /// Which ways of reporting this browser can actually carry out.
 ///
 /// A peer that does not ship `grep` should get a working loop with matching
@@ -165,6 +160,11 @@ pub fn tellings(surface: Surface<'_>) -> Vec<Telling> {
     tellings
 }
 
+/// Which moves are worth offering for this page.
+///
+/// A move with nothing to aim at is left out rather than offered and refused,
+/// since an option that cannot be acted on still competes for the answer.
+#[must_use]
 pub fn available(space: &ActionSpace, view: &PageView, surface: Surface<'_>) -> Vec<Operation> {
     // SNAPSHOT is not here, and that is deliberate. The loop observes a settled
     // page at the top of every iteration, so choosing to look again costs a

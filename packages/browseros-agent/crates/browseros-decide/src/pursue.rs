@@ -424,7 +424,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         }
         run.declined = 0;
 
-        let Some(next) = resolve(&decision, &run, &supplied) else {
+        let Some(next) = resolve(&decision, &run, &supplied, &view) else {
             return end(
                 &run,
                 Status::NeedsInput(
@@ -782,7 +782,12 @@ async fn search<O: Oracle>(
 }
 
 /// Turns a judged decision into something the driver can run.
-fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<Move> {
+fn resolve(
+    decision: &Decision,
+    run: &Run,
+    supplied: &Option<String>,
+    view: &PageView,
+) -> Option<Move> {
     match decision.operation {
         Operation::Act => {
             let how = decision.how?;
@@ -843,8 +848,17 @@ fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<
         // one of the three that needs nothing chosen and cannot be wrong about
         // what it was asked for.
         Operation::Report => Some(Move::Report(match decision.telling {
-            Some(Telling::Matching) => Ask::Grep(pattern_for(&run.goal)),
-            Some(Telling::HowMany) => Ask::Count(pattern_for(&run.goal)),
+            // A needle that matches nothing hands back nothing, and one that
+            // matches everything hands back the page with extra steps. Where no
+            // word of the goal discriminates, reading is the honest answer.
+            Some(Telling::Matching) => match needle_for(&run.goal, view) {
+                Some(needle) => Ask::Grep(needle),
+                None => Ask::Read,
+            },
+            Some(Telling::HowMany) => match needle_for(&run.goal, view) {
+                Some(needle) => Ask::Count(needle),
+                None => Ask::Read,
+            },
             Some(Telling::Text) | None => Ask::Read,
         })),
         Operation::Read => Some(Move::Report(Ask::Read)),
@@ -869,6 +883,49 @@ const NOISE: &[&str] = &[
     "out", "page", "are", "was", "its", "into", "than", "then", "there", "here", "about",
     "whether",
 ];
+
+/// What to search this page for, chosen by how well it narrows this page.
+///
+/// The old rule took the goal's longest word, which is a property of the goal
+/// and says nothing about the page. Measured live: the goal named a Sensodyne
+/// toothpaste on a page of toothpaste search results, the longest word was
+/// "Toothpaste", and the match was 55,718 characters of nearly every line.
+///
+/// So the candidates are scored against what is actually on the page, and the
+/// most selective one that still matches something wins. `None` means no word
+/// of the goal narrows this page, and the caller reads it instead.
+fn needle_for(goal: &str, view: &PageView) -> Option<String> {
+    let mut haystack = String::with_capacity(view.text.len() + 256);
+    haystack.push_str(&view.text.to_lowercase());
+    for control in &view.controls {
+        haystack.push('\n');
+        haystack.push_str(&control.name.to_lowercase());
+    }
+
+    let lines: Vec<&str> = haystack.lines().collect();
+    let total = lines.len().max(1);
+
+    let mut best: Option<(usize, String)> = None;
+    for word in goal.split(|character: char| !character.is_alphanumeric()) {
+        if word.len() <= 3 || NOISE.contains(&word.to_lowercase().as_str()) {
+            continue;
+        }
+        let lowered = word.to_lowercase();
+        let hits = lines
+            .iter()
+            .filter(|line| line.contains(lowered.as_str()))
+            .count();
+        // Absent narrows nothing because it finds nothing. Present on nearly
+        // every line narrows nothing either.
+        if hits == 0 || hits * 2 > total {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(fewest, _)| hits < *fewest) {
+            best = Some((hits, word.to_string()));
+        }
+    }
+    best.map(|(_, word)| word)
+}
 
 /// What to search the page for, derived from the goal in code.
 ///
@@ -1005,5 +1062,73 @@ fn end(
         goal_met,
         unlabelled_images: view.as_ref().map_or(0, |view| view.unlabelled_images),
         ended_on: view,
+    }
+}
+
+#[cfg(test)]
+mod needle_tests {
+    use super::needle_for;
+    use crate::view::{Control, ControlState, PageView};
+
+    fn named(reference: &str, role: &str, name: &str) -> Control {
+        Control {
+            reference: reference.to_string(),
+            clickable: false,
+            role: role.to_string(),
+            name: name.to_string(),
+            value: None,
+            state: ControlState::default(),
+            options: Vec::new(),
+            guard: 0,
+        }
+    }
+
+    /// The amazon case. The goal named a Sensodyne toothpaste on a page of
+    /// toothpaste results, and the old rule took the goal's longest word,
+    /// "Toothpaste", which was on nearly every line and matched 55,718
+    /// characters.
+    #[test]
+    fn the_needle_is_the_word_that_narrows_this_page() {
+        let view = PageView::from_snapshot_parts(
+            "https://shop.test/s?k=toothpaste",
+            "toothpaste",
+            "",
+            vec![
+                named("e1", "link", "Colgate Toothpaste Total"),
+                named("e2", "link", "Colgate Toothpaste Fresh"),
+                named("e3", "link", "Sensodyne Toothpaste Fresh Gel"),
+                named("e4", "link", "Pepsodent Toothpaste"),
+            ],
+        );
+
+        let needle = needle_for("add the Sensodyne Toothpaste Fresh Gel to the cart", &view);
+
+        assert_eq!(
+            needle.as_deref(),
+            Some("Sensodyne"),
+            "the word that picks out one listing, not the one on every listing"
+        );
+    }
+
+    /// A word on every line narrows nothing, and neither does a word on none.
+    /// With no word that narrows, reading the page is the honest answer.
+    #[test]
+    fn no_word_that_narrows_means_no_needle() {
+        let view = PageView::from_snapshot_parts(
+            "https://shop.test/",
+            "shop",
+            "",
+            vec![
+                named("e1", "link", "Toothpaste one"),
+                named("e2", "link", "Toothpaste two"),
+            ],
+        );
+
+        assert_eq!(needle_for("count the toothpaste", &view), None);
+        assert_eq!(
+            needle_for("find the helicopter", &view),
+            None,
+            "a word the page does not have finds nothing"
+        );
     }
 }
