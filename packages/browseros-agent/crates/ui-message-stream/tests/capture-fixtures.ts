@@ -108,8 +108,15 @@ async function save(name: string, chunks: UIMessageChunk[]) {
   ]) {
     const path = join(fixtures, `${name}.${suffix}`)
     if (check) {
-      if (readFileSync(path, 'utf8') !== content)
-        throw new Error(`TS fixture drift: ${path}`)
+      const actual = readFileSync(path, 'utf8')
+      // The commit hook formats JSON fixtures. Compare their captured state (and key order)
+      // independent of whitespace; SSE is always checked as untouched, exact bytes.
+      const matches =
+        suffix === 'json'
+          ? JSON.stringify(JSON.parse(actual)) ===
+            JSON.stringify(JSON.parse(content))
+          : actual === content
+      if (!matches) throw new Error(`TS fixture drift: ${path}`)
     } else await Bun.write(path, content)
   }
 }
