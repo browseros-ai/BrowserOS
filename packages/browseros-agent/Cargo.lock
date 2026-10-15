@@ -457,6 +457,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tower",
  "tracing",
  "ulid",
  "uuid",
