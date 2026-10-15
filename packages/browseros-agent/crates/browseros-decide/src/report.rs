@@ -118,6 +118,12 @@ pub struct Told {
     /// The page it ended on, so a caller that has to try again can see what it
     /// is trying again against.
     pub page: Option<Seen>,
+    /// The run, in order, as sentences a person can read.
+    ///
+    /// `decided` is a flat array of eleven fields a decision and leaves the
+    /// reading to the caller. This is the same information as prose, which is
+    /// what a caller deciding how to word its next goal actually reads.
+    pub story: Vec<String>,
     /// Every decision the run paid for, and what the gate made of each.
     ///
     /// The one thing a caller could not see. A run reported twelve scalars and
@@ -156,8 +162,108 @@ pub fn tell(outcome: &Outcome) -> Told {
             .ended_on
             .as_ref()
             .map(|view| seen(view, outcome.omitted)),
+        story: story(outcome),
         decided: outcome.decided.clone(),
     }
+}
+
+/// The run as sentences, built from what was already recorded.
+///
+/// A pure function of the outcome, so the whole thing is testable without a
+/// browser or a model. Walks the decisions and the steps together: a decision
+/// that ran has a step beside it, and a decision that was refused does not.
+fn story(outcome: &Outcome) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut steps = outcome.trail.iter();
+
+    for decided in &outcome.decided {
+        if decided.verdict != "ran" {
+            lines.push(refused(decided, outcome));
+            continue;
+        }
+        let step = steps.next();
+        lines.push(ran(decided, step));
+    }
+    lines
+}
+
+/// What a refused decision says about itself.
+fn refused(decided: &crate::pursue::Decided, outcome: &Outcome) -> String {
+    let what = decided.operation.to_lowercase();
+    match (decided.verdict, decided.weakest) {
+        ("handed_back", _) => format!(
+            "none of the {} controls it could choose between would do",
+            outcome.offered
+        ),
+        (_, Some(weakest)) => format!(
+            "{what} was too close to call on {weakest}{}",
+            match (decided.margin, decided.needed) {
+                (Some(margin), Some(needed)) =>
+                    format!(", leading by {margin:.2} where it needed {needed:.2}"),
+                _ => String::new(),
+            }
+        ),
+        _ => format!("{what} was refused"),
+    }
+}
+
+/// What a decision that ran says about itself, with what it moved.
+fn ran(decided: &crate::pursue::Decided, step: Option<&crate::pursue::Step>) -> String {
+    let on = decided
+        .target_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty());
+    let moved = step.map_or(String::new(), |step| {
+        step.moved
+            .iter()
+            .map(|moved| format!(", and {:?} became {:?}", moved.was, moved.now))
+            .collect::<Vec<_>>()
+            .join("")
+    });
+
+    let did = match (decided.operation, decided.how) {
+        ("ACT", Some("FILL")) => match (&step.and_then(|step| step.value.clone()), on) {
+            (Some(text), Some(name)) => format!("typed {text:?} into {name}"),
+            (Some(text), None) => format!("typed {text:?}"),
+            (None, Some(name)) => format!("typed into {name}"),
+            (None, None) => "typed something".to_string(),
+        },
+        ("ACT", Some("SUBMIT")) => "submitted it".to_string(),
+        ("ACT", Some("SCROLL")) => "scrolled the page".to_string(),
+        ("ACT", Some(how)) => {
+            // Past tense, because the story is a record of what happened. The
+            // vocabulary's own words are imperatives.
+            let did = match how {
+                "CLICK" => "clicked",
+                "CHECK" => "ticked",
+                "UNCHECK" => "unticked",
+                "HOVER" => "hovered over",
+                "SELECT" => "set",
+                "PRESS" => "pressed a key on",
+                other => other,
+            };
+            match on {
+                Some(name) => format!("{did} {name}"),
+                None => did.to_string(),
+            }
+        }
+        ("NAVIGATE", _) => match on {
+            Some(name) => format!("went to {name}"),
+            None => "went to another page".to_string(),
+        },
+        ("DONE", _) => "said the goal was met".to_string(),
+        ("BLOCKED", _) => "said nothing on this page could do it".to_string(),
+        ("REPORT", _) => "handed the page back".to_string(),
+        (operation, _) => operation.to_lowercase(),
+    };
+
+    let arrived = step
+        .map(|step| step.url_after.as_str())
+        .filter(|url| !url.is_empty())
+        .filter(|_| decided.how == Some("SUBMIT") || decided.operation == "NAVIGATE")
+        .map_or(String::new(), |url| format!(", and the page became {url}"));
+
+    format!("{did}{arrived}{moved}")
 }
 
 /// One sentence, which has to be true of what happened.
@@ -235,6 +341,56 @@ mod tests {
             page_changed: changed,
             moved: Vec::new(),
             url_after: "https://example.test/".to_string(),
+            input_tokens: 1_000,
+        }
+    }
+
+    fn filled(text: &str, url: &str) -> Step {
+        Step {
+            how: Some(How::Fill),
+            value: Some(text.to_string()),
+            url_after: url.to_string(),
+            ..step(true)
+        }
+    }
+
+    fn submitted(url: &str) -> Step {
+        Step {
+            how: Some(How::Submit),
+            target: None,
+            url_after: url.to_string(),
+            ..step(true)
+        }
+    }
+
+    fn clicked_and_moved(was: &str, now: &str) -> Step {
+        Step {
+            moved: vec![crate::view::Moved {
+                reference: "e63".to_string(),
+                was: was.to_string(),
+                now: now.to_string(),
+            }],
+            ..step(true)
+        }
+    }
+
+    fn decision_that_ran(
+        operation: &'static str,
+        how: Option<&'static str>,
+        target_name: Option<&str>,
+    ) -> crate::pursue::Decided {
+        crate::pursue::Decided {
+            operation,
+            how,
+            target: Some("e1".to_string()),
+            target_name: target_name.map(str::to_string),
+            verdict: "ran",
+            weakest: None,
+            margin: None,
+            needed: None,
+            share: None,
+            why: None,
+            batch: 1,
             input_tokens: 1_000,
         }
     }
@@ -526,6 +682,99 @@ mod tests {
                 .starts_with("It took no action, then answered the goal"),
             "got {:?}",
             told.said
+        );
+    }
+
+    /// The amazon case as the caller would read it back: what it typed, that
+    /// it submitted, and that the cart moved.
+    #[test]
+    fn the_story_reads_as_what_the_run_did() {
+        let mut got = outcome(Status::Satisfied, vec![]);
+        got.trail = vec![
+            filled("sensodyne toothpaste", "https://amazon.test/"),
+            submitted("https://amazon.test/s?k=sensodyne+toothpaste"),
+            clicked_and_moved("0 items in cart", "2 items in cart"),
+        ];
+        got.decided = vec![
+            decision_that_ran("ACT", Some("FILL"), Some("Search Amazon.in")),
+            decision_that_ran("ACT", Some("SUBMIT"), None),
+            decision_that_ran("ACT", Some("CLICK"), Some("Add to cart")),
+        ];
+
+        let told = tell(&got);
+
+        assert_eq!(
+            told.story,
+            vec![
+                "typed \"sensodyne toothpaste\" into Search Amazon.in".to_string(),
+                "submitted it, and the page became https://amazon.test/s?k=sensodyne+toothpaste"
+                    .to_string(),
+                "clicked Add to cart, and \"0 items in cart\" became \"2 items in cart\""
+                    .to_string(),
+            ]
+        );
+    }
+
+    /// A refused decision says which judgement was close and by how much,
+    /// which is the thing a caller needs in order to reword a goal.
+    #[test]
+    fn the_story_says_why_a_decision_was_refused() {
+        let mut got = outcome(Status::Stalled(Stuck::NotConfident), vec![]);
+        got.decided = vec![crate::pursue::Decided {
+            operation: "ACT",
+            how: Some("CLICK"),
+            target: None,
+            target_name: None,
+            verdict: "explored",
+            weakest: Some("how to act on it"),
+            margin: Some(0.06),
+            needed: Some(0.30),
+            share: Some(0.44),
+            why: None,
+            batch: 1,
+            input_tokens: 100,
+        }];
+
+        let told = tell(&got);
+
+        assert_eq!(
+            told.story,
+            vec![
+                "act was too close to call on how to act on it, leading by 0.06 where it needed 0.30"
+                    .to_string()
+            ]
+        );
+    }
+
+    /// A hand-back says how much it was choosing between, because "none of
+    /// these" means something different over eight controls than over 254.
+    #[test]
+    fn the_story_says_how_much_it_was_choosing_between() {
+        let mut got = outcome(
+            Status::NeedsInput(Handback::NothingOffered, "none will do".to_string()),
+            vec![],
+        );
+        got.offered = 254;
+        got.decided = vec![crate::pursue::Decided {
+            operation: "ACT",
+            how: Some("CLICK"),
+            target: None,
+            target_name: None,
+            verdict: "handed_back",
+            weakest: None,
+            margin: None,
+            needed: None,
+            share: None,
+            why: Some("none of the options offered for this step can advance the goal".to_string()),
+            batch: 1,
+            input_tokens: 100,
+        }];
+
+        let told = tell(&got);
+
+        assert_eq!(
+            told.story,
+            vec!["none of the 254 controls it could choose between would do".to_string()]
         );
     }
 }
