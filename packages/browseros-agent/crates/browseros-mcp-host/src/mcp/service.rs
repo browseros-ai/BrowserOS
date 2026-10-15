@@ -6,10 +6,11 @@
 use crate::{
     branding::HostBranding,
     ctx::HostCtx,
+    ctx::RegisteredLocalTool,
     identity::{ClientIdentity, ClientInfo},
     ids::SessionId,
     mcp::dispatch::{ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token},
-    seams::{LocalTool, LocalToolCall},
+    seams::LocalToolCall,
     sessions::{RetirementCause, Session, TaskTargetStore},
 };
 use browseros_core::target::BrowserView;
@@ -137,11 +138,8 @@ impl HostMcpService {
         self.catalog.iter().position(|tool| tool.name == name)
     }
 
-    fn find_local_tool(&self, name: &str) -> Option<&Arc<dyn LocalTool>> {
-        self.host
-            .local_tools
-            .iter()
-            .find(|tool| tool.definition().name == name)
+    fn find_local_tool(&self, name: &str) -> Option<&RegisteredLocalTool> {
+        self.host.find_local_tool(name)
     }
 
     fn with_session_arg(&self, tool: Tool) -> Tool {
@@ -178,8 +176,8 @@ impl HostMcpService {
             self.host
                 .local_tools
                 .iter()
-                .filter(|tool| tool.listed())
-                .map(|tool| decorate(tool.definition())),
+                .filter(|entry| entry.tool.listed())
+                .map(|entry| decorate(entry.definition.clone())),
         );
         tools
     }
@@ -637,8 +635,8 @@ impl ServerHandler for HostMcpService {
     fn get_tool(&self, name: &str) -> Option<Tool> {
         // Local tools resolve even while unlisted: rmcp only reads this schema to validate
         // SEP-2243 headers, and none of them declares one.
-        if let Some(tool) = self.find_local_tool(name) {
-            return Some(self.with_session_arg(tool.definition()));
+        if let Some(entry) = self.find_local_tool(name) {
+            return Some(self.with_session_arg(entry.definition.clone()));
         }
         // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
         // cached caller should reach execute_tool's explanation, not method-not-found.
@@ -652,7 +650,9 @@ impl ServerHandler for HostMcpService {
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
         // Local tools win a name clash with the catalog, as they always have.
-        let local_tool = self.find_local_tool(&request.name).cloned();
+        let local_tool = self
+            .find_local_tool(&request.name)
+            .map(|entry| entry.tool.clone());
         let tool_index = self.find_tool_index(&request.name);
         if local_tool.is_none() && tool_index.is_none() {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());

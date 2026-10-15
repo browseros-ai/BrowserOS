@@ -175,11 +175,9 @@ pub trait ProfileDirectory: Send + Sync {
     fn profiles(&self) -> BoxFuture<'_, HostResult<Vec<ProfileView>>>;
 }
 
-/// A finished catalog dispatch's outcome is observed through `DispatchObserver::observe`;
-/// these are the two other dispatch shapes an observer may want to record.
-///
-/// A primitive a `run`/`evaluate` script executed through the captured view. It never
-/// passed through dispatch effects; `call` is the parent script dispatch.
+/// A primitive a `run`/`evaluate` script executed through the captured view, handed to
+/// `DispatchObserver::observe_inner_call`. It never passed through dispatch effects;
+/// `call` is the parent script dispatch.
 pub struct InnerCallContext<'a> {
     pub call: &'a ToolCall,
     pub identity: &'a ToolIdentity,
@@ -196,7 +194,8 @@ pub struct InnerCallContext<'a> {
     pub output_token_estimate: i64,
 }
 
-/// A host-local tool call (`name_session`, claw's `save_skill`, …) after it finished.
+/// A finished host-local tool call (`name_session`, claw's `save_skill`, …), handed to
+/// `DispatchObserver::observe_local_tool`.
 pub struct LocalToolContext<'a> {
     pub session: &'a Arc<Session>,
     pub agent_label: &'a str,
@@ -227,7 +226,8 @@ pub trait DispatchEffect: Send + Sync {
 }
 
 /// Read-only consumer of final dispatch outcomes (claw: audit timeline, run-failure
-/// reports). Observers see the post-effect result exactly once and cannot change it.
+/// reports). Catalog dispatches arrive through `observe`, after effects, exactly once and
+/// unchangeable; script primitives and local tools through the two defaulted methods.
 pub trait DispatchObserver: Send + Sync {
     fn name(&self) -> &'static str;
 

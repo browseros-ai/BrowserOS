@@ -90,7 +90,7 @@ pub struct HostCtx {
     pub(crate) profiles: Arc<dyn ProfileDirectory>,
     /// `name_session` first, then the host's tools in registration order; this is also
     /// their `tools/list` order after the catalog.
-    pub(crate) local_tools: Vec<Arc<dyn LocalTool>>,
+    pub(crate) local_tools: Vec<RegisteredLocalTool>,
     /// Complete ordered pipeline: built-ins first, host additions after.
     pub(crate) guards: Vec<Arc<dyn DispatchGuard>>,
     pub(crate) effects: Vec<Arc<dyn DispatchEffect>>,
@@ -155,10 +155,13 @@ impl HostCtx {
     /// A registered local tool by name (`name_session` or one the host added).
     #[must_use]
     pub fn local_tool(&self, name: &str) -> Option<Arc<dyn LocalTool>> {
+        self.find_local_tool(name).map(|entry| entry.tool.clone())
+    }
+
+    pub(crate) fn find_local_tool(&self, name: &str) -> Option<&RegisteredLocalTool> {
         self.local_tools
             .iter()
-            .find(|tool| tool.definition().name == name)
-            .cloned()
+            .find(|entry| entry.definition.name == name)
     }
 
     /// Names of the dispatch effects in run order (built-ins, then the host's).
@@ -196,6 +199,13 @@ impl HostCtx {
         self.browser.stop();
         self.sessions.shutdown().await
     }
+}
+
+/// A local tool with its definition read once at build: definitions are fixed for the
+/// process, and lookups by name happen on every `tools/call`.
+pub(crate) struct RegisteredLocalTool {
+    pub(crate) definition: rmcp::model::Tool,
+    pub(crate) tool: Arc<dyn LocalTool>,
 }
 
 pub struct HostCtxBuilder {
@@ -267,8 +277,13 @@ impl HostCtxBuilder {
         } = self.core;
         install_retained_group_hook(&sessions, &browser);
         targets.set_product_name(&self.branding.product_name);
-        let mut local_tools: Vec<Arc<dyn LocalTool>> = vec![Arc::new(NameSessionTool)];
-        local_tools.extend(self.local_tools);
+        let local_tools = std::iter::once(Arc::new(NameSessionTool) as Arc<dyn LocalTool>)
+            .chain(self.local_tools)
+            .map(|tool| RegisteredLocalTool {
+                definition: tool.definition(),
+                tool,
+            })
+            .collect();
         let mut guards: Vec<Arc<dyn DispatchGuard>> = DEFAULT_GUARDS
             .iter()
             .map(|guard| Arc::new(*guard) as Arc<dyn DispatchGuard>)
