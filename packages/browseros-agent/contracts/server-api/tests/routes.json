@@ -1979,6 +1979,30 @@
       "403": {
         "$ref": "../responses.yaml#/Forbidden"
       },
+      "406": {
+        "description": "SDK transport requires Accept to include both application/json and text/event-stream.",
+        "content": {
+          "application/json": {
+            "schema": {}
+          }
+        }
+      },
+      "413": {
+        "description": "SDK request body exceeds the configured maximum size; JSON-RPC error.",
+        "content": {
+          "application/json": {
+            "schema": {}
+          }
+        }
+      },
+      "415": {
+        "description": "SDK transport requires Content-Type application/json; JSON-RPC error.",
+        "content": {
+          "application/json": {
+            "schema": {}
+          }
+        }
+      },
       "500": {
         "description": "Internal JSON-RPC error.",
         "content": {

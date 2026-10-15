@@ -1,6 +1,7 @@
 collection:
   get:
     operationId: listConversations
+    summary: List conversations by lastMessagedAt descending
     tags:
       - conversations
     responses:
@@ -14,7 +15,8 @@ collection:
         $ref: ../responses.yaml#/Forbidden
       "500":
         $ref: ../responses.yaml#/InternalError
-    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    description: Returns conversations ordered by lastMessagedAt descending (most recently messaged first).
+      Requires a loopback trusted-app request; mutations require an allowed Origin header.
 detail:
   get:
     operationId: getConversation

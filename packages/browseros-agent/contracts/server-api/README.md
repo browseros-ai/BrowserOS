@@ -51,11 +51,32 @@ All HTTP failures throw `ServerApiError { status, code?, message }`, including
 plain-text OAuth failures, nested chat errors, Zod errors and message-only
 errors. Network/abort errors preserve the fetch implementation's own error.
 `createChat` and `reconnectChat` return an unconsumed Response for the AI SDK or
-the shared reader; reconnect returns null on 204. The reader validates chunks
-with a generated guard, handles fragmented UTF-8 and SSE LF/CRLF/CR framing,
+the shared reader; reconnect returns null on 204. The reader validates known chunks
+with a generated guard and forwards unknown string types unchanged, so future
+SDK additions do not interrupt a turn. Missing/non-string types and malformed
+known chunks (including every `data-*` name) still fail. Its declared union
+describes the known payloads; downstream consumers must ignore unknown tags.
+The reader handles fragmented UTF-8 and SSE LF/CRLF/CR framing,
 and requires the `[DONE]` sentinel to avoid treating truncated work as complete.
 Breaking iteration cancels the local subscriber and releases its reader; it
 does not stop the server's run. Use the explicit stop endpoint for that.
+
+The union is pinned to all 29 `ai@7.0.114` variants (28 literal types plus the
+patterned `data-*` variant) in `ai/dist/index.d.ts:2468-2640`. Added to the original
+20 are `custom`, `reasoning-file`, `source-document`, `tool-approval-request`,
+`tool-approval-response`, `tool-output-denied`, `reset-step`, `message-metadata`,
+and `data-*`. Custom `kind` requires a dot, matching `${string}.${string}`;
+data names may be empty after the prefix and their payload may be any JSON.
+The generator derives known-type detection and patterned validation from this
+union. Its `x-typescript-type` refinement retains `data-${string}` in both TS
+trees so fixed tags still narrow correctly. Rust's generated data DTO uses a
+string tag; the JSON schema and client guard enforce the pattern. OpenAPI's
+literal-only discriminator mapping is omitted for this patterned union.
+
+List endpoints preserve the stores' descending order: conversations by
+`lastMessagedAt`, agents by `updatedAt`, and scheduled job runs by `startedAt`.
+MCP POST also documents the installed SDK's JSON-RPC 406 (Accept), 413 (body
+size), and 415 (Content-Type) transport rejections.
 
 ## Evidence and live conformance
 

@@ -47,6 +47,77 @@ pub mod ui_abort_chunk {
     pub use super::UiAbortChunkType as Type;
 }
 
+/// UiCustomChunk : Provider-specific custom content. The kind contains a namespace separator (a dot).
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiCustomChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiCustomChunkType,
+    #[serde(rename = "kind")]
+    pub kind: String,
+    #[serde(rename = "providerMetadata", skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<
+        std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
+    >,
+}
+
+impl UiCustomChunk {
+    /// Provider-specific custom content. The kind contains a namespace separator (a dot).
+    pub fn new(r#type: UiCustomChunkType, kind: String) -> UiCustomChunk {
+        UiCustomChunk {
+            additional_properties: Default::default(),
+            r#type,
+            kind,
+            provider_metadata: None,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiCustomChunkType {
+    #[serde(rename = "custom")]
+    Custom,
+}
+
+impl Default for UiCustomChunkType {
+    fn default() -> UiCustomChunkType {
+        Self::Custom
+    }
+}
+
+pub mod ui_custom_chunk {
+    pub use super::UiCustomChunkType as Type;
+}
+
+/// UiDataChunk : Generic SDK DataUIMessageChunk, whose type is data-${NAME} for any string NAME (including the empty string). Data is arbitrary JSON; id and transient are optional. The pattern is the wire constraint; generated TypeScript retains the template literal so data parts cannot obscure narrowing of fixed chunk types. Rust DTOs use String.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiDataChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: String,
+    #[serde(rename = "id", skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "data", deserialize_with = "Option::deserialize")]
+    pub data: Option<serde_json::Value>,
+    #[serde(rename = "transient", skip_serializing_if = "Option::is_none")]
+    pub transient: Option<bool>,
+}
+
+impl UiDataChunk {
+    /// Generic SDK DataUIMessageChunk, whose type is data-${NAME} for any string NAME (including the empty string). Data is arbitrary JSON; id and transient are optional. The pattern is the wire constraint; generated TypeScript retains the template literal so data parts cannot obscure narrowing of fixed chunk types. Rust DTOs use String.
+    pub fn new(r#type: String, data: Option<serde_json::Value>) -> UiDataChunk {
+        UiDataChunk {
+            additional_properties: Default::default(),
+            r#type,
+            id: None,
+            data,
+            transient: None,
+        }
+    }
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiErrorChunk {
     #[serde(flatten)]
@@ -227,8 +298,8 @@ pub mod ui_finish_step_chunk {
     pub use super::UiFinishStepChunkType as Type;
 }
 
-/// UiMessageChunk : AI SDK v7 UI message stream v1 JSON payloads. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata remains open.
-/// AI SDK v7 UI message stream v1 JSON payloads. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata remains open.
+/// UiMessageChunk : Complete ai@7.0.114 UIMessageChunk union: 28 fixed types and the data-* namespace. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata and extension fields remain open. Each fixed type or data-* payload must match its known shape. Client readers forward other string types unchanged for future SDK extensions. A discriminator mapping is omitted because OpenAPI mappings cannot represent the data-* namespace; the literal tags and pattern keep oneOf unambiguous.
+/// Complete ai@7.0.114 UIMessageChunk union: 28 fixed types and the data-* namespace. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata and extension fields remain open. Each fixed type or data-* payload must match its known shape. Client readers forward other string types unchanged for future SDK extensions. A discriminator mapping is omitted because OpenAPI mappings cannot represent the data-* namespace; the literal tags and pattern keep oneOf unambiguous.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum UiMessageChunk {
@@ -252,61 +323,20 @@ pub enum UiMessageChunk {
     UiToolOutputErrorChunk(models::UiToolOutputErrorChunk),
     UiSourceUrlChunk(models::UiSourceUrlChunk),
     UiFileChunk(models::UiFileChunk),
+    UiCustomChunk(models::UiCustomChunk),
+    UiReasoningFileChunk(models::UiReasoningFileChunk),
+    UiSourceDocumentChunk(models::UiSourceDocumentChunk),
+    UiToolApprovalRequestChunk(models::UiToolApprovalRequestChunk),
+    UiToolApprovalResponseChunk(models::UiToolApprovalResponseChunk),
+    UiToolOutputDeniedChunk(models::UiToolOutputDeniedChunk),
+    UiResetStepChunk(models::UiResetStepChunk),
+    UiMessageMetadataChunk(models::UiMessageMetadataChunk),
+    UiDataChunk(models::UiDataChunk),
 }
 
 impl Default for UiMessageChunk {
     fn default() -> Self {
         Self::UiStartChunk(Default::default())
-    }
-}
-///
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
-pub enum UiMessageChunkType {
-    #[serde(rename = "start")]
-    Start,
-    #[serde(rename = "start-step")]
-    StartStep,
-    #[serde(rename = "finish-step")]
-    FinishStep,
-    #[serde(rename = "finish")]
-    Finish,
-    #[serde(rename = "abort")]
-    Abort,
-    #[serde(rename = "error")]
-    Error,
-    #[serde(rename = "text-start")]
-    TextStart,
-    #[serde(rename = "text-delta")]
-    TextDelta,
-    #[serde(rename = "text-end")]
-    TextEnd,
-    #[serde(rename = "reasoning-start")]
-    ReasoningStart,
-    #[serde(rename = "reasoning-delta")]
-    ReasoningDelta,
-    #[serde(rename = "reasoning-end")]
-    ReasoningEnd,
-    #[serde(rename = "tool-input-start")]
-    ToolInputStart,
-    #[serde(rename = "tool-input-delta")]
-    ToolInputDelta,
-    #[serde(rename = "tool-input-available")]
-    ToolInputAvailable,
-    #[serde(rename = "tool-input-error")]
-    ToolInputError,
-    #[serde(rename = "tool-output-available")]
-    ToolOutputAvailable,
-    #[serde(rename = "tool-output-error")]
-    ToolOutputError,
-    #[serde(rename = "source-url")]
-    SourceUrl,
-    #[serde(rename = "file")]
-    File,
-}
-
-impl Default for UiMessageChunkType {
-    fn default() -> UiMessageChunkType {
-        Self::Start
     }
 }
 ///
@@ -334,7 +364,45 @@ impl Default for UiMessageChunkFinishReason {
 
 pub mod ui_message_chunk {
     pub use super::UiMessageChunkFinishReason as FinishReason;
-    pub use super::UiMessageChunkType as Type;
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiMessageMetadataChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiMessageMetadataChunkType,
+    #[serde(rename = "messageMetadata", deserialize_with = "Option::deserialize")]
+    pub message_metadata: Option<serde_json::Value>,
+}
+
+impl UiMessageMetadataChunk {
+    pub fn new(
+        r#type: UiMessageMetadataChunkType,
+        message_metadata: Option<serde_json::Value>,
+    ) -> UiMessageMetadataChunk {
+        UiMessageMetadataChunk {
+            additional_properties: Default::default(),
+            r#type,
+            message_metadata,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiMessageMetadataChunkType {
+    #[serde(rename = "message-metadata")]
+    MessageMetadata,
+}
+
+impl Default for UiMessageMetadataChunkType {
+    fn default() -> UiMessageMetadataChunkType {
+        Self::MessageMetadata
+    }
+}
+
+pub mod ui_message_metadata_chunk {
+    pub use super::UiMessageMetadataChunkType as Type;
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
@@ -426,6 +494,56 @@ pub mod ui_reasoning_end_chunk {
     pub use super::UiReasoningEndChunkType as Type;
 }
 
+/// UiReasoningFileChunk : Reasoning media, including Google thought images, forwarded by createAgentUIStream.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiReasoningFileChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiReasoningFileChunkType,
+    #[serde(rename = "url")]
+    pub url: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    #[serde(rename = "providerMetadata", skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<
+        std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
+    >,
+}
+
+impl UiReasoningFileChunk {
+    /// Reasoning media, including Google thought images, forwarded by createAgentUIStream.
+    pub fn new(
+        r#type: UiReasoningFileChunkType,
+        url: String,
+        media_type: String,
+    ) -> UiReasoningFileChunk {
+        UiReasoningFileChunk {
+            additional_properties: Default::default(),
+            r#type,
+            url,
+            media_type,
+            provider_metadata: None,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiReasoningFileChunkType {
+    #[serde(rename = "reasoning-file")]
+    ReasoningFile,
+}
+
+impl Default for UiReasoningFileChunkType {
+    fn default() -> UiReasoningFileChunkType {
+        Self::ReasoningFile
+    }
+}
+
+pub mod ui_reasoning_file_chunk {
+    pub use super::UiReasoningFileChunkType as Type;
+}
+
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiReasoningStartChunk {
     #[serde(flatten)]
@@ -465,6 +583,96 @@ impl Default for UiReasoningStartChunkType {
 
 pub mod ui_reasoning_start_chunk {
     pub use super::UiReasoningStartChunkType as Type;
+}
+
+/// UiResetStepChunk : Removes all message parts added during the current step.
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiResetStepChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiResetStepChunkType,
+}
+
+impl UiResetStepChunk {
+    /// Removes all message parts added during the current step.
+    pub fn new(r#type: UiResetStepChunkType) -> UiResetStepChunk {
+        UiResetStepChunk {
+            additional_properties: Default::default(),
+            r#type,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiResetStepChunkType {
+    #[serde(rename = "reset-step")]
+    ResetStep,
+}
+
+impl Default for UiResetStepChunkType {
+    fn default() -> UiResetStepChunkType {
+        Self::ResetStep
+    }
+}
+
+pub mod ui_reset_step_chunk {
+    pub use super::UiResetStepChunkType as Type;
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiSourceDocumentChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiSourceDocumentChunkType,
+    #[serde(rename = "sourceId")]
+    pub source_id: String,
+    #[serde(rename = "mediaType")]
+    pub media_type: String,
+    #[serde(rename = "title")]
+    pub title: String,
+    #[serde(rename = "filename", skip_serializing_if = "Option::is_none")]
+    pub filename: Option<String>,
+    #[serde(rename = "providerMetadata", skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<
+        std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
+    >,
+}
+
+impl UiSourceDocumentChunk {
+    pub fn new(
+        r#type: UiSourceDocumentChunkType,
+        source_id: String,
+        media_type: String,
+        title: String,
+    ) -> UiSourceDocumentChunk {
+        UiSourceDocumentChunk {
+            additional_properties: Default::default(),
+            r#type,
+            source_id,
+            media_type,
+            title,
+            filename: None,
+            provider_metadata: None,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiSourceDocumentChunkType {
+    #[serde(rename = "source-document")]
+    SourceDocument,
+}
+
+impl Default for UiSourceDocumentChunkType {
+    fn default() -> UiSourceDocumentChunkType {
+        Self::SourceDocument
+    }
+}
+
+pub mod ui_source_document_chunk {
+    pub use super::UiSourceDocumentChunkType as Type;
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
@@ -718,6 +926,128 @@ pub mod ui_text_start_chunk {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiToolApprovalRequestChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiToolApprovalRequestChunkType,
+    #[serde(rename = "approvalId")]
+    pub approval_id: String,
+    #[serde(rename = "toolCallId")]
+    pub tool_call_id: String,
+    #[serde(
+        rename = "approvalDescriptor",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub approval_descriptor: Option<Option<serde_json::Value>>,
+    #[serde(
+        rename = "inputSchemaInput",
+        default,
+        with = "::serde_with::rust::double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub input_schema_input: Option<Option<serde_json::Value>>,
+    #[serde(rename = "reason", skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(rename = "isAutomatic", skip_serializing_if = "Option::is_none")]
+    pub is_automatic: Option<bool>,
+    #[serde(rename = "signature", skip_serializing_if = "Option::is_none")]
+    pub signature: Option<String>,
+}
+
+impl UiToolApprovalRequestChunk {
+    pub fn new(
+        r#type: UiToolApprovalRequestChunkType,
+        approval_id: String,
+        tool_call_id: String,
+    ) -> UiToolApprovalRequestChunk {
+        UiToolApprovalRequestChunk {
+            additional_properties: Default::default(),
+            r#type,
+            approval_id,
+            tool_call_id,
+            approval_descriptor: None,
+            input_schema_input: None,
+            reason: None,
+            is_automatic: None,
+            signature: None,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiToolApprovalRequestChunkType {
+    #[serde(rename = "tool-approval-request")]
+    ToolApprovalRequest,
+}
+
+impl Default for UiToolApprovalRequestChunkType {
+    fn default() -> UiToolApprovalRequestChunkType {
+        Self::ToolApprovalRequest
+    }
+}
+
+pub mod ui_tool_approval_request_chunk {
+    pub use super::UiToolApprovalRequestChunkType as Type;
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiToolApprovalResponseChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiToolApprovalResponseChunkType,
+    #[serde(rename = "approvalId")]
+    pub approval_id: String,
+    #[serde(rename = "approved")]
+    pub approved: bool,
+    #[serde(rename = "reason", skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(rename = "providerExecuted", skip_serializing_if = "Option::is_none")]
+    pub provider_executed: Option<bool>,
+    #[serde(rename = "providerMetadata", skip_serializing_if = "Option::is_none")]
+    pub provider_metadata: Option<
+        std::collections::HashMap<String, std::collections::HashMap<String, serde_json::Value>>,
+    >,
+}
+
+impl UiToolApprovalResponseChunk {
+    pub fn new(
+        r#type: UiToolApprovalResponseChunkType,
+        approval_id: String,
+        approved: bool,
+    ) -> UiToolApprovalResponseChunk {
+        UiToolApprovalResponseChunk {
+            additional_properties: Default::default(),
+            r#type,
+            approval_id,
+            approved,
+            reason: None,
+            provider_executed: None,
+            provider_metadata: None,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiToolApprovalResponseChunkType {
+    #[serde(rename = "tool-approval-response")]
+    ToolApprovalResponse,
+}
+
+impl Default for UiToolApprovalResponseChunkType {
+    fn default() -> UiToolApprovalResponseChunkType {
+        Self::ToolApprovalResponse
+    }
+}
+
+pub mod ui_tool_approval_response_chunk {
+    pub use super::UiToolApprovalResponseChunkType as Type;
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiToolInputAvailableChunk {
     #[serde(flatten)]
     pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
@@ -968,8 +1298,6 @@ pub struct UiToolOutputAvailableChunk {
     pub tool_metadata: Option<std::collections::HashMap<String, serde_json::Value>>,
     #[serde(rename = "dynamic", skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
-    #[serde(rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
     #[serde(rename = "toolCallId")]
     pub tool_call_id: String,
     #[serde(rename = "output", deserialize_with = "Option::deserialize")]
@@ -991,7 +1319,6 @@ impl UiToolOutputAvailableChunk {
             provider_executed: None,
             tool_metadata: None,
             dynamic: None,
-            title: None,
             tool_call_id,
             output,
             preliminary: None,
@@ -1016,6 +1343,45 @@ pub mod ui_tool_output_available_chunk {
 }
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UiToolOutputDeniedChunk {
+    #[serde(flatten)]
+    pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
+    #[serde(rename = "type")]
+    pub r#type: UiToolOutputDeniedChunkType,
+    #[serde(rename = "toolCallId")]
+    pub tool_call_id: String,
+}
+
+impl UiToolOutputDeniedChunk {
+    pub fn new(
+        r#type: UiToolOutputDeniedChunkType,
+        tool_call_id: String,
+    ) -> UiToolOutputDeniedChunk {
+        UiToolOutputDeniedChunk {
+            additional_properties: Default::default(),
+            r#type,
+            tool_call_id,
+        }
+    }
+}
+///
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+pub enum UiToolOutputDeniedChunkType {
+    #[serde(rename = "tool-output-denied")]
+    ToolOutputDenied,
+}
+
+impl Default for UiToolOutputDeniedChunkType {
+    fn default() -> UiToolOutputDeniedChunkType {
+        Self::ToolOutputDenied
+    }
+}
+
+pub mod ui_tool_output_denied_chunk {
+    pub use super::UiToolOutputDeniedChunkType as Type;
+}
+
+#[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiToolOutputErrorChunk {
     #[serde(flatten)]
     pub additional_properties: std::collections::HashMap<String, serde_json::Value>,
@@ -1031,8 +1397,6 @@ pub struct UiToolOutputErrorChunk {
     pub tool_metadata: Option<std::collections::HashMap<String, serde_json::Value>>,
     #[serde(rename = "dynamic", skip_serializing_if = "Option::is_none")]
     pub dynamic: Option<bool>,
-    #[serde(rename = "title", skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
     #[serde(rename = "toolCallId")]
     pub tool_call_id: String,
     #[serde(rename = "errorText")]
@@ -1052,7 +1416,6 @@ impl UiToolOutputErrorChunk {
             provider_executed: None,
             tool_metadata: None,
             dynamic: None,
-            title: None,
             tool_call_id,
             error_text,
         }

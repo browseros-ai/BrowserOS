@@ -1,3 +1,5 @@
+# Pinned to ai@7.0.114 dist/index.d.ts:2468-2640. Keep the full SDK wire union;
+# the reader separately forwards unknown future tags without weakening these shapes.
 UiStartChunk:
   type: object
   additionalProperties: true
@@ -323,8 +325,6 @@ UiToolOutputAvailableChunk:
       additionalProperties: {}
     dynamic:
       type: boolean
-    title:
-      type: string
     toolCallId:
       type: string
     output: {}
@@ -354,8 +354,6 @@ UiToolOutputErrorChunk:
       additionalProperties: {}
     dynamic:
       type: boolean
-    title:
-      type: string
     toolCallId:
       type: string
     errorText:
@@ -408,6 +406,180 @@ UiFileChunk:
     - type
     - url
     - mediaType
+UiCustomChunk:
+  description: Provider-specific custom content. The kind contains a namespace separator (a dot).
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - custom
+    kind:
+      type: string
+      pattern: '[.]'
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+  required:
+    - type
+    - kind
+UiReasoningFileChunk:
+  description: Reasoning media, including Google thought images, forwarded by createAgentUIStream.
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - reasoning-file
+    url:
+      type: string
+    mediaType:
+      type: string
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+  required:
+    - type
+    - url
+    - mediaType
+UiSourceDocumentChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - source-document
+    sourceId:
+      type: string
+    mediaType:
+      type: string
+    title:
+      type: string
+    filename:
+      type: string
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+  required:
+    - type
+    - sourceId
+    - mediaType
+    - title
+UiToolApprovalRequestChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-approval-request
+    approvalId:
+      type: string
+    toolCallId:
+      type: string
+    approvalDescriptor: {}
+    inputSchemaInput: {}
+    reason:
+      type: string
+    isAutomatic:
+      type: boolean
+    signature:
+      type: string
+  required:
+    - type
+    - approvalId
+    - toolCallId
+UiToolApprovalResponseChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-approval-response
+    approvalId:
+      type: string
+    approved:
+      type: boolean
+    reason:
+      type: string
+    providerExecuted:
+      type: boolean
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+  required:
+    - type
+    - approvalId
+    - approved
+UiToolOutputDeniedChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-output-denied
+    toolCallId:
+      type: string
+  required:
+    - type
+    - toolCallId
+UiResetStepChunk:
+  description: Removes all message parts added during the current step.
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - reset-step
+  required:
+    - type
+UiMessageMetadataChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - message-metadata
+    messageMetadata: {}
+  required:
+    - type
+    - messageMetadata
+UiDataChunk:
+  description: >-
+    Generic SDK DataUIMessageChunk, whose type is data-${NAME} for any string NAME
+    (including the empty string). Data is arbitrary JSON; id and transient are optional.
+    The pattern is the wire constraint; generated TypeScript retains the template literal
+    so data parts cannot obscure narrowing of fixed chunk types. Rust DTOs use String.
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      pattern: '^data-'
+      x-typescript-type: '`data-${string}`'
+    id:
+      type: string
+    data: {}
+    transient:
+      type: boolean
+  required:
+    - type
+    - data
 UiMessageChunk:
   oneOf:
     - $ref: "#/UiStartChunk"
@@ -430,28 +602,19 @@ UiMessageChunk:
     - $ref: "#/UiToolOutputErrorChunk"
     - $ref: "#/UiSourceUrlChunk"
     - $ref: "#/UiFileChunk"
-  discriminator:
-    propertyName: type
-    mapping:
-      start: "#/UiStartChunk"
-      start-step: "#/UiStartStepChunk"
-      finish-step: "#/UiFinishStepChunk"
-      finish: "#/UiFinishChunk"
-      abort: "#/UiAbortChunk"
-      error: "#/UiErrorChunk"
-      text-start: "#/UiTextStartChunk"
-      text-delta: "#/UiTextDeltaChunk"
-      text-end: "#/UiTextEndChunk"
-      reasoning-start: "#/UiReasoningStartChunk"
-      reasoning-delta: "#/UiReasoningDeltaChunk"
-      reasoning-end: "#/UiReasoningEndChunk"
-      tool-input-start: "#/UiToolInputStartChunk"
-      tool-input-delta: "#/UiToolInputDeltaChunk"
-      tool-input-available: "#/UiToolInputAvailableChunk"
-      tool-input-error: "#/UiToolInputErrorChunk"
-      tool-output-available: "#/UiToolOutputAvailableChunk"
-      tool-output-error: "#/UiToolOutputErrorChunk"
-      source-url: "#/UiSourceUrlChunk"
-      file: "#/UiFileChunk"
-  description: AI SDK v7 UI message stream v1 JSON payloads. Each SSE data frame contains one chunk;
-    [DONE] is a framing sentinel, never a chunk. Metadata remains open.
+    - $ref: "#/UiCustomChunk"
+    - $ref: "#/UiReasoningFileChunk"
+    - $ref: "#/UiSourceDocumentChunk"
+    - $ref: "#/UiToolApprovalRequestChunk"
+    - $ref: "#/UiToolApprovalResponseChunk"
+    - $ref: "#/UiToolOutputDeniedChunk"
+    - $ref: "#/UiResetStepChunk"
+    - $ref: "#/UiMessageMetadataChunk"
+    - $ref: "#/UiDataChunk"
+  description: >-
+    Complete ai@7.0.114 UIMessageChunk union: 28 fixed types and the data-* namespace.
+    Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk.
+    Metadata and extension fields remain open. Each fixed type or data-* payload must
+    match its known shape. Client readers forward other string types unchanged for future
+    SDK extensions. A discriminator mapping is omitted because OpenAPI mappings cannot
+    represent the data-* namespace; the literal tags and pattern keep oneOf unambiguous.

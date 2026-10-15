@@ -288,6 +288,24 @@ components:
       $ref: ./schemas/ui_stream.yaml#/UiFileChunk
     UiMessageChunk:
       $ref: ./schemas/ui_stream.yaml#/UiMessageChunk
+    UiCustomChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiCustomChunk
+    UiReasoningFileChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiReasoningFileChunk
+    UiSourceDocumentChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiSourceDocumentChunk
+    UiToolApprovalRequestChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolApprovalRequestChunk
+    UiToolApprovalResponseChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolApprovalResponseChunk
+    UiToolOutputDeniedChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolOutputDeniedChunk
+    UiResetStepChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiResetStepChunk
+    UiMessageMetadataChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiMessageMetadataChunk
+    UiDataChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiDataChunk
     CustomAcpAgentConfig:
       $ref: ./schemas/agents.yaml#/CustomAcpAgentConfig
     CreateBuiltinAgentRequest:

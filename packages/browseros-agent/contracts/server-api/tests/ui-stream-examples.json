@@ -1,0 +1,150 @@
+{
+  "provenance": "Source-derived examples from ai@7.0.114; not live captures",
+  "additionalChunks": [
+    {
+      "type": "custom",
+      "kind": "google.search",
+      "providerMetadata": {
+        "google": {
+          "query": "example"
+        }
+      }
+    },
+    {
+      "type": "reasoning-file",
+      "url": "data:image/png;base64,AA==",
+      "mediaType": "image/png",
+      "providerMetadata": {
+        "google": {
+          "thoughtSignature": "example"
+        }
+      }
+    },
+    {
+      "type": "source-document",
+      "sourceId": "document-1",
+      "mediaType": "application/pdf",
+      "title": "Example document",
+      "filename": "example.pdf",
+      "providerMetadata": {
+        "example": {
+          "page": 1
+        }
+      }
+    },
+    {
+      "type": "tool-approval-request",
+      "approvalId": "approval-1",
+      "toolCallId": "call-1",
+      "approvalDescriptor": {
+        "action": "write"
+      },
+      "inputSchemaInput": {
+        "path": "/example"
+      },
+      "reason": "Confirm write",
+      "isAutomatic": false,
+      "signature": "example-signature"
+    },
+    {
+      "type": "tool-approval-response",
+      "approvalId": "approval-1",
+      "approved": true,
+      "reason": "Confirmed",
+      "providerExecuted": false,
+      "providerMetadata": {
+        "example": {
+          "approved": true
+        }
+      }
+    },
+    {
+      "type": "tool-output-denied",
+      "toolCallId": "call-1"
+    },
+    {
+      "type": "reset-step"
+    },
+    {
+      "type": "message-metadata",
+      "messageMetadata": null
+    },
+    {
+      "type": "data-progress",
+      "id": "progress-1",
+      "data": {
+        "percent": 50
+      },
+      "transient": true
+    }
+  ],
+  "malformedChunks": [
+    {
+      "type": "custom"
+    },
+    {
+      "type": "custom",
+      "kind": "no-namespace"
+    },
+    {
+      "type": "custom",
+      "kind": 1
+    },
+    {
+      "type": "reasoning-file",
+      "mediaType": "image/png"
+    },
+    {
+      "type": "reasoning-file",
+      "url": "example",
+      "mediaType": 1
+    },
+    {
+      "type": "source-document",
+      "sourceId": "s1",
+      "mediaType": "text/plain"
+    },
+    {
+      "type": "tool-approval-request",
+      "approvalId": "a1"
+    },
+    {
+      "type": "tool-approval-request",
+      "approvalId": "a1",
+      "toolCallId": "c1",
+      "isAutomatic": "yes"
+    },
+    {
+      "type": "tool-approval-response",
+      "approvalId": "a1",
+      "approved": "yes"
+    },
+    {
+      "type": "tool-output-denied"
+    },
+    {
+      "type": "message-metadata"
+    },
+    {
+      "type": "data-progress"
+    },
+    {
+      "type": "data-progress",
+      "data": null,
+      "id": 1
+    },
+    {
+      "type": "data-progress",
+      "data": null,
+      "transient": "yes"
+    },
+    {
+      "type": "text-delta",
+      "id": "t1"
+    },
+    {
+      "type": "finish",
+      "finishReason": "unknown"
+    }
+  ]
+}

@@ -525,7 +525,7 @@ import type { {{{.}}} } from './{{.}}{{importFileExtension}}';
     path.endsWith('.ts'),
   )) {
     const path = join(typescript, file)
-    const source = readFileSync(path, 'utf8')
+    const source = retainTypeScriptPatterns(readFileSync(path, 'utf8'))
     const normalized = `${source
       .split('\n')
       .map((line) =>
@@ -549,7 +549,7 @@ import type { {{{.}}} } from './{{.}}{{importFileExtension}}';
   runOpenApiTypescript(clientOutput)
   writeFileSync(
     clientOutput,
-    `// This file is generated from contracts/server-api/openapi.yaml. Do not edit.\n${readFileSync(clientOutput, 'utf8')}`,
+    `// This file is generated from contracts/server-api/openapi.yaml. Do not edit.\n${retainTypeScriptPatterns(readFileSync(clientOutput, 'utf8'))}`,
   )
   runFormatter(
     clientOutput,
@@ -582,7 +582,35 @@ import type { {{{.}}} } from './{{.}}{{importFileExtension}}';
   }
 }
 
-/** Generate the stream guard from the same union as both DTO trees. */
+/**
+ * OpenAPI represents data-${string} with a regex; both upstream TS generators
+ * otherwise widen it to string, preventing callers from narrowing fixed tags.
+ * Keep the schema's explicit TS refinement in both model and operation output.
+ */
+function retainTypeScriptPatterns(source: string): string {
+  const spec = bundleSpec() as {
+    components: { schemas: Record<string, Record<string, unknown>> }
+  }
+  for (const [model, schema] of Object.entries(spec.components.schemas)) {
+    const properties = (schema.properties ?? {}) as Record<
+      string,
+      Record<string, unknown>
+    >
+    for (const [property, shape] of Object.entries(properties)) {
+      const refinement = shape['x-typescript-type']
+      if (typeof refinement !== 'string') continue
+      source = source.replace(
+        new RegExp(
+          `((?:export interface ${model}|${model}:) \\{[\\s\\S]*?\\n\\s*${property}\\??:) string\\b`,
+        ),
+        (_match, prefix: string) => `${prefix} ${refinement}`,
+      )
+    }
+  }
+  return source
+}
+
+/** Generate payload validation and known-tag detection from the same union. */
 function emitChunkValidator(): string {
   const spec = bundleSpec() as {
     components: { schemas: Record<string, Record<string, unknown>> }
@@ -602,6 +630,8 @@ function emitChunkValidator(): string {
       const candidate = `allowed${variable++}`
       return `${JSON.stringify(shape.enum)}.some((${candidate}) => ${candidate} === ${value})`
     }
+    if (typeof shape.pattern === 'string')
+      return `typeof ${value} === 'string' && ${new RegExp(shape.pattern).toString()}.test(${value})`
     if (shape.type === 'string' || shape.type === 'boolean')
       return `typeof ${value} === '${shape.type}'`
     if (shape.type === 'number' || shape.type === 'integer')
@@ -618,7 +648,7 @@ function emitChunkValidator(): string {
         const condition = check(prop, field)
         terms.push(
           required.has(key)
-            ? `(${JSON.stringify(key)} in ${value} && ${condition})`
+            ? `${JSON.stringify(key)} in ${value} && ${condition}`
             : `(!(${JSON.stringify(key)} in ${value}) || ${condition})`,
         )
       }
@@ -637,6 +667,9 @@ function emitChunkValidator(): string {
     return 'true'
   }
   const variants = schemas.UiMessageChunk?.oneOf as Array<{ $ref: string }>
+  const tags: string[] = []
+  const patternedCases: string[] = []
+  const patternedTypes: string[] = []
   const cases = variants
     .map((variant) => {
       const shape = schemas[variant.$ref.split('/').at(-1) as string] as Record<
@@ -647,7 +680,14 @@ function emitChunkValidator(): string {
         shape.properties as Record<string, Record<string, unknown>>
       ).type
       const tag = (typeSchema?.enum as string[] | undefined)?.[0]
-      if (!tag) throw new Error('A UI chunk must declare one literal type')
+      if (!tag) {
+        if (typeof typeSchema?.pattern !== 'string')
+          throw new Error('A UI chunk must declare a literal or patterned type')
+        patternedCases.push(check(shape, 'value'))
+        patternedTypes.push(check(typeSchema, 'type'))
+        return ''
+      }
+      tags.push(tag)
       return `case ${JSON.stringify(tag)}: return ${check(shape, 'value')}`
     })
     .join('\n')
@@ -657,13 +697,17 @@ import type { UiMessageChunk } from '@browseros/server-api'
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+/** Separates future tags from malformed known payloads, including every data-* name. */
+export function isKnownUiMessageChunkType(type: string): boolean {
+  return ${[`${JSON.stringify(tags)}.includes(type)`, ...patternedTypes].join(' || ')}
+}
 /** Validates stream payloads without dropping provider metadata or extension fields. */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: generated cases validate the complete chunk union.
 export function isUiMessageChunk(value: unknown): value is UiMessageChunk {
   if (!isRecord(value)) return false
   switch(value.type) {
     ${cases}
-    default: return false
+    default: return ${patternedCases.join(' || ') || 'false'}
   }
 }
 `

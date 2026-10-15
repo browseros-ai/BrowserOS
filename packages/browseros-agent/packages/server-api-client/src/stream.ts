@@ -5,7 +5,10 @@
  */
 import type { UiMessageChunk } from '@browseros/server-api'
 import { ServerApiError } from './errors'
-import { isUiMessageChunk } from './generated/ui-message-chunk'
+import {
+  isKnownUiMessageChunkType,
+  isUiMessageChunk,
+} from './generated/ui-message-chunk'
 
 export async function* readUiMessageStream(
   response: Response,
@@ -25,13 +28,24 @@ export async function* readUiMessageStream(
     } catch {
       throw invalidStream(response, 'Invalid JSON in a chat stream event')
     }
-    if (!isUiMessageChunk(chunk)) {
+    if (
+      typeof chunk !== 'object' ||
+      chunk === null ||
+      Array.isArray(chunk) ||
+      !('type' in chunk) ||
+      typeof chunk.type !== 'string' ||
+      (isKnownUiMessageChunkType(chunk.type) && !isUiMessageChunk(chunk))
+    ) {
       throw invalidStream(
         response,
         'Invalid UI message chunk in a chat stream event',
       )
     }
-    yield chunk
+    // Servers may introduce new tags before the client contract is regenerated.
+    // Keep their entire payload for downstream SDK reducers, which ignore unknown
+    // tags. The declared union describes known shapes; this assertion is only at
+    // the transport seam, after strict validation of every known tag/data-* part.
+    yield chunk as UiMessageChunk
   }
   if (options.requireDone ?? true) {
     throw invalidStream(response, 'The chat stream ended before [DONE]')

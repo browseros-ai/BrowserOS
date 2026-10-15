@@ -4,6 +4,42 @@ import type { UiMessageChunk } from '@browseros/server-api'
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
+/** Separates future tags from malformed known payloads, including every data-* name. */
+export function isKnownUiMessageChunkType(type: string): boolean {
+  return (
+    [
+      'start',
+      'start-step',
+      'finish-step',
+      'finish',
+      'abort',
+      'error',
+      'text-start',
+      'text-delta',
+      'text-end',
+      'reasoning-start',
+      'reasoning-delta',
+      'reasoning-end',
+      'tool-input-start',
+      'tool-input-delta',
+      'tool-input-available',
+      'tool-input-error',
+      'tool-output-available',
+      'tool-output-error',
+      'source-url',
+      'file',
+      'custom',
+      'reasoning-file',
+      'source-document',
+      'tool-approval-request',
+      'tool-approval-response',
+      'tool-output-denied',
+      'reset-step',
+      'message-metadata',
+    ].includes(type) ||
+    (typeof type === 'string' && /^data-/.test(type))
+  )
+}
 /** Validates stream payloads without dropping provider metadata or extension fields. */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: generated cases validate the complete chunk union.
 export function isUiMessageChunk(value: unknown): value is UiMessageChunk {
@@ -236,7 +272,6 @@ export function isUiMessageChunk(value: unknown): value is UiMessageChunk {
           typeof value.providerExecuted === 'boolean') &&
         (!('toolMetadata' in value) || isRecord(value.toolMetadata)) &&
         (!('dynamic' in value) || typeof value.dynamic === 'boolean') &&
-        (!('title' in value) || typeof value.title === 'string') &&
         'toolCallId' in value &&
         typeof value.toolCallId === 'string' &&
         'output' in value &&
@@ -257,7 +292,6 @@ export function isUiMessageChunk(value: unknown): value is UiMessageChunk {
           typeof value.providerExecuted === 'boolean') &&
         (!('toolMetadata' in value) || isRecord(value.toolMetadata)) &&
         (!('dynamic' in value) || typeof value.dynamic === 'boolean') &&
-        (!('title' in value) || typeof value.title === 'string') &&
         'toolCallId' in value &&
         typeof value.toolCallId === 'string' &&
         'errorText' in value &&
@@ -294,7 +328,123 @@ export function isUiMessageChunk(value: unknown): value is UiMessageChunk {
         'mediaType' in value &&
         typeof value.mediaType === 'string'
       )
+    case 'custom':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['custom'].some((allowed34) => allowed34 === value.type) &&
+        'kind' in value &&
+        typeof value.kind === 'string' &&
+        /[.]/.test(value.kind) &&
+        (!('providerMetadata' in value) ||
+          (isRecord(value.providerMetadata) &&
+            Object.values(value.providerMetadata).every((item35) =>
+              isRecord(item35),
+            )))
+      )
+    case 'reasoning-file':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['reasoning-file'].some((allowed36) => allowed36 === value.type) &&
+        'url' in value &&
+        typeof value.url === 'string' &&
+        'mediaType' in value &&
+        typeof value.mediaType === 'string' &&
+        (!('providerMetadata' in value) ||
+          (isRecord(value.providerMetadata) &&
+            Object.values(value.providerMetadata).every((item37) =>
+              isRecord(item37),
+            )))
+      )
+    case 'source-document':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['source-document'].some((allowed38) => allowed38 === value.type) &&
+        'sourceId' in value &&
+        typeof value.sourceId === 'string' &&
+        'mediaType' in value &&
+        typeof value.mediaType === 'string' &&
+        'title' in value &&
+        typeof value.title === 'string' &&
+        (!('filename' in value) || typeof value.filename === 'string') &&
+        (!('providerMetadata' in value) ||
+          (isRecord(value.providerMetadata) &&
+            Object.values(value.providerMetadata).every((item39) =>
+              isRecord(item39),
+            )))
+      )
+    case 'tool-approval-request':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['tool-approval-request'].some(
+          (allowed40) => allowed40 === value.type,
+        ) &&
+        'approvalId' in value &&
+        typeof value.approvalId === 'string' &&
+        'toolCallId' in value &&
+        typeof value.toolCallId === 'string' &&
+        (!('approvalDescriptor' in value) || true) &&
+        (!('inputSchemaInput' in value) || true) &&
+        (!('reason' in value) || typeof value.reason === 'string') &&
+        (!('isAutomatic' in value) || typeof value.isAutomatic === 'boolean') &&
+        (!('signature' in value) || typeof value.signature === 'string')
+      )
+    case 'tool-approval-response':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['tool-approval-response'].some(
+          (allowed41) => allowed41 === value.type,
+        ) &&
+        'approvalId' in value &&
+        typeof value.approvalId === 'string' &&
+        'approved' in value &&
+        typeof value.approved === 'boolean' &&
+        (!('reason' in value) || typeof value.reason === 'string') &&
+        (!('providerExecuted' in value) ||
+          typeof value.providerExecuted === 'boolean') &&
+        (!('providerMetadata' in value) ||
+          (isRecord(value.providerMetadata) &&
+            Object.values(value.providerMetadata).every((item42) =>
+              isRecord(item42),
+            )))
+      )
+    case 'tool-output-denied':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['tool-output-denied'].some((allowed43) => allowed43 === value.type) &&
+        'toolCallId' in value &&
+        typeof value.toolCallId === 'string'
+      )
+    case 'reset-step':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['reset-step'].some((allowed44) => allowed44 === value.type)
+      )
+    case 'message-metadata':
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        ['message-metadata'].some((allowed45) => allowed45 === value.type) &&
+        'messageMetadata' in value &&
+        true
+      )
+
     default:
-      return false
+      return (
+        isRecord(value) &&
+        'type' in value &&
+        typeof value.type === 'string' &&
+        /^data-/.test(value.type) &&
+        (!('id' in value) || typeof value.id === 'string') &&
+        'data' in value &&
+        true &&
+        (!('transient' in value) || typeof value.transient === 'boolean')
+      )
   }
 }

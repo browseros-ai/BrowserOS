@@ -226,7 +226,10 @@ export interface paths {
       path?: never
       cookie?: never
     }
-    /** @description Requires a loopback trusted-app request; mutations require an allowed Origin header. */
+    /**
+     * List conversations by lastMessagedAt descending
+     * @description Returns conversations ordered by lastMessagedAt descending (most recently messaged first). Requires a loopback trusted-app request; mutations require an allowed Origin header.
+     */
     get: operations['listConversations']
     put?: never
     post?: never
@@ -262,7 +265,10 @@ export interface paths {
       path?: never
       cookie?: never
     }
-    /** @description Requires a loopback trusted-app request; mutations require an allowed Origin header. */
+    /**
+     * List agents by updatedAt descending
+     * @description Returns agents ordered by updatedAt descending (most recently updated first). Requires a loopback trusted-app request; mutations require an allowed Origin header.
+     */
     get: operations['listAgents']
     put?: never
     /** @description Requires a loopback trusted-app request; mutations require an allowed Origin header. */
@@ -371,7 +377,10 @@ export interface paths {
       path?: never
       cookie?: never
     }
-    /** @description Requires a loopback trusted-app request; mutations require an allowed Origin header. */
+    /**
+     * List scheduled job runs by startedAt descending
+     * @description Returns scheduled job runs ordered by startedAt descending (most recently started first). Requires a loopback trusted-app request; mutations require an allowed Origin header.
+     */
     get: operations['listScheduledJobRuns']
     put?: never
     post?: never
@@ -1233,10 +1242,7 @@ export interface components {
       sessionCount: number
     }
     UiStartChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'start'
       messageId?: string
       messageMetadata?: unknown
@@ -1244,28 +1250,19 @@ export interface components {
       [key: string]: unknown
     }
     UiStartStepChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'start-step'
     } & {
       [key: string]: unknown
     }
     UiFinishStepChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'finish-step'
     } & {
       [key: string]: unknown
     }
     UiFinishChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'finish'
       /** @enum {string} */
       finishReason?:
@@ -1280,30 +1277,21 @@ export interface components {
       [key: string]: unknown
     }
     UiAbortChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'abort'
       reason?: string
     } & {
       [key: string]: unknown
     }
     UiErrorChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'error'
       errorText: string
     } & {
       [key: string]: unknown
     }
     UiTextStartChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'text-start'
       providerMetadata?: {
         [key: string]: {
@@ -1315,10 +1303,7 @@ export interface components {
       [key: string]: unknown
     }
     UiTextDeltaChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'text-delta'
       providerMetadata?: {
         [key: string]: {
@@ -1331,10 +1316,7 @@ export interface components {
       [key: string]: unknown
     }
     UiTextEndChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'text-end'
       providerMetadata?: {
         [key: string]: {
@@ -1346,10 +1328,7 @@ export interface components {
       [key: string]: unknown
     }
     UiReasoningStartChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'reasoning-start'
       providerMetadata?: {
         [key: string]: {
@@ -1361,10 +1340,7 @@ export interface components {
       [key: string]: unknown
     }
     UiReasoningDeltaChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'reasoning-delta'
       providerMetadata?: {
         [key: string]: {
@@ -1377,10 +1353,7 @@ export interface components {
       [key: string]: unknown
     }
     UiReasoningEndChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'reasoning-end'
       providerMetadata?: {
         [key: string]: {
@@ -1392,10 +1365,7 @@ export interface components {
       [key: string]: unknown
     }
     UiToolInputStartChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'tool-input-start'
       providerMetadata?: {
         [key: string]: {
@@ -1414,10 +1384,7 @@ export interface components {
       [key: string]: unknown
     }
     UiToolInputDeltaChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'tool-input-delta'
       toolCallId: string
       inputTextDelta: string
@@ -1425,10 +1392,7 @@ export interface components {
       [key: string]: unknown
     }
     UiToolInputAvailableChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'tool-input-available'
       providerMetadata?: {
         [key: string]: {
@@ -1448,10 +1412,7 @@ export interface components {
       [key: string]: unknown
     }
     UiToolInputErrorChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'tool-input-error'
       providerMetadata?: {
         [key: string]: {
@@ -1472,10 +1433,7 @@ export interface components {
       [key: string]: unknown
     }
     UiToolOutputAvailableChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'tool-output-available'
       providerMetadata?: {
         [key: string]: {
@@ -1487,7 +1445,6 @@ export interface components {
         [key: string]: unknown
       }
       dynamic?: boolean
-      title?: string
       toolCallId: string
       output: unknown
       preliminary?: boolean
@@ -1495,10 +1452,7 @@ export interface components {
       [key: string]: unknown
     }
     UiToolOutputErrorChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'tool-output-error'
       providerMetadata?: {
         [key: string]: {
@@ -1510,17 +1464,13 @@ export interface components {
         [key: string]: unknown
       }
       dynamic?: boolean
-      title?: string
       toolCallId: string
       errorText: string
     } & {
       [key: string]: unknown
     }
     UiSourceUrlChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'source-url'
       providerMetadata?: {
         [key: string]: {
@@ -1534,10 +1484,7 @@ export interface components {
       [key: string]: unknown
     }
     UiFileChunk: {
-      /**
-       * @description discriminator enum property added by openapi-typescript
-       * @enum {string}
-       */
+      /** @enum {string} */
       type: 'file'
       providerMetadata?: {
         [key: string]: {
@@ -1549,7 +1496,7 @@ export interface components {
     } & {
       [key: string]: unknown
     }
-    /** @description AI SDK v7 UI message stream v1 JSON payloads. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata remains open. */
+    /** @description Complete ai@7.0.114 UIMessageChunk union: 28 fixed types and the data-* namespace. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata and extension fields remain open. Each fixed type or data-* payload must match its known shape. Client readers forward other string types unchanged for future SDK extensions. A discriminator mapping is omitted because OpenAPI mappings cannot represent the data-* namespace; the literal tags and pattern keep oneOf unambiguous. */
     UiMessageChunk:
       | components['schemas']['UiStartChunk']
       | components['schemas']['UiStartStepChunk']
@@ -1571,6 +1518,115 @@ export interface components {
       | components['schemas']['UiToolOutputErrorChunk']
       | components['schemas']['UiSourceUrlChunk']
       | components['schemas']['UiFileChunk']
+      | components['schemas']['UiCustomChunk']
+      | components['schemas']['UiReasoningFileChunk']
+      | components['schemas']['UiSourceDocumentChunk']
+      | components['schemas']['UiToolApprovalRequestChunk']
+      | components['schemas']['UiToolApprovalResponseChunk']
+      | components['schemas']['UiToolOutputDeniedChunk']
+      | components['schemas']['UiResetStepChunk']
+      | components['schemas']['UiMessageMetadataChunk']
+      | components['schemas']['UiDataChunk']
+    /** @description Provider-specific custom content. The kind contains a namespace separator (a dot). */
+    UiCustomChunk: {
+      /** @enum {string} */
+      type: 'custom'
+      kind: string
+      providerMetadata?: {
+        [key: string]: {
+          [key: string]: unknown
+        }
+      }
+    } & {
+      [key: string]: unknown
+    }
+    /** @description Reasoning media, including Google thought images, forwarded by createAgentUIStream. */
+    UiReasoningFileChunk: {
+      /** @enum {string} */
+      type: 'reasoning-file'
+      url: string
+      mediaType: string
+      providerMetadata?: {
+        [key: string]: {
+          [key: string]: unknown
+        }
+      }
+    } & {
+      [key: string]: unknown
+    }
+    UiSourceDocumentChunk: {
+      /** @enum {string} */
+      type: 'source-document'
+      sourceId: string
+      mediaType: string
+      title: string
+      filename?: string
+      providerMetadata?: {
+        [key: string]: {
+          [key: string]: unknown
+        }
+      }
+    } & {
+      [key: string]: unknown
+    }
+    UiToolApprovalRequestChunk: {
+      /** @enum {string} */
+      type: 'tool-approval-request'
+      approvalId: string
+      toolCallId: string
+      approvalDescriptor?: unknown
+      inputSchemaInput?: unknown
+      reason?: string
+      isAutomatic?: boolean
+      signature?: string
+    } & {
+      [key: string]: unknown
+    }
+    UiToolApprovalResponseChunk: {
+      /** @enum {string} */
+      type: 'tool-approval-response'
+      approvalId: string
+      approved: boolean
+      reason?: string
+      providerExecuted?: boolean
+      providerMetadata?: {
+        [key: string]: {
+          [key: string]: unknown
+        }
+      }
+    } & {
+      [key: string]: unknown
+    }
+    UiToolOutputDeniedChunk: {
+      /** @enum {string} */
+      type: 'tool-output-denied'
+      toolCallId: string
+    } & {
+      [key: string]: unknown
+    }
+    /** @description Removes all message parts added during the current step. */
+    UiResetStepChunk: {
+      /** @enum {string} */
+      type: 'reset-step'
+    } & {
+      [key: string]: unknown
+    }
+    UiMessageMetadataChunk: {
+      /** @enum {string} */
+      type: 'message-metadata'
+      messageMetadata: unknown
+    } & {
+      [key: string]: unknown
+    }
+    /** @description Generic SDK DataUIMessageChunk, whose type is data-${NAME} for any string NAME (including the empty string). Data is arbitrary JSON; id and transient are optional. The pattern is the wire constraint; generated TypeScript retains the template literal so data parts cannot obscure narrowing of fixed chunk types. Rust DTOs use String. */
+    UiDataChunk: {
+      type: `data-${string}`
+      id?: string
+      data: unknown
+      transient?: boolean
+    } & {
+      [key: string]: unknown
+    }
     CustomAcpAgentConfig: {
       /** @description Trimmed by the server before minimum-length validation. */
       command: string
@@ -3666,6 +3722,33 @@ export interface operations {
         }
       }
       403: components['responses']['Forbidden']
+      /** @description SDK transport requires Accept to include both application/json and text/event-stream. */
+      406: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+      /** @description SDK request body exceeds the configured maximum size; JSON-RPC error. */
+      413: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
+      /** @description SDK transport requires Content-Type application/json; JSON-RPC error. */
+      415: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': unknown
+        }
+      }
       /** @description Internal JSON-RPC error. */
       500: {
         headers: {

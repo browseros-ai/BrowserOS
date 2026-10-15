@@ -43,6 +43,75 @@ export type UiAbortChunkTypeEnum =
   (typeof UiAbortChunkTypeEnum)[keyof typeof UiAbortChunkTypeEnum]
 
 /**
+ * Provider-specific custom content. The kind contains a namespace separator (a dot).
+ * @export
+ * @interface UiCustomChunk
+ */
+export interface UiCustomChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiCustomChunkTypeEnum}
+   * @memberof UiCustomChunk
+   */
+  type: UiCustomChunkTypeEnum
+  /**
+   *
+   * @type {string}
+   * @memberof UiCustomChunk
+   */
+  kind: string
+  /**
+   *
+   * @type {{ [key: string]: { [key: string]: any; }; }}
+   * @memberof UiCustomChunk
+   */
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
+}
+
+/**
+ * @export
+ */
+export const UiCustomChunkTypeEnum = {
+  Custom: 'custom',
+} as const
+export type UiCustomChunkTypeEnum =
+  (typeof UiCustomChunkTypeEnum)[keyof typeof UiCustomChunkTypeEnum]
+
+/**
+ * Generic SDK DataUIMessageChunk, whose type is data-${NAME} for any string NAME (including the empty string). Data is arbitrary JSON; id and transient are optional. The pattern is the wire constraint; generated TypeScript retains the template literal so data parts cannot obscure narrowing of fixed chunk types. Rust DTOs use String.
+ * @export
+ * @interface UiDataChunk
+ */
+export interface UiDataChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {string}
+   * @memberof UiDataChunk
+   */
+  type: `data-${string}`
+  /**
+   *
+   * @type {string}
+   * @memberof UiDataChunk
+   */
+  id?: string
+  /**
+   *
+   * @type {any}
+   * @memberof UiDataChunk
+   */
+  data: unknown | null
+  /**
+   *
+   * @type {boolean}
+   * @memberof UiDataChunk
+   */
+  _transient?: boolean
+}
+
+/**
  *
  * @export
  * @interface UiErrorChunk
@@ -190,30 +259,69 @@ export type UiFinishStepChunkTypeEnum =
 
 /**
  * @type UiMessageChunk
- * AI SDK v7 UI message stream v1 JSON payloads. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata remains open.
+ * Complete ai@7.0.114 UIMessageChunk union: 28 fixed types and the data-* namespace. Each SSE data frame contains one chunk; [DONE] is a framing sentinel, never a chunk. Metadata and extension fields remain open. Each fixed type or data-* payload must match its known shape. Client readers forward other string types unchanged for future SDK extensions. A discriminator mapping is omitted because OpenAPI mappings cannot represent the data-* namespace; the literal tags and pattern keep oneOf unambiguous.
  * @export
  */
 export type UiMessageChunk =
   | UiAbortChunk
+  | UiCustomChunk
+  | UiDataChunk
   | UiErrorChunk
   | UiFileChunk
   | UiFinishChunk
   | UiFinishStepChunk
+  | UiMessageMetadataChunk
   | UiReasoningDeltaChunk
   | UiReasoningEndChunk
+  | UiReasoningFileChunk
   | UiReasoningStartChunk
+  | UiResetStepChunk
+  | UiSourceDocumentChunk
   | UiSourceUrlChunk
   | UiStartChunk
   | UiStartStepChunk
   | UiTextDeltaChunk
   | UiTextEndChunk
   | UiTextStartChunk
+  | UiToolApprovalRequestChunk
+  | UiToolApprovalResponseChunk
   | UiToolInputAvailableChunk
   | UiToolInputDeltaChunk
   | UiToolInputErrorChunk
   | UiToolInputStartChunk
   | UiToolOutputAvailableChunk
+  | UiToolOutputDeniedChunk
   | UiToolOutputErrorChunk
+
+/**
+ *
+ * @export
+ * @interface UiMessageMetadataChunk
+ */
+export interface UiMessageMetadataChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiMessageMetadataChunkTypeEnum}
+   * @memberof UiMessageMetadataChunk
+   */
+  type: UiMessageMetadataChunkTypeEnum
+  /**
+   *
+   * @type {any}
+   * @memberof UiMessageMetadataChunk
+   */
+  messageMetadata: unknown | null
+}
+
+/**
+ * @export
+ */
+export const UiMessageMetadataChunkTypeEnum = {
+  MessageMetadata: 'message-metadata',
+} as const
+export type UiMessageMetadataChunkTypeEnum =
+  (typeof UiMessageMetadataChunkTypeEnum)[keyof typeof UiMessageMetadataChunkTypeEnum]
 
 /**
  *
@@ -294,6 +402,48 @@ export type UiReasoningEndChunkTypeEnum =
   (typeof UiReasoningEndChunkTypeEnum)[keyof typeof UiReasoningEndChunkTypeEnum]
 
 /**
+ * Reasoning media, including Google thought images, forwarded by createAgentUIStream.
+ * @export
+ * @interface UiReasoningFileChunk
+ */
+export interface UiReasoningFileChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiReasoningFileChunkTypeEnum}
+   * @memberof UiReasoningFileChunk
+   */
+  type: UiReasoningFileChunkTypeEnum
+  /**
+   *
+   * @type {string}
+   * @memberof UiReasoningFileChunk
+   */
+  url: string
+  /**
+   *
+   * @type {string}
+   * @memberof UiReasoningFileChunk
+   */
+  mediaType: string
+  /**
+   *
+   * @type {{ [key: string]: { [key: string]: any; }; }}
+   * @memberof UiReasoningFileChunk
+   */
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
+}
+
+/**
+ * @export
+ */
+export const UiReasoningFileChunkTypeEnum = {
+  ReasoningFile: 'reasoning-file',
+} as const
+export type UiReasoningFileChunkTypeEnum =
+  (typeof UiReasoningFileChunkTypeEnum)[keyof typeof UiReasoningFileChunkTypeEnum]
+
+/**
  *
  * @export
  * @interface UiReasoningStartChunk
@@ -328,6 +478,84 @@ export const UiReasoningStartChunkTypeEnum = {
 } as const
 export type UiReasoningStartChunkTypeEnum =
   (typeof UiReasoningStartChunkTypeEnum)[keyof typeof UiReasoningStartChunkTypeEnum]
+
+/**
+ * Removes all message parts added during the current step.
+ * @export
+ * @interface UiResetStepChunk
+ */
+export interface UiResetStepChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiResetStepChunkTypeEnum}
+   * @memberof UiResetStepChunk
+   */
+  type: UiResetStepChunkTypeEnum
+}
+
+/**
+ * @export
+ */
+export const UiResetStepChunkTypeEnum = {
+  ResetStep: 'reset-step',
+} as const
+export type UiResetStepChunkTypeEnum =
+  (typeof UiResetStepChunkTypeEnum)[keyof typeof UiResetStepChunkTypeEnum]
+
+/**
+ *
+ * @export
+ * @interface UiSourceDocumentChunk
+ */
+export interface UiSourceDocumentChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiSourceDocumentChunkTypeEnum}
+   * @memberof UiSourceDocumentChunk
+   */
+  type: UiSourceDocumentChunkTypeEnum
+  /**
+   *
+   * @type {string}
+   * @memberof UiSourceDocumentChunk
+   */
+  sourceId: string
+  /**
+   *
+   * @type {string}
+   * @memberof UiSourceDocumentChunk
+   */
+  mediaType: string
+  /**
+   *
+   * @type {string}
+   * @memberof UiSourceDocumentChunk
+   */
+  title: string
+  /**
+   *
+   * @type {string}
+   * @memberof UiSourceDocumentChunk
+   */
+  filename?: string
+  /**
+   *
+   * @type {{ [key: string]: { [key: string]: any; }; }}
+   * @memberof UiSourceDocumentChunk
+   */
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
+}
+
+/**
+ * @export
+ */
+export const UiSourceDocumentChunkTypeEnum = {
+  SourceDocument: 'source-document',
+} as const
+export type UiSourceDocumentChunkTypeEnum =
+  (typeof UiSourceDocumentChunkTypeEnum)[keyof typeof UiSourceDocumentChunkTypeEnum]
 
 /**
  *
@@ -550,6 +778,126 @@ export const UiTextStartChunkTypeEnum = {
 } as const
 export type UiTextStartChunkTypeEnum =
   (typeof UiTextStartChunkTypeEnum)[keyof typeof UiTextStartChunkTypeEnum]
+
+/**
+ *
+ * @export
+ * @interface UiToolApprovalRequestChunk
+ */
+export interface UiToolApprovalRequestChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiToolApprovalRequestChunkTypeEnum}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  type: UiToolApprovalRequestChunkTypeEnum
+  /**
+   *
+   * @type {string}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  approvalId: string
+  /**
+   *
+   * @type {string}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  toolCallId: string
+  /**
+   *
+   * @type {any}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  approvalDescriptor?: unknown | null
+  /**
+   *
+   * @type {any}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  inputSchemaInput?: unknown | null
+  /**
+   *
+   * @type {string}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  reason?: string
+  /**
+   *
+   * @type {boolean}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  isAutomatic?: boolean
+  /**
+   *
+   * @type {string}
+   * @memberof UiToolApprovalRequestChunk
+   */
+  signature?: string
+}
+
+/**
+ * @export
+ */
+export const UiToolApprovalRequestChunkTypeEnum = {
+  ToolApprovalRequest: 'tool-approval-request',
+} as const
+export type UiToolApprovalRequestChunkTypeEnum =
+  (typeof UiToolApprovalRequestChunkTypeEnum)[keyof typeof UiToolApprovalRequestChunkTypeEnum]
+
+/**
+ *
+ * @export
+ * @interface UiToolApprovalResponseChunk
+ */
+export interface UiToolApprovalResponseChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiToolApprovalResponseChunkTypeEnum}
+   * @memberof UiToolApprovalResponseChunk
+   */
+  type: UiToolApprovalResponseChunkTypeEnum
+  /**
+   *
+   * @type {string}
+   * @memberof UiToolApprovalResponseChunk
+   */
+  approvalId: string
+  /**
+   *
+   * @type {boolean}
+   * @memberof UiToolApprovalResponseChunk
+   */
+  approved: boolean
+  /**
+   *
+   * @type {string}
+   * @memberof UiToolApprovalResponseChunk
+   */
+  reason?: string
+  /**
+   *
+   * @type {boolean}
+   * @memberof UiToolApprovalResponseChunk
+   */
+  providerExecuted?: boolean
+  /**
+   *
+   * @type {{ [key: string]: { [key: string]: any; }; }}
+   * @memberof UiToolApprovalResponseChunk
+   */
+  providerMetadata?: { [key: string]: { [key: string]: unknown } }
+}
+
+/**
+ * @export
+ */
+export const UiToolApprovalResponseChunkTypeEnum = {
+  ToolApprovalResponse: 'tool-approval-response',
+} as const
+export type UiToolApprovalResponseChunkTypeEnum =
+  (typeof UiToolApprovalResponseChunkTypeEnum)[keyof typeof UiToolApprovalResponseChunkTypeEnum]
 
 /**
  *
@@ -845,12 +1193,6 @@ export interface UiToolOutputAvailableChunk {
    * @type {string}
    * @memberof UiToolOutputAvailableChunk
    */
-  title?: string
-  /**
-   *
-   * @type {string}
-   * @memberof UiToolOutputAvailableChunk
-   */
   toolCallId: string
   /**
    *
@@ -874,6 +1216,36 @@ export const UiToolOutputAvailableChunkTypeEnum = {
 } as const
 export type UiToolOutputAvailableChunkTypeEnum =
   (typeof UiToolOutputAvailableChunkTypeEnum)[keyof typeof UiToolOutputAvailableChunkTypeEnum]
+
+/**
+ *
+ * @export
+ * @interface UiToolOutputDeniedChunk
+ */
+export interface UiToolOutputDeniedChunk {
+  [key: string]: unknown
+  /**
+   *
+   * @type {UiToolOutputDeniedChunkTypeEnum}
+   * @memberof UiToolOutputDeniedChunk
+   */
+  type: UiToolOutputDeniedChunkTypeEnum
+  /**
+   *
+   * @type {string}
+   * @memberof UiToolOutputDeniedChunk
+   */
+  toolCallId: string
+}
+
+/**
+ * @export
+ */
+export const UiToolOutputDeniedChunkTypeEnum = {
+  ToolOutputDenied: 'tool-output-denied',
+} as const
+export type UiToolOutputDeniedChunkTypeEnum =
+  (typeof UiToolOutputDeniedChunkTypeEnum)[keyof typeof UiToolOutputDeniedChunkTypeEnum]
 
 /**
  *
@@ -912,12 +1284,6 @@ export interface UiToolOutputErrorChunk {
    * @memberof UiToolOutputErrorChunk
    */
   dynamic?: boolean
-  /**
-   *
-   * @type {string}
-   * @memberof UiToolOutputErrorChunk
-   */
-  title?: string
   /**
    *
    * @type {string}

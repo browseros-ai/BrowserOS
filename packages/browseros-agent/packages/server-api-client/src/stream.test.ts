@@ -3,6 +3,7 @@ import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import manifest from '../../../contracts/server-api/fixtures/manifest.json'
+import examples from '../../../contracts/server-api/tests/ui-stream-examples.json'
 import { ServerApiError } from './errors'
 import { readUiMessageStream } from './stream'
 
@@ -26,6 +27,7 @@ function response(bytes: Uint8Array[], cancel?: () => void): Response {
   )
 }
 const encoder = new TextEncoder()
+const { additionalChunks, malformedChunks } = examples
 const chunks = manifest
   .filter((item) => item.schema === 'UiMessageChunk')
   .map((item) =>
@@ -40,6 +42,7 @@ const chunks = manifest
       ),
     ),
   )
+  .concat(additionalChunks)
 
 test('all chunk variants survive one-byte reads, UTF-8 and all SSE line endings', async () => {
   for (const ending of ['\n', '\r\n', '\r']) {
@@ -160,7 +163,11 @@ test('optional DONE still propagates body read failures', async () => {
 
 for (const payload of [
   'nope',
-  '{"type":"unknown"}',
+  'null',
+  '[]',
+  '{}',
+  '{"type":null}',
+  '{"type":1}',
   '{"type":"text-delta","id":"t"}',
 ]) {
   test(`optional DONE still rejects invalid chunks: ${payload}`, async () => {
@@ -192,6 +199,42 @@ for (const wire of [
       status: 200,
       code: 'invalid_stream',
     })
+  })
+}
+
+test('tests that unknown string types pass through unchanged and later chunks still arrive', async () => {
+  const expected = [
+    { type: 'start' },
+    { type: 'future-provider-event', payload: { values: [1, null] } },
+    { type: '', extension: true },
+    { type: 'text-delta', id: 't1', delta: 'Still streaming' },
+    { type: 'finish' },
+  ]
+  for (const requireDone of [true, false]) {
+    const wire =
+      expected.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join('') +
+      (requireDone ? 'data: [DONE]\n\n' : '')
+    const actual: unknown[] = await Array.fromAsync(
+      readUiMessageStream(response([encoder.encode(wire)]), {
+        requireDone,
+      }),
+    )
+    expect(actual).toEqual(expected)
+  }
+})
+
+for (const chunk of malformedChunks) {
+  test(`tests that known malformed ${JSON.stringify(chunk)} never takes the forward compatibility path`, async () => {
+    const raw = response([
+      encoder.encode(`data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n`),
+    ])
+    await expect(
+      Array.fromAsync(readUiMessageStream(raw)),
+    ).rejects.toMatchObject({
+      name: 'ServerApiError',
+      code: 'invalid_stream',
+    })
+    expect(raw.body?.locked).toBe(false)
   })
 }
 test('HTTP failures use the same parsed error; 204 yields no chunks', async () => {
