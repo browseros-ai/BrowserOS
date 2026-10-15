@@ -9,6 +9,7 @@ use crate::{
     chat::{
         AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationHistory, ConversationRuns,
     },
+    chat::{BrowserOsEngineDeps, NoBrowser, RegistryLeases, klavis_state_name, production_models},
     config::Config,
     db::{self, Database},
     http,
@@ -119,7 +120,22 @@ impl AppState {
         let runs = ConversationRuns::new(activity.clone(), PANEL_HEARTBEAT);
         let leases = ToolLeases::new(runs.clone());
         let acp = Arc::new(AcpEngine::new());
-        let browseros = Arc::new(BrowserOsEngine::new(http.clone(), config.env.use_mock_llm));
+        // P14: until P15 wires the host's browser, scheduled runs fall back to the request's
+        // context (`NoBrowser`), as TS does when it cannot open the background page.
+        let klavis_for_key = klavis.clone();
+        let browseros = Arc::new(BrowserOsEngine::new(BrowserOsEngineDeps {
+            models: production_models(http.clone(), config.env.use_mock_llm),
+            leases: Arc::new(RegistryLeases(leases.clone())),
+            pages: Arc::new(NoBrowser),
+            mcp_port: config.server_port,
+            klavis_status: Arc::new(move || {
+                Some(klavis_state_name(&klavis_for_key.proxy_state()).to_owned())
+            }),
+            connector_names: Klavis::catalog()
+                .iter()
+                .map(|connector| connector.name.to_owned())
+                .collect(),
+        }));
         let chat = ChatService::new(ChatDeps {
             runs: runs.clone(),
             history: ConversationHistory::new(db.conversations()),

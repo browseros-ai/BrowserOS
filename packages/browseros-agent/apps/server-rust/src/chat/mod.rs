@@ -21,7 +21,10 @@ pub mod request;
 pub mod runs;
 
 pub use acp_engine::AcpEngine;
-pub use browseros_engine::BrowserOsEngine;
+pub use browseros_engine::{
+    BackgroundPages, BrowserOsEngine, BrowserOsEngineDeps, KlavisStatus, LeaseIssuer, ModelFactory,
+    NoBrowser, RegistryLeases, SessionLease, klavis_state_name, production_models,
+};
 pub use engine::{ChatEngine, ChatRejection, ResolvedLlm, ScriptedEngine, Turn, TurnTarget};
 pub use history::{ConversationHistory, TargetKey};
 pub use request::{ChatRequest, ChatTurnRequest, RequestTarget};
