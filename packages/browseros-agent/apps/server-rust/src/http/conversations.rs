@@ -7,10 +7,10 @@ use axum::{
     extract::{FromRequest, Path, Request, State},
     response::{IntoResponse, Response},
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use server_api::models as api;
 
-use super::wire::crud::{self, CrudJson};
+use super::{extract::ZodJson, wire::crud};
 use crate::{AppState, db};
 
 pub async fn list(State(state): State<AppState>) -> Response {
@@ -49,19 +49,21 @@ pub async fn import(
         Ok(id) => id,
         Err(response) => return response.into_response(),
     };
-    let CrudJson(input) =
-        match CrudJson::<api::ImportConversationRequest>::from_request(request, &state).await {
-            Ok(input) => input,
-            Err(response) => return response.into_response(),
-        };
-    let messages = match input
-        .messages
-        .into_iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(messages) => messages,
-        Err(error) => return crud::internal_error(&error.to_string()),
+    let ZodJson(body) = match ZodJson::<Value>::from_request(request, &state).await {
+        Ok(body) => body,
+        Err(response) => return response.into_response(),
+    };
+    // TS stores the parsed body's messages verbatim. The generated message model is a HashMap,
+    // which would re-serialize every message in an arbitrary key order, so the validated
+    // request supplies the metadata and the body supplies the messages.
+    let messages = body
+        .get("messages")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let input = match crud::decode::<api::ImportConversationRequest>(body) {
+        Ok(input) => input,
+        Err(response) => return response.into_response(),
     };
     let input = db::ImportConversation {
         messages,
