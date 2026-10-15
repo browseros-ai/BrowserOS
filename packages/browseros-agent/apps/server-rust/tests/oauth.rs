@@ -522,7 +522,7 @@ async fn occupied_callback_port_is_503() -> TestResult {
     ctx.manager.shutdown().await;
     Ok(())
 }
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn device_json_and_form_pkce_pending_waf_and_slowdown() -> TestResult {
     for provider in [OAuthProvider::GitHubCopilot, OAuthProvider::QwenCode] {
         let mut fake = FakeAuth::new(Duration::ZERO).await?;
@@ -559,20 +559,30 @@ async fn device_json_and_form_pkce_pending_waf_and_slowdown() -> TestResult {
             body(response).await?,
             r#"{"userCode":"ABCD","verificationUri":"https://verify.test/complete","expiresIn":600}"#
         );
+        // Virtual time accelerates only the protocol polling sleeps. SQLite's worker thread
+        // uses real I/O, so open the fixture before pausing and resume before persistence.
+        tokio::time::pause();
         for _ in 0..5 {
             fake.next_hit().await?;
         }
-        for _ in 0..1000 {
-            if ctx
-                .manager
-                .try_status(provider.as_str())
-                .await?
-                .authenticated
-            {
-                break;
+        tokio::time::resume();
+        // The fake server observes the last request before reqwest receives its response.
+        // Wait for the manager's durable status, rather than assuming a fixed yield count
+        // spans that network -> poller -> SQLite handoff.
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                if ctx
+                    .manager
+                    .try_status(provider.as_str())
+                    .await?
+                    .authenticated
+                {
+                    return Ok::<(), server_rust::oauth::OAuthError>(());
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::task::yield_now().await;
-        }
+        })
+        .await??;
         let saved = ctx
             .store
             .get("installation-a", provider.as_str())
