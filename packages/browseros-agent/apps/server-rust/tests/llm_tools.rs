@@ -26,6 +26,10 @@ struct Fixture {
 
 impl Fixture {
     async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::with_mock(false).await
+    }
+
+    async fn with_mock(use_mock_llm: bool) -> Result<Self, Box<dyn std::error::Error>> {
         let dir = tempfile::tempdir()?;
         let config_file = dir.path().join("config.json");
         std::fs::write(
@@ -35,6 +39,7 @@ impl Fixture {
         )?;
         let env = EnvConfig {
             browseros_dir: Some(dir.path().join("browseros")),
+            use_mock_llm,
             ..Default::default()
         };
         let state = AppState::start(Config::load(&config_file, &env)?).await?;
@@ -554,6 +559,88 @@ async fn unknown_stored_llm_type_is_not_mistaken_for_a_coding_agent() -> TestRes
         body,
         json!({"success":false,"message":"Unknown provider: future-provider"})
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stored_header_validation_uses_factory_failure_message() -> TestResult {
+    let fixture = Fixture::new().await?;
+    fixture
+        .state
+        .providers
+        .upsert_llm(
+            "headers",
+            UpsertProvider {
+                provider_type: "openai-compatible".to_owned(),
+                name: "Headers".to_owned(),
+                model_id: Some("model".to_owned()),
+                context_window: Some(128_000),
+                headers: Some(Some(BTreeMap::from([
+                    ("X-Token".to_owned(), "a".to_owned()),
+                    ("x-token".to_owned(), "b".to_owned()),
+                ]))),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let (status, body) = fixture
+        .post(
+            "/refine-prompt",
+            json!({"providerId":"headers", "name":"Morning", "prompt":"Read the news"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["success"], false);
+    let issues: Value =
+        serde_json::from_str(body["message"].as_str().ok_or("missing factory error")?)?;
+    assert_eq!(
+        issues,
+        json!([{"code":"custom","message":"Duplicate header name","path":["x-token"]}])
+    );
+    assert!(body.get("error").is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn mock_harness_bypasses_oauth_and_stored_factory_validation() -> TestResult {
+    let fixture = Fixture::with_mock(true).await?;
+    let (status, body) = fixture
+        .post(
+            "/test-provider",
+            json!({"provider":"chatgpt-pro", "model":"test"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["message"],
+        "Connection successful. Response: \"Mock BrowserOS test response.\""
+    );
+    fixture
+        .state
+        .providers
+        .upsert_llm(
+            "mock",
+            UpsertProvider {
+                provider_type: "future-provider".to_owned(),
+                name: "Mock".to_owned(),
+                model_id: Some("model".to_owned()),
+                context_window: Some(128_000),
+                headers: Some(Some(BTreeMap::from([
+                    ("X-Token".to_owned(), "a".to_owned()),
+                    ("x-token".to_owned(), "b".to_owned()),
+                ]))),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let (status, body) = fixture
+        .post(
+            "/refine-prompt",
+            json!({"providerId":"mock", "name":"Morning", "prompt":"Read the news"}),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["refined"], "Mock BrowserOS test response.");
     Ok(())
 }
 

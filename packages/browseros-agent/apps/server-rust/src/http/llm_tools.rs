@@ -111,7 +111,11 @@ pub async fn refine_prompt(
         if row.model_id.as_deref().is_none_or(str::is_empty) {
             return super::errors::success_false(StatusCode::BAD_REQUEST, NO_LLM);
         }
-        config = match config_from_row(&row, config.upstream_provider) {
+        config = match config_from_row(
+            &row,
+            config.upstream_provider,
+            state.config.env.use_mock_llm,
+        ) {
             Ok(config) => config,
             Err(message) => return super::errors::success_false(StatusCode::BAD_REQUEST, &message),
         };
@@ -228,13 +232,17 @@ fn merge_stored_credentials(config: &mut LlmConfig, row: &ProviderRow) {
 fn config_from_row(
     row: &ProviderRow,
     upstream_provider: Option<String>,
+    use_mock_llm: bool,
 ) -> Result<LlmConfig, String> {
     // Kind and provider dialect are independent in the unified store. A stale/unknown LLM
     // type must produce the TS factory error, rather than being mistaken for an ACP agent.
-    let provider = row
-        .provider_type
-        .parse::<ProviderKind>()
-        .map_err(|_| format!("Unknown provider: {}", row.provider_type))?;
+    let provider = match row.provider_type.parse::<ProviderKind>() {
+        Ok(provider) => provider,
+        // TS's mock factory returns before choosing a dialect. The typed placeholder stays
+        // private to this call and is never used to construct a production model.
+        Err(_) if use_mock_llm => ProviderKind::OpenAiCompatible,
+        Err(_) => return Err(format!("Unknown provider: {}", row.provider_type)),
+    };
     let mut config = config_from_body(&json!({
         "provider": row.provider_type, "model": row.model_id,
         "headers": row.headers,
@@ -308,6 +316,23 @@ async fn generate(
             if provider == OAuthProvider::ChatGptPro {
                 config.account_id = credentials.account_id;
                 config.upstream_provider = Some("openai".to_owned());
+            }
+        }
+        if let Some(headers) = &config.headers {
+            let mut issues = Vec::new();
+            validate_headers(&json!(headers), &mut issues);
+            if !issues.is_empty() {
+                // The TS factory validates headers after OAuth, outside the HTTP schema.
+                // Its ZodError is a model failure message, with record-root paths rather
+                // than the request schema's leading `headers` path component.
+                for issue in &mut issues {
+                    issue.path.remove(0);
+                }
+                let issues: Vec<_> = issues
+                    .iter()
+                    .map(super::extract::ZodIssue::wire_value)
+                    .collect();
+                return Err(serde_json::to_string_pretty(&issues).map_err(|e| e.to_string())?);
             }
         }
         llm::create_language_model(&config, &state.http).map_err(|e| e.to_string())?
