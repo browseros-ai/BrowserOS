@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noUndeclaredEnvVars: Standalone compatibility CLIs are never Turbo-cached.
 /** Uses test-ui's CDP inspector on an owned profile, then reports explicit manual evidence for each release journey. */
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
@@ -44,6 +45,28 @@ async function inspect(port: number, args: string[], output: string) {
     return stdout
   } finally {
     clearTimeout(timer)
+  }
+}
+
+function validateReceipt(id: string, receipt: Receipt, evidenceFile?: string) {
+  if (
+    !['PASS', 'FAIL', 'SKIP'].includes(receipt.status) ||
+    typeof receipt.reason !== 'string' ||
+    !receipt.reason.trim()
+  )
+    throw new Error(`Invalid receipt for ${id}`)
+  if (receipt.status === 'PASS') {
+    // A PASS is a human attestation with both observable sides attached, never just a checked box.
+    for (const field of ['uiEvidence', 'serverEvidence'] as const) {
+      const file = receipt[field]
+      const path =
+        file &&
+        (isAbsolute(file)
+          ? file
+          : resolve(dirname(resolve(evidenceFile ?? '.')), file))
+      if (!path || !existsSync(path))
+        throw new Error(`${id} PASS requires an existing ${field} artifact`)
+    }
   }
 }
 
@@ -153,25 +176,7 @@ async function main() {
       status: 'SKIP' as const,
       reason: `Not executed: ${instructions}`,
     }
-    if (
-      !['PASS', 'FAIL', 'SKIP'].includes(receipt.status) ||
-      typeof receipt.reason !== 'string' ||
-      !receipt.reason.trim()
-    )
-      throw new Error(`Invalid receipt for ${id}`)
-    if (receipt.status === 'PASS') {
-      // A PASS is a human attestation with both observable sides attached, never just a checked box.
-      for (const field of ['uiEvidence', 'serverEvidence'] as const) {
-        const file = receipt[field]
-        const path =
-          file &&
-          (isAbsolute(file)
-            ? file
-            : resolve(dirname(resolve(evidenceFile!)), file))
-        if (!path || !existsSync(path))
-          throw new Error(`${id} PASS requires an existing ${field} artifact`)
-      }
-    }
+    validateReceipt(id, receipt, evidenceFile)
     receipts.push({ id, ...receipt })
     console.log(
       `${receipt.status} ${id}: ${receipt.reason}${receipt.status === 'PASS' ? ' (manual evidence)' : ''}`,

@@ -66,7 +66,7 @@ describe('wire oracle', () => {
   test('tests that framing, key order, null and omitted keys remain observable', () => {
     expect(() => parseSse('data: {}\r\n\r\n')).toThrow()
     expect(() => parseSse('data: {}\n\n')).toThrow()
-    expect(() => parseSse('data: { "type":"start"}\n\n' + done)).toThrow()
+    expect(() => parseSse(`data: { "type":"start"}\n\n${done}`)).toThrow()
     expect(
       diffBytes(
         frame({ type: 'text-start', id: 'x' }),

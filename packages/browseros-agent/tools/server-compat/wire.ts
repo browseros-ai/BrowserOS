@@ -62,31 +62,29 @@ export function normalizeSse(
   options: { acp?: boolean } = {},
 ): string {
   const ids = new Ids()
-  return (
-    parseSse(raw)
-      .filter(
-        (chunk) =>
-          !(
-            options.acp &&
-            chunk.type === 'tool-input-error' &&
-            chunk.providerExecuted === true &&
-            chunk.dynamic === true &&
-            chunk.errorText === 'The ACP agent failed to respond.'
-          ),
+  return `${parseSse(raw)
+    .filter(
+      (chunk) =>
+        !(
+          options.acp &&
+          chunk.type === 'tool-input-error' &&
+          chunk.providerExecuted === true &&
+          chunk.dynamic === true &&
+          chunk.errorText === 'The ACP agent failed to respond.'
+        ),
+    )
+    .map((chunk) => {
+      if (chunk.type === 'start') delete chunk.messageId // F8: built-in TS omits the generated assistant id.
+      if (
+        typeof chunk.id === 'string' &&
+        /^(text|reasoning)-/.test(String(chunk.type))
       )
-      .map((chunk) => {
-        if (chunk.type === 'start') delete chunk.messageId // F8: built-in TS omits the generated assistant id.
-        if (
-          typeof chunk.id === 'string' &&
-          /^(text|reasoning)-/.test(String(chunk.type))
-        )
-          chunk.id = ids.id(String(chunk.type).split('-')[0], chunk.id)
-        if (typeof chunk.toolCallId === 'string')
-          chunk.toolCallId = ids.id('tool', chunk.toolCallId)
-        return `data: ${JSON.stringify(chunk)}\n\n`
-      })
-      .join('') + 'data: [DONE]\n\n'
-  )
+        chunk.id = ids.id(String(chunk.type).split('-')[0], chunk.id)
+      if (typeof chunk.toolCallId === 'string')
+        chunk.toolCallId = ids.id('tool', chunk.toolCallId)
+      return `data: ${JSON.stringify(chunk)}\n\n`
+    })
+    .join('')}data: [DONE]\n\n`
 }
 
 export function diffBytes(a: string, b: string): string | null {
@@ -157,6 +155,7 @@ const volatileTimes = new Set([
   'updatedAt',
   'lastUsedAt',
   'lastActiveAt',
+  'lastMessagedAt',
   'startedAt',
   'completedAt',
   'timestamp',

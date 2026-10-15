@@ -1,3 +1,4 @@
+// biome-ignore-all lint/suspicious/noUndeclaredEnvVars: Standalone compatibility CLIs are never Turbo-cached.
 /** Runs identical model transcripts through actual servers and compares POST, replay and persisted output. */
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -247,16 +248,27 @@ async function runScenario(
     throw new Error('Run did not finish with the original identity')
   if ((await jsonRequest(server, '/status')).can_update !== true)
     throw new Error('Finished run still blocks update')
-  const conversation = await jsonRequest(
-    server,
-    `/conversations/${conversationId}`,
+  const persistedResponse = await fetch(
+    `${server.url}/conversations/${conversationId}`,
+    { headers, signal: AbortSignal.timeout(5_000) },
   )
+  const conversation = {
+    status: persistedResponse.status,
+    body: await persistedResponse.json(),
+  }
+  if (
+    persistedResponse.status !== 200 &&
+    !(scenario === 'long-stream' && persistedResponse.status === 404)
+  )
+    throw new Error(`Persisted conversation HTTP ${persistedResponse.status}`)
+  // Current TS cancellation may close before onFinish persists anything. Keep absence in the differential receipt.
   await writeFile(
     join(output, `${session}.conversation.json`),
     JSON.stringify(conversation, null, 2),
   )
   await jsonRequest(server, `/chat/${conversationId}`, 'DELETE')
-  await jsonRequest(server, `/conversations/${conversationId}`, 'DELETE')
+  if (persistedResponse.status === 200)
+    await jsonRequest(server, `/conversations/${conversationId}`, 'DELETE')
   await jsonRequest(server, `/providers/${providerId}`, 'DELETE')
   return {
     post: normalizeSse(raw),
@@ -292,6 +304,12 @@ export async function main() {
               output,
             ),
           )
+          for (let i = 0; i < 100 && fake.activeStreams; i++)
+            await Bun.sleep(20)
+          if (fake.activeStreams)
+            throw new Error(
+              `${scenario}: upstream work survived completion/stop`,
+            )
           console.log(
             `PASS ${index === 0 ? 'A' : 'B'} ${kind} ${scenario}: POST, mid-run replay, SDK, persistence, idle`,
           )

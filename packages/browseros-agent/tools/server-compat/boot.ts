@@ -1,10 +1,12 @@
+// biome-ignore-all lint/suspicious/noUndeclaredEnvVars: Standalone compatibility CLIs are never Turbo-cached.
 /** Owns an isolated server/browser process tree from config creation through bounded, awaited teardown. */
-import { type ChildProcess, spawn } from 'node:child_process'
+import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { createServer } from 'node:net'
 import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { promisify } from 'node:util'
 
 export const workspace = resolve(import.meta.dir, '../..')
 export const trustedOrigin =
@@ -64,20 +66,53 @@ function ownedProcess(
 }
 
 async function terminate(child: ChildProcess, exited: Promise<void>) {
-  if (!child.pid) return
-  const signal = (name: NodeJS.Signals) => {
+  const pid = child.pid
+  if (!pid) return
+  if (process.platform === 'win32') {
+    // taskkill's /T includes owned browser helpers. No image-name or port-wide termination is used.
+    if (child.exitCode === null && child.signalCode === null)
+      await promisify(execFile)('taskkill', ['/PID', String(pid), '/T', '/F'])
+    await exited
+    return
+  }
+  const liveGroup = async () => {
+    const { stdout } = await promisify(execFile)('ps', [
+      '-axo',
+      'pgid=,uid=,stat=',
+    ])
+    const members = stdout
+      .trim()
+      .split('\n')
+      .map((line) => line.trim().split(/\s+/))
+      .filter(
+        ([group, , state]) => Number(group) === pid && !state.startsWith('Z'),
+      )
+    if (members.some(([, uid]) => Number(uid) !== process.getuid?.()))
+      throw new Error(
+        `Owned process group ${pid} contains a different uid; refusing to signal`,
+      )
+    return members.length > 0
+  }
+  const signal = async (name: NodeJS.Signals) => {
+    if (!(await liveGroup())) return
     try {
-      if (process.platform === 'win32') child.kill(name)
-      else process.kill(-child.pid!, name)
+      process.kill(-pid, name)
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
+      const code = (error as NodeJS.ErrnoException).code
+      // Darwin can return EPERM when the last live member exits between ps and kill (zombies remain).
+      if (code !== 'ESRCH' && !(code === 'EPERM' && !(await liveGroup())))
+        throw error
     }
   }
-  signal('SIGTERM')
+  await signal('SIGTERM')
   await Promise.race([exited, Bun.sleep(3_000)])
-  // The group may still hold browser helpers even if its leader has exited.
-  signal('SIGKILL')
+  await signal('SIGKILL')
   await exited
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (!(await liveGroup())) return
+    await Bun.sleep(20)
+  }
+  throw new Error(`Owned process group ${pid} survived teardown`)
 }
 
 async function waitReady(
