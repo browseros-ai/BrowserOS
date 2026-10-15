@@ -22,7 +22,7 @@ use crate::client::Question;
 use crate::offer::{Destination, NamedValue, OpenTab};
 use crate::space::{ActionSpace, NONE_OF_THESE};
 use crate::view::PageView;
-use crate::vocabulary::{self, Direction, How, Operation, PRESS_KEYS, STATES};
+use crate::vocabulary::{self, Direction, How, Operation, PRESS_KEYS, STATES, Telling};
 
 /// How many destinations one question may offer.
 ///
@@ -43,6 +43,7 @@ pub const TAB: &str = "tab";
 pub const PRESS_KEY: &str = "press_key";
 pub const STATE_WHAT: &str = "state_what";
 pub const GOAL_MET: &str = "goal_met";
+pub const REPORT_HOW: &str = "report_how";
 
 /// Roles each way of acting can aim at. Narrowing a head's options is both
 /// cheaper, since every head repeats its list as input tokens, and more honest,
@@ -144,6 +145,26 @@ pub fn state(view: &PageView, space: &ActionSpace, recent: &[String], retired: u
 /// A move with nothing to aim at is left out rather than offered and refused,
 /// since an option that cannot be acted on still competes for the answer.
 #[must_use]
+/// Which ways of reporting this browser can actually carry out.
+///
+/// A peer that does not ship `grep` should get a working loop with matching
+/// left out rather than an option it cannot run, which is the same rule that
+/// governs the operation head. Counting reads the page and counts in code, so
+/// it needs `read` rather than `grep`.
+#[must_use]
+pub fn tellings(surface: Surface<'_>) -> Vec<Telling> {
+    let mut tellings = Vec::new();
+    if !surface.unavailable.contains(&Operation::Read) {
+        tellings.push(Telling::Text);
+        tellings.push(Telling::HowMany);
+    }
+    if !surface.unavailable.contains(&Operation::Grep) {
+        tellings.push(Telling::Matching);
+    }
+    tellings.sort_unstable();
+    tellings
+}
+
 pub fn available(space: &ActionSpace, view: &PageView, surface: Surface<'_>) -> Vec<Operation> {
     // SNAPSHOT is not here, and that is deliberate. The loop observes a settled
     // page at the top of every iteration, so choosing to look again costs a
@@ -157,16 +178,19 @@ pub fn available(space: &ActionSpace, view: &PageView, surface: Surface<'_>) -> 
     // defensible, but no errand in the measured set reached for it. It stays
     // implemented and unoffered, which is what the vocabulary does with any
     // move the browser cannot perform.
+    // One REPORT rather than READ, GREP, COUNT and SCREENSHOT. Four near
+    // synonyms divided one probability mass four ways, so no report ever led by
+    // the margin it needed and an informational goal had no way to end. Which
+    // of them to hand back is `report_how`, read only when REPORT wins.
     let mut moves = vec![
         Operation::Done,
         Operation::Blocked,
         Operation::Wait,
         Operation::Reload,
-        Operation::Read,
-        Operation::Grep,
-        Operation::Count,
-        Operation::Screenshot,
     ];
+    if !tellings(surface).is_empty() {
+        moves.push(Operation::Report);
+    }
     if !space.offered.is_empty() {
         moves.push(Operation::Act);
         moves.push(Operation::CheckState);
@@ -296,6 +320,27 @@ pub fn build(
             })),
         },
     );
+
+    // Asked only when there is a choice to make. A one-option Choice is not a
+    // judgement, and with nothing asked the loop reads the page, which is the
+    // one way of reporting that needs nothing chosen.
+    let tellings = tellings(surface);
+    if moves.contains(&Operation::Report) && tellings.len() >= 2 {
+        questions.insert(
+            REPORT_HOW.to_string(),
+            Question::Choice {
+                instructions: ask(
+                    goal,
+                    "Assume the next move hands something about this page back to the caller. \
+                     What should it hand back?",
+                ),
+                criteria: tellings
+                    .iter()
+                    .map(|telling| (telling.as_str().to_string(), json!(telling.description())))
+                    .collect(),
+            },
+        );
+    }
 
     if moves.contains(&Operation::Act) && ways.len() >= 2 {
         questions.insert(
@@ -565,7 +610,7 @@ mod tests {
         let space = space_for(&view, "how many points does the top story have");
         let moves = available(&space, &view, Surface::default());
 
-        assert!(moves.contains(&Operation::Read), "{moves:?}");
+        assert!(moves.contains(&Operation::Report), "{moves:?}");
         assert!(!moves.contains(&Operation::Act), "nothing to act on");
     }
 
@@ -582,9 +627,14 @@ mod tests {
         assert!(!moves.contains(&Operation::Grep));
         assert!(!moves.contains(&Operation::Evaluate));
         assert!(
-            moves.contains(&Operation::Read),
+            moves.contains(&Operation::Report),
             "the rest of the loop still works"
         );
+        // Reporting survives without grep, and matching does not: the way of
+        // reporting the browser cannot carry out is the one withheld.
+        let offered = tellings(surface);
+        assert!(!offered.contains(&Telling::Matching));
+        assert!(offered.contains(&Telling::Text));
     }
 
     #[test]

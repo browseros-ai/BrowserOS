@@ -8,11 +8,11 @@
 
 use crate::client::Response;
 use crate::questions::{
-    ACT_HOW, DESTINATION, DIRECTION, FILL_VALUE, GOAL_MET, OPERATION, PRESS_KEY, SELECT_VALUE,
-    STATE_WHAT, TAB, TARGET,
+    ACT_HOW, DESTINATION, DIRECTION, FILL_VALUE, GOAL_MET, OPERATION, PRESS_KEY, REPORT_HOW,
+    SELECT_VALUE, STATE_WHAT, TAB, TARGET,
 };
 use crate::space::{ActionSpace, NONE_OF_THESE};
-use crate::vocabulary::{Consequence, Direction, How, Operation};
+use crate::vocabulary::{Consequence, Direction, How, Operation, Telling};
 
 /// No share below this acts, whatever its margin.
 ///
@@ -129,6 +129,9 @@ pub struct Decision {
     /// The key, for a press.
     pub key: Option<String>,
     pub key_lead: Option<Lead>,
+    /// What to hand back, for [`Operation::Report`].
+    pub telling: Option<Telling>,
+    pub telling_lead: Option<Lead>,
     /// Which way to scroll.
     pub direction: Option<Direction>,
     /// Which state a check asks about.
@@ -154,6 +157,7 @@ pub struct Decision {
 pub enum Weakest {
     Operation,
     How,
+    Telling,
     Target,
     Key,
     Value,
@@ -165,6 +169,7 @@ impl Weakest {
         match self {
             Self::Operation => "which move to make",
             Self::How => "how to act on it",
+            Self::Telling => "what to hand back",
             Self::Target => "which control to use it on",
             Self::Key => "which key to press",
             Self::Value => "which value to type",
@@ -198,6 +203,8 @@ impl Decision {
             value_lead: None,
             key: None,
             key_lead: None,
+            telling: None,
+            telling_lead: None,
             direction: Some(Direction::Down),
             state: None,
             none_of_these: false,
@@ -235,6 +242,11 @@ impl Decision {
         // picking the wrong box.
         if self.operation == Operation::Act && self.how_lead.is_some() {
             judgements.push((Weakest::How, self.how_lead.unwrap_or_default()));
+        }
+        if self.operation == Operation::Report
+            && let Some(lead) = self.telling_lead
+        {
+            judgements.push((Weakest::Telling, lead));
         }
         if self.needs_target() {
             judgements.push((Weakest::Target, self.target_lead.unwrap_or_default()));
@@ -349,6 +361,8 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
         value_lead: None,
         key: None,
         key_lead: None,
+        telling: None,
+        telling_lead: None,
         direction: None,
         state: None,
         none_of_these: false,
@@ -359,6 +373,16 @@ pub fn read(response: &Response) -> Result<Decision, ReadError> {
         input_tokens: response.usage.input_tokens,
     };
 
+    // A report aims at nothing on the page, so no target is read for it. What it
+    // hands back is the second question, exactly as how-to-act is the second
+    // question for ACT.
+    if operation == Operation::Report {
+        if let Some((named, _)) = chosen(response, REPORT_HOW) {
+            decision.telling = Telling::parse(named);
+            decision.telling_lead = Some(lead(response, REPORT_HOW));
+        }
+        return Ok(decision);
+    }
     if operation == Operation::Act {
         // A page with one way of acting has no how question in the request,
         // because a one-option Choice is not a judgement.

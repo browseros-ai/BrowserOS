@@ -18,7 +18,7 @@ use crate::run::{Budget, DECLINE_LIMIT, NAVIGATION_LIMIT, Run, STALL_LIMIT, WAIT
 use crate::space::ActionSpace;
 use crate::space::Candidate;
 use crate::view::PageView;
-use crate::vocabulary::{How, Operation};
+use crate::vocabulary::{How, Operation, Telling};
 
 /// Where a decision comes from.
 ///
@@ -756,6 +756,14 @@ fn resolve(decision: &Decision, run: &Run, supplied: &Option<String>) -> Option<
         }
         Operation::Snapshot => Some(Move::Resnapshot),
         Operation::Wait => Some(Move::Settle),
+        // A report with no second answer reads the page, because that is the
+        // one of the three that needs nothing chosen and cannot be wrong about
+        // what it was asked for.
+        Operation::Report => Some(Move::Report(match decision.telling {
+            Some(Telling::Matching) => Ask::Grep(pattern_for(&run.goal)),
+            Some(Telling::HowMany) => Ask::Count(pattern_for(&run.goal)),
+            Some(Telling::Text) | None => Ask::Read,
+        })),
         Operation::Read => Some(Move::Report(Ask::Read)),
         Operation::Grep => Some(Move::Report(Ask::Grep(pattern_for(&run.goal)))),
         Operation::Count => Some(Move::Report(Ask::Count(pattern_for(&run.goal)))),

@@ -173,6 +173,12 @@ impl Fake {
         self
     }
 
+    /// A browser that does not ship a tool, which a peer legitimately may not.
+    fn without(mut self, tools: &[Operation]) -> Self {
+        self.missing = tools.to_vec();
+        self
+    }
+
     fn swallowing(mut self, references: &[&str]) -> Self {
         self.inert = references.iter().map(|r| (*r).to_string()).collect();
         self
@@ -1138,4 +1144,109 @@ async fn a_decision_that_ran_is_on_the_record_as_having_run() {
         ran[0].why.is_none(),
         "nothing to explain about a move that ran"
     );
+}
+
+/// The OpenAI docs case. A run was sent to read a guide, arrived at exactly
+/// the right page, and could not end: READ, GREP, COUNT and SCREENSHOT were
+/// four near synonyms on one head, so no report led by the margin it needed.
+/// Asked in as many words to "read back this guide", it declined three times
+/// and returned not_confident with no answer, and the caller read the page
+/// itself on its next call.
+///
+/// One REPORT competes with WAIT, RELOAD, DONE and BLOCKED rather than with
+/// three siblings that mean nearly the same thing.
+#[tokio::test]
+async fn an_informational_goal_can_end_by_reporting() {
+    let view = page(
+        "https://example.test/guides/secure-mcp-tunnel",
+        1,
+        vec![control("e1", "link", "Back to guides")],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![vec![
+        ("operation", spread("REPORT", 0.62, 0.11)),
+        ("report_how", spread("TEXT", 0.80, 0.12)),
+    ]]);
+
+    let outcome = advance(&oracle, &driver, run_for("read back how the tunnel works")).await;
+
+    assert_eq!(outcome.status, Status::Answered);
+    let answer = outcome.answer.expect("a report hands something back");
+    assert_eq!(answer.asked, "read");
+    assert!(answer.text.is_some(), "and the text travels with it");
+
+    let heads = oracle.heads_asked();
+    assert!(
+        heads[0].contains(&"report_how".to_string()),
+        "the second question is asked, got {:?}",
+        heads[0]
+    );
+    assert!(
+        !heads[0].contains(&"target".to_string()) || outcome.decided[0].target.is_none(),
+        "a report aims at nothing on the page"
+    );
+}
+
+/// Which of the three to hand back is a judgement like any other, so it is
+/// gated like any other: a report whose second head is a coin flip is not run.
+#[tokio::test]
+async fn a_report_that_cannot_say_what_to_hand_back_is_not_run() {
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![control("e1", "link", "Something")],
+    );
+    let driver = Fake::new(view);
+    let coin_flip = || {
+        vec![
+            ("operation", spread("REPORT", 0.90, 0.02)),
+            ("report_how", spread("MATCHING", 0.34, 0.33)),
+        ]
+    };
+    let oracle = Scripted::new(vec![coin_flip(), coin_flip(), coin_flip()]);
+
+    let outcome = advance(&oracle, &driver, run_for("find out the price")).await;
+
+    assert_eq!(outcome.status, Status::Stalled(Stuck::NotConfident));
+    assert_eq!(
+        outcome.decided[0].weakest,
+        Some("what to hand back"),
+        "and it says which judgement it was"
+    );
+}
+
+/// A run whose browser has no grep is offered no way to match, and reporting
+/// still works. The rule is the operation head's rule applied one level down:
+/// an option that cannot be carried out still competes for the answer.
+#[tokio::test]
+async fn a_browser_without_grep_is_offered_no_way_to_match() {
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![control("e1", "link", "Something")],
+    );
+    let driver = Fake::new(view).without(&[Operation::Grep]);
+    let oracle = Scripted::new(vec![vec![
+        ("operation", spread("REPORT", 0.70, 0.08)),
+        ("report_how", spread("TEXT", 0.80, 0.10)),
+    ]]);
+    let run = run_for("read the page").offering(Offered {
+        unavailable: vec![Operation::Grep],
+        ..Offered::default()
+    });
+
+    let outcome = advance(&oracle, &driver, run).await;
+
+    assert_eq!(outcome.status, Status::Answered);
+    assert_eq!(outcome.answer.expect("something came back").asked, "read");
+
+    let offered = browseros_decide::questions::tellings(browseros_decide::questions::Surface {
+        unavailable: &[Operation::Grep],
+        ..Default::default()
+    });
+    assert!(
+        !offered.contains(&browseros_decide::vocabulary::Telling::Matching),
+        "matching needs grep, got {offered:?}"
+    );
+    assert!(offered.contains(&browseros_decide::vocabulary::Telling::Text));
 }

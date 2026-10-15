@@ -38,6 +38,17 @@ pub enum Operation {
     Wait,
 
     // These produce something only the caller can use. The run ends.
+    /// Hand something about this page back to the caller, and end the run.
+    ///
+    /// One option rather than four. READ, GREP, COUNT and SCREENSHOT are near
+    /// synonyms for any goal phrased "find out", "read back" or "explain", so
+    /// they divided one probability mass four ways and none of them led by the
+    /// margin a report needs. Measured on a live page: READ and GREP tied at
+    /// 0.16 while WAIT and BLOCKED took 0.22 and 0.21, a margin of 0.01, and
+    /// the decision was declined. ACT on that same page won its own head at
+    /// 0.98, because it does not compete with its own siblings; which way to
+    /// act is a second question. This is that shape, applied to reporting.
+    Report,
     /// Hand the page's text back.
     Read,
     /// Hand back the lines matching what the goal asks about.
@@ -81,6 +92,62 @@ pub enum How {
     /// reach.
     Press,
     Scroll,
+}
+
+/// What [`Operation::Report`] hands back. The second head, read only when
+/// REPORT wins.
+///
+/// A picture is not here. The screenshot path runs the tool and discards its
+/// result, so it hands back a claim that a picture was taken and no picture; an
+/// option that cannot deliver still competes for the answer, which is the same
+/// rule that keeps EVALUATE unoffered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Telling {
+    /// The page's text.
+    Text,
+    /// Only the lines that match what the goal asks about.
+    Matching,
+    /// How many things match, counted in code.
+    HowMany,
+}
+
+impl Telling {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Text => "TEXT",
+            Self::Matching => "MATCHING",
+            Self::HowMany => "HOW_MANY",
+        }
+    }
+
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        Some(match value {
+            "TEXT" => Self::Text,
+            "MATCHING" => Self::Matching,
+            "HOW_MANY" => Self::HowMany,
+            _ => return None,
+        })
+    }
+
+    #[must_use]
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::Text => {
+                "The whole of this page's text. Choose this when the goal asks to read, explain \
+                 or describe what is on the page."
+            }
+            Self::Matching => {
+                "Only the lines of this page that mention what the goal asks about. Choose this \
+                 when the goal asks for one particular fact out of a long page."
+            }
+            Self::HowMany => {
+                "How many things on this page match what the goal describes, counted rather than \
+                 estimated."
+            }
+        }
+    }
 }
 
 /// Which way [`How::Scroll`] scrolls.
@@ -193,6 +260,7 @@ impl Operation {
             Self::Tabs => "TABS",
             Self::Snapshot => "SNAPSHOT",
             Self::Wait => "WAIT",
+            Self::Report => "REPORT",
             Self::Read => "READ",
             Self::Grep => "GREP",
             Self::Count => "COUNT",
@@ -216,6 +284,7 @@ impl Operation {
             "TABS" => Self::Tabs,
             "SNAPSHOT" => Self::Snapshot,
             "WAIT" => Self::Wait,
+            "REPORT" => Self::Report,
             "READ" => Self::Read,
             "GREP" => Self::Grep,
             "COUNT" => Self::Count,
@@ -255,6 +324,12 @@ impl Operation {
             Self::Wait => {
                 "Wait for the page to finish updating. Choose this only if nothing else can \
                  progress."
+            }
+            Self::Report => {
+                "Hand something about this page back to the caller: its text, the lines matching \
+                 what the goal asks about, or a count of them. Choose this when the goal asks to \
+                 find out, read, explain, check or count something, and what it asks about is on \
+                 this page. A second question asks which of those to hand back."
             }
             Self::Read => {
                 "Read this page's text and hand it to the caller. Choose this when the goal asks \
@@ -302,7 +377,8 @@ impl Operation {
     pub fn is_report(self) -> bool {
         matches!(
             self,
-            Self::Read
+            Self::Report
+                | Self::Read
                 | Self::Grep
                 | Self::Count
                 | Self::CheckState
