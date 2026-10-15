@@ -158,7 +158,13 @@ impl ToolSource for FilesystemTools {
     ) -> Result<ToolOutput, ToolCallError> {
         let input = Input(input);
         let result = match (self.scope.as_ref(), name) {
-            (FsScope::Workspace(cwd), "filesystem_bash") => bash::run(cwd, &input, cancel).await,
+            (FsScope::Workspace(cwd), "filesystem_bash") => {
+                let result = bash::run(cwd, &input, cancel.clone()).await;
+                if cancel.is_cancelled() {
+                    return Err(ToolCallError("Tool call cancelled".to_owned()));
+                }
+                result
+            }
             (FsScope::Workspace(_), "filesystem_read" | "filesystem_write" | "filesystem_edit")
             | (FsScope::Workspace(_), "filesystem_grep" | "filesystem_find" | "filesystem_ls")
             | (FsScope::OutputOnly(_), "filesystem_read") => {

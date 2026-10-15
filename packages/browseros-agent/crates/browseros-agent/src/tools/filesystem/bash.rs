@@ -6,7 +6,12 @@ use super::{
     FsResult, Input,
     util::{DEFAULT_BASH_TIMEOUT, js_number, or_default, truncate_tail},
 };
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{
+    path::Path,
+    process::Stdio,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 use tokio::io::AsyncReadExt;
 use tokio_util::sync::CancellationToken;
 
@@ -43,10 +48,10 @@ pub(super) async fn run(cwd: &Path, input: &Input, cancel: CancellationToken) ->
         .spawn()
         .map_err(|error| error.to_string())?;
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let read_stdout = tokio::spawn(read_all(stdout));
-    let read_stderr = tokio::spawn(read_all(stderr));
+    let stdout = Captured::default();
+    let stderr = Captured::default();
+    let read_stdout = tokio::spawn(capture(child.stdout.take(), stdout.clone()));
+    let read_stderr = tokio::spawn(capture(child.stderr.take(), stderr.clone()));
 
     let timeout = Duration::from_secs_f64(timeout_seconds.max(0.0));
     let mut timed_out = false;
@@ -61,21 +66,17 @@ pub(super) async fn run(cwd: &Path, input: &Input, cancel: CancellationToken) ->
         }
     };
 
-    let (stdout_text, stderr_text) = if timed_out {
-        let drained = tokio::time::timeout(DRAIN_AFTER_KILL, async {
-            (read_stdout.await, read_stderr.await)
-        })
-        .await;
-        match drained {
-            Ok((out, err)) => (out.unwrap_or_default(), err.unwrap_or_default()),
-            Err(_) => (String::new(), String::new()),
-        }
-    } else {
-        (
-            read_stdout.await.unwrap_or_default(),
-            read_stderr.await.unwrap_or_default(),
-        )
+    let drained = async {
+        let _ = read_stdout.await;
+        let _ = read_stderr.await;
     };
+    if timed_out {
+        // Keep what was read so far even if the pipes never close.
+        let _ = tokio::time::timeout(DRAIN_AFTER_KILL, drained).await;
+    } else {
+        drained.await;
+    }
+    let (stdout_text, stderr_text) = (stdout.text(), stderr.text());
 
     let mut output = stdout_text;
     if !stderr_text.is_empty() {
@@ -129,11 +130,30 @@ fn exit_code(status: std::process::ExitStatus) -> i32 {
     1
 }
 
-async fn read_all<R: tokio::io::AsyncRead + Unpin>(reader: Option<R>) -> String {
+/// Output read so far; shared with the reader task so a timed-out call still reports it.
+#[derive(Clone, Default)]
+struct Captured(Arc<Mutex<Vec<u8>>>);
+
+impl Captured {
+    fn text(&self) -> String {
+        self.0
+            .lock()
+            .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
+            .unwrap_or_default()
+    }
+}
+
+async fn capture<R: tokio::io::AsyncRead + Unpin>(reader: Option<R>, into: Captured) {
     let Some(mut reader) = reader else {
-        return String::new();
+        return;
     };
-    let mut bytes = Vec::new();
-    let _ = reader.read_to_end(&mut bytes).await;
-    String::from_utf8_lossy(&bytes).into_owned()
+    let mut chunk = [0u8; 8192];
+    while let Ok(read) = reader.read(&mut chunk).await {
+        if read == 0 {
+            break;
+        }
+        if let Ok(mut bytes) = into.0.lock() {
+            bytes.extend_from_slice(&chunk[..read]);
+        }
+    }
 }
