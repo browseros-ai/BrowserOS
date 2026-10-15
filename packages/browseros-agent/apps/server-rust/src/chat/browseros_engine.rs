@@ -30,7 +30,10 @@ use crate::{
 };
 use browseros_agent::{
     Agent, AgentBuildError, AgentConfig, TurnInput,
-    llm::{self, ChatError, HttpStack, LanguageModel, LlmConfig, LlmConfigError, ModelError},
+    llm::{
+        self, HttpStack, LanguageModel, LlmConfig, LlmConfigError, ModelError, ModelRequest,
+        ModelStream, ProviderKind,
+    },
     prompt::{self, BrowserContextView, PromptInputs, SessionInputs, TabView},
     tools::{self, FsScope, McpEndpoint, McpTransport, OutputGrants, SourceSpec, ToolSource},
 };
@@ -45,6 +48,7 @@ use std::{
     },
     task::{Context, Poll},
 };
+use tokio_util::sync::CancellationToken;
 use ui_message_stream::{ChunkStream, Role, UiChunk, UiMessage, UiPart};
 use uuid::Uuid;
 
@@ -61,16 +65,44 @@ const SCHEDULED_PAGE_TITLE: &str = "Scheduled Task";
 pub type ModelFactory =
     Arc<dyn Fn(&LlmConfig) -> Result<Arc<dyn LanguageModel>, LlmConfigError> + Send + Sync>;
 
-/// The production model factory. `BROWSEROS_USE_MOCK_LLM=true` swaps every model for
+/// The production model factory. With `BROWSEROS_USE_MOCK_LLM=true`, every model answers like
 /// `ScriptedModel::mock()`.
 pub fn production_models(http: HttpStack, use_mock_llm: bool) -> ModelFactory {
     Arc::new(move |config: &LlmConfig| {
         if use_mock_llm {
-            Ok(Arc::new(llm::ScriptedModel::mock()) as Arc<dyn LanguageModel>)
+            Ok(Arc::new(RepeatingMock(llm::ScriptedModel::mock())) as Arc<dyn LanguageModel>)
         } else {
             llm::create_language_model(config, &http)
         }
     })
+}
+
+/// The mock LLM. TS `mock-language-model.ts` answers every call. A `ScriptedModel` runs out after
+/// its one step, but a cached session calls its model at least once per turn, so each call here
+/// replays a fresh mock.
+struct RepeatingMock(llm::ScriptedModel);
+
+#[async_trait::async_trait]
+impl LanguageModel for RepeatingMock {
+    fn provider(&self) -> ProviderKind {
+        self.0.provider()
+    }
+
+    fn model_id(&self) -> &str {
+        self.0.model_id()
+    }
+
+    fn supports_media_in_tool_results(&self) -> bool {
+        self.0.supports_media_in_tool_results()
+    }
+
+    async fn stream(
+        &self,
+        request: ModelRequest,
+        cancel: CancellationToken,
+    ) -> Result<ModelStream, ModelError> {
+        llm::ScriptedModel::mock().stream(request, cancel).await
+    }
 }
 
 /// The live Klavis/Strata proxy state name (`klavis.getProxyStatus().state`). `None` means no
@@ -260,9 +292,10 @@ impl ChatEngine for BrowserOsEngine {
         // future can be dropped (e.g. the POST connection closes mid-prepare). That must not strand
         // a minted lease, an open background page or a half-replaced session.
         let inner = self.inner.clone();
-        tokio::spawn(async move { inner.prepare(turn).await })
-            .await
-            .unwrap_or_else(|error| Err(prepare_error(format!("turn preparation failed: {error}"))))
+        match tokio::spawn(async move { inner.prepare(turn).await }).await {
+            Ok(prepared) => prepared.map_err(ChatRejection::from),
+            Err(error) => Err(PrepareError(format!("turn preparation failed: {error}")).into()),
+        }
     }
 
     async fn forget(&self, conversation_id: Uuid) -> bool {
@@ -313,7 +346,7 @@ impl Inner {
     }
 
     /// Phase 1 of a turn (TS `processBrowserOsMessage` up to `createAgentUIStream`).
-    async fn prepare(self: Arc<Self>, turn: Turn) -> Result<ChunkStream, ChatRejection> {
+    async fn prepare(self: Arc<Self>, turn: Turn) -> Result<ChunkStream, PrepareError> {
         let Turn {
             conversation_id,
             run,
@@ -323,7 +356,7 @@ impl Inner {
             browser_context,
         } = turn;
         let TurnTarget::BrowserOs(llm) = target else {
-            return Err(prepare_error(
+            return Err(PrepareError(
                 "the built-in engine was given an ACP target".to_owned(),
             ));
         };
@@ -347,7 +380,7 @@ impl Inner {
         // before the old session is replaced.
         let mut notices = Vec::new();
         if guard.as_ref().is_some_and(|session| session.inputs != next)
-            && let Some(old) = self.take(&mut *guard)
+            && let Some(old) = self.take(&mut guard)
         {
             notices = prompt::context_notices(&old.inputs, &next);
             tracing::info!(
@@ -375,7 +408,7 @@ impl Inner {
                     page,
                 )
                 .await?;
-            self.put(&mut *guard, session);
+            self.put(&mut guard, session);
         }
 
         if guard.is_none() {
@@ -396,10 +429,10 @@ impl Inner {
                     page,
                 )
                 .await?;
-            self.put(&mut *guard, session);
+            self.put(&mut guard, session);
         }
         let Some(session) = guard.as_mut() else {
-            return Err(prepare_error("built-in session is missing".to_owned()));
+            return Err(PrepareError("built-in session is missing".to_owned()));
         };
 
         // Scheduled pages already carry MCP page ids from `open_background`. Re-resolving would
@@ -483,10 +516,10 @@ impl Inner {
         inputs: SessionInputs,
         context: TurnContext,
         scheduled_page: PageSlot,
-    ) -> Result<Session, ChatRejection> {
+    ) -> Result<Session, PrepareError> {
         let built = async {
-            let model = (self.deps.models)(&llm.config)
-                .map_err(|error| prepare_error(error.to_string()))?;
+            let model =
+                (self.deps.models)(&llm.config).map_err(|error| PrepareError(error.to_string()))?;
             let lease = self
                 .deps
                 .leases
@@ -500,7 +533,7 @@ impl Inner {
                     browser_context: context.raw.clone(),
                 })
                 .await
-                .map_err(|error| prepare_error(error.to_string()))?;
+                .map_err(|error| PrepareError(error.to_string()))?;
             match self
                 .build_agent(model, llm, request, &context, lease.as_ref())
                 .await
@@ -549,7 +582,7 @@ impl Inner {
         request: &ChatTurnRequest,
         context: &TurnContext,
         lease: &dyn SessionLease,
-    ) -> Result<Agent, ChatRejection> {
+    ) -> Result<Agent, PrepareError> {
         let chat_mode = request.mode == ChatMode::Chat;
         let internal = tools::connect_mcp(internal_mcp_endpoint(
             self.deps.mcp_port,
@@ -559,7 +592,7 @@ impl Inner {
         .await
         .map_err(|error| {
             tracing::warn!(error = %error, "failed to connect required MCP client");
-            prepare_error(
+            PrepareError(
                 AgentBuildError::RequiredSourceUnavailable(INTERNAL_MCP_LABEL.to_owned())
                     .to_string(),
             )
@@ -620,7 +653,7 @@ impl Inner {
             max_steps: MAX_STEPS,
         })
         .await
-        .map_err(|error| prepare_error(error.to_string()))
+        .map_err(|error| PrepareError(error.to_string()))
     }
 }
 
@@ -638,14 +671,14 @@ fn internal_mcp_endpoint(
     port: u16,
     lease_token: &str,
     read_only: bool,
-) -> Result<McpEndpoint, ChatRejection> {
+) -> Result<McpEndpoint, PrepareError> {
     let query = if read_only {
         "structured=1&read_only=1"
     } else {
         "structured=1"
     };
     let url = url::Url::parse(&format!("http://127.0.0.1:{port}/mcp?{query}"))
-        .map_err(|error| prepare_error(format!("invalid loopback MCP URL: {error}")))?;
+        .map_err(|error| PrepareError(format!("invalid loopback MCP URL: {error}")))?;
     Ok(McpEndpoint {
         label: INTERNAL_MCP_LABEL.to_owned(),
         url,
@@ -905,11 +938,15 @@ fn close_page_later(pages: Arc<dyn BackgroundPages>, page_id: u32, conversation_
     });
 }
 
-/// A pre-stream failure as the 500 chat envelope. TS throws a plain `Error`, and the app's
-/// `onError` classifies it by message without a provider.
-fn prepare_error(message: String) -> ChatRejection {
-    let error: ChatError = llm::to_chat_error(&ModelError::Config(message), None);
-    ChatRejection::Internal(error)
+/// A pre-stream failure. It stays small inside the engine and becomes the 500 chat envelope once,
+/// at the seam. TS throws a plain `Error` there, and the app's `onError` classifies it by message
+/// without a provider.
+struct PrepareError(String);
+
+impl From<PrepareError> for ChatRejection {
+    fn from(error: PrepareError) -> Self {
+        ChatRejection::Internal(llm::to_chat_error(&ModelError::Config(error.0), None))
+    }
 }
 
 #[cfg(test)]
@@ -937,7 +974,7 @@ mod tests {
 
     #[test]
     fn internal_endpoint_carries_lease_and_read_only_query() -> Result<(), String> {
-        let endpoint = internal_mcp_endpoint(9100, "tok", false).map_err(|e| e.to_string())?;
+        let endpoint = internal_mcp_endpoint(9100, "tok", false).map_err(|e| e.0)?;
         assert_eq!(
             endpoint.url.as_str(),
             "http://127.0.0.1:9100/mcp?structured=1"
@@ -947,7 +984,7 @@ mod tests {
             vec![(LEASE_HEADER.to_owned(), "tok".to_owned())]
         );
         assert_eq!(endpoint.transport, McpTransport::StreamableHttp);
-        let read_only = internal_mcp_endpoint(9100, "tok", true).map_err(|e| e.to_string())?;
+        let read_only = internal_mcp_endpoint(9100, "tok", true).map_err(|e| e.0)?;
         assert_eq!(
             read_only.url.as_str(),
             "http://127.0.0.1:9100/mcp?structured=1&read_only=1"
@@ -1090,6 +1127,45 @@ mod tests {
             }),
             "ready"
         );
+    }
+
+    #[tokio::test]
+    async fn mock_llm_answers_every_call() -> Result<(), String> {
+        let config = LlmConfig {
+            provider: ProviderKind::OpenAi,
+            model: "gpt".to_owned(),
+            api_key: None,
+            base_url: None,
+            headers: None,
+            resource_name: None,
+            region: None,
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            account_id: None,
+            upstream_provider: None,
+            conversation_id: String::new(),
+        };
+        let model = production_models(HttpStack::new(), true)(&config).map_err(|e| e.0)?;
+        for _ in 0..3 {
+            let request = ModelRequest {
+                system: None,
+                messages: Vec::new(),
+                tools: Vec::new(),
+                options: llm::ProviderOptions::default(),
+            };
+            let events = model
+                .stream(request, CancellationToken::new())
+                .await
+                .map_err(|e| e.to_string())?;
+            let events = futures_util::StreamExt::collect::<Vec<_>>(events).await;
+            assert!(events.iter().all(Result::is_ok));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                Ok(llm::ModelEvent::TextDelta { delta, .. }) if delta == "Mock BrowserOS test response."
+            )));
+        }
+        Ok(())
     }
 
     #[tokio::test]
