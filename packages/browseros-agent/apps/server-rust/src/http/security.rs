@@ -171,7 +171,7 @@ pub async fn ingress(State(state): State<AppState>, mut request: Request, next: 
         errors::forbidden_browser_request()
     } else {
         let activity = (request.method() == Method::POST && request.uri().path() == "/mcp")
-            .then(|| state.activity.mcp_post_started_owned());
+            .then(|| state.activity.reserve());
         let response = next.run(request).await;
         if let Some(activity) = activity {
             let (parts, body) = response.into_parts();

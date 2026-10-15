@@ -547,7 +547,8 @@ async fn the_app_admits_its_own_leases_on_a_bound_session() -> Result {
     );
     assert!(
         state
-            .host
+            .mcp
+            .host()
             .sessions()
             .lookup(&browseros_mcp_host::ids::SessionId::new(format!(
                 "bound-{conversation}"

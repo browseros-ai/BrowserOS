@@ -26,7 +26,7 @@ use crate::{
 use axum::{Router, middleware, routing::MethodFilter};
 use browseros_agent::llm::HttpStack;
 use browseros_core::NativeCapabilities;
-use browseros_mcp_host::{HostCtx, HostError};
+use browseros_mcp_host::HostError;
 use std::{ops::Deref, sync::Arc, time::Duration};
 use tokio_util::sync::CancellationToken;
 
@@ -45,7 +45,6 @@ pub struct AppInner {
     pub paths: BrowserosPaths,
     pub identity: Identity,
     pub activity: Arc<ServerActivity>,
-    pub db: Database,
     pub providers: db::ProviderStore,
     pub agents: db::AgentStore,
     pub conversations: db::ConversationStore,
@@ -54,18 +53,17 @@ pub struct AppInner {
     pub klavis: Arc<Klavis>,
     pub mcp_manager: McpManagerService,
     pub leases: Arc<ToolLeases>,
-    /// The shared MCP host behind `/mcp`; also the process's browser (CDP) connection.
-    pub host: Arc<HostCtx>,
+    /// `/mcp`: the shared MCP host, which is also the process's browser (CDP) connection.
     pub mcp: Arc<McpServer>,
-    pub runs: Arc<ConversationRuns>,
     pub chat: Arc<ChatService>,
     /// Concrete (not `dyn ChatEngine`): `/agents` needs `close_all_for_agent`.
     pub acp: Arc<AcpEngine>,
     pub http: HttpStack,
     /// PostHog sink (disabled without an install id or a build-time key); flushed by `stop`.
     pub metrics: Metrics,
-    /// The process root's one Sentry client. Shared, never re-initialized here, so startup and
-    /// scheduled-turn captures go through the same redacting client the panic hook uses.
+    /// The process root's one Sentry client. Shared, never re-initialized here, so startup,
+    /// route-error and scheduled-turn captures go through the same redacting client the panic
+    /// hook uses.
     pub sentry: Arc<SentryGuard>,
     pub shutdown: ShutdownSignal,
 }
@@ -209,14 +207,11 @@ impl AppState {
             paths,
             identity,
             activity,
-            db,
             oauth,
             klavis,
             mcp_manager,
             leases,
-            host,
             mcp,
-            runs,
             chat,
             acp,
             http,

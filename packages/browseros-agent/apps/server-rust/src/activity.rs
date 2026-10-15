@@ -1,5 +1,5 @@
 //! `ServerActivity`: what OTA readiness (`GET /status` `can_update`) is computed from — active
-//! chat runs plus in-flight `/mcp` POSTs (an axum layer on `/mcp` increments around each request).
+//! chat runs plus in-flight `/mcp` POSTs. Each holds a [`BusyGuard`] for its whole lifetime.
 
 use std::sync::{
     Arc,
@@ -19,30 +19,13 @@ impl ServerActivity {
         Self::default()
     }
 
-    /// Held for the lifetime of one chat run; dropping it decrements.
-    pub fn run_started(&self) -> ActivityGuard<'_> {
+    /// Marks the server busy until the guard drops. The guard is owned rather than borrowed
+    /// because both reservations change hands: a chat run is registered by its request and
+    /// driven by a spawned task, and an `/mcp` response body outlives the middleware that
+    /// reserved it, so the server stays busy until the transport finishes or the caller leaves.
+    pub fn reserve(self: &Arc<Self>) -> BusyGuard {
         self.active.fetch_add(1, Ordering::SeqCst);
-        ActivityGuard(&self.active)
-    }
-
-    /// Owned form of [`Self::run_started`]: a chat run is registered by the request and driven by
-    /// a spawned task, so its reservation must move between them without a gap.
-    pub fn run_started_owned(self: &Arc<Self>) -> McpPostGuard {
-        self.active.fetch_add(1, Ordering::SeqCst);
-        McpPostGuard(self.clone())
-    }
-
-    /// Held for the lifetime of one `/mcp` POST.
-    pub fn mcp_post_started(&self) -> ActivityGuard<'_> {
-        self.active.fetch_add(1, Ordering::SeqCst);
-        ActivityGuard(&self.active)
-    }
-
-    /// The HTTP response body can outlive its handler future. An owned guard
-    /// keeps OTA busy until the transport finishes or the caller disconnects.
-    pub fn mcp_post_started_owned(self: &Arc<Self>) -> McpPostGuard {
-        self.active.fetch_add(1, Ordering::SeqCst);
-        McpPostGuard(self.clone())
+        BusyGuard(self.clone())
     }
 
     pub fn can_update(&self) -> bool {
@@ -50,19 +33,11 @@ impl ServerActivity {
     }
 }
 
-pub struct ActivityGuard<'a>(&'a AtomicUsize);
+/// One reservation of [`ServerActivity`]; dropping it releases the reservation.
+pub struct BusyGuard(Arc<ServerActivity>);
 
-/// A transport-owned reservation that survives the middleware-to-body handoff.
-pub struct McpPostGuard(Arc<ServerActivity>);
-
-impl Drop for McpPostGuard {
+impl Drop for BusyGuard {
     fn drop(&mut self) {
         self.0.active.fetch_sub(1, Ordering::SeqCst);
-    }
-}
-
-impl Drop for ActivityGuard<'_> {
-    fn drop(&mut self) {
-        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }

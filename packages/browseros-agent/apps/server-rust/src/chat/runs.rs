@@ -330,7 +330,7 @@ impl ConversationRuns {
         };
         // `/status` reports busy from registration until the run is fully unwound (preparation,
         // pump and `on_finish`); the guard moves into the driving task.
-        let busy = self.activity.run_started_owned();
+        let busy = self.activity.reserve();
 
         let handle = RunHandle {
             run_id: record.run_id,
@@ -708,15 +708,6 @@ impl ConversationRuns {
         if state.panels.remove(&tab_id).is_some() {
             publish_panels(&state);
         }
-    }
-
-    /// Runs still in progress; feeds `/status` `can_update` together with `ServerActivity`.
-    pub fn running_count(&self) -> usize {
-        lock(&self.state)
-            .runs
-            .values()
-            .filter(|record| record.status() == RunStatus::Running)
-            .count()
     }
 }
 

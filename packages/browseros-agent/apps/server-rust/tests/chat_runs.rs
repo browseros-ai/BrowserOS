@@ -766,7 +766,6 @@ async fn a_rejected_preparation_leaves_a_failed_record_and_releases_activity() -
         ConversationRunStatus::Failed
     );
     eventually(|| activity.can_update()).await?;
-    assert_eq!(runs.running_count(), 0);
 
     // The failed record does not block the next turn.
     let (_source, chunks) = controlled();
@@ -807,10 +806,11 @@ async fn reports_activity_while_running() -> TestResult {
     let (source, chunks) = controlled();
     start(&runs, conversation, &[], chunks).await?;
     eventually(|| !activity.can_update()).await?;
-    assert_eq!(runs.running_count(), 1);
+    let status = |runs: &ConversationRuns| runs.snapshot(conversation).map(|s| s.status);
+    assert_eq!(status(&runs), Some(RunStatus::Running));
     drop(source);
     eventually(|| activity.can_update()).await?;
-    assert_eq!(runs.running_count(), 0);
+    assert_ne!(status(&runs), Some(RunStatus::Running));
     Ok(())
 }
 

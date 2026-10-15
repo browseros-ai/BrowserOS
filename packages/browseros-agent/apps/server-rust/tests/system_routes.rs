@@ -54,7 +54,7 @@ async fn health_status_aliases_and_shutdown() -> Result {
             assert!(body["cdpConnected"].is_boolean());
         }
     }
-    let guard = state.activity.run_started();
+    let guard = state.activity.reserve();
     let response = router
         .clone()
         .oneshot(Request::get("/status").body(Body::empty())?)
@@ -62,9 +62,9 @@ async fn health_status_aliases_and_shutdown() -> Result {
     let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await?)?;
     assert_eq!(body["can_update"], false);
     drop(guard);
-    let guard = state.activity.mcp_post_started();
+    let guard = state.activity.reserve();
     assert!(!state.activity.can_update());
-    let overlapping_run = state.activity.run_started();
+    let overlapping_run = state.activity.reserve();
     drop(guard);
     assert!(
         !state.activity.can_update(),
