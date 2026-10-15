@@ -376,8 +376,10 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 if why == Handback::NothingOffered
                     && view.can_search_itself()
                     && !run.known.searched
+                    && run.searches < crate::run::SEARCH_LIMIT
                 {
                     run.known.searched = true;
+                    run.searches += 1;
                     run.remember(
                         "nothing listed could advance the goal, so this page's own search is \
                          offered first",

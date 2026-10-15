@@ -142,6 +142,8 @@ pub struct Run {
     pub unchanged: u32,
     /// Consecutive steps that changed the page and got no closer.
     pub circling: u32,
+    /// How many times this run has answered a refusal by searching.
+    pub searches: u32,
     /// The best completion score this run has seen, so a step is only credited
     /// for improving on the run's high-water mark rather than on the last step.
     pub closest: f64,
@@ -174,6 +176,16 @@ pub const STALL_LIMIT: u32 = 3;
 /// and all three steps are progress. Measured live, a run that was genuinely
 /// circling did it three times over eleven steps before its budget ran out.
 pub const CIRCLING_LIMIT: u32 = 4;
+
+/// How many times one run may answer a refusal by reaching for a search.
+///
+/// Counted per run and not per page. The per-page flag lives beside the page
+/// fingerprint and is forgotten the moment the page changes, and an active page
+/// changes on every action: measured live, a run was refused three times and
+/// reached for a search all three, which is not what "once per page" was meant
+/// to mean. The flag still stops two attempts on a page standing still; this
+/// stops a page that keeps moving re-arming it forever.
+pub const SEARCH_LIMIT: u32 = 2;
 /// How many decisions in a row the gate may decline before the run stops.
 pub const DECLINE_LIMIT: u32 = 3;
 /// How many times one run may move between pages.
@@ -198,6 +210,7 @@ impl Run {
             repeating: None,
             unchanged: 0,
             circling: 0,
+            searches: 0,
             closest: 0.0,
             declined: 0,
             navigations: 0,

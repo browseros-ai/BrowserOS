@@ -1476,3 +1476,61 @@ async fn a_run_that_keeps_arriving_somewhere_is_left_alone() {
         "the url moved every step, so none of them was circling"
     );
 }
+
+/// The per-page flag is forgotten when the page changes, and an active page
+/// changes on every action. Measured live: a run was refused three times on a
+/// moving page and reached for a search all three. A run-wide bound is what
+/// makes "once per page" mean something.
+#[tokio::test]
+async fn a_run_reaches_for_a_search_a_bounded_number_of_times() {
+    let mut search = control("e9", "searchbox", "Search");
+    search.state.editable = true;
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![control("e1", "link", "Something"), search],
+    );
+    // Acting moves the page, which is what re-armed the per-page flag.
+    let driver = Fake::new(view);
+    let nothing_fits = || {
+        vec![
+            ("operation", spread("ACT", 0.90, 0.03)),
+            ("act_how", spread("CLICK", 0.90, 0.03)),
+            ("target", spread("none_of_these", 0.90, 0.03)),
+        ]
+    };
+    let acts = || {
+        vec![
+            ("operation", spread("ACT", 0.95, 0.02)),
+            ("act_how", spread("CLICK", 0.95, 0.02)),
+            ("target", spread("e1", 0.95, 0.02)),
+        ]
+    };
+    // Refused, acts, refused, acts, refused: without a bound the third refusal
+    // would reach for a search again.
+    let oracle = Scripted::new(vec![
+        nothing_fits(),
+        acts(),
+        nothing_fits(),
+        acts(),
+        nothing_fits(),
+        acts(),
+        nothing_fits(),
+    ]);
+
+    let outcome = advance(&oracle, &driver, run_for("find something")).await;
+
+    let Status::NeedsInput(why, _) = outcome.status else {
+        panic!("expected a hand-back, got {:?}", outcome.status);
+    };
+    assert_eq!(why, Handback::NothingOffered);
+    let refusals = outcome
+        .decided
+        .iter()
+        .filter(|decided| decided.verdict == "handed_back")
+        .count();
+    assert_eq!(
+        refusals, 3,
+        "two refusals were answered by searching and the third ended the run"
+    );
+}

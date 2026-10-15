@@ -471,8 +471,7 @@ impl How {
             Self::Click => "Click a button, link, menu option or suggestion.",
             Self::Fill => {
                 "Enter text in a field. The caller supplies the text, so choose this only when \
-                 typing is what the goal needs next. A page's own search field is a field: use \
-                 it to reach something this page does not list."
+                 typing is what the goal needs next."
             }
             Self::Submit => {
                 "Press Enter in the field a previous step typed into, to search for or submit \
