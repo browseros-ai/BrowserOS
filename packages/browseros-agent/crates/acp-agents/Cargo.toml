@@ -17,6 +17,7 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["io-std"] }
 tokio-util.workspace = true
 tracing.workspace = true
+ui-message-stream.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]

@@ -41,6 +41,7 @@ use acp_client::{
 use futures_util::FutureExt;
 use tokio::{sync::mpsc, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
+use ui_message_stream::{ChunkStream, UiChunk};
 use uuid::Uuid;
 
 use crate::{
@@ -51,7 +52,6 @@ use crate::{
     },
     store::{SESSION_RECORD_SCHEMA, SessionRecord, SessionStore},
     translate::{TurnEnd, UiTranslator},
-    ui::{ChunkStream, UiChunk},
 };
 
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
@@ -227,6 +227,7 @@ impl AcpRuntime {
         };
         let (tx, rx) = mpsc::unbounded_channel();
         let _ = tx.send(UiChunk::Start {
+            message_metadata: None,
             message_id: Some(response_message_id),
         });
         let driver = Driver {

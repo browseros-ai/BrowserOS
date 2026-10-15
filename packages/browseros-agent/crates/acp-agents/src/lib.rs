@@ -26,7 +26,6 @@ mod probe;
 mod runtime;
 mod store;
 mod translate;
-mod ui;
 
 pub use definition::{AgentDefinition, AgentKind, CustomAgentConfig};
 pub use launch::{
@@ -50,6 +49,6 @@ pub use store::{
     SessionStore,
 };
 pub use translate::{ACP_FAILED_TO_RESPOND, TurnEnd, UiTranslator};
-/// The output vocabulary; one type with the built-in engine's (`ui_message_stream::ChunkStream`).
-pub type UiChunkStream = ui::ChunkStream;
-pub use ui::{FinishReason, UiChunk};
+/// The output vocabulary, shared with the built-in engine.
+pub type UiChunkStream = ui_message_stream::ChunkStream;
+pub use ui_message_stream::{FinishReason, UiChunk};

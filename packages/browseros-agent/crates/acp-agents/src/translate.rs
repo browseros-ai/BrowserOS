@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use acp_client::schema::{ContentBlock, ContentChunk, SessionUpdate, StopReason, ToolCallStatus};
 use serde_json::Value;
 
-use crate::ui::{FinishReason, UiChunk};
+use ui_message_stream::{FinishReason, UiChunk};
 
 /// Generic UI error text for agent failures without a better message (TS `acpUiErrorMessage`).
 pub const ACP_FAILED_TO_RESPOND: &str = "The ACP agent failed to respond.";
@@ -170,6 +170,7 @@ impl UiTranslator {
                     chunks.push(UiChunk::FinishStep);
                     chunks.push(UiChunk::Finish {
                         finish_reason: Some(finish_reason(reason)),
+                        message_metadata: None,
                     });
                 }
                 chunks
@@ -386,6 +387,7 @@ fn failure(message: String) -> Vec<UiChunk> {
         UiChunk::FinishStep,
         UiChunk::Finish {
             finish_reason: Some(FinishReason::Error),
+            message_metadata: None,
         },
     ]
 }
