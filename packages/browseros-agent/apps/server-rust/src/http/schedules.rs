@@ -2,8 +2,8 @@
 //! Cadence validation gates only new/changed cadence so maintenance writes can still update
 //! legacy invalid jobs. Every run write delegates pruning to the store's write transaction.
 
+use super::Json;
 use axum::{
-    Json,
     extract::{Path, State},
     response::{IntoResponse, Response},
 };

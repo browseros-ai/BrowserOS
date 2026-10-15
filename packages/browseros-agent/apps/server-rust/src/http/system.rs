@@ -2,9 +2,9 @@
 //! active work. Diagnostics share one process-stable OS lookup and shutdown only signals
 //! the process owner after yielding the response to the HTTP runtime.
 
+use super::Json;
 use crate::{AppState, VERSION};
 use axum::{
-    Json,
     extract::State,
     response::{IntoResponse, Response},
 };

@@ -2,11 +2,9 @@
 //! Handlers never hand-build error JSON, so each dialect stays byte-identical everywhere it is
 //! used. P3 pins every body against the contract fixtures.
 
+use super::Json;
 use super::extract::ZodIssue;
-use axum::{
-    Json,
-    response::{IntoResponse, Response},
-};
+use axum::response::{IntoResponse, Response};
 use browseros_agent::llm::ChatError;
 use http::{StatusCode, header};
 use serde_json::{Value, json};

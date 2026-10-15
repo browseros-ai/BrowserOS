@@ -405,9 +405,28 @@ pub static ROUTES: &[Route] = &[
     },
 ];
 
-/// The skeleton's answer on every route whose piece has not landed: never a fake success.
-pub fn not_implemented() -> Response {
-    errors::error_string(StatusCode::NOT_IMPLEMENTED, "not implemented")
+/// `axum::Json` written as `JSON.stringify` writes it ([`ui_message_stream::sse::json_bytes`]).
+/// The generated contract DTOs hold every number as `f64`, so serde_json alone would answer a
+/// stored millisecond timestamp as `1792055977284.0` where TS answers `1792055977284`: equal to a
+/// JS client, but not to a strict one decoding the contract's integer fields. Every handler
+/// answers JSON through this type.
+pub struct Json<T>(pub T);
+
+impl<T: serde::Serialize> axum::response::IntoResponse for Json<T> {
+    fn into_response(self) -> Response {
+        match ui_message_stream::sse::json_bytes(&self.0) {
+            Ok(bytes) => (
+                [(
+                    http::header::CONTENT_TYPE,
+                    http::HeaderValue::from_static("application/json"),
+                )],
+                bytes,
+            )
+                .into_response(),
+            // axum::Json's own answer to an unserializable value.
+            Err(error) => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()).into_response(),
+        }
+    }
 }
 
 /// Response extension set only by the router fallback. It never reaches the wire; it lets tests

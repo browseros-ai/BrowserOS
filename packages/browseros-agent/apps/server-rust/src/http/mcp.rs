@@ -3,10 +3,10 @@
 //! for `/status`. POST is `mcp::McpServer`'s lease admission + transport in front of the
 //! shared host; GET is a status blob, not SSE.
 
+use super::Json;
 use super::errors;
 use crate::AppState;
 use axum::{
-    Json,
     extract::{Request, State},
     response::{IntoResponse, Response},
 };

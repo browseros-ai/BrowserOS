@@ -2,8 +2,8 @@
 //! wire projection is deliberately asymmetric: every read removes four secrets and adds
 //! presence flags, while an upsert returns the raw row for compatibility with shipped clients.
 
+use super::Json;
 use axum::{
-    Json,
     extract::{Path, State},
     response::{IntoResponse, Response},
 };

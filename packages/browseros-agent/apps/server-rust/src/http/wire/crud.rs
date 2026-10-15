@@ -3,8 +3,8 @@
 //! future type strings and legacy JSON. Zod rules (trimming, strict objects, UTF-16 lengths,
 //! headers, and ordered issues) run before decoding request models.
 
+use crate::http::Json;
 use axum::{
-    Json,
     extract::{FromRequest, Request},
     response::{IntoResponse, Response},
 };

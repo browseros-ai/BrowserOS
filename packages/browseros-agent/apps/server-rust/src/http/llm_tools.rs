@@ -2,9 +2,9 @@
 //! selection and secret ownership stay here; the shared agent crate owns model transports.
 //! Unlike chat, each call substitutes a fresh UUID in custom headers (TS pipeline F11).
 
+use super::Json;
 use crate::{AppState, db::ProviderRow, oauth::OAuthProvider};
 use axum::{
-    Json,
     extract::State,
     response::{IntoResponse, Response},
 };

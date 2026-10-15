@@ -2,6 +2,7 @@
 //! lenient on malformed/empty bodies, unlike Zod routes; a valid client proxy URL
 //! takes precedence over the internal listening port.
 
+use super::Json;
 use crate::{app::AppState, klavis::Klavis, mcp_manager::McpManagerService};
 use std::sync::Arc;
 
@@ -24,7 +25,6 @@ impl axum::extract::FromRef<AppState> for ManagerState {
 }
 use super::errors;
 use axum::{
-    Json,
     body::to_bytes,
     extract::{Path, Request, State},
     response::{IntoResponse, Response},

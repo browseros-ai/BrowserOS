@@ -2,13 +2,13 @@
 //! and token submission parses untyped JSON regardless of Content-Type. Other route groups'
 //! zod extractors deliberately do not apply here.
 
+use super::Json;
 use super::errors::{error_string, text_plain};
 use crate::{
     app::AppState,
     oauth::{OAuthProvider, StartFlow, TokenInput, TokenManager},
 };
 use axum::{
-    Json,
     body::Bytes,
     extract::{Path, State},
     response::{IntoResponse, Response},

@@ -4,11 +4,11 @@
 //! the probe JSON (probe failures ride inside it), and `500 wrapper_error` when the command cannot
 //! even be resolved. Owned by P16.
 
+use super::Json;
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use acp_agents::{AgentKind, DEFAULT_PROBE_TIMEOUT, HostEnvironment, ProbeRequest, probe_agent};
 use axum::{
-    Json,
     extract::State,
     response::{IntoResponse, Response},
 };

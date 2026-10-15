@@ -82,6 +82,19 @@ fn js_key_order(value: Value) -> Value {
     }
 }
 
+/// `JSON.stringify` bytes for any serializable value: JS key order (array-index keys first) and
+/// ECMAScript number spelling (`1792055977284`, not serde_json's `1792055977284.0`). The server's
+/// HTTP JSON responses use it so they match the TS server byte for byte, as SSE frames do.
+pub fn json_bytes<T: serde::Serialize + ?Sized>(value: &T) -> serde_json::Result<Vec<u8>> {
+    let value = js_key_order(serde_json::to_value(value)?);
+    let mut bytes = Vec::new();
+    value.serialize(&mut serde_json::Serializer::with_formatter(
+        &mut bytes,
+        JsFormatter,
+    ))?;
+    Ok(bytes)
+}
+
 /// serde_json uses Rust float spelling (`1.0`, `1e-6`), which differs from JSON.stringify
 /// (`1`, `0.000001`). Ryu's ECMAScript implementation also handles exponent signs and -0.
 struct JsFormatter;
