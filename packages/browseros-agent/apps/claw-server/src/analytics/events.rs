@@ -35,7 +35,7 @@ const SCREENSHOT_BASELINE_WIDTH: &str = "screenshot_baseline_width";
 const SCREENSHOT_BASELINE_HEIGHT: &str = "screenshot_baseline_height";
 const SCREENSHOT_TOKENS_PER_DISPATCH: &str = "screenshot_tokens_per_dispatch";
 
-pub(crate) const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+pub(crate) use browseros_mcp_host::seams::MAX_SAFE_INTEGER;
 
 /// Hard cap on the free-text task summary before it leaves the machine. The
 /// summary is already PII-scrubbed and length-capped upstream; this is the
@@ -56,23 +56,11 @@ pub(crate) const HARNESS_VALUES: [&str; 7] = [
 
 pub(crate) const END_KIND_VALUES: [&str; 3] = ["closed", "errored", "cancelled"];
 
-/// Fixed set of task kinds the agent may declare. Only these tokens leave the
-/// machine; the free-form session name never does. An unrecognized value is
-/// coerced to `other` rather than dropped, so the declaration still counts and a
-/// hot `other` signals a missing row.
-pub(crate) const TASK_CATEGORY_VALUES: [&str; 11] = [
-    "shopping",
-    "research",
-    "email-and-messaging",
-    "form-filling",
-    "data-extraction",
-    "testing-and-qa",
-    "dev-tools",
-    "social-media",
-    "finance-and-admin",
-    "internal-tools",
-    "other",
-];
+/// Fixed set of task kinds the agent may declare, owned by the MCP host's
+/// `name_session` schema. Only these tokens leave the machine; the free-form session
+/// name never does. An unrecognized value is coerced to `other` rather than dropped,
+/// so the declaration still counts and a hot `other` signals a missing row.
+pub(crate) use browseros_mcp_host::seams::TASK_CATEGORY_VALUES;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PropertyKind {

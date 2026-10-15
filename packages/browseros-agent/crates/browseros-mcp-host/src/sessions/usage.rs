@@ -1,4 +1,4 @@
-use crate::analytics::events::MAX_SAFE_INTEGER;
+use crate::seams::MAX_SAFE_INTEGER;
 use std::{
     collections::BTreeMap,
     sync::atomic::{AtomicBool, Ordering},
@@ -7,23 +7,23 @@ use std::{
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct SessionUsageSnapshot {
-    pub(crate) client_name: String,
-    pub(crate) dispatch_count: u64,
-    pub(crate) distinct_tool_count: u64,
-    pub(crate) max_concurrent_used_sessions: u64,
-    pub(crate) tools: Vec<ToolUsageSnapshot>,
+pub struct SessionUsageSnapshot {
+    pub client_name: String,
+    pub dispatch_count: u64,
+    pub distinct_tool_count: u64,
+    pub max_concurrent_used_sessions: u64,
+    pub tools: Vec<ToolUsageSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ToolUsageSnapshot {
-    pub(crate) tool_name: String,
-    pub(crate) dispatch_count: u64,
-    pub(crate) total_duration_ms: u64,
-    pub(crate) max_duration_ms: u64,
+pub struct ToolUsageSnapshot {
+    pub tool_name: String,
+    pub dispatch_count: u64,
+    pub total_duration_ms: u64,
+    pub max_duration_ms: u64,
 }
 
-pub(crate) struct UsageTracker {
+pub struct UsageTracker {
     client_name: String,
     used: AtomicBool,
     state: Mutex<UsageState>,
@@ -44,7 +44,7 @@ struct ToolUsage {
 }
 
 impl UsageTracker {
-    pub(crate) fn new(client_name: String) -> Self {
+    pub fn new(client_name: String) -> Self {
         Self {
             client_name,
             used: AtomicBool::new(false),
@@ -52,19 +52,19 @@ impl UsageTracker {
         }
     }
 
-    pub(crate) fn client_name(&self) -> &str {
+    pub fn client_name(&self) -> &str {
         &self.client_name
     }
 
-    pub(crate) fn mark_used(&self) {
+    pub fn mark_used(&self) {
         self.used.store(true, Ordering::Relaxed);
     }
 
-    pub(crate) fn is_used(&self) -> bool {
+    pub fn is_used(&self) -> bool {
         self.used.load(Ordering::Relaxed)
     }
 
-    pub(crate) async fn record(
+    pub async fn record(
         &self,
         tool_name: &str,
         elapsed: Duration,
@@ -84,7 +84,7 @@ impl UsageTracker {
         tool.max_duration_ms = tool.max_duration_ms.max(elapsed_ms);
     }
 
-    pub(crate) async fn snapshot(&self) -> SessionUsageSnapshot {
+    pub async fn snapshot(&self) -> SessionUsageSnapshot {
         let state = self.state.lock().await;
         SessionUsageSnapshot {
             client_name: self.client_name.clone(),
@@ -116,7 +116,7 @@ fn capped_u128(value: u128) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analytics::events::MAX_SAFE_INTEGER;
+    use crate::seams::MAX_SAFE_INTEGER;
     use std::time::Duration;
 
     #[tokio::test]

@@ -3,7 +3,7 @@
 //! Only intent and correlation are stored here; native profiles, views and ownership stay elsewhere.
 
 use crate::{
-    error::{AppError, AppResult},
+    error::{HostError, HostResult},
     ids::SessionId,
     storage::JsonStore,
 };
@@ -46,18 +46,18 @@ impl Record {
         }
     }
 
-    fn require_live(&self) -> AppResult<()> {
+    fn require_live(&self) -> HostResult<()> {
         if self.stopped {
-            return Err(AppError::Internal(
+            return Err(HostError::Internal(
                 "BrowserOS neo session was stopped and will not resume".into(),
             ));
         }
         Ok(())
     }
 
-    fn next_revision(&self) -> AppResult<u64> {
+    fn next_revision(&self) -> HostResult<u64> {
         self.revision.checked_add(1).ok_or_else(|| {
-            AppError::Internal("target_reselect_required: target revision exhausted".into())
+            HostError::Internal("target_reselect_required: target revision exhausted".into())
         })
     }
 }
@@ -92,11 +92,11 @@ pub struct TargetBindings {
 }
 
 impl TargetBindings {
-    pub async fn load(store: JsonStore) -> AppResult<Arc<Self>> {
+    pub async fn load(store: JsonStore) -> HostResult<Arc<Self>> {
         let records = match store.read_json(FILE).await {
             Ok(records) => records,
-            Err(browseros_mcp_host::HostError::StorageNotFound(_)) => Records::default(),
-            Err(error) => return Err(error.into()),
+            Err(HostError::StorageNotFound(_)) => Records::default(),
+            Err(error) => return Err(error),
         };
         Ok(Arc::new(Self {
             records: Mutex::new(records),
@@ -112,10 +112,10 @@ impl TargetBindings {
             .and_then(|record| record.binding.clone())
     }
 
-    pub(crate) async fn binding_for_execution(
+    pub async fn binding_for_execution(
         &self,
         session: &SessionId,
-    ) -> AppResult<Option<TargetBinding>> {
+    ) -> HostResult<Option<TargetBinding>> {
         let records = self.records.lock().await;
         let Some(record) = records.record(session) else {
             return Ok(None);
@@ -124,7 +124,7 @@ impl TargetBindings {
         Ok(record.binding.clone())
     }
 
-    pub(crate) async fn is_stopped(&self, session: &SessionId) -> bool {
+    pub async fn is_stopped(&self, session: &SessionId) -> bool {
         self.records
             .lock()
             .await
@@ -133,7 +133,7 @@ impl TargetBindings {
     }
 
     /// The latest successor is a live-map lookup hint, never authority to forget intent.
-    pub(crate) async fn current_session(&self, session: &SessionId) -> Option<SessionId> {
+    pub async fn current_session(&self, session: &SessionId) -> Option<SessionId> {
         self.records
             .lock()
             .await
@@ -141,7 +141,11 @@ impl TargetBindings {
             .map(|record| record.current_session.clone())
     }
 
-    pub async fn set(&self, session: &SessionId, intent: TargetIntent) -> AppResult<TargetBinding> {
+    pub async fn set(
+        &self,
+        session: &SessionId,
+        intent: TargetIntent,
+    ) -> HostResult<TargetBinding> {
         let mut records = self.records.lock().await;
         let mut next = records.clone();
         let record = next.ensure_record(session);
@@ -160,7 +164,7 @@ impl TargetBindings {
         Ok(binding)
     }
 
-    pub async fn clear(&self, session: &SessionId) -> AppResult<()> {
+    pub async fn clear(&self, session: &SessionId) -> HostResult<()> {
         let mut records = self.records.lock().await;
         let mut next = records.clone();
         let record = next.ensure_record(session);
@@ -179,7 +183,7 @@ impl TargetBindings {
         &self,
         from: &SessionId,
         to: &SessionId,
-    ) -> AppResult<Option<TargetBinding>> {
+    ) -> HostResult<Option<TargetBinding>> {
         let mut records = self.records.lock().await;
         if let Some(record) = records.record(from) {
             record.require_live()?;
@@ -195,7 +199,7 @@ impl TargetBindings {
         let record = next
             .tasks
             .get_mut(&canonical)
-            .ok_or_else(|| AppError::Internal("target task missing".into()))?;
+            .ok_or_else(|| HostError::Internal("target task missing".into()))?;
         record.current_session = to.clone();
         record.updated_at_ms = crate::clock::now_epoch_ms();
         let binding = record.binding.clone();
@@ -206,7 +210,7 @@ impl TargetBindings {
 
     /// Stop releases the native selection but keeps a durable marker for every alias.
     /// No profile unloading, window closure or ownership mutation occurs in this module.
-    pub async fn forget(&self, session: &SessionId) -> AppResult<()> {
+    pub async fn forget(&self, session: &SessionId) -> HostResult<()> {
         let mut records = self.records.lock().await;
         let mut next = records.clone();
         let record = next.ensure_record(session);
@@ -218,13 +222,13 @@ impl TargetBindings {
         Ok(())
     }
 
-    pub async fn sweep(&self, _now_ms: i64) -> AppResult<usize> {
+    pub async fn sweep(&self, _now_ms: i64) -> HostResult<usize> {
         // Views are per-call and never retained here. Keeping intent/aliases is what
         // makes a 30-day reconnect fail closed after native restart instead of unbinding.
         Ok(0)
     }
 
-    pub(crate) async fn remember_group(&self, session: &SessionId, group: &str) -> AppResult<()> {
+    pub async fn remember_group(&self, session: &SessionId, group: &str) -> HostResult<()> {
         let mut records = self.records.lock().await;
         let canonical = records.canonical(session).clone();
         if records.groups.get(group) == Some(&canonical) {
@@ -240,7 +244,7 @@ impl TargetBindings {
         Ok(())
     }
 
-    pub(crate) async fn owns_group(&self, session: &SessionId, group: &str) -> bool {
+    pub async fn owns_group(&self, session: &SessionId, group: &str) -> bool {
         let records = self.records.lock().await;
         records
             .groups
@@ -251,13 +255,13 @@ impl TargetBindings {
     /// Resolve the legacy group correlation before capture or tab creation. A caller
     /// that already chose a different task must explicitly reselect rather than borrow
     /// an old group's targeting as an accidental side effect of browser mutation.
-    pub(crate) async fn correlate_group(&self, session: &SessionId, group: &str) -> AppResult<()> {
+    pub async fn correlate_group(&self, session: &SessionId, group: &str) -> HostResult<()> {
         let mut records = self.records.lock().await;
         let Some(canonical) = records.groups.get(group).cloned() else {
             return Ok(());
         };
         let source = records.tasks.get(&canonical).ok_or_else(|| {
-            AppError::Internal("target_reselect_required: group task identity is missing".into())
+            HostError::Internal("target_reselect_required: group task identity is missing".into())
         })?;
         if records.record(session).is_some() {
             if records.canonical(session) == &canonical {
@@ -272,7 +276,7 @@ impl TargetBindings {
                 current.require_live()?;
                 return Ok(());
             }
-            return Err(AppError::Internal("target_reselect_required: group belongs to another task; select its profile explicitly".into()));
+            return Err(HostError::Internal("target_reselect_required: group belongs to another task; select its profile explicitly".into()));
         }
         source.require_live()?;
         let mut next = records.clone();
@@ -288,12 +292,12 @@ impl TargetBindings {
 }
 
 /// MCP management adapter pinned to the admitted logical task, not its transport.
-pub struct ClawTargetStore {
+pub struct TaskTargetStore {
     pub bindings: Arc<TargetBindings>,
     pub session: SessionId,
 }
 
-impl TargetStore for ClawTargetStore {
+impl TargetStore for TaskTargetStore {
     fn get(&self) -> BoxFuture<'_, Result<Option<TargetBinding>, String>> {
         Box::pin(async move {
             self.bindings

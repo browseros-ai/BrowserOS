@@ -4,7 +4,7 @@ use crate::{
     config::Config,
     identity::{ClientIdentity, ConversationIdentity},
     ids::SessionId,
-    services::sessions::{ClawTargetStore, Session},
+    services::sessions::{Session, TaskTargetStore},
 };
 use serde_json::Value;
 use std::{sync::Arc, time::Duration};
@@ -73,7 +73,7 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
         dispatch_cancel.clone(),
     );
     let ownership_key = session.convo_id().clone();
-    let target_store = Arc::new(ClawTargetStore {
+    let target_store = Arc::new(TaskTargetStore {
         bindings: state.targets.clone(),
         session: session.id().clone(),
     });

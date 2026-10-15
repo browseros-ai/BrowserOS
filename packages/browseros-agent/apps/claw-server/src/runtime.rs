@@ -230,7 +230,7 @@ impl AppRuntime {
     ) -> AppResult<()> {
         self.state.shutdown.request();
         let session_result = match timeout(session_timeout, self.state.sessions.shutdown()).await {
-            Ok(result) => result,
+            Ok(result) => result.map_err(AppError::from),
             Err(_) => {
                 warn!(
                     timeout_ms = session_timeout.as_millis(),
@@ -562,12 +562,14 @@ mod tests {
             analytics.clone(),
         ));
         let sessions = Sessions::new_with_analytics(
-            state.audit_log.clone(),
-            state.session_tabs.clone(),
+            crate::services::sessions::ClawSessionJournal::new(
+                state.audit_log.clone(),
+                state.session_tabs.clone(),
+            ),
             config.session_idle,
             config.session_retention,
             config.session_sweep_interval,
-            analytics.clone(),
+            crate::analytics::HostAnalyticsBridge::new(analytics.clone()),
         );
         sessions.set_completion_hook(Arc::new({
             let session_efficiency = session_efficiency.clone();
@@ -699,12 +701,14 @@ mod tests {
             .await?,
         );
         let sessions = Sessions::new_with_analytics(
-            state.audit_log.clone(),
-            state.session_tabs.clone(),
+            crate::services::sessions::ClawSessionJournal::new(
+                state.audit_log.clone(),
+                state.session_tabs.clone(),
+            ),
             config.session_idle,
             config.session_retention,
             config.session_sweep_interval,
-            analytics.clone(),
+            crate::analytics::HostAnalyticsBridge::new(analytics.clone()),
         );
         let hook_entered = Arc::new(Notify::new());
         sessions.set_retained_group_hook(Arc::new({

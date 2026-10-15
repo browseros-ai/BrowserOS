@@ -1,4 +1,4 @@
-pub use crate::services::sessions::TabGroupColor;
+pub use crate::sessions::TabGroupColor;
 
 const TAB_GROUP_COLORS: [TabGroupColor; 8] = [
     TabGroupColor::Grey,

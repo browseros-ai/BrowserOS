@@ -58,7 +58,7 @@ impl Session {
     /// Creates a session with its declared product fallback already fixed, before
     /// the registry publishes it to concurrent dispatches. It never affects ownership.
     #[must_use]
-    pub(crate) fn new_with_declared_product(
+    pub fn new_with_declared_product(
         id: SessionId,
         agent: ClientIdentity,
         identity: ConversationIdentity,
@@ -135,7 +135,7 @@ impl Session {
             .await;
     }
 
-    pub(crate) async fn usage_snapshot(&self) -> SessionUsageSnapshot {
+    pub async fn usage_snapshot(&self) -> SessionUsageSnapshot {
         self.usage.snapshot().await
     }
 

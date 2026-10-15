@@ -1,11 +1,10 @@
-mod manager;
-mod session;
-mod tab_ownership;
-mod target_bindings;
-mod usage;
+//! Session lifecycle lives in the shared MCP host. claw adds its durable journal: the
+//! audit timeline and the session tab-claim ledger.
 
-pub use manager::{RetainedGroupAction, RetainedGroupHook, RetirementCause, Sessions};
-pub use session::Session;
-pub(crate) use tab_ownership::ScopedGroupKey;
-pub use tab_ownership::{PageOwnership, TabGroup, TabGroupColor, TabGroupState, TitleSync};
-pub use target_bindings::{ClawTargetStore, TargetBindings};
+mod journal;
+
+pub use browseros_mcp_host::sessions::*;
+pub use journal::ClawSessionJournal;
+
+#[cfg(test)]
+mod manager_tests;

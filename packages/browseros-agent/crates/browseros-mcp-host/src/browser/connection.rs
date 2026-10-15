@@ -1,5 +1,4 @@
-use super::TabRegistry;
-use crate::services::sessions::PageOwnership;
+use crate::{seams::BrowserSessionObserver, sessions::PageOwnership};
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::{
     BrowserSession, BrowserSessionHooks, NativeCapabilities,
@@ -50,7 +49,8 @@ pub struct BrowserService {
     /// Kept so callers can ask the client how long the link has been down rather
     /// than this service keeping a second copy of that answer.
     client: Arc<RwLock<Option<CdpClient>>>,
-    tab_registry: Arc<TabRegistry>,
+    /// Seeded once per epoch (claw: the tab registry for recording attribution).
+    session_observer: Arc<dyn BrowserSessionObserver>,
     cancel: CancellationToken,
 }
 
@@ -59,7 +59,7 @@ impl BrowserService {
     pub fn new(
         cdp_port: u16,
         ownership: Arc<PageOwnership>,
-        tab_registry: Arc<TabRegistry>,
+        session_observer: Arc<dyn BrowserSessionObserver>,
         native: NativeCapabilities,
     ) -> Arc<Self> {
         let (state_tx, _) = watch::channel(BrowserConnectionState {
@@ -76,7 +76,7 @@ impl BrowserService {
             initial_attempt_tx,
             session: Arc::new(RwLock::new(None)),
             client: Arc::new(RwLock::new(None)),
-            tab_registry,
+            session_observer,
             cancel: CancellationToken::new(),
         })
     }
@@ -195,7 +195,7 @@ impl BrowserService {
             self.native,
         );
         if let Err(error) = self
-            .tab_registry
+            .session_observer
             .observe_session(session.clone(), epoch)
             .await
         {
@@ -282,14 +282,14 @@ impl BrowserService {
                     if connected && let Some(session) = self.session().await {
                         if transitioned {
                             if let Err(error) = self
-                                .tab_registry
+                                .session_observer
                                 .observe_session(session, epoch)
                                 .await
                             {
                                 warn!(epoch, error = %error, "failed to seed tab target map after reconnect");
                             }
-                        } else if !self.tab_registry.is_ready(epoch)
-                            && let Err(error) = self.tab_registry.reseed(&session, epoch).await
+                        } else if !self.session_observer.is_ready(epoch)
+                            && let Err(error) = self.session_observer.reseed(&session, epoch).await
                         {
                             warn!(epoch, error = %error, "failed to seed tab target map; retrying");
                         }
@@ -428,13 +428,8 @@ mod tests {
 
     async fn service() -> anyhow::Result<(Arc<BrowserService>, TempDir)> {
         let root = tempfile::tempdir()?;
-        let database =
-            crate::db::Database::open(root.path().join(crate::db::DATABASE_FILENAME)).await?;
-        let audit_log = Arc::new(crate::db::AuditLog::new(database.clone()));
-        let session_tabs = Arc::new(crate::db::SessionTabLedger::new(database));
-        let sessions = crate::services::sessions::Sessions::new(
-            audit_log,
-            session_tabs.clone(),
+        let sessions = crate::sessions::Sessions::new(
+            Arc::new(crate::noop::NoopSessionJournal),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(60),
@@ -443,7 +438,7 @@ mod tests {
             BrowserService::new(
                 0,
                 sessions.ownership(),
-                TabRegistry::new(session_tabs),
+                Arc::new(crate::noop::NoopBrowserSessionObserver),
                 NativeCapabilities::default(),
             ),
             root,

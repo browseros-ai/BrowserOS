@@ -2,6 +2,7 @@ mod aliases;
 pub mod drift_guards;
 pub mod error_allowlist;
 pub mod events;
+mod host;
 mod installation;
 pub mod script_fingerprint;
 mod service;
@@ -9,6 +10,7 @@ mod state;
 
 use serde_json::Value;
 
+pub use host::HostAnalyticsBridge;
 pub use service::AnalyticsService;
 pub use state::TelemetryState;
 

@@ -2361,8 +2361,10 @@ mod tests {
         let dir = tempfile::tempdir()?;
         let database = Database::open(dir.path().join(DATABASE_FILENAME)).await?;
         let sessions = Sessions::new(
-            Arc::new(AuditLog::new(database.clone())),
-            Arc::new(SessionTabLedger::new(database)),
+            crate::services::sessions::ClawSessionJournal::new(
+                Arc::new(AuditLog::new(database.clone())),
+                Arc::new(SessionTabLedger::new(database)),
+            ),
             Duration::from_secs(60),
             Duration::from_secs(60),
             Duration::from_secs(1),

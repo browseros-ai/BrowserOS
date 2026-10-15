@@ -1,6 +1,7 @@
 use crate::{clock::now_epoch_ms, db::SessionTabLedger, error::AppResult};
 use browseros_cdp::{CdpEvent, browser};
 use browseros_core::BrowserSession;
+use browseros_mcp_host::seams::BrowserSessionObserver;
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
 use std::{
@@ -397,6 +398,32 @@ fn prune_recently_destroyed(maps: &mut TargetMaps, now: Instant) {
     maps.recently_destroyed.retain(|_, entry| {
         now.duration_since(entry.destroyed_at) < Duration::from_millis(GRACE_MS)
     });
+}
+
+/// Plugs the registry into the host's per-epoch `BrowserSessionObserver` seam. A newtype
+/// because seeding spawns an event listener that must own the registry.
+pub struct TabRegistryObserver(pub Arc<TabRegistry>);
+
+impl BrowserSessionObserver for TabRegistryObserver {
+    fn observe_session(
+        &self,
+        session: Arc<BrowserSession>,
+        epoch: u64,
+    ) -> BoxFuture<'_, anyhow::Result<()>> {
+        Box::pin(self.0.observe_session(session, epoch))
+    }
+
+    fn is_ready(&self, epoch: u64) -> bool {
+        self.0.is_ready(epoch)
+    }
+
+    fn reseed<'a>(
+        &'a self,
+        session: &'a BrowserSession,
+        epoch: u64,
+    ) -> BoxFuture<'a, anyhow::Result<()>> {
+        Box::pin(self.0.reseed(session, epoch))
+    }
 }
 
 #[cfg(test)]

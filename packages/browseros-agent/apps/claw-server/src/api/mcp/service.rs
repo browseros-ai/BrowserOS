@@ -16,7 +16,7 @@ use crate::{
         agent_settings::HumanHelp,
         cockpit::LiveSessionFilters,
         help::{HelpEntry, HelpOpenParams, HelpWaitOutcome},
-        sessions::{ClawTargetStore, RetirementCause, Session},
+        sessions::{RetirementCause, Session, TaskTargetStore},
         skills::{CreateSkill, SkillOrigin},
     },
 };
@@ -1133,7 +1133,7 @@ impl ServerHandler for ClawMcpService {
                 Some(browser) => Some(BrowserView::capture(browser.clone(), binding, None).await),
                 None => None,
             };
-            let target_store: Arc<dyn TargetStore> = Arc::new(ClawTargetStore {
+            let target_store: Arc<dyn TargetStore> = Arc::new(TaskTargetStore {
                 bindings: self.state.targets.clone(),
                 session: started.session.id().clone(),
             });

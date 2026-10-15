@@ -1,5 +1,5 @@
 use crate::{
-    analytics::{AnalyticsService, AnalyticsSink},
+    analytics::{AnalyticsService, AnalyticsSink, HostAnalyticsBridge},
     api::http,
     config::Config,
     db::{
@@ -11,7 +11,7 @@ use crate::{
     services::{
         agent_settings::AgentSettingsStore,
         audit::AuditWorker,
-        browser::{BrowserService, TabRegistry},
+        browser::{BrowserService, TabRegistry, TabRegistryObserver},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
         harness_skills::load_browserclaw_skill,
@@ -20,13 +20,14 @@ use crate::{
         replay::ReplayService,
         screenshots::ScreenshotService,
         session_efficiency::SessionEfficiencyService,
-        sessions::{Sessions, TargetBindings},
+        sessions::{ClawSessionJournal, Sessions, TargetBindings},
         skill_runs::SkillRunService,
         skills::SkillService,
     },
     storage::JsonStore,
 };
 use axum::{Router, middleware};
+use browseros_mcp_host::HostError;
 use std::{env, ffi::OsString, path::PathBuf, sync::Arc, time::Duration};
 
 #[derive(Clone)]
@@ -139,12 +140,11 @@ impl AppState {
             analytics_sink.clone(),
         ));
         let sessions = Sessions::new_with_analytics(
-            audit_log.clone(),
-            session_tabs.clone(),
+            ClawSessionJournal::new(audit_log.clone(), session_tabs.clone()),
             config.session_idle,
             config.session_retention,
             config.session_sweep_interval,
-            analytics_sink,
+            HostAnalyticsBridge::new(analytics_sink),
         );
         sessions.set_target_bindings(targets.clone());
         sessions.set_completion_hook(Arc::new({
@@ -159,7 +159,7 @@ impl AppState {
         let browser = BrowserService::new(
             config.cdp_port,
             sessions.ownership(),
-            tab_registry.clone(),
+            Arc::new(TabRegistryObserver(tab_registry.clone())),
             config.native.capabilities,
         );
         let live_recordings = LiveRecordingBus::new();
@@ -183,11 +183,11 @@ impl AppState {
                 let audit_worker = audit_worker.clone();
                 Box::pin(async move {
                     let audit_worker = audit_worker.upgrade().ok_or_else(|| {
-                        AppError::Internal(
+                        HostError::Internal(
                             "audit worker unavailable during session flush".to_string(),
                         )
                     })?;
-                    audit_worker.flush_session(&session_id).await
+                    Ok(audit_worker.flush_session(&session_id).await?)
                 })
             }
         }));
