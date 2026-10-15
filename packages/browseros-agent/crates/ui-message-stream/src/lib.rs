@@ -12,7 +12,7 @@ pub mod message;
 pub mod sse;
 
 pub use assemble::UiMessageAssembler;
-pub use chunk::{FinishReason, UiChunk};
+pub use chunk::{DataChunk, FinishReason, UiChunk};
 pub use message::{
     FilePart, PartState, ReasoningPart, Role, TextPart, ToolPart, ToolPartKind, ToolState,
     UiMessage, UiPart,

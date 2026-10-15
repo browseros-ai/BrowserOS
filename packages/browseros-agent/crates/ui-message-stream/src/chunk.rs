@@ -4,7 +4,8 @@
 //! (`ai/src/ui-message-stream/to-ui-message-chunk.ts`) emits, because the stream-compat harness
 //! byte-diffs the Rust server's SSE against the TS server's. Optional keys are omitted, never
 //! `null`; the one exception is `tool-output-available.output`, which the SDK always sends.
-//! Variants cover C1's `UiMessageChunk` union (`contracts/server-api/schemas/ui_stream.yaml`).
+//! Variants cover every `ai@7.0.114` `UIMessageChunk` type (DECISIONS 14: the contract union is
+//! complete), including `data-*` chunks, whose open-ended type is the one untagged variant.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -64,9 +65,30 @@ pub enum UiChunk {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<Value>,
     },
+    SourceDocument {
+        source_id: String,
+        media_type: String,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        filename: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<Value>,
+    },
     File {
         media_type: String,
         url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<Value>,
+    },
+    /// Model-generated reasoning media (e.g. Gemini thought images); same shape as `file`.
+    ReasoningFile {
+        media_type: String,
+        url: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<Value>,
+    },
+    Custom {
+        kind: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_metadata: Option<Value>,
     },
@@ -138,6 +160,33 @@ pub enum UiChunk {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         dynamic: Option<bool>,
     },
+    ToolApprovalRequest {
+        approval_id: String,
+        tool_call_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_descriptor: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        input_schema_input: Option<Value>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        is_automatic: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+    ToolApprovalResponse {
+        approval_id: String,
+        approved: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        reason: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_executed: Option<bool>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_metadata: Option<Value>,
+    },
+    ToolOutputDenied {
+        tool_call_id: String,
+    },
     ToolOutputError {
         tool_call_id: String,
         error_text: String,
@@ -154,6 +203,7 @@ pub enum UiChunk {
         error_text: String,
     },
     FinishStep,
+    ResetStep,
     Finish {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         finish_reason: Option<FinishReason>,
@@ -164,6 +214,38 @@ pub enum UiChunk {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
+    MessageMetadata {
+        #[serde(default)]
+        message_metadata: Value,
+    },
+    /// `data-<name>` chunks. Untagged, so it must stay the last variant: serde tries it only when
+    /// no fixed `type` matched, and [`DataChunk`] rejects types without the `data-` prefix.
+    #[serde(untagged)]
+    Data(DataChunk),
+}
+
+/// A `data-<name>` chunk; `kind` is the full wire `type` (e.g. `data-notice`).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DataChunk {
+    #[serde(rename = "type", deserialize_with = "data_type")]
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default)]
+    pub data: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transient: Option<bool>,
+}
+
+fn data_type<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    let kind = String::deserialize(deserializer)?;
+    if kind.starts_with("data-") {
+        Ok(kind)
+    } else {
+        Err(serde::de::Error::custom(format!(
+            "unknown UI chunk type `{kind}`"
+        )))
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,6 +318,20 @@ mod tests {
             serde_json::to_string(&start)?,
             r#"{"type":"start","messageId":"m1"}"#
         );
+        Ok(())
+    }
+
+    #[test]
+    fn data_chunks_round_trip_and_unknown_types_fail() -> Result<(), serde_json::Error> {
+        let data = json!({"type": "data-notice", "id": "n1", "data": {"k": 1}, "transient": true});
+        let chunk: UiChunk = serde_json::from_value(data.clone())?;
+        assert!(matches!(&chunk, UiChunk::Data(DataChunk { kind, .. }) if kind == "data-notice"));
+        assert_eq!(serde_json::to_value(&chunk)?, data);
+        assert!(serde_json::from_value::<UiChunk>(json!({"type": "nope"})).is_err());
+        let file: UiChunk = serde_json::from_value(
+            json!({"type": "reasoning-file", "mediaType": "image/png", "url": "data:image/png;base64,AA=="}),
+        )?;
+        assert!(matches!(file, UiChunk::ReasoningFile { .. }));
         Ok(())
     }
 
