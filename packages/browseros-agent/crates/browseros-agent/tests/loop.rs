@@ -362,18 +362,20 @@ fn rate_limited() -> ModelError {
 
 fn envelope_code(error_text: &str) -> Option<String> {
     let value: Value = serde_json::from_str(error_text).ok()?;
-    value
-        .get("error")?
-        .get("code")?
-        .as_str()
-        .map(str::to_owned)
+    value.get("error")?.get("code")?.as_str().map(str::to_owned)
 }
 
 // ───── tests ─────
 
 #[tokio::test]
 async fn scripted_mock_streams_one_text_step() -> TestResult {
-    let agent = build(Arc::new(ScriptedModel::mock()), Vec::new(), 100, PromptInputs::default()).await?;
+    let agent = build(
+        Arc::new(ScriptedModel::mock()),
+        Vec::new(),
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let chunks = run(&agent, CancellationToken::new()).await;
     assert_eq!(
         chunks,
@@ -421,13 +423,23 @@ async fn multi_step_runs_tools_concurrently_in_completion_order() -> TestResult 
             delta: "{\"ms\":50}".to_owned(),
         }),
         call("call-a", "slow", json!({ "ms": 50 })),
-        call("call-b", "fast", json!({ "ms": 5, "query": "q", "dropped": 1 })),
+        call(
+            "call-b",
+            "fast",
+            json!({ "ms": 5, "query": "q", "dropped": 1 }),
+        ),
     ];
     step_one.push(finish(ModelFinishReason::ToolCalls));
     let mut step_two = text("t2", "Done");
     step_two.push(finish(ModelFinishReason::Stop));
     let model = TestModel::new(vec![Step::Events(step_one), Step::Events(step_two)]);
-    let agent = build(model.clone(), vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model.clone(),
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
 
     let chunks = run(&agent, CancellationToken::new()).await;
     assert_eq!(
@@ -507,7 +519,11 @@ async fn multi_step_runs_tools_concurrently_in_completion_order() -> TestResult 
             ToolMessagePart::ToolApprovalResponse { .. } => "",
         })
         .collect();
-    assert_eq!(ids, ["call-a", "call-b"], "results are sorted by call order");
+    assert_eq!(
+        ids,
+        ["call-a", "call-b"],
+        "results are sorted by call order"
+    );
     Ok(())
 }
 
@@ -524,7 +540,13 @@ async fn tools_start_after_the_model_finishes_the_step() -> TestResult {
         ),
         Step::Events(vec![finish(ModelFinishReason::Stop)]),
     ]);
-    let agent = build(model, vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model,
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let mut stream = agent.run_turn(input("go"), CancellationToken::new());
     let mut seen = Vec::new();
     while let Some(chunk) = stream.next().await {
@@ -535,11 +557,17 @@ async fn tools_start_after_the_model_finishes_the_step() -> TestResult {
         }
     }
     tokio::time::sleep(Duration::from_millis(50)).await;
-    assert!(tools.calls().is_empty(), "the tool ran before the step finished");
+    assert!(
+        tools.calls().is_empty(),
+        "the tool ran before the step finished"
+    );
     gate.notify_one();
     let rest: Vec<UiChunk> = stream.collect().await;
     assert_eq!(tools.calls(), ["act"]);
-    assert!(rest.iter().any(|chunk| matches!(chunk, UiChunk::ToolOutputAvailable { .. })));
+    assert!(
+        rest.iter()
+            .any(|chunk| matches!(chunk, UiChunk::ToolOutputAvailable { .. }))
+    );
     Ok(())
 }
 
@@ -552,11 +580,23 @@ async fn length_finish_skips_tool_execution() -> TestResult {
         call("c1", "act", json!({})),
         finish(ModelFinishReason::Length),
     ])]);
-    let agent = build(model.clone(), vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model.clone(),
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let chunks = run(&agent, CancellationToken::new()).await;
     assert_eq!(
         kinds(&chunks),
-        ["start", "start-step", "tool-input-available", "finish-step", "finish"]
+        [
+            "start",
+            "start-step",
+            "tool-input-available",
+            "finish-step",
+            "finish"
+        ]
     );
     assert_eq!(
         chunks.last(),
@@ -592,7 +632,13 @@ async fn invalid_tool_calls_fail_without_executing() -> TestResult {
         ]),
         Step::Events(done),
     ]);
-    let agent = build(model.clone(), vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model.clone(),
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let chunks = run(&agent, CancellationToken::new()).await;
     assert_eq!(
         kinds(&chunks),
@@ -627,10 +673,7 @@ async fn invalid_tool_calls_fail_without_executing() -> TestResult {
                 dynamic: Some(true),
                 ..
             },
-            UiChunk::ToolInputError {
-                dynamic: None,
-                ..
-            },
+            UiChunk::ToolInputError { dynamic: None, .. },
             UiChunk::ToolInputError {
                 input: Value::String(raw),
                 ..
@@ -643,7 +686,11 @@ async fn invalid_tool_calls_fail_without_executing() -> TestResult {
         other => return Err(format!("unexpected invalid-call chunks: {other:?}").into()),
     }
     // The failures go back to the model as error results, in call order.
-    let second = model.requests().get(1).map(|r| r.messages.clone()).unwrap_or_default();
+    let second = model
+        .requests()
+        .get(1)
+        .map(|r| r.messages.clone())
+        .unwrap_or_default();
     let Some(ModelMessage::Tool { content }) = second.last() else {
         return Err("expected error results".into());
     };
@@ -665,7 +712,13 @@ async fn thrown_tool_errors_become_output_errors() -> TestResult {
         ]),
         Step::Events(vec![finish(ModelFinishReason::Stop)]),
     ]);
-    let agent = build(model, vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model,
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let chunks = run(&agent, CancellationToken::new()).await;
     let error = chunks.iter().find_map(|chunk| match chunk {
         UiChunk::ToolOutputError {
@@ -695,9 +748,18 @@ async fn max_steps_ends_with_the_last_steps_reason() -> TestResult {
         ])
     };
     let model = TestModel::new(vec![step(), step(), step()]);
-    let agent = build(model.clone(), vec![source(&tools, true)], 2, PromptInputs::default()).await?;
+    let agent = build(
+        model.clone(),
+        vec![source(&tools, true)],
+        2,
+        PromptInputs::default(),
+    )
+    .await?;
     let chunks = run(&agent, CancellationToken::new()).await;
-    assert_eq!(kinds(&chunks).iter().filter(|k| *k == "start-step").count(), 2);
+    assert_eq!(
+        kinds(&chunks).iter().filter(|k| *k == "start-step").count(),
+        2
+    );
     assert_eq!(model.calls(), 2);
     assert_eq!(
         chunks.last(),
@@ -724,7 +786,15 @@ async fn retries_happen_before_the_first_event() -> TestResult {
     assert_eq!(model.calls(), 3);
     assert_eq!(
         kinds(&chunks),
-        ["start", "start-step", "text-start", "text-delta", "text-end", "finish-step", "finish"]
+        [
+            "start",
+            "start-step",
+            "text-start",
+            "text-delta",
+            "text-end",
+            "finish-step",
+            "finish"
+        ]
     );
     Ok(())
 }
@@ -745,7 +815,11 @@ async fn exhausted_retries_end_with_a_pre_stream_error() -> TestResult {
     let UiChunk::Error { error_text } = &chunks[1] else {
         return Err("expected an error chunk".into());
     };
-    assert!(serde_json::from_str::<Value>(error_text)?.get("error").is_some());
+    assert!(
+        serde_json::from_str::<Value>(error_text)?
+            .get("error")
+            .is_some()
+    );
     Ok(())
 }
 
@@ -756,7 +830,10 @@ async fn non_retryable_failures_are_not_retried() -> TestResult {
         Step::Events(vec![finish(ModelFinishReason::Stop)]),
     ]);
     let agent = build(model.clone(), Vec::new(), 100, PromptInputs::default()).await?;
-    assert_eq!(kinds(&run(&agent, CancellationToken::new()).await), ["start", "error"]);
+    assert_eq!(
+        kinds(&run(&agent, CancellationToken::new()).await),
+        ["start", "error"]
+    );
     assert_eq!(model.calls(), 1);
     Ok(())
 }
@@ -784,7 +861,15 @@ async fn errors_after_the_first_event_are_not_retried() -> TestResult {
     assert_eq!(model.calls(), 1);
     assert_eq!(
         kinds(&chunks),
-        ["start", "start-step", "text-start", "text-delta", "error", "finish-step", "finish"]
+        [
+            "start",
+            "start-step",
+            "text-start",
+            "text-delta",
+            "error",
+            "finish-step",
+            "finish"
+        ]
     );
     assert_eq!(
         chunks.last(),
@@ -800,7 +885,10 @@ async fn errors_after_the_first_event_are_not_retried() -> TestResult {
 async fn an_empty_model_stream_is_a_no_output_error() -> TestResult {
     let model = TestModel::new(vec![Step::Events(Vec::new())]);
     let agent = build(model, Vec::new(), 100, PromptInputs::default()).await?;
-    assert_eq!(kinds(&run(&agent, CancellationToken::new()).await), ["start", "error"]);
+    assert_eq!(
+        kinds(&run(&agent, CancellationToken::new()).await),
+        ["start", "error"]
+    );
     Ok(())
 }
 
@@ -842,7 +930,13 @@ async fn cancel_during_tool_execution_aborts_and_cancels_the_tool() -> TestResul
         call("c1", "act", json!({ "wait": true })),
         finish(ModelFinishReason::ToolCalls),
     ])]);
-    let agent = build(model, vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model,
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let cancel = CancellationToken::new();
     let mut stream = agent.run_turn(input("go"), cancel.clone());
     let mut chunks = Vec::new();
@@ -863,7 +957,13 @@ async fn cancel_during_tool_execution_aborts_and_cancels_the_tool() -> TestResul
 
 #[tokio::test]
 async fn an_already_cancelled_run_aborts_after_start() -> TestResult {
-    let agent = build(Arc::new(ScriptedModel::mock()), Vec::new(), 100, PromptInputs::default()).await?;
+    let agent = build(
+        Arc::new(ScriptedModel::mock()),
+        Vec::new(),
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let cancel = CancellationToken::new();
     cancel.cancel();
     assert_eq!(kinds(&run(&agent, cancel).await), ["start", "abort"]);
@@ -878,7 +978,13 @@ async fn dropping_the_stream_cancels_running_tools() -> TestResult {
         call("c1", "act", json!({ "wait": true })),
         finish(ModelFinishReason::ToolCalls),
     ])]);
-    let agent = build(model, vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model,
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let mut stream = agent.run_turn(input("go"), CancellationToken::new());
     while let Some(chunk) = stream.next().await {
         if matches!(chunk, UiChunk::ToolInputAvailable { .. }) {
@@ -907,7 +1013,13 @@ async fn text_part_ids_stay_unique_across_steps() -> TestResult {
     let mut second = text("0", "b");
     second.push(finish(ModelFinishReason::Stop));
     let model = TestModel::new(vec![Step::Events(first), Step::Events(second)]);
-    let agent = build(model, vec![source(&tools, true)], 100, PromptInputs::default()).await?;
+    let agent = build(
+        model,
+        vec![source(&tools, true)],
+        100,
+        PromptInputs::default(),
+    )
+    .await?;
     let chunks = run(&agent, CancellationToken::new()).await;
     let ids: Vec<&str> = chunks
         .iter()
@@ -935,9 +1047,18 @@ async fn text_part_ids_stay_unique_across_steps() -> TestResult {
 /// and no nudges in chat mode.
 #[tokio::test]
 async fn build_merges_sources_and_wraps_the_user_message() -> TestResult {
-    let internal = TestTools::new("browseros", vec![dynamic_tool("tabs"), dynamic_tool("navigate")]);
-    let custom = TestTools::new("custom-x", vec![dynamic_tool("navigate"), dynamic_tool("search")]);
-    let local = TestTools::new("filesystem", vec![static_tool("filesystem_read"), static_tool("search")]);
+    let internal = TestTools::new(
+        "browseros",
+        vec![dynamic_tool("tabs"), dynamic_tool("navigate")],
+    );
+    let custom = TestTools::new(
+        "custom-x",
+        vec![dynamic_tool("navigate"), dynamic_tool("search")],
+    );
+    let local = TestTools::new(
+        "filesystem",
+        vec![static_tool("filesystem_read"), static_tool("search")],
+    );
     let model = TestModel::new(vec![Step::Events(vec![finish(ModelFinishReason::Stop)])]);
     let agent = build(
         model.clone(),
@@ -961,18 +1082,31 @@ async fn build_merges_sources_and_wraps_the_user_message() -> TestResult {
     assert_eq!(names, ["filesystem_read", "navigate", "search", "tabs"]);
 
     let chunks = run(&agent, CancellationToken::new()).await;
-    assert_eq!(kinds(&chunks), ["start", "start-step", "finish-step", "finish"]);
+    assert_eq!(
+        kinds(&chunks),
+        ["start", "start-step", "finish-step", "finish"]
+    );
     let request = model.requests().into_iter().next().ok_or("no request")?;
-    let order: Vec<&str> = request.tools.iter().map(|tool| tool.name.as_str()).collect();
+    let order: Vec<&str> = request
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect();
     assert_eq!(order, ["tabs", "navigate", "search", "filesystem_read"]);
     // The local `search` (the static spec, with `required`) replaced the custom one in place.
-    let search = request.tools.iter().find(|tool| tool.name == "search").ok_or("search")?;
+    let search = request
+        .tools
+        .iter()
+        .find(|tool| tool.name == "search")
+        .ok_or("search")?;
     assert!(search.input_schema.get("required").is_some());
     assert!(request.system.is_some());
     let Some(ModelMessage::User { content }) = request.messages.last() else {
         return Err(format!("expected the user message last: {:?}", request.messages).into());
     };
-    assert!(matches!(&content[..], [UserPart::Text { text, .. }] if text == "<USER_QUERY>\nhello\n</USER_QUERY>"));
+    assert!(
+        matches!(&content[..], [UserPart::Text { text, .. }] if text == "<USER_QUERY>\nhello\n</USER_QUERY>")
+    );
     Ok(())
 }
 

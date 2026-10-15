@@ -54,8 +54,8 @@ impl LegacySseTransport {
         for (name, value) in headers {
             request = request.header(name.as_str(), value.as_str());
         }
-        let mut events = EventSource::new(request)
-            .map_err(|error| SseTransportError(error.to_string()))?;
+        let mut events =
+            EventSource::new(request).map_err(|error| SseTransportError(error.to_string()))?;
         events.set_retry_policy(Box::new(Never));
 
         let (tx, incoming) = mpsc::channel(64);
@@ -156,8 +156,8 @@ impl Transport<RoleClient> for LegacySseTransport {
         let endpoint = self.endpoint.clone();
         let headers = self.headers.clone();
         async move {
-            let body =
-                serde_json::to_string(&item).map_err(|error| SseTransportError(error.to_string()))?;
+            let body = serde_json::to_string(&item)
+                .map_err(|error| SseTransportError(error.to_string()))?;
             let mut request = client
                 .post(endpoint.clone())
                 .header(PROTOCOL_VERSION_HEADER.0, PROTOCOL_VERSION_HEADER.1);

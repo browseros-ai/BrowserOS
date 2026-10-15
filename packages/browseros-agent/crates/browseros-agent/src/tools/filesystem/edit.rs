@@ -6,7 +6,9 @@ use super::{
     FsResult, Input,
     paths::{FsError, node_error, resolve_existing, resolve_write_target},
     read::read_utf8_lossy,
-    util::{detect_line_ending, js_replace_first, normalize_to_lf, restore_line_endings, strip_bom},
+    util::{
+        detect_line_ending, js_replace_first, normalize_to_lf, restore_line_endings, strip_bom,
+    },
 };
 use std::path::Path;
 
@@ -15,9 +17,11 @@ pub(super) fn write(cwd: &Path, input: &Input) -> Result<FsResult, FsError> {
     let content = input.str("content").unwrap_or_default();
     let resolved = resolve_write_target(cwd, path)?;
     if let Some(parent) = resolved.parent() {
-        std::fs::create_dir_all(parent).map_err(|error| node_error(&error, "mkdir", Some(parent)))?;
+        std::fs::create_dir_all(parent)
+            .map_err(|error| node_error(&error, "mkdir", Some(parent)))?;
     }
-    std::fs::write(&resolved, content).map_err(|error| node_error(&error, "open", Some(&resolved)))?;
+    std::fs::write(&resolved, content)
+        .map_err(|error| node_error(&error, "open", Some(&resolved)))?;
     Ok(FsResult::text(format!(
         "Wrote {} bytes to {path}",
         content.len()

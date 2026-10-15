@@ -43,7 +43,10 @@ pub(super) fn lexical_join(base: &Path, input: &str) -> PathBuf {
         match component {
             Component::CurDir => {}
             Component::ParentDir => {
-                if !matches!(out.components().next_back(), Some(Component::RootDir) | None) {
+                if !matches!(
+                    out.components().next_back(),
+                    Some(Component::RootDir) | None
+                ) {
                     out.pop();
                 }
             }
@@ -254,7 +257,11 @@ pub(super) fn node_error(error: &io::Error, syscall: &str, path: Option<&Path>) 
 fn is_loop_error(error: &io::Error) -> bool {
     // ELOOP is 62 on Darwin/BSD and 40 on Linux.
     match error.raw_os_error() {
-        Some(62) => cfg!(any(target_os = "macos", target_os = "ios", target_os = "freebsd")),
+        Some(62) => cfg!(any(
+            target_os = "macos",
+            target_os = "ios",
+            target_os = "freebsd"
+        )),
         Some(40) => cfg!(target_os = "linux"),
         _ => false,
     }

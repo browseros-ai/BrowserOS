@@ -324,19 +324,35 @@ impl Workspace {
     }
 }
 
-async fn call(source: &Arc<dyn ToolSource>, name: &str, input: Value) -> Result<ToolOutput, Box<dyn std::error::Error>> {
+async fn call(
+    source: &Arc<dyn ToolSource>,
+    name: &str,
+    input: Value,
+) -> Result<ToolOutput, Box<dyn std::error::Error>> {
     Ok(source.call(name, input, CancellationToken::new()).await?)
 }
 
 /// The `{text, isError?}` wire output as (text, is_error).
 fn result(output: &ToolOutput) -> (&str, bool) {
     (
-        output.ui.get("text").and_then(Value::as_str).unwrap_or_default(),
-        output.ui.get("isError").and_then(Value::as_bool).unwrap_or(false),
+        output
+            .ui
+            .get("text")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+        output
+            .ui
+            .get("isError")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     )
 }
 
-async fn text_of(source: &Arc<dyn ToolSource>, name: &str, input: Value) -> Result<(String, bool), Box<dyn std::error::Error>> {
+async fn text_of(
+    source: &Arc<dyn ToolSource>,
+    name: &str,
+    input: Value,
+) -> Result<(String, bool), Box<dyn std::error::Error>> {
     let output = call(source, name, input).await?;
     let (text, is_error) = result(&output);
     Ok((text.to_owned(), is_error))
@@ -366,10 +382,18 @@ async fn definitions_match_the_ts_tools() -> TestResult {
         assert_eq!(spec.input_schema, expected["inputSchema"], "{}", spec.name);
     }
 
-    let output_only = filesystem_tools(FsScope::OutputOnly(Arc::new(NoGrants))).tools().await?;
+    let output_only = filesystem_tools(FsScope::OutputOnly(Arc::new(NoGrants)))
+        .tools()
+        .await?;
     assert_eq!(output_only.len(), 1);
-    assert_eq!(output_only[0].description, capture["out:filesystem_read"]["description"]);
-    assert_eq!(output_only[0].input_schema, capture["out:filesystem_read"]["inputSchema"]);
+    assert_eq!(
+        output_only[0].description,
+        capture["out:filesystem_read"]["description"]
+    );
+    assert_eq!(
+        output_only[0].input_schema,
+        capture["out:filesystem_read"]["inputSchema"]
+    );
 
     let app_description = capture["nudge:suggest_app_connection"]["description"]
         .as_str()
@@ -406,7 +430,12 @@ async fn nudges_return_ts_sentinels() -> TestResult {
         output.ui,
         json!({ "content": [{ "type": "text", "text": sentinel }], "isError": false })
     );
-    assert_eq!(output.model, ToolResultOutput::Text { value: sentinel.to_owned() });
+    assert_eq!(
+        output.model,
+        ToolResultOutput::Text {
+            value: sentinel.to_owned()
+        }
+    );
 
     let output = call(
         &nudges,
@@ -432,10 +461,22 @@ async fn paths_cannot_leave_the_workspace() -> TestResult {
 
     for (path, error) in [
         ("../outside", "Path is outside the selected workspace."),
-        ("sub/../../outside", "Path is outside the selected workspace."),
-        ("/etc/hosts", "Path must be relative to the selected workspace."),
-        ("C:\\Windows\\win.ini", "Path must be relative to the selected workspace."),
-        ("\\\\server\\share", "Path must be relative to the selected workspace."),
+        (
+            "sub/../../outside",
+            "Path is outside the selected workspace.",
+        ),
+        (
+            "/etc/hosts",
+            "Path must be relative to the selected workspace.",
+        ),
+        (
+            "C:\\Windows\\win.ini",
+            "Path must be relative to the selected workspace.",
+        ),
+        (
+            "\\\\server\\share",
+            "Path must be relative to the selected workspace.",
+        ),
     ] {
         assert_eq!(
             text_of(&tools, "filesystem_read", json!({ "path": path })).await?,
@@ -443,16 +484,25 @@ async fn paths_cannot_leave_the_workspace() -> TestResult {
             "read {path}"
         );
         assert_eq!(
-            text_of(&tools, "filesystem_write", json!({ "path": path, "content": "x" })).await?,
+            text_of(
+                &tools,
+                "filesystem_write",
+                json!({ "path": path, "content": "x" })
+            )
+            .await?,
             (error.to_owned(), true),
             "write {path}"
         );
     }
-    let (missing, is_error) = text_of(&tools, "filesystem_read", json!({ "path": "nope.txt" })).await?;
+    let (missing, is_error) =
+        text_of(&tools, "filesystem_read", json!({ "path": "nope.txt" })).await?;
     assert!(is_error);
     assert_eq!(
         missing,
-        format!("ENOENT: no such file or directory, realpath '{}'", ws.root.join("nope.txt").display())
+        format!(
+            "ENOENT: no such file or directory, realpath '{}'",
+            ws.root.join("nope.txt").display()
+        )
     );
     assert_eq!(std::fs::read_to_string(ws.outside())?, "secret");
     Ok(())
@@ -469,32 +519,72 @@ async fn symlinks_cannot_leave_the_workspace() -> TestResult {
     std::fs::write(outside_dir.join("secret.txt"), "secret")?;
     symlink(outside_dir.join("secret.txt"), ws.root.join("link.txt"))?;
     symlink(&outside_dir, ws.root.join("linkdir"))?;
-    symlink(ws.root.with_file_name("dangling-target"), ws.root.join("dangling"))?;
+    symlink(
+        ws.root.with_file_name("dangling-target"),
+        ws.root.join("dangling"),
+    )?;
     ws.write("real.txt", "real")?;
     symlink(ws.root.join("real.txt"), ws.root.join("inner-link.txt"))?;
 
     let outside = ("Path is outside the selected workspace.".to_owned(), true);
-    assert_eq!(text_of(&tools, "filesystem_read", json!({ "path": "link.txt" })).await?, outside);
-    assert_eq!(text_of(&tools, "filesystem_read", json!({ "path": "linkdir/secret.txt" })).await?, outside);
     assert_eq!(
-        text_of(&tools, "filesystem_write", json!({ "path": "linkdir/new.txt", "content": "x" })).await?,
+        text_of(&tools, "filesystem_read", json!({ "path": "link.txt" })).await?,
         outside
     );
     assert_eq!(
-        text_of(&tools, "filesystem_write", json!({ "path": "link.txt", "content": "x" })).await?,
+        text_of(
+            &tools,
+            "filesystem_read",
+            json!({ "path": "linkdir/secret.txt" })
+        )
+        .await?,
+        outside
+    );
+    assert_eq!(
+        text_of(
+            &tools,
+            "filesystem_write",
+            json!({ "path": "linkdir/new.txt", "content": "x" })
+        )
+        .await?,
+        outside
+    );
+    assert_eq!(
+        text_of(
+            &tools,
+            "filesystem_write",
+            json!({ "path": "link.txt", "content": "x" })
+        )
+        .await?,
         outside
     );
     // A dangling link would let `writeFile` create its target wherever it points.
     assert_eq!(
-        text_of(&tools, "filesystem_write", json!({ "path": "dangling", "content": "x" })).await?,
+        text_of(
+            &tools,
+            "filesystem_write",
+            json!({ "path": "dangling", "content": "x" })
+        )
+        .await?,
         outside
     );
     assert!(!ws.root.with_file_name("dangling-target").exists());
     assert!(!outside_dir.join("new.txt").exists());
-    assert_eq!(std::fs::read_to_string(outside_dir.join("secret.txt"))?, "secret");
+    assert_eq!(
+        std::fs::read_to_string(outside_dir.join("secret.txt"))?,
+        "secret"
+    );
 
     // Links that stay inside are followed.
-    assert_eq!(text_of(&tools, "filesystem_read", json!({ "path": "inner-link.txt" })).await?, ("1 | real".to_owned(), false));
+    assert_eq!(
+        text_of(
+            &tools,
+            "filesystem_read",
+            json!({ "path": "inner-link.txt" })
+        )
+        .await?,
+        ("1 | real".to_owned(), false)
+    );
 
     // Listing and searching hide what escapes.
     let (listing, _) = text_of(&tools, "filesystem_ls", json!({})).await?;
@@ -517,20 +607,47 @@ async fn read_numbers_lines_and_paginates() -> TestResult {
     assert!(all.starts_with(" 1 | line 1\n 2 | line 2"), "{all}");
     assert!(all.ends_with("10 | line 10"));
 
-    let (page, _) = text_of(&tools, "filesystem_read", json!({ "path": "ten.txt", "offset": 3, "limit": 2 })).await?;
+    let (page, _) = text_of(
+        &tools,
+        "filesystem_read",
+        json!({ "path": "ten.txt", "offset": 3, "limit": 2 }),
+    )
+    .await?;
     assert_eq!(
         page,
         "3 | line 3\n4 | line 4\n\n(6 more lines in file. Use offset=5 to continue reading.)"
     );
-    let (tail, _) = text_of(&tools, "filesystem_read", json!({ "path": "ten.txt", "offset": 9 })).await?;
-    assert_eq!(tail, " 9 | line 9\n10 | line 10\n\n(Showing lines 9-10 of 10)");
-    let (beyond, is_error) = text_of(&tools, "filesystem_read", json!({ "path": "ten.txt", "offset": 11 })).await?;
-    assert_eq!((beyond.as_str(), is_error), ("File has 10 lines. Offset 11 is beyond end of file.", false));
-    let output = call(&tools, "filesystem_read", json!({ "path": "ten.txt", "limit": 1 })).await?;
+    let (tail, _) = text_of(
+        &tools,
+        "filesystem_read",
+        json!({ "path": "ten.txt", "offset": 9 }),
+    )
+    .await?;
+    assert_eq!(
+        tail,
+        " 9 | line 9\n10 | line 10\n\n(Showing lines 9-10 of 10)"
+    );
+    let (beyond, is_error) = text_of(
+        &tools,
+        "filesystem_read",
+        json!({ "path": "ten.txt", "offset": 11 }),
+    )
+    .await?;
+    assert_eq!(
+        (beyond.as_str(), is_error),
+        ("File has 10 lines. Offset 11 is beyond end of file.", false)
+    );
+    let output = call(
+        &tools,
+        "filesystem_read",
+        json!({ "path": "ten.txt", "limit": 1 }),
+    )
+    .await?;
     assert_eq!(
         output.model,
         ToolResultOutput::Text {
-            value: "1 | line 1\n\n(9 more lines in file. Use offset=2 to continue reading.)".to_owned()
+            value: "1 | line 1\n\n(9 more lines in file. Use offset=2 to continue reading.)"
+                .to_owned()
         }
     );
     Ok(())
@@ -544,21 +661,35 @@ async fn read_enforces_line_and_character_limits() -> TestResult {
     ws.write("many.txt", many.join("\n"))?;
     ws.write("wide.txt", "x".repeat(20_000))?;
 
-    let (error, is_error) = text_of(&tools, "filesystem_read", json!({ "path": "many.txt" })).await?;
+    let (error, is_error) =
+        text_of(&tools, "filesystem_read", json!({ "path": "many.txt" })).await?;
     assert!(is_error);
     assert_eq!(
         error,
         "Requested lines 1-600 exceed the 500-line limit for filesystem_read. Retry with offset and limit=500 or smaller."
     );
-    let (error, _) = text_of(&tools, "filesystem_read", json!({ "path": "many.txt", "limit": 501 })).await?;
-    assert_eq!(error, "filesystem_read accepts at most 500 lines per call. Retry with a smaller limit.");
+    let (error, _) = text_of(
+        &tools,
+        "filesystem_read",
+        json!({ "path": "many.txt", "limit": 501 }),
+    )
+    .await?;
+    assert_eq!(
+        error,
+        "filesystem_read accepts at most 500 lines per call. Retry with a smaller limit."
+    );
     let (error, _) = text_of(&tools, "filesystem_read", json!({ "path": "wide.txt" })).await?;
     assert_eq!(
         error,
         "Requested lines 1-1 produce 20004 characters in the response, above the 15000-character limit for filesystem_read. Retry with a smaller limit or a later offset."
     );
     let output = call(&tools, "filesystem_read", json!({ "path": "many.txt" })).await?;
-    assert_eq!(output.model, ToolResultOutput::ErrorText { value: error_text(&output) });
+    assert_eq!(
+        output.model,
+        ToolResultOutput::ErrorText {
+            value: error_text(&output)
+        }
+    );
     Ok(())
 }
 
@@ -582,8 +713,13 @@ async fn read_returns_images_as_media() -> TestResult {
         output.model,
         ToolResultOutput::Content {
             value: vec![
-                ToolContentItem::Text { text: "Image: pic.PNG (4 bytes)".to_owned() },
-                ToolContentItem::Media { data: "iVBORw==".to_owned(), media_type: "image/png".to_owned() },
+                ToolContentItem::Text {
+                    text: "Image: pic.PNG (4 bytes)".to_owned()
+                },
+                ToolContentItem::Media {
+                    data: "iVBORw==".to_owned(),
+                    media_type: "image/png".to_owned()
+                },
             ]
         }
     );
@@ -595,7 +731,12 @@ async fn write_creates_parent_directories() -> TestResult {
     let ws = Workspace::new()?;
     let tools = ws.tools();
     assert_eq!(
-        text_of(&tools, "filesystem_write", json!({ "path": "a/b/c.txt", "content": "héllo" })).await?,
+        text_of(
+            &tools,
+            "filesystem_write",
+            json!({ "path": "a/b/c.txt", "content": "héllo" })
+        )
+        .await?,
         ("Wrote 6 bytes to a/b/c.txt".to_owned(), false)
     );
     assert_eq!(std::fs::read_to_string(ws.root.join("a/b/c.txt"))?, "héllo");
@@ -629,21 +770,49 @@ async fn edit_replaces_one_match_and_keeps_bom_and_line_endings() -> TestResult 
     )
     .await?;
     assert!(!is_error);
-    assert_eq!(std::fs::read_to_string(ws.root.join("crlf.txt"))?, "\u{feff}one\r\nmore\r\ngamma\r\n");
+    assert_eq!(
+        std::fs::read_to_string(ws.root.join("crlf.txt"))?,
+        "\u{feff}one\r\nmore\r\ngamma\r\n"
+    );
 
     // `String#replace` substitution patterns apply, as in TS.
     ws.write("dollar.txt", "price")?;
-    text_of(&tools, "filesystem_edit", json!({ "path": "dollar.txt", "old_string": "price", "new_string": "$& $$5" })).await?;
-    assert_eq!(std::fs::read_to_string(ws.root.join("dollar.txt"))?, "price $5");
+    text_of(
+        &tools,
+        "filesystem_edit",
+        json!({ "path": "dollar.txt", "old_string": "price", "new_string": "$& $$5" }),
+    )
+    .await?;
+    assert_eq!(
+        std::fs::read_to_string(ws.root.join("dollar.txt"))?,
+        "price $5"
+    );
 
     ws.write("dup.txt", "x\nx\n")?;
     for (old, new, expected) in [
-        ("x", "y", "Found 2 exact occurrences of old_string. Add more surrounding context to make the match unique."),
-        ("zzz", "y", "old_string not found in file (exact and whitespace-tolerant match both failed)."),
-        ("x", "x", "old_string and new_string are identical — no change needed."),
+        (
+            "x",
+            "y",
+            "Found 2 exact occurrences of old_string. Add more surrounding context to make the match unique.",
+        ),
+        (
+            "zzz",
+            "y",
+            "old_string not found in file (exact and whitespace-tolerant match both failed).",
+        ),
+        (
+            "x",
+            "x",
+            "old_string and new_string are identical — no change needed.",
+        ),
     ] {
         assert_eq!(
-            text_of(&tools, "filesystem_edit", json!({ "path": "dup.txt", "old_string": old, "new_string": new })).await?,
+            text_of(
+                &tools,
+                "filesystem_edit",
+                json!({ "path": "dup.txt", "old_string": old, "new_string": new })
+            )
+            .await?,
             (expected.to_owned(), true)
         );
     }
@@ -659,17 +828,29 @@ async fn bash_runs_in_the_workspace_with_exit_codes_and_timeouts() -> TestResult
     assert_eq!(PathBuf::from(pwd.trim()), ws.root);
 
     assert_eq!(
-        text_of(&tools, "filesystem_bash", json!({ "command": "echo out; echo err >&2; exit 3" })).await?,
+        text_of(
+            &tools,
+            "filesystem_bash",
+            json!({ "command": "echo out; echo err >&2; exit 3" })
+        )
+        .await?,
         ("out\n\nerr\n\n\n[Exit code: 3]".to_owned(), true)
     );
     assert_eq!(
         text_of(&tools, "filesystem_bash", json!({ "command": "true" })).await?,
         ("(no output)".to_owned(), false)
     );
-    let (timed_out, is_error) =
-        text_of(&tools, "filesystem_bash", json!({ "command": "echo started; sleep 5", "timeout": 0.5 })).await?;
+    let (timed_out, is_error) = text_of(
+        &tools,
+        "filesystem_bash",
+        json!({ "command": "echo started; sleep 5", "timeout": 0.5 }),
+    )
+    .await?;
     assert!(is_error);
-    assert!(timed_out.starts_with("Command timed out after 0.5s\n\n"), "{timed_out}");
+    assert!(
+        timed_out.starts_with("Command timed out after 0.5s\n\n"),
+        "{timed_out}"
+    );
 
     let cancel = CancellationToken::new();
     let stopper = cancel.clone();
@@ -678,7 +859,9 @@ async fn bash_runs_in_the_workspace_with_exit_codes_and_timeouts() -> TestResult
         stopper.cancel();
     });
     let started = std::time::Instant::now();
-    let cancelled = tools.call("filesystem_bash", json!({ "command": "sleep 5" }), cancel).await;
+    let cancelled = tools
+        .call("filesystem_bash", json!({ "command": "sleep 5" }), cancel)
+        .await;
     assert!(cancelled.is_err());
     assert!(started.elapsed() < Duration::from_secs(3));
     Ok(())
@@ -694,22 +877,42 @@ async fn grep_matches_with_context_filters_and_limits() -> TestResult {
     ws.write("logo.png", "foo")?;
 
     let grep = |input: Value| text_of(&tools, "filesystem_grep", input);
-    assert_eq!(grep(json!({ "pattern": "foo" })).await?, ("src/a.ts:1:foo".to_owned(), false));
     assert_eq!(
-        grep(json!({ "pattern": "FOO", "ignore_case": true })).await?.0,
+        grep(json!({ "pattern": "foo" })).await?,
+        ("src/a.ts:1:foo".to_owned(), false)
+    );
+    assert_eq!(
+        grep(json!({ "pattern": "FOO", "ignore_case": true }))
+            .await?
+            .0,
         "src/a.ts:1:foo\nsrc/a.ts:5:Foo bar"
     );
     assert_eq!(
-        grep(json!({ "pattern": "foo", "ignore_case": true, "context": 1 })).await?.0,
+        grep(json!({ "pattern": "foo", "ignore_case": true, "context": 1 }))
+            .await?
+            .0,
         "src/a.ts:1:foo\nsrc/a.ts-2-bar\n--\nsrc/a.ts-4-qux\nsrc/a.ts:5:Foo bar"
     );
     assert_eq!(
         grep(json!({ "pattern": "a", "limit": 1 })).await?.0,
         "src/a.ts:2:bar\n\n(Showing first 1 matches. Use limit=2 to see more.)"
     );
-    assert_eq!(grep(json!({ "pattern": "foo", "glob": "*.js" })).await?.0, "No matches found.");
-    assert_eq!(grep(json!({ "pattern": "Foo b", "literal": true })).await?.0, "src/a.ts:5:Foo bar");
-    assert_eq!(grep(json!({ "pattern": "baz", "path": "src/a.ts" })).await?.0, "src/a.ts:3:baz");
+    assert_eq!(
+        grep(json!({ "pattern": "foo", "glob": "*.js" })).await?.0,
+        "No matches found."
+    );
+    assert_eq!(
+        grep(json!({ "pattern": "Foo b", "literal": true }))
+            .await?
+            .0,
+        "src/a.ts:5:Foo bar"
+    );
+    assert_eq!(
+        grep(json!({ "pattern": "baz", "path": "src/a.ts" }))
+            .await?
+            .0,
+        "src/a.ts:3:baz"
+    );
     assert_eq!(
         grep(json!({ "pattern": "(" })).await?,
         ("Invalid regex pattern: (".to_owned(), true)
@@ -727,12 +930,27 @@ async fn find_lists_sorted_relative_paths() -> TestResult {
     ws.write("dist/out.ts", "")?;
 
     let find = |input: Value| text_of(&tools, "filesystem_find", input);
-    assert_eq!(find(json!({ "pattern": "*.ts" })).await?.0, "src/a.ts\nsrc/z.ts");
-    assert_eq!(find(json!({ "pattern": "**/*.{ts,js}" })).await?.0, "b.js\nsrc/a.ts\nsrc/z.ts");
-    assert_eq!(find(json!({ "pattern": "*.ts", "path": "src" })).await?.0, "a.ts\nz.ts");
+    assert_eq!(
+        find(json!({ "pattern": "*.ts" })).await?.0,
+        "src/a.ts\nsrc/z.ts"
+    );
+    assert_eq!(
+        find(json!({ "pattern": "**/*.{ts,js}" })).await?.0,
+        "b.js\nsrc/a.ts\nsrc/z.ts"
+    );
+    assert_eq!(
+        find(json!({ "pattern": "*.ts", "path": "src" })).await?.0,
+        "a.ts\nz.ts"
+    );
     let (limited, _) = find(json!({ "pattern": "*.ts", "limit": 1 })).await?;
-    assert!(limited.ends_with("\n\n(Showing first 1 results. Use limit=2 to see more.)"), "{limited}");
-    assert_eq!(find(json!({ "pattern": "*.rs" })).await?.0, "No files matching \"*.rs\" found.");
+    assert!(
+        limited.ends_with("\n\n(Showing first 1 results. Use limit=2 to see more.)"),
+        "{limited}"
+    );
+    assert_eq!(
+        find(json!({ "pattern": "*.rs" })).await?.0,
+        "No files matching \"*.rs\" found."
+    );
     Ok(())
 }
 
@@ -759,7 +977,10 @@ async fn ls_lists_directories_first_with_sizes() -> TestResult {
     assert_eq!(ls(json!({ "path": "empty" })).await?.0, "(empty directory)");
     let (error, is_error) = ls(json!({ "path": "a.txt" })).await?;
     assert!(is_error);
-    assert!(error.starts_with("ENOTDIR: not a directory, scandir"), "{error}");
+    assert!(
+        error.starts_with("ENOTDIR: not a directory, scandir"),
+        "{error}"
+    );
     Ok(())
 }
 
@@ -826,7 +1047,10 @@ async fn output_only_reads_are_granted_fenced_and_bounded() -> TestResult {
     let (text, is_error) = text_of(&tools, "filesystem_read", json!({ "path": granted })).await?;
     assert!(!is_error, "{text}");
     let lines: Vec<&str> = text.lines().collect();
-    assert!(lines[0].starts_with("[UNTRUSTED_PAGE_CONTENT nonce="), "{text}");
+    assert!(
+        lines[0].starts_with("[UNTRUSTED_PAGE_CONTENT nonce="),
+        "{text}"
+    );
     assert!(lines[0].contains(&format!("origin={}]", granted.display())));
     assert_eq!(&lines[1..3], ["1 | row one", "2 | row two"]);
     assert!(lines[3].starts_with("[END_UNTRUSTED_PAGE_CONTENT nonce="));
@@ -848,7 +1072,11 @@ async fn output_only_reads_are_granted_fenced_and_bounded() -> TestResult {
         "filesystem_read can only read BrowserOS-generated tool output files returned in this session.",
     )
     .await?;
-    refuse(state.join("browseros.db"), "Path is outside BrowserOS tool output.").await?;
+    refuse(
+        state.join("browseros.db"),
+        "Path is outside BrowserOS tool output.",
+    )
+    .await?;
     refuse(
         PathBuf::from("snapshot.txt"),
         "No workspace selected. filesystem_read can only read BrowserOS-generated tool output files by absolute path.",
@@ -862,7 +1090,11 @@ async fn output_only_reads_are_granted_fenced_and_bounded() -> TestResult {
     #[cfg(unix)]
     {
         std::os::unix::fs::symlink(state.join("browseros.db"), outputs.join("escape.txt"))?;
-        refuse(outputs.join("escape.txt"), "Path is outside BrowserOS tool output.").await?;
+        refuse(
+            outputs.join("escape.txt"),
+            "Path is outside BrowserOS tool output.",
+        )
+        .await?;
     }
     Ok(())
 }

@@ -4,16 +4,15 @@
 
 use super::{
     FsResult, Image, Input, ReadScope,
-    paths::{
-        FsError, is_browseros_state_path, node_error, resolve_existing, resolve_tool_output,
-    },
+    paths::{FsError, is_browseros_state_path, node_error, resolve_existing, resolve_tool_output},
     util::{MAX_READ_CHARS, MAX_READ_LINES, extname, image_mime_type, js_number, utf16_len},
 };
 use base64::Engine as _;
 use std::path::{Path, PathBuf};
 
 const NO_WORKSPACE_READ_ERROR: &str = "No workspace selected. filesystem_read can only read BrowserOS-generated tool output files by absolute path.";
-const NOT_GRANTED_ERROR: &str = "filesystem_read can only read BrowserOS-generated tool output files returned in this session.";
+const NOT_GRANTED_ERROR: &str =
+    "filesystem_read can only read BrowserOS-generated tool output files returned in this session.";
 
 pub(super) fn run(scope: &ReadScope<'_>, input: &Input) -> Result<FsResult, FsError> {
     let path = input.str("path").unwrap_or_default();

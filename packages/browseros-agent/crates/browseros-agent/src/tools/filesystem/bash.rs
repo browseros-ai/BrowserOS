@@ -31,7 +31,11 @@ fn shell() -> (String, &'static str) {
     }
 }
 
-pub(super) async fn run(cwd: &Path, input: &Input, cancel: CancellationToken) -> Result<FsResult, String> {
+pub(super) async fn run(
+    cwd: &Path,
+    input: &Input,
+    cancel: CancellationToken,
+) -> Result<FsResult, String> {
     let command = input.str("command").unwrap_or_default();
     let timeout_seconds = or_default(input.number("timeout"), DEFAULT_BASH_TIMEOUT);
     let (shell, flag) = shell();

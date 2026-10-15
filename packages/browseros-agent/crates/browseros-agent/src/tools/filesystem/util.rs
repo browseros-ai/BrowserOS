@@ -136,7 +136,10 @@ pub(super) fn image_mime_type(extension: &str) -> Option<&'static str> {
 
 /// Node's `path.extname`: from the last `.` of the final component, unless that dot leads it.
 pub(super) fn extname(path: &Path) -> String {
-    let Some(name) = path.file_name().map(|name| name.to_string_lossy().into_owned()) else {
+    let Some(name) = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+    else {
         return String::new();
     };
     match name.rfind('.') {

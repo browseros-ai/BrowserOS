@@ -239,7 +239,9 @@ fn read_schema(path_description: &str) -> Value {
 fn output_read_spec() -> ToolSpec {
     spec(
         "filesystem_read",
-        format!("Read BrowserOS-generated tool output files by absolute path. {READ_DESCRIPTION_TAIL}"),
+        format!(
+            "Read BrowserOS-generated tool output files by absolute path. {READ_DESCRIPTION_TAIL}"
+        ),
         read_schema("Absolute BrowserOS-generated tool output path returned by a browser tool"),
     )
 }

@@ -60,10 +60,8 @@ pub(super) fn grep(cwd: &Path, input: &Input) -> Result<FsResult, FsError> {
     let mut all_matches = Vec::new();
     let mut total = 0.0;
     if meta.is_file() {
-        let display = path_input.map_or_else(
-            || search_path.to_string_lossy().into_owned(),
-            str::to_owned,
-        );
+        let display =
+            path_input.map_or_else(|| search_path.to_string_lossy().into_owned(), str::to_owned);
         let Some(content) = read_grep_file(&search_path) else {
             return Ok(FsResult::error(format!("Unable to read file: {display}")));
         };
@@ -278,7 +276,10 @@ pub(super) fn ls(cwd: &Path, input: &Input) -> Result<FsResult, FsError> {
 /// `path.join(inputPath, name)`, for re-validating each listed child through the boundary (which
 /// folds `.`/`..` itself).
 fn join_display(input_path: &str, name: &str) -> String {
-    Path::new(input_path).join(name).to_string_lossy().into_owned()
+    Path::new(input_path)
+        .join(name)
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn format_size(bytes: u64) -> String {

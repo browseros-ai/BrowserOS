@@ -442,7 +442,8 @@ impl Turn {
         );
         copy.into_iter()
             .map(|mut message| {
-                if message.role == Role::User && wrapped_id.as_deref() == Some(message.id.as_str()) {
+                if message.role == Role::User && wrapped_id.as_deref() == Some(message.id.as_str())
+                {
                     message.parts = vec![UiPart::Text(TextPart {
                         text: input.prompt_text.clone(),
                         state: None,
@@ -569,7 +570,8 @@ impl Turn {
                     has_output = true;
                     let stream_id = match open_text.get(&id) {
                         Some((stream_id, index)) => {
-                            if let Some(AssistantPart::Text { text, .. }) = content.get_mut(*index) {
+                            if let Some(AssistantPart::Text { text, .. }) = content.get_mut(*index)
+                            {
                                 text.push_str(&delta);
                             }
                             stream_id.clone()
@@ -589,8 +591,12 @@ impl Turn {
                 } => {
                     let stream_id = match open_text.remove(&id) {
                         Some((stream_id, index)) => {
-                            if let (Some(metadata), Some(AssistantPart::Text { provider_options, .. })) =
-                                (&provider_metadata, content.get_mut(index))
+                            if let (
+                                Some(metadata),
+                                Some(AssistantPart::Text {
+                                    provider_options, ..
+                                }),
+                            ) = (&provider_metadata, content.get_mut(index))
                             {
                                 *provider_options = Some(metadata.clone());
                             }
@@ -813,7 +819,10 @@ impl Turn {
 
         let tools_may_run = !errored
             && finish.is_some_and(|(reason, _)| {
-                matches!(reason, ModelFinishReason::Stop | ModelFinishReason::ToolCalls)
+                matches!(
+                    reason,
+                    ModelFinishReason::Stop | ModelFinishReason::ToolCalls
+                )
             });
         if tools_may_run {
             results.extend(self.run_tools(pending).await?);
@@ -847,7 +856,11 @@ impl Turn {
     async fn run_tools(&self, calls: Vec<PendingCall>) -> Flow<Vec<ToolResultPart>> {
         let mut running = FuturesUnordered::new();
         for (index, call) in calls.iter().enumerate() {
-            let tool = self.inner.tools.get(&call.tool_name).map(|tool| Arc::clone(&tool.source));
+            let tool = self
+                .inner
+                .tools
+                .get(&call.tool_name)
+                .map(|tool| Arc::clone(&tool.source));
             let name = call.tool_name.clone();
             let input = call.input.clone();
             let token = self.stop.child_token();
@@ -869,7 +882,9 @@ impl Turn {
             };
             let call = &calls[index];
             let result = joined.unwrap_or_else(|error| {
-                Err(tools::ToolCallError(format!("Tool execution failed: {error}")))
+                Err(tools::ToolCallError(format!(
+                    "Tool execution failed: {error}"
+                )))
             });
             let (tool_metadata, dynamic, _) = self
                 .inner
@@ -930,7 +945,9 @@ impl Turn {
         let Some(tool) = self.inner.tools.get(tool_name) else {
             let available = self.inner.tools.keys().cloned().collect::<Vec<_>>();
             let message = if available.is_empty() {
-                format!("Model tried to call unavailable tool '{tool_name}'. No tools are available.")
+                format!(
+                    "Model tried to call unavailable tool '{tool_name}'. No tools are available."
+                )
             } else {
                 format!(
                     "Model tried to call unavailable tool '{tool_name}'. Available tools: {}.",
@@ -951,8 +968,10 @@ impl Turn {
         let parsed = parsed.map_err(|cause| invalid_input(cause, Value::from(input_json)))?;
         match tool.spec.kind {
             ToolKind::Dynamic { .. } => Ok(parsed),
-            ToolKind::Static => tools::validate_static_input(&tool.spec.input_schema, parsed.clone())
-                .map_err(|cause| invalid_input(cause, parsed)),
+            ToolKind::Static => {
+                tools::validate_static_input(&tool.spec.input_schema, parsed.clone())
+                    .map_err(|cause| invalid_input(cause, parsed))
+            }
         }
     }
 
@@ -961,7 +980,10 @@ impl Turn {
     }
 
     fn message_error_text(&self, message: &str) -> String {
-        llm::chat_error_text(&message_chat_error(message, self.inner.info.provider.as_str()))
+        llm::chat_error_text(&message_chat_error(
+            message,
+            self.inner.info.provider.as_str(),
+        ))
     }
 }
 
@@ -999,11 +1021,19 @@ fn step_messages(
     if !content.is_empty() {
         messages.push(ModelMessage::Assistant { content });
     }
-    let order = |id: &str| call_order.iter().position(|call| call == id).unwrap_or(usize::MAX);
+    let order = |id: &str| {
+        call_order
+            .iter()
+            .position(|call| call == id)
+            .unwrap_or(usize::MAX)
+    };
     results.sort_by_key(|part| order(&part.tool_call_id));
     if !results.is_empty() {
         messages.push(ModelMessage::Tool {
-            content: results.into_iter().map(ToolMessagePart::ToolResult).collect(),
+            content: results
+                .into_iter()
+                .map(ToolMessagePart::ToolResult)
+                .collect(),
         });
     }
     messages
@@ -1082,7 +1112,12 @@ fn message_chat_error(message: &str, provider: &str) -> ChatError {
             )
         };
     }
-    if has(&["context length", "context_length_exceeded", "too many tokens", "maximum context"]) {
+    if has(&[
+        "context length",
+        "context_length_exceeded",
+        "too many tokens",
+        "maximum context",
+    ]) {
         return base(
             ChatErrorCode::ContextLength,
             "Conversation too long",
@@ -1098,7 +1133,13 @@ fn message_chat_error(message: &str, provider: &str) -> ChatError {
             false,
         );
     }
-    if has(&["requires apikey", "requires baseurl", "requires oauth", "not authenticated with", "is required for"]) {
+    if has(&[
+        "requires apikey",
+        "requires baseurl",
+        "requires oauth",
+        "not authenticated with",
+        "is required for",
+    ]) {
         return base(
             ChatErrorCode::ProviderConfig,
             "Provider not configured",

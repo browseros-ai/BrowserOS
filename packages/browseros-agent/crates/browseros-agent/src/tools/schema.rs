@@ -38,8 +38,12 @@ pub(crate) fn validate_static_input(schema: &Value, input: Value) -> Result<Valu
                 }
             }
             None if required.contains(&key.as_str()) => {
-                let expected = property.get("type").and_then(Value::as_str).unwrap_or("any");
-                issues.push(invalid_type(expected, &Value::Null, &[key]).with_received("undefined"));
+                let expected = property
+                    .get("type")
+                    .and_then(Value::as_str)
+                    .unwrap_or("any");
+                issues
+                    .push(invalid_type(expected, &Value::Null, &[key]).with_received("undefined"));
             }
             None => {}
         }
@@ -71,7 +75,10 @@ impl Issue {
 }
 
 fn check_property(property: &Value, value: &Value, key: &str) -> Option<Issue> {
-    let expected = property.get("type").and_then(Value::as_str).unwrap_or("any");
+    let expected = property
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or("any");
     let type_ok = match expected {
         "string" => value.is_string(),
         "number" => value.is_number(),
@@ -170,7 +177,9 @@ fn js_type(value: &Value) -> &'static str {
 fn render(value: &Value, issues: &[Issue]) -> String {
     let issues = Value::Array(issues.iter().map(|issue| issue.0.clone()).collect());
     let pretty = serde_json::to_string_pretty(&issues).unwrap_or_else(|_| issues.to_string());
-    format!("AI_TypeValidationError: Type validation failed: Value: {value}.\nError message: {pretty}")
+    format!(
+        "AI_TypeValidationError: Type validation failed: Value: {value}.\nError message: {pretty}"
+    )
 }
 
 #[cfg(test)]

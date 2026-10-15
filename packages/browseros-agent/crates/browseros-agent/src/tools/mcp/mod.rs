@@ -17,14 +17,12 @@ use crate::messages::{ToolContentItem, ToolResultOutput};
 use rmcp::{
     RoleClient, ServiceExt,
     model::{
-        CallToolRequest, CallToolRequestParams, CancelledNotification,
-        CancelledNotificationParam, ClientCapabilities, ClientInfo, ClientRequest, Implementation,
-        ServerResult, Tool,
+        CallToolRequest, CallToolRequestParams, CancelledNotification, CancelledNotificationParam,
+        ClientCapabilities, ClientInfo, ClientRequest, Implementation, ServerResult, Tool,
     },
     service::{Peer, PeerRequestOptions, RunningService},
     transport::{
-        StreamableHttpClientTransport,
-        streamable_http_client::StreamableHttpClientTransportConfig,
+        StreamableHttpClientTransport, streamable_http_client::StreamableHttpClientTransportConfig,
     },
 };
 use serde_json::{Map, Value};
@@ -129,7 +127,9 @@ async fn connect(endpoint: &McpEndpoint) -> Result<Client, String> {
             let transport = sse::LegacySseTransport::connect(&endpoint.url, &endpoint.headers)
                 .await
                 .map_err(|error| error.to_string())?;
-            info.serve(transport).await.map_err(|error| error.to_string())
+            info.serve(transport)
+                .await
+                .map_err(|error| error.to_string())
         }
     }
 }
@@ -151,7 +151,11 @@ fn tool_spec(tool: &Tool) -> ToolSpec {
     let title = raw
         .get("title")
         .and_then(Value::as_str)
-        .or_else(|| annotations.and_then(|a| a.get("title")).and_then(Value::as_str))
+        .or_else(|| {
+            annotations
+                .and_then(|a| a.get("title"))
+                .and_then(Value::as_str)
+        })
         .map(str::to_owned);
 
     let mut metadata = Map::new();
@@ -271,7 +275,9 @@ impl ToolSource for McpToolSource {
                 "MCP server \"{}\" returned an unexpected response to tools/call",
                 self.label
             ))),
-            Err(rmcp::service::ServiceError::McpError(error)) => Err(ToolCallError(error.message.into_owned())),
+            Err(rmcp::service::ServiceError::McpError(error)) => {
+                Err(ToolCallError(error.message.into_owned()))
+            }
             Err(error) => Err(ToolCallError(error.to_string())),
         }
     }
@@ -296,9 +302,16 @@ fn mcp_to_model_output(result: &Value) -> ToolResultOutput {
         .iter()
         .map(|part| {
             let kind = part.get("type").and_then(Value::as_str);
-            match (kind, part.get("text"), part.get("data"), part.get("mimeType")) {
+            match (
+                kind,
+                part.get("text"),
+                part.get("data"),
+                part.get("mimeType"),
+            ) {
                 (Some("text"), Some(text), _, _) => ToolContentItem::Text {
-                    text: text.as_str().map_or_else(|| text.to_string(), str::to_owned),
+                    text: text
+                        .as_str()
+                        .map_or_else(|| text.to_string(), str::to_owned),
                 },
                 (Some("image"), _, Some(Value::String(data)), Some(Value::String(mime))) => {
                     ToolContentItem::Media {
