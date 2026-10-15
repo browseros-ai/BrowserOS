@@ -72,7 +72,7 @@ const CREATE_JOURNAL: &str = "CREATE TABLE IF NOT EXISTS \"__drizzle_migrations\
 /// What the catch-up did.
 pub(super) struct CatchUp {
     pub(super) applied: usize,
-    /// Hashes recorded in the journal that are not among [`MIGRATIONS`]: a newer TS server ran.
+    /// Hashes of rows with timestamps beyond our journal: a newer TS server ran.
     pub(super) unknown: Vec<String>,
 }
 
@@ -89,7 +89,7 @@ pub(super) async fn catch_up(connection: &mut SqliteConnection) -> Result<CatchU
         // `!lastDbMigration || Number(created_at) < when`; NaN applies nothing, as in JS.
         .filter(|migration| newest.is_none_or(|newest| newest < migration.when as f64))
         .collect();
-    if pending.is_empty() {
+    if !unknown.is_empty() || pending.is_empty() {
         return Ok(CatchUp {
             applied: 0,
             unknown,
@@ -131,7 +131,7 @@ async fn apply(
     pending: &[&FrozenMigration],
     check_foreign_keys: bool,
 ) -> Result<Option<usize>, sqlx::Error> {
-    let mut transaction = connection.begin().await?;
+    let mut transaction = connection.begin_with("BEGIN IMMEDIATE").await?;
     for migration in pending {
         for statement in migration.sql.split(STATEMENT_BREAKPOINT) {
             if statement.trim().is_empty() {
@@ -187,13 +187,10 @@ async fn newest_created_at(connection: &mut SqliteConnection) -> Result<Option<f
 }
 
 async fn unknown_hashes(connection: &mut SqliteConnection) -> Result<Vec<String>, sqlx::Error> {
-    let known: Vec<String> = MIGRATIONS.iter().map(FrozenMigration::hash).collect();
-    let recorded: Vec<String> =
-        sqlx::query_scalar(r#"SELECT hash FROM "__drizzle_migrations" ORDER BY created_at"#)
-            .fetch_all(&mut *connection)
-            .await?;
-    Ok(recorded
-        .into_iter()
-        .filter(|hash| !known.contains(hash))
-        .collect())
+    // Drizzle compares timestamps, not hashes. The same historical SQL may have a different
+    // hash after a CRLF checkout; conversely a future entry can reuse a known hash.
+    let latest = MIGRATIONS.last().map_or(0, |migration| migration.when);
+    sqlx::query_scalar(
+        r#"SELECT hash FROM "__drizzle_migrations" WHERE CAST(created_at AS REAL) > ? ORDER BY created_at"#,
+    ).bind(latest).fetch_all(&mut *connection).await
 }

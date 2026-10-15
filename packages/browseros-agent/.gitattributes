@@ -1,2 +1,5 @@
 third_party/bin/* filter=lfs diff=lfs merge=lfs -text
 third_party/bin/rcedit-x64.exe filter=lfs diff=lfs merge=lfs -text
+
+# Drizzle journals SHA-256 of SQL bytes; keep hashes stable on Windows checkouts.
+*.sql text eol=lf

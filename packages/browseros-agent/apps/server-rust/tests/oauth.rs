@@ -153,6 +153,7 @@ async fn fake_auth(State(state): State<Arc<FakeInner>>, request: Request) -> Res
     }
 }
 struct Context {
+    db: Database,
     _dir: tempfile::TempDir,
     paths: BrowserosPaths,
     store: OAuthTokenStore,
@@ -173,6 +174,7 @@ impl Context {
             port,
         );
         Ok(Self {
+            db,
             _dir: dir,
             paths,
             store,
@@ -756,7 +758,7 @@ async fn refresh_rejection_deletes_and_malformed_success_preserves_tokens() -> T
         "/chatgpt-pro/token",
         StatusCode::UNAUTHORIZED,
         "application/json",
-        json!({}),
+        json!({"error":"invalid_grant"}),
     )
     .await;
     assert_eq!(
@@ -804,16 +806,6 @@ async fn copilot_no_refresh_durable_storage_and_logout() -> TestResult {
         serde_json::to_value(ctx.manager.try_status("unknown").await?)?,
         json!({"authenticated":false,"provider":"unknown"})
     );
-    let (reopened, _) = Database::open(&ctx.paths).await?;
-    assert_eq!(
-        reopened
-            .oauth_tokens()
-            .get("installation-a", "chatgpt-pro")
-            .await?
-            .ok_or("not durable")?
-            .access_token,
-        "old"
-    );
     ctx.manager.try_logout("chatgpt-pro").await?;
     assert!(!ctx.manager.try_status("chatgpt-pro").await?.authenticated);
     assert!(ctx.manager.try_status("qwen-code").await?.authenticated);
@@ -827,6 +819,27 @@ async fn copilot_no_refresh_durable_storage_and_logout() -> TestResult {
         "Not authenticated with ChatGPT. Please login first."
     );
     ctx.manager.shutdown().await;
+    // Rust instances are exclusive: hand the file off only after the first pool is closed.
+    ctx.db.close().await?;
+    let (reopened, _) = Database::open(&ctx.paths).await?;
+    assert_eq!(
+        reopened
+            .oauth_tokens()
+            .get("installation-a", "qwen-code")
+            .await?
+            .ok_or("not durable")?
+            .access_token,
+        "old"
+    );
+    assert!(
+        reopened
+            .oauth_tokens()
+            .get("installation-a", "chatgpt-pro")
+            .await?
+            .is_none()
+    );
+    reopened.close().await?;
+
     Ok(())
 }
 #[tokio::test]
@@ -994,7 +1007,7 @@ async fn concurrent_refresh_waiters_share_the_failure() -> TestResult {
         "/qwen-code/token",
         StatusCode::UNAUTHORIZED,
         "application/json",
-        json!({}),
+        json!({"error":"invalid_token"}),
     )
     .await;
     let mut tasks = Vec::new();
@@ -1069,5 +1082,57 @@ async fn device_denial_and_shutdown_end_background_polling() -> TestResult {
         );
         ctx.manager.shutdown().await;
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_outages_and_ambiguous_errors_keep_durable_tokens() -> TestResult {
+    for (status, body) in [
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            json!({"error":"invalid_grant"}),
+        ),
+        (
+            StatusCode::TOO_MANY_REQUESTS,
+            json!({"error":"invalid_token"}),
+        ),
+        (StatusCode::UNAUTHORIZED, json!({})),
+        (StatusCode::BAD_REQUEST, json!({"error":"invalid_client"})),
+    ] {
+        let fake = FakeAuth::new(Duration::ZERO).await?;
+        let ctx = Context::new(&fake, 0).await?;
+        ctx.put(OAuthProvider::ChatGptPro, 1, "still-valid").await?;
+        fake.reply("/chatgpt-pro/token", status, "application/json", body)
+            .await;
+        assert!(
+            ctx.manager
+                .credentials(OAuthProvider::ChatGptPro)
+                .await
+                .is_err()
+        );
+        assert!(
+            ctx.manager.try_status("chatgpt-pro").await?.authenticated,
+            "tokens deleted for {status}"
+        );
+        ctx.manager.shutdown().await;
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn refresh_transport_failure_keeps_tokens() -> TestResult {
+    let fake = FakeAuth::new(Duration::ZERO).await?;
+    let ctx = Context::new(&fake, 0).await?;
+    ctx.put(OAuthProvider::ChatGptPro, 1, "still-valid").await?;
+    fake.task.abort();
+    tokio::task::yield_now().await;
+    assert!(
+        ctx.manager
+            .credentials(OAuthProvider::ChatGptPro)
+            .await
+            .is_err()
+    );
+    assert!(ctx.manager.try_status("chatgpt-pro").await?.authenticated);
+    ctx.manager.shutdown().await;
     Ok(())
 }

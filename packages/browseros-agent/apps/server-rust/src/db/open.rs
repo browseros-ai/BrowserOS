@@ -1,19 +1,10 @@
 //! Opening the shared file: the order of steps and what each protects.
 //!
-//! 1. A file SQLite reports as corrupt or not a database is renamed aside (timestamped, never
-//!    overwriting) and a fresh one is created; claw-server's recovery, which beats the TS
-//!    server's crash loop and keeps the bytes. Any other failure aborts startup untouched.
-//! 2. Before the first Rust open of an existing file, `browseros.sqlite{,-wal,-shm}` are copied to
-//!    `browseros.sqlite.pre-rust.bak{,-wal,-shm}`, once: an existing backup is never replaced.
-//!    The rule is "file exists, backup does not", so a Rust-created file also gets one copy on
-//!    its second open; probing for the Rust ledger first would mean opening the file before
-//!    copying it. No connection is open yet, so the copy is the file as the last server left it.
-//! 3. The drizzle catch-up runs on its own connection, because it switches foreign-key
-//!    enforcement for that connection only.
-//! 4. The pool (one connection: TS's write serialization, without SQLite write-upgrade
-//!    contention) runs the Rust ledger, then checks every column the stores use exists.
+//! Corrupt files are preserved before best-effort row salvage. A one-time VACUUM snapshot is
+//! published by fsync + atomic rename before migration. Newer ledgers disable all writes; only
+//! compatible files receive drizzle catch-up, the additive Rust ledger, and column validation.
 
-use super::{DbError, MigrationOutcome, drizzle, migrator};
+use super::{DbError, MigrationOutcome, drizzle, migrator, recovery};
 use sea_orm::{
     ConnectionTrait, DatabaseConnection, DbErr, RuntimeErr, SqlxSqliteConnector, Statement,
     sqlx::{
@@ -130,6 +121,7 @@ const REQUIRED_COLUMNS: &[(&str, &[&str])] = &[
 enum OpenFailure {
     Sqlite(DbErr),
     Other(DbError),
+    Corrupt(String),
 }
 
 impl From<DbErr> for OpenFailure {
@@ -158,16 +150,24 @@ pub(super) async fn open(path: &Path) -> Result<(DatabaseConnection, MigrationOu
     }
     match open_once(path).await {
         Ok(opened) => Ok(opened),
-        Err(OpenFailure::Sqlite(error)) if is_recoverable(&error) => {
+        Err(failure) => {
+            let corruption = match &failure {
+                OpenFailure::Corrupt(reason) => Some(reason.clone()),
+                OpenFailure::Sqlite(error) if is_recoverable(error) => Some(error.to_string()),
+                _ => None,
+            };
+            let Some(reason) = corruption else {
+                return Err(into_db_error(failure));
+            };
             let aside = set_aside(path).await?;
-            tracing::error!(
-                error = %error,
-                moved_to = %aside.display(),
-                "SQLite database is corrupt or not a database; moved it aside and starting fresh"
-            );
-            open_once(path).await.map_err(into_db_error)
+            tracing::error!(%reason, moved_to = %aside.display(), "preserved corrupt SQLite database; attempting recovery");
+            let (connection, _) = open_once(path).await.map_err(into_db_error)?;
+            let salvaged = recovery::salvage(&aside, path).await;
+            Ok((
+                connection,
+                MigrationOutcome::RecreatedAfterCorruption { aside, salvaged },
+            ))
         }
-        Err(failure) => Err(into_db_error(failure)),
     }
 }
 
@@ -180,13 +180,32 @@ async fn open_once(path: &Path) -> Result<(DatabaseConnection, MigrationOutcome)
     }
 
     let mut connection = SqliteConnection::connect_with(&connect_options(path)).await?;
-    let caught_up = drizzle::catch_up(&mut connection).await;
+    let check: Vec<String> = sea_orm::sqlx::query_scalar("PRAGMA quick_check")
+        .fetch_all(&mut connection)
+        .await?;
+    if check != ["ok"] {
+        connection.close().await?;
+        return Err(OpenFailure::Corrupt(check.join("; ")));
+    }
+    let rust_unknown = migrator::unknown_sqlite_versions(&mut connection).await?;
+    let caught_up = if rust_unknown.is_empty() {
+        drizzle::catch_up(&mut connection).await
+    } else {
+        Ok(drizzle::CatchUp {
+            applied: 0,
+            unknown: rust_unknown,
+        })
+    };
     connection.close().await?;
     let caught_up = caught_up?;
 
-    let pool = connect_pool(path).await?;
+    let pool = connect_pool(path, false).await?;
     let connection = SqlxSqliteConnector::from_sqlx_sqlite_pool(pool);
-    let settled = match migrator::migrate_forward_compatible(&connection).await {
+    let settled = match if caught_up.unknown.is_empty() {
+        migrator::migrate_forward_compatible(&connection).await
+    } else {
+        Ok(migrator::LedgerOutcome::Applied(0))
+    } {
         Ok(ledger) => verify_columns(&connection).await.map(|()| ledger),
         Err(error) => Err(error),
     };
@@ -218,10 +237,16 @@ async fn open_once(path: &Path) -> Result<(DatabaseConnection, MigrationOutcome)
             rust_applied,
         }
     };
+    if matches!(outcome, MigrationOutcome::DatabaseAhead { .. }) {
+        connection.close().await?;
+        let pool = connect_pool(path, true).await?;
+        return Ok((SqlxSqliteConnector::from_sqlx_sqlite_pool(pool), outcome));
+    }
     Ok((connection, outcome))
 }
 
-/// The TS server's pragmas (WAL, foreign keys on) plus the design's 5 s busy timeout. Nothing
+/// The TS server's pragmas (WAL, foreign keys on) plus a short per-attempt busy timeout.
+/// Write admission bounds and backs off retries in write.rs. Nothing
 /// else is set, so page size, auto-vacuum and synchronous stay what the file already has.
 fn connect_options(path: &Path) -> SqliteConnectOptions {
     SqliteConnectOptions::new()
@@ -229,11 +254,19 @@ fn connect_options(path: &Path) -> SqliteConnectOptions {
         .create_if_missing(true)
         .journal_mode(SqliteJournalMode::Wal)
         .foreign_keys(true)
-        .busy_timeout(Duration::from_secs(5))
+        .busy_timeout(Duration::from_millis(100))
 }
 
-async fn connect_pool(path: &Path) -> Result<sqlx::SqlitePool, OpenFailure> {
-    let options = connect_options(path);
+async fn connect_pool(path: &Path, read_only: bool) -> Result<sqlx::SqlitePool, OpenFailure> {
+    let options = if read_only {
+        SqliteConnectOptions::new()
+            .filename(path)
+            .read_only(true)
+            .foreign_keys(true)
+            .busy_timeout(Duration::from_millis(100))
+    } else {
+        connect_options(path)
+    };
     // A blocking task keeps paused Tokio clocks (tests) from expiring sqlx's acquire timeout
     // before the SQLite worker answers (claw-server's workaround).
     let runtime = tokio::runtime::Handle::current();
@@ -275,38 +308,70 @@ async fn verify_columns(connection: &DatabaseConnection) -> Result<(), DbErr> {
     Ok(())
 }
 
-async fn back_up_once(path: &Path) -> Result<(), DbError> {
+async fn back_up_once(path: &Path) -> Result<(), OpenFailure> {
     let marker = with_suffix(path, ".pre-rust.bak");
-    if tokio::fs::try_exists(&marker).await.unwrap_or(true) {
+    if tokio::fs::try_exists(&marker)
+        .await
+        .map_err(|source| io_error("check backup marker", &marker, source))?
+    {
         return Ok(());
     }
-    // The main file goes last: its presence is what marks the backup complete.
-    for (source, backup) in [
-        ("-wal", ".pre-rust.bak-wal"),
-        ("-shm", ".pre-rust.bak-shm"),
-        ("", ".pre-rust.bak"),
-    ] {
-        let source = with_suffix(path, source);
-        match tokio::fs::copy(&source, with_suffix(path, backup)).await {
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(io_error(
-                    "back up the database before adopting it",
-                    &source,
-                    error,
-                ));
-            }
-        }
+    let temporary = with_suffix(path, &format!(".pre-rust-{}.tmp", uuid::Uuid::new_v4()));
+    let cleanup = TemporaryFile(temporary.clone());
+    // VACUUM reads a single SQLite snapshot, including committed WAL pages, while a TS
+    // connection keeps writing/checkpointing. A raw copy of db + WAL has no such guarantee.
+    let mut source = SqliteConnection::connect_with(
+        &SqliteConnectOptions::new()
+            .filename(path)
+            .busy_timeout(Duration::from_secs(5)),
+    )
+    .await?;
+    let vacuum = sqlx::query("VACUUM INTO ?")
+        .bind(temporary.to_string_lossy().as_ref())
+        .execute(&mut source)
+        .await;
+    source.close().await?;
+    vacuum?;
+    let file = tokio::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&temporary)
+        .await
+        .map_err(|source| io_error("open backup snapshot", &temporary, source))?;
+    file.sync_all()
+        .await
+        .map_err(|source| io_error("fsync backup snapshot", &temporary, source))?;
+    drop(file);
+    tokio::fs::rename(&temporary, &marker)
+        .await
+        .map_err(|source| io_error("publish backup snapshot", &marker, source))?;
+    // Sync the directory too: the rename is the durable completion marker after power loss.
+    #[cfg(unix)]
+    if let Some(parent) = marker.parent() {
+        std::fs::File::open(parent)
+            .and_then(|file| file.sync_all())
+            .map_err(|source| io_error("fsync backup directory", parent, source))?;
     }
+    drop(cleanup);
     tracing::info!(backup = %marker.display(), "backed up the database before its first Rust open");
     Ok(())
+}
+
+/// Unpublished snapshots never count as backups, including cancellation during VACUUM.
+struct TemporaryFile(PathBuf);
+impl Drop for TemporaryFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
 }
 
 /// Renames the unusable file (and its WAL/SHM) to `browseros.sqlite.corrupt-<ms>.bak*`.
 async fn set_aside(path: &Path) -> Result<PathBuf, DbError> {
     let stamp = super::js::now_ms();
-    let aside = with_suffix(path, &format!(".corrupt-{stamp}.bak"));
+    let aside = with_suffix(
+        path,
+        &format!(".corrupt-{stamp}-{}.bak", uuid::Uuid::new_v4()),
+    );
     for suffix in ["", "-wal", "-shm"] {
         let source = with_suffix(path, suffix);
         match tokio::fs::rename(&source, with_suffix(&aside, suffix)).await {
@@ -347,6 +412,7 @@ fn into_db_error(failure: OpenFailure) -> DbError {
     match failure {
         OpenFailure::Sqlite(error) => DbError::Migration(error.to_string()),
         OpenFailure::Other(error) => error,
+        OpenFailure::Corrupt(reason) => DbError::Migration(reason),
     }
 }
 

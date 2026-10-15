@@ -13,7 +13,7 @@ use super::{
 };
 use sea_orm::{
     ActiveValue::Set,
-    ColumnTrait, DbErr, EntityTrait, FromQueryResult, QueryFilter, QueryResult, TransactionTrait,
+    ColumnTrait, DbErr, EntityTrait, FromQueryResult, QueryFilter, QueryResult,
     sea_query::{Expr, OnConflict},
 };
 use std::{collections::BTreeMap, fmt};
@@ -217,7 +217,7 @@ impl ProviderStore {
     /// is unknown, so a stale pointer cannot be stored. The old default is cleared first in the
     /// same transaction: the partial unique index admits one `is_default = 1` row at a time.
     pub async fn set_default(&self, id: &str) -> DbResult<Option<ProviderRow>> {
-        let transaction = self.db.connection().begin().await?;
+        let transaction = self.db.begin_write().await?;
         if Entity::find_by_id(id.to_owned())
             .into_model::<ProviderRow>()
             .one(&transaction)
@@ -346,7 +346,7 @@ impl ProviderStore {
             }
         }
 
-        let transaction = self.db.connection().begin().await?;
+        let transaction = self.db.begin_write().await?;
         Entity::insert(row)
             .on_conflict(
                 OnConflict::column(Column::Id)
@@ -367,9 +367,11 @@ impl ProviderStore {
     /// Deletes a row of any kind (ACP agents included); jobs pointing at it get `provider_id`
     /// NULL through the foreign key.
     pub async fn delete(&self, id: &str) -> DbResult<bool> {
+        let transaction = self.db.begin_write().await?;
         let deleted = Entity::delete_by_id(id.to_owned())
-            .exec(self.db.connection())
+            .exec(&transaction)
             .await?;
+        transaction.commit().await?;
         Ok(deleted.rows_affected > 0)
     }
 }

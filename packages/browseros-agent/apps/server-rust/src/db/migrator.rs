@@ -45,12 +45,12 @@ mod m0001_adopt_drizzle_schema {
 
 pub(super) enum LedgerOutcome {
     Applied(usize),
-    /// Every known entry is applied and the ledger holds newer ones: written by a newer server.
+    /// The ledger holds entries from another build; do not replay anything over it.
     Ahead(Vec<String>),
 }
 
 /// Applies pending entries unless the file was migrated by a newer server, in which case
-/// `Migrator::up` would abort on the unknown rows; refuses when the two have diverged.
+/// `Migrator::up` would abort on the unknown rows. Leave even diverged ledgers read-only.
 pub(super) async fn migrate_forward_compatible(
     connection: &DatabaseConnection,
 ) -> Result<LedgerOutcome, DbErr> {
@@ -75,12 +75,7 @@ pub(super) async fn migrate_forward_compatible(
             Migrator::up(connection, None).await?;
             Ok(LedgerOutcome::Applied(pending))
         }
-        (false, 0) => Ok(LedgerOutcome::Ahead(unknown)),
-        (false, _) => Err(DbErr::Custom(format!(
-            "database schema is incompatible with this BrowserOS server: it has Rust migrations \
-             this build does not know ({}) and this build has unapplied ones",
-            unknown.join(", ")
-        ))),
+        (false, _) => Ok(LedgerOutcome::Ahead(unknown)),
     }
 }
 
@@ -104,4 +99,30 @@ async fn applied_versions(connection: &DatabaseConnection) -> Result<Vec<String>
         .iter()
         .map(|row| row.try_get::<String>("", "version"))
         .collect()
+}
+
+/// Probe before drizzle catch-up too: a future Rust ledger may coexist with older TS tables.
+pub(super) async fn unknown_sqlite_versions(
+    connection: &mut sea_orm::sqlx::SqliteConnection,
+) -> Result<Vec<String>, sea_orm::sqlx::Error> {
+    let exists: i64 = sea_orm::sqlx::query_scalar(
+        "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='seaql_migrations'",
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if exists == 0 {
+        return Ok(Vec::new());
+    }
+    let versions: Vec<String> =
+        sea_orm::sqlx::query_scalar("SELECT version FROM seaql_migrations ORDER BY version")
+            .fetch_all(&mut *connection)
+            .await?;
+    let known = Migrator::migrations()
+        .into_iter()
+        .map(|migration| migration.name().to_owned())
+        .collect::<Vec<_>>();
+    Ok(versions
+        .into_iter()
+        .filter(|version| !known.contains(version))
+        .collect())
 }

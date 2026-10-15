@@ -72,6 +72,7 @@ impl OAuthTokenStore {
         provider: &str,
         tokens: &OAuthTokens,
     ) -> DbResult<()> {
+        let transaction = self.db.begin_write().await?;
         let row = ActiveModel {
             browseros_id: Set(browseros_id.to_owned()),
             provider: Set(provider.to_owned()),
@@ -95,17 +96,20 @@ impl OAuthTokenStore {
                     ])
                     .to_owned(),
             )
-            .exec_without_returning(self.db.connection())
+            .exec_without_returning(&transaction)
             .await?;
+        transaction.commit().await?;
         Ok(())
     }
 
     pub async fn delete(&self, browseros_id: &str, provider: &str) -> DbResult<()> {
+        let transaction = self.db.begin_write().await?;
         Entity::delete_many()
             .filter(Column::BrowserosId.eq(browseros_id))
             .filter(Column::Provider.eq(provider))
-            .exec(self.db.connection())
+            .exec(&transaction)
             .await?;
+        transaction.commit().await?;
         Ok(())
     }
 }

@@ -458,12 +458,28 @@ async fn execute_refresh(
         .await
         .map_err(upstream)?;
     if !response.status().is_success() {
-        store
-            .delete(&browseros_id, spec.provider.as_str())
-            .await
-            .map_err(upstream)?;
-        return Err(OAuthError::Expired(format!(
-            "{} session expired. Please re-login.",
+        let status = response.status();
+        let rejection = response.json::<Value>().await.ok();
+        let invalid_token = rejection
+            .as_ref()
+            .and_then(|data| data.get("error"))
+            .and_then(Value::as_str)
+            .is_some_and(|error| matches!(error, "invalid_grant" | "invalid_token"));
+        // DECIDED deviation from TS: only an explicit credential revocation logs the user out.
+        // Rate limits, outages, malformed error bodies and transport failures keep rotating
+        // refresh tokens intact so a subsequent request can retry after the provider recovers.
+        if matches!(status.as_u16(), 400 | 401) && invalid_token {
+            store
+                .delete(&browseros_id, spec.provider.as_str())
+                .await
+                .map_err(upstream)?;
+            return Err(OAuthError::Expired(format!(
+                "{} session expired. Please re-login.",
+                spec.display_name
+            )));
+        }
+        return Err(OAuthError::Upstream(format!(
+            "{} token refresh failed: {status}",
             spec.display_name
         )));
     }

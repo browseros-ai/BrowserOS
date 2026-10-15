@@ -234,9 +234,13 @@ async fn agents_trim_order_and_update_field_by_field() -> anyhow::Result<()> {
     .await?;
     drop(connection);
     assert_eq!(
-        store.list().await?.len(),
-        2,
-        "llm rows and unknown agents skipped"
+        store.list_stored().await?.len(),
+        3,
+        "llm rows excluded; unknown agents remain visible"
+    );
+    assert!(
+        store.list().await.is_err(),
+        "execution view must reject unsupported rows explicitly"
     );
     assert!(store.delete(custom.id).await?);
     assert!(!store.delete(custom.id).await?);

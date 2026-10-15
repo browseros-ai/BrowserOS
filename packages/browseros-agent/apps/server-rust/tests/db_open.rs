@@ -75,7 +75,7 @@ async fn fresh_file_matches_a_ts_created_schema_and_journal() -> anyhow::Result<
 #[tokio::test]
 async fn ts_0014_file_is_adopted_without_touching_drizzle_rows() -> anyhow::Result<()> {
     let (_dir, paths) = stage(Some("v0014"))?;
-    let original = std::fs::read(&paths.db_file)?;
+    let original_providers = count(&paths.db_file, "providers").await?;
     let (db, outcome) = open(&paths).await?;
     assert_eq!(
         outcome,
@@ -94,7 +94,13 @@ async fn ts_0014_file_is_adopted_without_touching_drizzle_rows() -> anyhow::Resu
     db.close().await?;
 
     let backup = backup_path(&paths.db_file);
-    assert_eq!(std::fs::read(&backup)?, original, "backup is the TS file");
+    assert_eq!(count(&backup, "providers").await?, original_providers);
+    let mut snapshot = raw(&backup).await?;
+    let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+        .fetch_one(&mut snapshot)
+        .await?;
+    assert_eq!(integrity, "ok");
+    drop(snapshot);
     std::fs::write(&backup, b"sentinel")?;
     let (db, outcome) = open(&paths).await?;
     assert_eq!(outcome, MigrationOutcome::UpToDate);
@@ -181,7 +187,10 @@ async fn corrupt_file_is_moved_aside_and_recreated() -> anyhow::Result<()> {
     let garbage = vec![0x42_u8; 8192];
     std::fs::write(&paths.db_file, &garbage)?;
     let (db, outcome) = open(&paths).await?;
-    assert_eq!(outcome, MigrationOutcome::Created);
+    assert!(matches!(
+        outcome,
+        MigrationOutcome::RecreatedAfterCorruption { .. }
+    ));
     db.close().await?;
     let aside: Vec<_> = std::fs::read_dir(dir.path().join("db"))?
         .filter_map(Result::ok)

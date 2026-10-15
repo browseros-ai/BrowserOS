@@ -15,7 +15,7 @@ use super::{
 };
 use sea_orm::{
     ActiveValue::Set, ConnectionTrait, DbErr, EntityTrait, FromQueryResult, QueryOrder,
-    QueryResult, QuerySelect, TransactionTrait, sea_query::OnConflict,
+    QueryResult, QuerySelect, sea_query::OnConflict,
 };
 use serde_json::Value;
 use ui_message_stream::UiMessage;
@@ -62,6 +62,56 @@ impl From<AgentKind> for TargetType {
             AgentKind::Custom => Self::Custom,
         }
     }
+}
+
+/// Lossless persisted target; supported execution targets remain the closed `TargetType`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredTargetType {
+    BrowserOs,
+    Claude,
+    Codex,
+    Custom,
+    Unknown(String),
+}
+impl StoredTargetType {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::BrowserOs => "browseros",
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Custom => "custom",
+            Self::Unknown(value) => value,
+        }
+    }
+    fn parse(value: String) -> Self {
+        match value.as_str() {
+            "browseros" => Self::BrowserOs,
+            "claude" => Self::Claude,
+            "codex" => Self::Codex,
+            "custom" => Self::Custom,
+            _ => Self::Unknown(value),
+        }
+    }
+}
+
+/// Raw metadata used by management/diagnostic reads; never normalizes a stored identifier.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredConversationSummary {
+    pub id: String,
+    pub last_user_message: Option<String>,
+    pub origin: Option<String>,
+    pub target_type: StoredTargetType,
+    pub agent_id: Option<String>,
+    pub last_messaged_at: i64,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
+/// Lossless row and raw JSON history, including rows unsupported by chat's execution model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredConversationRecord {
+    pub summary: StoredConversationSummary,
+    pub messages: Vec<Value>,
 }
 
 /// Row metadata without the message blob. Optional fields are `None` for NULL (TS omits them).
@@ -139,6 +189,49 @@ impl ConversationStore {
         Self { db }
     }
 
+    /// Lossless storage list: ids stay byte-for-byte strings, and future targets stay visible.
+    pub async fn list_stored(&self) -> DbResult<Vec<StoredConversationSummary>> {
+        // Keep message blobs out of the list just as the typed management list does.
+        Ok(Entity::find()
+            .select_only()
+            .columns([
+                Column::Id,
+                Column::LastUserMessage,
+                Column::Origin,
+                Column::TargetType,
+                Column::AgentId,
+                Column::LastMessagedAt,
+                Column::CreatedAt,
+                Column::UpdatedAt,
+            ])
+            .order_by_desc(Column::LastMessagedAt)
+            .into_model::<SummaryRecord>()
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(SummaryRecord::stored)
+            .collect())
+    }
+
+    pub async fn get_stored(&self, id: &str) -> DbResult<Option<StoredConversationRecord>> {
+        let Some(row) = Entity::find_by_id(id.to_owned())
+            .into_model::<ConversationRecord>()
+            .one(self.db.connection())
+            .await?
+        else {
+            return Ok(None);
+        };
+        let messages = serde_json::from_str(&row.messages).map_err(|error| {
+            DbError::Query(format!(
+                "conversation {id} has unreadable messages: {error}"
+            ))
+        })?;
+        Ok(Some(StoredConversationRecord {
+            summary: row.summary.stored(),
+            messages,
+        }))
+    }
+
     /// Newest `last_messaged_at` first.
     pub async fn list(&self) -> DbResult<Vec<ConversationSummary>> {
         let rows = Entity::find()
@@ -157,10 +250,7 @@ impl ConversationStore {
             .into_model::<SummaryRecord>()
             .all(self.db.connection())
             .await?;
-        Ok(rows
-            .into_iter()
-            .filter_map(SummaryRecord::summary)
-            .collect())
+        rows.into_iter().map(SummaryRecord::summary).collect()
     }
 
     pub async fn get(&self, id: Uuid) -> DbResult<Option<StoredConversation>> {
@@ -176,9 +266,7 @@ impl ConversationStore {
                 "conversation {id} has unreadable messages: {error}"
             ))
         })?;
-        let summary = row.summary.summary().ok_or_else(|| {
-            DbError::Query(format!("conversation {id} has an unknown target type"))
-        })?;
+        let summary = row.summary.summary()?;
         Ok(Some(StoredConversation { summary, messages }))
     }
 
@@ -202,7 +290,7 @@ impl ConversationStore {
 
     /// [`Self::save`] with the messages written verbatim.
     pub async fn save_raw(&self, input: SaveRawConversation) -> DbResult<()> {
-        let transaction = self.db.connection().begin().await?;
+        let transaction = self.db.begin_write().await?;
         upsert(
             &transaction,
             Upsert {
@@ -226,7 +314,7 @@ impl ConversationStore {
         id: Uuid,
         input: ImportConversation,
     ) -> DbResult<Option<ConversationSummary>> {
-        let transaction = self.db.connection().begin().await?;
+        let transaction = self.db.begin_write().await?;
         if exists(&transaction, id).await? {
             return Ok(None);
         }
@@ -246,14 +334,17 @@ impl ConversationStore {
         Ok(Some(summary))
     }
 
-    pub async fn delete(&self, id: Uuid) -> DbResult<bool> {
+    pub async fn delete(&self, id: impl ToString) -> DbResult<bool> {
+        let id = id.to_string();
+        let transaction = self.db.begin_write().await?;
         let deleted = Entity::delete_by_id(id.to_string())
-            .exec(self.db.connection())
+            .exec(&transaction)
             .await?;
         let deleted = deleted.rows_affected > 0;
         if deleted {
             tracing::info!(conversation_id = %id, "conversation deleted");
         }
+        transaction.commit().await?;
         Ok(deleted)
     }
 }
@@ -388,19 +479,33 @@ struct SummaryRecord {
 }
 
 impl SummaryRecord {
-    fn summary(self) -> Option<ConversationSummary> {
-        let (Ok(id), Some(target_type)) = (
-            Uuid::parse_str(&self.id),
-            TargetType::parse(&self.target_type),
-        ) else {
-            tracing::warn!(
-                conversation_id = %self.id,
-                target_type = %self.target_type,
-                "skipping conversation row with an unrecognized id or target type"
-            );
-            return None;
-        };
-        Some(ConversationSummary {
+    fn stored(self) -> StoredConversationSummary {
+        StoredConversationSummary {
+            id: self.id,
+            last_user_message: self.last_user_message,
+            origin: self.origin,
+            target_type: StoredTargetType::parse(self.target_type),
+            agent_id: self.agent_id,
+            last_messaged_at: self.last_messaged_at,
+            created_at: self.created_at,
+            updated_at: self.updated_at,
+        }
+    }
+
+    fn summary(self) -> DbResult<ConversationSummary> {
+        let id = Uuid::parse_str(&self.id).map_err(|_| {
+            DbError::Query(format!(
+                "conversation {} has a non-UUID id; use get_stored",
+                self.id
+            ))
+        })?;
+        let target_type = TargetType::parse(&self.target_type).ok_or_else(|| {
+            DbError::Query(format!(
+                "conversation {} has an unsupported target; use get_stored",
+                self.id
+            ))
+        })?;
+        Ok(ConversationSummary {
             id,
             last_user_message: self.last_user_message,
             origin: self.origin,

@@ -14,7 +14,7 @@ use super::{
 };
 use sea_orm::{
     ActiveValue::Set, ColumnTrait, ConnectionTrait, DbErr, EntityTrait, FromQueryResult,
-    QueryFilter, QueryOrder, QueryResult, QuerySelect, TransactionTrait, sea_query::OnConflict,
+    QueryFilter, QueryOrder, QueryResult, QuerySelect, sea_query::OnConflict,
 };
 use serde_json::Value;
 
@@ -149,7 +149,7 @@ impl ScheduleStore {
             updated.push(jobs::Column::LastRunAt);
         }
 
-        let transaction = self.db.connection().begin().await?;
+        let transaction = self.db.begin_write().await?;
         jobs::Entity::insert(row)
             .on_conflict(
                 OnConflict::column(jobs::Column::Id)
@@ -169,9 +169,11 @@ impl ScheduleStore {
 
     /// Deletes the job; its runs go with it (ON DELETE CASCADE).
     pub async fn delete_job(&self, id: &str) -> DbResult<bool> {
+        let transaction = self.db.begin_write().await?;
         let deleted = jobs::Entity::delete_by_id(id.to_owned())
-            .exec(self.db.connection())
+            .exec(&transaction)
             .await?;
+        transaction.commit().await?;
         Ok(deleted.rows_affected > 0)
     }
 
@@ -242,7 +244,7 @@ impl ScheduleStore {
             updated.push(runs::Column::ToolCalls);
         }
 
-        let transaction = self.db.connection().begin().await?;
+        let transaction = self.db.begin_write().await?;
         runs::Entity::insert(row)
             .on_conflict(
                 OnConflict::column(runs::Column::Id)
@@ -262,9 +264,11 @@ impl ScheduleStore {
     }
 
     pub async fn delete_run(&self, id: &str) -> DbResult<bool> {
+        let transaction = self.db.begin_write().await?;
         let deleted = runs::Entity::delete_by_id(id.to_owned())
-            .exec(self.db.connection())
+            .exec(&transaction)
             .await?;
+        transaction.commit().await?;
         Ok(deleted.rows_affected > 0)
     }
 }

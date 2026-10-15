@@ -10,8 +10,7 @@ use super::{
     providers::ProviderRow,
 };
 use sea_orm::{
-    ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TransactionTrait,
-    sea_query::Expr,
+    ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, sea_query::Expr,
 };
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
@@ -58,21 +57,22 @@ pub struct AcpAgentRow {
 }
 
 impl AcpAgentRow {
-    /// `None` (logged) for a row this build cannot represent: TS would list it with its raw id
-    /// and type, but no route here can address it.
-    fn from_provider(row: ProviderRow) -> Option<Self> {
-        let (Ok(id), Some(kind)) = (
-            Uuid::parse_str(&row.id),
-            AgentKind::parse(&row.provider_type),
-        ) else {
-            tracing::warn!(
-                agent_id = %row.id,
-                agent_type = %row.provider_type,
-                "skipping ACP agent row with an unrecognized id or type"
-            );
-            return None;
-        };
-        Some(Self {
+    // Execution requires a supported kind and UUID. Storage reads use StoredAgentRow instead:
+    // rejecting this conversion must never make the original row disappear from diagnostics.
+    fn from_provider(row: ProviderRow) -> DbResult<Self> {
+        let id = Uuid::parse_str(&row.id).map_err(|_| {
+            DbError::Query(format!(
+                "agent {} has a non-UUID id; use get_stored",
+                row.id
+            ))
+        })?;
+        let kind = AgentKind::parse(&row.provider_type).ok_or_else(|| {
+            DbError::Query(format!(
+                "agent {} has an unsupported type; use get_stored",
+                row.id
+            ))
+        })?;
+        Ok(Self {
             id,
             kind,
             name: row.name,
@@ -83,6 +83,62 @@ impl AcpAgentRow {
             created_at: row.created_at,
             updated_at: row.updated_at,
         })
+    }
+}
+
+/// Lossless persisted agent kind; unknown future values remain visible and deletable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StoredAgentKind {
+    Claude,
+    Codex,
+    Custom,
+    Unknown(String),
+}
+impl StoredAgentKind {
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Custom => "custom",
+            Self::Unknown(value) => value,
+        }
+    }
+    fn parse(value: String) -> Self {
+        match value.as_str() {
+            "claude" => Self::Claude,
+            "codex" => Self::Codex,
+            "custom" => Self::Custom,
+            _ => Self::Unknown(value),
+        }
+    }
+}
+
+/// The storage view, independent of the UUID/kind constraints of the ACP execution interface.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredAgentRow {
+    pub id: String,
+    pub kind: StoredAgentKind,
+    pub name: String,
+    pub model_id: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub working_directory: Option<PathBuf>,
+    pub custom_config: Option<String>,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+impl From<ProviderRow> for StoredAgentRow {
+    fn from(row: ProviderRow) -> Self {
+        Self {
+            id: row.id,
+            kind: StoredAgentKind::parse(row.provider_type),
+            name: row.name,
+            model_id: row.model_id,
+            reasoning_effort: row.reasoning_effort,
+            working_directory: row.working_directory.map(PathBuf::from),
+            custom_config: row.custom_config,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        }
     }
 }
 
@@ -117,7 +173,30 @@ impl AgentStore {
         Self { db }
     }
 
-    /// Newest `updated_at` first.
+    /// Lossless storage list, newest first. Use this for management/diagnostics; execution's
+    /// typed `list`/`get` reject unsupported rows explicitly rather than silently dropping them.
+    pub async fn list_stored(&self) -> DbResult<Vec<StoredAgentRow>> {
+        Ok(Entity::find()
+            .filter(Column::Kind.eq("acp"))
+            .order_by_desc(Column::UpdatedAt)
+            .into_model::<ProviderRow>()
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(StoredAgentRow::from)
+            .collect())
+    }
+
+    pub async fn get_stored(&self, id: &str) -> DbResult<Option<StoredAgentRow>> {
+        Ok(Entity::find_by_id(id.to_owned())
+            .filter(Column::Kind.eq("acp"))
+            .into_model::<ProviderRow>()
+            .one(self.db.connection())
+            .await?
+            .map(StoredAgentRow::from))
+    }
+
+    /// Validated execution view, newest `updated_at` first.
     pub async fn list(&self) -> DbResult<Vec<AcpAgentRow>> {
         let rows = Entity::find()
             .filter(Column::Kind.eq("acp"))
@@ -125,17 +204,18 @@ impl AgentStore {
             .into_model::<ProviderRow>()
             .all(self.db.connection())
             .await?;
-        Ok(rows
-            .into_iter()
-            .filter_map(AcpAgentRow::from_provider)
-            .collect())
+        rows.into_iter().map(AcpAgentRow::from_provider).collect()
     }
 
     pub async fn get(&self, id: Uuid) -> DbResult<Option<AcpAgentRow>> {
-        Ok(self.find(id).await?.and_then(AcpAgentRow::from_provider))
+        self.find(id)
+            .await?
+            .map(AcpAgentRow::from_provider)
+            .transpose()
     }
 
     pub async fn create(&self, input: CreateAgent) -> DbResult<AcpAgentRow> {
+        let transaction = self.db.begin_write().await?;
         let id = Uuid::new_v4();
         let now = js::now_ms();
         let row = ActiveModel {
@@ -154,8 +234,9 @@ impl AgentStore {
             ..Default::default()
         };
         Entity::insert(row)
-            .exec_without_returning(self.db.connection())
+            .exec_without_returning(&transaction)
             .await?;
+        transaction.commit().await?;
         let saved = self
             .get(id)
             .await?
@@ -166,7 +247,7 @@ impl AgentStore {
 
     /// `None` when no ACP agent has this id.
     pub async fn update(&self, id: Uuid, input: UpdateAgent) -> DbResult<Option<AcpAgentRow>> {
-        let transaction = self.db.connection().begin().await?;
+        let transaction = self.db.begin_write().await?;
         let exists = Entity::find_by_id(id.to_string())
             .filter(Column::Kind.eq("acp"))
             .into_model::<ProviderRow>()
@@ -207,19 +288,22 @@ impl AgentStore {
             .await?;
         transaction.commit().await?;
         tracing::info!(agent_id = %id, "ACP agent updated");
-        Ok(saved.and_then(AcpAgentRow::from_provider))
+        saved.map(AcpAgentRow::from_provider).transpose()
     }
 
-    pub async fn delete(&self, id: Uuid) -> DbResult<bool> {
+    pub async fn delete(&self, id: impl ToString) -> DbResult<bool> {
+        let id = id.to_string();
+        let transaction = self.db.begin_write().await?;
         let deleted = Entity::delete_many()
             .filter(Column::Kind.eq("acp"))
             .filter(Column::Id.eq(id.to_string()))
-            .exec(self.db.connection())
+            .exec(&transaction)
             .await?;
         let deleted = deleted.rows_affected > 0;
         if deleted {
             tracing::info!(agent_id = %id, "ACP agent deleted");
         }
+        transaction.commit().await?;
         Ok(deleted)
     }
 
