@@ -1,19 +1,16 @@
+import type { McpTool } from '@browseros/server-api'
 import { useQuery } from '@tanstack/react-query'
-import type { McpTool } from '@/lib/mcp/client'
+import { serverApi, serverData } from '@/lib/server-api/client'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
-
-interface ListToolsResponse {
-  tools: McpTool[]
-}
 
 const TOOLS_QUERY_KEY = ['mcp-manager', 'tools'] as const
 
 async function fetchTools(agentServerUrl: string): Promise<McpTool[]> {
-  const res = await fetch(`${agentServerUrl}/mcp-manager/tools`)
-  if (!res.ok) {
-    throw new Error(`Failed to list tools: ${res.status} ${res.statusText}`)
-  }
-  const body = (await res.json()) as ListToolsResponse
+  const body = await serverData(
+    serverApi(agentServerUrl).http.GET('/mcp-manager/tools'),
+    (error, response) =>
+      `Failed to list tools: ${error.status} ${response?.statusText ?? ''}`,
+  )
   return body.tools
 }
 

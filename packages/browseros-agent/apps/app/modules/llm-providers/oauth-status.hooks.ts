@@ -1,11 +1,9 @@
+import type { OAuthStatus } from '@browseros/server-api'
 import { useEffect, useRef, useState } from 'react'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
+import { serverApi, serverData } from '@/lib/server-api/client'
 
-export interface OAuthStatus {
-  authenticated: boolean
-  email?: string
-  provider: string
-}
+export type { OAuthStatus } from '@browseros/server-api'
 
 export interface UseOAuthStatusReturn {
   status: OAuthStatus | null
@@ -25,9 +23,11 @@ export function useOAuthStatus(provider: string): UseOAuthStatusReturn {
   async function fetchStatus(): Promise<OAuthStatus | null> {
     try {
       const serverUrl = await getAgentServerUrl()
-      const res = await fetch(`${serverUrl}/oauth/${provider}/status`)
-      if (!res.ok) return null
-      const data = (await res.json()) as OAuthStatus
+      const data = await serverData(
+        serverApi(serverUrl).http.GET('/oauth/{provider}/status', {
+          params: { path: { provider } },
+        }),
+      )
       setStatus(data)
       return data
     } catch {
@@ -60,7 +60,9 @@ export function useOAuthStatus(provider: string): UseOAuthStatusReturn {
   async function disconnect() {
     try {
       const serverUrl = await getAgentServerUrl()
-      await fetch(`${serverUrl}/oauth/${provider}`, { method: 'DELETE' })
+      await serverApi(serverUrl).http.DELETE('/oauth/{provider}', {
+        params: { path: { provider } },
+      })
       setStatus({ authenticated: false, provider })
     } catch {
       // Best-effort disconnect

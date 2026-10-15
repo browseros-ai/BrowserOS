@@ -1,18 +1,9 @@
 import useSWR from 'swr'
+import { serverApi, serverData } from '@/lib/server-api/client'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 
-interface McpServerResponse {
-  servers: {
-    name: string
-    description: string
-  }[]
-  count: number
-}
-
 const getAllManagedServers = async ([hostUrl]: [hostUrl: string]) => {
-  const response = await fetch(`${hostUrl}/klavis/servers`)
-  const servers = (await response.json()) as McpServerResponse
-  return servers
+  return serverData(serverApi(hostUrl).http.GET('/klavis/servers'))
 }
 
 export const useGetMCPServersList = () => {

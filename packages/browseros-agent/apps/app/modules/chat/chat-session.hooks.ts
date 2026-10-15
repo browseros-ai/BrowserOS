@@ -1,6 +1,6 @@
 import { useChat } from '@ai-sdk/react'
 import { useQueryClient } from '@tanstack/react-query'
-import { DefaultChatTransport, type FileUIPart, type UIMessage } from 'ai'
+import type { FileUIPart, UIMessage } from 'ai'
 import { compact } from 'es-toolkit/array'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
@@ -29,6 +29,8 @@ import { track } from '@/lib/metrics/track'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
 import { sentry } from '@/lib/sentry/sentry'
+import { ServerChatTransport } from '@/lib/server-api/chat-transport'
+import { nullOnNotFound, serverApi, serverData } from '@/lib/server-api/client'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { selectedWorkspaceStorage } from '@/lib/workspace/workspace-storage'
 import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
@@ -147,7 +149,7 @@ const buildRequestBrowserContext = ({
 }): ChatRequestBrowserContext | undefined => {
   const browserContext: ChatRequestBrowserContext = {}
 
-  if (activeTab) {
+  if (activeTab?.id !== undefined) {
     browserContext.windowId = activeTab.windowId
     browserContext.activeTab = {
       id: activeTab.id,
@@ -157,11 +159,17 @@ const buildRequestBrowserContext = ({
   }
 
   if (action?.tabs?.length) {
-    browserContext.selectedTabs = action.tabs.map((tab) => ({
-      id: tab.id,
-      url: tab.url,
-      title: tab.title,
-    }))
+    browserContext.selectedTabs = action.tabs.flatMap((tab) =>
+      tab.id === undefined
+        ? []
+        : [
+            {
+              id: tab.id,
+              url: tab.url,
+              title: tab.title,
+            },
+          ],
+    )
   }
 
   const managedMcpServers = compact(enabledMcpServers)
@@ -170,7 +178,9 @@ const buildRequestBrowserContext = ({
   }
 
   if (customMcpServers.length) {
-    browserContext.customMcpServers = customMcpServers
+    browserContext.customMcpServers = customMcpServers.flatMap(
+      ({ name, url }) => (url ? [{ name, url }] : []),
+    )
   }
 
   return Object.keys(browserContext).length ? browserContext : undefined
@@ -387,9 +397,9 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     ? toProviderOption(selectedChatTarget)
     : providers[0]
 
-  const transportRef = useRef<DefaultChatTransport<UIMessage> | null>(null)
+  const transportRef = useRef<ServerChatTransport | null>(null)
   if (!transportRef.current) {
-    transportRef.current = new DefaultChatTransport<UIMessage>({
+    transportRef.current = new ServerChatTransport({
       prepareReconnectToStreamRequest: async ({ body }) => {
         const serverUrl = await resolveAgentServerUrl()
         return {
@@ -559,13 +569,12 @@ export const useChatSession = (options?: ChatSessionOptions) => {
     const detaching = detachView()
     try {
       const serverUrl = agentUrlRef.current ?? (await resolveAgentServerUrl())
-      const response = await fetch(
-        `${serverUrl}/chat/${encodeURIComponent(stoppedConversationId)}/stop`,
-        { method: 'POST' },
+      await serverData(
+        serverApi(serverUrl).http.POST('/chat/{conversationId}/stop', {
+          params: { path: { conversationId: stoppedConversationId } },
+        }),
+        (error) => `Conversation stop failed (${error.status})`,
       )
-      if (!response.ok) {
-        throw new Error(`Conversation stop failed (${response.status})`)
-      }
     } catch (error) {
       sentry.captureException(error, {
         extra: {
@@ -978,20 +987,19 @@ export const useChatSession = (options?: ChatSessionOptions) => {
   const discardServerSession = useCallback((conversationId: string) => {
     const serverUrl = agentUrlRef.current
     if (!serverUrl) return
-    void fetch(`${serverUrl}/chat/${encodeURIComponent(conversationId)}`, {
-      method: 'DELETE',
-      keepalive: true,
+    void nullOnNotFound(
+      serverData(
+        serverApi(serverUrl).http.DELETE('/chat/{conversationId}', {
+          params: { path: { conversationId } },
+          keepalive: true,
+        }),
+        (error) => `Session cleanup failed (${error.status})`,
+      ),
+    ).catch((error) => {
+      sentry.captureException(error, {
+        extra: { conversationId },
+      })
     })
-      .then((response) => {
-        if (!response.ok && response.status !== 404) {
-          throw new Error(`Session cleanup failed (${response.status})`)
-        }
-      })
-      .catch((error) => {
-        sentry.captureException(error, {
-          extra: { conversationId },
-        })
-      })
   }, [])
 
   const resetConversationState = () => {

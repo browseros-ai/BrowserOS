@@ -11,12 +11,13 @@ const constructMcpServers = (servers: McpServer[]) => {
 }
 
 const constructCustomServers = (servers: McpServer[]) => {
-  return servers
-    .filter((eachServer) => eachServer.type === 'custom')
-    .map((each) => ({
-      name: each.displayName,
-      url: each.config?.url,
-    }))
+  // Old storage can contain incomplete custom entries. Do not send a missing
+  // endpoint to either server: the HTTP contract requires an absolute URL.
+  return servers.flatMap((server) =>
+    server.type === 'custom' && server.config?.url
+      ? [{ name: server.displayName, url: server.config.url }]
+      : [],
+  )
 }
 
 export const useChatRefs = () => {

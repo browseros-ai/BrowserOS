@@ -1,11 +1,12 @@
+import type { ConversationRunSnapshot } from '@browseros/server-api'
+import { ServerApiClient } from '@browseros/server-api-client'
 import type { UIMessage } from 'ai'
+import { serverData } from '@/lib/server-api/client'
 
-export interface ConversationRunState {
-  conversationId: string
-  runId: string
-  status: 'running' | 'completed' | 'aborted' | 'failed'
-  messages: UIMessage[]
-}
+export type ConversationRunState = Omit<
+  ConversationRunSnapshot,
+  'messages' | 'chunkCount'
+> & { messages: UIMessage[]; chunkCount?: number }
 
 export async function fetchConversationRunState(
   serverUrl: string,
@@ -13,14 +14,15 @@ export async function fetchConversationRunState(
   fetchImpl: typeof fetch = fetch,
   signal?: AbortSignal,
 ): Promise<ConversationRunState> {
-  const response = await fetchImpl(
-    `${serverUrl}/chat/${encodeURIComponent(conversationId)}/state`,
-    { cache: 'no-store', ...(signal && { signal }) },
+  const client = new ServerApiClient(serverUrl, { fetch: fetchImpl })
+  const value: unknown = await serverData(
+    client.http.GET('/chat/{conversationId}/state', {
+      params: { path: { conversationId } },
+      cache: 'no-store',
+      signal,
+    }),
+    (error) => `Failed to load active conversation (${error.status})`,
   )
-  if (!response.ok) {
-    throw new Error(`Failed to load active conversation (${response.status})`)
-  }
-  const value: unknown = await response.json()
   if (!isConversationRunState(value)) {
     throw new Error('Invalid active conversation state')
   }

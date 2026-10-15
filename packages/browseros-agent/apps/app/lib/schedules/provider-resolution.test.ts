@@ -99,13 +99,19 @@ beforeEach(() => {
   fetchBodies.length = 0
   storageValues.set('providers', providers)
   storageValues.set('defaultProviderId', 'anthropic-sonnet')
-  globalThis.fetch = mock(async (_url, init) => {
-    fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
+  globalThis.fetch = mock(async (input, init) => {
+    fetchBodies.push(
+      input instanceof Request
+        ? await input.json()
+        : JSON.parse(String(init?.body ?? '{}')),
+    )
     return new Response(
       [
         'data: {"type":"text-delta","id":"message","delta":"done"}',
         '',
         'data: {"type":"finish","finishReason":"stop"}',
+        '',
+        'data: [DONE]',
         '',
         '',
       ].join('\n'),
@@ -159,8 +165,12 @@ describe('scheduled provider resolution', () => {
   // Named, not described. The endpoint resolves the model and the credentials
   // from the id, so nothing about the provider crosses the wire here.
   it('names the refine provider and sends no configuration', async () => {
-    globalThis.fetch = mock(async (_url, init) => {
-      fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
+    globalThis.fetch = mock(async (input, init) => {
+      fetchBodies.push(
+        input instanceof Request
+          ? await input.json()
+          : JSON.parse(String(init?.body ?? '{}')),
+      )
       return Response.json({ success: true, refined: 'Refined prompt' })
     }) as unknown as typeof fetch
 
@@ -184,8 +194,12 @@ describe('scheduled provider resolution', () => {
   })
 
   it('names nothing when the caller has no provider, so the server picks', async () => {
-    globalThis.fetch = mock(async (_url, init) => {
-      fetchBodies.push(JSON.parse(String(init?.body ?? '{}')))
+    globalThis.fetch = mock(async (input, init) => {
+      fetchBodies.push(
+        input instanceof Request
+          ? await input.json()
+          : JSON.parse(String(init?.body ?? '{}')),
+      )
       return Response.json({ success: true, refined: 'Refined prompt' })
     }) as unknown as typeof fetch
 

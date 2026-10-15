@@ -6,7 +6,7 @@ import {
 
 describe('conversation run client', () => {
   it('loads the server-owned base messages for a panel', async () => {
-    const fetchImpl = mock(async () =>
+    const fetchImpl = mock(async (_request: Request) =>
       Response.json({
         conversationId: 'conversation/one',
         runId: 'run-1',
@@ -15,16 +15,32 @@ describe('conversation run client', () => {
       }),
     )
 
-    const state = await fetchConversationRunState(
-      'http://127.0.0.1:9000',
-      'conversation/one',
-      fetchImpl as unknown as typeof fetch,
-    )
+    // Bun 1.3 drops Request.cache even when passed no-store. Observe the real
+    // constructor input so this checks the browser contract, not Bun's accessor.
+    const NativeRequest = globalThis.Request
+    let cache: RequestCache | undefined
+    globalThis.Request = class extends NativeRequest {
+      constructor(input: RequestInfo | URL, init?: RequestInit) {
+        cache = init?.cache
+        super(input, init)
+      }
+    }
+    let state: Awaited<ReturnType<typeof fetchConversationRunState>>
+    try {
+      state = await fetchConversationRunState(
+        'http://127.0.0.1:9000',
+        'conversation/one',
+        fetchImpl as unknown as typeof fetch,
+      )
+    } finally {
+      globalThis.Request = NativeRequest
+    }
 
-    expect(fetchImpl).toHaveBeenCalledWith(
+    const request = fetchImpl.mock.calls[0]?.[0]
+    expect(request?.url).toBe(
       'http://127.0.0.1:9000/chat/conversation%2Fone/state',
-      { cache: 'no-store' },
     )
+    expect(cache).toBe('no-store')
     expect(state.status).toBe('running')
     expect(state.messages[0]?.id).toBe('user-1')
   })

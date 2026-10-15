@@ -1,50 +1,21 @@
-import type { AgentRoutes } from '@browseros/server'
+import type {
+  CreateAgentRequest,
+  UpdateAgentRequest,
+} from '@browseros/server-api'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { hc } from 'hono/client'
 import { Feature } from '@/lib/browseros/capabilities'
+import { serverApi, serverData } from '@/lib/server-api/client'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import { useCapabilities } from '@/modules/browseros/capabilities.hooks'
-import type { AcpAgentType, CustomAcpAgentConfig } from './acp-agent-types'
 import { computeAgentsSettled } from './agents.helpers'
 
-interface CreateAcpAgentInput {
-  name: string
-  type: AcpAgentType
-  modelId?: string
-  reasoningEffort?: string
-  workingDirectory?: string
-  customConfig?: CustomAcpAgentConfig
-}
-
+type CreateAcpAgentInput = CreateAgentRequest
 interface UpdateAcpAgentInput {
   agentId: string
-  patch: {
-    name?: string
-    modelId?: string | null
-    reasoningEffort?: string | null
-    workingDirectory?: string | null
-    customConfig?: CustomAcpAgentConfig
-  }
+  patch: UpdateAgentRequest
 }
 
 const AGENTS_QUERY_KEY = 'acp-agents'
-
-function agentsClient(baseUrl: string) {
-  return hc<AgentRoutes>(`${baseUrl}/agents`)
-}
-
-// Accept the minimal shape this reads rather than the full `Response`: the Hono
-// client returns a `ClientResponse`, which is not structurally the global
-// `Response` under the current lib types.
-async function agentRequestError(response: {
-  status: number
-  json: () => Promise<unknown>
-}): Promise<Error> {
-  const body = (await response.json().catch(() => ({}))) as { error?: string }
-  return new Error(
-    body.error ?? `Request failed with status ${response.status}`,
-  )
-}
 
 export function useAcpAgents(enabled = true) {
   const { supports, isLoading: capabilitiesLoading } = useCapabilities()
@@ -57,9 +28,7 @@ export function useAcpAgents(enabled = true) {
   const query = useQuery({
     queryKey: [AGENTS_QUERY_KEY, baseUrl],
     queryFn: async () => {
-      const response = await agentsClient(baseUrl as string).index.$get()
-      if (!response.ok) throw await agentRequestError(response)
-      return response.json()
+      return serverData(serverApi(baseUrl as string).http.GET('/agents'))
     },
     enabled: Boolean(baseUrl) && !urlLoading && enabled && agentsSupported,
   })
@@ -93,9 +62,9 @@ export function useCreateAcpAgent() {
       if (!baseUrl || isLoading) {
         throw new Error('BrowserOS agent server URL is not ready')
       }
-      const response = await agentsClient(baseUrl).index.$post({ json: input })
-      if (!response.ok) throw await agentRequestError(response)
-      const result = await response.json()
+      const result = await serverData(
+        serverApi(baseUrl).http.POST('/agents', { body: input }),
+      )
       return result.agent
     },
     onSuccess: () =>
@@ -112,12 +81,12 @@ export function useUpdateAcpAgent() {
       if (!baseUrl || isLoading) {
         throw new Error('BrowserOS agent server URL is not ready')
       }
-      const response = await agentsClient(baseUrl)[':agentId'].$put({
-        param: { agentId },
-        json: patch,
-      })
-      if (!response.ok) throw await agentRequestError(response)
-      const result = await response.json()
+      const result = await serverData(
+        serverApi(baseUrl).http.PUT('/agents/{agentId}', {
+          params: { path: { agentId } },
+          body: patch,
+        }),
+      )
       return result.agent
     },
     onSuccess: () =>
@@ -134,11 +103,11 @@ export function useDeleteAcpAgent() {
       if (!baseUrl || isLoading) {
         throw new Error('BrowserOS agent server URL is not ready')
       }
-      const response = await agentsClient(baseUrl)[':agentId'].$delete({
-        param: { agentId },
-      })
-      if (!response.ok) throw await agentRequestError(response)
-      return response.json()
+      return serverData(
+        serverApi(baseUrl).http.DELETE('/agents/{agentId}', {
+          params: { path: { agentId } },
+        }),
+      )
     },
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: [AGENTS_QUERY_KEY] }),

@@ -1,4 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
+import { serverApi, serverData } from '@/lib/server-api/client'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 import type { AcpAgentType, AcpProbeResult } from './acp-agent-types'
 
@@ -18,23 +19,16 @@ export function useProbeCustomAgent() {
   return useMutation<AcpProbeResult, Error, ProbeCustomAgentInput>({
     mutationFn: async ({ command, env, cwd }) => {
       if (!baseUrl) throw new Error('BrowserOS agent server URL is not ready')
-      const response = await fetch(`${baseUrl}/acpx/probe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          type: 'custom',
-          command,
-          ...(env && Object.keys(env).length > 0 ? { env } : {}),
-          ...(cwd ? { cwd } : {}),
+      return serverData(
+        serverApi(baseUrl).http.POST('/acpx/probe', {
+          body: {
+            type: 'custom',
+            command,
+            ...(env && Object.keys(env).length > 0 ? { env } : {}),
+            ...(cwd ? { cwd } : {}),
+          },
         }),
-      })
-      if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as {
-          error?: { message?: string }
-        }
-        throw new Error(body.error?.message ?? 'Agent probe failed')
-      }
-      return response.json() as Promise<AcpProbeResult>
+      )
     },
   })
 }
@@ -50,18 +44,11 @@ export function useAcpAgentProbe(
     enabled: enabled && Boolean(type && baseUrl),
     staleTime: 0,
     queryFn: async () => {
-      const response = await fetch(`${baseUrl}/acpx/probe`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type }),
-      })
-      if (!response.ok) {
-        const body = (await response.json().catch(() => ({}))) as {
-          error?: { message?: string }
-        }
-        throw new Error(body.error?.message ?? 'Agent probe failed')
-      }
-      return response.json() as Promise<AcpProbeResult>
+      if (!baseUrl || !type || type === 'custom')
+        throw new Error('Agent probe failed')
+      return serverData(
+        serverApi(baseUrl).http.POST('/acpx/probe', { body: { type } }),
+      )
     },
   })
 }

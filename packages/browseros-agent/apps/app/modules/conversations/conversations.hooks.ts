@@ -1,18 +1,21 @@
-import type { ConversationRoutes } from '@browseros/server'
+import type { ConversationSummary } from '@browseros/server-api'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UIMessage } from 'ai'
-import { hc } from 'hono/client'
 import { removeConversationExecutionHistory } from '@/lib/execution-history/storage'
-import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
+import {
+  getServerApi,
+  nullOnNotFound,
+  serverData,
+} from '@/lib/server-api/client'
+import { uiMessages } from '@/lib/server-api/ui-messages'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
 
 export const SERVER_CONVERSATIONS_QUERY_KEY = 'server-conversations'
 
-export interface ServerConversationSummary {
-  id: string
-  lastMessagedAt: number
-  lastUserMessage: string
-}
+export type ServerConversationSummary = Pick<
+  ConversationSummary,
+  'id' | 'lastMessagedAt'
+> & { lastUserMessage: string }
 
 export interface ServerConversation {
   id: string
@@ -21,20 +24,14 @@ export interface ServerConversation {
   agentId?: string
 }
 
-async function conversationsClient() {
-  const baseUrl = await resolveAgentServerUrl()
-  return hc<ConversationRoutes>(`${baseUrl}/conversations`)
-}
-
 export async function fetchServerConversations(): Promise<
   ServerConversationSummary[]
 > {
-  const client = await conversationsClient()
-  const response = await client.index.$get()
-  if (!response.ok) {
-    throw new Error(`Failed to load conversations (${response.status})`)
-  }
-  const { conversations } = await response.json()
+  const client = await getServerApi()
+  const { conversations } = await serverData(
+    client.http.GET('/conversations'),
+    (error) => `Failed to load conversations (${error.status})`,
+  )
   return conversations.map((conversation) => ({
     id: conversation.id,
     lastMessagedAt: conversation.lastMessagedAt,
@@ -45,23 +42,19 @@ export async function fetchServerConversations(): Promise<
 export async function fetchServerConversation(
   conversationId: string,
 ): Promise<ServerConversation | null> {
-  const client = await conversationsClient()
-  const response = await client[':conversationId'].$get({
-    param: { conversationId },
-  })
-  if (response.status === 404) return null
-  if (!response.ok) {
-    throw new Error(`Failed to load conversation (${response.status})`)
-  }
-  const data = await response.json()
-  if (!('conversation' in data)) {
-    throw new Error('Failed to load conversation')
-  }
-  // hc applies a JSON transform to the response type, and UIMessage[]'s union is
-  // too deep for the compiler to instantiate through it (TS2589). The runtime
-  // shape is UIMessage[] exactly as the server stored it, so assert it here at
-  // the JSON boundary.
-  const messages = data.conversation.messages as UIMessage[]
+  const client = await getServerApi()
+  const data = await nullOnNotFound(
+    serverData(
+      client.http.GET('/conversations/{conversationId}', {
+        params: { path: { conversationId } },
+      }),
+      (error) => `Failed to load conversation (${error.status})`,
+    ),
+  )
+  if (!data) return null
+  // Stored messages are intentionally opaque JSON in the HTTP contract. The
+  // AI SDK owns their UI representation; no server implementation types leak in.
+  const messages = uiMessages(data.conversation.messages)
   return {
     id: data.conversation.id,
     messages,
@@ -74,13 +67,15 @@ export async function fetchServerConversation(
 export async function deleteServerConversationRow(
   conversationId: string,
 ): Promise<void> {
-  const client = await conversationsClient()
-  const response = await client[':conversationId'].$delete({
-    param: { conversationId },
-  })
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Failed to delete conversation (${response.status})`)
-  }
+  const client = await getServerApi()
+  await nullOnNotFound(
+    serverData(
+      client.http.DELETE('/conversations/{conversationId}', {
+        params: { path: { conversationId } },
+      }),
+      (error) => `Failed to delete conversation (${error.status})`,
+    ),
+  )
 }
 
 export async function deleteServerConversation(

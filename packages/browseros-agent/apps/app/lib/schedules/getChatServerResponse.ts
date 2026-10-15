@@ -1,18 +1,16 @@
+import type { BrowserTab, UiMessageChunk } from '@browseros/server-api'
+import { readUiMessageStream } from '@browseros/server-api-client'
 import { chatErrorMessage } from '@browseros/shared/schemas/chat-error'
-import { createParser, type EventSourceMessage } from 'eventsource-parser'
 import { getAgentServerUrl } from '@/lib/browseros/helpers'
 import { mcpServerStorage } from '@/lib/mcp/mcpServerStorage'
 import { buildChatRequestBody } from '@/lib/messaging/server/buildChatRequestBody'
+import { serverApi } from '@/lib/server-api/client'
 import type { ChatMode } from '@/modules/chat/chat-types'
 import { personalizationStorage } from '../personalization/personalizationStorage'
 import { scheduleSystemPrompt } from './scheduleSystemPrompt'
 import type { ToolCallExecution } from './scheduleTypes'
 
-export interface ActiveTab {
-  id?: number
-  url?: string
-  title?: string
-}
+export type ActiveTab = BrowserTab
 
 export interface ChatServerRequest {
   message: string
@@ -39,19 +37,6 @@ interface ParsedStreamResult {
   toolCalls: ToolCallExecution[]
   error: string | null
 }
-
-type UIMessageEvent =
-  | { type: 'text-delta'; id: string; delta: string }
-  | {
-      type: 'tool-input-available'
-      toolCallId: string
-      toolName: string
-      input: unknown
-    }
-  | { type: 'tool-output-available'; toolCallId: string; output: unknown }
-  | { type: 'tool-output-error'; toolCallId: string; errorText: string }
-  | { type: 'error'; errorText: string }
-  | { type: 'finish'; finishReason: string }
 
 interface StreamParseState {
   fullText: string
@@ -80,18 +65,14 @@ export async function getChatServerResponse(
     .filter((s) => s.type === 'managed')
     .map((s) => s.managedServerName)
     .filter((name): name is string => !!name)
-  const customMcpServers = mcpServers
-    .filter((s) => s.type === 'custom' && !!s.config?.url)
-    // biome-ignore lint/style/noNonNullAssertion: filter guarantees url exists
-    .map((s) => ({ name: s.displayName, url: s.config!.url }))
+  const customMcpServers = mcpServers.flatMap((server) =>
+    server.type === 'custom' && server.config?.url
+      ? [{ name: server.displayName, url: server.config.url }]
+      : [],
+  )
 
-  const response = await fetch(`${agentServerUrl}/chat`, {
-    method: 'POST',
-    signal: request.signal,
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  const response = await serverApi(agentServerUrl).createChat(
+    {
       messages: [{ role: 'user', content: request.message }],
       ...buildChatRequestBody({
         providerId: request.providerId,
@@ -115,17 +96,9 @@ export async function getChatServerResponse(
         userSystemPrompt: `${personalization}\n${scheduleSystemPrompt}`,
         isScheduledTask: true,
       }),
-    }),
-  })
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    const reason = body ? chatErrorMessage(body) : ''
-    throw new Error(
-      reason ||
-        `Chat request failed: ${response.status} ${response.statusText}`,
-    )
-  }
+    },
+    { signal: request.signal },
+  )
 
   const parsed = await parseUIMessageStream(response)
 
@@ -142,7 +115,7 @@ export async function getChatServerResponse(
   }
 }
 
-function processEvent(event: UIMessageEvent, state: StreamParseState): void {
+function processEvent(event: UiMessageChunk, state: StreamParseState): void {
   if (event.type === 'text-delta') {
     const text = event.delta
     state.fullText += text
@@ -198,28 +171,9 @@ async function parseUIMessageStream(
     receivedFinish: false,
   }
 
-  const parser = createParser({
-    onEvent(event: EventSourceMessage) {
-      if (event.data === '[DONE]') return
-
-      try {
-        const parsedEvent = JSON.parse(event.data) as UIMessageEvent
-        processEvent(parsedEvent, state)
-      } catch {}
-    },
-  })
-
   try {
-    const reader = response.body.getReader()
-    const decoder = new TextDecoder()
-
-    while (true) {
-      const { done, value } = await reader.read()
-
-      if (done) break
-
-      const chunk = decoder.decode(value, { stream: true })
-      parser.feed(chunk)
+    for await (const event of readUiMessageStream(response)) {
+      processEvent(event, state)
     }
 
     if (!state.receivedFinish && !state.error) {
@@ -251,7 +205,10 @@ async function parseUIMessageStream(
       toolCalls: Array.from(state.toolCallsMap.values()),
       error:
         error instanceof Error
-          ? error.message
+          ? error.message === 'The chat stream ended before [DONE]'
+            ? (state.error ??
+              'Stream ended unexpectedly without completion. The task may have been interrupted.')
+            : error.message
           : String(error || 'Unknown error'),
     }
   }

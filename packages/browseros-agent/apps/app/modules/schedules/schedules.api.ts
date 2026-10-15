@@ -1,16 +1,13 @@
 import type {
-  ScheduledJobRoutes,
-  ScheduledJobRunRoutes,
-} from '@browseros/server'
-import { hc } from 'hono/client'
-import type {
   ScheduledJob,
   ScheduledJobRun,
 } from '@/lib/schedules/scheduleTypes'
-import { resolveAgentServerUrl } from '@/modules/browseros/agent-server-url.helpers'
 import {
-  type ScheduledJobRow,
-  type ScheduledJobRunRow,
+  getServerApi,
+  nullOnNotFound,
+  serverData,
+} from '@/lib/server-api/client'
+import {
   toScheduledJob,
   toScheduledJobPayload,
   toScheduledJobRun,
@@ -18,66 +15,58 @@ import {
 } from './schedules.helpers'
 import { bumpScheduleRevision } from './schedules.revision'
 
-async function jobsClient() {
-  const baseUrl = await resolveAgentServerUrl()
-  return hc<ScheduledJobRoutes>(`${baseUrl}/scheduled-jobs`)
-}
-
-async function runsClient() {
-  const baseUrl = await resolveAgentServerUrl()
-  return hc<ScheduledJobRunRoutes>(`${baseUrl}/scheduled-job-runs`)
-}
-
 export async function listScheduledJobs(): Promise<ScheduledJob[]> {
-  const client = await jobsClient()
-  const response = await client.index.$get()
-  if (!response.ok) {
-    throw new Error(`Failed to load scheduled jobs (${response.status})`)
-  }
-  const { jobs } = await response.json()
-  return (jobs as ScheduledJobRow[]).map(toScheduledJob)
+  const client = await getServerApi()
+  const { jobs } = await serverData(
+    client.http.GET('/scheduled-jobs'),
+    (error) => `Failed to load scheduled jobs (${error.status})`,
+  )
+  return jobs.map(toScheduledJob)
 }
 
 export async function putScheduledJob(job: ScheduledJob): Promise<void> {
-  const client = await jobsClient()
-  const response = await client[':jobId'].$put({
-    param: { jobId: job.id },
-    json: toScheduledJobPayload(job),
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to save scheduled job (${response.status})`)
-  }
+  const client = await getServerApi()
+  await serverData(
+    client.http.PUT('/scheduled-jobs/{jobId}', {
+      params: { path: { jobId: job.id } },
+      body: toScheduledJobPayload(job),
+    }),
+    (error) => `Failed to save scheduled job (${error.status})`,
+  )
   await bumpScheduleRevision()
 }
 
 export async function deleteScheduledJob(jobId: string): Promise<void> {
-  const client = await jobsClient()
-  const response = await client[':jobId'].$delete({ param: { jobId } })
-  if (!response.ok && response.status !== 404) {
-    throw new Error(`Failed to delete scheduled job (${response.status})`)
-  }
+  const client = await getServerApi()
+  await nullOnNotFound(
+    serverData(
+      client.http.DELETE('/scheduled-jobs/{jobId}', {
+        params: { path: { jobId } },
+      }),
+      (error) => `Failed to delete scheduled job (${error.status})`,
+    ),
+  )
   await bumpScheduleRevision()
 }
 
 export async function listScheduledJobRuns(): Promise<ScheduledJobRun[]> {
-  const client = await runsClient()
-  const response = await client.index.$get()
-  if (!response.ok) {
-    throw new Error(`Failed to load run history (${response.status})`)
-  }
-  const { runs } = await response.json()
-  return (runs as ScheduledJobRunRow[]).map(toScheduledJobRun)
+  const client = await getServerApi()
+  const { runs } = await serverData(
+    client.http.GET('/scheduled-job-runs'),
+    (error) => `Failed to load run history (${error.status})`,
+  )
+  return runs.map(toScheduledJobRun)
 }
 
 export async function putScheduledJobRun(run: ScheduledJobRun): Promise<void> {
-  const client = await runsClient()
-  const response = await client[':runId'].$put({
-    param: { runId: run.id },
-    json: toScheduledJobRunPayload(run),
-  })
-  if (!response.ok) {
-    throw new Error(`Failed to save run (${response.status})`)
-  }
+  const client = await getServerApi()
+  await serverData(
+    client.http.PUT('/scheduled-job-runs/{runId}', {
+      params: { path: { runId: run.id } },
+      body: toScheduledJobRunPayload(run),
+    }),
+    (error) => `Failed to save run (${error.status})`,
+  )
   await bumpScheduleRevision()
 }
 

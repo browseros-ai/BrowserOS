@@ -50,7 +50,7 @@ describe('server conversations api', () => {
       { id: 'a', lastMessagedAt: 2, lastUserMessage: 'hi' },
       { id: 'b', lastMessagedAt: 1, lastUserMessage: '' },
     ])
-    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+    expect((fetchMock.mock.calls[0]?.[0] as Request | undefined)?.url).toBe(
       'http://127.0.0.1:9999/conversations',
     )
   })

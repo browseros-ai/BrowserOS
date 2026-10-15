@@ -1,3 +1,4 @@
+import { ServerApiClient } from '@browseros/server-api-client'
 import {
   createDiagnosticsCollector,
   type DiagnosticsResult,
@@ -47,11 +48,13 @@ async function readServer(
   resolveServerUrl: () => Promise<string>,
 ): Promise<ServerDetails> {
   const baseUrl = await resolveServerUrl()
-  const response = await fetch(`${baseUrl}/system/diagnostics`, {
-    signal: AbortSignal.timeout(1800),
-  })
-  if (!response.ok) throw new Error('Server diagnostics unavailable')
-  const data = await response.json()
+  const { data } = await new ServerApiClient(baseUrl).http.GET(
+    '/system/diagnostics',
+    {
+      signal: AbortSignal.timeout(1800),
+    },
+  )
+  if (!data) throw new Error('Server diagnostics unavailable')
   return {
     version: valueText(data.version),
     os: valueText(data.os),

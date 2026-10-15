@@ -1,3 +1,4 @@
+import type { OAuthDeviceCode } from '@browseros/server-api'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -9,6 +10,7 @@ import { CHATGPT_PROVIDER_DISPLAY_NAME } from '@/lib/llm-providers/provider-disp
 import { getProviderTemplate } from '@/lib/llm-providers/providerTemplates'
 import type { LlmProviderConfig, ProviderType } from '@/lib/llm-providers/types'
 import { track } from '@/lib/metrics/track'
+import { serverApi } from '@/lib/server-api/client'
 import { useOAuthStatus } from '@/modules/llm-providers/oauth-status.hooks'
 
 export interface OAuthProviderFlowConfig {
@@ -158,30 +160,26 @@ export function useOAuthProviderFlow(
     })
 
     startTokenPolling(auth, deviceData, codeVerifier, async (token) => {
-      await fetch(`${serverUrl}/oauth/${config.providerType}/token`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(token),
+      await serverApi(serverUrl).http.POST('/oauth/{provider}/token', {
+        params: { path: { provider: config.providerType } },
+        body: { ...token },
       })
       startPolling()
     })
   }
 
   async function handleServerAuth(agentServerUrl: string) {
-    const res = await fetch(
-      `${agentServerUrl}/oauth/${config.providerType}/start`,
+    // Keep redirect-follow behavior and the final response URL for PKCE flows.
+    const { response: res } = await serverApi(agentServerUrl).http.GET(
+      '/oauth/{provider}/start',
+      {
+        params: { path: { provider: config.providerType } },
+        parseAs: 'stream',
+      },
     )
 
     if (res.headers.get('content-type')?.includes('application/json')) {
-      const data = (await res.json()) as {
-        userCode?: string
-        verificationUri?: string
-        error?: string
-      }
-
-      if (!res.ok || data.error) {
-        throw new Error(data.error || `Server returned ${res.status}`)
-      }
+      const data = (await res.json()) as OAuthDeviceCode
       if (!data.userCode || !data.verificationUri) {
         throw new Error('Invalid response from server')
       }

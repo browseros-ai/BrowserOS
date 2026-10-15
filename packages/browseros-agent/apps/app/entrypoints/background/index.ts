@@ -23,6 +23,7 @@ import { onServerMessage } from '@/lib/messaging/server/serverMessages'
 import { onOpenSidePanelWithSearch } from '@/lib/messaging/sidepanel/openSidepanelWithSearch'
 import { searchActionsStorage } from '@/lib/search-actions/searchActionsStorage'
 import { selectedTextStorage } from '@/lib/selected-text/selectedTextStorage'
+import { serverApi } from '@/lib/server-api/client'
 import { stopAgentStorage } from '@/lib/stop-agent/stop-agent-storage'
 import { scheduledJobRuns } from './scheduledJobRuns'
 
@@ -133,7 +134,9 @@ export default defineBackground(() => {
   onServerMessage('checkHealth', async () => {
     try {
       const url = await getHealthCheckUrl()
-      const response = await fetch(url)
+      const { response } = await serverApi(new URL(url).origin).http.GET(
+        '/system/health',
+      )
       return { healthy: response.ok }
     } catch {
       return { healthy: false }

@@ -1,3 +1,7 @@
+import type {
+  BrowserContext,
+  BrowserOsChatRequest,
+} from '@browseros/server-api'
 import { getModelsDevModels } from '@/lib/llm-providers/models-dev'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 import type { ChatMode } from '@/modules/chat/chat-types'
@@ -19,24 +23,7 @@ export interface ChatHistoryEntry {
   content: string
 }
 
-export interface ChatRequestBrowserContext {
-  windowId?: number
-  activeTab?: {
-    id?: number
-    url?: string
-    title?: string
-  }
-  selectedTabs?: {
-    id?: number
-    url?: string
-    title?: string
-  }[]
-  enabledMcpServers?: string[]
-  customMcpServers?: {
-    name: string
-    url?: string
-  }[]
-}
+export type ChatRequestBrowserContext = BrowserContext
 
 export interface ChatRequestBodyParams {
   conversationId: string
@@ -84,7 +71,7 @@ export const buildChatRequestBody = ({
   selectedText,
   selectedTextSource,
   isScheduledTask,
-}: ChatRequestBodyParams) => ({
+}: ChatRequestBodyParams): BrowserOsChatRequest => ({
   // The provider is named, not described. The server holds the list and which
   // one is selected, so it resolves the model, endpoint and credentials from
   // the id. Those used to travel on every message, which meant the api key and
@@ -105,7 +92,9 @@ export const buildChatRequestBody = ({
   // the reasoning answer comes from a model catalogue the extension bundles.
   supportsImages: supportsImages ?? provider?.supportsImages,
   supportsReasoning: provider ? resolvesSupportsReasoning(provider) : undefined,
-  previousConversation,
+  previousConversation: Array.isArray(previousConversation)
+    ? previousConversation.map((entry) => ({ ...entry }))
+    : previousConversation,
   persist,
   declinedApps: declinedApps?.length ? declinedApps : undefined,
   selectedText,

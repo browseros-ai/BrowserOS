@@ -13,27 +13,52 @@ export async function* readUiMessageStream(
 ): AsyncGenerator<UiMessageChunk> {
   if (!response.ok) throw await ServerApiError.fromResponse(response)
   if (response.status === 204) return
-  const invalid = (message: string) =>
-    new ServerApiError({
-      status: response.status,
-      code: 'invalid_stream',
-      message,
-    })
+  for await (const payload of readSseData(response, options)) {
+    if (payload === '[DONE]') return
+    let chunk: unknown
+    try {
+      chunk = JSON.parse(payload)
+    } catch {
+      throw invalidStream(response, 'Invalid JSON in a chat stream event')
+    }
+    if (!isUiMessageChunk(chunk)) {
+      throw invalidStream(
+        response,
+        'Invalid UI message chunk in a chat stream event',
+      )
+    }
+    yield chunk
+  }
+  throw invalidStream(response, 'The chat stream ended before [DONE]')
+}
+
+/**
+ * Shares framing with non-chat streams such as panel assignments, whose payloads
+ * have their own validator and end at EOF rather than a chat [DONE] sentinel.
+ * Breaking or aborting consumption closes only this HTTP subscriber.
+ */
+export async function* readSseData(
+  response: Response,
+  options: { signal?: AbortSignal } = {},
+): AsyncGenerator<string> {
+  if (!response.ok) throw await ServerApiError.fromResponse(response)
+  if (response.status === 204) return
   if (
     !response.headers
       .get('content-type')
       ?.toLowerCase()
       .startsWith('text/event-stream')
   ) {
-    throw invalid('Expected a text/event-stream response')
+    throw invalidStream(response, 'Expected a text/event-stream response')
   }
-  if (!response.body) throw invalid('The chat stream has no body')
+  if (!response.body)
+    throw invalidStream(response, 'The chat stream has no body')
   const reader = response.body.getReader()
   const decoder = new TextDecoder()
   const frames = new SseDataDecoder()
   const { signal } = options
-  // Cancel a pending read as well as checking between reads. The finally block
-  // removes this listener and releases the reader even on an early consumer break.
+  // Cancel a pending read as well as checking between reads. Cleanup releases
+  // the reader even on an early consumer break, without stopping server work.
   const abort = () => {
     void reader.cancel(signal?.reason).catch(() => {})
   }
@@ -43,29 +68,22 @@ export async function* readUiMessageStream(
       signal?.throwIfAborted()
       const part = await reader.read()
       signal?.throwIfAborted()
-      if (part.done) throw invalid('The chat stream ended before [DONE]')
-      for (const payload of frames.push(
-        decoder.decode(part.value, { stream: true }),
-      )) {
-        if (payload === '[DONE]') return
-        let chunk: unknown
-        try {
-          chunk = JSON.parse(payload)
-        } catch {
-          throw invalid('Invalid JSON in a chat stream event')
-        }
-        if (!isUiMessageChunk(chunk))
-          throw invalid('Invalid UI message chunk in a chat stream event')
-        yield chunk
-      }
+      if (part.done) return
+      yield* frames.push(decoder.decode(part.value, { stream: true }))
     }
   } finally {
     signal?.removeEventListener('abort', abort)
-    // Closing only our subscriber preserves server work. A transport cleanup
-    // rejection must not replace the parse/abort error the caller needs to see.
     await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
+}
+
+function invalidStream(response: Response, message: string): ServerApiError {
+  return new ServerApiError({
+    status: response.status,
+    code: 'invalid_stream',
+    message,
+  })
 }
 
 /** Carries SSE line and event state across arbitrary decoded network segments. */

@@ -1,10 +1,11 @@
-import {
-  type ConversationPanelAssignment,
-  type ConversationPanelAssignments,
-  ConversationPanelAssignmentsSchema,
-} from '@browseros/shared/schemas/conversation-panels'
-import { EventSourceParserStream } from 'eventsource-parser/stream'
+import type {
+  ConversationPanelAssignment,
+  ConversationPanelAssignments,
+} from '@browseros/server-api'
+import { readSseData, ServerApiClient } from '@browseros/server-api-client'
+import { ConversationPanelAssignmentsSchema } from '@browseros/shared/schemas/conversation-panels'
 import type { GlowMessage } from '@/entrypoints/glow.content/GlowMessage'
+import { serverData } from '@/lib/server-api/client'
 import type { ConversationPanelViews } from './conversationPanelStorage'
 
 export interface ConversationPanelBrokerErrorContext {
@@ -14,7 +15,7 @@ export interface ConversationPanelBrokerErrorContext {
 
 export interface ConversationPanelBrokerDeps {
   resolveServerUrl(): Promise<string>
-  fetch(input: string, init: RequestInit): Promise<Response>
+  fetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response>
   getTab(tabId: number): Promise<{ id?: number; windowId: number }>
   openPanel(target: { tabId: number; windowId: number }): Promise<void>
   readViews(): Promise<ConversationPanelViews>
@@ -84,12 +85,15 @@ export class ConversationPanelBroker {
     this.reconciliation = cleaned
     await cleaned
     const serverUrl = await this.deps.resolveServerUrl()
-    const response = await this.deps.fetch(
-      `${serverUrl}/chat/panels/${tabId}`,
-      { method: 'DELETE' },
+    await serverData(
+      new ServerApiClient(serverUrl, { fetch: this.deps.fetch }).http.DELETE(
+        '/chat/panels/{tabId}',
+        {
+          params: { path: { tabId: String(tabId) } },
+        },
+      ),
+      (error) => `Panel cleanup failed (${error.status})`,
     )
-    if (!response.ok)
-      throw new Error(`Panel cleanup failed (${response.status})`)
   }
 
   private async applyAssignments(
@@ -214,23 +218,22 @@ export class ConversationPanelBroker {
 
   private async consumeAssignments(signal: AbortSignal): Promise<void> {
     const serverUrl = await this.deps.resolveServerUrl()
-    const response = await this.deps.fetch(`${serverUrl}/chat/panels`, {
+    const { response } = await new ServerApiClient(serverUrl, {
+      fetch: this.deps.fetch,
+    }).http.GET('/chat/panels', {
       headers: { Accept: 'text/event-stream' },
       signal,
+      parseAs: 'stream',
     })
-    if (!response.ok || !response.body) {
+    if (!response.body)
       throw new Error(`Conversation panels unavailable (${response.status})`)
-    }
 
-    // The parser buffers arbitrary fetch chunk boundaries. Each full assignment
-    // set is reconciled in stream order, including periodic healing heartbeats.
-    const events = response.body
-      .pipeThrough(new TextDecoderStream())
-      .pipeThrough(new EventSourceParserStream())
-    for await (const message of events) {
+    // Complete assignment sets are reconciled in stream order, including the
+    // periodic healing heartbeat. Panels have no chat DONE sentinel.
+    for await (const data of readSseData(response, { signal })) {
       let decoded: unknown
       try {
-        decoded = JSON.parse(message.data)
+        decoded = JSON.parse(data)
       } catch {
         continue
       }

@@ -57,7 +57,7 @@ export const NewCodingAgentDialog: FC<NewCodingAgentDialogProps> = ({
     probe.error?.message ?? probe.data?.error?.message ?? undefined
 
   const handleCreate = async () => {
-    if (!type || !name.trim()) return
+    if (!type || type === 'custom' || !name.trim()) return
     const created = await createAgent.mutateAsync({
       name: name.trim(),
       type,

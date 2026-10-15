@@ -1,37 +1,20 @@
 import type {
+  ScheduledJob as ServerScheduledJob,
+  ScheduledJobRun as ServerScheduledJobRun,
+} from '@browseros/server-api'
+import type {
   ScheduledJob,
   ScheduledJobRun,
-  ToolCallExecution,
 } from '@/lib/schedules/scheduleTypes'
 
 /** A job row as the server returns it: absent values are null, times are epoch. */
-export interface ScheduledJobRow {
-  id: string
-  name: string
-  query: string
-  scheduleType: ScheduledJob['scheduleType']
-  scheduleTime: string | null
-  scheduleInterval: number | null
-  enabled: boolean
-  providerId: string | null
-  lastRunAt: number | null
-  createdAt: number
-  updatedAt: number
-}
+export type ScheduledJobRow = ServerScheduledJob
 
-/** A run row as the server returns it. */
-export interface ScheduledJobRunRow {
-  id: string
-  jobId: string
-  status: ScheduledJobRun['status']
-  startedAt: number
-  completedAt: number | null
-  result: string | null
-  finalResult: string | null
-  executionLog: string | null
-  toolCalls: ToolCallExecution[] | null
-  error: string | null
-}
+/** Older stored run projections omit bookkeeping timestamps not used by the UI. */
+export type ScheduledJobRunRow = Omit<
+  ServerScheduledJobRun,
+  'createdAt' | 'updatedAt'
+>
 
 function orUndefined<T>(value: T | null): T | undefined {
   return value ?? undefined
@@ -123,7 +106,7 @@ export function toScheduledJobRunPayload(run: ScheduledJobRun) {
     result: run.result,
     finalResult: run.finalResult,
     executionLog: run.executionLog,
-    toolCalls: run.toolCalls,
+    toolCalls: run.toolCalls?.map((call) => ({ ...call })),
     error: run.error,
   }
 }

@@ -1,3 +1,4 @@
+import type { ChatRequest } from '@browseros/server-api'
 import type { Provider } from '../../components/chat/chatComponentTypes'
 import type { LlmProviderConfig } from '../../lib/llm-providers/types'
 import { buildChatRequestBody } from '../../lib/messaging/server/buildChatRequestBody'
@@ -52,7 +53,10 @@ export function buildSidepanelPreparedSendMessagesRequest({
   fallbackProvider,
   message,
   ...common
-}: BuildSidepanelPreparedSendMessagesRequestInput) {
+}: BuildSidepanelPreparedSendMessagesRequestInput): {
+  api: string
+  body: ChatRequest
+} {
   if (target?.kind === 'acp') {
     return {
       api: `${agentServerUrl}/chat`,
@@ -65,7 +69,9 @@ export function buildSidepanelPreparedSendMessagesRequest({
         userSystemPrompt: common.userSystemPrompt,
         userWorkingDir: common.userWorkingDir,
         supportsImages: common.supportsImages,
-        previousConversation: common.previousConversation,
+        previousConversation: Array.isArray(common.previousConversation)
+          ? common.previousConversation.map((entry) => ({ ...entry }))
+          : common.previousConversation,
         declinedApps: common.declinedApps,
         selectedText: common.selectedText,
         selectedTextSource: common.selectedTextSource,

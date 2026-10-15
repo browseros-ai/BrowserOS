@@ -1,3 +1,4 @@
+import type { PublicProvider } from '@browseros/server-api'
 import { isProviderType } from '@/lib/llm-providers/providerTemplates'
 import type { LlmProviderConfig } from '@/lib/llm-providers/types'
 
@@ -8,29 +9,16 @@ import type { LlmProviderConfig } from '@/lib/llm-providers/types'
  * at all: the server reports only whether each is set, so a key cannot reach
  * a surface that has no use for it.
  */
-export interface ProviderRow {
-  id: string
-  kind: 'llm' | 'acp'
-  type: string
-  name: string
-  baseUrl: string | null
-  headers?: Record<string, string> | null
-  // Nullable since the table holds coding agents too, and those carry neither.
-  modelId: string | null
-  supportsImages: boolean
-  contextWindow: number | null
-  temperature: number
-  hasApiKey: boolean
-  hasAccessKeyId: boolean
-  hasSecretAccessKey: boolean
-  hasSessionToken: boolean
-  resourceName: string | null
-  region: string | null
-  reasoningEffort: string | null
-  reasoningSummary: string | null
-  createdAt: number
-  updatedAt: number
-}
+export type ProviderRow = Omit<
+  PublicProvider,
+  'headers' | 'workingDirectory' | 'customConfig' | 'isDefault'
+> &
+  Partial<
+    Pick<
+      PublicProvider,
+      'headers' | 'workingDirectory' | 'customConfig' | 'isDefault'
+    >
+  >
 
 function orUndefined<T>(value: T | null): T | undefined {
   return value ?? undefined

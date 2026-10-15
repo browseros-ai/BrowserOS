@@ -1,22 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
+import { serverApi, serverData } from '@/lib/server-api/client'
 import { useAgentServerUrl } from '@/modules/browseros/agent-server-url.hooks'
-
-interface UserMCPIntegrationsList {
-  integrations: {
-    name: string
-    is_authenticated: boolean
-  }[]
-  count: number
-}
 
 const INTEGRATIONS_QUERY_KEY = 'klavis-user-integrations'
 
-const getUserMCPIntegrations = async (
-  hostUrl: string,
-): Promise<UserMCPIntegrationsList> => {
-  const response = await fetch(`${hostUrl}/klavis/user-integrations`)
-  const data = (await response.json()) as UserMCPIntegrationsList
-  return data
+const getUserMCPIntegrations = async (hostUrl: string) => {
+  return serverData(serverApi(hostUrl).http.GET('/klavis/user-integrations'))
 }
 
 export const useGetUserMCPIntegrations = () => {
