@@ -415,6 +415,49 @@ impl PageView {
             .is_some_and(|control| control.guard == guard)
     }
 
+    /// Controls that kept their reference and changed their name.
+    ///
+    /// Which is what a counter moving looks like from here: the cart link is
+    /// still `e63` and is called "2 items in cart" where it was called "0 items
+    /// in cart". So is "Showing 1-16 of 400", and so is a tab becoming
+    /// selected. It is the only generic way to say what an action actually did
+    /// without knowing anything about the site.
+    ///
+    /// `about` is the goal, used only to order the answer: a live page has
+    /// countdown timers on it, and a run that moved three things should report
+    /// the ones the goal is about rather than the clock.
+    #[must_use]
+    pub fn what_moved(&self, after: &Self, about: &str, most: usize) -> Vec<Moved> {
+        let words = crate::relevance::words(about);
+        let mut moved: Vec<(bool, Moved)> = Vec::new();
+        for was in self
+            .controls
+            .iter()
+            .filter(|control| control.is_offerable())
+        {
+            let Some(now) = after.control(&was.reference) else {
+                continue;
+            };
+            if now.name.trim() == was.name.trim() || now.role != was.role {
+                continue;
+            }
+            let about_the_goal = crate::relevance::words(&now.name)
+                .iter()
+                .any(|word| words.contains(word));
+            moved.push((
+                about_the_goal,
+                Moved {
+                    reference: was.reference.clone(),
+                    was: was.name.clone(),
+                    now: now.name.clone(),
+                },
+            ));
+        }
+        // The ones the goal mentions first, page order within each group.
+        moved.sort_by_key(|(about_the_goal, _)| !*about_the_goal);
+        moved.into_iter().map(|(_, one)| one).take(most).collect()
+    }
+
     /// Whether this page offers a way to search itself.
     ///
     /// Asked when the model has just said nothing listed can advance the goal,
@@ -537,6 +580,14 @@ fn fingerprint_of(url: &str, title: &str, text: &str, controls: &[Control]) -> u
 
 fn indent_of(line: &str) -> usize {
     line.len() - line.trim_start().len()
+}
+
+/// A control that kept its reference and changed its name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Moved {
+    pub reference: String,
+    pub was: String,
+    pub now: String,
 }
 
 /// How deeply a snapshot line sits in the page's tree.
@@ -702,6 +753,19 @@ fn nested_options(lines: &[&str], index: usize) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
+    fn named(reference: &str, role: &str, name: &str) -> Control {
+        Control {
+            reference: reference.to_string(),
+            clickable: false,
+            role: role.to_string(),
+            name: name.to_string(),
+            value: None,
+            state: ControlState::default(),
+            options: Vec::new(),
+            guard: 0,
+        }
+    }
+
     /// The renderer writes one line per node as `- role "name" [ref=eN]`, and
     /// omits the quoted name when there is none, so an unnamed image is a line
     /// with a role and nothing else. Built in that format rather than from a
@@ -1555,5 +1619,90 @@ mod tests {
             without_nested_twins(vec![bare(1, "e1"), bare(2, "e2")]).len(),
             2
         );
+    }
+
+    /// The cart case. The loop cannot know an action succeeded; it can say what
+    /// it clicked and that a counter moved, which is checkable.
+    #[test]
+    fn a_counter_that_moved_is_what_an_action_observably_did() {
+        let before = PageView::from_snapshot_parts(
+            "https://shop.test/s?k=toothpaste",
+            "results",
+            "",
+            vec![
+                named("e63", "link", "0 items in cart"),
+                named("e128", "button", "Add to cart"),
+            ],
+        );
+        let after = PageView::from_snapshot_parts(
+            "https://shop.test/s?k=toothpaste",
+            "results",
+            "",
+            vec![
+                named("e63", "link", "2 items in cart"),
+                named("e128", "button", "Add to cart"),
+            ],
+        );
+
+        let moved = before.what_moved(&after, "add toothpaste to the cart", 3);
+
+        assert_eq!(moved.len(), 1, "got {moved:?}");
+        assert_eq!(moved[0].reference, "e63");
+        assert_eq!(moved[0].was, "0 items in cart");
+        assert_eq!(moved[0].now, "2 items in cart");
+    }
+
+    /// A live page has a clock on it. A step that moved several things reports
+    /// the ones the goal is about first, and no more than it was asked for.
+    #[test]
+    fn the_goals_own_words_order_what_is_reported() {
+        let before = PageView::from_snapshot_parts(
+            "https://shop.test/",
+            "shop",
+            "",
+            vec![
+                named("e1", "link", "Ends in 05:52:02"),
+                named("e2", "link", "Ends in 04:11:00"),
+                named("e3", "link", "0 items in cart"),
+            ],
+        );
+        let after = PageView::from_snapshot_parts(
+            "https://shop.test/",
+            "shop",
+            "",
+            vec![
+                named("e1", "link", "Ends in 05:52:01"),
+                named("e2", "link", "Ends in 04:10:59"),
+                named("e3", "link", "1 item in cart"),
+            ],
+        );
+
+        let moved = before.what_moved(&after, "add it to the cart", 1);
+
+        assert_eq!(moved.len(), 1, "capped at what was asked for");
+        assert_eq!(
+            moved[0].reference, "e3",
+            "the cart before the clocks, got {moved:?}"
+        );
+    }
+
+    /// A control that is simply gone, or that changed role, is not a counter
+    /// moving and is not reported as one.
+    #[test]
+    fn only_a_control_that_stayed_counts_as_having_moved() {
+        let before = PageView::from_snapshot_parts(
+            "https://shop.test/",
+            "shop",
+            "",
+            vec![named("e1", "link", "One"), named("e2", "link", "Two")],
+        );
+        let after = PageView::from_snapshot_parts(
+            "https://shop.test/",
+            "shop",
+            "",
+            vec![named("e2", "button", "Two and a half")],
+        );
+
+        assert!(before.what_moved(&after, "do something", 3).is_empty());
     }
 }

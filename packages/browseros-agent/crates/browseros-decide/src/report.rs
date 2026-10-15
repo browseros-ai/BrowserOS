@@ -233,6 +233,7 @@ mod tests {
             value: None,
             confidence: 0.9,
             page_changed: changed,
+            moved: Vec::new(),
             url_after: "https://example.test/".to_string(),
             input_tokens: 1_000,
         }

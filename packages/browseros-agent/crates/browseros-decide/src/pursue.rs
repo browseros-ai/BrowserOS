@@ -18,7 +18,7 @@ use crate::run::Known;
 use crate::run::{Budget, DECLINE_LIMIT, NAVIGATION_LIMIT, Run, STALL_LIMIT, WAIT_LIMIT};
 use crate::space::ActionSpace;
 use crate::space::Candidate;
-use crate::view::PageView;
+use crate::view::{Moved, PageView};
 use crate::vocabulary::{How, Operation, Telling};
 
 /// Where a decision comes from.
@@ -173,6 +173,13 @@ pub struct Step {
     pub confidence: f64,
     pub page_changed: bool,
     pub url_after: String,
+    /// What observably moved on the page, as fact rather than as a claim.
+    ///
+    /// The loop cannot know an action succeeded. It can say that it clicked a
+    /// control called "Add to cart" and that a control called "0 items in cart"
+    /// is now called "2 items in cart", which is checkable and is what a caller
+    /// asking whether the errand worked actually wants.
+    pub moved: Vec<Moved>,
     pub input_tokens: u64,
 }
 
@@ -554,7 +561,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         };
 
         if let Performed::Answer(answer) = performed {
-            trail.push(step_of(&decision, false, &view.url));
+            trail.push(step_of(&decision, false, &view.url, Vec::new()));
             return end(
                 &run,
                 Status::Answered,
@@ -580,10 +587,16 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         let changed = after
             .as_ref()
             .is_some_and(|view| view.fingerprint != before);
+        // What this action observably did, taken by joining the page before it
+        // with the page after it on the control reference.
+        let moved = after.as_ref().map_or_else(Vec::new, |now| {
+            view.what_moved(now, &run.goal, MOVED_REPORTED)
+        });
         trail.push(step_of(
             &decision,
             changed,
             after.as_ref().map_or(&view.url, |view| &view.url),
+            moved,
         ));
         run.remember(said(&decision, changed));
 
@@ -1002,7 +1015,7 @@ fn keyed_values(run: &Run) -> Vec<(String, &crate::offer::NamedValue)> {
         .collect()
 }
 
-fn step_of(decision: &Decision, changed: bool, url: &str) -> Step {
+fn step_of(decision: &Decision, changed: bool, url: &str, moved: Vec<Moved>) -> Step {
     Step {
         operation: decision.operation,
         how: decision.how,
@@ -1011,9 +1024,16 @@ fn step_of(decision: &Decision, changed: bool, url: &str) -> Step {
         confidence: decision.confidence(),
         page_changed: changed,
         url_after: url.to_string(),
+        moved,
         input_tokens: decision.input_tokens,
     }
 }
+
+/// At most this many moved controls are reported per step.
+///
+/// A live page has a countdown on it, so a step that moved everything should
+/// report the few things the goal is about rather than the clock.
+const MOVED_REPORTED: usize = 3;
 
 fn said(decision: &Decision, changed: bool) -> String {
     let what = decision.operation.as_str();
@@ -1104,7 +1124,7 @@ fn end(
 #[cfg(test)]
 mod needle_tests {
     use super::needle_for;
-    use crate::view::{Control, ControlState, PageView};
+    use crate::view::{Control, ControlState, Moved, PageView};
 
     fn named(reference: &str, role: &str, name: &str) -> Control {
         Control {

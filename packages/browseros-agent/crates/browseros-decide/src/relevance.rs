@@ -31,7 +31,7 @@ const NOISE: &[&str] = &[
 
 /// Splits text into comparable words, lowercased, with noise and very short
 /// fragments dropped.
-fn words(text: &str) -> Vec<String> {
+pub(crate) fn words(text: &str) -> Vec<String> {
     text.split(|character: char| !character.is_alphanumeric())
         .filter(|word| word.len() > 2)
         .map(str::to_lowercase)
