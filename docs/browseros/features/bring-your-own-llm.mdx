@@ -192,6 +192,27 @@ Connect to powerful AI models using your API keys. Your keys stay on your machin
     ![OpenRouter config](/images/byollm--openrouter-provider-config.png)
   </Accordion>
 
+  <div id="nvidia" />
+  <Accordion title="NVIDIA NIM" icon="microchip">
+    Use models hosted on NVIDIA NIM through its OpenAI-compatible API.
+
+    **Get your API key:**
+    1. Go to [build.nvidia.com](https://build.nvidia.com) and sign in
+    2. Generate an API key from your account
+
+    **Add to BrowserOS:**
+    1. Go to `chrome://browseros/settings`
+    2. Click **USE** on the **NVIDIA NIM** card
+    3. Enter your API key (it will be encrypted and stored locally on your machine)
+    4. The model is pre-configured to `nvidia/nemotron-3-super-120b-a12b`. To use another model, pick its ID from [build.nvidia.com/models](https://build.nvidia.com/models)
+    5. Set **Context Window** based on the model
+    6. Click **Save**
+
+    <Tip>
+    The base URL (`https://integrate.api.nvidia.com/v1`) is pre-filled when you select the NVIDIA NIM template. Change it to your own endpoint if you run a self-hosted NIM.
+    </Tip>
+  </Accordion>
+
   <div id="azure" />
   <Accordion title="Azure OpenAI" icon="microsoft">
     Use OpenAI models hosted on your own Azure subscription for enterprise compliance and data residency.
