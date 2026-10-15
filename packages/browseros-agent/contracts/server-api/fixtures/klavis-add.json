@@ -1,0 +1,7 @@
+{
+  "success": true,
+  "serverName": "Gmail",
+  "strataId": "fixture-strata",
+  "addedServers": ["Gmail"],
+  "oauthUrl": "https://example.com/oauth"
+}

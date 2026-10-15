@@ -1,0 +1,5 @@
+{
+  "userCode": "FIXTURE",
+  "verificationUri": "https://example.com/verify",
+  "expiresIn": 900
+}

@@ -1,0 +1,89 @@
+collection:
+  get:
+    operationId: listScheduledJobs
+    tags:
+      - scheduled-jobs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/scheduled_jobs.yaml#/ScheduledJobList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+detail:
+  get:
+    operationId: getScheduledJob
+    tags:
+      - scheduled-jobs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/scheduled_jobs.yaml#/ScheduledJobResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/JobId
+  put:
+    operationId: upsertScheduledJob
+    tags:
+      - scheduled-jobs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/scheduled_jobs.yaml#/ScheduledJobResponse
+      "400":
+        $ref: ../responses.yaml#/BadRequest
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Cadence checks only run for a new or changed cadence. Unknown provider FK fails with
+      HTTP 500. Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/JobId
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/scheduled_jobs.yaml#/UpsertScheduledJobRequest
+  delete:
+    operationId: deleteScheduledJob
+    tags:
+      - scheduled-jobs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/SuccessResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/JobId

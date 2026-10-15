@@ -1,0 +1,2013 @@
+[
+  {
+    "path": "/system/health",
+    "method": "get",
+    "pathRef": "./paths/system.yaml#/health",
+    "operationId": "getHealth",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/system.yaml#/HealthResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/health",
+    "method": "get",
+    "pathRef": "./paths/system.yaml#/healthAlias",
+    "operationId": "getHealthAlias",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/system.yaml#/HealthResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/status",
+    "method": "get",
+    "pathRef": "./paths/system.yaml#/status",
+    "operationId": "getStatus",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/system.yaml#/StatusResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/system/diagnostics",
+    "method": "get",
+    "pathRef": "./paths/system.yaml#/diagnostics",
+    "operationId": "getDiagnostics",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/system.yaml#/DiagnosticsResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/system/shutdown",
+    "method": "post",
+    "pathRef": "./paths/system.yaml#/shutdown",
+    "operationId": "shutdownSystem",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/system.yaml#/ShutdownResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/shutdown",
+    "method": "post",
+    "pathRef": "./paths/system.yaml#/shutdownAlias",
+    "operationId": "shutdownAlias",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/system.yaml#/ShutdownResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/chat",
+    "method": "post",
+    "pathRef": "./paths/chat.yaml#/collection",
+    "operationId": "createChat",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/chat.yaml#/ChatRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "AI SDK v7 UI message stream, x-vercel-ai-ui-message-stream: v1. SSE data: <UiMessageChunk JSON> followed by a blank line; terminal data: [DONE]. Disconnect only detaches the subscriber; it never cancels the run.",
+        "headers": {
+          "x-vercel-ai-ui-message-stream": {
+            "schema": {
+              "type": "string",
+              "enum": ["v1"]
+            }
+          },
+          "Cache-Control": {
+            "schema": {
+              "type": "string",
+              "enum": ["no-cache"]
+            }
+          },
+          "Connection": {
+            "schema": {
+              "type": "string",
+              "enum": ["keep-alive"]
+            }
+          },
+          "x-accel-buffering": {
+            "schema": {
+              "type": "string",
+              "enum": ["no"]
+            }
+          }
+        },
+        "content": {
+          "text/event-stream": {
+            "schema": {
+              "type": "string"
+            },
+            "x-event-schema": {
+              "$ref": "../schemas/ui_stream.yaml#/UiMessageChunk"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/BadRequest"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "409": {
+        "description": "An agent turn is already running",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/chat/panels",
+    "method": "get",
+    "pathRef": "./paths/chat.yaml#/panels",
+    "operationId": "streamPanelAssignments",
+    "responses": {
+      "200": {
+        "description": "Full ConversationPanelAssignments table immediately, on changes, and every 5 seconds. No [DONE] sentinel.",
+        "headers": {
+          "Cache-Control": {
+            "schema": {
+              "type": "string",
+              "enum": ["no-cache, no-transform"]
+            }
+          }
+        },
+        "content": {
+          "text/event-stream": {
+            "schema": {
+              "type": "string"
+            },
+            "x-event-schema": {
+              "$ref": "../schemas/chat.yaml#/ConversationPanelAssignments"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/chat/panels/{tabId}",
+    "method": "delete",
+    "pathRef": "./paths/chat.yaml#/panel",
+    "operationId": "removePanelTab",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/SuccessResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Invalid tab id",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/chat/{conversationId}/state",
+    "method": "get",
+    "pathRef": "./paths/chat.yaml#/state",
+    "operationId": "getChatState",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/chat.yaml#/ConversationRunSnapshot"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Invalid conversation id",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/chat/{conversationId}/stream",
+    "method": "get",
+    "pathRef": "./paths/chat.yaml#/stream",
+    "operationId": "streamChat",
+    "responses": {
+      "200": {
+        "description": "AI SDK v7 UI message stream, x-vercel-ai-ui-message-stream: v1. SSE data: <UiMessageChunk JSON> followed by a blank line; terminal data: [DONE]. Disconnect only detaches the subscriber; it never cancels the run.",
+        "headers": {
+          "x-vercel-ai-ui-message-stream": {
+            "schema": {
+              "type": "string",
+              "enum": ["v1"]
+            }
+          },
+          "Cache-Control": {
+            "schema": {
+              "type": "string",
+              "enum": ["no-cache"]
+            }
+          },
+          "Connection": {
+            "schema": {
+              "type": "string",
+              "enum": ["keep-alive"]
+            }
+          },
+          "x-accel-buffering": {
+            "schema": {
+              "type": "string",
+              "enum": ["no"]
+            }
+          }
+        },
+        "content": {
+          "text/event-stream": {
+            "schema": {
+              "type": "string"
+            },
+            "x-event-schema": {
+              "$ref": "../schemas/ui_stream.yaml#/UiMessageChunk"
+            }
+          }
+        }
+      },
+      "204": {
+        "description": "No run record; no body."
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "409": {
+        "description": "Conversation run changed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/chat/{conversationId}/stop",
+    "method": "post",
+    "pathRef": "./paths/chat.yaml#/stop",
+    "operationId": "stopChat",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/chat.yaml#/StopChatResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/chat/{conversationId}",
+    "method": "delete",
+    "pathRef": "./paths/chat.yaml#/detail",
+    "operationId": "deleteChat",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/chat.yaml#/DeleteChatResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "description": "Session not found",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/conversations",
+    "method": "get",
+    "pathRef": "./paths/conversations.yaml#/collection",
+    "operationId": "listConversations",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/conversations.yaml#/ConversationList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/conversations/{conversationId}",
+    "method": "get",
+    "pathRef": "./paths/conversations.yaml#/detail",
+    "operationId": "getConversation",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/conversations.yaml#/ConversationResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/conversations/{conversationId}",
+    "method": "put",
+    "pathRef": "./paths/conversations.yaml#/detail",
+    "operationId": "importConversation",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/conversations.yaml#/ImportConversationRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/conversations.yaml#/ImportConversationResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/conversations/{conversationId}",
+    "method": "delete",
+    "pathRef": "./paths/conversations.yaml#/detail",
+    "operationId": "deleteConversation",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/SuccessResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/agents",
+    "method": "get",
+    "pathRef": "./paths/agents.yaml#/collection",
+    "operationId": "listAgents",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/agents.yaml#/AgentList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/agents",
+    "method": "post",
+    "pathRef": "./paths/agents.yaml#/collection",
+    "operationId": "createAgent",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/agents.yaml#/CreateAgentRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "201": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/agents.yaml#/AgentResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/agents/{agentId}",
+    "method": "get",
+    "pathRef": "./paths/agents.yaml#/detail",
+    "operationId": "getAgent",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/agents.yaml#/AgentResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/agents/{agentId}",
+    "method": "put",
+    "pathRef": "./paths/agents.yaml#/detail",
+    "operationId": "updateAgent",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/agents.yaml#/UpdateAgentRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/agents.yaml#/AgentResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/BadRequest"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/agents/{agentId}",
+    "method": "delete",
+    "pathRef": "./paths/agents.yaml#/detail",
+    "operationId": "deleteAgent",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/SuccessResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/providers",
+    "method": "get",
+    "pathRef": "./paths/providers.yaml#/collection",
+    "operationId": "listProviders",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/ProviderList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/providers/{providerId}",
+    "method": "get",
+    "pathRef": "./paths/providers.yaml#/detail",
+    "operationId": "getProvider",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/PublicProviderResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/providers/{providerId}",
+    "method": "put",
+    "pathRef": "./paths/providers.yaml#/detail",
+    "operationId": "upsertProvider",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/providers.yaml#/UpsertProviderRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/ProviderResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/providers/{providerId}",
+    "method": "delete",
+    "pathRef": "./paths/providers.yaml#/detail",
+    "operationId": "deleteProvider",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/SuccessResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-jobs",
+    "method": "get",
+    "pathRef": "./paths/scheduled-jobs.yaml#/collection",
+    "operationId": "listScheduledJobs",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/scheduled_jobs.yaml#/ScheduledJobList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-jobs/{jobId}",
+    "method": "get",
+    "pathRef": "./paths/scheduled-jobs.yaml#/detail",
+    "operationId": "getScheduledJob",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/scheduled_jobs.yaml#/ScheduledJobResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-jobs/{jobId}",
+    "method": "put",
+    "pathRef": "./paths/scheduled-jobs.yaml#/detail",
+    "operationId": "upsertScheduledJob",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/scheduled_jobs.yaml#/UpsertScheduledJobRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/scheduled_jobs.yaml#/ScheduledJobResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/BadRequest"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-jobs/{jobId}",
+    "method": "delete",
+    "pathRef": "./paths/scheduled-jobs.yaml#/detail",
+    "operationId": "deleteScheduledJob",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/SuccessResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-job-runs",
+    "method": "get",
+    "pathRef": "./paths/scheduled-job-runs.yaml#/collection",
+    "operationId": "listScheduledJobRuns",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/scheduled_job_runs.yaml#/ScheduledJobRunList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-job-runs/{runId}",
+    "method": "get",
+    "pathRef": "./paths/scheduled-job-runs.yaml#/detail",
+    "operationId": "getScheduledJobRun",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/scheduled_job_runs.yaml#/ScheduledJobRunResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-job-runs/{runId}",
+    "method": "put",
+    "pathRef": "./paths/scheduled-job-runs.yaml#/detail",
+    "operationId": "upsertScheduledJobRun",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/scheduled_job_runs.yaml#/UpsertScheduledJobRunRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/scheduled_job_runs.yaml#/ScheduledJobRunResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/scheduled-job-runs/{runId}",
+    "method": "delete",
+    "pathRef": "./paths/scheduled-job-runs.yaml#/detail",
+    "operationId": "deleteScheduledJobRun",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/SuccessResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/providers/default",
+    "method": "get",
+    "pathRef": "./paths/providers.yaml#/default",
+    "operationId": "getDefaultProvider",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/DefaultProviderResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/providers/default",
+    "method": "put",
+    "pathRef": "./paths/providers.yaml#/default",
+    "operationId": "setDefaultProvider",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/providers.yaml#/SetDefaultProviderRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/DefaultProviderResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "$ref": "../responses.yaml#/NotFound"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/test-provider",
+    "method": "post",
+    "pathRef": "./paths/providers.yaml#/test",
+    "operationId": "testProvider",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/providers.yaml#/TestProviderRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/TestProviderResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Validation failure or failed provider test, including responseTime.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/TestProviderBadRequest"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/refine-prompt",
+    "method": "post",
+    "pathRef": "./paths/providers.yaml#/refine",
+    "operationId": "refinePrompt",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/providers.yaml#/RefinePromptRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/RefinePromptResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Validation failure or provider/model failure.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/providers.yaml#/RefinePromptBadRequest"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/acpx/probe",
+    "method": "post",
+    "pathRef": "./paths/acpx-probe.yaml#/probe",
+    "operationId": "probeAcpx",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/acpx_probe.yaml#/AcpxProbeRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/acpx_probe.yaml#/AcpxProbeResult"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/ValidationError"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Wrapper crash or unhandled error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/AcpxInternalError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/klavis/servers",
+    "method": "get",
+    "pathRef": "./paths/klavis.yaml#/servers",
+    "operationId": "listConnectors",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/klavis.yaml#/ConnectorList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Connector or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/KlavisError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/klavis/oauth-urls",
+    "method": "get",
+    "pathRef": "./paths/klavis.yaml#/oauthUrls",
+    "operationId": "getConnectorOAuthUrls",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/klavis.yaml#/ConnectorOAuthUrls"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Connector or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/KlavisError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/klavis/user-integrations",
+    "method": "get",
+    "pathRef": "./paths/klavis.yaml#/integrations",
+    "operationId": "listUserIntegrations",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/klavis.yaml#/UserIntegrationList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Connector or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/KlavisError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/klavis/servers/add",
+    "method": "post",
+    "pathRef": "./paths/klavis.yaml#/add",
+    "operationId": "addConnector",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/klavis.yaml#/ServerNameRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/klavis.yaml#/AddConnectorResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/BadRequest"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Connector or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/KlavisError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/klavis/servers/submit-api-key",
+    "method": "post",
+    "pathRef": "./paths/klavis.yaml#/submitApiKey",
+    "operationId": "submitConnectorApiKey",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/klavis.yaml#/SubmitApiKeyRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/klavis.yaml#/ConnectorSuccess"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/BadRequest"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Connector or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/KlavisError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/klavis/servers/remove",
+    "method": "delete",
+    "pathRef": "./paths/klavis.yaml#/remove",
+    "operationId": "removeConnector",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/klavis.yaml#/ServerNameRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/klavis.yaml#/ConnectorSuccess"
+            }
+          }
+        }
+      },
+      "400": {
+        "$ref": "../responses.yaml#/BadRequest"
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Connector or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/KlavisError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/oauth/{provider}/start",
+    "method": "get",
+    "pathRef": "./paths/oauth.yaml#/start",
+    "operationId": "startOAuth",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/oauth.yaml#/OAuthDeviceCode"
+            }
+          }
+        }
+      },
+      "302": {
+        "description": "PKCE authorization redirect (chatgpt-pro).",
+        "headers": {
+          "Location": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Unknown OAuth provider",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Start authentication failure",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      },
+      "503": {
+        "description": "Callback-port conflict or OAuth unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/oauth/{provider}/token",
+    "method": "post",
+    "pathRef": "./paths/oauth.yaml#/token",
+    "operationId": "storeOAuthToken",
+    "requestBody": {
+      "required": true,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/oauth.yaml#/OAuthTokenRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/oauth.yaml#/OAuthTokenResponse"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Missing accessToken or unknown OAuth provider",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Failed to store token (also on malformed JSON)",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "503": {
+        "description": "OAuth unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/oauth/{provider}/status",
+    "method": "get",
+    "pathRef": "./paths/oauth.yaml#/status",
+    "operationId": "getOAuthStatus",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/oauth.yaml#/OAuthStatus"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      },
+      "503": {
+        "description": "OAuth unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/oauth/{provider}",
+    "method": "delete",
+    "pathRef": "./paths/oauth.yaml#/detail",
+    "operationId": "deleteOAuthToken",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/SuccessResponse"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      },
+      "503": {
+        "description": "OAuth unavailable",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/StringError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/mcp-manager/tools",
+    "method": "get",
+    "pathRef": "./paths/mcp-manager.yaml#/tools",
+    "operationId": "listMcpTools",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/mcp_manager.yaml#/McpToolList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Catalogue or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/McpManagerReadError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/mcp-manager/agents",
+    "method": "get",
+    "pathRef": "./paths/mcp-manager.yaml#/agents",
+    "operationId": "listMcpAgents",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/mcp_manager.yaml#/McpAgentList"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Agent discovery or global error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/McpManagerReadError"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/mcp-manager/agents/{id}/install",
+    "method": "post",
+    "pathRef": "./paths/mcp-manager.yaml#/install",
+    "operationId": "installMcpAgent",
+    "requestBody": {
+      "required": false,
+      "content": {
+        "application/json": {
+          "schema": {
+            "$ref": "../schemas/mcp_manager.yaml#/McpInstallRequest"
+          }
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/mcp_manager.yaml#/McpInstallResult"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      },
+      "409": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      },
+      "500": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/mcp-manager/agents/{id}/uninstall",
+    "method": "post",
+    "pathRef": "./paths/mcp-manager.yaml#/uninstall",
+    "operationId": "uninstallMcpAgent",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/mcp_manager.yaml#/McpInstallResult"
+            }
+          }
+        }
+      },
+      "400": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      },
+      "409": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      },
+      "500": {
+        "description": "Agent configuration operation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/common.yaml#/FailureMessage"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/mcp",
+    "method": "get",
+    "pathRef": "./paths/mcp.yaml#/endpoint",
+    "operationId": "getMcpStatus",
+    "responses": {
+      "200": {
+        "description": "Success",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "../schemas/mcp.yaml#/McpStatus"
+            }
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "$ref": "../responses.yaml#/InternalError"
+      }
+    }
+  },
+  {
+    "path": "/mcp",
+    "method": "post",
+    "pathRef": "./paths/mcp.yaml#/endpoint",
+    "operationId": "dispatchMcp",
+    "requestBody": {
+      "required": false,
+      "content": {
+        "application/json": {
+          "schema": {}
+        }
+      }
+    },
+    "responses": {
+      "200": {
+        "description": "Opaque SDK-owned MCP response.",
+        "content": {
+          "application/json": {
+            "schema": {}
+          },
+          "text/event-stream": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "202": {
+        "description": "SDK notification accepted."
+      },
+      "400": {
+        "description": "SDK protocol rejection; opaque response."
+      },
+      "401": {
+        "description": "Invalid or expired tool lease; JSON-RPC error.",
+        "content": {
+          "application/json": {
+            "schema": {}
+          }
+        }
+      },
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "500": {
+        "description": "Internal JSON-RPC error.",
+        "content": {
+          "application/json": {
+            "schema": {}
+          }
+        }
+      }
+    }
+  },
+  {
+    "path": "/mcp",
+    "method": "delete",
+    "pathRef": "./paths/mcp.yaml#/endpoint",
+    "operationId": "deleteMcpSession",
+    "responses": {
+      "403": {
+        "$ref": "../responses.yaml#/Forbidden"
+      },
+      "404": {
+        "description": "404 Not Found; no DELETE route registered.",
+        "content": {
+          "text/plain": {
+            "schema": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,9 @@
+{
+  "servers": [
+    {
+      "name": "Gmail",
+      "description": "Read mail"
+    }
+  ],
+  "count": 1
+}

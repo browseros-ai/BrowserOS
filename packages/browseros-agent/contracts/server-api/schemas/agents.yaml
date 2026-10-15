@@ -1,0 +1,203 @@
+AcpAgentType:
+  type: string
+  enum:
+    - claude
+    - codex
+    - custom
+CustomAcpAgentConfig:
+  type: object
+  additionalProperties: false
+  properties:
+    command:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    env:
+      type: object
+      additionalProperties:
+        type: string
+    fullAccessModes:
+      type: array
+      items:
+        type: string
+        minLength: 1
+        pattern: \S
+        description: Trimmed by the server before minimum-length validation.
+    reasoningEffortKey:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    systemPromptAppend:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    icon:
+      type: string
+      minLength: 1
+      pattern: ^\s*\S(?:[\s\S]{0,62}\S)?\s*$
+      description: Trimmed before checking 1..64 characters.
+  required:
+    - command
+CreateBuiltinAgentRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      minLength: 1
+      pattern: ^\s*\S(?:[\s\S]{0,78}\S)?\s*$
+      description: Trimmed before checking 1..80 characters; surrounding whitespace does not count.
+    type:
+      type: string
+      enum:
+        - claude
+        - codex
+    modelId:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    reasoningEffort:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    workingDirectory:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+  required:
+    - name
+    - type
+CreateCustomAgentRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      minLength: 1
+      pattern: ^\s*\S(?:[\s\S]{0,78}\S)?\s*$
+      description: Trimmed before checking 1..80 characters; surrounding whitespace does not count.
+    type:
+      type: string
+      enum:
+        - custom
+    modelId:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    reasoningEffort:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    workingDirectory:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    customConfig:
+      $ref: "#/CustomAcpAgentConfig"
+  required:
+    - name
+    - type
+    - customConfig
+CreateAgentRequest:
+  oneOf:
+    - $ref: "#/CreateBuiltinAgentRequest"
+    - $ref: "#/CreateCustomAgentRequest"
+UpdateAgentRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      minLength: 1
+      pattern: ^\s*\S(?:[\s\S]{0,78}\S)?\s*$
+      description: Trimmed before checking 1..80 characters; surrounding whitespace does not count.
+    modelId:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+      nullable: true
+    reasoningEffort:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+      nullable: true
+    workingDirectory:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+      nullable: true
+    customConfig:
+      $ref: "#/CustomAcpAgentConfig"
+  description: customConfig is rejected with 400 for an existing builtin agent. Null clears the
+    optional model/effort/directory.
+Agent:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+      maxLength: 80
+    type:
+      $ref: "#/AcpAgentType"
+    modelId:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    reasoningEffort:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    workingDirectory:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    customConfig:
+      $ref: "#/CustomAcpAgentConfig"
+    id:
+      type: string
+    createdAt:
+      type: number
+    updatedAt:
+      type: number
+  required:
+    - id
+    - name
+    - type
+    - createdAt
+    - updatedAt
+AgentList:
+  type: object
+  additionalProperties: false
+  properties:
+    agents:
+      type: array
+      items:
+        $ref: "#/Agent"
+  required:
+    - agents
+AgentResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    agent:
+      $ref: "#/Agent"
+  required:
+    - agent

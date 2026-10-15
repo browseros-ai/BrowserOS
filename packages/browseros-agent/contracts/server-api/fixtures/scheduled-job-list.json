@@ -1,0 +1,17 @@
+{
+  "jobs": [
+    {
+      "id": "fixture-job",
+      "name": "Fixture job",
+      "query": "Do nothing",
+      "scheduleType": "daily",
+      "scheduleTime": "09:00",
+      "scheduleInterval": null,
+      "enabled": false,
+      "providerId": null,
+      "lastRunAt": null,
+      "createdAt": 1792011600000,
+      "updatedAt": 1792011600000
+    }
+  ]
+}

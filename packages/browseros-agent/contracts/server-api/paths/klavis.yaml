@@ -1,0 +1,147 @@
+servers:
+  get:
+    operationId: listConnectors
+    tags:
+      - klavis
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/klavis.yaml#/ConnectorList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Connector or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/KlavisError
+    description: Available connector catalogue.
+oauthUrls:
+  get:
+    operationId: getConnectorOAuthUrls
+    tags:
+      - klavis
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/klavis.yaml#/ConnectorOAuthUrls
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Connector or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/KlavisError
+    description: Creates upstream connection intents for all connectors; this GET has side effects.
+integrations:
+  get:
+    operationId: listUserIntegrations
+    tags:
+      - klavis
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/klavis.yaml#/UserIntegrationList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Connector or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/KlavisError
+    description: May query the upstream connector service.
+add:
+  post:
+    operationId: addConnector
+    tags:
+      - klavis
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/klavis.yaml#/AddConnectorResponse
+      "400":
+        $ref: ../responses.yaml#/BadRequest
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Connector or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/KlavisError
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/klavis.yaml#/ServerNameRequest
+submitApiKey:
+  post:
+    operationId: submitConnectorApiKey
+    tags:
+      - klavis
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/klavis.yaml#/ConnectorSuccess
+      "400":
+        $ref: ../responses.yaml#/BadRequest
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Connector or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/KlavisError
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/klavis.yaml#/SubmitApiKeyRequest
+remove:
+  delete:
+    operationId: removeConnector
+    tags:
+      - klavis
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/klavis.yaml#/ConnectorSuccess
+      "400":
+        $ref: ../responses.yaml#/BadRequest
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Connector or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/KlavisError
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/klavis.yaml#/ServerNameRequest

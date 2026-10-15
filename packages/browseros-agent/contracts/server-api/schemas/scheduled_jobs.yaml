@@ -1,0 +1,104 @@
+UpsertScheduledJobRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    name:
+      type: string
+      minLength: 1
+    query:
+      type: string
+      minLength: 1
+    scheduleType:
+      type: string
+      enum:
+        - daily
+        - hourly
+        - minutes
+    scheduleTime:
+      type: string
+      nullable: true
+    scheduleInterval:
+      type: number
+      nullable: true
+    enabled:
+      type: boolean
+    providerId:
+      type: string
+      nullable: true
+    lastRunAt:
+      type: number
+      nullable: true
+    createdAt:
+      type: number
+  description: "Cadence is checked only on new/changed cadence: daily requires HH:MM 24-hour,
+    hourly/minutes integer interval 1..60. An unchanged legacy invalid cadence remains writable."
+  required:
+    - name
+    - query
+    - scheduleType
+ScheduledJob:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      minLength: 1
+    query:
+      type: string
+      minLength: 1
+    scheduleType:
+      type: string
+      enum:
+        - daily
+        - hourly
+        - minutes
+    scheduleTime:
+      type: string
+      nullable: true
+    scheduleInterval:
+      type: number
+      nullable: true
+    enabled:
+      type: boolean
+    providerId:
+      type: string
+      nullable: true
+    lastRunAt:
+      type: number
+      nullable: true
+    createdAt:
+      type: number
+    id:
+      type: string
+    updatedAt:
+      type: number
+  required:
+    - name
+    - query
+    - scheduleType
+    - scheduleTime
+    - scheduleInterval
+    - enabled
+    - providerId
+    - lastRunAt
+    - createdAt
+    - id
+    - updatedAt
+ScheduledJobList:
+  type: object
+  additionalProperties: false
+  properties:
+    jobs:
+      type: array
+      items:
+        $ref: "#/ScheduledJob"
+  required:
+    - jobs
+ScheduledJobResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    job:
+      $ref: "#/ScheduledJob"
+  required:
+    - job

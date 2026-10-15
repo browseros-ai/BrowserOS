@@ -1,0 +1,78 @@
+McpTool:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+    description:
+      type: string
+  required:
+    - name
+    - description
+McpToolList:
+  type: object
+  additionalProperties: false
+  properties:
+    tools:
+      type: array
+      items:
+        $ref: "#/McpTool"
+  required:
+    - tools
+McpAgent:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+      enum:
+        - claude-code
+        - codex
+        - cursor
+        - opencode
+        - antigravity
+        - vscode
+        - zed
+    displayName:
+      type: string
+    installed:
+      type: boolean
+    linked:
+      type: boolean
+    configPath:
+      type: string
+      nullable: true
+  required:
+    - id
+    - displayName
+    - installed
+    - linked
+    - configPath
+McpAgentList:
+  type: object
+  additionalProperties: false
+  properties:
+    agents:
+      type: array
+      items:
+        $ref: "#/McpAgent"
+  required:
+    - agents
+McpInstallRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    mcpUrl:
+      type: string
+      format: uri
+  description: Optional body. Invalid/non-JSON input falls back to {}; invalid URL gets a FailureMessage 400.
+McpInstallResult:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+    message:
+      type: string
+  required:
+    - success

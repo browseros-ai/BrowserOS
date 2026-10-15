@@ -1,0 +1,18 @@
+{
+  "models": [
+    {
+      "id": "model",
+      "name": "Model"
+    }
+  ],
+  "reasoning": {
+    "values": ["low", "medium"],
+    "defaultValue": "medium"
+  },
+  "supportsConfigOption": true,
+  "agentInfo": {
+    "name": "Fixture",
+    "version": "1"
+  },
+  "protocolVersion": 1
+}

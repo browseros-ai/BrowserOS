@@ -1,0 +1,10 @@
+{
+  "error": {
+    "code": "unknown",
+    "title": "Something went wrong",
+    "message": "Malformed JSON in request body",
+    "retryable": false,
+    "name": "InternalServerError",
+    "statusCode": 500
+  }
+}

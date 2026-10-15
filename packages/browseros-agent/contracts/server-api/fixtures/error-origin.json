@@ -1,0 +1,8 @@
+{
+  "error": {
+    "name": "ForbiddenOrigin",
+    "message": "Origin not allowed",
+    "code": "FORBIDDEN_ORIGIN",
+    "statusCode": 403
+  }
+}

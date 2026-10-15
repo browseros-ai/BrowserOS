@@ -1,0 +1,8 @@
+{
+  "tools": [
+    {
+      "name": "snapshot",
+      "description": "Snapshot the current page"
+    }
+  ]
+}

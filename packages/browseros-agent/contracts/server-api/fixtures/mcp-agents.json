@@ -1,0 +1,11 @@
+{
+  "agents": [
+    {
+      "id": "codex",
+      "displayName": "Codex",
+      "installed": true,
+      "linked": false,
+      "configPath": null
+    }
+  ]
+}

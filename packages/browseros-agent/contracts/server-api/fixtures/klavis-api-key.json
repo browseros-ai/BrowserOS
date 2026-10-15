@@ -1,0 +1,5 @@
+{
+  "serverName": "Fixture",
+  "apiKey": "not-a-real-secret",
+  "apiKeyUrl": "https://example.com/?instance_id=fixture"
+}

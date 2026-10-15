@@ -1,0 +1,16 @@
+{
+  "name": "@browseros/server-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BrowserOS server compatibility contract.",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  }
+}

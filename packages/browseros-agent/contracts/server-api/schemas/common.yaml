@@ -1,0 +1,158 @@
+StringError:
+  type: object
+  additionalProperties: false
+  properties:
+    error:
+      type: string
+  required:
+    - error
+MessageError:
+  type: object
+  additionalProperties: false
+  properties:
+    message:
+      type: string
+  required:
+    - message
+FailureMessage:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - false
+    message:
+      type: string
+  required:
+    - success
+    - message
+SuccessResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - true
+  required:
+    - success
+ZodIssueError:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+      enum:
+        - ZodError
+    message:
+      type: string
+      description: JSON-serialized Zod issue array, including indentation.
+  required:
+    - name
+    - message
+ValidationError:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - false
+    error:
+      $ref: "#/ZodIssueError"
+  required:
+    - success
+    - error
+HttpAgentError:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+    message:
+      type: string
+    code:
+      type: string
+    statusCode:
+      type: number
+    originalError:
+      type: string
+  required:
+    - name
+    - message
+    - statusCode
+HttpAgentErrorEnvelope:
+  type: object
+  additionalProperties: false
+  properties:
+    error:
+      $ref: "#/HttpAgentError"
+  required:
+    - error
+ChatError:
+  type: object
+  additionalProperties: false
+  properties:
+    code:
+      type: string
+      enum:
+        - rate_limited
+        - auth_failed
+        - provider_config
+        - context_length
+        - content_filter
+        - connection_failed
+        - provider_unavailable
+        - unknown
+    title:
+      type: string
+    message:
+      type: string
+    retryable:
+      type: boolean
+    provider:
+      type: string
+    statusCode:
+      type: number
+    docsUrl:
+      type: string
+    retryAfterSeconds:
+      type: number
+    details:
+      type: string
+    name:
+      type: string
+  required:
+    - code
+    - title
+    - message
+    - retryable
+ChatErrorEnvelope:
+  type: object
+  additionalProperties: false
+  properties:
+    error:
+      $ref: "#/ChatError"
+  required:
+    - error
+ForbiddenError:
+  oneOf:
+    - $ref: "#/StringError"
+    - $ref: "#/HttpAgentErrorEnvelope"
+BadRequestError:
+  oneOf:
+    - $ref: "#/StringError"
+    - $ref: "#/ValidationError"
+KlavisError:
+  oneOf:
+    - $ref: "#/StringError"
+    - $ref: "#/ChatErrorEnvelope"
+McpManagerReadError:
+  oneOf:
+    - $ref: "#/MessageError"
+    - $ref: "#/ChatErrorEnvelope"
+AcpxInternalError:
+  oneOf:
+    - $ref: ./acpx_probe.yaml#/AcpxProbeWrapperError
+    - $ref: "#/ChatErrorEnvelope"

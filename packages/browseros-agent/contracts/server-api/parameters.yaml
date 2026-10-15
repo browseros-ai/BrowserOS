@@ -1,0 +1,56 @@
+ConversationId:
+  name: conversationId
+  in: path
+  required: true
+  schema:
+    type: string
+    format: uuid
+AgentId:
+  name: agentId
+  in: path
+  required: true
+  schema:
+    type: string
+    format: uuid
+ProviderId:
+  name: providerId
+  in: path
+  required: true
+  schema:
+    type: string
+    minLength: 1
+JobId:
+  name: jobId
+  in: path
+  required: true
+  schema:
+    type: string
+    minLength: 1
+RunId:
+  name: runId
+  in: path
+  required: true
+  schema:
+    type: string
+    minLength: 1
+TabId:
+  name: tabId
+  in: path
+  required: true
+  schema:
+    type: string
+    description: Coerced using Number(); must be a non-negative integer.
+OAuthProvider:
+  name: provider
+  in: path
+  required: true
+  schema:
+    type: string
+    description: start/token accept chatgpt-pro, github-copilot, qwen-code; other values return 400.
+      status/delete accept any string.
+McpAgentId:
+  name: id
+  in: path
+  required: true
+  schema:
+    type: string

@@ -1,0 +1,150 @@
+BuiltinProbeRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    type:
+      type: string
+      enum:
+        - claude
+        - codex
+    command:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    env:
+      type: object
+      additionalProperties:
+        type: string
+    cwd:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    timeoutMs:
+      type: integer
+      format: int64
+      minimum: 1000
+      maximum: 120000
+  required:
+    - type
+CustomProbeRequest:
+  type: object
+  additionalProperties: false
+  properties:
+    type:
+      type: string
+      enum:
+        - custom
+    command:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    env:
+      type: object
+      additionalProperties:
+        type: string
+    cwd:
+      type: string
+      minLength: 1
+      pattern: \S
+      description: Trimmed by the server before minimum-length validation.
+    timeoutMs:
+      type: integer
+      format: int64
+      minimum: 1000
+      maximum: 120000
+  required:
+    - type
+    - command
+AcpxProbeRequest:
+  oneOf:
+    - $ref: "#/BuiltinProbeRequest"
+    - $ref: "#/CustomProbeRequest"
+AcpxProbeModel:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+    name:
+      type: string
+    description:
+      type: string
+  required:
+    - id
+AcpxProbeReasoning:
+  type: object
+  additionalProperties: false
+  properties:
+    values:
+      type: array
+      items:
+        type: string
+    defaultValue:
+      type: string
+  required:
+    - values
+AcpxProbeAgentInfo:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+    title:
+      type: string
+    version:
+      type: string
+AcpxProbeError:
+  type: object
+  additionalProperties: false
+  properties:
+    code:
+      type: string
+    message:
+      type: string
+    acpErrorCode:
+      type: number
+  required:
+    - code
+    - message
+AcpxProbeResult:
+  type: object
+  additionalProperties: false
+  properties:
+    models:
+      type: array
+      items:
+        $ref: "#/AcpxProbeModel"
+    reasoning:
+      type: object
+      allOf:
+        - $ref: "#/AcpxProbeReasoning"
+      nullable: true
+    supportsConfigOption:
+      type: boolean
+    agentInfo:
+      type: object
+      allOf:
+        - $ref: "#/AcpxProbeAgentInfo"
+      nullable: true
+    protocolVersion:
+      type: number
+    error:
+      $ref: "#/AcpxProbeError"
+  description: Protocol-level failures still return HTTP 200 with error. Only wrapper crashes return 500.
+  required:
+    - models
+    - reasoning
+    - supportsConfigOption
+    - agentInfo
+    - protocolVersion
+AcpxProbeWrapperError:
+  type: object
+  additionalProperties: false
+  properties:
+    error:
+      $ref: "#/AcpxProbeError"
+  required:
+    - error

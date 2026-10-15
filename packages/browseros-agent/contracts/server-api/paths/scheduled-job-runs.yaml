@@ -1,0 +1,89 @@
+collection:
+  get:
+    operationId: listScheduledJobRuns
+    tags:
+      - scheduled-job-runs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/scheduled_job_runs.yaml#/ScheduledJobRunList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+detail:
+  get:
+    operationId: getScheduledJobRun
+    tags:
+      - scheduled-job-runs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/scheduled_job_runs.yaml#/ScheduledJobRunResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/RunId
+  put:
+    operationId: upsertScheduledJobRun
+    tags:
+      - scheduled-job-runs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/scheduled_job_runs.yaml#/ScheduledJobRunResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Every write prunes this job to its newest 15 runs. Unknown job FK fails with HTTP 500.
+      Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/RunId
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/scheduled_job_runs.yaml#/UpsertScheduledJobRunRequest
+  delete:
+    operationId: deleteScheduledJobRun
+    tags:
+      - scheduled-job-runs
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/SuccessResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/RunId

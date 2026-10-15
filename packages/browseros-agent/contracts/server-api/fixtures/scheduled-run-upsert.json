@@ -1,0 +1,22 @@
+{
+  "jobId": "fixture-job",
+  "status": "completed",
+  "startedAt": 1792011600000,
+  "completedAt": 1792011601000,
+  "result": "Done",
+  "finalResult": null,
+  "executionLog": null,
+  "toolCalls": [
+    {
+      "id": "call-1",
+      "name": "snapshot",
+      "input": null,
+      "output": {
+        "tabs": []
+      },
+      "timestamp": "2026-10-14T21:00:00Z"
+    }
+  ],
+  "error": null,
+  "createdAt": 1792011600000
+}

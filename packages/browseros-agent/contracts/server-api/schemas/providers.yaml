@@ -1,0 +1,469 @@
+LlmProvider:
+  type: string
+  enum:
+    - anthropic
+    - openai
+    - google
+    - openrouter
+    - azure
+    - ollama
+    - lmstudio
+    - bedrock
+    - openai-compatible
+    - moonshot
+    - chatgpt-pro
+    - github-copilot
+    - qwen-code
+LlmHeaders:
+  type: object
+  additionalProperties:
+    type: string
+    pattern: ^[\t\x20-\x7e\x80-\xff]*(?![\s\S])
+  description: Header names must match ^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\s\S]); case-insensitive
+    duplicate names are rejected by the server. OpenAPI 3.0 cannot express propertyNames or that
+    cross-key check.
+TestProviderRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    providerId:
+      type: string
+    apiKey:
+      type: string
+    baseUrl:
+      type: string
+    resourceName:
+      type: string
+    region:
+      type: string
+    accessKeyId:
+      type: string
+    secretAccessKey:
+      type: string
+    sessionToken:
+      type: string
+    upstreamProvider:
+      type: string
+    provider:
+      $ref: "#/LlmProvider"
+    model:
+      type: string
+      minLength: 1
+    headers:
+      $ref: "#/LlmHeaders"
+    reasoningEffort:
+      type: string
+      enum:
+        - none
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+    reasoningSummary:
+      type: string
+      enum:
+        - auto
+        - concise
+        - detailed
+  required:
+    - provider
+    - model
+RefinePromptRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    providerId:
+      type: string
+    apiKey:
+      type: string
+    baseUrl:
+      type: string
+    resourceName:
+      type: string
+    region:
+      type: string
+    accessKeyId:
+      type: string
+    secretAccessKey:
+      type: string
+    sessionToken:
+      type: string
+    upstreamProvider:
+      type: string
+    provider:
+      $ref: "#/LlmProvider"
+    model:
+      type: string
+      minLength: 1
+    headers:
+      $ref: "#/LlmHeaders"
+    reasoningEffort:
+      type: string
+      enum:
+        - none
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+    reasoningSummary:
+      type: string
+      enum:
+        - auto
+        - concise
+        - detailed
+    prompt:
+      type: string
+      minLength: 1
+    name:
+      type: string
+      minLength: 1
+  required:
+    - prompt
+    - name
+TestProviderResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - true
+    message:
+      type: string
+    responseTime:
+      type: number
+  required:
+    - success
+    - message
+    - responseTime
+TestProviderFailure:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - false
+    message:
+      type: string
+    responseTime:
+      type: number
+  required:
+    - success
+    - message
+    - responseTime
+TestProviderBadRequest:
+  oneOf:
+    - $ref: ./common.yaml#/ValidationError
+    - $ref: "#/TestProviderFailure"
+RefinePromptResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - true
+    refined:
+      type: string
+  required:
+    - success
+    - refined
+RefinePromptBadRequest:
+  oneOf:
+    - $ref: ./common.yaml#/ValidationError
+    - $ref: ./common.yaml#/FailureMessage
+PublicProvider:
+  type: object
+  additionalProperties: false
+  properties:
+    modelId:
+      type: string
+      nullable: true
+    reasoningEffort:
+      type: string
+      nullable: true
+    baseUrl:
+      type: string
+      nullable: true
+    resourceName:
+      type: string
+      nullable: true
+    region:
+      type: string
+      nullable: true
+    reasoningSummary:
+      type: string
+      nullable: true
+    workingDirectory:
+      type: string
+      nullable: true
+    customConfig:
+      type: string
+      nullable: true
+    id:
+      type: string
+    kind:
+      type: string
+      enum:
+        - llm
+        - acp
+    type:
+      type: string
+    name:
+      type: string
+    isDefault:
+      type: boolean
+    createdAt:
+      type: number
+    updatedAt:
+      type: number
+    headers:
+      type: object
+      additionalProperties:
+        type: string
+      nullable: true
+    supportsImages:
+      type: boolean
+    contextWindow:
+      type: number
+      nullable: true
+    temperature:
+      type: number
+    hasApiKey:
+      type: boolean
+    hasAccessKeyId:
+      type: boolean
+    hasSecretAccessKey:
+      type: boolean
+    hasSessionToken:
+      type: boolean
+  description: Read projection. customConfig is a raw JSON string; headers is parsed JSON. Four
+    credentials are replaced by presence flags.
+  required:
+    - modelId
+    - reasoningEffort
+    - baseUrl
+    - resourceName
+    - region
+    - reasoningSummary
+    - workingDirectory
+    - customConfig
+    - id
+    - kind
+    - type
+    - name
+    - isDefault
+    - createdAt
+    - updatedAt
+    - headers
+    - supportsImages
+    - contextWindow
+    - temperature
+    - hasApiKey
+    - hasAccessKeyId
+    - hasSecretAccessKey
+    - hasSessionToken
+Provider:
+  type: object
+  additionalProperties: false
+  properties:
+    modelId:
+      type: string
+      nullable: true
+    reasoningEffort:
+      type: string
+      nullable: true
+    baseUrl:
+      type: string
+      nullable: true
+    resourceName:
+      type: string
+      nullable: true
+    region:
+      type: string
+      nullable: true
+    reasoningSummary:
+      type: string
+      nullable: true
+    workingDirectory:
+      type: string
+      nullable: true
+    customConfig:
+      type: string
+      nullable: true
+    id:
+      type: string
+    kind:
+      type: string
+      enum:
+        - llm
+        - acp
+    type:
+      type: string
+    name:
+      type: string
+    isDefault:
+      type: boolean
+    createdAt:
+      type: number
+    updatedAt:
+      type: number
+    headers:
+      type: object
+      additionalProperties:
+        type: string
+      nullable: true
+    supportsImages:
+      type: boolean
+    contextWindow:
+      type: number
+      nullable: true
+    temperature:
+      type: number
+    apiKey:
+      type: string
+      nullable: true
+    accessKeyId:
+      type: string
+      nullable: true
+    secretAccessKey:
+      type: string
+      nullable: true
+    sessionToken:
+      type: string
+      nullable: true
+  description: The existing PUT response includes nullable credential fields. Do not use this shape
+    for GET responses.
+  required:
+    - modelId
+    - reasoningEffort
+    - baseUrl
+    - resourceName
+    - region
+    - reasoningSummary
+    - workingDirectory
+    - customConfig
+    - id
+    - kind
+    - type
+    - name
+    - isDefault
+    - createdAt
+    - updatedAt
+    - headers
+    - supportsImages
+    - contextWindow
+    - temperature
+    - apiKey
+    - accessKeyId
+    - secretAccessKey
+    - sessionToken
+UpsertProviderRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    baseUrl:
+      type: string
+      nullable: true
+    apiKey:
+      type: string
+      nullable: true
+    accessKeyId:
+      type: string
+      nullable: true
+    secretAccessKey:
+      type: string
+      nullable: true
+    sessionToken:
+      type: string
+      nullable: true
+    resourceName:
+      type: string
+      nullable: true
+    region:
+      type: string
+      nullable: true
+    reasoningEffort:
+      type: string
+      nullable: true
+    reasoningSummary:
+      type: string
+      nullable: true
+    type:
+      type: string
+      minLength: 1
+    name:
+      type: string
+      minLength: 1
+    modelId:
+      type: string
+      minLength: 1
+    contextWindow:
+      type: number
+    supportsImages:
+      type: boolean
+    temperature:
+      type: number
+    createdAt:
+      type: number
+    headers:
+      allOf:
+        - $ref: "#/LlmHeaders"
+      type: object
+      nullable: true
+  description: Unknown keys are stripped. Missing or empty credentials preserve existing values; null
+    clears. kind is forced to llm.
+  required:
+    - type
+    - name
+    - modelId
+    - contextWindow
+ProviderList:
+  type: object
+  additionalProperties: false
+  properties:
+    providers:
+      type: array
+      items:
+        $ref: "#/PublicProvider"
+  required:
+    - providers
+PublicProviderResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    provider:
+      $ref: "#/PublicProvider"
+  required:
+    - provider
+DefaultProviderResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    provider:
+      type: object
+      allOf:
+        - $ref: "#/PublicProvider"
+      nullable: true
+  required:
+    - provider
+ProviderResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    provider:
+      $ref: "#/Provider"
+  required:
+    - provider
+SetDefaultProviderRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    providerId:
+      type: string
+      minLength: 1
+  required:
+    - providerId

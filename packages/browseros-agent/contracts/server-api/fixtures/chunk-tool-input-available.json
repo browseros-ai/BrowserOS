@@ -1,0 +1,6 @@
+{
+  "type": "tool-input-available",
+  "toolCallId": "call-1",
+  "toolName": "snapshot",
+  "input": null
+}

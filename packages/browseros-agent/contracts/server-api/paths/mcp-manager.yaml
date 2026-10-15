@@ -1,0 +1,128 @@
+tools:
+  get:
+    operationId: listMcpTools
+    tags:
+      - mcp-manager
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/mcp_manager.yaml#/McpToolList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Catalogue or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/McpManagerReadError
+agents:
+  get:
+    operationId: listMcpAgents
+    tags:
+      - mcp-manager
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/mcp_manager.yaml#/McpAgentList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Agent discovery or global error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/McpManagerReadError
+install:
+  post:
+    operationId: installMcpAgent
+    tags:
+      - mcp-manager
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/mcp_manager.yaml#/McpInstallResult
+      "400":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+      "409":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+      "500":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+    description: Writes third-party agent config files. Uninstall returns 409 for user-edited entries.
+    parameters:
+      - $ref: ../parameters.yaml#/McpAgentId
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/mcp_manager.yaml#/McpInstallRequest
+uninstall:
+  post:
+    operationId: uninstallMcpAgent
+    tags:
+      - mcp-manager
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/mcp_manager.yaml#/McpInstallResult
+      "400":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+      "409":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+      "500":
+        description: Agent configuration operation failed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+    description: Writes third-party agent config files. Uninstall returns 409 for user-edited entries.
+    parameters:
+      - $ref: ../parameters.yaml#/McpAgentId

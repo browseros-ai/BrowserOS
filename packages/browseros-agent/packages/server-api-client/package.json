@@ -1,0 +1,25 @@
+{
+  "name": "@browseros/server-api-client",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "BrowserOS server compatibility contract.",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@browseros/server-api": "workspace:*",
+    "openapi-fetch": "0.17.0"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./openapi": {
+      "types": "./src/generated/openapi.ts",
+      "default": "./src/generated/openapi.ts"
+    }
+  }
+}

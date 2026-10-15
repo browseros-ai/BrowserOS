@@ -1,0 +1,239 @@
+collection:
+  post:
+    operationId: createChat
+    tags:
+      - chat
+    responses:
+      "200":
+        description: "AI SDK v7 UI message stream, x-vercel-ai-ui-message-stream: v1. SSE data:
+          <UiMessageChunk JSON> followed by a blank line; terminal data: [DONE]. Disconnect only
+          detaches the subscriber; it never cancels the run."
+        headers:
+          x-vercel-ai-ui-message-stream:
+            schema:
+              type: string
+              enum:
+                - v1
+          Cache-Control:
+            schema:
+              type: string
+              enum:
+                - no-cache
+          Connection:
+            schema:
+              type: string
+              enum:
+                - keep-alive
+          x-accel-buffering:
+            schema:
+              type: string
+              enum:
+                - no
+        content:
+          text/event-stream:
+            schema:
+              type: string
+            x-event-schema:
+              $ref: ../schemas/ui_stream.yaml#/UiMessageChunk
+      "400":
+        $ref: ../responses.yaml#/BadRequest
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "409":
+        description: An agent turn is already running
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/chat.yaml#/ChatRequest
+panels:
+  get:
+    operationId: streamPanelAssignments
+    tags:
+      - chat
+    responses:
+      "200":
+        description: Full ConversationPanelAssignments table immediately, on changes, and every 5 seconds.
+          No [DONE] sentinel.
+        headers:
+          Cache-Control:
+            schema:
+              type: string
+              enum:
+                - no-cache, no-transform
+        content:
+          text/event-stream:
+            schema:
+              type: string
+            x-event-schema:
+              $ref: ../schemas/chat.yaml#/ConversationPanelAssignments
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+panel:
+  delete:
+    operationId: removePanelTab
+    tags:
+      - chat
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/SuccessResponse
+      "400":
+        description: Invalid tab id
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/TabId
+state:
+  get:
+    operationId: getChatState
+    tags:
+      - chat
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/chat.yaml#/ConversationRunSnapshot
+      "400":
+        description: Invalid conversation id
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: "Waits for provider/MCP preparation; Cache-Control: no-store. No timeout."
+    parameters:
+      - $ref: ../parameters.yaml#/ConversationId
+stream:
+  get:
+    operationId: streamChat
+    tags:
+      - chat
+    responses:
+      "200":
+        description: "AI SDK v7 UI message stream, x-vercel-ai-ui-message-stream: v1. SSE data:
+          <UiMessageChunk JSON> followed by a blank line; terminal data: [DONE]. Disconnect only
+          detaches the subscriber; it never cancels the run."
+        headers:
+          x-vercel-ai-ui-message-stream:
+            schema:
+              type: string
+              enum:
+                - v1
+          Cache-Control:
+            schema:
+              type: string
+              enum:
+                - no-cache
+          Connection:
+            schema:
+              type: string
+              enum:
+                - keep-alive
+          x-accel-buffering:
+            schema:
+              type: string
+              enum:
+                - no
+        content:
+          text/event-stream:
+            schema:
+              type: string
+            x-event-schema:
+              $ref: ../schemas/ui_stream.yaml#/UiMessageChunk
+      "204":
+        description: No run record; no body.
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "409":
+        description: Conversation run changed
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    parameters:
+      - $ref: ../parameters.yaml#/ConversationId
+      - name: runId
+        in: query
+        schema:
+          type: string
+stop:
+  post:
+    operationId: stopChat
+    tags:
+      - chat
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/chat.yaml#/StopChatResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    parameters:
+      - $ref: ../parameters.yaml#/ConversationId
+detail:
+  delete:
+    operationId: deleteChat
+    tags:
+      - chat
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/chat.yaml#/DeleteChatResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        description: Session not found
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/FailureMessage
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Only ACP sessions require the trusted-app check. Aborts work and deletes the in-memory session.
+    parameters:
+      - $ref: ../parameters.yaml#/ConversationId

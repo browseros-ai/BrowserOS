@@ -1,0 +1,8 @@
+{
+  "type": "tool-input-error",
+  "toolCallId": "call-2",
+  "toolName": "missing",
+  "input": {},
+  "errorText": "Unknown tool",
+  "dynamic": true
+}

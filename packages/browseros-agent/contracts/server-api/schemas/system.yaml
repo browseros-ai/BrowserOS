@@ -1,0 +1,54 @@
+HealthResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    status:
+      type: string
+      enum:
+        - ok
+    cdpConnected:
+      type: boolean
+  required:
+    - status
+StatusResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    status:
+      type: string
+      enum:
+        - ok
+    cdpConnected:
+      type: boolean
+    can_update:
+      type: boolean
+  description: can_update is false while a chat stream or MCP tool execution is active; Chromium uses
+    this OTA gate.
+  required:
+    - status
+    - can_update
+DiagnosticsResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    version:
+      type: string
+    os:
+      type: string
+    osVersion:
+      type: string
+      nullable: true
+  required:
+    - version
+    - os
+    - osVersion
+ShutdownResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    status:
+      type: string
+      enum:
+        - ok
+  required:
+    - status

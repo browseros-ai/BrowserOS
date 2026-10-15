@@ -1,0 +1,134 @@
+UiMessage:
+  type: object
+  additionalProperties: true
+  properties: {}
+  description: AI SDK v7 persisted UIMessage, conventionally id/role/parts/metadata. The current
+    import route does not validate these fields.
+ImportedMessage:
+  oneOf:
+    - $ref: "#/UiMessage"
+    - type: array
+      items: {}
+  description: The actual import predicate is typeof value === object && value !== null, including arrays.
+ConversationSummary:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+    lastUserMessage:
+      type: string
+    origin:
+      type: string
+    targetType:
+      type: string
+      enum:
+        - browseros
+        - claude
+        - codex
+        - custom
+    agentId:
+      type: string
+    lastMessagedAt:
+      type: number
+    createdAt:
+      type: number
+    updatedAt:
+      type: number
+  required:
+    - id
+    - targetType
+    - lastMessagedAt
+    - createdAt
+    - updatedAt
+ConversationDetail:
+  type: object
+  additionalProperties: false
+  properties:
+    id:
+      type: string
+    lastUserMessage:
+      type: string
+    origin:
+      type: string
+    targetType:
+      type: string
+      enum:
+        - browseros
+        - claude
+        - codex
+        - custom
+    agentId:
+      type: string
+    lastMessagedAt:
+      type: number
+    createdAt:
+      type: number
+    updatedAt:
+      type: number
+    messages:
+      type: array
+      items:
+        $ref: "#/ImportedMessage"
+  required:
+    - id
+    - targetType
+    - lastMessagedAt
+    - createdAt
+    - updatedAt
+    - messages
+ConversationList:
+  type: object
+  additionalProperties: false
+  properties:
+    conversations:
+      type: array
+      items:
+        $ref: "#/ConversationSummary"
+  required:
+    - conversations
+ConversationResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    conversation:
+      $ref: "#/ConversationDetail"
+  required:
+    - conversation
+ImportConversationRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    messages:
+      type: array
+      items:
+        $ref: "#/ImportedMessage"
+    lastMessagedAt:
+      type: number
+    targetType:
+      type: string
+      enum:
+        - browseros
+        - claude
+        - codex
+    origin:
+      type: string
+    agentId:
+      type: string
+  required:
+    - messages
+ImportConversationResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    conversation:
+      type: object
+      allOf:
+        - $ref: "#/ConversationSummary"
+      nullable: true
+    imported:
+      type: boolean
+  description: Insert-if-absent. Existing rows return conversation:null, imported:false.
+  required:
+    - conversation
+    - imported

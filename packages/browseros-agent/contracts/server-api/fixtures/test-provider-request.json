@@ -1,0 +1,5 @@
+{
+  "provider": "openai",
+  "model": "fixture-model",
+  "providerId": "fixture-provider"
+}

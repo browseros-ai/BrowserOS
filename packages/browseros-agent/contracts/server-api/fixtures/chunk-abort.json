@@ -1,0 +1,4 @@
+{
+  "type": "abort",
+  "reason": "AbortError: Conversation stopped"
+}

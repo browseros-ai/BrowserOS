@@ -1,0 +1,542 @@
+[
+  {
+    "file": "health.json",
+    "schema": "HealthResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/health.ts"
+  },
+  {
+    "file": "health-minimal.json",
+    "schema": "HealthResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/health.ts"
+  },
+  {
+    "file": "status.json",
+    "schema": "StatusResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/status.ts"
+  },
+  {
+    "file": "diagnostics.json",
+    "schema": "DiagnosticsResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/diagnostics.ts"
+  },
+  {
+    "file": "shutdown.json",
+    "schema": "ShutdownResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/shutdown.ts"
+  },
+  {
+    "file": "success.json",
+    "schema": "SuccessResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/conversations.ts"
+  },
+  {
+    "file": "error-string.json",
+    "schema": "StringError",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/providers.ts"
+  },
+  {
+    "file": "error-message.json",
+    "schema": "MessageError",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/mcp-manager.ts"
+  },
+  {
+    "file": "error-failure.json",
+    "schema": "FailureMessage",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/chat.ts"
+  },
+  {
+    "file": "error-validation.json",
+    "schema": "ValidationError",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/agents.ts + @hono/zod-validator"
+  },
+  {
+    "file": "error-origin.json",
+    "schema": "HttpAgentErrorEnvelope",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/middleware/require-trusted-origin.ts"
+  },
+  {
+    "file": "error-chat.json",
+    "schema": "ChatErrorEnvelope",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/server.ts"
+  },
+  {
+    "file": "error-probe-wrapper.json",
+    "schema": "AcpxProbeWrapperError",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/acpx-probe.ts"
+  },
+  {
+    "file": "provider-read.json",
+    "schema": "PublicProviderResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/providers/provider-store.ts"
+  },
+  {
+    "file": "provider-list.json",
+    "schema": "ProviderList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/providers/provider-store.ts"
+  },
+  {
+    "file": "provider-write.json",
+    "schema": "ProviderResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/providers.ts"
+  },
+  {
+    "file": "provider-default-empty.json",
+    "schema": "DefaultProviderResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/providers.ts"
+  },
+  {
+    "file": "provider-default.json",
+    "schema": "DefaultProviderResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/providers.ts"
+  },
+  {
+    "file": "provider-upsert.json",
+    "schema": "UpsertProviderRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/providers.ts"
+  },
+  {
+    "file": "provider-default-request.json",
+    "schema": "SetDefaultProviderRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/providers.ts"
+  },
+  {
+    "file": "test-provider-request.json",
+    "schema": "TestProviderRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/types.ts"
+  },
+  {
+    "file": "test-provider-response.json",
+    "schema": "TestProviderResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/clients/llm/test-provider.ts"
+  },
+  {
+    "file": "test-provider-failure.json",
+    "schema": "TestProviderBadRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/clients/llm/test-provider.ts"
+  },
+  {
+    "file": "refine-request.json",
+    "schema": "RefinePromptRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/refine-prompt.ts"
+  },
+  {
+    "file": "refine-response.json",
+    "schema": "RefinePromptResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/refine-prompt.ts"
+  },
+  {
+    "file": "refine-failure.json",
+    "schema": "RefinePromptBadRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/refine-prompt.ts"
+  },
+  {
+    "file": "conversation-list.json",
+    "schema": "ConversationList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/conversations/conversation-store.ts"
+  },
+  {
+    "file": "conversation-detail.json",
+    "schema": "ConversationResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/conversations/conversation-store.ts"
+  },
+  {
+    "file": "conversation-import-request.json",
+    "schema": "ImportConversationRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/conversations.ts"
+  },
+  {
+    "file": "conversation-import-legacy-array.json",
+    "schema": "ImportConversationRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/conversations.ts"
+  },
+  {
+    "file": "conversation-imported.json",
+    "schema": "ImportConversationResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/conversations.ts"
+  },
+  {
+    "file": "conversation-existing.json",
+    "schema": "ImportConversationResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/conversations.ts"
+  },
+  {
+    "file": "chat-minimal.json",
+    "schema": "ChatRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/types.ts"
+  },
+  {
+    "file": "chat-browseros.json",
+    "schema": "ChatRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/types.ts"
+  },
+  {
+    "file": "chat-legacy.json",
+    "schema": "ChatRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/types.ts"
+  },
+  {
+    "file": "chat-acp.json",
+    "schema": "ChatRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/types.ts"
+  },
+  {
+    "file": "chat-state.json",
+    "schema": "ConversationRunSnapshot",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts"
+  },
+  {
+    "file": "chat-panels.json",
+    "schema": "ConversationPanelAssignments",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts"
+  },
+  {
+    "file": "chat-stopped.json",
+    "schema": "StopChatResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/chat.ts"
+  },
+  {
+    "file": "chat-deleted.json",
+    "schema": "DeleteChatResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/chat.ts"
+  },
+  {
+    "file": "agent-list.json",
+    "schema": "AgentList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/agents/storage/acp-agent-store.ts"
+  },
+  {
+    "file": "agent-detail.json",
+    "schema": "AgentResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/agents.ts"
+  },
+  {
+    "file": "agent-create.json",
+    "schema": "CreateAgentRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/agents.ts"
+  },
+  {
+    "file": "agent-create-builtin.json",
+    "schema": "CreateAgentRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/agents.ts"
+  },
+  {
+    "file": "agent-update.json",
+    "schema": "UpdateAgentRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/agents.ts"
+  },
+  {
+    "file": "scheduled-job-list.json",
+    "schema": "ScheduledJobList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/schedules/schedule-store.ts"
+  },
+  {
+    "file": "scheduled-job-detail.json",
+    "schema": "ScheduledJobResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/scheduled-jobs.ts"
+  },
+  {
+    "file": "scheduled-job-upsert.json",
+    "schema": "UpsertScheduledJobRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/scheduled-jobs.ts"
+  },
+  {
+    "file": "scheduled-run-list.json",
+    "schema": "ScheduledJobRunList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/schedules/run-store.ts"
+  },
+  {
+    "file": "scheduled-run-detail.json",
+    "schema": "ScheduledJobRunResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/scheduled-job-runs.ts"
+  },
+  {
+    "file": "scheduled-run-upsert.json",
+    "schema": "UpsertScheduledJobRunRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/scheduled-job-runs.ts"
+  },
+  {
+    "file": "probe-request.json",
+    "schema": "AcpxProbeRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/acpx-probe.ts"
+  },
+  {
+    "file": "probe-result.json",
+    "schema": "AcpxProbeResult",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/acpx-probe/probeAgent.ts"
+  },
+  {
+    "file": "probe-error-result.json",
+    "schema": "AcpxProbeResult",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/acpx-probe/probeAgent.ts"
+  },
+  {
+    "file": "klavis-list.json",
+    "schema": "ConnectorList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/klavis.ts"
+  },
+  {
+    "file": "klavis-oauth.json",
+    "schema": "ConnectorOAuthUrls",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/klavis.ts"
+  },
+  {
+    "file": "klavis-integrations.json",
+    "schema": "UserIntegrationList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/klavis.ts"
+  },
+  {
+    "file": "klavis-add.json",
+    "schema": "AddConnectorResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/klavis.ts"
+  },
+  {
+    "file": "klavis-success.json",
+    "schema": "ConnectorSuccess",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/klavis.ts"
+  },
+  {
+    "file": "klavis-request.json",
+    "schema": "ServerNameRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/klavis.ts"
+  },
+  {
+    "file": "klavis-api-key.json",
+    "schema": "SubmitApiKeyRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/klavis.ts"
+  },
+  {
+    "file": "oauth-device-code.json",
+    "schema": "OAuthDeviceCode",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/oauth.ts"
+  },
+  {
+    "file": "oauth-status.json",
+    "schema": "OAuthStatus",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/clients/oauth/token-store.ts"
+  },
+  {
+    "file": "oauth-token.json",
+    "schema": "OAuthTokenRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/oauth.ts"
+  },
+  {
+    "file": "oauth-token-response.json",
+    "schema": "OAuthTokenResponse",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/oauth.ts"
+  },
+  {
+    "file": "mcp-status.json",
+    "schema": "McpStatus",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/mcp.ts"
+  },
+  {
+    "file": "mcp-tools.json",
+    "schema": "McpToolList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/mcp-manager.ts"
+  },
+  {
+    "file": "mcp-agents.json",
+    "schema": "McpAgentList",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/lib/mcp-manager/types.ts"
+  },
+  {
+    "file": "mcp-install-request.json",
+    "schema": "McpInstallRequest",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/mcp-manager.ts"
+  },
+  {
+    "file": "mcp-install-result.json",
+    "schema": "McpInstallResult",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/routes/mcp-manager.ts"
+  },
+  {
+    "file": "chunk-start.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-start-step.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-reasoning-start.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-reasoning-delta.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-reasoning-end.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-text-start.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-text-delta.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-text-end.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-tool-input-start.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-tool-input-delta.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-tool-input-available.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-tool-input-error.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-tool-output-available.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-tool-output-error.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-error.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-finish-step.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-finish.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-abort.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-source-url.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  },
+  {
+    "file": "chunk-file.json",
+    "schema": "UiMessageChunk",
+    "provenance": "source-derived example; not a live capture",
+    "source": "apps/server/src/api/services/conversation-runs.ts + ai@7.0.114 UIMessageChunk"
+  }
+]

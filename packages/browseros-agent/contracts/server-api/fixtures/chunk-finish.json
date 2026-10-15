@@ -1,0 +1,7 @@
+{
+  "type": "finish",
+  "finishReason": "stop",
+  "messageMetadata": {
+    "fixture": true
+  }
+}

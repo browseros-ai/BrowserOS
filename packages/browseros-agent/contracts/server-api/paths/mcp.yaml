@@ -1,0 +1,86 @@
+endpoint:
+  get:
+    operationId: getMcpStatus
+    tags:
+      - mcp
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/mcp.yaml#/McpStatus
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Browser fetch requests (Sec-Fetch-Site present) are rejected. This TS route returns
+      JSON status, not an SSE stream.
+  post:
+    operationId: dispatchMcp
+    tags:
+      - mcp
+    responses:
+      "200":
+        description: Opaque SDK-owned MCP response.
+        content:
+          application/json:
+            schema: {}
+          text/event-stream:
+            schema:
+              type: string
+      "202":
+        description: SDK notification accepted.
+      "400":
+        description: SDK protocol rejection; opaque response.
+      "401":
+        description: Invalid or expired tool lease; JSON-RPC error.
+        content:
+          application/json:
+            schema: {}
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Internal JSON-RPC error.
+        content:
+          application/json:
+            schema: {}
+    description: Opaque MCP streamable HTTP / JSON-RPC dispatch. Legacy requests use stateless JSON;
+      modern SDK owns transport responses. Browser fetch requests are rejected.
+    parameters:
+      - name: structured
+        in: query
+        schema:
+          type: string
+          enum:
+            - "1"
+      - name: read_only
+        in: query
+        schema:
+          type: string
+          enum:
+            - "1"
+      - name: X-BrowserOS-Internal-Lease
+        in: header
+        schema:
+          type: string
+    requestBody:
+      required: false
+      content:
+        application/json:
+          schema: {}
+  delete:
+    operationId: deleteMcpSession
+    tags:
+      - mcp
+    responses:
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        description: 404 Not Found; no DELETE route registered.
+        content:
+          text/plain:
+            schema:
+              type: string
+    description: "Compatibility observation: apps/server registers no DELETE handler; it returns Hono
+      plain-text 404. No session lifecycle is invented."

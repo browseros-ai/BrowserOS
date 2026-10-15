@@ -1,0 +1,457 @@
+UiStartChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - start
+    messageId:
+      type: string
+    messageMetadata: {}
+  required:
+    - type
+UiStartStepChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - start-step
+  required:
+    - type
+UiFinishStepChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - finish-step
+  required:
+    - type
+UiFinishChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - finish
+    finishReason:
+      type: string
+      enum:
+        - stop
+        - length
+        - content-filter
+        - tool-calls
+        - error
+        - other
+    messageMetadata: {}
+  required:
+    - type
+UiAbortChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - abort
+    reason:
+      type: string
+  required:
+    - type
+UiErrorChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - error
+    errorText:
+      type: string
+  required:
+    - type
+    - errorText
+UiTextStartChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - text-start
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    id:
+      type: string
+  required:
+    - type
+    - id
+UiTextDeltaChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - text-delta
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    id:
+      type: string
+    delta:
+      type: string
+  required:
+    - type
+    - id
+    - delta
+UiTextEndChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - text-end
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    id:
+      type: string
+  required:
+    - type
+    - id
+UiReasoningStartChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - reasoning-start
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    id:
+      type: string
+  required:
+    - type
+    - id
+UiReasoningDeltaChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - reasoning-delta
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    id:
+      type: string
+    delta:
+      type: string
+  required:
+    - type
+    - id
+    - delta
+UiReasoningEndChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - reasoning-end
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    id:
+      type: string
+  required:
+    - type
+    - id
+UiToolInputStartChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-input-start
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    providerExecuted:
+      type: boolean
+    toolMetadata:
+      type: object
+      additionalProperties: {}
+    dynamic:
+      type: boolean
+    title:
+      type: string
+    toolCallId:
+      type: string
+    toolName:
+      type: string
+  required:
+    - type
+    - toolCallId
+    - toolName
+UiToolInputDeltaChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-input-delta
+    toolCallId:
+      type: string
+    inputTextDelta:
+      type: string
+  required:
+    - type
+    - toolCallId
+    - inputTextDelta
+UiToolInputAvailableChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-input-available
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    providerExecuted:
+      type: boolean
+    toolMetadata:
+      type: object
+      additionalProperties: {}
+    dynamic:
+      type: boolean
+    title:
+      type: string
+    toolCallId:
+      type: string
+    toolName:
+      type: string
+    input: {}
+  required:
+    - type
+    - toolCallId
+    - toolName
+    - input
+UiToolInputErrorChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-input-error
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    providerExecuted:
+      type: boolean
+    toolMetadata:
+      type: object
+      additionalProperties: {}
+    dynamic:
+      type: boolean
+    title:
+      type: string
+    toolCallId:
+      type: string
+    toolName:
+      type: string
+    input: {}
+    errorText:
+      type: string
+  required:
+    - type
+    - toolCallId
+    - toolName
+    - input
+    - errorText
+UiToolOutputAvailableChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-output-available
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    providerExecuted:
+      type: boolean
+    toolMetadata:
+      type: object
+      additionalProperties: {}
+    dynamic:
+      type: boolean
+    title:
+      type: string
+    toolCallId:
+      type: string
+    output: {}
+    preliminary:
+      type: boolean
+  required:
+    - type
+    - toolCallId
+    - output
+UiToolOutputErrorChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - tool-output-error
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    providerExecuted:
+      type: boolean
+    toolMetadata:
+      type: object
+      additionalProperties: {}
+    dynamic:
+      type: boolean
+    title:
+      type: string
+    toolCallId:
+      type: string
+    errorText:
+      type: string
+  required:
+    - type
+    - toolCallId
+    - errorText
+UiSourceUrlChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - source-url
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    sourceId:
+      type: string
+    url:
+      type: string
+    title:
+      type: string
+  required:
+    - type
+    - sourceId
+    - url
+UiFileChunk:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - file
+    providerMetadata:
+      type: object
+      additionalProperties:
+        type: object
+        additionalProperties: {}
+    url:
+      type: string
+    mediaType:
+      type: string
+  required:
+    - type
+    - url
+    - mediaType
+UiMessageChunk:
+  oneOf:
+    - $ref: "#/UiStartChunk"
+    - $ref: "#/UiStartStepChunk"
+    - $ref: "#/UiFinishStepChunk"
+    - $ref: "#/UiFinishChunk"
+    - $ref: "#/UiAbortChunk"
+    - $ref: "#/UiErrorChunk"
+    - $ref: "#/UiTextStartChunk"
+    - $ref: "#/UiTextDeltaChunk"
+    - $ref: "#/UiTextEndChunk"
+    - $ref: "#/UiReasoningStartChunk"
+    - $ref: "#/UiReasoningDeltaChunk"
+    - $ref: "#/UiReasoningEndChunk"
+    - $ref: "#/UiToolInputStartChunk"
+    - $ref: "#/UiToolInputDeltaChunk"
+    - $ref: "#/UiToolInputAvailableChunk"
+    - $ref: "#/UiToolInputErrorChunk"
+    - $ref: "#/UiToolOutputAvailableChunk"
+    - $ref: "#/UiToolOutputErrorChunk"
+    - $ref: "#/UiSourceUrlChunk"
+    - $ref: "#/UiFileChunk"
+  discriminator:
+    propertyName: type
+    mapping:
+      start: "#/UiStartChunk"
+      start-step: "#/UiStartStepChunk"
+      finish-step: "#/UiFinishStepChunk"
+      finish: "#/UiFinishChunk"
+      abort: "#/UiAbortChunk"
+      error: "#/UiErrorChunk"
+      text-start: "#/UiTextStartChunk"
+      text-delta: "#/UiTextDeltaChunk"
+      text-end: "#/UiTextEndChunk"
+      reasoning-start: "#/UiReasoningStartChunk"
+      reasoning-delta: "#/UiReasoningDeltaChunk"
+      reasoning-end: "#/UiReasoningEndChunk"
+      tool-input-start: "#/UiToolInputStartChunk"
+      tool-input-delta: "#/UiToolInputDeltaChunk"
+      tool-input-available: "#/UiToolInputAvailableChunk"
+      tool-input-error: "#/UiToolInputErrorChunk"
+      tool-output-available: "#/UiToolOutputAvailableChunk"
+      tool-output-error: "#/UiToolOutputErrorChunk"
+      source-url: "#/UiSourceUrlChunk"
+      file: "#/UiFileChunk"
+  description: AI SDK v7 UI message stream v1 JSON payloads. Each SSE data frame contains one chunk;
+    [DONE] is a framing sentinel, never a chunk. Metadata remains open.

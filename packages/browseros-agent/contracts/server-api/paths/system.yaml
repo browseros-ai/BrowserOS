@@ -1,0 +1,100 @@
+health:
+  get:
+    operationId: getHealth
+    tags:
+      - system
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/HealthResponse
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+healthAlias:
+  get:
+    operationId: getHealthAlias
+    tags:
+      - system
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/HealthResponse
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+status:
+  get:
+    operationId: getStatus
+    tags:
+      - system
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/StatusResponse
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+diagnostics:
+  get:
+    operationId: getDiagnostics
+    tags:
+      - system
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/DiagnosticsResponse
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+shutdown:
+  post:
+    operationId: shutdownSystem
+    tags:
+      - system
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/ShutdownResponse
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Returns 200, schedules shutdown, then exits with status 0. Body ignored; compat alias
+      retained for shipped Chromium.
+shutdownAlias:
+  post:
+    operationId: shutdownAlias
+    tags:
+      - system
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/system.yaml#/ShutdownResponse
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Returns 200, schedules shutdown, then exits with status 0. Body ignored; compat alias
+      retained for shipped Chromium.

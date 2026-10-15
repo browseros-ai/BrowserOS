@@ -1,0 +1,9 @@
+{
+  "type": "reasoning-start",
+  "id": "r1",
+  "providerMetadata": {
+    "anthropic": {
+      "signature": "fixture"
+    }
+  }
+}

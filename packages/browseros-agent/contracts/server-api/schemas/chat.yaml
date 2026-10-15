@@ -1,0 +1,385 @@
+BrowserOsTarget:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      type: string
+      enum:
+        - browseros
+    providerId:
+      type: string
+      minLength: 1
+  required:
+    - type
+AcpTarget:
+  type: object
+  additionalProperties: true
+  properties:
+    type:
+      $ref: ./agents.yaml#/AcpAgentType
+    agentId:
+      type: string
+      format: uuid
+  required:
+    - type
+    - agentId
+BrowserTab:
+  type: object
+  additionalProperties: true
+  properties:
+    id:
+      type: number
+    url:
+      type: string
+    title:
+      type: string
+    pageId:
+      type: number
+  required:
+    - id
+CustomMcpServer:
+  type: object
+  additionalProperties: true
+  properties:
+    name:
+      type: string
+    url:
+      type: string
+      format: uri
+  required:
+    - name
+    - url
+BrowserContext:
+  type: object
+  additionalProperties: true
+  properties:
+    windowId:
+      type: number
+    activeTab:
+      $ref: "#/BrowserTab"
+    selectedTabs:
+      type: array
+      items:
+        $ref: "#/BrowserTab"
+    tabs:
+      type: array
+      items:
+        $ref: "#/BrowserTab"
+    enabledMcpServers:
+      type: array
+      items:
+        type: string
+    customMcpServers:
+      type: array
+      items:
+        $ref: "#/CustomMcpServer"
+SelectedTextSource:
+  type: object
+  additionalProperties: true
+  properties:
+    url:
+      type: string
+    title:
+      type: string
+  required:
+    - url
+    - title
+PreviousMessage:
+  type: object
+  additionalProperties: true
+  properties:
+    role:
+      type: string
+      enum:
+        - user
+        - assistant
+    content:
+      type: string
+  required:
+    - role
+    - content
+PreviousConversation:
+  oneOf:
+    - type: array
+      items:
+        $ref: "#/PreviousMessage"
+    - type: string
+  description: "Compatibility input: a non-blank string becomes one user message; a blank string
+    becomes absent."
+ChatAttachment:
+  type: object
+  additionalProperties: true
+  properties:
+    mediaType:
+      type: string
+      minLength: 1
+    data:
+      type: string
+      minLength: 1
+  required:
+    - mediaType
+    - data
+BrowserOsChatRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    providerId:
+      type: string
+    apiKey:
+      type: string
+    baseUrl:
+      type: string
+    resourceName:
+      type: string
+    region:
+      type: string
+    accessKeyId:
+      type: string
+    secretAccessKey:
+      type: string
+    sessionToken:
+      type: string
+    upstreamProvider:
+      type: string
+    provider:
+      $ref: ./providers.yaml#/LlmProvider
+    model:
+      type: string
+      minLength: 1
+    headers:
+      $ref: ./providers.yaml#/LlmHeaders
+    reasoningEffort:
+      type: string
+      enum:
+        - none
+        - low
+        - medium
+        - high
+        - xhigh
+        - max
+    reasoningSummary:
+      type: string
+      enum:
+        - auto
+        - concise
+        - detailed
+    userSystemPrompt:
+      type: string
+    selectedText:
+      type: string
+    conversationId:
+      type: string
+      format: uuid
+    message:
+      type: string
+      default: ""
+    contextWindowSize:
+      type: number
+    browserContext:
+      $ref: "#/BrowserContext"
+    isScheduledTask:
+      type: boolean
+      default: false
+    userWorkingDir:
+      type: string
+      minLength: 1
+    supportsImages:
+      type: boolean
+      default: true
+    supportsReasoning:
+      type: boolean
+      default: true
+    mode:
+      type: string
+      enum:
+        - chat
+        - agent
+      default: agent
+    origin:
+      type: string
+      enum:
+        - sidepanel
+        - newtab
+      default: sidepanel
+    declinedApps:
+      type: array
+      items:
+        type: string
+    selectedTextSource:
+      $ref: "#/SelectedTextSource"
+    previousConversation:
+      $ref: "#/PreviousConversation"
+    persist:
+      type: boolean
+      description: Absent means true. Scheduled tasks never persist.
+    historyMode:
+      type: string
+      enum:
+        - local
+        - cloud
+      deprecated: true
+    attachments:
+      type: array
+      items:
+        $ref: "#/ChatAttachment"
+    target:
+      $ref: "#/BrowserOsTarget"
+  required:
+    - conversationId
+AcpChatRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    userSystemPrompt:
+      type: string
+    selectedText:
+      type: string
+    conversationId:
+      type: string
+      format: uuid
+    message:
+      type: string
+      default: ""
+    contextWindowSize:
+      type: number
+    browserContext:
+      $ref: "#/BrowserContext"
+    isScheduledTask:
+      type: boolean
+      default: false
+    userWorkingDir:
+      type: string
+      minLength: 1
+    supportsImages:
+      type: boolean
+      default: true
+    supportsReasoning:
+      type: boolean
+      default: true
+    mode:
+      type: string
+      enum:
+        - chat
+        - agent
+      default: agent
+    origin:
+      type: string
+      enum:
+        - sidepanel
+        - newtab
+      default: sidepanel
+    declinedApps:
+      type: array
+      items:
+        type: string
+    selectedTextSource:
+      $ref: "#/SelectedTextSource"
+    previousConversation:
+      $ref: "#/PreviousConversation"
+    persist:
+      type: boolean
+      description: Absent means true. Scheduled tasks never persist.
+    historyMode:
+      type: string
+      enum:
+        - local
+        - cloud
+      deprecated: true
+    attachments:
+      type: array
+      items:
+        $ref: "#/ChatAttachment"
+    target:
+      $ref: "#/AcpTarget"
+  required:
+    - conversationId
+    - target
+ChatRequest:
+  oneOf:
+    - $ref: "#/AcpChatRequest"
+    - $ref: "#/BrowserOsChatRequest"
+  description: ACP branch is tried first. Without a target the server supplies browseros and resolves
+    target.providerId, providerId, provider, then default provider. Unknown keys are stripped.
+ConversationRunStatus:
+  type: string
+  enum:
+    - running
+    - completed
+    - aborted
+    - failed
+ConversationRunSnapshot:
+  type: object
+  additionalProperties: false
+  properties:
+    conversationId:
+      type: string
+    runId:
+      type: string
+    status:
+      $ref: "#/ConversationRunStatus"
+    messages:
+      type: array
+      items:
+        $ref: ./conversations.yaml#/ImportedMessage
+    chunkCount:
+      type: number
+  required:
+    - conversationId
+    - runId
+    - status
+    - messages
+    - chunkCount
+ConversationPanelAssignment:
+  type: object
+  additionalProperties: false
+  properties:
+    tabId:
+      type: integer
+      format: int64
+    conversationId:
+      type: string
+    runId:
+      type: string
+    status:
+      $ref: "#/ConversationRunStatus"
+    autoOpenId:
+      type: string
+  required:
+    - tabId
+    - conversationId
+    - runId
+    - status
+ConversationPanelAssignments:
+  type: object
+  additionalProperties: false
+  properties:
+    assignments:
+      type: array
+      items:
+        $ref: "#/ConversationPanelAssignment"
+  required:
+    - assignments
+StopChatResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    stopped:
+      type: boolean
+  required:
+    - stopped
+DeleteChatResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - true
+    message:
+      type: string
+    sessionCount:
+      type: number
+  required:
+    - success
+    - message
+    - sessionCount

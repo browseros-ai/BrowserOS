@@ -1,0 +1,48 @@
+OAuthDeviceCode:
+  type: object
+  additionalProperties: false
+  properties:
+    userCode:
+      type: string
+    verificationUri:
+      type: string
+    expiresIn:
+      type: number
+  required:
+    - userCode
+    - verificationUri
+    - expiresIn
+OAuthTokenRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    accessToken: {}
+    refreshToken: {}
+    expiresIn: {}
+  description: "Intentionally unvalidated c.req.json() input: accessToken is only checked for
+    truthiness; string/number conventions are not enforced. Malformed JSON returns plain-text 500."
+  required:
+    - accessToken
+OAuthTokenResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    ok:
+      type: boolean
+      enum:
+        - true
+  required:
+    - ok
+OAuthStatus:
+  type: object
+  additionalProperties: false
+  properties:
+    authenticated:
+      type: boolean
+    email:
+      type: string
+    provider:
+      type: string
+  required:
+    - authenticated
+    - provider

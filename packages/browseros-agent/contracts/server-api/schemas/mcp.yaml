@@ -1,0 +1,13 @@
+McpStatus:
+  type: object
+  additionalProperties: false
+  properties:
+    status:
+      type: string
+      enum:
+        - ok
+    message:
+      type: string
+  required:
+    - status
+    - message

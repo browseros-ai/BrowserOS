@@ -1,0 +1,6 @@
+{
+  "oauthUrls": {
+    "Gmail": "https://example.com/oauth"
+  },
+  "servers": ["Gmail"]
+}

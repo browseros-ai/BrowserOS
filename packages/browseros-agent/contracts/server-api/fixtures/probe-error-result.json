@@ -1,0 +1,12 @@
+{
+  "models": [],
+  "reasoning": null,
+  "supportsConfigOption": false,
+  "agentInfo": null,
+  "protocolVersion": 1,
+  "error": {
+    "code": "probe_error",
+    "message": "Probe failed",
+    "acpErrorCode": -32603
+  }
+}

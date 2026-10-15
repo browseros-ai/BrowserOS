@@ -1,0 +1,132 @@
+start:
+  get:
+    operationId: startOAuth
+    tags:
+      - oauth
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/oauth.yaml#/OAuthDeviceCode
+      "302":
+        description: PKCE authorization redirect (chatgpt-pro).
+        headers:
+          Location:
+            schema:
+              type: string
+      "400":
+        description: Unknown OAuth provider
+        content:
+          text/plain:
+            schema:
+              type: string
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Start authentication failure
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+      "503":
+        description: Callback-port conflict or OAuth unavailable
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+    parameters:
+      - $ref: ../parameters.yaml#/OAuthProvider
+      - name: redirect
+        in: query
+        schema:
+          type: string
+token:
+  post:
+    operationId: storeOAuthToken
+    tags:
+      - oauth
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/oauth.yaml#/OAuthTokenResponse
+      "400":
+        description: Missing accessToken or unknown OAuth provider
+        content:
+          text/plain:
+            schema:
+              type: string
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Failed to store token (also on malformed JSON)
+        content:
+          text/plain:
+            schema:
+              type: string
+      "503":
+        description: OAuth unavailable
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+    parameters:
+      - $ref: ../parameters.yaml#/OAuthProvider
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/oauth.yaml#/OAuthTokenRequest
+status:
+  get:
+    operationId: getOAuthStatus
+    tags:
+      - oauth
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/oauth.yaml#/OAuthStatus
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+      "503":
+        description: OAuth unavailable
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+    parameters:
+      - $ref: ../parameters.yaml#/OAuthProvider
+detail:
+  delete:
+    operationId: deleteOAuthToken
+    tags:
+      - oauth
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/SuccessResponse
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+      "503":
+        description: OAuth unavailable
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/StringError
+    parameters:
+      - $ref: ../parameters.yaml#/OAuthProvider

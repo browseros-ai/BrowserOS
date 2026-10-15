@@ -1,0 +1,11 @@
+{
+  "conversation": {
+    "id": "11111111-1111-4111-8111-111111111111",
+    "lastUserMessage": "Hello",
+    "targetType": "browseros",
+    "lastMessagedAt": 1792011600000,
+    "createdAt": 1792011600000,
+    "updatedAt": 1792011600000
+  },
+  "imported": true
+}

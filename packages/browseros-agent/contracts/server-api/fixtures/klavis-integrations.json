@@ -1,0 +1,9 @@
+{
+  "integrations": [
+    {
+      "name": "Gmail",
+      "is_authenticated": true
+    }
+  ],
+  "count": 1
+}

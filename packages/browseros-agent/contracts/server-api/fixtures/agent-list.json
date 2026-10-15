@@ -1,0 +1,21 @@
+{
+  "agents": [
+    {
+      "id": "22222222-2222-4222-8222-222222222222",
+      "name": "Fixture agent",
+      "type": "custom",
+      "customConfig": {
+        "command": "fixture-agent --acp",
+        "env": {
+          "FIXTURE": "1"
+        },
+        "fullAccessModes": ["full-access"],
+        "reasoningEffortKey": "effort",
+        "systemPromptAppend": "Be concise",
+        "icon": "bot"
+      },
+      "createdAt": 1792011600000,
+      "updatedAt": 1792011600000
+    }
+  ]
+}

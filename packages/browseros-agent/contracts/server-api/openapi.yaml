@@ -1,0 +1,388 @@
+openapi: 3.0.3
+info:
+  title: BrowserOS server compatibility API
+  version: 1.0.0
+  description: Existing apps/server wire format, without a version prefix. Preserves nullable columns,
+    request defaults, per-route error dialects, and AI SDK v7 streaming. All routes pass a
+    trusted-Origin guard; protected routes additionally check loopback peer/Host/Referer and require
+    an app Origin on mutations. CORS preflight allows GET/POST/DELETE/OPTIONS (the current server
+    omits PUT). Unmatched routes and trailing slashes return plain-text 404; HEAD inherits GET.
+    OAuth wildcard fallback returns 503 when OAuth is unavailable. The separate PKCE callback
+    listener on port 1455 is outside this contract.
+servers:
+  - url: http://127.0.0.1:9100
+paths:
+  /system/health:
+    $ref: ./paths/system.yaml#/health
+  /health:
+    $ref: ./paths/system.yaml#/healthAlias
+  /status:
+    $ref: ./paths/system.yaml#/status
+  /system/diagnostics:
+    $ref: ./paths/system.yaml#/diagnostics
+  /system/shutdown:
+    $ref: ./paths/system.yaml#/shutdown
+  /shutdown:
+    $ref: ./paths/system.yaml#/shutdownAlias
+  /chat:
+    $ref: ./paths/chat.yaml#/collection
+  /chat/panels:
+    $ref: ./paths/chat.yaml#/panels
+  /chat/panels/{tabId}:
+    $ref: ./paths/chat.yaml#/panel
+  /chat/{conversationId}/state:
+    $ref: ./paths/chat.yaml#/state
+  /chat/{conversationId}/stream:
+    $ref: ./paths/chat.yaml#/stream
+  /chat/{conversationId}/stop:
+    $ref: ./paths/chat.yaml#/stop
+  /chat/{conversationId}:
+    $ref: ./paths/chat.yaml#/detail
+  /conversations:
+    $ref: ./paths/conversations.yaml#/collection
+  /conversations/{conversationId}:
+    $ref: ./paths/conversations.yaml#/detail
+  /agents:
+    $ref: ./paths/agents.yaml#/collection
+  /agents/{agentId}:
+    $ref: ./paths/agents.yaml#/detail
+  /providers:
+    $ref: ./paths/providers.yaml#/collection
+  /providers/{providerId}:
+    $ref: ./paths/providers.yaml#/detail
+  /scheduled-jobs:
+    $ref: ./paths/scheduled-jobs.yaml#/collection
+  /scheduled-jobs/{jobId}:
+    $ref: ./paths/scheduled-jobs.yaml#/detail
+  /scheduled-job-runs:
+    $ref: ./paths/scheduled-job-runs.yaml#/collection
+  /scheduled-job-runs/{runId}:
+    $ref: ./paths/scheduled-job-runs.yaml#/detail
+  /providers/default:
+    $ref: ./paths/providers.yaml#/default
+  /test-provider:
+    $ref: ./paths/providers.yaml#/test
+  /refine-prompt:
+    $ref: ./paths/providers.yaml#/refine
+  /acpx/probe:
+    $ref: ./paths/acpx-probe.yaml#/probe
+  /klavis/servers:
+    $ref: ./paths/klavis.yaml#/servers
+  /klavis/oauth-urls:
+    $ref: ./paths/klavis.yaml#/oauthUrls
+  /klavis/user-integrations:
+    $ref: ./paths/klavis.yaml#/integrations
+  /klavis/servers/add:
+    $ref: ./paths/klavis.yaml#/add
+  /klavis/servers/submit-api-key:
+    $ref: ./paths/klavis.yaml#/submitApiKey
+  /klavis/servers/remove:
+    $ref: ./paths/klavis.yaml#/remove
+  /oauth/{provider}/start:
+    $ref: ./paths/oauth.yaml#/start
+  /oauth/{provider}/token:
+    $ref: ./paths/oauth.yaml#/token
+  /oauth/{provider}/status:
+    $ref: ./paths/oauth.yaml#/status
+  /oauth/{provider}:
+    $ref: ./paths/oauth.yaml#/detail
+  /mcp-manager/tools:
+    $ref: ./paths/mcp-manager.yaml#/tools
+  /mcp-manager/agents:
+    $ref: ./paths/mcp-manager.yaml#/agents
+  /mcp-manager/agents/{id}/install:
+    $ref: ./paths/mcp-manager.yaml#/install
+  /mcp-manager/agents/{id}/uninstall:
+    $ref: ./paths/mcp-manager.yaml#/uninstall
+  /mcp:
+    $ref: ./paths/mcp.yaml#/endpoint
+components:
+  parameters:
+    ConversationId:
+      $ref: ./parameters.yaml#/ConversationId
+    AgentId:
+      $ref: ./parameters.yaml#/AgentId
+    ProviderId:
+      $ref: ./parameters.yaml#/ProviderId
+    JobId:
+      $ref: ./parameters.yaml#/JobId
+    RunId:
+      $ref: ./parameters.yaml#/RunId
+    TabId:
+      $ref: ./parameters.yaml#/TabId
+    OAuthProvider:
+      $ref: ./parameters.yaml#/OAuthProvider
+    McpAgentId:
+      $ref: ./parameters.yaml#/McpAgentId
+  responses:
+    Forbidden:
+      $ref: ./responses.yaml#/Forbidden
+    InternalError:
+      $ref: ./responses.yaml#/InternalError
+    ValidationError:
+      $ref: ./responses.yaml#/ValidationError
+    BadRequest:
+      $ref: ./responses.yaml#/BadRequest
+    NotFound:
+      $ref: ./responses.yaml#/NotFound
+  schemas:
+    StringError:
+      $ref: ./schemas/common.yaml#/StringError
+    MessageError:
+      $ref: ./schemas/common.yaml#/MessageError
+    FailureMessage:
+      $ref: ./schemas/common.yaml#/FailureMessage
+    SuccessResponse:
+      $ref: ./schemas/common.yaml#/SuccessResponse
+    ZodIssueError:
+      $ref: ./schemas/common.yaml#/ZodIssueError
+    ValidationError:
+      $ref: ./schemas/common.yaml#/ValidationError
+    HttpAgentError:
+      $ref: ./schemas/common.yaml#/HttpAgentError
+    HttpAgentErrorEnvelope:
+      $ref: ./schemas/common.yaml#/HttpAgentErrorEnvelope
+    ChatError:
+      $ref: ./schemas/common.yaml#/ChatError
+    ChatErrorEnvelope:
+      $ref: ./schemas/common.yaml#/ChatErrorEnvelope
+    ForbiddenError:
+      $ref: ./schemas/common.yaml#/ForbiddenError
+    BadRequestError:
+      $ref: ./schemas/common.yaml#/BadRequestError
+    HealthResponse:
+      $ref: ./schemas/system.yaml#/HealthResponse
+    StatusResponse:
+      $ref: ./schemas/system.yaml#/StatusResponse
+    DiagnosticsResponse:
+      $ref: ./schemas/system.yaml#/DiagnosticsResponse
+    ShutdownResponse:
+      $ref: ./schemas/system.yaml#/ShutdownResponse
+    LlmProvider:
+      $ref: ./schemas/providers.yaml#/LlmProvider
+    LlmHeaders:
+      $ref: ./schemas/providers.yaml#/LlmHeaders
+    TestProviderRequest:
+      $ref: ./schemas/providers.yaml#/TestProviderRequest
+    RefinePromptRequest:
+      $ref: ./schemas/providers.yaml#/RefinePromptRequest
+    TestProviderResponse:
+      $ref: ./schemas/providers.yaml#/TestProviderResponse
+    TestProviderFailure:
+      $ref: ./schemas/providers.yaml#/TestProviderFailure
+    TestProviderBadRequest:
+      $ref: ./schemas/providers.yaml#/TestProviderBadRequest
+    RefinePromptResponse:
+      $ref: ./schemas/providers.yaml#/RefinePromptResponse
+    RefinePromptBadRequest:
+      $ref: ./schemas/providers.yaml#/RefinePromptBadRequest
+    PublicProvider:
+      $ref: ./schemas/providers.yaml#/PublicProvider
+    Provider:
+      $ref: ./schemas/providers.yaml#/Provider
+    UpsertProviderRequest:
+      $ref: ./schemas/providers.yaml#/UpsertProviderRequest
+    ProviderList:
+      $ref: ./schemas/providers.yaml#/ProviderList
+    PublicProviderResponse:
+      $ref: ./schemas/providers.yaml#/PublicProviderResponse
+    DefaultProviderResponse:
+      $ref: ./schemas/providers.yaml#/DefaultProviderResponse
+    ProviderResponse:
+      $ref: ./schemas/providers.yaml#/ProviderResponse
+    SetDefaultProviderRequest:
+      $ref: ./schemas/providers.yaml#/SetDefaultProviderRequest
+    AcpAgentType:
+      $ref: ./schemas/agents.yaml#/AcpAgentType
+    BrowserOsTarget:
+      $ref: ./schemas/chat.yaml#/BrowserOsTarget
+    AcpTarget:
+      $ref: ./schemas/chat.yaml#/AcpTarget
+    BrowserTab:
+      $ref: ./schemas/chat.yaml#/BrowserTab
+    CustomMcpServer:
+      $ref: ./schemas/chat.yaml#/CustomMcpServer
+    BrowserContext:
+      $ref: ./schemas/chat.yaml#/BrowserContext
+    SelectedTextSource:
+      $ref: ./schemas/chat.yaml#/SelectedTextSource
+    PreviousMessage:
+      $ref: ./schemas/chat.yaml#/PreviousMessage
+    PreviousConversation:
+      $ref: ./schemas/chat.yaml#/PreviousConversation
+    ChatAttachment:
+      $ref: ./schemas/chat.yaml#/ChatAttachment
+    BrowserOsChatRequest:
+      $ref: ./schemas/chat.yaml#/BrowserOsChatRequest
+    AcpChatRequest:
+      $ref: ./schemas/chat.yaml#/AcpChatRequest
+    ChatRequest:
+      $ref: ./schemas/chat.yaml#/ChatRequest
+    UiMessage:
+      $ref: ./schemas/conversations.yaml#/UiMessage
+    ImportedMessage:
+      $ref: ./schemas/conversations.yaml#/ImportedMessage
+    ConversationSummary:
+      $ref: ./schemas/conversations.yaml#/ConversationSummary
+    ConversationDetail:
+      $ref: ./schemas/conversations.yaml#/ConversationDetail
+    ConversationList:
+      $ref: ./schemas/conversations.yaml#/ConversationList
+    ConversationResponse:
+      $ref: ./schemas/conversations.yaml#/ConversationResponse
+    ImportConversationRequest:
+      $ref: ./schemas/conversations.yaml#/ImportConversationRequest
+    ImportConversationResponse:
+      $ref: ./schemas/conversations.yaml#/ImportConversationResponse
+    ConversationRunStatus:
+      $ref: ./schemas/chat.yaml#/ConversationRunStatus
+    ConversationRunSnapshot:
+      $ref: ./schemas/chat.yaml#/ConversationRunSnapshot
+    ConversationPanelAssignment:
+      $ref: ./schemas/chat.yaml#/ConversationPanelAssignment
+    ConversationPanelAssignments:
+      $ref: ./schemas/chat.yaml#/ConversationPanelAssignments
+    StopChatResponse:
+      $ref: ./schemas/chat.yaml#/StopChatResponse
+    DeleteChatResponse:
+      $ref: ./schemas/chat.yaml#/DeleteChatResponse
+    UiStartChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiStartChunk
+    UiStartStepChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiStartStepChunk
+    UiFinishStepChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiFinishStepChunk
+    UiFinishChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiFinishChunk
+    UiAbortChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiAbortChunk
+    UiErrorChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiErrorChunk
+    UiTextStartChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiTextStartChunk
+    UiTextDeltaChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiTextDeltaChunk
+    UiTextEndChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiTextEndChunk
+    UiReasoningStartChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiReasoningStartChunk
+    UiReasoningDeltaChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiReasoningDeltaChunk
+    UiReasoningEndChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiReasoningEndChunk
+    UiToolInputStartChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolInputStartChunk
+    UiToolInputDeltaChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolInputDeltaChunk
+    UiToolInputAvailableChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolInputAvailableChunk
+    UiToolInputErrorChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolInputErrorChunk
+    UiToolOutputAvailableChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolOutputAvailableChunk
+    UiToolOutputErrorChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiToolOutputErrorChunk
+    UiSourceUrlChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiSourceUrlChunk
+    UiFileChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiFileChunk
+    UiMessageChunk:
+      $ref: ./schemas/ui_stream.yaml#/UiMessageChunk
+    CustomAcpAgentConfig:
+      $ref: ./schemas/agents.yaml#/CustomAcpAgentConfig
+    CreateBuiltinAgentRequest:
+      $ref: ./schemas/agents.yaml#/CreateBuiltinAgentRequest
+    CreateCustomAgentRequest:
+      $ref: ./schemas/agents.yaml#/CreateCustomAgentRequest
+    CreateAgentRequest:
+      $ref: ./schemas/agents.yaml#/CreateAgentRequest
+    UpdateAgentRequest:
+      $ref: ./schemas/agents.yaml#/UpdateAgentRequest
+    Agent:
+      $ref: ./schemas/agents.yaml#/Agent
+    AgentList:
+      $ref: ./schemas/agents.yaml#/AgentList
+    AgentResponse:
+      $ref: ./schemas/agents.yaml#/AgentResponse
+    UpsertScheduledJobRequest:
+      $ref: ./schemas/scheduled_jobs.yaml#/UpsertScheduledJobRequest
+    ScheduledJob:
+      $ref: ./schemas/scheduled_jobs.yaml#/ScheduledJob
+    ScheduledJobList:
+      $ref: ./schemas/scheduled_jobs.yaml#/ScheduledJobList
+    ScheduledJobResponse:
+      $ref: ./schemas/scheduled_jobs.yaml#/ScheduledJobResponse
+    ToolCallExecution:
+      $ref: ./schemas/scheduled_job_runs.yaml#/ToolCallExecution
+    UpsertScheduledJobRunRequest:
+      $ref: ./schemas/scheduled_job_runs.yaml#/UpsertScheduledJobRunRequest
+    ScheduledJobRun:
+      $ref: ./schemas/scheduled_job_runs.yaml#/ScheduledJobRun
+    ScheduledJobRunList:
+      $ref: ./schemas/scheduled_job_runs.yaml#/ScheduledJobRunList
+    ScheduledJobRunResponse:
+      $ref: ./schemas/scheduled_job_runs.yaml#/ScheduledJobRunResponse
+    BuiltinProbeRequest:
+      $ref: ./schemas/acpx_probe.yaml#/BuiltinProbeRequest
+    CustomProbeRequest:
+      $ref: ./schemas/acpx_probe.yaml#/CustomProbeRequest
+    AcpxProbeRequest:
+      $ref: ./schemas/acpx_probe.yaml#/AcpxProbeRequest
+    AcpxProbeModel:
+      $ref: ./schemas/acpx_probe.yaml#/AcpxProbeModel
+    AcpxProbeReasoning:
+      $ref: ./schemas/acpx_probe.yaml#/AcpxProbeReasoning
+    AcpxProbeAgentInfo:
+      $ref: ./schemas/acpx_probe.yaml#/AcpxProbeAgentInfo
+    AcpxProbeError:
+      $ref: ./schemas/acpx_probe.yaml#/AcpxProbeError
+    AcpxProbeResult:
+      $ref: ./schemas/acpx_probe.yaml#/AcpxProbeResult
+    AcpxProbeWrapperError:
+      $ref: ./schemas/acpx_probe.yaml#/AcpxProbeWrapperError
+    Connector:
+      $ref: ./schemas/klavis.yaml#/Connector
+    ConnectorList:
+      $ref: ./schemas/klavis.yaml#/ConnectorList
+    ConnectorOAuthUrls:
+      $ref: ./schemas/klavis.yaml#/ConnectorOAuthUrls
+    UserIntegration:
+      $ref: ./schemas/klavis.yaml#/UserIntegration
+    UserIntegrationList:
+      $ref: ./schemas/klavis.yaml#/UserIntegrationList
+    ServerNameRequest:
+      $ref: ./schemas/klavis.yaml#/ServerNameRequest
+    SubmitApiKeyRequest:
+      $ref: ./schemas/klavis.yaml#/SubmitApiKeyRequest
+    ConnectorSuccess:
+      $ref: ./schemas/klavis.yaml#/ConnectorSuccess
+    AddConnectorResponse:
+      $ref: ./schemas/klavis.yaml#/AddConnectorResponse
+    OAuthDeviceCode:
+      $ref: ./schemas/oauth.yaml#/OAuthDeviceCode
+    OAuthTokenRequest:
+      $ref: ./schemas/oauth.yaml#/OAuthTokenRequest
+    OAuthTokenResponse:
+      $ref: ./schemas/oauth.yaml#/OAuthTokenResponse
+    OAuthStatus:
+      $ref: ./schemas/oauth.yaml#/OAuthStatus
+    McpTool:
+      $ref: ./schemas/mcp_manager.yaml#/McpTool
+    McpToolList:
+      $ref: ./schemas/mcp_manager.yaml#/McpToolList
+    McpAgent:
+      $ref: ./schemas/mcp_manager.yaml#/McpAgent
+    McpAgentList:
+      $ref: ./schemas/mcp_manager.yaml#/McpAgentList
+    McpInstallRequest:
+      $ref: ./schemas/mcp_manager.yaml#/McpInstallRequest
+    McpInstallResult:
+      $ref: ./schemas/mcp_manager.yaml#/McpInstallResult
+    McpStatus:
+      $ref: ./schemas/mcp.yaml#/McpStatus
+    KlavisError:
+      $ref: ./schemas/common.yaml#/KlavisError
+    McpManagerReadError:
+      $ref: ./schemas/common.yaml#/McpManagerReadError
+    AcpxInternalError:
+      $ref: ./schemas/common.yaml#/AcpxInternalError

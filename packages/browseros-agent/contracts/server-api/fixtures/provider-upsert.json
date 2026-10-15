@@ -1,0 +1,10 @@
+{
+  "type": "openai",
+  "name": "Contract fixture",
+  "modelId": "fixture-model",
+  "contextWindow": 128000,
+  "headers": {
+    "X-Contract": "fixture"
+  },
+  "apiKey": null
+}

@@ -1,0 +1,13 @@
+{
+  "type": "tool-input-start",
+  "toolCallId": "call-1",
+  "toolName": "snapshot",
+  "dynamic": true,
+  "toolMetadata": {
+    "clientName": "fixture",
+    "annotations": {
+      "readOnlyHint": true
+    }
+  },
+  "title": "Snapshot"
+}

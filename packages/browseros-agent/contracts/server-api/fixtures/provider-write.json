@@ -1,0 +1,29 @@
+{
+  "provider": {
+    "modelId": "fixture-model",
+    "reasoningEffort": null,
+    "baseUrl": null,
+    "resourceName": null,
+    "region": null,
+    "reasoningSummary": null,
+    "workingDirectory": null,
+    "customConfig": null,
+    "id": "fixture-provider",
+    "kind": "llm",
+    "type": "openai",
+    "name": "Contract fixture",
+    "isDefault": false,
+    "createdAt": 1792011600000,
+    "updatedAt": 1792011600000,
+    "headers": {
+      "X-Contract": "fixture"
+    },
+    "supportsImages": true,
+    "contextWindow": 128000,
+    "temperature": 0.2,
+    "apiKey": null,
+    "accessKeyId": null,
+    "secretAccessKey": null,
+    "sessionToken": null
+  }
+}

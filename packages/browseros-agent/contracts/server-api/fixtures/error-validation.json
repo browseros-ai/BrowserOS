@@ -1,0 +1,7 @@
+{
+  "success": false,
+  "error": {
+    "name": "ZodError",
+    "message": "[\n  {\"code\":\"invalid_type\",\"path\":[\"name\"],\"message\":\"Invalid input: expected string, received undefined\"}\n]"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "Fixture agent",
+  "type": "custom",
+  "customConfig": {
+    "command": "fixture-agent --acp",
+    "env": {
+      "FIXTURE": "1"
+    },
+    "fullAccessModes": ["full-access"],
+    "reasoningEffortKey": "effort",
+    "systemPromptAppend": "Be concise",
+    "icon": "bot"
+  }
+}

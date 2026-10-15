@@ -1,0 +1,5 @@
+{
+  "type": "custom",
+  "command": "fixture-agent --acp",
+  "timeoutMs": 1000
+}

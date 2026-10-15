@@ -1,0 +1,11 @@
+{
+  "name": "Fixture job",
+  "query": "Do nothing",
+  "scheduleType": "daily",
+  "scheduleTime": "09:00",
+  "scheduleInterval": null,
+  "enabled": false,
+  "providerId": null,
+  "lastRunAt": null,
+  "createdAt": 1792011600000
+}

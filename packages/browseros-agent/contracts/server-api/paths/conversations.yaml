@@ -1,0 +1,89 @@
+collection:
+  get:
+    operationId: listConversations
+    tags:
+      - conversations
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/conversations.yaml#/ConversationList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+detail:
+  get:
+    operationId: getConversation
+    tags:
+      - conversations
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/conversations.yaml#/ConversationResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/ConversationId
+  put:
+    operationId: importConversation
+    tags:
+      - conversations
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/conversations.yaml#/ImportConversationResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Insert-if-absent; never overwrites an existing conversation. Requires a loopback
+      trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/ConversationId
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/conversations.yaml#/ImportConversationRequest
+  delete:
+    operationId: deleteConversation
+    tags:
+      - conversations
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/SuccessResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/ConversationId

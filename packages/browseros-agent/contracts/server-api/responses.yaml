@@ -1,0 +1,31 @@
+Forbidden:
+  description: Origin guard returns nested HttpAgentErrorEnvelope; trusted-app guard returns {error:string}.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/ForbiddenError
+InternalError:
+  description: Unhandled errors, including malformed JSON on zValidator routes, return HTTP 500 (even
+    when nested statusCode differs).
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/ChatErrorEnvelope
+ValidationError:
+  description: Zod validation failure.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/ValidationError
+BadRequest:
+  description: Zod validation failure or route-specific {error:string}.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/BadRequestError
+NotFound:
+  description: Unknown resource.
+  content:
+    application/json:
+      schema:
+        $ref: ./schemas/common.yaml#/StringError

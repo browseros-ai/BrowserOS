@@ -1,0 +1,132 @@
+ToolCallExecution:
+  type: object
+  additionalProperties: true
+  properties:
+    id:
+      type: string
+    name:
+      type: string
+    input: {}
+    output: {}
+    error:
+      type: string
+    timestamp:
+      type: string
+  required:
+    - id
+    - name
+    - input
+    - timestamp
+UpsertScheduledJobRunRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    jobId:
+      type: string
+      minLength: 1
+    status:
+      type: string
+      enum:
+        - running
+        - completed
+        - failed
+    startedAt:
+      type: number
+    completedAt:
+      type: number
+      nullable: true
+    result:
+      type: string
+      nullable: true
+    finalResult:
+      type: string
+      nullable: true
+    executionLog:
+      type: string
+      nullable: true
+    toolCalls:
+      type: array
+      items:
+        $ref: "#/ToolCallExecution"
+      nullable: true
+    error:
+      type: string
+      nullable: true
+    createdAt:
+      type: number
+  required:
+    - jobId
+    - status
+    - startedAt
+ScheduledJobRun:
+  type: object
+  additionalProperties: false
+  properties:
+    jobId:
+      type: string
+      minLength: 1
+    status:
+      type: string
+      enum:
+        - running
+        - completed
+        - failed
+    startedAt:
+      type: number
+    completedAt:
+      type: number
+      nullable: true
+    result:
+      type: string
+      nullable: true
+    finalResult:
+      type: string
+      nullable: true
+    executionLog:
+      type: string
+      nullable: true
+    toolCalls:
+      type: array
+      items:
+        $ref: "#/ToolCallExecution"
+      nullable: true
+    error:
+      type: string
+      nullable: true
+    createdAt:
+      type: number
+    id:
+      type: string
+    updatedAt:
+      type: number
+  required:
+    - jobId
+    - status
+    - startedAt
+    - completedAt
+    - result
+    - finalResult
+    - executionLog
+    - toolCalls
+    - error
+    - createdAt
+    - id
+    - updatedAt
+ScheduledJobRunList:
+  type: object
+  additionalProperties: false
+  properties:
+    runs:
+      type: array
+      items:
+        $ref: "#/ScheduledJobRun"
+  required:
+    - runs
+ScheduledJobRunResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    run:
+      $ref: "#/ScheduledJobRun"
+  required:
+    - run

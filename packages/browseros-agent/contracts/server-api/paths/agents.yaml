@@ -1,0 +1,115 @@
+collection:
+  get:
+    operationId: listAgents
+    tags:
+      - agents
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/agents.yaml#/AgentList
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+  post:
+    operationId: createAgent
+    tags:
+      - agents
+    responses:
+      "201":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/agents.yaml#/AgentResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/agents.yaml#/CreateAgentRequest
+detail:
+  get:
+    operationId: getAgent
+    tags:
+      - agents
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/agents.yaml#/AgentResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/AgentId
+  put:
+    operationId: updateAgent
+    tags:
+      - agents
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/agents.yaml#/AgentResponse
+      "400":
+        $ref: ../responses.yaml#/BadRequest
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Refreshes running ACP sessions after the update; refresh failures are logged. Requires
+      a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/AgentId
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/agents.yaml#/UpdateAgentRequest
+  delete:
+    operationId: deleteAgent
+    tags:
+      - agents
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/SuccessResponse
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "404":
+        $ref: ../responses.yaml#/NotFound
+      "500":
+        $ref: ../responses.yaml#/InternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    parameters:
+      - $ref: ../parameters.yaml#/AgentId

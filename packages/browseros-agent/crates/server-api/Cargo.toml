@@ -1,0 +1,18 @@
+[package]
+name = "server-api"
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_repr.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+# Generated nullish request fields distinguish omitted, null and a value.
+serde_with = { version = "3.24", default-features = false }
+
+[lints]
+workspace = true

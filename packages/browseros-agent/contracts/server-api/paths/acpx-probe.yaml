@@ -1,0 +1,29 @@
+probe:
+  post:
+    operationId: probeAcpx
+    tags:
+      - acpx-probe
+    responses:
+      "200":
+        description: Success
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/acpx_probe.yaml#/AcpxProbeResult
+      "400":
+        $ref: ../responses.yaml#/ValidationError
+      "403":
+        $ref: ../responses.yaml#/Forbidden
+      "500":
+        description: Wrapper crash or unhandled error
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/AcpxInternalError
+    description: Requires a loopback trusted-app request; mutations require an allowed Origin header.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/acpx_probe.yaml#/AcpxProbeRequest

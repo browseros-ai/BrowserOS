@@ -1,0 +1,127 @@
+Connector:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+    description:
+      type: string
+  required:
+    - name
+    - description
+ConnectorList:
+  type: object
+  additionalProperties: false
+  properties:
+    servers:
+      type: array
+      items:
+        $ref: "#/Connector"
+    count:
+      type: number
+  required:
+    - servers
+    - count
+ConnectorOAuthUrls:
+  type: object
+  additionalProperties: false
+  properties:
+    oauthUrls:
+      type: object
+      additionalProperties:
+        type: string
+    servers:
+      type: array
+      items:
+        type: string
+  required:
+    - oauthUrls
+    - servers
+UserIntegration:
+  type: object
+  additionalProperties: false
+  properties:
+    name:
+      type: string
+    is_authenticated:
+      type: boolean
+  required:
+    - name
+    - is_authenticated
+UserIntegrationList:
+  type: object
+  additionalProperties: false
+  properties:
+    integrations:
+      type: array
+      items:
+        $ref: "#/UserIntegration"
+    count:
+      type: number
+  required:
+    - integrations
+    - count
+ServerNameRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    serverName:
+      type: string
+      minLength: 1
+  required:
+    - serverName
+SubmitApiKeyRequest:
+  type: object
+  additionalProperties: true
+  properties:
+    serverName:
+      type: string
+      minLength: 1
+    apiKey:
+      type: string
+      minLength: 1
+    apiKeyUrl:
+      type: string
+      format: uri
+  required:
+    - serverName
+    - apiKey
+    - apiKeyUrl
+ConnectorSuccess:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - true
+    serverName:
+      type: string
+  required:
+    - success
+    - serverName
+AddConnectorResponse:
+  type: object
+  additionalProperties: false
+  properties:
+    success:
+      type: boolean
+      enum:
+        - true
+    serverName:
+      type: string
+    strataId:
+      type: string
+    addedServers:
+      type: array
+      items:
+        type: string
+    oauthUrl:
+      type: string
+    apiKeyUrl:
+      type: string
+  required:
+    - success
+    - serverName
+    - strataId
+    - addedServers
