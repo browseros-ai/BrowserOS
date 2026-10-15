@@ -1,6 +1,6 @@
 //! Local server discovery is published only after bind and removed only while the
 //! publication still belongs to this process. Keep the deployed JSON shape free of
-//! internal ownership markers; ownership uses the exact bytes this handle published.
+//! internal ownership markers; ownership uses file identity and the published bytes.
 
 use crate::{VERSION, config::Config, identity::Identity};
 use serde_json::{Value, json};
@@ -8,13 +8,20 @@ use std::{
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
+use tokio::io::AsyncWriteExt;
+
+#[derive(Debug, Clone)]
+struct Publication {
+    bytes: Vec<u8>,
+    metadata: std::fs::Metadata,
+}
 
 /// All clones share one publication token so cleanup cannot remove a replacement.
 #[derive(Debug, Clone)]
 pub struct ServerFile {
     path: PathBuf,
     metadata: Value,
-    published: Arc<Mutex<Option<Vec<u8>>>>,
+    published: Arc<Mutex<Option<Publication>>>,
 }
 impl ServerFile {
     pub fn new(browseros_dir: &Path) -> Self {
@@ -45,9 +52,32 @@ impl ServerFile {
         metadata["url"] = json!(format!("http://127.0.0.1:{port}"));
         let mut bytes = serde_json::to_vec_pretty(&metadata).map_err(std::io::Error::other)?;
         bytes.push(b'\n');
-        tokio::fs::write(&self.path, &bytes).await?;
+        // Rename a complete, uniquely owned inode into place. A restarted server
+        // may publish identical JSON on the same port; bytes alone cannot tell it
+        // apart from the old process during late shutdown cleanup.
+        let temporary = self.path.with_file_name(format!(
+            ".server.json.{}.{}.tmp",
+            std::process::id(),
+            uuid::Uuid::new_v4()
+        ));
+        let result = async {
+            let mut file = tokio::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&temporary)
+                .await?;
+            file.write_all(&bytes).await?;
+            file.flush().await?;
+            let metadata = file.metadata().await?;
+            drop(file);
+            tokio::fs::rename(&temporary, &self.path).await?;
+            Ok::<_, std::io::Error>(metadata)
+        }
+        .await;
+        let _ = tokio::fs::remove_file(&temporary).await;
+        let metadata = result?;
         if let Ok(mut published) = self.published.lock() {
-            *published = Some(bytes);
+            *published = Some(Publication { bytes, metadata });
         }
         Ok(())
     }
@@ -58,9 +88,29 @@ impl ServerFile {
             .ok()
             .and_then(|mut value| value.take());
         if let Some(published) = published
-            && tokio::fs::read(&self.path).await.ok().as_ref() == Some(&published)
+            && tokio::fs::read(&self.path).await.ok().as_ref() == Some(&published.bytes)
+            && let Ok(current) = tokio::fs::symlink_metadata(&self.path).await
+            && same_publication(&current, &published.metadata)
         {
             let _ = tokio::fs::remove_file(&self.path).await;
         }
+    }
+}
+
+fn same_publication(current: &std::fs::Metadata, published: &std::fs::Metadata) -> bool {
+    if current.file_type().is_symlink()
+        || current.len() != published.len()
+        || current.modified().ok() != published.modified().ok()
+    {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        current.dev() == published.dev() && current.ino() == published.ino()
+    }
+    #[cfg(not(unix))]
+    {
+        current.created().ok() == published.created().ok()
     }
 }

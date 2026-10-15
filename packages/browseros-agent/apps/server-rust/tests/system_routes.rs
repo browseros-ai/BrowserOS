@@ -139,6 +139,15 @@ async fn discovery_shape_and_cleanup_ownership() -> Result {
         "must not remove another process's discovery"
     );
     publication.write(config.server_port).await?;
+    let replacement = publication.path().with_file_name("replacement.json");
+    std::fs::copy(publication.path(), &replacement)?;
+    std::fs::rename(&replacement, publication.path())?;
+    publication.remove().await;
+    assert!(
+        publication.path().exists(),
+        "identical bytes from another publisher still belong to it"
+    );
+    publication.write(config.server_port).await?;
     publication.remove().await;
     assert!(!publication.path().exists());
     Ok(())
@@ -181,6 +190,16 @@ async fn private_paths_reject_symlinks_and_leave_unrelated_state_alone() -> Resu
     assert!(!legacy.exists());
     assert!(foreign.join("keep").exists());
     assert!(root.join("sessions/link").is_symlink());
+    std::fs::rename(root.join("sessions"), root.join("sessions-original"))?;
+    symlink(&foreign, root.join("sessions"))?;
+    let foreign_old = foreign.join("old");
+    std::fs::create_dir(&foreign_old)?;
+    std::fs::File::open(&foreign_old)?.set_times(std::fs::FileTimes::new().set_modified(old))?;
+    paths.prepare().await?;
+    assert!(
+        foreign_old.exists(),
+        "a symlinked sessions root does not transfer ownership"
+    );
     std::fs::remove_dir(&paths.tool_output_dir)?;
     symlink(&foreign, &paths.tool_output_dir)?;
     assert!(paths.prepare().await.is_err());

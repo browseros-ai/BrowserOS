@@ -86,6 +86,15 @@ impl BrowserosPaths {
             )
             .await?;
         }
+        // A configured product root can contain a user-owned sessions symlink.
+        // Pruning below that link would claim files outside the legacy store.
+        if tokio::fs::symlink_metadata(&sessions)
+            .await?
+            .file_type()
+            .is_symlink()
+        {
+            return Ok(());
+        }
         let cutoff = std::time::SystemTime::now()
             .checked_sub(std::time::Duration::from_secs(30 * 24 * 60 * 60));
         if let Ok(mut entries) = tokio::fs::read_dir(&sessions).await {
