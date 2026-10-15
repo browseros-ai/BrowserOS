@@ -8,6 +8,7 @@ import platform
 import re
 import shutil
 import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import AbstractSet, Callable, Mapping, Optional
@@ -117,6 +118,8 @@ def server_build_command(
     target_id: str,
     agent_root: Path,
     cargo_target_dir: Path,
+    *,
+    server_runtime: str = "ts",
 ) -> tuple[tuple[str, ...], Path]:
     """Return the source builder command and its expected output."""
     try:
@@ -124,6 +127,15 @@ def server_build_command(
     except KeyError as exc:
         raise ValueError(f"Unknown server target {target_id}") from exc
     bundle = _server_bundle(product)
+    if product == "browseros" and server_runtime == "rust":
+        # Reuse the complete manifest stager so ACP's target-specific Bun is kept.
+        return (
+            (
+                "bun", "scripts/build/server-rust.ts",
+                f"--target={target.id}", "--no-upload",
+            ),
+            agent_root / "dist/prod/server-rust" / target.id,
+        )
     if bundle.source_builder == "bun":
         return (
             (
@@ -135,8 +147,12 @@ def server_build_command(
             agent_root / "dist/prod/server" / target.id,
         )
     suffix = ".exe" if target.os == "windows" else ""
+    cargo_package, cargo_binary = {
+        "browserclaw": ("claw-server", "browseros-claw-server-rs"),
+        "browseros": ("server-rust", "browseros-server-rs"),
+    }[product]
     binary = cargo_target_dir / target.cargo_triple / "release" / (
-        f"browseros-claw-server-rs{suffix}"
+        f"{cargo_binary}{suffix}"
     )
     return (
         (
@@ -145,9 +161,9 @@ def server_build_command(
             "--release",
             "--locked",
             "-p",
-            "claw-server",
+            cargo_package,
             "--bin",
-            "browseros-claw-server-rs",
+            cargo_binary,
             "--target",
             target.cargo_triple,
             "--manifest-path",
@@ -273,7 +289,11 @@ class ServerResourceBuilder:
         which: Which = shutil.which,
         rust_targets: RustTargets = _default_rust_targets,
         cargo_target_dir: Optional[Path] = None,
+        server_runtime: str = "ts",
     ) -> None:
+        if server_runtime not in {"ts", "rust"}:
+            raise ValueError(f"Unknown server runtime {server_runtime}")
+        self.server_runtime = server_runtime
         self.repo_root = repo_root.resolve()
         self.agent_root = self.repo_root / "packages/browseros-agent"
         self.browseros_root = self.repo_root / "packages/browseros"
@@ -287,6 +307,13 @@ class ServerResourceBuilder:
 
     def _preflight(self, product: str, target: ServerTarget) -> ServerBundle:
         bundle = _server_bundle(product)
+        if product == "browseros" and self.server_runtime == "rust":
+            # The shared local cross-compiler currently requires a macOS host.
+            if self.host_platform != "macos":
+                raise RuntimeError("The local BrowserOS Rust packager requires macOS")
+            for prerequisite in ("cargo", "rustup"):
+                if self.which(prerequisite) is None:
+                    raise RuntimeError(f"Cannot build {target.id}: install {prerequisite}")
         tool = "bun" if bundle.source_builder == "bun" else "cargo"
         if bundle.source_builder == "cargo" and self.host_platform != target.os:
             raise RuntimeError(
@@ -338,10 +365,14 @@ class ServerResourceBuilder:
         normalized_version = normalize_component_version(
             source.server_component, version
         )
-        source_version = read_component_version(
-            self.agent_root.parent.parent,
-            source.server_component,
-        )
+        if product == "browseros" and self.server_runtime == "rust":
+            manifest = self.agent_root / "apps/server-rust/Cargo.toml"
+            source_version = tomllib.loads(manifest.read_text())["package"]["version"]
+        else:
+            source_version = read_component_version(
+                self.agent_root.parent.parent,
+                source.server_component,
+            )
         if source_version != normalized_version:
             raise ValueError(
                 f"Server source version {source_version} does not match "
@@ -352,7 +383,8 @@ class ServerResourceBuilder:
             shutil.rmtree(destination)
 
         command, artifact = server_build_command(
-            product, target, self.agent_root, self.cargo_target_dir
+            product, target, self.agent_root, self.cargo_target_dir,
+            server_runtime=self.server_runtime,
         )
         environment = {**os.environ, "CARGO_TARGET_DIR": str(self.cargo_target_dir)}
         self.run(command, self.agent_root, environment)

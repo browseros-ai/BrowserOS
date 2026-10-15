@@ -66,6 +66,26 @@ class ServerTargetTest(unittest.TestCase):
                 )
                 self.assertEqual(artifact, root / "dist/prod/server" / target)
 
+    def test_browseros_rust_runtime_is_opt_in(self) -> None:
+        # The Rust server is selected only when the caller asks for it; the TS
+        # builder stays the default (see the test above).
+        root = Path("/repo/packages/browseros-agent")
+        for target in ("linux-x64", "windows-x64", "darwin-arm64"):
+            with self.subTest(target=target):
+                command, artifact = server_build_command(
+                    "browseros", target, root, root / "target", server_runtime="rust"
+                )
+                self.assertEqual(
+                    command,
+                    (
+                        "bun",
+                        "scripts/build/server-rust.ts",
+                        f"--target={target}",
+                        "--no-upload",
+                    ),
+                )
+                self.assertEqual(artifact, root / "dist/prod/server-rust" / target)
+
     def test_browserclaw_maps_targets_to_cargo_triples_and_runtime_names(self) -> None:
         root = Path("/repo/packages/browseros-agent")
         target_root = root / "target"
