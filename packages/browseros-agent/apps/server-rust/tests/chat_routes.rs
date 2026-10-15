@@ -181,7 +181,6 @@ async fn harness_with(
         oauth: token_manager(dir.path()).await?,
         tabs: None,
         use_mock_llm: false,
-        telemetry: server_rust::chat::ChatTelemetry::default(),
     });
     Ok(Harness {
         chat,
@@ -1120,7 +1119,6 @@ async fn db_records_classify_acp_rows_and_persist_through_the_conversation_store
         oauth: token_manager(dir.path()).await?,
         tabs: None,
         use_mock_llm: false,
-        telemetry: server_rust::chat::ChatTelemetry::default(),
     });
     let router = Router::new()
         .route("/chat", post(chat::post_chat))

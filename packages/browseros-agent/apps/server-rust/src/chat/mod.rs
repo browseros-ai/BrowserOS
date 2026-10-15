@@ -46,7 +46,6 @@ use crate::{
     },
     http::security::RequestTrust,
     oauth::TokenManager,
-    telemetry::{metrics::Metrics, sentry::SentryGuard},
 };
 use browseros_agent::{
     llm::{ChatError, ChatErrorCode},
@@ -168,15 +167,6 @@ pub struct ChatDeps {
     pub tabs: Option<Arc<dyn TabResolver>>,
     /// `BROWSEROS_USE_MOCK_LLM=true`: no credential resolution (the engine swaps in the mock).
     pub use_mock_llm: bool,
-    pub telemetry: ChatTelemetry,
-}
-
-/// The process's telemetry sinks as the chat owner uses them (`Default` = both disabled, for
-/// tests). Clones of the composition root's handles, never fresh clients.
-#[derive(Clone, Default)]
-pub struct ChatTelemetry {
-    pub metrics: Metrics,
-    pub sentry: Arc<SentryGuard>,
 }
 
 pub struct ChatService {
@@ -188,7 +178,6 @@ pub struct ChatService {
     oauth: Arc<TokenManager>,
     tabs: Option<Arc<dyn TabResolver>>,
     use_mock_llm: bool,
-    telemetry: ChatTelemetry,
     /// conversation → ACP agent, for every conversation that ran an ACP turn in this process
     /// (TS `acpConversationAgents`): DELETE needs the trusted-app check only for these.
     acp_conversations: Arc<Mutex<HashMap<Uuid, Uuid>>>,
@@ -211,7 +200,6 @@ impl ChatService {
             oauth: deps.oauth,
             tabs: deps.tabs,
             use_mock_llm: deps.use_mock_llm,
-            telemetry: deps.telemetry,
             acp_conversations: Arc::new(Mutex::new(HashMap::new())),
         })
     }
@@ -267,21 +255,6 @@ impl ChatService {
             }
         };
 
-        // TS logs `chat.request` once the body is parsed and hydrated, before the run is
-        // registered: a 409 retry is still a request. `model` is omitted, not null, when absent.
-        let (provider, model) = match &plan {
-            Plan::BrowserOs(hydrated) => {
-                (hydrated.provider.as_str(), hydrated.inline.model.clone())
-            }
-            Plan::Acp { kind, .. } => (kind.as_str(), None),
-        };
-        let mut properties = serde_json::json!({ "provider": provider });
-        if let Some(model) = model {
-            properties["model"] = serde_json::Value::String(model);
-        }
-        self.telemetry.metrics.capture("chat.request", properties);
-        let scheduled = input.is_scheduled_task;
-
         let presentation = RunPresentation {
             panel_tab_ids: active_tab_id(input.browser_context.as_ref())
                 .into_iter()
@@ -290,19 +263,9 @@ impl ChatService {
             tab_group: (!input.is_scheduled_task).then(|| tab_group(&message, &plan)),
         };
         let prepare = self.prepare(conversation_id, message, plan, Arc::new(input));
-        let started = self
-            .runs
+        self.runs
             .start(conversation_id, presentation, prepare)
-            .await;
-        // TS tags the request scope `request-type=schedule` and its error handler captures the
-        // unhandled (500) failures; a scheduled turn has no user watching, so this is its only
-        // report. Interactive turns and 4xx rejections are not captured (P13's Sentry scope).
-        if let (true, Err(ChatRejection::Internal(error))) = (scheduled, &started) {
-            self.telemetry
-                .sentry
-                .capture_scheduled_error(&error.message);
-        }
-        started?;
+            .await?;
         Ok(match self.runs.subscribe(conversation_id, None) {
             Resume::Stream(chunks) => chunks,
             // Deleted between registration and here: an empty stream (`[DONE]` only).

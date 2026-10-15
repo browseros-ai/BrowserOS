@@ -7,7 +7,7 @@
 use crate::{
     activity::ServerActivity,
     chat::DbChatRecords,
-    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ChatTelemetry, ConversationRuns},
+    chat::{AcpEngine, BrowserOsEngine, ChatDeps, ChatService, ConversationRuns},
     chat::{BrowserOsEngineDeps, NoBrowser, RegistryLeases, klavis_state_name, production_models},
     config::Config,
     db::{self, Database},
@@ -57,8 +57,7 @@ pub struct AppInner {
     /// Concrete (not `dyn ChatEngine`): `/agents` needs `close_all_for_agent`.
     pub acp: Arc<AcpEngine>,
     pub http: HttpStack,
-    /// PostHog sink (disabled without an install id or a build-time key). Cloned into the chat
-    /// owner for `chat.request`; flushed by `stop`.
+    /// PostHog sink (disabled without an install id or a build-time key); flushed by `stop`.
     pub metrics: Metrics,
     /// The process root's one Sentry client. Shared, never re-initialized here, so startup and
     /// scheduled-turn captures go through the same redacting client the panic hook uses.
@@ -172,10 +171,6 @@ impl AppState {
             oauth: oauth.clone(),
             tabs: None,
             use_mock_llm: config.env.use_mock_llm,
-            telemetry: ChatTelemetry {
-                metrics: metrics.clone(),
-                sentry: sentry.clone(),
-            },
         });
 
         Ok(Self(Arc::new(AppInner {
