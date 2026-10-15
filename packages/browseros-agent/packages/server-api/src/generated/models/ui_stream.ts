@@ -108,7 +108,7 @@ export interface UiDataChunk {
    * @type {boolean}
    * @memberof UiDataChunk
    */
-  _transient?: boolean
+  transient?: boolean
 }
 
 /**

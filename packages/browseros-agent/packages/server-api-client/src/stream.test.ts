@@ -2,6 +2,7 @@
 import { expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import type { UiDataChunk } from '@browseros/server-api'
 import manifest from '../../../contracts/server-api/fixtures/manifest.json'
 import examples from '../../../contracts/server-api/tests/ui-stream-examples.json'
 import { ServerApiError } from './errors'
@@ -28,6 +29,17 @@ function response(bytes: Uint8Array[], cancel?: () => void): Response {
 }
 const encoder = new TextEncoder()
 const { additionalChunks, malformedChunks } = examples
+
+test('tests that generated data chunks expose the typed wire transient field', () => {
+  const chunk: UiDataChunk = {
+    type: 'data-progress',
+    data: null,
+    transient: true,
+  }
+  const transient: boolean | undefined = chunk.transient
+  expect(transient).toBe(true)
+})
+
 const chunks = manifest
   .filter((item) => item.schema === 'UiMessageChunk')
   .map((item) =>

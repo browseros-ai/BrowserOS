@@ -497,6 +497,10 @@ import type { {{{.}}} } from './{{.}}{{importFileExtension}}';
     '/out/typescript',
     '--global-property',
     'models,modelDocs=false,modelTests=false',
+    // The upstream reserved-word list escapes this SDK field to _transient.
+    // These models are the wire payloads, so preserve its real property name.
+    '--reserved-words-mappings',
+    'transient=transient',
     '--additional-properties',
     'supportsES6=true,typescriptThreePlus=true,importFileExtension=,disallowAdditionalPropertiesIfNotPresent=false',
   ])
