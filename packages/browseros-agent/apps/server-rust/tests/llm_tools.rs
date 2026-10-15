@@ -226,7 +226,7 @@ async fn provider_deadline_bounds_a_stalled_stream() -> TestResult {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         body["message"],
-        "[openai-compatible] The operation was aborted due to timeout"
+        "[openai-compatible] The operation timed out."
     );
     assert!(body["responseTime"].as_u64().is_some_and(|ms| ms >= 14_900));
     Ok(())

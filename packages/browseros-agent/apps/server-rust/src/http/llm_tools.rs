@@ -36,9 +36,7 @@ pub async fn test_provider(
         }
     }
 
-    // The deadline covers OAuth resolution and the entire text stream, including a stalled
-    // provider. Dropping the generation future closes the HTTP body; cancellation also reaches
-    // adapters that keep a stream task alive beyond that future.
+    // Elapsed time includes credential/model resolution, just like testProviderConnection.
     let start = std::time::Instant::now();
     let result = generate(&state, config.clone(), None, TEST_PROMPT, TEST_TIMEOUT).await;
     let response_time = (start.elapsed().as_secs_f64() * 1000.0).round() as u64;
@@ -162,10 +160,11 @@ async fn resolve_refine_provider(
         }
         // The stores split LLM and ACP rows. An explicitly named coding agent must fail,
         // whereas a coding-agent default is allowed to fall back to the first LLM row.
-        if let Ok(id) = Uuid::parse_str(id)
+        if let Ok(agent_id) = Uuid::parse_str(id)
+            && agent_id.to_string() == id
             && state
                 .agents
-                .get(id)
+                .get(agent_id)
                 .await
                 .map_err(|e| internal_error(&e.to_string()))?
                 .is_some()
@@ -297,34 +296,38 @@ async fn generate(
     prompt: &str,
     timeout: Duration,
 ) -> Result<String, String> {
-    let cancel = CancellationToken::new();
-    let operation = async {
-        let model: Arc<dyn LanguageModel> = if state.config.env.use_mock_llm {
-            // Mock resolution precedes OAuth, matching TS: the compatibility harness needs
-            // neither a vendor key nor a logged-in subscription to exercise these routes.
-            Arc::new(ScriptedModel::mock())
-        } else {
-            if let Ok(provider) = config.provider.as_str().parse::<OAuthProvider>() {
-                let credentials = state
-                    .oauth
-                    .credentials(provider)
-                    .await
-                    .map_err(|e| e.to_string())?;
-                config.api_key = Some(credentials.access_token);
-                if provider == OAuthProvider::ChatGptPro {
-                    config.account_id = credentials.account_id;
-                    config.upstream_provider = Some("openai".to_owned());
-                }
+    let model: Arc<dyn LanguageModel> = if state.config.env.use_mock_llm {
+        // Mock resolution precedes OAuth, matching TS: the compatibility harness needs
+        // neither a vendor key nor a logged-in subscription to exercise these routes.
+        Arc::new(ScriptedModel::mock())
+    } else {
+        if let Ok(provider) = config.provider.as_str().parse::<OAuthProvider>() {
+            let credentials = state
+                .oauth
+                .credentials(provider)
+                .await
+                .map_err(|e| e.to_string())?;
+            config.api_key = Some(credentials.access_token);
+            if provider == OAuthProvider::ChatGptPro {
+                config.account_id = credentials.account_id;
+                config.upstream_provider = Some("openai".to_owned());
             }
-            llm::create_language_model(&config, &state.http).map_err(|e| e.to_string())?
-        };
-        llm::generate_text(model.as_ref(), system, prompt, cancel.clone())
-            .await
-            .map_err(|e| e.to_string())
+        }
+        llm::create_language_model(&config, &state.http).map_err(|e| e.to_string())?
     };
-    let result = tokio::time::timeout(timeout, operation).await;
+    // TS creates AbortSignal.timeout only after resolving OAuth and creating the model.
+    // Dropping generation closes the response body; cancellation also reaches adapters
+    // that keep a stream task alive beyond that future.
+    let cancel = CancellationToken::new();
+    let result = tokio::time::timeout(
+        timeout,
+        llm::generate_text(model.as_ref(), system, prompt, cancel.clone()),
+    )
+    .await;
     cancel.cancel();
-    result.unwrap_or_else(|_| Err("The operation was aborted due to timeout".to_owned()))
+    result
+        .map_err(|_| "The operation timed out.".to_owned())?
+        .map_err(|error| error.to_string())
 }
 
 fn string<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
