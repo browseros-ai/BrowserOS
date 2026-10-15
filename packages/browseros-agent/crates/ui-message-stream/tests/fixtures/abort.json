@@ -1,0 +1,50 @@
+{
+  "snapshots": [
+    { "id": "", "role": "assistant", "parts": [] },
+    { "id": "", "role": "assistant", "parts": [{ "type": "step-start" }] },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        { "type": "text", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "line 1\n\"quotes\" \\ café 🙂",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "line 1\n\"quotes\" \\ café 🙂",
+          "state": "streaming"
+        }
+      ]
+    }
+  ],
+  "message": {
+    "id": "",
+    "role": "assistant",
+    "parts": [
+      { "type": "step-start" },
+      {
+        "type": "text",
+        "text": "line 1\n\"quotes\" \\ café 🙂",
+        "state": "streaming"
+      }
+    ]
+  }
+}

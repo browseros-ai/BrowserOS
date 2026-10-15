@@ -1,0 +1,2495 @@
+{
+  "snapshots": [
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": []
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [{ "type": "step-start" }]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "",
+          "providerMetadata": { "z": { "b": 2, "a": 1 } },
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "",
+          "providerMetadata": { "z": { "b": 2, "a": 1 } },
+          "state": "streaming"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "",
+          "providerMetadata": { "z": { "b": 2, "a": 1 } },
+          "state": "streaming"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "",
+          "providerMetadata": { "z": { "b": 2, "a": 1 } },
+          "state": "streaming"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "",
+          "state": "streaming"
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "streaming"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "",
+          "state": "streaming"
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "",
+          "state": "streaming"
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "streaming"
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": { "z": 1, "a": null },
+          "transient": false
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        { "type": "data-progress", "id": "n", "data": null, "transient": false }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        { "type": "data-progress", "id": "n", "data": null, "transient": false }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "input-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "callProviderMetadata": { "p": { "call": true } }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "approval-requested",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "callProviderMetadata": { "p": { "call": true } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig"
+          }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "approval-responded",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-denied",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-denied",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          }
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-denied",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          }
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": null,
+          "providerExecuted": true,
+          "preliminary": true,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": true } }
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-error",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "errorText": "failed",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-error",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "errorText": "failed",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        {
+          "type": "tool-new",
+          "toolCallId": "c",
+          "state": "input-available",
+          "input": null
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-error",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "errorText": "failed",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        {
+          "type": "tool-new",
+          "toolCallId": "c",
+          "state": "output-available",
+          "input": null,
+          "output": 0
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-error",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "errorText": "failed",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        {
+          "type": "tool-new",
+          "toolCallId": "c",
+          "state": "output-available",
+          "input": null,
+          "output": 0
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "t",
+          "toolCallId": "reset",
+          "state": "input-streaming"
+        }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-error",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "errorText": "failed",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        {
+          "type": "tool-new",
+          "toolCallId": "c",
+          "state": "output-available",
+          "input": null,
+          "output": 0
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "t",
+          "toolCallId": "reset",
+          "state": "input-streaming"
+        },
+        { "type": "text", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-error",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "errorText": "failed",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        {
+          "type": "tool-new",
+          "toolCallId": "c",
+          "state": "output-available",
+          "input": null,
+          "output": 0
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "t",
+          "toolCallId": "reset",
+          "state": "input-streaming"
+        },
+        { "type": "text", "text": "discard", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-error",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "errorText": "failed",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "kept", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1 }, "a": [1, 2] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "kept", "state": "done" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1, "third": 3 }, "a": [3] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "kept", "state": "done" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1, "third": 3 }, "a": [3] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "kept", "state": "done" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": 2, "first": 1, "third": 3 }, "a": [3] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "kept", "state": "done" }
+      ]
+    },
+    {
+      "id": "extensions",
+      "metadata": { "z": { "second": null, "first": 1, "third": 3 }, "a": [3] },
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "text",
+          "text": "overlap",
+          "providerMetadata": { "a": { "c": true } },
+          "state": "done"
+        },
+        {
+          "type": "reasoning",
+          "id": "shared",
+          "text": "thought",
+          "providerMetadata": { "p": { "sig": "s" } },
+          "state": "done"
+        },
+        { "type": "step-start" },
+        {
+          "type": "source-url",
+          "sourceId": "s",
+          "url": "https://example.com",
+          "title": "Source",
+          "providerMetadata": { "p": { "z": 1 } }
+        },
+        {
+          "type": "source-document",
+          "sourceId": "doc",
+          "mediaType": "application/pdf",
+          "title": "Doc",
+          "filename": "doc.pdf"
+        },
+        {
+          "type": "file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA=="
+        },
+        {
+          "type": "reasoning-file",
+          "mediaType": "image/png",
+          "url": "data:image/png;base64,AA==",
+          "providerMetadata": { "google": { "thoughtSignature": "s" } }
+        },
+        {
+          "type": "custom",
+          "kind": "google.search",
+          "providerMetadata": { "google": { "q": "hi" } }
+        },
+        {
+          "type": "data-progress",
+          "id": "n",
+          "data": null,
+          "transient": false
+        },
+        { "type": "data-progress", "data": [false, "anonymous"] },
+        {
+          "type": "tool-run",
+          "toolCallId": "c",
+          "state": "output-available",
+          "title": "Run",
+          "input": { "z": 1, "a": 2 },
+          "output": "earlier-step",
+          "providerExecuted": false,
+          "callProviderMetadata": { "p": { "approved": false } },
+          "approval": {
+            "id": "ap",
+            "descriptor": { "action": "write" },
+            "inputSchemaInput": null,
+            "requestReason": "Confirm",
+            "isAutomatic": true,
+            "signature": "sig",
+            "approved": false,
+            "reason": "Denied"
+          },
+          "resultProviderMetadata": { "p": { "result": false } }
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "kept", "state": "done" }
+      ]
+    }
+  ],
+  "message": {
+    "id": "extensions",
+    "metadata": { "z": { "second": null, "first": 1, "third": 3 }, "a": [3] },
+    "role": "assistant",
+    "parts": [
+      { "type": "step-start" },
+      {
+        "type": "text",
+        "text": "overlap",
+        "providerMetadata": { "a": { "c": true } },
+        "state": "done"
+      },
+      {
+        "type": "reasoning",
+        "id": "shared",
+        "text": "thought",
+        "providerMetadata": { "p": { "sig": "s" } },
+        "state": "done"
+      },
+      { "type": "step-start" },
+      {
+        "type": "source-url",
+        "sourceId": "s",
+        "url": "https://example.com",
+        "title": "Source",
+        "providerMetadata": { "p": { "z": 1 } }
+      },
+      {
+        "type": "source-document",
+        "sourceId": "doc",
+        "mediaType": "application/pdf",
+        "title": "Doc",
+        "filename": "doc.pdf"
+      },
+      {
+        "type": "file",
+        "mediaType": "image/png",
+        "url": "data:image/png;base64,AA=="
+      },
+      {
+        "type": "reasoning-file",
+        "mediaType": "image/png",
+        "url": "data:image/png;base64,AA==",
+        "providerMetadata": { "google": { "thoughtSignature": "s" } }
+      },
+      {
+        "type": "custom",
+        "kind": "google.search",
+        "providerMetadata": { "google": { "q": "hi" } }
+      },
+      { "type": "data-progress", "id": "n", "data": null, "transient": false },
+      { "type": "data-progress", "data": [false, "anonymous"] },
+      {
+        "type": "tool-run",
+        "toolCallId": "c",
+        "state": "output-available",
+        "title": "Run",
+        "input": { "z": 1, "a": 2 },
+        "output": "earlier-step",
+        "providerExecuted": false,
+        "callProviderMetadata": { "p": { "approved": false } },
+        "approval": {
+          "id": "ap",
+          "descriptor": { "action": "write" },
+          "inputSchemaInput": null,
+          "requestReason": "Confirm",
+          "isAutomatic": true,
+          "signature": "sig",
+          "approved": false,
+          "reason": "Denied"
+        },
+        "resultProviderMetadata": { "p": { "result": false } }
+      },
+      { "type": "step-start" },
+      { "type": "text", "text": "kept", "state": "done" }
+    ]
+  }
+}

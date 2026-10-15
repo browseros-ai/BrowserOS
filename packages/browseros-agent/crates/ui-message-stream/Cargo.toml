@@ -10,11 +10,14 @@ repository.workspace = true
 bytes.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
+ryu-js = "1.0.3"
 serde.workspace = true
-serde_json.workspace = true
+# Opaque provider/tool JSON keeps JS object insertion order for byte-identical SSE.
+serde_json = { workspace = true, features = ["preserve_order"] }
 thiserror.workspace = true
 
 [dev-dependencies]
+server-api.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
 
 [lints]

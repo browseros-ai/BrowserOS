@@ -1,0 +1,84 @@
+data: {"type":"start","messageMetadata":{"z":{"second":2,"first":1},"a":[1,2]},"messageId":"extensions"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"shared","providerMetadata":{"z":{"b":2,"a":1}}}
+
+data: {"type":"reasoning-start","id":"shared"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-delta","id":"shared","delta":"overlap","providerMetadata":{"a":{"c":true}}}
+
+data: {"type":"text-end","id":"shared"}
+
+data: {"type":"reasoning-delta","id":"shared","delta":"thought","providerMetadata":{"p":{"sig":"s"}}}
+
+data: {"type":"reasoning-end","id":"shared"}
+
+data: {"type":"source-url","sourceId":"s","url":"https://example.com","title":"Source","providerMetadata":{"p":{"z":1}}}
+
+data: {"type":"source-document","sourceId":"doc","mediaType":"application/pdf","title":"Doc","filename":"doc.pdf"}
+
+data: {"type":"file","mediaType":"image/png","url":"data:image/png;base64,AA=="}
+
+data: {"type":"reasoning-file","mediaType":"image/png","url":"data:image/png;base64,AA==","providerMetadata":{"google":{"thoughtSignature":"s"}}}
+
+data: {"type":"custom","kind":"google.search","providerMetadata":{"google":{"q":"hi"}}}
+
+data: {"type":"data-progress","id":"n","data":{"z":1,"a":null},"transient":false}
+
+data: {"type":"data-progress","id":"n","data":null}
+
+data: {"type":"data-progress","id":"n","data":"discard","transient":true}
+
+data: {"type":"data-progress","data":[false,"anonymous"]}
+
+data: {"type":"tool-input-available","toolCallId":"c","toolName":"run","input":{"z":1,"a":2},"providerMetadata":{"p":{"call":true}},"title":"Run"}
+
+data: {"type":"tool-approval-request","approvalId":"ap","toolCallId":"c","approvalDescriptor":{"action":"write"},"inputSchemaInput":null,"reason":"Confirm","isAutomatic":true,"signature":"sig"}
+
+data: {"type":"tool-approval-response","approvalId":"ap","approved":false,"reason":"Denied","providerExecuted":false,"providerMetadata":{"p":{"approved":false}}}
+
+data: {"type":"tool-output-denied","toolCallId":"c"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-output-available","toolCallId":"c","output":null,"providerExecuted":true,"providerMetadata":{"p":{"result":true}},"toolMetadata":{"ignored":true},"preliminary":true,"dynamic":true}
+
+data: {"type":"tool-output-error","toolCallId":"c","errorText":"failed","providerExecuted":false,"providerMetadata":{"p":{"result":false}},"dynamic":true}
+
+data: {"type":"tool-input-available","toolCallId":"c","toolName":"new","input":null}
+
+data: {"type":"tool-output-available","toolCallId":"c","output":0}
+
+data: {"type":"tool-input-start","toolCallId":"reset","toolName":"t","dynamic":true}
+
+data: {"type":"text-start","id":"reset"}
+
+data: {"type":"text-delta","id":"reset","delta":"discard"}
+
+data: {"type":"reset-step"}
+
+data: {"type":"tool-output-available","toolCallId":"c","output":"earlier-step"}
+
+data: {"type":"text-start","id":"reset"}
+
+data: {"type":"text-delta","id":"reset","delta":"kept"}
+
+data: {"type":"text-end","id":"reset"}
+
+data: {"type":"message-metadata","messageMetadata":{"z":{"third":3},"a":[3]}}
+
+data: {"type":"message-metadata","messageMetadata":null}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop","messageMetadata":{"z":{"second":null}}}
+
+data: [DONE]
+

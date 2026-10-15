@@ -1,0 +1,6 @@
+data: {"type":"start"}
+
+data: {"type":"error","errorText":"{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"}
+
+data: [DONE]
+

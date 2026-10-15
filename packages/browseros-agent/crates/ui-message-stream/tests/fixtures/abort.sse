@@ -1,0 +1,12 @@
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t"}
+
+data: {"type":"text-delta","id":"t","delta":"line 1\n\"quotes\" \\ café 🙂"}
+
+data: {"type":"abort","reason":"AbortError: Conversation stopped"}
+
+data: [DONE]
+

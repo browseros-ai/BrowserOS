@@ -1,11 +1,14 @@
 //! SSE framing for the UI message stream, exactly as the AI SDK's
 //! `json-to-sse-transform-stream.ts`: one `data: <compact JSON>\n\n` frame per chunk, then
-//! `data: [DONE]\n\n`; no `event:`/`id:` lines. P1 owns this file after S0 (byte-fixture tests).
+//! `data: [DONE]\n\n`; no `event:`/`id:` lines. JSON uses JavaScript's number formatting and
+//! integer-key ordering as well as the SDK's chunk field order, including inside opaque output.
 
 use crate::{ChunkStream, chunk::UiChunk};
 use bytes::Bytes;
 use futures_util::StreamExt as _;
-use std::convert::Infallible;
+use serde::Serialize as _;
+use serde_json::Value;
+use std::{convert::Infallible, io};
 
 /// Response headers of `/chat` and `/chat/{id}/stream` (`UI_MESSAGE_STREAM_HEADERS`).
 pub const UI_STREAM_HEADERS: [(&str, &str); 5] = [
@@ -34,12 +37,67 @@ pub enum ParseError {
 
 /// `b"data: " + compact JSON + b"\n\n"`.
 pub fn frame(chunk: &UiChunk) -> Bytes {
-    // A `UiChunk` holds only string-keyed JSON, so serialization cannot fail; the fallback keeps
-    // the stream well-formed rather than panicking on a request path if that ever changes.
-    let json = serde_json::to_string(chunk).unwrap_or_else(|error| {
-        format!(r#"{{"type":"error","errorText":{:?}}}"#, error.to_string())
+    // Value preserves enum field order and nested JS object insertion order. Array-index keys
+    // are the exception: JSON.stringify enumerates those numerically before all string keys.
+    let json = serde_json::to_value(chunk).map(js_key_order);
+    let mut bytes = b"data: ".to_vec();
+    let result = json.and_then(|value| {
+        value.serialize(&mut serde_json::Serializer::with_formatter(
+            &mut bytes,
+            JsFormatter,
+        ))
     });
-    Bytes::from(format!("data: {json}\n\n"))
+    // Every UiChunk is JSON-representable, and writing to Vec cannot fail. If that invariant
+    // changes later, emit a valid error frame rather than panic inside an HTTP body stream.
+    if result.is_err() {
+        return Bytes::from_static(
+            b"data: {\"type\":\"error\",\"errorText\":\"Unable to serialize UI chunk\"}\n\n",
+        );
+    }
+    bytes.extend_from_slice(b"\n\n");
+    Bytes::from(bytes)
+}
+
+fn js_key_order(value: Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut entries: Vec<_> = map.into_iter().collect();
+            // Stable sort: non-index keys keep insertion order. 2^32-1 and keys with leading
+            // zeroes are ordinary strings in ECMAScript, not array indices.
+            entries.sort_by_key(|(key, _)| {
+                key.parse::<u32>()
+                    .ok()
+                    .filter(|index| *index != u32::MAX && index.to_string() == *key)
+                    .unwrap_or(u32::MAX)
+            });
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (key, js_key_order(value)))
+                    .collect(),
+            )
+        }
+        Value::Array(values) => Value::Array(values.into_iter().map(js_key_order).collect()),
+        value => value,
+    }
+}
+
+/// serde_json uses Rust float spelling (`1.0`, `1e-6`), which differs from JSON.stringify
+/// (`1`, `0.000001`). Ryu's ECMAScript implementation also handles exponent signs and -0.
+struct JsFormatter;
+impl serde_json::ser::Formatter for JsFormatter {
+    fn write_f64<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
+        writer.write_all(ryu_js::Buffer::new().format_finite(value).as_bytes())
+    }
+    fn write_f32<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: f32) -> io::Result<()> {
+        self.write_f64(writer, f64::from(value))
+    }
+    fn write_i64<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: i64) -> io::Result<()> {
+        self.write_f64(writer, value as f64)
+    }
+    fn write_u64<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: u64) -> io::Result<()> {
+        self.write_f64(writer, value as f64)
+    }
 }
 
 /// Frames every chunk, then the `[DONE]` sentinel once the turn's stream ends. A response body

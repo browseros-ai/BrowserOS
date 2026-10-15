@@ -2,8 +2,8 @@
 //!
 //! Field order inside each variant is the key order `toUIMessageChunk`
 //! (`ai/src/ui-message-stream/to-ui-message-chunk.ts`) emits, because the stream-compat harness
-//! byte-diffs the Rust server's SSE against the TS server's. Optional keys are omitted, never
-//! `null`; the one exception is `tool-output-available.output`, which the SDK always sends.
+//! byte-diffs the Rust server's SSE against the TS server's. Optional keys are omitted; required
+//! JSON payloads keep explicit null, including `tool-output-available.output` for absent results.
 //! Variants cover every `ai@7.0.114` `UIMessageChunk` type (DECISIONS 14: the contract union is
 //! complete), including `data-*` chunks, whose open-ended type is the one untagged variant.
 
@@ -115,7 +115,6 @@ pub enum UiChunk {
     ToolInputAvailable {
         tool_call_id: String,
         tool_name: String,
-        #[serde(default)]
         input: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
@@ -132,7 +131,6 @@ pub enum UiChunk {
     ToolInputError {
         tool_call_id: String,
         tool_name: String,
-        #[serde(default)]
         input: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
@@ -149,7 +147,6 @@ pub enum UiChunk {
     /// `output` serializes `null` when the tool returned nothing (the one non-omitted optional).
     ToolOutputAvailable {
         tool_call_id: String,
-        #[serde(default)]
         output: Value,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         provider_executed: Option<bool>,
@@ -167,7 +164,11 @@ pub enum UiChunk {
         tool_call_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         approval_descriptor: Option<Value>,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            deserialize_with = "present",
+            skip_serializing_if = "Option::is_none"
+        )]
         input_schema_input: Option<Value>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
@@ -237,6 +238,12 @@ pub struct DataChunk {
     pub data: Value,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transient: Option<bool>,
+}
+
+// Approval input is opaque JSON: a present null differs from an omitted key in the SDK's
+// hasOwnProperty check, and must survive both SSE replay and persisted approval metadata.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
 }
 
 fn namespaced_kind<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {

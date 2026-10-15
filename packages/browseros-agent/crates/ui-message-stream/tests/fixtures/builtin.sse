@@ -1,0 +1,48 @@
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"r1"}
+
+data: {"type":"reasoning-delta","id":"r1","delta":"thinking"}
+
+data: {"type":"reasoning-end","id":"r1"}
+
+data: {"type":"text-start","id":"t1"}
+
+data: {"type":"text-delta","id":"t1","delta":"Hi"}
+
+data: {"type":"text-end","id":"t1"}
+
+data: {"type":"tool-input-start","toolCallId":"call_1","toolName":"snapshot","toolMetadata":{"clientName":"ai-sdk-mcp-client","toolName":"snapshot","annotations":{"readOnlyHint":true}},"dynamic":true,"title":"Snapshot"}
+
+data: {"type":"tool-input-delta","toolCallId":"call_1","inputTextDelta":"{\"page\":1}"}
+
+data: {"type":"tool-input-available","toolCallId":"call_1","toolName":"snapshot","input":{"page":1},"toolMetadata":{"clientName":"ai-sdk-mcp-client","toolName":"snapshot","annotations":{"readOnlyHint":true}},"dynamic":true,"title":"Snapshot"}
+
+data: {"type":"tool-input-available","toolCallId":"call_2","toolName":"suggest_schedule","input":{"query":"q","suggestedName":"n","scheduleType":"daily"}}
+
+data: {"type":"tool-input-error","toolCallId":"call_3","toolName":"nope","input":{},"dynamic":true,"errorText":"{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"}
+
+data: {"type":"tool-output-error","toolCallId":"call_3","errorText":"{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}","dynamic":true}
+
+data: {"type":"tool-output-available","toolCallId":"call_1","output":{"content":[{"type":"text","text":"ok"}],"isError":false},"toolMetadata":{"clientName":"ai-sdk-mcp-client","toolName":"snapshot","annotations":{"readOnlyHint":true}},"dynamic":true}
+
+data: {"type":"tool-output-available","toolCallId":"call_2","output":{"content":[{"type":"text","text":"{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"}],"isError":false}}
+
+data: {"type":"finish-step"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t2"}
+
+data: {"type":"text-delta","id":"t2","delta":"Done"}
+
+data: {"type":"text-end","id":"t2"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

@@ -1,0 +1,498 @@
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"tool-input-start","toolCallId":"p0","toolName":"partial","dynamic":true}
+
+data: {"type":"tool-input-start","toolCallId":"p1","toolName":"partial","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"q"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"h"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":" "}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"🙂"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":","}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"v"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"s"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"["}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":","}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"f"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"s"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":","}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"n"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":","}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"-"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"1"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"."}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"2"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"3"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"]"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":","}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"k"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"1"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"}"}
+
+data: {"type":"tool-input-delta","toolCallId":"p1","inputTextDelta":"}"}
+
+data: {"type":"tool-input-start","toolCallId":"p2","toolName":"partial","dynamic":true}
+
+data: {"type":"tool-input-delta","toolCallId":"p2","inputTextDelta":"["}
+
+data: {"type":"tool-input-delta","toolCallId":"p2","inputTextDelta":"1"}
+
+data: {"type":"tool-input-delta","toolCallId":"p2","inputTextDelta":","}
+
+data: {"type":"tool-input-delta","toolCallId":"p2","inputTextDelta":"2"}
+
+data: {"type":"tool-input-delta","toolCallId":"p2","inputTextDelta":","}
+
+data: {"type":"tool-input-start","toolCallId":"p3","toolName":"partial","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"q"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"\\"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"2"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"6"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"3"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p3","inputTextDelta":"}"}
+
+data: {"type":"tool-input-start","toolCallId":"p4","toolName":"partial","dynamic":true}
+
+data: {"type":"tool-input-delta","toolCallId":"p4","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p4","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p4","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p4","inputTextDelta":"e"}
+
+data: {"type":"tool-input-start","toolCallId":"p5","toolName":"partial","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"p5","inputTextDelta":"f"}
+
+data: {"type":"tool-input-delta","toolCallId":"p5","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p5","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p5","inputTextDelta":"s"}
+
+data: {"type":"tool-input-delta","toolCallId":"p5","inputTextDelta":"e"}
+
+data: {"type":"tool-input-start","toolCallId":"p6","toolName":"partial","dynamic":true}
+
+data: {"type":"tool-input-delta","toolCallId":"p6","inputTextDelta":"n"}
+
+data: {"type":"tool-input-delta","toolCallId":"p6","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p6","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p6","inputTextDelta":"l"}
+
+data: {"type":"tool-input-start","toolCallId":"p7","toolName":"partial","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"p7","inputTextDelta":"1"}
+
+data: {"type":"tool-input-delta","toolCallId":"p7","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p7","inputTextDelta":"+"}
+
+data: {"type":"tool-input-start","toolCallId":"p8","toolName":"partial","dynamic":true}
+
+data: {"type":"tool-input-delta","toolCallId":"p8","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p8","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p8","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p8","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p8","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p8","inputTextDelta":"-"}
+
+data: {"type":"tool-input-start","toolCallId":"p9","toolName":"partial","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"p"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"l"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"i"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"n"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":" "}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"A"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"C"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"P"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":" "}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"s"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p9","inputTextDelta":"s"}
+
+data: {"type":"tool-input-start","toolCallId":"p10","toolName":"partial","dynamic":true}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"_"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"_"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"p"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"_"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"_"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"x"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"1"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"}"}
+
+data: {"type":"tool-input-delta","toolCallId":"p10","inputTextDelta":"}"}
+
+data: {"type":"tool-input-start","toolCallId":"p11","toolName":"partial","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"n"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"s"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"d"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"c"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"n"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"s"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"c"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"p"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"y"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"p"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"}"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"}"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"}"}
+
+data: {"type":"tool-input-delta","toolCallId":"p11","inputTextDelta":"}"}
+
+data: {"type":"tool-input-start","toolCallId":"p12","toolName":"partial","dynamic":true}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"c"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"n"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"s"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"c"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"{"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"o"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"d"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"i"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"n"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"a"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"y"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"\""}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":":"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"t"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"r"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"u"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"e"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"}"}
+
+data: {"type":"tool-input-delta","toolCallId":"p12","inputTextDelta":"}"}
+
+data: {"type":"tool-input-start","toolCallId":"p13","toolName":"partial","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"9"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"0"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"0"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"7"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"1"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"9"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"9"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"2"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"5"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"4"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"7"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"4"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"0"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"9"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"9"}
+
+data: {"type":"tool-input-delta","toolCallId":"p13","inputTextDelta":"3"}
+
+data: [DONE]
+

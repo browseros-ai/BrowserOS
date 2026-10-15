@@ -1,0 +1,44 @@
+data: {"type":"start","messageId":"9e602f3e-19f9-4d94-a85e-0ca4044b2e9c"}
+
+data: {"type":"start-step"}
+
+data: {"type":"reasoning-start","id":"acpx-2"}
+
+data: {"type":"reasoning-delta","id":"acpx-2","delta":"pondering"}
+
+data: {"type":"reasoning-end","id":"acpx-2"}
+
+data: {"type":"text-start","id":"acpx-3"}
+
+data: {"type":"text-delta","id":"acpx-3","delta":"Hello "}
+
+data: {"type":"text-end","id":"acpx-3"}
+
+data: {"type":"tool-input-start","toolCallId":"tc1","toolName":"browseros: navigate","dynamic":false}
+
+data: {"type":"tool-input-delta","toolCallId":"tc1","inputTextDelta":"browseros: navigate (pending): https://x"}
+
+data: {"type":"tool-input-delta","toolCallId":"tc1","inputTextDelta":"browseros: navigate (completed): ok"}
+
+data: {"type":"tool-input-available","toolCallId":"tc1","toolName":"browseros: navigate","input":"browseros: navigate (pending): https://xbrowseros: navigate (completed): ok","providerExecuted":true}
+
+data: {"type":"tool-output-available","toolCallId":"tc1","output":"browseros: navigate (pending): https://xbrowseros: navigate (completed): ok","providerExecuted":true}
+
+data: {"type":"reasoning-start","id":"acpx-4"}
+
+data: {"type":"reasoning-delta","id":"acpx-4","delta":"[Plan] 1. do thing"}
+
+data: {"type":"reasoning-end","id":"acpx-4"}
+
+data: {"type":"text-start","id":"acpx-5"}
+
+data: {"type":"text-delta","id":"acpx-5","delta":"Done"}
+
+data: {"type":"text-end","id":"acpx-5"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+

@@ -1,0 +1,863 @@
+{
+  "snapshots": [
+    { "id": "", "role": "assistant", "parts": [] },
+    { "id": "", "role": "assistant", "parts": [{ "type": "step-start" }] },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        { "type": "reasoning", "id": "r1", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        { "type": "reasoning", "id": "r1", "text": "thinking", "state": "done" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "input-streaming",
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "input-streaming",
+          "input": { "page": 1 },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "input-available",
+          "input": { "page": 1 },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "input-available",
+          "input": { "page": 1 },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "input-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          }
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "input-available",
+          "input": { "page": 1 },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "input-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "input-available",
+          "input": { "page": 1 },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "input-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "input-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        },
+        { "type": "step-start" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "Done", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "Done", "state": "done" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "Done", "state": "done" }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "r1",
+          "text": "thinking",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hi", "state": "done" },
+        {
+          "type": "dynamic-tool",
+          "toolName": "snapshot",
+          "toolCallId": "call_1",
+          "state": "output-available",
+          "input": { "page": 1 },
+          "output": {
+            "content": [{ "type": "text", "text": "ok" }],
+            "isError": false
+          },
+          "title": "Snapshot",
+          "toolMetadata": {
+            "clientName": "ai-sdk-mcp-client",
+            "toolName": "snapshot",
+            "annotations": { "readOnlyHint": true }
+          }
+        },
+        {
+          "type": "tool-suggest_schedule",
+          "toolCallId": "call_2",
+          "state": "output-available",
+          "input": {
+            "query": "q",
+            "suggestedName": "n",
+            "scheduleType": "daily"
+          },
+          "output": {
+            "content": [
+              {
+                "type": "text",
+                "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+              }
+            ],
+            "isError": false
+          }
+        },
+        {
+          "type": "dynamic-tool",
+          "toolName": "nope",
+          "toolCallId": "call_3",
+          "state": "output-error",
+          "input": {},
+          "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+        },
+        { "type": "step-start" },
+        { "type": "text", "text": "Done", "state": "done" }
+      ]
+    }
+  ],
+  "message": {
+    "id": "",
+    "role": "assistant",
+    "parts": [
+      { "type": "step-start" },
+      { "type": "reasoning", "id": "r1", "text": "thinking", "state": "done" },
+      { "type": "text", "text": "Hi", "state": "done" },
+      {
+        "type": "dynamic-tool",
+        "toolName": "snapshot",
+        "toolCallId": "call_1",
+        "state": "output-available",
+        "input": { "page": 1 },
+        "output": {
+          "content": [{ "type": "text", "text": "ok" }],
+          "isError": false
+        },
+        "title": "Snapshot",
+        "toolMetadata": {
+          "clientName": "ai-sdk-mcp-client",
+          "toolName": "snapshot",
+          "annotations": { "readOnlyHint": true }
+        }
+      },
+      {
+        "type": "tool-suggest_schedule",
+        "toolCallId": "call_2",
+        "state": "output-available",
+        "input": {
+          "query": "q",
+          "suggestedName": "n",
+          "scheduleType": "daily"
+        },
+        "output": {
+          "content": [
+            {
+              "type": "text",
+              "text": "{\"type\":\"schedule_suggestion\",\"query\":\"q\",\"suggestedName\":\"n\",\"scheduleType\":\"daily\",\"scheduleTime\":\"09:00\"}"
+            }
+          ],
+          "isError": false
+        }
+      },
+      {
+        "type": "dynamic-tool",
+        "toolName": "nope",
+        "toolCallId": "call_3",
+        "state": "output-error",
+        "input": {},
+        "errorText": "{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"
+      },
+      { "type": "step-start" },
+      { "type": "text", "text": "Done", "state": "done" }
+    ]
+  }
+}

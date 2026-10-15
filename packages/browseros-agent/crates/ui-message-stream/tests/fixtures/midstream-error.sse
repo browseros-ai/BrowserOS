@@ -1,0 +1,16 @@
+data: {"type":"start"}
+
+data: {"type":"start-step"}
+
+data: {"type":"text-start","id":"t"}
+
+data: {"type":"text-delta","id":"t","delta":"line 1\n\"quotes\" \\ café 🙂"}
+
+data: {"type":"error","errorText":"{\"error\":{\"code\":\"tool_execution_failed\",\"message\":\"fixture error\",\"retryable\":false}}"}
+
+data: {"type":"finish-step"}
+
+data: {"type":"finish","finishReason":"error"}
+
+data: [DONE]
+

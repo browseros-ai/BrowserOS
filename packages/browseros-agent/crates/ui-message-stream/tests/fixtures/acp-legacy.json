@@ -1,0 +1,444 @@
+{
+  "snapshots": [
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": []
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [{ "type": "step-start" }]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "input-streaming"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "input-streaming"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "input-streaming"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-error",
+          "rawInput": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "errorText": "The ACP agent failed to respond.",
+          "providerExecuted": true
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "[Plan] 1. do thing",
+          "state": "streaming"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "[Plan] 1. do thing",
+          "state": "done"
+        }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "[Plan] 1. do thing",
+          "state": "done"
+        },
+        { "type": "text", "text": "", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "[Plan] 1. do thing",
+          "state": "done"
+        },
+        { "type": "text", "text": "Done", "state": "streaming" }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "[Plan] 1. do thing",
+          "state": "done"
+        },
+        { "type": "text", "text": "Done", "state": "done" }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "[Plan] 1. do thing",
+          "state": "done"
+        },
+        { "type": "text", "text": "Done", "state": "done" }
+      ]
+    },
+    {
+      "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+      "role": "assistant",
+      "parts": [
+        { "type": "step-start" },
+        {
+          "type": "reasoning",
+          "id": "acpx-2",
+          "text": "pondering",
+          "state": "done"
+        },
+        { "type": "text", "text": "Hello ", "state": "done" },
+        {
+          "type": "tool-browseros: navigate",
+          "toolCallId": "tc1",
+          "state": "output-available",
+          "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+          "providerExecuted": true
+        },
+        {
+          "type": "reasoning",
+          "id": "acpx-4",
+          "text": "[Plan] 1. do thing",
+          "state": "done"
+        },
+        { "type": "text", "text": "Done", "state": "done" }
+      ]
+    }
+  ],
+  "message": {
+    "id": "9e602f3e-19f9-4d94-a85e-0ca4044b2e9c",
+    "role": "assistant",
+    "parts": [
+      { "type": "step-start" },
+      {
+        "type": "reasoning",
+        "id": "acpx-2",
+        "text": "pondering",
+        "state": "done"
+      },
+      { "type": "text", "text": "Hello ", "state": "done" },
+      {
+        "type": "tool-browseros: navigate",
+        "toolCallId": "tc1",
+        "state": "output-available",
+        "output": "browseros: navigate (pending): https://xbrowseros: navigate (completed): ok",
+        "providerExecuted": true
+      },
+      {
+        "type": "reasoning",
+        "id": "acpx-4",
+        "text": "[Plan] 1. do thing",
+        "state": "done"
+      },
+      { "type": "text", "text": "Done", "state": "done" }
+    ]
+  }
+}

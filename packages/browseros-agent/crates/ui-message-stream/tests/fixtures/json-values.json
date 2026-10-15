@@ -1,0 +1,98 @@
+{
+  "snapshots": [
+    { "id": "", "role": "assistant", "parts": [] },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool-json",
+          "toolCallId": "json",
+          "state": "input-available",
+          "input": {}
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool-json",
+          "toolCallId": "json",
+          "state": "output-available",
+          "input": {},
+          "output": {
+            "2": "two",
+            "10": "ten",
+            "z": 1,
+            "a": 2,
+            "01": "ordinary",
+            "4294967295": "ordinary too",
+            "nested": {
+              "b": [
+                0, 0, 1, 1e-7, 0.000001, 100000000000000000000, 1e21,
+                1.2345678901234567
+              ],
+              "a": "line\n\t\"\\ café 🙂"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "",
+      "role": "assistant",
+      "parts": [
+        {
+          "type": "tool-json",
+          "toolCallId": "json",
+          "state": "output-available",
+          "input": {},
+          "output": {
+            "2": "two",
+            "10": "ten",
+            "z": 1,
+            "a": 2,
+            "01": "ordinary",
+            "4294967295": "ordinary too",
+            "nested": {
+              "b": [
+                0, 0, 1, 1e-7, 0.000001, 100000000000000000000, 1e21,
+                1.2345678901234567
+              ],
+              "a": "line\n\t\"\\ café 🙂"
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "message": {
+    "id": "",
+    "role": "assistant",
+    "parts": [
+      {
+        "type": "tool-json",
+        "toolCallId": "json",
+        "state": "output-available",
+        "input": {},
+        "output": {
+          "2": "two",
+          "10": "ten",
+          "z": 1,
+          "a": 2,
+          "01": "ordinary",
+          "4294967295": "ordinary too",
+          "nested": {
+            "b": [
+              0, 0, 1, 1e-7, 0.000001, 100000000000000000000, 1e21,
+              1.2345678901234567
+            ],
+            "a": "line\n\t\"\\ café 🙂"
+          }
+        }
+      }
+    ]
+  }
+}

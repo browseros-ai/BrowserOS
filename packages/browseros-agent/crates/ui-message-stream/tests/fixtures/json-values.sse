@@ -1,0 +1,10 @@
+data: {"type":"start"}
+
+data: {"type":"tool-input-available","toolCallId":"json","toolName":"json","input":{}}
+
+data: {"type":"tool-output-available","toolCallId":"json","output":{"2":"two","10":"ten","z":1,"a":2,"01":"ordinary","4294967295":"ordinary too","nested":{"b":[0,0,1,1e-7,0.000001,100000000000000000000,1e+21,1.2345678901234567],"a":"line\n\t\"\\ café 🙂"}}}
+
+data: {"type":"finish","finishReason":"stop"}
+
+data: [DONE]
+
