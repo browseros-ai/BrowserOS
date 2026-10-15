@@ -45,18 +45,10 @@ use uuid::Uuid;
 pub struct RunPresentation {
     pub panel_tab_ids: Vec<u32>,
     pub panels_visible: bool,
-    pub tab_group: Option<TabGroupPresentation>,
     /// Keep the replay log after the run ended and its last subscriber left. False for scheduled
     /// runs: their one viewer is the POST that started them, and each uses a fresh conversation
     /// id nobody DELETEs, so a retained log would live until restart.
     pub keep_replay: bool,
-}
-
-/// `"<target>/<first-5-words>"` plus the color identity of the tab group a run's pages join.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TabGroupPresentation {
-    pub title: String,
-    pub color_key: String,
 }
 
 /// What an engine holds of its run: id, cancellation, and the hook that publishes the display
@@ -174,7 +166,6 @@ pub struct ActiveRun {
     pub conversation_id: Uuid,
     pub run_id: Uuid,
     pub panels_visible: bool,
-    pub tab_group: Option<TabGroupPresentation>,
 }
 
 pub struct ConversationRuns {
@@ -198,7 +189,6 @@ struct RunRecord {
     conversation_id: Uuid,
     run_id: Uuid,
     panels_visible: bool,
-    tab_group: Option<TabGroupPresentation>,
     keep_replay: bool,
     cancel: CancellationToken,
     /// Latch released once `prepare` returned (or the run ended): what `/state` waits on.
@@ -282,7 +272,7 @@ impl ConversationRuns {
     {
         let (record, own_cursor) = {
             let mut state = lock(&self.state);
-            let (previous_group, previous_messages) = match state.runs.get(&conversation_id) {
+            let previous_messages = match state.runs.get(&conversation_id) {
                 Some(existing) => {
                     let inner = lock(&existing.inner);
                     if inner.status == RunStatus::Running || inner.deleting {
@@ -291,18 +281,15 @@ impl ConversationRuns {
                     // The new record shows the conversation as it stands until this turn
                     // publishes its own history: a turn failing before that (unknown agent,
                     // credentials, history read) must not make other panels hydrate it empty.
-                    (existing.tab_group.clone(), inner.messages.clone())
+                    inner.messages.clone()
                 }
-                None => (None, Vec::new()),
+                None => Vec::new(),
             };
             let (log_version, _) = watch::channel(0);
             let record = Arc::new(RunRecord {
                 conversation_id,
                 run_id: Uuid::new_v4(),
                 panels_visible: presentation.panels_visible,
-                // Keep the first useful presentation across turns: a group first created on a
-                // later turn still describes the conversation, not only its latest prompt.
-                tab_group: previous_group.or(presentation.tab_group),
                 keep_replay: presentation.keep_replay,
                 cancel: CancellationToken::new(),
                 prepared: CancellationToken::new(),
@@ -626,7 +613,6 @@ impl ConversationRuns {
             conversation_id,
             run_id: record.run_id,
             panels_visible: record.panels_visible,
-            tab_group: record.tab_group.clone(),
         })
     }
 

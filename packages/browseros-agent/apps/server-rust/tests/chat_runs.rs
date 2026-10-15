@@ -58,7 +58,6 @@ fn presentation(tabs: &[u32]) -> RunPresentation {
     RunPresentation {
         panel_tab_ids: tabs.to_vec(),
         panels_visible: true,
-        tab_group: None,
         keep_replay: true,
     }
 }
@@ -496,7 +495,6 @@ async fn keeps_scheduled_runs_out_of_panel_state() -> TestResult {
         RunPresentation {
             panel_tab_ids: vec![30],
             panels_visible: false,
-            tab_group: None,
             keep_replay: false,
         },
         move |_| async move {

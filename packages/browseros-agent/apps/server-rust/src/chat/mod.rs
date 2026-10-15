@@ -36,7 +36,7 @@ pub use history::{ConversationHistory, History, TargetKey};
 pub use request::{ChatRequest, ChatTurnRequest, ProviderRecord, RequestTarget};
 pub use runs::{
     ActiveRun, ConversationRuns, FinishOutcome, FinishedTurn, OnFinish, Prepared, RunHandle,
-    RunPresentation, RunSnapshot, RunStatus, StartedRun, TabGroupPresentation,
+    RunPresentation, RunSnapshot, RunStatus, StartedRun,
 };
 
 use crate::{
@@ -289,7 +289,6 @@ impl ChatService {
                 .into_iter()
                 .collect(),
             panels_visible: !input.is_scheduled_task,
-            tab_group: (!input.is_scheduled_task).then(|| tab_group(&message, &plan)),
             keep_replay: !input.is_scheduled_task,
         };
         let prepare = self.prepare(conversation_id, message, plan, Arc::new(input));
@@ -591,37 +590,6 @@ fn user_message(message: &str, input: &ChatTurnRequest, target: &TargetKey) -> U
 fn active_tab_id(context: Option<&request::BrowserContext>) -> Option<u32> {
     let id = context?.active_tab.as_ref()?.id;
     (id.fract() == 0.0 && (0.0..=f64::from(u32::MAX)).contains(&id)).then_some(id as u32)
-}
-
-/// `conversationTabGroup`: `<target>/<first five words, lowercased, '-'-joined, ≤ 40 UTF-16
-/// units>` (or `task`); colored by target identity so one agent's groups share a color.
-fn tab_group(message: &str, plan: &Plan) -> TabGroupPresentation {
-    let lowered = message.to_lowercase();
-    let words: Vec<&str> = lowered
-        .split(|ch: char| !ch.is_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .take(5)
-        .collect();
-    let mut task = String::new();
-    let mut units = 0;
-    for ch in words.join("-").chars() {
-        units += ch.len_utf16();
-        if units > 40 {
-            break;
-        }
-        task.push(ch);
-    }
-    if task.is_empty() {
-        task = "task".to_owned();
-    }
-    let (prefix, color_key) = match plan {
-        Plan::BrowserOs(_) => ("browseros", "browseros".to_owned()),
-        Plan::Acp { kind, agent_id } => (kind.as_str(), format!("{}:{agent_id}", kind.as_str())),
-    };
-    TabGroupPresentation {
-        title: format!("{prefix}/{task}"),
-        color_key,
-    }
 }
 
 /// `resolveBrowserContextPageIds` + projection to the engines' view. With a resolver, every tab's

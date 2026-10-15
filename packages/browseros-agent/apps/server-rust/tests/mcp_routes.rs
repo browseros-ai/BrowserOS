@@ -71,7 +71,6 @@ impl Runs {
             conversation_id,
             run_id: Uuid::new_v4(),
             panels_visible: true,
-            tab_group: None,
         };
         self.lock_active().insert(conversation_id, run.clone());
         run
