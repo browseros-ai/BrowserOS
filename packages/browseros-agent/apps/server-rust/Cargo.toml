@@ -13,7 +13,17 @@ path = "src/lib.rs"
 name = "browseros-server-rs"
 path = "src/main.rs"
 
+# The scripted ACP peer of acp-agents, built here too so AcpEngine tests drive real stdio turns
+# (Cargo exposes CARGO_BIN_EXE_* only for a package's own binaries). Never shipped.
+[[bin]]
+name = "server-rust-fake-acp-agent"
+path = "../../crates/acp-agents/tests/support/fake-agent.rs"
+test = false
+bench = false
+
 [dependencies]
+# ACP agents (P16): policy, sessions and the session/update → UiChunk runtime.
+acp-agents.workspace = true
 browseros-agent.workspace = true
 harness-integrations.workspace = true
 server-api.workspace = true

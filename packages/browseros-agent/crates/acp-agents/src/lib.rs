@@ -27,6 +27,9 @@ mod runtime;
 mod store;
 mod translate;
 
+/// The ACP schema and error types callers build prompts from and match on, re-exported so the
+/// server needs no direct `acp-client` dependency.
+pub use acp_client::{AcpError, schema};
 pub use definition::{AgentDefinition, AgentKind, CustomAgentConfig};
 pub use launch::{
     AdapterPackage, CLAUDE_ADAPTER, CODEX_ADAPTER, HostEnvironment, LaunchError, LaunchSource,

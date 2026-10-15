@@ -1,0 +1,247 @@
+{
+  "_comment": "Captured from the TS route (apps/server/src/api/routes/acpx-probe.ts, zod 4.5 + @hono/zod-validator) by POSTing each body through Hono with a stub probe; 2026-10-15.",
+  "cases": [
+    {
+      "body": {},
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"claude\",\n      \"codex\",\n      \"custom\"\n    ],\n    \"path\": [\n      \"type\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"claude\\\"|\\\"codex\\\"|\\\"custom\\\"\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "gemini"
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"claude\",\n      \"codex\",\n      \"custom\"\n    ],\n    \"path\": [\n      \"type\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"claude\\\"|\\\"codex\\\"|\\\"custom\\\"\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": 5
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"claude\",\n      \"codex\",\n      \"custom\"\n    ],\n    \"path\": [\n      \"type\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"claude\\\"|\\\"codex\\\"|\\\"custom\\\"\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "custom"
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"code\": \"custom\",\n    \"message\": \"command is required to probe a custom agent\",\n    \"path\": [\n      \"command\"\n    ]\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "custom",
+        "command": "   "
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"command\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  },\n  {\n    \"code\": \"custom\",\n    \"message\": \"command is required to probe a custom agent\",\n    \"path\": [\n      \"command\"\n    ]\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "claude",
+        "command": "  "
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"command\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "claude",
+        "extra": 1,
+        "other": 2
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\",\n      \"other\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized keys: \\\"extra\\\", \\\"other\\\"\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "codex",
+        "env": {
+          "a": 1,
+          "b": "ok"
+        }
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"expected\": \"string\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"env\",\n      \"a\"\n    ],\n    \"message\": \"Invalid input: expected string, received number\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "codex",
+        "env": "nope"
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"expected\": \"record\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"env\"\n    ],\n    \"message\": \"Invalid input: expected record, received string\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "codex",
+        "timeoutMs": 500
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_small\",\n    \"minimum\": 1000,\n    \"inclusive\": true,\n    \"path\": [\n      \"timeoutMs\"\n    ],\n    \"message\": \"Too small: expected number to be >=1000\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "codex",
+        "timeoutMs": 1.5
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"expected\": \"int\",\n    \"format\": \"safeint\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"timeoutMs\"\n    ],\n    \"message\": \"Invalid input: expected int, received number\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "codex",
+        "timeoutMs": "2000"
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"expected\": \"number\",\n    \"code\": \"invalid_type\",\n    \"path\": [\n      \"timeoutMs\"\n    ],\n    \"message\": \"Invalid input: expected number, received string\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "codex",
+        "timeoutMs": 200000
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"origin\": \"number\",\n    \"code\": \"too_big\",\n    \"maximum\": 120000,\n    \"inclusive\": true,\n    \"path\": [\n      \"timeoutMs\"\n    ],\n    \"message\": \"Too big: expected number to be <=120000\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "codex",
+        "cwd": ""
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"cwd\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": {
+        "type": "x",
+        "command": "",
+        "extra": true
+      },
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"code\": \"invalid_value\",\n    \"values\": [\n      \"claude\",\n      \"codex\",\n      \"custom\"\n    ],\n    \"path\": [\n      \"type\"\n    ],\n    \"message\": \"Invalid option: expected one of \\\"claude\\\"|\\\"codex\\\"|\\\"custom\\\"\"\n  },\n  {\n    \"origin\": \"string\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"command\"\n    ],\n    \"message\": \"Too small: expected string to have >=1 characters\"\n  },\n  {\n    \"code\": \"unrecognized_keys\",\n    \"keys\": [\n      \"extra\"\n    ],\n    \"path\": [],\n    \"message\": \"Unrecognized key: \\\"extra\\\"\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": [],
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received array\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": "str",
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received string\"\n  }\n]"
+        }
+      }
+    },
+    {
+      "body": null,
+      "status": 400,
+      "response": {
+        "success": false,
+        "error": {
+          "name": "ZodError",
+          "message": "[\n  {\n    \"expected\": \"object\",\n    \"code\": \"invalid_type\",\n    \"path\": [],\n    \"message\": \"Invalid input: expected object, received null\"\n  }\n]"
+        }
+      }
+    }
+  ]
+}

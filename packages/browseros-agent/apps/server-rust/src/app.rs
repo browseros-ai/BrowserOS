@@ -117,7 +117,7 @@ impl AppState {
 
         let runs = ConversationRuns::new(activity.clone(), PANEL_HEARTBEAT);
         let leases = ToolLeases::new(runs.clone());
-        let acp = Arc::new(AcpEngine::new());
+        let acp = Arc::new(AcpEngine::new(&config, &paths, leases.clone()));
         // P14: until P15 wires the host's browser, scheduled runs fall back to the request's
         // context (`NoBrowser`), as TS does when it cannot open the background page.
         let klavis_for_key = klavis.clone();

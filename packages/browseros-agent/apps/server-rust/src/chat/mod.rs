@@ -23,7 +23,7 @@ pub mod history;
 pub mod request;
 pub mod runs;
 
-pub use acp_engine::AcpEngine;
+pub use acp_engine::{AcpEngine, PREPARATION_ERROR};
 pub use browseros_engine::{
     BackgroundPages, BrowserOsEngine, BrowserOsEngineDeps, KlavisStatus, LeaseIssuer, ModelFactory,
     NoBrowser, RegistryLeases, SessionLease, klavis_state_name, production_models,

@@ -4205,6 +4205,7 @@ dependencies = [
 name = "server-rust"
 version = "0.1.0"
 dependencies = [
+ "acp-agents",
  "anyhow",
  "async-trait",
  "axum",
