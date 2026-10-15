@@ -10,9 +10,10 @@ use axum::{
 use http::request::Parts;
 use serde::Serialize;
 use serde_json::{Value, json};
-use std::collections::HashMap;
+use std::{collections::BTreeMap, sync::LazyLock};
 use uuid::Uuid;
 
+/// Consumes the body once, then delegates TS schema semantics to the route's T.
 #[derive(Debug, Clone)]
 pub struct ZodJson<T>(pub T);
 
@@ -34,9 +35,14 @@ impl<T: ZodSchema + Send, S: Send + Sync> FromRequest<S> for ZodJson<T> {
             .get(http::header::CONTENT_TYPE)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        let media_type = content_type.split(';').next().unwrap_or("").trim();
-        let json_type = media_type == "application/json"
-            || (media_type.starts_with("application/") && media_type.ends_with("+json"));
+        // Hono's MIME expression is narrower than a generic +json suffix check:
+        // whitespace before ';' and digits in a vendor subtype are not accepted.
+        static JSON_TYPE: LazyLock<Result<regex::Regex, regex::Error>> = LazyLock::new(|| {
+            regex::Regex::new(r"(?i)^application/([a-z\-.]+\+)?json(;\s*[a-zA-Z0-9\-]+=([^;]+))*$")
+        });
+        let json_type = JSON_TYPE
+            .as_ref()
+            .is_ok_and(|pattern| pattern.is_match(content_type));
         let value = if json_type {
             // Hono has no application-level JSON size limit. MCP owns its SDK limit separately.
             let bytes = to_bytes(request.into_body(), usize::MAX)
@@ -90,7 +96,7 @@ impl ZodUuid {
 impl<S: Send + Sync> FromRequestParts<S> for ZodUuid {
     type Rejection = Response;
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        let Path(params) = Path::<HashMap<String, String>>::from_request_parts(parts, state)
+        let Path(params) = Path::<BTreeMap<String, String>>::from_request_parts(parts, state)
             .await
             .map_err(|_| {
                 super::errors::error_string(http::StatusCode::BAD_REQUEST, "Invalid path parameter")

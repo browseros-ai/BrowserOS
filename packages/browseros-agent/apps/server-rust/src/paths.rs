@@ -44,7 +44,14 @@ pub fn resolve_browseros_dir(env: &EnvConfig) -> PathBuf {
     {
         return PathBuf::from(dir.to_string_lossy().trim());
     }
-    let home = env.home.clone().unwrap_or_default();
+    // os.homedir() also falls back to the platform account database when HOME
+    // is absent; std's platform lookup preserves that launch-environment case.
+    #[allow(deprecated)]
+    let home = env
+        .home
+        .clone()
+        .or_else(std::env::home_dir)
+        .unwrap_or_default();
     if env.node_env.as_deref() == Some("development") {
         home.join(".browseros-dev")
     } else {

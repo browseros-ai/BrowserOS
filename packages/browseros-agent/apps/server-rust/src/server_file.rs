@@ -9,6 +9,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+/// All clones share one publication token so cleanup cannot remove a replacement.
 #[derive(Debug, Clone)]
 pub struct ServerFile {
     path: PathBuf,

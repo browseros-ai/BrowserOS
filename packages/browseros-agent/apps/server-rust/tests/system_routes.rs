@@ -143,3 +143,67 @@ async fn discovery_shape_and_cleanup_ownership() -> Result {
     assert!(!publication.path().exists());
     Ok(())
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn private_paths_reject_symlinks_and_leave_unrelated_state_alone() -> Result {
+    use std::os::unix::fs::{PermissionsExt, symlink};
+    let dir = tempfile::tempdir()?;
+    let root = dir.path().join("data");
+    let paths = BrowserosPaths::new(root.clone());
+    paths.prepare().await?;
+    assert_eq!(
+        std::fs::metadata(&paths.tool_output_dir)?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+    let config = config(dir.path())?;
+    Identity::load(&config, &paths).await?;
+    assert_eq!(
+        std::fs::metadata(&paths.installation_file)?
+            .permissions()
+            .mode()
+            & 0o777,
+        0o600
+    );
+    let foreign = dir.path().join("foreign");
+    std::fs::create_dir(&foreign)?;
+    std::fs::write(foreign.join("keep"), "owned elsewhere")?;
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(31 * 24 * 60 * 60);
+    std::fs::File::open(&foreign)?.set_times(std::fs::FileTimes::new().set_modified(old))?;
+    symlink(&foreign, root.join("sessions/link"))?;
+    let legacy = root.join("sessions/old");
+    std::fs::create_dir(&legacy)?;
+    std::fs::File::open(&legacy)?.set_times(std::fs::FileTimes::new().set_modified(old))?;
+    paths.prepare().await?;
+    assert!(!legacy.exists());
+    assert!(foreign.join("keep").exists());
+    assert!(root.join("sessions/link").is_symlink());
+    std::fs::remove_dir(&paths.tool_output_dir)?;
+    symlink(&foreign, &paths.tool_output_dir)?;
+    assert!(paths.prepare().await.is_err());
+    assert_eq!(
+        std::fs::read_to_string(foreign.join("keep"))?,
+        "owned elsewhere"
+    );
+    Ok(())
+}
+
+#[test]
+fn linux_diagnostics_parser_handles_quotes_limits_and_missing_values() {
+    use server_rust::http::system::parse_os_release;
+    assert_eq!(
+        parse_os_release("NAME=\"Debian GNU/Linux\"\nVERSION_ID='13'\nHOME=private"),
+        ("Debian GNU/Linux".into(), Some("13".into()))
+    );
+    assert_eq!(parse_os_release(""), ("Linux".into(), None));
+    assert_eq!(parse_os_release("NAME='"), ("'".into(), None));
+    assert_eq!(
+        parse_os_release(&format!("NAME={}", "x".repeat(210)))
+            .0
+            .len(),
+        200
+    );
+}

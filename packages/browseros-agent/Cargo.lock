@@ -4011,6 +4011,7 @@ dependencies = [
  "futures-util",
  "harness-integrations",
  "http",
+ "regex",
  "reqwest 0.12.28",
  "serde",
  "serde-saphyr",

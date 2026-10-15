@@ -1,6 +1,6 @@
 //! Composition root: builds every long-lived service once at startup (`AppState::start`) and
 //! mounts `http::ROUTES` (`build_router`). Construction order mirrors the process contract:
-//! paths → identity → DB → stores → OAuth/Klavis (background) → chat engines → chat service.
+//! paths → DB → identity → stores → OAuth/Klavis (background) → chat engines → chat service.
 //! The `browseros-mcp-host` `HostCtx` field and its construction lines are added by P15.
 //! Owned by P3.
 
@@ -31,6 +31,8 @@ const PANEL_HEARTBEAT: Duration = Duration::from_secs(5);
 #[derive(Clone)]
 pub struct AppState(Arc<AppInner>);
 
+/// One process lifetime owns these handles. HTTP requests only clone AppState;
+/// shutdown belongs to the process owner rather than whichever request ends first.
 pub struct AppInner {
     pub config: Config,
     pub origins: http::security::OriginPolicy,
@@ -97,9 +99,9 @@ impl AppState {
     pub async fn start(config: Config) -> Result<Self, StartupError> {
         let paths = BrowserosPaths::new(config.browseros_dir.clone());
         paths.prepare().await?;
-        let identity = Identity::load(&config, &paths).await?;
         let activity = Arc::new(ServerActivity::new());
         let (db, _outcome) = Database::open(&paths).await?;
+        let identity = Identity::load(&config, &paths).await?;
         let client = reqwest::Client::builder().build()?;
         let http = HttpStack::new();
 

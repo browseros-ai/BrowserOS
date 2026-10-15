@@ -26,6 +26,7 @@ futures-core.workspace = true
 futures-util.workspace = true
 http.workspace = true
 reqwest.workspace = true
+regex.workspace = true
 serde.workspace = true
 # Preserve JS object insertion order when HTTP/chat payloads cross the stream seam.
 serde_json = { workspace = true, features = ["preserve_order"] }

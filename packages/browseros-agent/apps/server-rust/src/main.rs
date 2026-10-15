@@ -33,7 +33,13 @@ fn run() -> i32 {
             .enable_all()
             .build()
         {
-            Ok(runtime) => runtime.block_on(serve(&config)),
+            Ok(runtime) => {
+                let code = runtime.block_on(serve(&config));
+                // Runtime drop otherwise waits indefinitely for blocking jobs,
+                // even after the async service drain met Chromium's deadline.
+                runtime.shutdown_timeout(Duration::from_millis(250));
+                code
+            }
             Err(error) => fatal(&format!("failed to start runtime: {error}"), exit::GENERAL),
         },
     }
@@ -62,7 +68,7 @@ async fn serve(config_path: &Path) -> i32 {
     let listener = match tokio::net::TcpListener::bind((Ipv4Addr::UNSPECIFIED, port)).await {
         Ok(listener) => listener,
         Err(error) => {
-            state.stop().await;
+            let _ = tokio::time::timeout(Duration::from_secs(1), state.stop()).await;
             return bind_failure(port, &error);
         }
     };
@@ -80,18 +86,24 @@ async fn serve(config_path: &Path) -> i32 {
     if let Err(error) = server_file.write(port).await {
         tracing::warn!(%error,"Failed to write server config for auto-discovery");
     }
+    // Reconciliation is a boot one-shot after serving starts. The manifest owner
+    // decides which links to repair and whether a public proxy URL was provided.
+    let mcp_manager = state.mcp_manager.clone();
+    let reconcile = tokio::spawn(async move { mcp_manager.self_heal().await });
     tracing::info!(port, version = VERSION, "http_server.started");
     let code = tokio::select! {
         () = state.shutdown.triggered() => exit::SUCCESS,
         () = termination_signal() => exit::SIGNAL,
         result = &mut server => {
             tracing::error!(?result,"HTTP server stopped unexpectedly");
+            reconcile.abort();
             server_file.remove().await;
             let _ = tokio::time::timeout(Duration::from_secs(1),state.stop()).await;
             return exit::GENERAL;
         }
     };
     stop_http.cancel();
+    reconcile.abort();
     // Idle keep-alives and SSE clients must not consume Chromium's entire grace.
     // Graceful drain flushes the shutdown response; the deadline bounds stuck work.
     if tokio::time::timeout(Duration::from_secs(3), &mut server)

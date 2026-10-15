@@ -85,8 +85,9 @@ pub fn parse_os_release(contents: &str) -> (String, Option<String>) {
     let mut version = None;
     for line in contents.lines() {
         if let Some((key, value)) = line.split_once('=') {
-            let value = if (value.starts_with('"') && value.ends_with('"'))
-                || (value.starts_with('\'') && value.ends_with('\''))
+            let value = if value.len() >= 2
+                && ((value.starts_with('"') && value.ends_with('"'))
+                    || (value.starts_with('\'') && value.ends_with('\'')))
             {
                 &value[1..value.len() - 1]
             } else {

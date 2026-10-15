@@ -27,7 +27,7 @@ pub fn zod_400(issues: &[ZodIssue]) -> Response {
         .into_response()
 }
 
-/// 500 chat envelope: the `ChatError` plus `name: "InternalServerError"`, `statusCode: 500`.
+/// HTTP 500 chat envelope; an upstream statusCode remains in the body for the client card.
 pub fn chat_envelope_500(error: &ChatError) -> Response {
     let mut body = serde_json::to_value(error).unwrap_or_else(|_| json!({}));
     if let Some(object) = body.as_object_mut() {
