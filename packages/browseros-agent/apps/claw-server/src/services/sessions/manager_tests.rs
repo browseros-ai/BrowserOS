@@ -1,3 +1,6 @@
+//! `Sessions` lifecycle against claw's real journal: audit start/end rows, operator
+//! cancellation marks and tab-claim release land in the database as the host records them.
+
 #[cfg(test)]
 mod tests {
     use crate::analytics::HostAnalyticsBridge;

@@ -15,8 +15,6 @@ pub use manager::{
     SessionCompletionHook, Sessions,
 };
 pub use session::Session;
-pub use tab_ownership::{
-    PageOwnership, ScopedGroupKey, TabGroup, TabGroupColor, TabGroupState, TitleSync,
-};
+pub(crate) use tab_ownership::ScopedGroupKey;
+pub use tab_ownership::{PageOwnership, TabGroup, TabGroupColor, TabGroupState, TitleSync};
 pub use target_bindings::{TargetBindings, TaskTargetStore};
-pub use usage::{SessionUsageSnapshot, ToolUsageSnapshot};

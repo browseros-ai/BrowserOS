@@ -1,3 +1,6 @@
+//! Atomic JSON files under one root (write to a temp file, then rename), with paths
+//! confined to that root. Target bindings persist through it.
+
 use crate::error::{HostError, HostResult, IoPath};
 use serde::{Serialize, de::DeserializeOwned};
 use std::{

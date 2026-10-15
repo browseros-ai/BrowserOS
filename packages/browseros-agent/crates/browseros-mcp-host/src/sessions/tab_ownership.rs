@@ -79,7 +79,7 @@ struct ConvoTabs {
 /// it must not split a retained group or redirect work to the task's current binding.
 /// Unbound captures have no saved profile but still retain their actual window.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
-pub struct ScopedGroupKey {
+pub(crate) struct ScopedGroupKey {
     pub browser_profile_id: Option<BrowserProfileId>,
     pub window_id: WindowId,
 }
@@ -95,7 +95,7 @@ pub struct TabGroup {
     pub window_id: Option<WindowId>,
     /// Borrowed groups are never closed by retained-task cleanup.
     pub borrowed: bool,
-    pub scope: Option<ScopedGroupKey>,
+    pub(crate) scope: Option<ScopedGroupKey>,
 }
 
 /// Desired browser group-title state. `Pending` survives disconnects until the
@@ -258,7 +258,7 @@ impl PageOwnership {
     /// Looks up the profile/window supplied by the admitted view. Revision remains
     /// in BrowserView and delayed creation capabilities; this lookup never reads
     /// or follows the task's current binding. Keep the argument for caller compatibility.
-    pub async fn group_for_capture(
+    pub(crate) async fn group_for_capture(
         &self,
         convo_id: &ConvoId,
         profile: &BrowserProfileId,
@@ -272,7 +272,7 @@ impl PageOwnership {
         self.scoped_group(convo_id, &scope).await
     }
 
-    pub async fn scoped_group(
+    pub(crate) async fn scoped_group(
         &self,
         convo_id: &ConvoId,
         scope: &ScopedGroupKey,
@@ -285,7 +285,7 @@ impl PageOwnership {
             .cloned()
     }
 
-    pub async fn remember_scoped_group(
+    pub(crate) async fn remember_scoped_group(
         &self,
         convo_id: &ConvoId,
         scope: ScopedGroupKey,
@@ -305,7 +305,7 @@ impl PageOwnership {
     }
 
     /// Lifecycle operations cover every actual group, including those no longer current.
-    pub async fn groups(&self, convo_id: &ConvoId) -> Vec<TabGroup> {
+    pub(crate) async fn groups(&self, convo_id: &ConvoId) -> Vec<TabGroup> {
         let inner = self.inner.read().await;
         let Some(convo) = inner.convos.get(convo_id) else {
             return Vec::new();
@@ -313,7 +313,7 @@ impl PageOwnership {
         convo.retained_groups.values().cloned().collect()
     }
 
-    pub async fn update_group_by_ref(
+    pub(crate) async fn update_group_by_ref(
         &self,
         convo_id: &ConvoId,
         group_ref: &str,
@@ -334,7 +334,7 @@ impl PageOwnership {
         }
     }
 
-    pub async fn forget_group_by_ref(&self, convo_id: &ConvoId, group_ref: &str) {
+    pub(crate) async fn forget_group_by_ref(&self, convo_id: &ConvoId, group_ref: &str) {
         let mut inner = self.inner.write().await;
         if let Some(convo) = inner.convos.get_mut(convo_id) {
             convo.scoped_groups.retain(|_, id| id != group_ref);
@@ -352,7 +352,7 @@ impl PageOwnership {
 
     /// A projected listing can prove a group is no longer this capture's destination,
     /// but cannot prove global absence. Keep lifecycle ownership until global cleanup.
-    pub async fn detach_captured_group(
+    pub(crate) async fn detach_captured_group(
         &self,
         convo_id: &ConvoId,
         scope: &ScopedGroupKey,

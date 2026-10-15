@@ -1,6 +1,6 @@
 //! Identity glossary — the four scopes:
 //! - `ProfileId` — a stored agent profile configured by the user and persisted
-//!   by `crate::services::profiles`.
+//!   by the host (claw's `services::profiles`; see `seams::ProfileDirectory`).
 //! - `SessionId` — a server-minted task handle (or a legacy transport session).
 //!   Browser-target successors alias one persisted task record; `BrowserProfileId`
 //!   in core identifies a native saved profile and is unrelated to `ProfileId`.

@@ -127,7 +127,7 @@ impl TargetBindings {
             .and_then(|record| record.binding.clone())
     }
 
-    pub async fn binding_for_execution(
+    pub(crate) async fn binding_for_execution(
         &self,
         session: &SessionId,
     ) -> HostResult<Option<TargetBinding>> {
@@ -139,7 +139,7 @@ impl TargetBindings {
         Ok(record.binding.clone())
     }
 
-    pub async fn is_stopped(&self, session: &SessionId) -> bool {
+    pub(crate) async fn is_stopped(&self, session: &SessionId) -> bool {
         self.records
             .lock()
             .await
@@ -148,7 +148,7 @@ impl TargetBindings {
     }
 
     /// The latest successor is a live-map lookup hint, never authority to forget intent.
-    pub async fn current_session(&self, session: &SessionId) -> Option<SessionId> {
+    pub(crate) async fn current_session(&self, session: &SessionId) -> Option<SessionId> {
         self.records
             .lock()
             .await
@@ -243,7 +243,7 @@ impl TargetBindings {
         Ok(0)
     }
 
-    pub async fn remember_group(&self, session: &SessionId, group: &str) -> HostResult<()> {
+    pub(crate) async fn remember_group(&self, session: &SessionId, group: &str) -> HostResult<()> {
         let mut records = self.records.lock().await;
         let canonical = records.canonical(session).clone();
         if records.groups.get(group) == Some(&canonical) {
@@ -259,7 +259,7 @@ impl TargetBindings {
         Ok(())
     }
 
-    pub async fn owns_group(&self, session: &SessionId, group: &str) -> bool {
+    pub(crate) async fn owns_group(&self, session: &SessionId, group: &str) -> bool {
         let records = self.records.lock().await;
         records
             .groups
@@ -270,7 +270,7 @@ impl TargetBindings {
     /// Resolve the legacy group correlation before capture or tab creation. A caller
     /// that already chose a different task must explicitly reselect rather than borrow
     /// an old group's targeting as an accidental side effect of browser mutation.
-    pub async fn correlate_group(&self, session: &SessionId, group: &str) -> HostResult<()> {
+    pub(crate) async fn correlate_group(&self, session: &SessionId, group: &str) -> HostResult<()> {
         let mut records = self.records.lock().await;
         let Some(canonical) = records.groups.get(group).cloned() else {
             return Ok(());
