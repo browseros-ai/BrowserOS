@@ -59,14 +59,37 @@ async fn system_details() -> DiagnosticsResponse {
                 .unwrap_or_default(),
         )
     } else {
-        let version = tokio::process::Command::new("cmd")
-            .args(["/C", "ver"])
-            .kill_on_drop(true)
-            .output()
+        let mut command = if cfg!(windows) {
+            let mut command = tokio::process::Command::new("cmd");
+            command.args(["/C", "ver"]);
+            command
+        } else {
+            let mut command = tokio::process::Command::new("uname");
+            command.arg("-r");
+            command
+        };
+        command.kill_on_drop(true);
+        let version = tokio::time::timeout(std::time::Duration::from_secs(1), command.output())
             .await
             .ok()
+            .and_then(Result::ok)
             .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned());
+            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+            .and_then(|release| {
+                if cfg!(windows) {
+                    // os.release() exposes major.minor.build, not cmd's localized
+                    // banner or its optional update-build revision component.
+                    regex::Regex::new(r"\d+\.\d+\.\d+")
+                        .ok()
+                        .and_then(|pattern| {
+                            pattern
+                                .find(&release)
+                                .map(|value| value.as_str().to_owned())
+                        })
+                } else {
+                    (!release.is_empty()).then_some(release)
+                }
+            });
         (
             if cfg!(windows) {
                 "Windows"
