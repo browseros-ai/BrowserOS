@@ -56,7 +56,7 @@ pub(super) async fn list(
                 since: query.since,
             })
             .await
-            .map_err(|source| internal(&request_id, source.into()))?
+            .map_err(|source| internal(&request_id, source))?
             .into_iter()
             .map(contract_live_projection)
             .collect::<Vec<_>>();
@@ -133,7 +133,7 @@ pub(super) async fn get(
         .audit_log
         .get_task(&session_id)
         .await
-        .map_err(|source| internal(&request_id, source.into()))?
+        .map_err(|source| internal(&request_id, source))?
         .ok_or_else(|| {
             error(
                 &request_id,
@@ -163,7 +163,7 @@ pub(super) async fn cancel(
             .audit_log
             .get_task_summary(session_id.as_str())
             .await
-            .map_err(|source| internal(&request_id, source.into()))?
+            .map_err(|source| internal(&request_id, source))?
             .map(|summary| summary.status)
         {
             Some(TaskStatus::Cancelled) => 0,

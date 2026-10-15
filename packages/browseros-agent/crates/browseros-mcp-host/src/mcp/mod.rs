@@ -52,7 +52,6 @@ pub struct McpRouteConfig {
 
 /// Mounts the MCP endpoint at `/mcp`. Request hygiene (Origin and browser-fetch
 /// rejection, JSON content type) is the host's policy; layer it on the returned router.
-#[must_use]
 pub fn mcp_router(host: Arc<HostCtx>, config: McpRouteConfig) -> Router {
     Router::new().nest_service("/mcp", streamable_http_service(host, config.http))
 }
