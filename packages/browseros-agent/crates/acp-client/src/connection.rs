@@ -40,6 +40,10 @@ pub(crate) struct State {
     pub(crate) process: Process,
     pub(crate) routes: Arc<Routes>,
     pub(crate) stop: CancellationToken,
+    pub(crate) response_grace: Duration,
+    // EOF may precede waitpid, whose report also waits for stderr capture.
+    // Compose the configured phase budgets instead of racing a fixed short timer.
+    exit_report_grace: Duration,
     // Caller teardown must yield Closed even if the supervisor wins the race
     // to reap. Driver failures instead preserve an already-available exit report.
     shutdown_requested: AtomicBool,
@@ -60,7 +64,7 @@ pub(crate) struct Inner {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        self.state.close(Duration::from_secs(1));
+        self.state.close(self.options.shutdown_grace);
     }
 }
 
@@ -77,11 +81,14 @@ impl AgentConnection {
         options: ClientOptions,
         permissions: Arc<dyn PermissionPolicy>,
     ) -> Result<Self, AcpError> {
-        let (process, stdin, stdout) = Process::spawn(spec, options.stderr_tail_lines)?;
+        let (process, stdin, stdout) =
+            Process::spawn(spec, options.stderr_tail_lines, options.stderr_grace)?;
         let state = Arc::new(State {
             process,
             routes: Arc::default(),
             stop: CancellationToken::new(),
+            response_grace: options.response_grace,
+            exit_report_grace: options.response_grace.saturating_add(options.stderr_grace),
             shutdown_requested: AtomicBool::new(false),
             error_responses: Mutex::default(),
         });
@@ -93,6 +100,7 @@ impl AgentConnection {
         let dispatch_state = state.clone();
         let driver_state = state.clone();
         let permission_state = state.clone();
+        let shutdown_grace = options.shutdown_grace;
         tokio::spawn(async move {
             let result = Client.builder()
                 .on_receive_dispatch(async move |dispatch: Dispatch, _cx| {
@@ -160,7 +168,7 @@ impl AgentConnection {
                 // A malformed/broken transport may end dispatch without EOF.
                 // Wake prompt and permission waiters even if the child lives.
                 driver_state.stop.cancel();
-                driver_state.process.stop(Duration::from_secs(1));
+                driver_state.process.stop(shutdown_grace);
                 tracing::debug!(%error, "ACP connection driver stopped");
             }
         });
@@ -475,7 +483,7 @@ async fn map_error(
         // stdout EOF can beat waitpid by a scheduler tick. Give the sole child
         // owner time to reap and finish the stderr tail before reporting a crash.
         if let Ok(report) =
-            tokio::time::timeout(Duration::from_millis(1250), state.process.closed()).await
+            tokio::time::timeout(state.exit_report_grace, state.process.closed()).await
         {
             return exited(report);
         }

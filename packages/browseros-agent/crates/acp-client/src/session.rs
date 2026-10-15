@@ -2,10 +2,7 @@
 //! cancellation. Cancel is enqueued before waking pending permission policies;
 //! the prompt future is never dropped merely because the UI stopped reading.
 
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::{Agent, ConnectionTo};
 use tokio::sync::mpsc;
@@ -129,7 +126,7 @@ impl Session {
                     tokio::select! {
                         biased;
                         () = state.stop.cancelled() => Err(state.stopped_error()),
-                        result = tokio::time::timeout(Duration::from_secs(1), &mut response) => result.unwrap_or_else(|_| Err(exited(report))),
+                        result = tokio::time::timeout(state.response_grace, &mut response) => result.unwrap_or_else(|_| Err(exited(report))),
                     }
                 }
             }.map(|response| TurnOutcome { stop_reason: response.stop_reason, meta: response.meta });

@@ -62,15 +62,23 @@ its process group on Unix. It affects all connection clones and sessions. The
 last connection/session handle also starts supervised cleanup, including during
 an in-flight turn; turn streams, cancellers, and prompt tasks do not keep the
 agent alive. Pending turns finish with `Closed` on caller teardown. Driver
-failures use `Exited` when an exit report is already available. After child exit, prompts allow up to one
-second for a buffered response, then finish with `Exited` even if an escaped
-descendant still holds stdout. On Unix a supervisor drop guard also kills the
-process group if the runtime shuts down before cleanup finishes.
+failures use `Exited` when an exit report is already available. After child exit,
+prompts allow `ClientOptions::response_grace` for a buffered response, then finish
+with `Exited` even if an escaped descendant still holds stdout. On Unix a
+supervisor drop guard also kills the process group if the runtime shuts down before cleanup finishes.
 `closed()` waits for child reaping and bounded stderr capture; stderr is retained
 for diagnostics, never forwarded into the conversation. Each retained line keeps
 at most the final 8 KiB of incoming bytes.
 Non-Unix systems terminate the direct child; descendant-group cleanup is Unix
 only.
+
+`ClientOptions` separates `shutdown_grace` (automatic teardown), `response_grace`
+(final stdout response), and `stderr_grace` (diagnostic capture). All three default
+to one second; `control_timeout` defaults to 30 seconds. Construct options with
+`..ClientOptions::default()` when only some settings need overriding. Transport
+EOF waits up to the combined response/stderr budgets for the exit report, so
+configured stderr draining cannot lose a race to a shorter hard-coded deadline.
+Explicit `shutdown(grace)` still controls that individual shutdown call.
 
 Control requests have the configured deadline. A timed-out or dropped control
 future retires the connection because a late reply (especially load replay)
@@ -93,6 +101,14 @@ cargo clippy -p acp-client --all-targets -- -D warnings
 cargo fmt --all --check
 ACP_LIVE=1 cargo test -p acp-client --test live -- --ignored --nocapture
 ```
+
+The process tests use 30-second failure caps and generous independent I/O graces;
+healthy peers complete without waiting for those caps. Timeout tests advance the
+Tokio clock only after the fake agent acknowledges receiving the request. Unix
+descendant tests observe socket EOF instead of inferring exit from heartbeat
+silence, and cancellation uses an explicit acknowledgment/release handshake.
+The single-threaded fake agent also avoids creating a runtime worker per CPU in
+every subprocess when the suite runs concurrently.
 
 The `acp-client-fake-agent` binary is a test fixture, not an agent launcher. Normal
 tests use it with no network. The ignored live test uses `~/.local/bin/fx acp` and
@@ -128,3 +144,7 @@ independent of host credentials.
   approve/reject policies acpx 0.13.2 fallback ordering.
   WHY: Callers asking for a persistent decision should keep that preference;
   the built-in policies need compatibility when once options are unavailable.
+
+- DECIDED: Keep stdout, stderr, and automatic-shutdown graces independently configurable.
+  WHY: A short missing-response regression must not shorten startup or diagnostic
+  capture budgets on a CPU-starved host.

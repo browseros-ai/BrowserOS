@@ -47,6 +47,7 @@ async fn live_fx_and_claude() -> Result<(), Box<dyn std::error::Error>> {
             client_version: "0.1.0".into(),
             control_timeout: Duration::from_secs(90),
             stderr_tail_lines: 20,
+            ..ClientOptions::default()
         };
         let conn =
             AgentConnection::connect(spec.clone(), options.clone(), Arc::new(RejectAll)).await?;

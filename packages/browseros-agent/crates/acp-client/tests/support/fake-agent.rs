@@ -52,25 +52,38 @@ fn session_info() -> Value {
         "configOptions":[{"id":"model", "name":"Model", "type":"select", "currentValue":"fake", "options":[{"value":"fake", "name":"Fake"}]}]})
 }
 
-#[tokio::main]
+/// Atomically publish fixture acknowledgments so an observed file always has
+/// its complete contents, including PID handoffs on a heavily loaded machine.
+fn signal(path: &str, value: &str) -> std::io::Result<()> {
+    let pending = format!("{path}.tmp");
+    std::fs::write(&pending, value)?;
+    std::fs::rename(pending, path)
+}
+
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let scenario = std::env::args().nth(1).unwrap_or_default();
-    if scenario == "stdout-holder" {
-        // Escape the supervised group to reproduce an inherited stdout pipe
-        // that remains open after the direct ACP child has been reaped.
+    if scenario == "stdout-holder" || scenario == "grandchild-hang" {
         #[cfg(unix)]
-        rustix::process::setsid()?;
-        std::fs::write("stdout-holder-ready", std::process::id().to_string())?;
-        tokio::time::sleep(std::time::Duration::from_secs(15)).await;
-        return Ok(());
-    }
-    if scenario == "grandchild-hang" {
-        let mut count = 0_u64;
-        loop {
-            std::fs::write("grandchild-heartbeat", count.to_string())?;
-            count += 1;
-            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        {
+            use tokio::io::AsyncReadExt;
+            if scenario == "stdout-holder" {
+                // Escape the supervised group while retaining its stdout pipe.
+                rustix::process::setsid()?;
+            }
+            // The parent observes actual process exit through socket EOF, not a
+            // quiet heartbeat interval. Closing its end also cleans up a failed test.
+            let mut lifetime =
+                tokio::net::UnixStream::connect(std::env::var("ACP_TEST_LIFETIME_SOCKET")?).await?;
+            lifetime.write_all(b"r").await?;
+            if scenario == "stdout-holder" {
+                signal("stdout-holder-ready", &std::process::id().to_string())?;
+            }
+            let _ = lifetime.read(&mut [0]).await?;
         }
+        #[cfg(not(unix))]
+        std::future::pending::<()>().await;
+        return Ok(());
     }
     // Retain child handles for the life of the wrapper; subprocesses inherit
     // the group created by acp-client and must be stopped by group cleanup.
@@ -116,6 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match message["method"].as_str().unwrap_or_default() {
             "initialize" => {
                 if scenario == "hang-init" {
+                    signal("initialize-received", "ready")?;
                     continue;
                 }
                 if scenario == "auth-init" {
@@ -218,6 +232,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             "session/set_mode" | "session/set_config_option" => {
                 if scenario == "hang-control" {
+                    signal("control-received", "ready")?;
                     continue;
                 }
                 if scenario == "crash-control" {
@@ -424,7 +439,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(request) = pending.remove(&session) {
                     update(&mut out, &session, "after cancel 1").await?;
                     update(&mut out, &session, "after cancel 2").await?;
-                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    if scenario == "pause-cancel" && cancels.get(&session) == Some(&1) {
+                        signal("cancel-received", "ready")?;
+                        while !std::path::Path::new("release-cancel").exists() {
+                            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                        }
+                    }
                     reply(
                         &mut out,
                         request.prompt_id,

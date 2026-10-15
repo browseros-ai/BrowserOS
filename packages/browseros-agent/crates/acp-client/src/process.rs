@@ -34,6 +34,7 @@ impl Process {
     pub(crate) fn spawn(
         spec: LaunchSpec,
         tail_lines: usize,
+        stderr_grace: Duration,
     ) -> Result<(Self, ChildStdin, ChildStdout), AcpError> {
         let mut command = Command::new(&spec.program);
         command
@@ -122,7 +123,7 @@ impl Process {
             // A wrapper may exit before its descendants. They retain our pipe
             // descriptors, so group cleanup is also required after normal exit.
             group_guard.kill();
-            if tokio::time::timeout(Duration::from_secs(1), &mut drain)
+            if tokio::time::timeout(stderr_grace, &mut drain)
                 .await
                 .is_err()
             {

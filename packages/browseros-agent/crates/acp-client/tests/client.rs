@@ -17,12 +17,20 @@ use acp_client::{
 use futures_util::future::BoxFuture;
 use tempfile::TempDir;
 
+// These are failure caps, not expected runtimes. A runnable peer completes
+// immediately; CPU contention must not turn scheduler latency into a test failure.
+const WAIT_CAP: Duration = Duration::from_secs(30);
+const IO_GRACE: Duration = Duration::from_secs(10);
+
 fn options() -> ClientOptions {
     ClientOptions {
         client_name: "acp-client-test".into(),
         client_version: "1".into(),
-        control_timeout: Duration::from_secs(3),
+        control_timeout: WAIT_CAP,
         stderr_tail_lines: 2,
+        shutdown_grace: IO_GRACE,
+        response_grace: IO_GRACE,
+        stderr_grace: IO_GRACE,
     }
 }
 fn fake_spec(dir: &TempDir, scenario: &str) -> Result<LaunchSpec, Box<dyn std::error::Error>> {
@@ -53,7 +61,7 @@ async fn connect(
 async fn collect(
     turn: &mut Turn,
 ) -> Result<(Vec<SessionUpdate>, TurnOutcome), Box<dyn std::error::Error>> {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    tokio::time::timeout(WAIT_CAP, async {
         let mut updates = vec![];
         while let Some(event) = turn.next().await {
             match event {
@@ -81,7 +89,7 @@ fn visible(updates: &[SessionUpdate]) -> String {
         .collect()
 }
 async fn next_text(turn: &mut Turn, expected: &str) -> Result<(), Box<dyn std::error::Error>> {
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(WAIT_CAP, async {
         while let Some(event) = turn.next().await {
             if let TurnEvent::Update(update) = event
                 && visible(&[update]).contains(expected)
@@ -155,7 +163,7 @@ async fn streams_routes_controls_and_swallows_load_replay() -> Result<(), Box<dy
         first.prompt(text("closed alias")),
         Err(AcpError::Closed)
     ));
-    let report = conn.shutdown(Duration::from_secs(1)).await;
+    let report = conn.shutdown(IO_GRACE).await;
     assert!(report.status.is_some_and(|status| status.success()));
     Ok(())
 }
@@ -164,17 +172,19 @@ async fn streams_routes_controls_and_swallows_load_replay() -> Result<(), Box<dy
 async fn cancel_is_idempotent_drains_and_old_cancellers_cannot_cancel_next_turn()
 -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
-    let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
+    let conn = connect(&dir, "pause-cancel", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
     let mut turn = session.prompt(text("hang"))?;
     let cancel = turn.canceller();
     next_text(&mut turn, "started").await?;
     cancel.cancel();
     cancel.clone().cancel();
+    wait_for_file(&dir.path().join("cancel-received")).await?;
     assert!(matches!(
         session.prompt(text("still busy")),
         Err(AcpError::TurnInProgress)
     ));
+    std::fs::write(dir.path().join("release-cancel"), "ready")?;
     let (updates, outcome) = collect(&mut turn).await?;
     assert_eq!(visible(&updates), "after cancel 1after cancel 2");
     assert_eq!(outcome.stop_reason, StopReason::Cancelled);
@@ -190,7 +200,7 @@ async fn cancel_is_idempotent_drains_and_old_cancellers_cannot_cancel_next_turn(
         collect(&mut immediate).await?.1.stop_reason,
         StopReason::Cancelled
     );
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     Ok(())
 }
 
@@ -220,7 +230,7 @@ async fn cancelling_pending_permission_does_not_block_dispatch()
     turn.canceller().cancel();
     let (updates, _) = collect(&mut turn).await?;
     assert!(visible(&updates).contains("cancelled"));
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     Ok(())
 }
 
@@ -258,7 +268,7 @@ async fn permission_decisions_choose_only_offered_options() -> Result<(), Box<dy
         let (updates, _) = collect(&mut turn).await?;
         assert!(matches!(updates.first(), Some(SessionUpdate::ToolCall(_))));
         assert!(visible(&updates).contains(expected));
-        conn.shutdown(Duration::from_secs(1)).await;
+        conn.shutdown(IO_GRACE).await;
     }
     Ok(())
 }
@@ -284,7 +294,7 @@ async fn spawn_environment_and_exit_diagnostics() -> Result<(), Box<dyn std::err
     // macOS may canonicalize /var to /private/var in current_dir().
     assert!(visible(&updates).contains(&dir.path().canonicalize()?.display().to_string()));
     let mut crash = session.prompt(text("crash"))?;
-    match tokio::time::timeout(Duration::from_secs(3), crash.next()).await? {
+    match tokio::time::timeout(WAIT_CAP, crash.next()).await? {
         Some(TurnEvent::Done(Err(AcpError::Exited {
             status,
             stderr_tail,
@@ -330,7 +340,7 @@ async fn errors_capabilities_and_control_timeouts() -> Result<(), Box<dyn std::e
             }
             _ => return Err("unexpected error mapping".into()),
         }
-        conn.shutdown(Duration::from_secs(1)).await;
+        conn.shutdown(IO_GRACE).await;
     }
     let conn = connect(&dir, "no-caps", Arc::new(ApproveAll)).await?;
     assert!(matches!(
@@ -356,39 +366,37 @@ async fn errors_capabilities_and_control_timeouts() -> Result<(), Box<dyn std::e
     }
     let session = conn.new_session(params(&dir)).await?;
     session.close().await?;
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     assert!(
         matches!(connect(&dir, "v2", Arc::new(ApproveAll)).await, Err(error) if matches!(error.downcast_ref::<AcpError>(), Some(AcpError::ProtocolVersion(_))))
     );
-    let mut short = options();
-    short.control_timeout = Duration::from_millis(60);
-    assert!(matches!(
-        AgentConnection::connect(
-            fake_spec(&dir, "hang-init")?,
-            short.clone(),
-            Arc::new(ApproveAll)
-        )
-        .await,
-        Err(AcpError::Timeout {
-            method: "initialize",
-            ..
-        })
-    ));
-    let conn = AgentConnection::connect(
-        fake_spec(&dir, "hang-control")?,
-        short,
+    let initialize_received = dir.path().join("initialize-received");
+    let mut initializing = Box::pin(AgentConnection::connect(
+        fake_spec(&dir, "hang-init")?,
+        options(),
         Arc::new(ApproveAll),
-    )
-    .await?;
-    let session = conn.new_session(params(&dir)).await?;
-    assert!(matches!(
-        session.set_mode("code").await,
-        Err(AcpError::Timeout {
-            method: "session/set_mode",
-            ..
-        })
     ));
-    tokio::time::timeout(Duration::from_secs(3), conn.closed()).await?;
+    tokio::select! {
+        _ = &mut initializing => return Err("initialize unexpectedly completed before its timeout".into()),
+        ready = wait_for_file(&initialize_received) => ready?,
+    }
+    advance_deadline().await;
+    assert!(
+        matches!(initializing.await, Err(AcpError::Timeout { method: "initialize", after }) if after == WAIT_CAP)
+    );
+    let conn = connect(&dir, "hang-control", Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(&dir)).await?;
+    let control_received = dir.path().join("control-received");
+    let mut setting = Box::pin(session.set_mode("code"));
+    tokio::select! {
+        _ = &mut setting => return Err("set_mode unexpectedly completed before its timeout".into()),
+        ready = wait_for_file(&control_received) => ready?,
+    }
+    advance_deadline().await;
+    assert!(
+        matches!(setting.await, Err(AcpError::Timeout { method: "session/set_mode", after }) if after == WAIT_CAP)
+    );
+    tokio::time::timeout(WAIT_CAP, conn.closed()).await?;
     assert!(matches!(
         session.prompt(text("retired")),
         Err(AcpError::Exited { .. }) | Err(AcpError::Closed)
@@ -400,11 +408,7 @@ async fn errors_capabilities_and_control_timeouts() -> Result<(), Box<dyn std::e
 async fn shutdown_escalates_and_last_handle_drop_reaps() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
     let conn = connect(&dir, "ignore-eof", Arc::new(ApproveAll)).await?;
-    let report = tokio::time::timeout(
-        Duration::from_secs(3),
-        conn.shutdown(Duration::from_millis(50)),
-    )
-    .await?;
+    let report = tokio::time::timeout(WAIT_CAP, conn.shutdown(Duration::ZERO)).await?;
     assert!(report.status.is_some_and(|status| !status.success()));
     let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
     let pid = conn.pid().ok_or("missing PID")?;
@@ -412,7 +416,7 @@ async fn shutdown_escalates_and_last_handle_drop_reaps() -> Result<(), Box<dyn s
     #[cfg(unix)]
     {
         let pid = rustix::process::Pid::from_raw(i32::try_from(pid)?).ok_or("invalid PID")?;
-        tokio::time::timeout(Duration::from_secs(3), async {
+        tokio::time::timeout(WAIT_CAP, async {
             while rustix::process::test_kill_process(pid).is_ok() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
@@ -456,7 +460,7 @@ async fn unknown_notifications_are_logged_without_payload_and_turn_survives()
     let session = conn.new_session(params(&dir)).await?;
     let mut turn = session.prompt(text("normal"))?;
     assert_eq!(visible(&collect(&mut turn).await?.0), "hello:s1 world");
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     let log = String::from_utf8(bytes.lock().map_err(|_| "capture poisoned")?.clone())?;
     assert!(
         log.contains("future_unknown_tag"),
@@ -475,7 +479,7 @@ async fn dropping_turn_drains_before_releasing_session_and_shutdown_finishes_act
     let mut abandoned = session.prompt(text("hang"))?;
     next_text(&mut abandoned, "started").await?;
     drop(abandoned);
-    let mut next = tokio::time::timeout(Duration::from_secs(3), async {
+    let mut next = tokio::time::timeout(WAIT_CAP, async {
         loop {
             match session.prompt(text("normal")) {
                 Ok(turn) => return Ok::<_, AcpError>(turn),
@@ -492,7 +496,7 @@ async fn dropping_turn_drains_before_releasing_session_and_shutdown_finishes_act
     let mut active = session.prompt(text("hang"))?;
     next_text(&mut active, "started").await?;
     let waiter = conn.clone();
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     assert!(matches!(
         active.next().await,
         Some(TurnEvent::Done(Err(
@@ -509,12 +513,14 @@ async fn dropping_control_future_retires_ambiguous_connection()
     let dir = TempDir::new()?;
     let conn = connect(&dir, "hang-control", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
-    assert!(
-        tokio::time::timeout(Duration::from_millis(30), session.set_mode("code"))
-            .await
-            .is_err()
-    );
-    tokio::time::timeout(Duration::from_secs(3), conn.closed()).await?;
+    let control_received = dir.path().join("control-received");
+    let mut setting = Box::pin(session.set_mode("code"));
+    tokio::select! {
+        _ = &mut setting => return Err("set_mode unexpectedly completed before cancellation".into()),
+        ready = wait_for_file(&control_received) => ready?,
+    }
+    drop(setting);
+    tokio::time::timeout(WAIT_CAP, conn.closed()).await?;
     assert!(matches!(
         session.prompt(text("must not reuse")),
         Err(AcpError::Closed | AcpError::Exited { .. })
@@ -529,7 +535,7 @@ async fn unterminated_stderr_is_bounded_and_preserves_tail()
     let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
     let mut turn = session.prompt(text("long-stderr"))?;
-    match tokio::time::timeout(Duration::from_secs(3), turn.next()).await? {
+    match tokio::time::timeout(WAIT_CAP, turn.next()).await? {
         Some(TurnEvent::Done(Err(AcpError::Exited { stderr_tail, .. }))) => {
             assert_eq!(stderr_tail.len(), 1);
             assert_eq!(stderr_tail[0].len(), 8192);
@@ -544,25 +550,9 @@ async fn unterminated_stderr_is_bounded_and_preserves_tail()
 #[tokio::test]
 async fn shutdown_kills_wrapper_grandchildren() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
-    let conn = connect(&dir, "ignore-eof", Arc::new(ApproveAll)).await?;
-    let session = conn.new_session(params(&dir)).await?;
-    let mut turn = session.prompt(text("grandchild"))?;
-    collect(&mut turn).await?;
-    let heartbeat = dir.path().join("grandchild-heartbeat");
-    tokio::time::timeout(Duration::from_secs(3), async {
-        while !heartbeat.exists() {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-    })
-    .await?;
-    conn.shutdown(Duration::from_millis(30)).await;
-    let before = std::fs::read_to_string(&heartbeat)?;
-    tokio::time::sleep(Duration::from_millis(100)).await;
-    assert_eq!(
-        std::fs::read_to_string(heartbeat)?,
-        before,
-        "grandchild kept running after process group shutdown"
-    );
+    let (conn, _session, lifetime) = grandchild_fixture(&dir).await?;
+    tokio::time::timeout(WAIT_CAP, conn.shutdown(Duration::ZERO)).await?;
+    assert_descendant_exited(lifetime)?;
     Ok(())
 }
 
@@ -594,7 +584,7 @@ async fn policy_also_answers_setup_permissions_and_failed_load_does_not_revive_c
     let conn = connect(&dir, "setup-permission", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
     assert_eq!(session.id().to_string(), "setup-session");
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
 
     let conn = connect(&dir, "load-failure", Arc::new(ApproveAll)).await?;
     let session = conn.new_session(params(&dir)).await?;
@@ -607,7 +597,7 @@ async fn policy_also_answers_setup_permissions_and_failed_load_does_not_revive_c
         session.prompt(text("closed")),
         Err(AcpError::Closed)
     ));
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     Ok(())
 }
 
@@ -616,7 +606,7 @@ async fn policy_also_answers_setup_permissions_and_failed_load_does_not_revive_c
 async fn terminal(
     turn: &mut Turn,
 ) -> Result<Result<TurnOutcome, AcpError>, Box<dyn std::error::Error>> {
-    tokio::time::timeout(Duration::from_secs(4), async {
+    tokio::time::timeout(WAIT_CAP, async {
         while let Some(event) = turn.next().await {
             if let TurnEvent::Done(result) = event {
                 assert!(turn.next().await.is_none());
@@ -628,9 +618,8 @@ async fn terminal(
     .await?
 }
 
-#[cfg(unix)]
 async fn wait_for_file(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(WAIT_CAP, async {
         while !path.exists() {
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
@@ -655,7 +644,7 @@ async fn dropping_handles_during_ignored_cancel_stops_agent()
     // Keeping the stream and a canceller alive must not lease the connection.
     assert!(matches!(terminal(&mut turn).await?, Err(AcpError::Closed)));
     let pid = rustix::process::Pid::from_raw(i32::try_from(pid)?).ok_or("invalid pid")?;
-    tokio::time::timeout(Duration::from_secs(3), async {
+    tokio::time::timeout(WAIT_CAP, async {
         while rustix::process::test_kill_process(pid).is_ok() {
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
@@ -679,15 +668,21 @@ async fn inherited_stdout_cannot_hold_turn_open_after_exit()
 -> Result<(), Box<dyn std::error::Error>> {
     for cancel in [false, true] {
         let dir = TempDir::new()?;
-        let conn = connect(&dir, "", Arc::new(ApproveAll)).await?;
+        let (spec, listener) = watched_spec(&dir, "")?;
+        let mut client_options = options();
+        // Only this fixture deliberately withholds a response. Its stderr and
+        // startup budgets remain generous while the product drain grace is short.
+        client_options.response_grace = Duration::from_millis(50);
+        let conn = AgentConnection::connect(spec, client_options, Arc::new(ApproveAll)).await?;
         let session = conn.new_session(params(&dir)).await?;
         let mut turn = session.prompt(text("inherited-stdout"))?;
         let ready = dir.path().join("stdout-holder-ready");
         wait_for_file(&ready).await?;
+        let _lifetime = lifetime_socket(listener).await?;
         let pid: i32 = std::fs::read_to_string(&ready)?.parse()?;
         let _cleanup =
             EscapedChild(rustix::process::Pid::from_raw(pid).ok_or("invalid holder pid")?);
-        let report = tokio::time::timeout(Duration::from_secs(3), conn.closed()).await?;
+        let report = tokio::time::timeout(WAIT_CAP, conn.closed()).await?;
         assert_eq!(report.status.and_then(|status| status.code()), Some(23));
         if cancel {
             turn.canceller().cancel();
@@ -725,7 +720,7 @@ async fn transport_failures_are_closed_or_exited_and_retire_connection()
         session.prompt(text("must not reuse")),
         Err(AcpError::Closed | AcpError::Exited { .. })
     ));
-    conn.shutdown(Duration::from_millis(10)).await;
+    conn.shutdown(Duration::ZERO).await;
     Ok(())
 }
 
@@ -738,7 +733,7 @@ async fn config_setter_returns_agent_options_and_refreshes_snapshot()
     let returned = serde_json::to_value(session.set_config_option("model", "requested").await?)?;
     assert_eq!(returned[0]["currentValue"], "agent-selected");
     assert_eq!(serde_json::to_value(session.config_options())?, returned);
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     Ok(())
 }
 
@@ -767,7 +762,7 @@ async fn idle_control_notifications_refresh_all_session_aliases()
     // Idle control state is retained, but no idle transcript update is replayed.
     let mut turn = alias.prompt(text("normal"))?;
     assert_eq!(visible(&collect(&mut turn).await?.0), "hello:s1 world");
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     Ok(())
 }
 
@@ -822,7 +817,7 @@ async fn permission_fallbacks_match_acpx_preferences() -> Result<(), Box<dyn std
             }
             None => assert_eq!(outcome["outcome"], "cancelled"),
         }
-        conn.shutdown(Duration::from_secs(1)).await;
+        conn.shutdown(IO_GRACE).await;
     }
     Ok(())
 }
@@ -841,7 +836,7 @@ async fn auth_words_do_not_override_rpc_codes_or_mcp_failures()
             matches!(conn.new_session(params(&dir)).await, Err(AcpError::Rpc { code, data: Some(_), .. }) if code == expected),
             "{scenario}"
         );
-        conn.shutdown(Duration::from_secs(1)).await;
+        conn.shutdown(IO_GRACE).await;
     }
     Ok(())
 }
@@ -850,34 +845,15 @@ async fn auth_words_do_not_override_rpc_codes_or_mcp_failures()
 #[test]
 fn dropping_runtime_kills_supervised_process_group() -> Result<(), Box<dyn std::error::Error>> {
     let dir = TempDir::new()?;
-    let runtime = tokio::runtime::Runtime::new()?;
-    // Keep public handles outside the runtime: shutdown drops the supervisor
-    // before the normal last-handle teardown path gets a chance to run.
-    let handles = runtime.block_on(async {
-        let conn = connect(&dir, "ignore-eof", Arc::new(ApproveAll)).await?;
-        let session = conn.new_session(params(&dir)).await?;
-        let mut turn = session.prompt(text("grandchild"))?;
-        collect(&mut turn).await?;
-        wait_for_file(&dir.path().join("grandchild-heartbeat")).await?;
-        Ok::<_, Box<dyn std::error::Error>>((conn, session))
-    })?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(2)
+        .enable_all()
+        .build()?;
+    // Retain public handles outside the runtime so only the dropped supervisor
+    // can kill the group. Socket EOF observes that exit without a scheduler guess.
+    let (_conn, _session, lifetime) = runtime.block_on(grandchild_fixture(&dir))?;
     drop(runtime);
-    // Give a final already-running write time to settle, then require silence.
-    std::thread::sleep(Duration::from_millis(100));
-    let heartbeat = dir.path().join("grandchild-heartbeat");
-    let before = std::fs::read_to_string(&heartbeat)?;
-    std::thread::sleep(Duration::from_millis(100));
-    let after = std::fs::read_to_string(&heartbeat)?;
-    // Clean the reproduction up even on the unfixed implementation.
-    if let Some(pid) = handles
-        .0
-        .pid()
-        .and_then(|pid| i32::try_from(pid).ok())
-        .and_then(rustix::process::Pid::from_raw)
-    {
-        let _ = rustix::process::kill_process_group(pid, rustix::process::Signal::KILL);
-    }
-    assert_eq!(before, after, "grandchild survived dropped supervisor");
+    assert_descendant_exited(lifetime)?;
     Ok(())
 }
 
@@ -897,7 +873,7 @@ async fn config_response_cannot_overwrite_later_notification()
             "newer-notification"
         );
     }
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
     Ok(())
 }
 
@@ -947,6 +923,79 @@ async fn notifications_immediately_after_attachment_refresh_snapshots()
             );
         }
     }
-    conn.shutdown(Duration::from_secs(1)).await;
+    conn.shutdown(IO_GRACE).await;
+    Ok(())
+}
+
+/// Pause only after real I/O acknowledged receipt. Resuming before awaiting the
+/// timeout keeps subsequent process cleanup on wall time instead of auto-advancing it.
+async fn advance_deadline() {
+    tokio::time::pause();
+    tokio::time::advance(WAIT_CAP).await;
+    tokio::time::resume();
+}
+
+#[cfg(unix)]
+fn watched_spec(
+    dir: &TempDir,
+    scenario: &str,
+) -> Result<(LaunchSpec, tokio::net::UnixListener), Box<dyn std::error::Error>> {
+    let path = dir.path().join("life.sock");
+    let listener = tokio::net::UnixListener::bind(&path)?;
+    let mut spec = fake_spec(dir, scenario)?;
+    spec.env.insert(
+        "ACP_TEST_LIFETIME_SOCKET".into(),
+        path.to_string_lossy().into_owned(),
+    );
+    Ok((spec, listener))
+}
+
+#[cfg(unix)]
+async fn lifetime_socket(
+    listener: tokio::net::UnixListener,
+) -> Result<std::os::unix::net::UnixStream, Box<dyn std::error::Error>> {
+    use tokio::io::AsyncReadExt;
+    let (mut socket, _) = tokio::time::timeout(WAIT_CAP, listener.accept()).await??;
+    let mut ready = [0];
+    tokio::time::timeout(WAIT_CAP, socket.read_exact(&mut ready)).await??;
+    assert_eq!(&ready, b"r");
+    // A standard socket survives dropping the test runtime, unlike a Tokio
+    // registration owned by its reactor. Its read timeout is only a failure cap.
+    let socket = socket.into_std()?;
+    socket.set_nonblocking(false)?;
+    socket.set_read_timeout(Some(WAIT_CAP))?;
+    Ok(socket)
+}
+
+#[cfg(unix)]
+async fn grandchild_fixture(
+    dir: &TempDir,
+) -> Result<
+    (
+        AgentConnection,
+        acp_client::Session,
+        std::os::unix::net::UnixStream,
+    ),
+    Box<dyn std::error::Error>,
+> {
+    let (spec, listener) = watched_spec(dir, "ignore-eof")?;
+    let conn = AgentConnection::connect(spec, options(), Arc::new(ApproveAll)).await?;
+    let session = conn.new_session(params(dir)).await?;
+    let mut turn = session.prompt(text("grandchild"))?;
+    collect(&mut turn).await?;
+    let lifetime = lifetime_socket(listener).await?;
+    Ok((conn, session, lifetime))
+}
+
+#[cfg(unix)]
+fn assert_descendant_exited(
+    mut lifetime: std::os::unix::net::UnixStream,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::io::Read;
+    assert_eq!(
+        lifetime.read(&mut [0])?,
+        0,
+        "descendant survived group cleanup"
+    );
     Ok(())
 }
