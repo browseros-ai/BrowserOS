@@ -30,7 +30,8 @@ impl Fixture {
         let config_file = dir.path().join("config.json");
         std::fs::write(
             &config_file,
-            r#"{"ports":{"server":0,"cdp":0},"directories":{"resources":".","execution":"."}}"#,
+            // These handlers run in-process; the sidecar parser still requires nonzero ports.
+            r#"{"ports":{"server":1,"cdp":1},"directories":{"resources":".","execution":"."}}"#,
         )?;
         let env = EnvConfig {
             browseros_dir: Some(dir.path().join("browseros")),

@@ -28,6 +28,7 @@ pub struct MetricsConfig {
     pub properties: BTreeMap<String, Value>,
 }
 
+/// Cheaply cloned process sink; clones share the SDK queue, rollup and shutdown lifetime.
 #[derive(Clone, Default)]
 pub struct Metrics {
     active: Option<Arc<Active>>,
