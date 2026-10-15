@@ -415,6 +415,19 @@ impl PageView {
             .is_some_and(|control| control.guard == guard)
     }
 
+    /// Whether this page offers a way to search itself.
+    ///
+    /// Asked when the model has just said nothing listed can advance the goal,
+    /// which is the one situation where a page's own search is the obvious next
+    /// move and the goal never mentions it.
+    #[must_use]
+    pub fn can_search_itself(&self) -> bool {
+        self.controls
+            .iter()
+            .filter(|control| control.is_offerable())
+            .any(|control| crate::kind::of(control) == crate::kind::Kind::SearchField)
+    }
+
     /// How much page text travels with a decision, in bytes.
     ///
     /// Irrelevant detail in the state measurably degrades the answer as well as

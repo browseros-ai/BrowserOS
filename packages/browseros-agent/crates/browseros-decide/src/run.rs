@@ -72,6 +72,12 @@ pub struct Known {
     /// twice. Note what it does not do: a target found earlier stays in
     /// `target`, so an exhausted page is not an empty one.
     pub exhausted: bool,
+    /// Whether this run has already reached for this page's own search.
+    ///
+    /// Kept beside the fingerprint so it is forgotten the moment the page
+    /// changes, which is what stops a run searching the same page twice and
+    /// what lets it search the page the search took it to.
+    pub searched: bool,
 }
 
 impl Known {
@@ -334,7 +340,8 @@ mod tests {
             Known {
                 fingerprint: 8,
                 target: None,
-                exhausted: false
+                exhausted: false,
+                searched: false,
             }
         );
     }

@@ -1250,3 +1250,126 @@ async fn a_browser_without_grep_is_offered_no_way_to_match() {
     );
     assert!(offered.contains(&browseros_decide::vocabulary::Telling::Text));
 }
+
+/// The OpenAI docs case, the other half. The page offered
+/// `button "Search the API docs"`, the run was asked for something that page
+/// did not list, and it answered that none of the listed controls would do.
+/// That ended the run. It is the one situation where a page's own search is
+/// the obvious next move, and the goal never mentions it.
+#[tokio::test]
+async fn nothing_listed_fitting_is_a_reason_to_search_the_page() {
+    let mut search = control("e9", "searchbox", "Search the API docs");
+    search.state.editable = true;
+    let view = page(
+        "https://example.test/docs",
+        1,
+        vec![
+            control("e1", "link", "Home"),
+            control("e2", "link", "Guides"),
+            search,
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![
+        // Nothing here will do.
+        vec![
+            ("operation", spread("ACT", 0.90, 0.03)),
+            ("act_how", spread("CLICK", 0.90, 0.03)),
+            ("target", spread("none_of_these", 0.90, 0.03)),
+        ],
+        // Asked again, with the search field in front.
+        vec![
+            ("operation", spread("ACT", 0.95, 0.02)),
+            ("act_how", spread("FILL", 0.95, 0.02)),
+            ("target", spread("e9", 0.95, 0.02)),
+            ("fill_value", spread("search term", 0.95, 0.02)),
+        ],
+        vec![("operation", spread("DONE", 0.95, 0.02))],
+    ]);
+    let run = run_for("find the page about the secure tunnel").offering(Offered {
+        values: vec![NamedValue::new("search term", "secure tunnel")],
+        ..Offered::default()
+    });
+
+    let outcome = advance(&oracle, &driver, run).await;
+
+    assert_eq!(
+        outcome.status,
+        Status::Satisfied,
+        "the run carried on instead of ending on nothing_offered"
+    );
+    assert_eq!(
+        driver.targets_acted_on(),
+        vec!["e9".to_string()],
+        "and what it acted on was the page's own search field"
+    );
+    assert!(
+        outcome
+            .decided
+            .iter()
+            .any(|decided| decided.verdict == "handed_back"),
+        "the refusal is still on the record, it just is not the ending"
+    );
+}
+
+/// Once per page. A search that does not help must not be tried again, or the
+/// run trades one dead end for a loop.
+#[tokio::test]
+async fn a_page_is_searched_once_and_then_handed_back() {
+    let mut search = control("e9", "searchbox", "Search");
+    search.state.editable = true;
+    let view = page(
+        "https://example.test/docs",
+        1,
+        vec![control("e1", "link", "Home"), search],
+    );
+    let driver = Fake::new(view);
+    let nothing_fits = || {
+        vec![
+            ("operation", spread("ACT", 0.90, 0.03)),
+            ("act_how", spread("CLICK", 0.90, 0.03)),
+            ("target", spread("none_of_these", 0.90, 0.03)),
+        ]
+    };
+    let oracle = Scripted::new(vec![nothing_fits(), nothing_fits()]);
+
+    let outcome = advance(&oracle, &driver, run_for("find something not here")).await;
+
+    let Status::NeedsInput(why, _) = outcome.status else {
+        panic!("expected a hand-back, got {:?}", outcome.status);
+    };
+    assert_eq!(why, Handback::NothingOffered);
+    assert_eq!(
+        outcome.decided.len(),
+        2,
+        "it asked twice and then stopped, rather than asking forever"
+    );
+}
+
+/// A page with no way to search itself hands back as it always did, so the
+/// change is additive rather than a new way to spend a budget.
+#[tokio::test]
+async fn a_page_that_cannot_search_itself_still_hands_back_at_once() {
+    let view = page(
+        "https://example.test/",
+        1,
+        vec![
+            control("e1", "link", "Home"),
+            control("e2", "link", "About"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![vec![
+        ("operation", spread("ACT", 0.90, 0.03)),
+        ("act_how", spread("CLICK", 0.90, 0.03)),
+        ("target", spread("none_of_these", 0.90, 0.03)),
+    ]]);
+
+    let outcome = advance(&oracle, &driver, run_for("find something not here")).await;
+
+    let Status::NeedsInput(why, _) = outcome.status else {
+        panic!("expected a hand-back, got {:?}", outcome.status);
+    };
+    assert_eq!(why, Handback::NothingOffered);
+    assert_eq!(outcome.decided.len(), 1, "one question, one answer, done");
+}

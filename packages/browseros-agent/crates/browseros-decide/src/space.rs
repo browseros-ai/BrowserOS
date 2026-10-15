@@ -100,11 +100,16 @@ impl ActionSpace {
     /// question; the page as a whole is reachable across as many questions as it
     /// takes.
     #[must_use]
+    /// `insist` names kinds to pull forward regardless of what the goal says.
+    /// The goal's own words are not the only reason a kind matters: a run that
+    /// has just been told nothing listed can advance it has a reason to look at
+    /// this page's search field that the goal never mentioned.
     pub fn ordered(
         view: &PageView,
         goal: &str,
         last_acted: Option<&str>,
         retired: &[String],
+        insist: &[Kind],
     ) -> Vec<Candidate> {
         let mut scored: Vec<(i32, &Control)> = view
             .controls
@@ -119,7 +124,12 @@ impl ActionSpace {
         // batch index mean anything.
         scored.sort_by_key(|(score, _)| -score);
 
-        let implied = kind::implied_by(goal);
+        let mut implied: Vec<Kind> = insist.to_vec();
+        for wanted in kind::implied_by(goal) {
+            if !implied.contains(&wanted) {
+                implied.push(wanted);
+            }
+        }
         let mut ordered: Vec<Candidate> = Vec::new();
 
         // One place that decides whether a candidate can still be added, so the
@@ -199,7 +209,7 @@ impl ActionSpace {
         last_acted: Option<&str>,
         retired: &[String],
     ) -> Self {
-        Self::batch(&Self::ordered(view, goal, last_acted, retired), 0)
+        Self::batch(&Self::ordered(view, goal, last_acted, retired, &[]), 0)
     }
 
     /// Every offerable candidate in page order, uncapped.
@@ -652,7 +662,7 @@ mod tests {
             controls.push(unnamed);
         }
         let view = view_with(controls);
-        let ordered = ActionSpace::ordered(&view, "pick one", None, &[]);
+        let ordered = ActionSpace::ordered(&view, "pick one", None, &[], &[]);
         assert_eq!(ActionSpace::batches(&ordered), 2);
 
         let first = ActionSpace::batch(&ordered, 0);
@@ -683,7 +693,7 @@ mod tests {
     #[test]
     fn a_batch_past_the_end_is_empty() {
         let view = view_with(vec![control("e1", "button", "Only")]);
-        let ordered = ActionSpace::ordered(&view, "press it", None, &[]);
+        let ordered = ActionSpace::ordered(&view, "press it", None, &[], &[]);
         let past = ActionSpace::batch(&ordered, 4);
         assert!(past.offered.is_empty());
         assert_eq!(past.omitted, 0);
@@ -698,7 +708,7 @@ mod tests {
             .map(|index| control(&format!("e{index}"), "link", &format!("Link {index}")))
             .collect();
         let view = view_with(controls);
-        let ordered = ActionSpace::ordered(&view, "click one", None, &[]);
+        let ordered = ActionSpace::ordered(&view, "click one", None, &[], &[]);
         let first = ActionSpace::batch(&ordered, 0);
         assert_eq!(first.choice_options().len(), MAX_OFFERED + 1);
     }
@@ -711,8 +721,8 @@ mod tests {
             .map(|index| control(&format!("e{index}"), "link", &format!("Link {index}")))
             .collect();
         let view = view_with(controls);
-        let once = ActionSpace::ordered(&view, "click a link", None, &[]);
-        let twice = ActionSpace::ordered(&view, "click a link", None, &[]);
+        let once = ActionSpace::ordered(&view, "click a link", None, &[], &[]);
+        let twice = ActionSpace::ordered(&view, "click a link", None, &[], &[]);
         assert_eq!(once, twice);
     }
 

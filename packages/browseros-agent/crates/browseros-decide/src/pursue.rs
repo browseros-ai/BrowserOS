@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use crate::client::{Jev, JevError, Question};
 use crate::drive::{Answer, Ask, Driver, Journey, Move, Performed};
 use crate::gate::{self, Decision, Handback, Verdict};
+use crate::kind::Kind;
 use crate::offer::Destination;
 use crate::questions::{self, Surface};
 use crate::run::Known;
@@ -272,8 +273,20 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             values: &values,
             unavailable: &run.offered.unavailable,
         };
-        let ordered =
-            ActionSpace::ordered(&view, &run.goal, run.last_acted.as_deref(), &run.retired);
+        // Once this run has decided to search this page, its search field stays
+        // at the front of the question for as long as the page stands still.
+        let insist: &[Kind] = if run.known.searched {
+            &[Kind::SearchField]
+        } else {
+            &[]
+        };
+        let ordered = ActionSpace::ordered(
+            &view,
+            &run.goal,
+            run.last_acted.as_deref(),
+            &run.retired,
+            insist,
+        );
 
         let left = Duration::from_secs(run.budget.max_seconds).saturating_sub(started.elapsed());
         let searched = match search(oracle, &run, &view, &ordered, surface, left).await {
@@ -345,6 +358,25 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         match judged {
             Verdict::Execute => {}
             Verdict::HandBack(why, said) => {
+                // Nothing listed can advance the goal, and this page can search
+                // itself. That is not a reason to stop, it is the reason to
+                // search: the thing the goal needs is not on this page yet.
+                //
+                // Once per page, because a search that does not help must not
+                // be tried again, and the flag sits beside the fingerprint so
+                // the page the search opens is a page that may be searched too.
+                if why == Handback::NothingOffered
+                    && view.can_search_itself()
+                    && !run.known.searched
+                {
+                    run.known.searched = true;
+                    run.remember(
+                        "nothing listed could advance the goal, so this page's own search is \
+                         offered first",
+                    );
+                    last = Some(view);
+                    continue;
+                }
                 return end(
                     &run,
                     Status::NeedsInput(why, said),

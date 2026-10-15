@@ -26,6 +26,13 @@ pub enum Kind {
     SortControl,
     /// A field text can be typed into.
     TextField,
+    /// A field, or the control that opens one, for searching this page.
+    ///
+    /// Its own kind rather than a text field, so it can be moved to the front
+    /// of a question without moving every form field with it. Measured live: a
+    /// docs page offered `button "Search the API docs"`, the run was asked for
+    /// something that page did not list, and it scrolled twice and gave up.
+    SearchField,
     /// A control with a fixed set of values to choose between.
     Dropdown,
     /// A control that moves between pages of the same list.
@@ -83,6 +90,15 @@ pub fn of(control: &Control) -> Kind {
     }
     if !control.options.is_empty() {
         return Kind::Dropdown;
+    }
+    // A search field, and the button that opens one, before a plain text field.
+    // Amazon's box is a `searchbox` and OpenAI's is a collapsed button called
+    // "Search the API docs", so neither the role nor the name alone covers it.
+    if control.role == "searchbox"
+        || (name.contains("search") && (control.state.editable || control.clickable))
+        || (name.starts_with("search") && control.role == "button")
+    {
+        return Kind::SearchField;
     }
     if control.state.editable {
         return Kind::TextField;
