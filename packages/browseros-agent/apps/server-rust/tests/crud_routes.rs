@@ -826,3 +826,75 @@ async fn tests_that_concurrent_imports_insert_exactly_one_history() -> TestResul
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn tests_that_each_crud_body_preserves_its_zod_validation_rules() -> TestResult {
+    let server = Server::new().await?;
+    for (method, path, body) in [
+        (
+            "PUT",
+            format!("/conversations/{CONVERSATION}"),
+            json!({"messages":[null]}),
+        ),
+        (
+            "PUT",
+            format!("/conversations/{CONVERSATION}"),
+            json!({"messages":[],"targetType":"custom"}),
+        ),
+        (
+            "PUT",
+            format!("/conversations/{CONVERSATION}"),
+            json!({"messages":[],"origin":null}),
+        ),
+        (
+            "PUT",
+            format!("/agents/{CONVERSATION}"),
+            json!({"type":"claude"}),
+        ),
+        (
+            "PUT",
+            format!("/agents/{CONVERSATION}"),
+            json!({"modelId":" "}),
+        ),
+        (
+            "PUT",
+            format!("/agents/{CONVERSATION}"),
+            json!({"customConfig":null}),
+        ),
+        ("PUT", "/providers/default".into(), json!({"providerId":""})),
+        (
+            "PUT",
+            "/providers/p".into(),
+            json!({"type":"openai","name":"n","modelId":"m"}),
+        ),
+        (
+            "PUT",
+            "/scheduled-jobs/j".into(),
+            json!({"name":"j","query":"q","scheduleType":"weekly"}),
+        ),
+        (
+            "PUT",
+            "/scheduled-jobs/j".into(),
+            json!({"name":"j","query":"q","scheduleType":"daily","enabled":null}),
+        ),
+        (
+            "PUT",
+            "/scheduled-job-runs/r".into(),
+            json!({"jobId":"j","status":"unknown","startedAt":1}),
+        ),
+        (
+            "PUT",
+            "/scheduled-job-runs/r".into(),
+            json!({"jobId":"j","status":"running","startedAt":1,"toolCalls":[{"id":"c","name":"t","timestamp":"now"}]}),
+        ),
+        (
+            "PUT",
+            "/scheduled-job-runs/r".into(),
+            json!({"jobId":"j","status":"running","startedAt":1,"createdAt":null}),
+        ),
+    ] {
+        let (status, body) = server.request(method, &path, body).await?;
+        assert_zod(status, &body)?;
+    }
+    Ok(())
+}
