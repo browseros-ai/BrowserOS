@@ -1,0 +1,455 @@
+//! P13 behavior checks against the real HTTP handlers, SQLite stores and a loopback provider.
+//! The fake speaks OpenAI streaming chunks, so partial/error/empty output crosses the same
+//! transport and generation path as the settings UI without spending a vendor credential.
+
+use axum::{Json, Router, body::Body, extract::State, response::IntoResponse};
+use http::{HeaderMap, Request, StatusCode};
+use serde_json::{Value, json};
+use server_rust::{
+    AppState,
+    config::{Config, EnvConfig},
+    db::{AgentKind, CreateAgent, UpsertProvider},
+    telemetry::metrics::{Metrics, MetricsConfig},
+};
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex},
+};
+use tower::ServiceExt;
+
+type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+struct Fixture {
+    state: AppState,
+    _dir: tempfile::TempDir,
+}
+
+impl Fixture {
+    async fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        let dir = tempfile::tempdir()?;
+        let config_file = dir.path().join("config.json");
+        std::fs::write(
+            &config_file,
+            r#"{"ports":{"server":0,"cdp":0},"directories":{"resources":".","execution":"."}}"#,
+        )?;
+        let env = EnvConfig {
+            browseros_dir: Some(dir.path().join("browseros")),
+            ..Default::default()
+        };
+        let state = AppState::start(Config::load(&config_file, &env)?).await?;
+        Ok(Self { state, _dir: dir })
+    }
+
+    async fn post(
+        &self,
+        path: &str,
+        body: Value,
+    ) -> Result<(StatusCode, Value), Box<dyn std::error::Error>> {
+        let response = server_rust::build_router(self.state.clone())
+            .oneshot(
+                Request::post(path)
+                    .header("host", "127.0.0.1")
+                    .header(
+                        "origin",
+                        "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+                    )
+                    .header("content-type", "application/json")
+                    .body(Body::from(body.to_string()))?,
+            )
+            .await?;
+        let status = response.status();
+        let bytes = axum::body::to_bytes(response.into_body(), 1024 * 1024).await?;
+        Ok((status, serde_json::from_slice(&bytes)?))
+    }
+
+    async fn save(&self, id: &str, fake: &FakeProvider, model: &str) -> TestResult {
+        self.state
+            .providers
+            .upsert_llm(
+                id,
+                UpsertProvider {
+                    provider_type: "openai-compatible".to_owned(),
+                    name: id.to_owned(),
+                    model_id: Some(model.to_owned()),
+                    base_url: Some(fake.url.clone()),
+                    api_key: Some("saved-key".to_owned()),
+                    context_window: Some(128_000),
+                    ..Default::default()
+                },
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+struct FakeState {
+    text: String,
+    fail: bool,
+    calls: Arc<Mutex<Vec<(HeaderMap, Value)>>>,
+}
+
+struct FakeProvider {
+    url: String,
+    calls: Arc<Mutex<Vec<(HeaderMap, Value)>>>,
+    task: tokio::task::JoinHandle<()>,
+}
+
+impl Drop for FakeProvider {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+impl FakeProvider {
+    async fn start(text: &str, fail: bool) -> Result<Self, Box<dyn std::error::Error>> {
+        async fn respond(
+            State(state): State<FakeState>,
+            headers: HeaderMap,
+            Json(body): Json<Value>,
+        ) -> axum::response::Response {
+            state
+                .calls
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .push((headers, body));
+            if state.fail {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    Json(json!({"error":{"message":"invalid test key", "type":"invalid_api_key"}})),
+                )
+                    .into_response();
+            }
+            let content = json!({"id":"chatcmpl-test", "object":"chat.completion.chunk", "created":1, "model":"test", "choices":[{"index":0, "delta":{"role":"assistant", "content":state.text}, "finish_reason":null}]});
+            let finish = json!({"id":"chatcmpl-test", "object":"chat.completion.chunk", "created":1, "model":"test", "choices":[{"index":0, "delta":{}, "finish_reason":"stop"}], "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}});
+            (
+                [("content-type", "text/event-stream")],
+                format!("data: {content}\n\ndata: {finish}\n\ndata: [DONE]\n\n"),
+            )
+                .into_response()
+        }
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/v1", listener.local_addr()?);
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let router = Router::new().fallback(respond).with_state(FakeState {
+            text: text.to_owned(),
+            fail,
+            calls: calls.clone(),
+        });
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        Ok(Self { url, calls, task })
+    }
+
+    fn calls(&self) -> Vec<(HeaderMap, Value)> {
+        self.calls.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    fn inline(&self) -> Value {
+        json!({"provider":"openai-compatible", "model":"test-model", "apiKey":"inline-key", "baseUrl":self.url})
+    }
+}
+
+#[tokio::test]
+async fn provider_test_streams_preview_and_reports_time() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start(&"a".repeat(101), false).await?;
+    let (status, body) = fixture.post("/test-provider", fake.inline()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["success"], true);
+    assert_eq!(
+        body["message"],
+        format!(
+            "Connection successful. Response: \"{}...\"",
+            "a".repeat(100)
+        )
+    );
+    assert!(body["responseTime"].as_u64().is_some());
+    let calls = fake.calls();
+    assert_eq!(calls.len(), 1);
+    assert!(
+        calls[0].1["messages"]
+            .to_string()
+            .contains("Respond with exactly: 'ok'")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn empty_test_output_succeeds_but_empty_refinement_fails() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("", false).await?;
+    let (status, body) = fixture.post("/test-provider", fake.inline()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["message"],
+        "Connection successful. Provider responded."
+    );
+    let mut request = fake.inline();
+    request["name"] = json!("Morning");
+    request["prompt"] = json!("Read the news");
+    let (status, body) = fixture.post("/refine-prompt", request).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body,
+        json!({"success":false, "message":"Provider returned an empty response"})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_error_has_provider_prefix_and_response_time() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("", true).await?;
+    let (status, body) = fixture.post("/test-provider", fake.inline()).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["success"], false);
+    assert!(
+        body["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("[openai-compatible] ")
+                && message.contains("invalid test key")),
+        "{body}"
+    );
+    assert!(body["responseTime"].as_u64().is_some());
+    Ok(())
+}
+
+#[tokio::test]
+async fn stored_secret_pins_destination_but_explicit_secret_keeps_inline_url() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let saved = FakeProvider::start("saved", false).await?;
+    let inline = FakeProvider::start("inline", false).await?;
+    fixture.save("saved", &saved, "stored-model").await?;
+    let mut request = inline.inline();
+    request["providerId"] = json!("saved");
+    request["apiKey"] = json!("");
+    let (status, body) = fixture.post("/test-provider", request.clone()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(inline.calls().is_empty());
+    assert_eq!(
+        saved.calls()[0]
+            .0
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer saved-key")
+    );
+    request["apiKey"] = json!("caller-key");
+    let (status, body) = fixture.post("/test-provider", request).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        inline.calls()[0]
+            .0
+            .get("authorization")
+            .and_then(|value| value.to_str().ok()),
+        Some("Bearer caller-key")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn stored_secret_is_never_reused_for_a_different_provider_type() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("unused", false).await?;
+    fixture.save("saved", &fake, "stored-model").await?;
+    let (status, body) = fixture.post("/test-provider", json!({"providerId":"saved", "provider":"anthropic", "model":"test", "baseUrl":fake.url})).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["message"],
+        "[anthropic] Anthropic provider requires apiKey"
+    );
+    assert!(fake.calls().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn every_saved_credential_field_pins_the_destination() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let saved = FakeProvider::start("saved", false).await?;
+    let other = FakeProvider::start("caller", false).await?;
+    for (index, field) in ["apiKey", "accessKeyId", "secretAccessKey", "sessionToken"]
+        .into_iter()
+        .enumerate()
+    {
+        let id = format!("credential-{index}");
+        let mut row = UpsertProvider {
+            provider_type: "openai-compatible".to_owned(),
+            name: id.clone(),
+            model_id: Some("model".to_owned()),
+            context_window: Some(128_000),
+            base_url: Some(saved.url.clone()),
+            ..Default::default()
+        };
+        match field {
+            "apiKey" => row.api_key = Some("saved-key".to_owned()),
+            "accessKeyId" => row.access_key_id = Some("saved-access".to_owned()),
+            "secretAccessKey" => row.secret_access_key = Some("saved-secret".to_owned()),
+            _ => row.session_token = Some("saved-session".to_owned()),
+        }
+        fixture.state.providers.upsert_llm(&id, row).await?;
+        let mut body = other.inline();
+        body["providerId"] = json!(id);
+        body[field] = json!("");
+        let (status, response) = fixture.post("/test-provider", body).await?;
+        assert_eq!(status, StatusCode::OK, "{field}: {response}");
+    }
+    assert!(other.calls().is_empty());
+    assert_eq!(saved.calls().len(), 4);
+    Ok(())
+}
+
+#[tokio::test]
+async fn refinement_resolves_named_then_inline_then_default_then_first_llm() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("  refined instruction \n", false).await?;
+    fixture.save("first", &fake, "first-model").await?;
+    fixture.save("selected", &fake, "selected-model").await?;
+    let base = json!({"name":"Morning brief", "prompt":"Check the news"});
+    let (status, body) = fixture.post("/refine-prompt", base.clone()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body,
+        json!({"success":true,"refined":"refined instruction"})
+    );
+    assert_eq!(fake.calls()[0].1["model"], "first-model");
+    fixture.state.providers.set_default("selected").await?;
+    let (status, body) = fixture.post("/refine-prompt", base.clone()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(fake.calls()[1].1["model"], "selected-model");
+    let mut inline = fake.inline();
+    inline["name"] = base["name"].clone();
+    inline["prompt"] = base["prompt"].clone();
+    let (status, body) = fixture.post("/refine-prompt", inline.clone()).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(fake.calls()[2].1["model"], "test-model");
+    inline["providerId"] = json!("first");
+    let (status, body) = fixture.post("/refine-prompt", inline).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let calls = fake.calls();
+    assert_eq!(calls[3].1["model"], "first-model");
+    assert!(calls[3].1["messages"].to_string().contains("Morning brief"));
+    assert!(
+        calls[3].1["messages"]
+            .to_string()
+            .contains("Return ONLY the rewritten prompt")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn refinement_rejects_unknown_or_coding_agent_and_falls_back_from_coding_default()
+-> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("refined", false).await?;
+    let base = json!({"name":"Morning", "prompt":"Read the news"});
+    let (status, body) = fixture.post("/refine-prompt", base.clone()).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["message"],
+        "Connect an LLM provider in AI settings to refine a prompt"
+    );
+    fixture.save("first", &fake, "first-model").await?;
+    let agent = fixture
+        .state
+        .agents
+        .create(CreateAgent {
+            kind: AgentKind::Claude,
+            name: "Claude".to_owned(),
+            model_id: None,
+            reasoning_effort: None,
+            working_directory: None,
+            custom_config: None,
+        })
+        .await?;
+    let mut request = base.clone();
+    request["providerId"] = json!("missing");
+    let (status, body) = fixture.post("/refine-prompt", request.clone()).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["message"], "Unknown provider missing");
+    request["providerId"] = json!(agent.id);
+    let (status, body) = fixture.post("/refine-prompt", request).await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["message"],
+        format!(
+            "Provider {} is a coding agent and cannot refine a prompt",
+            agent.id
+        )
+    );
+    fixture
+        .state
+        .providers
+        .set_default(&agent.id.to_string())
+        .await?;
+    let (status, body) = fixture.post("/refine-prompt", base).await?;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(fake.calls()[0].1["model"], "first-model");
+    Ok(())
+}
+
+#[tokio::test]
+async fn one_shot_headers_get_fresh_random_conversation_ids() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("ok", false).await?;
+    let mut request = fake.inline();
+    request["headers"] = json!({"x-conversation":"{{conversationId}}/{{conversationId}}"});
+    for _ in 0..2 {
+        let (status, body) = fixture.post("/test-provider", request.clone()).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+    }
+    let calls = fake.calls();
+    let mut ids = Vec::new();
+    for (headers, _) in calls {
+        let value = headers
+            .get("x-conversation")
+            .ok_or("missing conversation header")?
+            .to_str()?;
+        let (left, right) = value.split_once('/').ok_or("missing second placeholder")?;
+        assert_eq!(left, right);
+        ids.push(uuid::Uuid::parse_str(left)?);
+    }
+    assert_ne!(ids[0], ids[1]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn invalid_input_uses_zod_error_dialect() -> TestResult {
+    let fixture = Fixture::new().await?;
+    for (path, body) in [
+        ("/test-provider", json!({"provider":"openai", "model":""})),
+        ("/refine-prompt", json!({"name":"", "prompt":""})),
+        (
+            "/test-provider",
+            json!({"provider":"openai", "model":"test", "headers":{"X-Token":"a","x-token":"b"}}),
+        ),
+        (
+            "/refine-prompt",
+            json!({"name":"Morning", "prompt":"check", "apiKey":null}),
+        ),
+    ] {
+        let (status, body) = fixture.post(path, body).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert_eq!(body["error"]["name"], "ZodError");
+        let issues: Vec<Value> =
+            serde_json::from_str(body["error"]["message"].as_str().ok_or("missing issues")?)?;
+        assert!(!issues.is_empty());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn metrics_never_enable_without_install_identity() {
+    for install_id in [None, Some(String::new())] {
+        let metrics = Metrics::initialize(MetricsConfig {
+            install_id,
+            properties: BTreeMap::from([("install_id".to_owned(), json!("spoofed"))]),
+            ..Default::default()
+        })
+        .await;
+        assert!(!metrics.is_enabled());
+        metrics.capture("http_server.started", json!({}));
+        metrics.capture("tool_executed", json!({"tool_name":"run","success":true}));
+        metrics.shutdown().await;
+    }
+}

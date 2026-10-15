@@ -20,12 +20,17 @@ pub struct SentryGuard {
 }
 
 pub fn init() -> SentryGuard {
-    let Some(dsn) = BUILD_DSN
-        .filter(|dsn| !dsn.is_empty())
-        .and_then(|dsn| dsn.parse().ok())
-    else {
+    let Some(client) = BUILD_DSN.and_then(build_client) else {
         return SentryGuard::default();
     };
+    install_panic_hook(&client);
+    SentryGuard {
+        client: Some(client),
+    }
+}
+
+fn build_client(dsn: &str) -> Option<Arc<sentry::Client>> {
+    let dsn = dsn.parse().ok()?;
     // Bypass init/apply_defaults: they read ambient env and add integrations. The explicit
     // factory is required here or Client::from_config would create a disabled transport.
     let client = Arc::new(sentry::Client::from_config(sentry::ClientOptions {
@@ -39,9 +44,10 @@ pub fn init() -> SentryGuard {
         environment: std::env::var("NODE_ENV").ok().map(Into::into),
         ..Default::default()
     }));
-    if !client.is_enabled() {
-        return SentryGuard::default();
-    }
+    client.is_enabled().then_some(client)
+}
+
+fn install_panic_hook(client: &Arc<sentry::Client>) {
     *PANIC_CLIENT.write().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(&client);
     PANIC_HOOK.get_or_init(|| {
         let previous = std::panic::take_hook();
@@ -64,9 +70,6 @@ pub fn init() -> SentryGuard {
             previous(info);
         }));
     });
-    SentryGuard {
-        client: Some(client),
-    }
 }
 
 impl SentryGuard {
@@ -119,4 +122,86 @@ fn event(
             .insert("request-type".to_owned(), request_type.to_owned());
     }
     event
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        io::{BufRead, BufReader, Read, Write},
+        net::TcpListener,
+        sync::mpsc,
+    };
+
+    #[test]
+    fn invalid_dsn_disables_without_runtime_fallback() {
+        assert!(build_client("not a dsn").is_none());
+        assert!(build_client("").is_none());
+        assert!(!SentryGuard::default().is_enabled());
+    }
+
+    #[test]
+    fn explicit_events_are_redacted_and_have_no_ambient_state() -> anyhow::Result<()> {
+        let event = event(
+            "chat",
+            "bad Bearer abcdefghijklmnopqrstuvwxyz and sk-abcdefghijklmnopqrstuv",
+            Some("schedule"),
+        );
+        let encoded = serde_json::to_value(event)?;
+        assert!(!encoded.to_string().contains("abcdefghijklmnopqrstuvwxyz"));
+        assert!(!encoded.to_string().contains("sk-abcdefghijklmnopqrstuv"));
+        assert_eq!(encoded["tags"]["request-type"], "schedule");
+        for field in ["request", "user", "breadcrumbs", "exception", "stacktrace"] {
+            assert!(
+                encoded.get(field).is_none(),
+                "unexpected {field}: {encoded}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn startup_capture_reaches_transport_and_guard_drop_flushes() -> anyhow::Result<()> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let dsn = format!("http://public@{}/1", listener.local_addr()?);
+        let (send, received) = mpsc::channel();
+        let thread = std::thread::spawn(move || -> std::io::Result<()> {
+            let (mut stream, _) = listener.accept()?;
+            stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+            let mut reader = BufReader::new(&stream);
+            let mut first = String::new();
+            reader.read_line(&mut first)?;
+            let mut length = 0;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line)?;
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                if let Some(value) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = value.trim().parse().unwrap_or_default();
+                }
+            }
+            let mut body = vec![0; length];
+            reader.read_exact(&mut body)?;
+            stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-length: 2\r\n\r\n{}")?;
+            let _ = send.send((first, body));
+            Ok(())
+        });
+        let guard = SentryGuard {
+            client: build_client(&dsn),
+        };
+        assert!(guard.is_enabled());
+        guard.capture_startup_error("failed with sk-abcdefghijklmnopqrstuv");
+        drop(guard);
+        let (first, bytes) = received.recv_timeout(Duration::from_secs(5))?;
+        assert!(first.starts_with("POST /api/1/envelope/"));
+        let envelope = String::from_utf8(bytes)?;
+        assert!(envelope.contains("startup"));
+        assert!(!envelope.contains("sk-abcdefghijklmnopqrstuv"));
+        thread
+            .join()
+            .map_err(|_| anyhow::anyhow!("ingest thread panicked"))??;
+        Ok(())
+    }
 }

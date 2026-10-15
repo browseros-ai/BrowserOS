@@ -261,11 +261,138 @@ fn now_ms() -> u64 {
 }
 
 fn timestamp(milliseconds: u64) -> String {
+    let Ok(format) = time::format_description::parse_borrowed::<2>(
+        "[year]-[month]-[day]T[hour]:[minute]:[second].[subsecond digits:3]Z",
+    ) else {
+        return String::new();
+    };
     time::OffsetDateTime::from_unix_timestamp_nanos(i128::from(milliseconds) * 1_000_000)
         .ok()
-        .and_then(|time| {
-            time.format(&time::format_description::well_known::Rfc3339)
-                .ok()
-        })
+        .and_then(|time| time.format(&format).ok())
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{Json, Router, extract::State};
+
+    #[test]
+    fn rollup_matches_ts_counts_alignment_and_cardinality() {
+        let mut rollup = Rollup::default();
+        assert_eq!(rollup.drain(INTERVAL_MS), None);
+        rollup.record("mcp.request", &json!({}), INTERVAL_MS + 17);
+        rollup.record(
+            "tool_executed",
+            &json!({"tool_name":"browser.click","source":"mcp","success":false}),
+            INTERVAL_MS + 18,
+        );
+        for index in 0..MAX_TOOL_NAMES + 5 {
+            rollup.record(
+                "tool_executed",
+                &json!({"tool_name":format!("tool.{index}")}),
+                INTERVAL_MS + 19,
+            );
+        }
+        let bucket = rollup.drain(INTERVAL_MS * 2).unwrap_or_default();
+        assert_eq!(bucket["period_start_ts"], "1970-01-01T00:30:00.000Z");
+        assert_eq!(bucket["period_end_ts"], "1970-01-01T01:00:00.000Z");
+        assert_eq!(bucket["interval_seconds"], 1800);
+        assert_eq!(bucket["mcp_requests_count"], 1);
+        assert_eq!(bucket["tool_executions_count"], 206);
+        assert_eq!(bucket["tool_executions_failed"], 1);
+        assert_eq!(
+            bucket["tool_executions_by_source"],
+            json!({"mcp":1,"unknown":205})
+        );
+        assert_eq!(bucket["tool_executions_by_tool"]["browser_click"], 1);
+        assert_eq!(bucket["tool_executions_by_tool"]["__other__"], 6);
+        assert_eq!(
+            bucket["tool_executions_by_tool"]
+                .as_object()
+                .map(|names| names.len()),
+            Some(201)
+        );
+        assert_eq!(rollup.drain(INTERVAL_MS * 3), None);
+    }
+
+    #[tokio::test]
+    async fn identity_and_build_key_gate_client_creation() {
+        let config = MetricsConfig::default();
+        assert!(
+            !Metrics::initialize_with(config, Some("key"), "invalid")
+                .await
+                .is_enabled()
+        );
+        let config = MetricsConfig {
+            install_id: Some("install".to_owned()),
+            ..Default::default()
+        };
+        assert!(
+            !Metrics::initialize_with(config, None, "invalid")
+                .await
+                .is_enabled()
+        );
+    }
+
+    #[tokio::test]
+    async fn posthog_wire_preserves_identity_names_and_unsampled_rollup() -> anyhow::Result<()> {
+        type Captures = Arc<Mutex<Vec<Value>>>;
+        async fn batch(State(seen): State<Captures>, Json(body): Json<Value>) -> Json<Value> {
+            seen.lock().unwrap_or_else(|e| e.into_inner()).push(body);
+            Json(json!({"status":1}))
+        }
+        let seen: Captures = Arc::new(Mutex::new(Vec::new()));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let host = format!("http://{}", listener.local_addr()?);
+        let router = Router::new().fallback(batch).with_state(seen.clone());
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, router).await;
+        });
+        let metrics = Metrics::initialize_with(
+            MetricsConfig {
+                install_id: Some("install".to_owned()),
+                server_version: Some("1.2.3".to_owned()),
+                properties: BTreeMap::from([("os_platform".to_owned(), json!("darwin"))]),
+                ..Default::default()
+            },
+            Some("test-key"),
+            &host,
+        )
+        .await;
+        assert!(metrics.is_enabled());
+        metrics.capture_sampled("http_server.started", json!({"install_id":"spoof", "product":"spoof", "surface":"spoof", "$process_person_profile":true, "server_version":"spoof"}), 1.0);
+        metrics.capture_sampled("filtered", json!({}), 0.0);
+        // Aggregation precedes sampling, even at sampling=0.
+        metrics.capture_sampled(
+            "tool_executed",
+            json!({"tool_name":"run","source":"mcp","success":true}),
+            0.0,
+        );
+        metrics.capture_sampled("mcp.request", json!({}), 0.0);
+        metrics.shutdown().await;
+        assert!(!metrics.is_enabled());
+        metrics.capture_sampled("after_shutdown", json!({}), 1.0);
+        task.abort();
+        let requests = seen.lock().unwrap_or_else(|e| e.into_inner());
+        let events: Vec<_> = requests
+            .iter()
+            .flat_map(|body| body["batch"].as_array().into_iter().flatten())
+            .collect();
+        assert_eq!(events.len(), 2, "{requests:?}");
+        for event in &events {
+            assert_eq!(event["distinct_id"], "install");
+            assert_eq!(event["properties"]["install_id"], "install");
+            assert_eq!(event["properties"]["product"], "browseros");
+            assert_eq!(event["properties"]["surface"], "server");
+            assert_eq!(event["properties"]["server_version"], "1.2.3");
+            assert_eq!(event["properties"]["$process_person_profile"], false);
+            assert_eq!(event["properties"]["os_platform"], "darwin");
+        }
+        assert_eq!(events[0]["event"], "browseros.server.http_server.started");
+        assert_eq!(events[1]["event"], "browseros.server.usage_rollup");
+        assert_eq!(events[1]["properties"]["tool_executions_count"], 1);
+        assert_eq!(events[1]["properties"]["mcp_requests_count"], 1);
+        Ok(())
+    }
 }

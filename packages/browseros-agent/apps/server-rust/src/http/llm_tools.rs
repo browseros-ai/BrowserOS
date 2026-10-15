@@ -130,7 +130,14 @@ async fn resolve_refine_provider(
             .await
             .map_err(|e| internal_error(&e.to_string()))?;
         if let Some(row) = row {
-            return Ok(Some(row));
+            return if is_llm(&row) {
+                Ok(Some(row))
+            } else {
+                Err(failure(&format!(
+                    "Provider {} is a coding agent and cannot refine a prompt",
+                    row.id
+                )))
+            };
         }
         // The stores split LLM and ACP rows. An explicitly named coding agent must fail,
         // whereas a coding-agent default is allowed to fall back to the first LLM row.
@@ -156,6 +163,7 @@ async fn resolve_refine_provider(
         .default()
         .await
         .map_err(|e| internal_error(&e.to_string()))?
+        .filter(is_llm)
     {
         return Ok(Some(row));
     }
@@ -164,7 +172,10 @@ async fn resolve_refine_provider(
         .list()
         .await
         .map_err(|e| internal_error(&e.to_string()))?;
-    let row = rows.into_iter().next().ok_or_else(|| failure(NO_LLM))?;
+    let row = rows
+        .into_iter()
+        .find(is_llm)
+        .ok_or_else(|| failure(NO_LLM))?;
     // TS lists public rows then re-reads credentials. Preserve that second lookup: deletion
     // between the two reads means no LLM, rather than using a row that no longer exists.
     state
@@ -174,6 +185,10 @@ async fn resolve_refine_provider(
         .map_err(|e| internal_error(&e.to_string()))?
         .map(Some)
         .ok_or_else(|| failure(NO_LLM))
+}
+
+fn is_llm(row: &ProviderRow) -> bool {
+    row.provider_type.parse::<ProviderKind>().is_ok()
 }
 
 fn merge_stored_credentials(config: &mut LlmConfig, row: &ProviderRow) {
