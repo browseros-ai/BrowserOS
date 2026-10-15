@@ -48,6 +48,8 @@ sea-orm-migration.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+# P14: rmcp test server standing in for loopback /mcp in tests/browseros_engine.rs.
+rmcp.workspace = true
 serde-saphyr.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
