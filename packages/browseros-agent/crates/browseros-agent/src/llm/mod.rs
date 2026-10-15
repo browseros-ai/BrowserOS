@@ -412,29 +412,32 @@ impl ModelError {
     }
 }
 
-/// The wait before retry `attempt` (0-based) of a step that failed before its first event:
-/// `retry-after-ms`, else `retry-after` seconds, when within 0–60 s; otherwise 2 s × 2ⁿ
-/// (`retry-with-exponential-backoff.ts`).
+/// The wait before retry `attempt` (0-based) of a step that failed before its first event,
+/// `getRetryDelayInMs` of `retry-with-exponential-backoff.ts`: `retry-after-ms`, else numeric
+/// `retry-after` seconds, used when ≥ 0 and under 60 s or under the backoff; otherwise
+/// 2 s × 2ⁿ. An HTTP-date `retry-after` falls back to the backoff.
 pub fn retry_delay(error: &ModelError, attempt: u32) -> Duration {
-    let backoff = Duration::from_millis(2_000u64.saturating_mul(2u64.saturating_pow(attempt)));
+    let backoff = 2_000.0 * 2f64.powi(i32::try_from(attempt).unwrap_or(i32::MAX));
     let ModelError::Api {
         response_headers, ..
     } = error
     else {
-        return backoff;
+        return Duration::from_secs_f64(backoff / 1000.0);
     };
     let header = |name: &str| {
         response_headers
             .iter()
             .find(|(key, _)| key.eq_ignore_ascii_case(name))
             .and_then(|(_, value)| value.trim().parse::<f64>().ok())
+            .filter(|value| !value.is_nan())
     };
-    let hinted_ms =
+    let hinted =
         header("retry-after-ms").or_else(|| header("retry-after").map(|seconds| seconds * 1000.0));
-    match hinted_ms {
-        Some(ms) if (0.0..=60_000.0).contains(&ms) => Duration::from_millis(ms as u64),
+    let ms = match hinted {
+        Some(ms) if ms >= 0.0 && (ms < 60_000.0 || ms < backoff) => ms,
         _ => backoff,
-    }
+    };
+    Duration::from_secs_f64(ms / 1000.0)
 }
 
 /// One-shot text generation for `/test-provider` and `/refine-prompt`: `streamText` with one user

@@ -345,7 +345,7 @@ pub fn continuation() -> Vec<ModelMessage> {
                 AssistantPart::ToolCall {
                     tool_call_id: "call_1".to_owned(),
                     tool_name: "get_time".to_owned(),
-                    input: json!({}),
+                    input: Some(json!({})),
                     provider_executed: None,
                     provider_options: None,
                 },
@@ -359,10 +359,14 @@ pub fn continuation() -> Vec<ModelMessage> {
                     value: vec![
                         ToolContentItem::Text {
                             text: r#"{"utc":"2026-10-15T04:47:54Z"}"#.to_owned(),
+                            extra: Default::default(),
                         },
-                        ToolContentItem::Media {
-                            data: RED_PNG_BASE64.to_owned(),
+                        // `{type:'file', mediaType, data:{type:'data', data}}`, as in the capture.
+                        ToolContentItem::File {
+                            data: json!({ "type": "data", "data": RED_PNG_BASE64 }),
                             media_type: "image/png".to_owned(),
+                            filename: None,
+                            extra: Default::default(),
                         },
                     ],
                 },
@@ -413,7 +417,7 @@ pub fn assistant_from(events: &[ModelEvent]) -> ModelMessage {
             } => content.push(AssistantPart::ToolCall {
                 tool_call_id: provider_call_id.clone(),
                 tool_name: tool_name.clone(),
-                input: serde_json::from_str(input_json).unwrap_or_else(|_| json!({})),
+                input: serde_json::from_str(input_json).ok(),
                 provider_executed: None,
                 provider_options: provider_metadata.clone(),
             }),

@@ -1056,7 +1056,10 @@ fn is_retryable(error: &ModelError) -> bool {
     match error {
         ModelError::Api { retryable, .. } => *retryable,
         ModelError::Connection(_) => true,
-        ModelError::InvalidPrompt(_) | ModelError::Config(_) | ModelError::Cancelled => false,
+        ModelError::InvalidPrompt(_)
+        | ModelError::Config(_)
+        | ModelError::Other(_)
+        | ModelError::Cancelled => false,
     }
 }
 

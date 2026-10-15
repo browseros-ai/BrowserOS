@@ -34,7 +34,9 @@ pub struct ScriptedModel {
 impl ScriptedModel {
     /// The mock LLM: every call streams `Mock BrowserOS test response.` and stops.
     pub fn mock() -> Self {
-        let id = "text-1".to_owned();
+        // TS's mock part is `text-1`; S0 published `mock-text` and downstream tests pin it.
+        // Stream diffs normalize part ids, so the spelling is not wire-visible.
+        let id = "mock-text".to_owned();
         let step = vec![
             Ok(ModelEvent::TextStart {
                 id: id.clone(),

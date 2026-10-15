@@ -68,9 +68,9 @@ pub(crate) fn to_rig_messages(messages: &[ModelMessage]) -> Result<Vec<Message>,
     let mut out = Vec::with_capacity(messages.len());
     for message in messages {
         let converted = match message {
-            ModelMessage::System { content } => Some(Message::system(content.clone())),
+            ModelMessage::System { content, .. } => Some(Message::system(content.clone())),
             ModelMessage::User { content } => {
-                let content: Vec<UserContent> = content.iter().map(user_part).collect();
+                let content: Vec<UserContent> = content.iter().filter_map(user_part).collect();
                 (!content.is_empty()).then_some(Message::User { content })
             }
             ModelMessage::Assistant { content } => assistant(content)?,
@@ -123,7 +123,9 @@ fn assistant(parts: &[AssistantPart]) -> Result<Option<Message>, ModelError> {
                 if *provider_executed == Some(true) {
                     continue;
                 }
-                let call = ToolCall::from_wire(tool_call_id.clone(), ToolFunction::new(tool_name(name)?, input.clone()));
+                // An input the SDK could not parse is absent; providers still need an object.
+                let input = input.clone().unwrap_or_else(|| Value::Object(Default::default()));
+                let call = ToolCall::from_wire(tool_call_id.clone(), ToolFunction::new(tool_name(name)?, input));
                 let stored = stored_block(provider_options.as_ref()).filter(|(_, block)| {
                     matches!(block, AssistantContent::ToolCall(stored)
                         if stored.id.wire() == tool_call_id.as_str()
@@ -133,6 +135,7 @@ fn assistant(parts: &[AssistantPart]) -> Result<Option<Message>, ModelError> {
                 (Some(AssistantContent::ToolCall(call)), stored)
             }
             AssistantPart::ReasoningFile { .. }
+            | AssistantPart::Custom { .. }
             | AssistantPart::File { .. }
             | AssistantPart::ToolResult(_)
             | AssistantPart::ToolApprovalRequest { .. } => continue,
@@ -159,9 +162,9 @@ fn assistant(parts: &[AssistantPart]) -> Result<Option<Message>, ModelError> {
     )))
 }
 
-/// AI SDK `DataContent | URL` as a rig source: a `data:` URL, an http(s) URL, or bare base64.
-/// Returns the media type a data URL names, for parts that left theirs out.
-fn media_source(data: &str) -> (DocumentSourceKind, Option<String>) {
+/// A string payload: a `data:` URL, an http(s) URL, or bare base64. Returns the media type a
+/// data URL names, for parts that left theirs out.
+fn string_source(data: &str) -> (DocumentSourceKind, Option<String>) {
     if let Some(rest) = data.strip_prefix("data:")
         && let Some((meta, payload)) = rest.split_once(',')
     {
@@ -183,13 +186,34 @@ fn media_source(data: &str) -> (DocumentSourceKind, Option<String>) {
     (DocumentSourceKind::Base64(data.to_owned()), None)
 }
 
-fn media_content(data: &str, media_type: Option<&str>) -> UserContent {
-    let (source, url_mime) = media_source(data);
+/// AI SDK v7 file data as a rig source: a legacy string, or the tagged `{type:"data"|"url"|"text"}`
+/// object. A provider `reference` has no rig source and is `None` (never sent as bytes).
+fn media_source(data: &Value) -> Option<(DocumentSourceKind, Option<String>)> {
+    match data {
+        Value::String(text) => Some(string_source(text)),
+        Value::Object(tagged) => match tagged.get("type").and_then(Value::as_str) {
+            Some("data") => tagged
+                .get("data")
+                .and_then(Value::as_str)
+                .map(string_source),
+            Some("url") => tagged.get("url").and_then(Value::as_str).map(string_source),
+            Some("text") => tagged
+                .get("text")
+                .and_then(Value::as_str)
+                .map(|text| (DocumentSourceKind::String(text.to_owned()), None)),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn media_content(data: &Value, media_type: Option<&str>) -> Option<UserContent> {
+    let (source, url_mime) = media_source(data)?;
     let mime = media_type
         .map(str::to_owned)
         .or(url_mime)
         .unwrap_or_default();
-    if mime.starts_with("image/") {
+    Some(if mime.starts_with("image/") {
         UserContent::Image(Image {
             data: source,
             media_type: ImageMediaType::from_mime_type(&mime),
@@ -212,22 +236,23 @@ fn media_content(data: &str, media_type: Option<&str>) -> UserContent {
             media_type: DocumentMediaType::from_mime_type(&mime),
             additional_params: None,
         })
-    }
+    })
 }
 
-fn user_part(part: &UserPart) -> UserContent {
+/// A user part, or `None` for media rig cannot address (a provider file reference).
+fn user_part(part: &UserPart) -> Option<UserContent> {
     match part {
-        UserPart::Text { text, .. } => UserContent::text(text.clone()),
+        UserPart::Text { text, .. } => Some(UserContent::text(text.clone())),
         UserPart::Image {
             image, media_type, ..
         } => {
-            let (source, url_mime) = media_source(image);
+            let (source, url_mime) = media_source(image)?;
             let mime = media_type.clone().or(url_mime);
-            UserContent::Image(Image {
+            Some(UserContent::Image(Image {
                 data: source,
                 media_type: mime.as_deref().and_then(ImageMediaType::from_mime_type),
                 ..Image::default()
-            })
+            }))
         }
         UserPart::File {
             data, media_type, ..
@@ -235,8 +260,44 @@ fn user_part(part: &UserPart) -> UserContent {
     }
 }
 
+/// `JSON.stringify` spelling, as the AI SDK providers write JSON into tool-result text.
 fn json_text(value: &Value) -> String {
-    serde_json::to_string(value).unwrap_or_default()
+    crate::messages::js_stringify(value)
+}
+
+/// A tool-result content item as rig tool-result content: text stays text; inline or URL images
+/// become images; anything else (non-image files, provider ids, custom items) is sent as its
+/// JSON, as the compatible providers send items they cannot render.
+fn tool_content(item: &ToolContentItem) -> ToolResultContent {
+    let image = |data: &Value, media_type: &str| {
+        media_source(data).map(|(source, _)| {
+            ToolResultContent::Image(Image {
+                data: source,
+                media_type: ImageMediaType::from_mime_type(media_type),
+                ..Image::default()
+            })
+        })
+    };
+    let converted = match item {
+        ToolContentItem::Text { text, .. } => Some(ToolResultContent::text(text.clone())),
+        ToolContentItem::File {
+            data, media_type, ..
+        }
+        | ToolContentItem::ImageData {
+            data, media_type, ..
+        }
+        | ToolContentItem::FileData {
+            data, media_type, ..
+        } if media_type.starts_with("image/") => image(data, media_type),
+        ToolContentItem::ImageUrl { url, .. } => Some(ToolResultContent::Image(Image {
+            data: DocumentSourceKind::Url(url.clone()),
+            ..Image::default()
+        })),
+        _ => None,
+    };
+    converted.unwrap_or_else(|| {
+        ToolResultContent::text(json_text(&serde_json::to_value(item).unwrap_or_default()))
+    })
 }
 
 /// `ToolResultOutput` → rig tool-result content, as the AI SDK providers render each output kind
@@ -256,28 +317,7 @@ fn tool_result(part: &ToolResultPart) -> Result<UserContent, ModelError> {
             )],
             false,
         ),
-        ToolResultOutput::Content { value } => (
-            value
-                .iter()
-                .map(|item| match item {
-                    ToolContentItem::Text { text: value } => text(value.clone()),
-                    ToolContentItem::Media { data, media_type }
-                        if media_type.starts_with("image/") =>
-                    {
-                        let (source, _) = media_source(data);
-                        ToolResultContent::Image(Image {
-                            data: source,
-                            media_type: ImageMediaType::from_mime_type(media_type),
-                            ..Image::default()
-                        })
-                    }
-                    // rig tool results hold text and images only; other media goes as its JSON,
-                    // as the compatible providers send unsupported items.
-                    other => text(json_text(&serde_json::to_value(other).unwrap_or_default())),
-                })
-                .collect(),
-            false,
-        ),
+        ToolResultOutput::Content { value } => (value.iter().map(tool_content).collect(), false),
     };
     // Every wire rejects a tool result with no content blocks.
     if content.is_empty() {

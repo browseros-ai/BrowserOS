@@ -810,7 +810,7 @@ async fn copilot_flags_vision_and_shrinks_images() -> anyhow::Result<()> {
                 provider_options: None,
             },
             browseros_agent::messages::UserPart::Image {
-                image: encoded,
+                image: Value::String(encoded),
                 media_type: Some("image/png".to_owned()),
                 provider_options: None,
             },
