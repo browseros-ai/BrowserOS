@@ -210,6 +210,11 @@ export async function bootServer(
       BROWSEROS_TRUSTED_ORIGINS: trustedOrigin,
       CARGO_HOME: process.env.CARGO_HOME ?? join(homedir(), '.cargo'),
       RUSTUP_HOME: process.env.RUSTUP_HOME ?? join(homedir(), '.rustup'),
+      // A private build dir lets this worktree's `cargo run` skip the lock on the
+      // shared build-dir from .cargo/config.toml, which other worktrees hold.
+      ...(process.env.CARGO_BUILD_BUILD_DIR && {
+        CARGO_BUILD_BUILD_DIR: process.env.CARGO_BUILD_BUILD_DIR,
+      }),
     }
     const config = join(root, 'sidecar.json')
     await writeFile(
