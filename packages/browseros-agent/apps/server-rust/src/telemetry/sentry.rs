@@ -48,7 +48,7 @@ fn build_client(dsn: &str) -> Option<Arc<sentry::Client>> {
 }
 
 fn install_panic_hook(client: &Arc<sentry::Client>) {
-    *PANIC_CLIENT.write().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(&client);
+    *PANIC_CLIENT.write().unwrap_or_else(|e| e.into_inner()) = Arc::downgrade(client);
     PANIC_HOOK.get_or_init(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {

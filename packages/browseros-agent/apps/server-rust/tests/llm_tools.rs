@@ -48,10 +48,13 @@ impl Fixture {
         let response = server_rust::build_router(self.state.clone())
             .oneshot(
                 Request::post(path)
+                    .extension(axum::extract::ConnectInfo(
+                        "127.0.0.1:12345".parse::<std::net::SocketAddr>()?,
+                    ))
                     .header("host", "127.0.0.1")
                     .header(
                         "origin",
-                        "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+                        "chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk",
                     )
                     .header("content-type", "application/json")
                     .body(Body::from(body.to_string()))?,
@@ -120,6 +123,9 @@ impl FakeProvider {
                 )
                     .into_response();
             }
+            if state.text == "[stall]" {
+                std::future::pending::<()>().await;
+            }
             let content = json!({"id":"chatcmpl-test", "object":"chat.completion.chunk", "created":1, "model":"test", "choices":[{"index":0, "delta":{"role":"assistant", "content":state.text}, "finish_reason":null}]});
             let finish = json!({"id":"chatcmpl-test", "object":"chat.completion.chunk", "created":1, "model":"test", "choices":[{"index":0, "delta":{}, "finish_reason":"stop"}], "usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}});
             (
@@ -173,6 +179,56 @@ async fn provider_test_streams_preview_and_reports_time() -> TestResult {
             .to_string()
             .contains("Respond with exactly: 'ok'")
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_preview_preserves_js_split_surrogate() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start(&format!("{}😀", "a".repeat(99)), false).await?;
+    let response = server_rust::build_router(fixture.state.clone())
+        .oneshot(
+            Request::post("/test-provider")
+                .extension(axum::extract::ConnectInfo(
+                    "127.0.0.1:12345".parse::<std::net::SocketAddr>()?,
+                ))
+                .header("host", "127.0.0.1")
+                .header(
+                    "origin",
+                    "chrome-extension://bflpfmnmnokmjhmgnolecpppdbdophmk",
+                )
+                .header("content-type", "application/json")
+                .body(Body::from(fake.inline().to_string()))?,
+        )
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = String::from_utf8(
+        axum::body::to_bytes(response.into_body(), 1024 * 1024)
+            .await?
+            .to_vec(),
+    )?;
+    assert!(
+        body.contains(&format!(r#"{}\ud83d...\"""#, "a".repeat(99))),
+        "{body}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn provider_deadline_bounds_a_stalled_stream() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("[stall]", false).await?;
+    let (status, body) = tokio::time::timeout(
+        std::time::Duration::from_secs(17),
+        fixture.post("/test-provider", fake.inline()),
+    )
+    .await??;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["message"],
+        "[openai-compatible] The operation was aborted due to timeout"
+    );
+    assert!(body["responseTime"].as_u64().is_some_and(|ms| ms >= 14_900));
     Ok(())
 }
 
@@ -296,6 +352,61 @@ async fn every_saved_credential_field_pins_the_destination() -> TestResult {
     }
     assert!(other.calls().is_empty());
     assert_eq!(saved.calls().len(), 4);
+    Ok(())
+}
+
+#[tokio::test]
+async fn absent_saved_endpoint_fields_clear_untrusted_inline_selectors() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let fake = FakeProvider::start("must not receive the saved key", false).await?;
+    fixture
+        .state
+        .providers
+        .upsert_llm(
+            "azure",
+            UpsertProvider {
+                provider_type: "azure".to_owned(),
+                name: "Azure".to_owned(),
+                model_id: Some("model".to_owned()),
+                context_window: Some(128_000),
+                api_key: Some("saved-key".to_owned()),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let (status, body) = fixture
+        .post(
+            "/test-provider",
+            json!({
+                "providerId":"azure", "provider":"azure", "model":"model",
+                "baseUrl":fake.url,"resourceName":"untrusted-resource", "region":"untrusted-region"
+            }),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["message"],
+        "[azure] Azure provider requires apiKey and either resourceName or baseUrl"
+    );
+    assert!(fake.calls().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn refinement_uses_ecmascript_whitespace_rules() -> TestResult {
+    let fixture = Fixture::new().await?;
+    for (text, expected) in [
+        ("\u{feff} refined \u{feff}", "refined"),
+        ("\u{85}", "\u{85}"),
+    ] {
+        let fake = FakeProvider::start(text, false).await?;
+        let mut request = fake.inline();
+        request["name"] = json!("Morning");
+        request["prompt"] = json!("Read the news");
+        let (status, body) = fixture.post("/refine-prompt", request).await?;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(body["refined"], expected);
+    }
     Ok(())
 }
 
@@ -452,4 +563,395 @@ async fn metrics_never_enable_without_install_identity() {
         metrics.capture("tool_executed", json!({"tool_name":"run","success":true}));
         metrics.shutdown().await;
     }
+}
+
+// Captured with Bun from LLMConfigSchema and the two route schema extensions, as
+// declared in the TS source. Keep the full pretty error message: clients receive
+// this JSON as a string, so field and issue ordering are part of the wire contract.
+const TS_VALIDATION_FIXTURES: &str = r####"[
+  {
+    "path": "/test-provider",
+    "input": {},
+    "issues": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "anthropic",
+          "openai",
+          "google",
+          "openrouter",
+          "azure",
+          "ollama",
+          "lmstudio",
+          "bedrock",
+          "openai-compatible",
+          "moonshot",
+          "chatgpt-pro",
+          "github-copilot",
+          "qwen-code"
+        ],
+        "path": [
+          "provider"
+        ],
+        "message": "Invalid option: expected one of \"anthropic\"|\"openai\"|\"google\"|\"openrouter\"|\"azure\"|\"ollama\"|\"lmstudio\"|\"bedrock\"|\"openai-compatible\"|\"moonshot\"|\"chatgpt-pro\"|\"github-copilot\"|\"qwen-code\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "model"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": {
+      "provider": "bad",
+      "model": ""
+    },
+    "issues": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "anthropic",
+          "openai",
+          "google",
+          "openrouter",
+          "azure",
+          "ollama",
+          "lmstudio",
+          "bedrock",
+          "openai-compatible",
+          "moonshot",
+          "chatgpt-pro",
+          "github-copilot",
+          "qwen-code"
+        ],
+        "path": [
+          "provider"
+        ],
+        "message": "Invalid option: expected one of \"anthropic\"|\"openai\"|\"google\"|\"openrouter\"|\"azure\"|\"ollama\"|\"lmstudio\"|\"bedrock\"|\"openai-compatible\"|\"moonshot\"|\"chatgpt-pro\"|\"github-copilot\"|\"qwen-code\""
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "model"
+        ],
+        "message": "Model name is required"
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": {
+      "provider": "openai",
+      "model": "m",
+      "headers": {
+        "X-Token": "a",
+        "x-token": "b"
+      }
+    },
+    "issues": [
+      {
+        "code": "custom",
+        "message": "Duplicate header name",
+        "path": [
+          "headers",
+          "x-token"
+        ]
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": {
+      "provider": "openai",
+      "model": "m",
+      "headers": {
+        "bad name": "a",
+        "ok": "a\n"
+      }
+    },
+    "issues": [
+      {
+        "code": "invalid_key",
+        "origin": "record",
+        "issues": [
+          {
+            "origin": "string",
+            "code": "invalid_format",
+            "format": "regex",
+            "pattern": "/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/",
+            "path": [],
+            "message": "Invalid string: must match pattern /^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/"
+          }
+        ],
+        "path": [
+          "headers",
+          "bad name"
+        ],
+        "message": "Invalid key in record"
+      },
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[\\t\\x20-\\x7e\\x80-\\xff]*(?![\\s\\S])/",
+        "path": [
+          "headers",
+          "ok"
+        ],
+        "message": "Invalid string: must match pattern /^[\\t\\x20-\\x7e\\x80-\\xff]*(?![\\s\\S])/"
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": {
+      "provider": "openai",
+      "model": "m",
+      "headers": {
+        "ok": 4
+      }
+    },
+    "issues": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "headers",
+          "ok"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": {
+      "provider": "openai",
+      "model": "m",
+      "headers": [
+        "x"
+      ]
+    },
+    "issues": [
+      {
+        "expected": "record",
+        "code": "invalid_type",
+        "path": [
+          "headers"
+        ],
+        "message": "Invalid input: expected record, received array"
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": {
+      "provider": "openai",
+      "model": "m",
+      "headers": {
+        "bad name": 3,
+        "X-K": "a",
+        "x-k": "b"
+      }
+    },
+    "issues": [
+      {
+        "code": "invalid_key",
+        "origin": "record",
+        "issues": [
+          {
+            "origin": "string",
+            "code": "invalid_format",
+            "format": "regex",
+            "pattern": "/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/",
+            "path": [],
+            "message": "Invalid string: must match pattern /^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\\s\\S])/"
+          }
+        ],
+        "path": [
+          "headers",
+          "bad name"
+        ],
+        "message": "Invalid key in record"
+      }
+    ]
+  },
+  {
+    "path": "/refine-prompt",
+    "input": {
+      "name": "",
+      "prompt": "",
+      "apiKey": null
+    },
+    "issues": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "apiKey"
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "prompt"
+        ],
+        "message": "Prompt cannot be empty"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "name"
+        ],
+        "message": "Task name cannot be empty"
+      }
+    ]
+  },
+  {
+    "path": "/refine-prompt",
+    "input": [],
+    "issues": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [],
+        "message": "Invalid input: expected object, received array"
+      }
+    ]
+  },
+  {
+    "path": "/refine-prompt",
+    "input": {
+      "name": 3,
+      "prompt": true,
+      "reasoningEffort": "bad"
+    },
+    "issues": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "none",
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ],
+        "path": [
+          "reasoningEffort"
+        ],
+        "message": "Invalid option: expected one of \"none\"|\"low\"|\"medium\"|\"high\"|\"xhigh\"|\"max\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "prompt"
+        ],
+        "message": "Invalid input: expected string, received boolean"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "name"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  },
+  {
+    "path": "/refine-prompt",
+    "input": {
+      "name": "n",
+      "prompt": "p",
+      "model": "",
+      "upstreamProvider": 3,
+      "providerId": null
+    },
+    "issues": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "providerId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "model"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "upstreamProvider"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": null,
+    "issues": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [],
+        "message": "Invalid input: expected object, received null"
+      }
+    ]
+  },
+  {
+    "path": "/test-provider",
+    "input": true,
+    "issues": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [],
+        "message": "Invalid input: expected object, received boolean"
+      }
+    ]
+  }
+]"####;
+
+#[tokio::test]
+async fn validation_messages_match_captured_ts_bytes() -> TestResult {
+    let fixture = Fixture::new().await?;
+    let examples: Vec<Value> = serde_json::from_str(TS_VALIDATION_FIXTURES)?;
+    for example in examples {
+        let path = example["path"].as_str().ok_or("fixture without route")?;
+        let (status, body) = fixture.post(path, example["input"].clone()).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{example}: {body}");
+        assert_eq!(body["error"]["name"], "ZodError");
+        assert_eq!(
+            body["error"]["message"],
+            serde_json::to_string_pretty(&example["issues"])?
+        );
+    }
+    Ok(())
 }

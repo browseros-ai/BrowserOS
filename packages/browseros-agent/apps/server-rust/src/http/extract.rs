@@ -128,6 +128,24 @@ impl ZodIssue {
         }
     }
     pub fn wire_value(&self) -> Value {
+        // P13's TS golden captures include record-key and custom-header issues. Zod inserts
+        // origin after code for invalid_key, and message before path for a custom issue;
+        // those orders remain observable inside the JSON-stringified error message.
+        if self.code == "invalid_key" || self.code == "custom" {
+            let mut issue = serde_json::Map::new();
+            issue.insert("code".into(), json!(self.code));
+            if let Some(attributes) = self.attributes.as_object() {
+                issue.extend(attributes.clone());
+            }
+            if self.code == "custom" {
+                issue.insert("message".into(), json!(self.message));
+                issue.insert("path".into(), json!(self.path));
+            } else {
+                issue.insert("path".into(), json!(self.path));
+                issue.insert("message".into(), json!(self.message));
+            }
+            return Value::Object(issue);
+        }
         let mut issue = serde_json::Map::new();
         // Zod's field insertion order is visible inside its JSON-stringified message.
         if let Some(origin) = self.attributes.get("origin") {

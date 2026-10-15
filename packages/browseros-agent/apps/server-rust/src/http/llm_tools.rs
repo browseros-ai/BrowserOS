@@ -5,7 +5,7 @@
 use crate::{AppState, db::ProviderRow, oauth::OAuthProvider};
 use axum::{
     Json,
-    extract::{Request, State},
+    extract::State,
     response::{IntoResponse, Response},
 };
 use browseros_agent::llm::{self, LanguageModel, LlmConfig, ProviderKind, ScriptedModel};
@@ -20,11 +20,10 @@ const TEST_PROMPT: &str = "Respond with exactly: 'ok'";
 const TEST_TIMEOUT: Duration = Duration::from_secs(15);
 const REFINE_TIMEOUT: Duration = Duration::from_secs(30);
 
-pub async fn test_provider(State(state): State<AppState>, request: Request) -> Response {
-    let body = match read_body(request).await {
-        Ok(body) => body,
-        Err(response) => return response,
-    };
+pub async fn test_provider(
+    State(state): State<AppState>,
+    super::extract::ZodJson(body): super::extract::ZodJson<Value>,
+) -> Response {
     if let Err(response) = validate(&body, false) {
         return response;
     }
@@ -51,6 +50,29 @@ pub async fn test_provider(State(state): State<AppState>, request: Request) -> R
         Ok(text) => {
             let preview = if text.encode_utf16().count() > 100 {
                 let units: Vec<_> = text.encode_utf16().take(100).collect();
+                if let Some(surrogate) = units
+                    .last()
+                    .copied()
+                    .filter(|unit| (0xd800..=0xdbff).contains(unit))
+                {
+                    // JS slice can split an emoji. Keep its unpaired UTF-16 unit escaped in
+                    // JSON instead of replacing it with U+FFFD, which changes the TS preview.
+                    let prefix = String::from_utf16_lossy(&units[..units.len() - 1]);
+                    let prefix = serde_json::to_string(&format!(
+                        "Connection successful. Response: \"{prefix}"
+                    ))
+                    .unwrap_or_default();
+                    let prefix = prefix.strip_suffix('"').unwrap_or_default();
+                    let body = format!(
+                        r#"{{"success":true,"message":{prefix}\u{surrogate:04x}...\"","responseTime":{response_time}}}"#
+                    );
+                    return (
+                        StatusCode::OK,
+                        [(http::header::CONTENT_TYPE, "application/json")],
+                        body,
+                    )
+                        .into_response();
+                }
                 format!("{}...", String::from_utf16_lossy(&units))
             } else {
                 text
@@ -73,11 +95,10 @@ pub async fn test_provider(State(state): State<AppState>, request: Request) -> R
         .into_response()
 }
 
-pub async fn refine_prompt(State(state): State<AppState>, request: Request) -> Response {
-    let body = match read_body(request).await {
-        Ok(body) => body,
-        Err(response) => return response,
-    };
+pub async fn refine_prompt(
+    State(state): State<AppState>,
+    super::extract::ZodJson(body): super::extract::ZodJson<Value>,
+) -> Response {
     if let Err(response) = validate(&body, true) {
         return response;
     }
@@ -107,8 +128,8 @@ pub async fn refine_prompt(State(state): State<AppState>, request: Request) -> R
     )
     .await
     {
-        Ok(text) if !text.trim().is_empty() => {
-            Json(json!({"success": true, "refined": text.trim()})).into_response()
+        Ok(text) if !js_trim(&text).is_empty() => {
+            Json(json!({"success": true, "refined": js_trim(&text)})).into_response()
         }
         Ok(_) => super::errors::success_false(
             StatusCode::BAD_REQUEST,
@@ -314,23 +335,13 @@ fn nonempty_string<'a>(body: &'a Value, key: &str) -> Option<&'a str> {
     string(body, key).filter(|value| !value.is_empty())
 }
 
-async fn read_body(request: Request) -> Result<Value, Response> {
-    let is_json = request
-        .headers()
-        .get(http::header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .is_some_and(|value| {
-            value == "application/json"
-                || value.starts_with("application/") && value.ends_with("+json")
-        });
-    if !is_json {
-        return Ok(json!({}));
-    }
-    let bytes = axum::body::to_bytes(request.into_body(), usize::MAX)
-        .await
-        .map_err(|_| internal_error("Malformed JSON in request body"))?;
-    serde_json::from_slice(&bytes).map_err(|_| internal_error("Malformed JSON in request body"))
+fn js_trim(text: &str) -> &str {
+    // ECMAScript trims BOM but not NEL (U+0085); Rust's str::trim does the reverse.
+    text.trim_matches(|c| {
+        matches!(c,
+        '\u{0009}'..='\u{000d}' | ' ' | '\u{00a0}' | '\u{1680}' | '\u{2000}'..='\u{200a}'
+        | '\u{2028}' | '\u{2029}' | '\u{202f}' | '\u{205f}' | '\u{3000}' | '\u{feff}')
+    })
 }
 
 fn internal_error(message: &str) -> Response {
@@ -340,137 +351,215 @@ fn internal_error(message: &str) -> Response {
     ))
 }
 
+// Issue order follows the Zod object's declared fields, rather than request key order. Unknown
+// keys are ignored, and optional fields still reject null; serde Option<T> cannot model that.
 fn validate(body: &Value, refine: bool) -> Result<(), Response> {
-    use super::extract::ZodIssue;
     let mut issues = Vec::new();
-    let mut issue = |key: &str, code: &str, message: &str| {
-        issues.push(ZodIssue {
-            code: code.to_owned(),
-            path: if key.is_empty() {
-                vec![]
-            } else {
-                vec![json!(key)]
-            },
-            message: message.to_owned(),
-        })
-    };
     if !body.is_object() {
-        issue("", "invalid_type", "Invalid input: expected object");
+        issues.push(invalid_type("object", Some(body), vec![]));
     } else {
-        for key in [
-            "providerId",
+        let providers: Vec<_> = ProviderKind::ALL.iter().map(|kind| kind.as_str()).collect();
+        validate_enum(body, "provider", &providers, !refine, &mut issues);
+        validate_string(body, "providerId", false, None, &mut issues);
+        validate_string(
+            body,
             "model",
-            "apiKey",
-            "baseUrl",
+            !refine,
+            Some(if refine {
+                "Too small: expected string to have >=1 characters"
+            } else {
+                "Model name is required"
+            }),
+            &mut issues,
+        );
+        for key in ["apiKey", "baseUrl"] {
+            validate_string(body, key, false, None, &mut issues);
+        }
+        if let Some(headers) = body.get("headers") {
+            validate_headers(headers, &mut issues);
+        }
+        for key in [
             "resourceName",
             "region",
             "accessKeyId",
             "secretAccessKey",
             "sessionToken",
-            "upstreamProvider",
-            "prompt",
-            "name",
         ] {
-            if body.get(key).is_some_and(|value| !value.is_string()) {
-                issue(key, "invalid_type", "Invalid input: expected string");
-            }
+            validate_string(body, key, false, None, &mut issues);
         }
-        if let Some(provider) = body.get("provider") {
-            if provider
-                .as_str()
-                .and_then(|provider| provider.parse::<ProviderKind>().ok())
-                .is_none()
-            {
-                issue(
-                    "provider",
-                    "invalid_value",
-                    "Invalid option: expected a supported LLM provider",
-                );
-            }
-        } else if !refine {
-            issue(
-                "provider",
-                "invalid_value",
-                "Invalid option: expected a supported LLM provider",
-            );
-        }
-        if (!refine || body.get("model").is_some())
-            && nonempty_string(body, "model").is_none()
-            && body.get("model").is_none_or(Value::is_string)
-        {
-            issue(
-                "model",
-                if body.get("model").is_none() {
-                    "invalid_type"
-                } else {
-                    "too_small"
-                },
-                if refine {
-                    "Too small: expected string to have >=1 characters"
-                } else {
-                    "Model name is required"
-                },
-            );
-        }
+        validate_enum(
+            body,
+            "reasoningEffort",
+            &["none", "low", "medium", "high", "xhigh", "max"],
+            false,
+            &mut issues,
+        );
+        validate_enum(
+            body,
+            "reasoningSummary",
+            &["auto", "concise", "detailed"],
+            false,
+            &mut issues,
+        );
         if refine {
-            for (key, message) in [
-                ("prompt", "Prompt cannot be empty"),
-                ("name", "Task name cannot be empty"),
-            ] {
-                if body.get(key).is_none() {
-                    issue(key, "invalid_type", "Invalid input: expected string");
-                } else if string(body, key) == Some("") {
-                    issue(key, "too_small", message);
-                }
-            }
+            validate_string(
+                body,
+                "prompt",
+                true,
+                Some("Prompt cannot be empty"),
+                &mut issues,
+            );
+            validate_string(
+                body,
+                "name",
+                true,
+                Some("Task name cannot be empty"),
+                &mut issues,
+            );
         }
-        for (key, allowed) in [
-            (
-                "reasoningEffort",
-                &["none", "low", "medium", "high", "xhigh", "max"][..],
-            ),
-            ("reasoningSummary", &["auto", "concise", "detailed"][..]),
-        ] {
-            if let Some(value) = body.get(key)
-                && !value.as_str().is_some_and(|value| allowed.contains(&value))
-            {
-                issue(key, "invalid_value", "Invalid option");
-            }
-        }
-        if let Some(headers) = body.get("headers") {
-            match headers.as_object() {
-                None => issue("headers", "invalid_type", "Invalid input: expected record"),
-                Some(headers) => {
-                    let mut names = std::collections::BTreeSet::new();
-                    for (name, value) in headers {
-                        if name.is_empty()
-                            || !name.bytes().all(|c| {
-                                c.is_ascii_alphanumeric() || b"!#$%&'*+.^_`|~-".contains(&c)
-                            })
-                        {
-                            issue("headers", "invalid_format", "Invalid header name");
-                        }
-                        if !value.as_str().is_some_and(|value| {
-                            value.chars().all(|c| {
-                                c == '\t'
-                                    || (' '..='~').contains(&c)
-                                    || ('\u{80}'..='\u{ff}').contains(&c)
-                            })
-                        }) {
-                            issue("headers", "invalid_format", "Invalid header value");
-                        }
-                        if !names.insert(name.to_ascii_lowercase()) {
-                            issue("headers", "custom", "Duplicate header name");
-                        }
-                    }
-                }
-            }
-        }
+        validate_string(body, "upstreamProvider", false, None, &mut issues);
     }
     if issues.is_empty() {
         Ok(())
     } else {
         Err(super::errors::zod_400(&issues))
+    }
+}
+
+fn invalid_type(
+    expected: &str,
+    value: Option<&Value>,
+    path: Vec<Value>,
+) -> super::extract::ZodIssue {
+    let received = match value {
+        None => "undefined",
+        Some(Value::Null) => "null",
+        Some(Value::Array(_)) => "array",
+        Some(Value::Object(_)) => "object",
+        Some(Value::Bool(_)) => "boolean",
+        Some(Value::Number(_)) => "number",
+        Some(Value::String(_)) => "string",
+    };
+    super::extract::ZodIssue {
+        code: "invalid_type".to_owned(),
+        path,
+        message: format!("Invalid input: expected {expected}, received {received}"),
+        attributes: json!({"expected":expected}),
+    }
+}
+
+fn validate_string(
+    body: &Value,
+    key: &str,
+    required: bool,
+    minimum_message: Option<&str>,
+    issues: &mut Vec<super::extract::ZodIssue>,
+) {
+    let value = body.get(key);
+    if value.is_none() && !required {
+        return;
+    }
+    match value.and_then(Value::as_str) {
+        None => issues.push(invalid_type("string", value, vec![json!(key)])),
+        Some("") if minimum_message.is_some() => issues.push(super::extract::ZodIssue {
+            code: "too_small".to_owned(),
+            path: vec![json!(key)],
+            message: minimum_message.unwrap_or_default().to_owned(),
+            attributes: json!({"origin":"string","minimum":1,"inclusive":true}),
+        }),
+        _ => {}
+    }
+}
+
+fn validate_enum(
+    body: &Value,
+    key: &str,
+    allowed: &[&str],
+    required: bool,
+    issues: &mut Vec<super::extract::ZodIssue>,
+) {
+    let value = body.get(key);
+    if value.is_none() && !required {
+        return;
+    }
+    if !value
+        .and_then(Value::as_str)
+        .is_some_and(|value| allowed.contains(&value))
+    {
+        let options = allowed
+            .iter()
+            .map(|value| format!("\"{value}\""))
+            .collect::<Vec<_>>()
+            .join("|");
+        issues.push(super::extract::ZodIssue {
+            code: "invalid_value".to_owned(),
+            path: vec![json!(key)],
+            message: format!("Invalid option: expected one of {options}"),
+            attributes: json!({"values":allowed}),
+        });
+    }
+}
+
+fn validate_headers(value: &Value, issues: &mut Vec<super::extract::ZodIssue>) {
+    use super::extract::ZodIssue;
+    const NAME_PATTERN: &str = r"/^[!#$%&'*+.^_`|~0-9A-Za-z-]+(?![\s\S])/";
+    const VALUE_PATTERN: &str = r"/^[\t\x20-\x7e\x80-\xff]*(?![\s\S])/";
+    let Some(headers) = value.as_object() else {
+        issues.push(invalid_type("record", Some(value), vec![json!("headers")]));
+        return;
+    };
+    let mut aborted = false;
+    for (name, value) in headers {
+        let path = vec![json!("headers"), json!(name)];
+        if name.is_empty()
+            || !name
+                .bytes()
+                .all(|c| c.is_ascii_alphanumeric() || b"!#$%&'*+.^_`|~-".contains(&c))
+        {
+            aborted = true;
+            issues.push(ZodIssue {
+                code:"invalid_key".to_owned(), path, message:"Invalid key in record".to_owned(),
+                attributes:json!({"origin":"record","issues":[{
+                    "origin":"string","code":"invalid_format","format":"regex","pattern":NAME_PATTERN,
+                    "path":[],"message":format!("Invalid string: must match pattern {NAME_PATTERN}")
+                }]}),
+            });
+            // Zod does not validate the value when the record key already failed.
+            continue;
+        }
+        match value.as_str() {
+            None => {
+                aborted = true;
+                issues.push(invalid_type("string", Some(value), path));
+            }
+            Some(value)
+                if !value.chars().all(|c| {
+                    c == '\t' || (' '..='~').contains(&c) || ('\u{80}'..='\u{ff}').contains(&c)
+                }) =>
+            {
+                issues.push(ZodIssue {
+                    code: "invalid_format".to_owned(),
+                    path,
+                    message: format!("Invalid string: must match pattern {VALUE_PATTERN}"),
+                    attributes: json!({"origin":"string","format":"regex","pattern":VALUE_PATTERN}),
+                })
+            }
+            _ => {}
+        }
+    }
+    // superRefine runs only when parsing did not abort. A regex failure is continuable;
+    // an invalid key/type aborts and must not introduce spurious duplicate-name issues.
+    if !aborted {
+        let mut names = std::collections::BTreeSet::new();
+        for name in headers.keys() {
+            if !names.insert(name.to_ascii_lowercase()) {
+                issues.push(ZodIssue::new(
+                    "custom",
+                    vec![json!("headers"), json!(name)],
+                    "Duplicate header name",
+                ));
+            }
+        }
     }
 }
 
