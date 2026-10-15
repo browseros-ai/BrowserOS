@@ -98,6 +98,18 @@ async fn schema_page_corruption_is_distinct_and_salvages_every_table() -> anyhow
         );
         assert_eq!(salvaged.get(table).copied(), Some(count as u64), "{table}");
     }
+    let dump = db_common::rust_dump(&db, &paths.db_file).await?;
+    let expected = db_common::read_json(&db_common::fixture("v0014/expected.json"))?;
+    for key in [
+        "providers",
+        "agents",
+        "conversations",
+        "oauthTokens",
+        "jobs",
+        "runs",
+    ] {
+        db_common::assert_same(&dump[key], &expected[key], key);
+    }
     db.close().await?;
     Ok(())
 }
@@ -293,5 +305,67 @@ async fn backup_is_a_complete_snapshot_during_checkpointing_writes() -> anyhow::
     }
     stop.store(true, Ordering::Relaxed);
     writer.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn future_timestamp_with_a_known_hash_is_still_ahead() -> anyhow::Result<()> {
+    let (_dir, paths) = stage(Some("v0014"))?;
+    let mut ts = raw(&paths.db_file).await?;
+    sqlx::query("INSERT INTO __drizzle_migrations(hash,created_at) SELECT hash,9999999999999 FROM __drizzle_migrations LIMIT 1")
+        .execute(&mut ts).await?;
+    ts.close().await?;
+    let (db, outcome) = open(&paths).await?;
+    assert!(matches!(
+        outcome,
+        server_rust::db::MigrationOutcome::DatabaseAhead { .. }
+    ));
+    assert!(db.providers().delete("anything").await.is_err());
+    // Even Rust-owned bookkeeping is not added to an ahead TS database.
+    let mut raw_db = raw(&paths.db_file).await?;
+    let ledgers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM sqlite_master WHERE name='seaql_migrations'")
+            .fetch_one(&mut raw_db)
+            .await?;
+    assert_eq!(ledgers, 0);
+    raw_db.close().await?;
+    db.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn corrupt_table_does_not_prevent_other_tables_from_being_salvaged() -> anyhow::Result<()> {
+    let (_dir, paths) = stage(Some("v0014"))?;
+    let mut ts = raw(&paths.db_file).await?;
+    let root: i64 =
+        sqlx::query_scalar("SELECT rootpage FROM sqlite_master WHERE name='conversations'")
+            .fetch_one(&mut ts)
+            .await?;
+    let page_size: i64 = sqlx::query_scalar("PRAGMA page_size")
+        .fetch_one(&mut ts)
+        .await?;
+    let tokens = db_common::count(&paths.db_file, "oauth_tokens").await?;
+    ts.close().await?;
+    let mut bytes = std::fs::read(&paths.db_file)?;
+    bytes[((root - 1) * page_size) as usize] ^= 0xff;
+    std::fs::write(&paths.db_file, bytes)?;
+    let (db, outcome) = open(&paths).await?;
+    assert!(matches!(
+        outcome,
+        server_rust::db::MigrationOutcome::RecreatedAfterCorruption { .. }
+    ));
+    assert_eq!(db.providers().list().await?.len(), 8);
+    assert_eq!(
+        db_common::count(&paths.db_file, "oauth_tokens").await?,
+        tokens
+    );
+    // The failed VACUUM must not publish its partial output as the completion marker.
+    assert!(
+        !paths
+            .db_file
+            .with_file_name("browseros.sqlite.pre-rust.bak")
+            .exists()
+    );
+    db.close().await?;
     Ok(())
 }

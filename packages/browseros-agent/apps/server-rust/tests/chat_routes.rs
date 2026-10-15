@@ -1143,7 +1143,13 @@ async fn db_records_classify_acp_rows_and_persist_through_the_conversation_store
         records: Arc::new(server_rust::chat::DbChatRecords::new(&db)),
         browseros: engine.clone(),
         acp: Arc::new(ScriptedEngine::new(script())),
-        oauth: token_manager(dir.path()).await?,
+        // Production shares one Database across records and OAuth; a second Rust owner of
+        // the same directory is now correctly rejected by the DB instance lock.
+        oauth: TokenManager::new(
+            db.oauth_tokens(),
+            "browseros-test".to_owned(),
+            reqwest::Client::new(),
+        ),
         tabs: None,
         use_mock_llm: false,
     });

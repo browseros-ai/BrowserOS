@@ -143,8 +143,15 @@ impl Database {
             })?;
         // OS advisory locks survive stale lock files and release on crash. TS does not take
         // this lock: BEGIN IMMEDIATE still arbitrates the OTA overlap with its SQLite writer.
-        lock.try_lock()
-            .map_err(|_| DbError::InstanceLocked(lock_path.display().to_string()))?;
+        lock.try_lock().map_err(|error| match error {
+            std::fs::TryLockError::WouldBlock => {
+                DbError::InstanceLocked(lock_path.display().to_string())
+            }
+            std::fs::TryLockError::Error(source) => DbError::Io {
+                context: "take database instance lock".into(),
+                source,
+            },
+        })?;
         let (connection, outcome) = open::open(&paths.db_file).await?;
         let read_only = matches!(outcome, MigrationOutcome::DatabaseAhead { .. });
         match &outcome {

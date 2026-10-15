@@ -236,11 +236,13 @@ impl AgentStore {
         Entity::insert(row)
             .exec_without_returning(&transaction)
             .await?;
-        transaction.commit().await?;
-        let saved = self
-            .get(id)
+        let saved = Entity::find_by_id(id.to_string())
+            .into_model::<ProviderRow>()
+            .one(&transaction)
             .await?
             .ok_or_else(|| DbError::Query(format!("agent {id} vanished after insert")))?;
+        let saved = AcpAgentRow::from_provider(saved)?;
+        transaction.commit().await?;
         tracing::info!(agent_id = %id, agent_type = input.kind.as_str(), "ACP agent created");
         Ok(saved)
     }
@@ -286,9 +288,10 @@ impl AgentStore {
             .into_model::<ProviderRow>()
             .one(&transaction)
             .await?;
+        let saved = saved.map(AcpAgentRow::from_provider).transpose()?;
         transaction.commit().await?;
         tracing::info!(agent_id = %id, "ACP agent updated");
-        saved.map(AcpAgentRow::from_provider).transpose()
+        Ok(saved)
     }
 
     pub async fn delete(&self, id: impl ToString) -> DbResult<bool> {
@@ -296,14 +299,14 @@ impl AgentStore {
         let transaction = self.db.begin_write().await?;
         let deleted = Entity::delete_many()
             .filter(Column::Kind.eq("acp"))
-            .filter(Column::Id.eq(id.to_string()))
+            .filter(Column::Id.eq(id.as_str()))
             .exec(&transaction)
             .await?;
         let deleted = deleted.rows_affected > 0;
+        transaction.commit().await?;
         if deleted {
             tracing::info!(agent_id = %id, "ACP agent deleted");
         }
-        transaction.commit().await?;
         Ok(deleted)
     }
 

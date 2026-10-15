@@ -341,10 +341,10 @@ impl ConversationStore {
             .exec(&transaction)
             .await?;
         let deleted = deleted.rows_affected > 0;
+        transaction.commit().await?;
         if deleted {
             tracing::info!(conversation_id = %id, "conversation deleted");
         }
-        transaction.commit().await?;
         Ok(deleted)
     }
 }
@@ -465,8 +465,7 @@ fn js_join_text(value: Option<&Value>) -> String {
     }
 }
 
-/// Summary columns as stored; `target_type` is checked separately so one unknown value does not
-/// fail a whole list.
+/// Raw summary projection shared by lossless reads and the validated execution view.
 struct SummaryRecord {
     id: String,
     last_user_message: Option<String>,
