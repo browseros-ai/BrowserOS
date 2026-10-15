@@ -143,7 +143,7 @@ impl AcpEngine {
             .mint(LeaseSpec {
                 conversation_id,
                 read_only,
-                client_slug: client_slug(row.kind),
+                client_slug: row.kind.as_str(),
                 task_label,
                 auto_group: !request.is_scheduled_task,
                 browser_context: request.browser_context.clone(),
@@ -237,14 +237,6 @@ impl ChatEngine for AcpEngine {
             .await;
         held.lease.revoke();
         true
-    }
-}
-
-fn client_slug(kind: db::AgentKind) -> &'static str {
-    match kind {
-        db::AgentKind::Claude => "claude",
-        db::AgentKind::Codex => "codex",
-        db::AgentKind::Custom => "custom",
     }
 }
 
