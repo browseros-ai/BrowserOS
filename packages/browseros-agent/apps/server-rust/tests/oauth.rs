@@ -436,12 +436,15 @@ async fn callback_errors_escaping_failed_exchange_retry_and_port_release() -> Te
     }
     Err("listener not released".into())
 }
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn callback_expires_after_five_minutes() -> TestResult {
     let fake = FakeAuth::new(Duration::ZERO).await?;
     let ctx = Context::new(&fake, 0).await?;
     let params = pkce(&ctx.manager).await?;
+    // Database migrations use a real SQLite worker; advance only the pending flow's clock.
+    tokio::time::pause();
     tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::time::resume();
     let mut callback = callback_url(&params)?;
     callback
         .query_pairs_mut()
@@ -1015,7 +1018,7 @@ async fn concurrent_refresh_waiters_share_the_failure() -> TestResult {
     Ok(())
 }
 
-#[tokio::test(start_paused = true)]
+#[tokio::test]
 async fn device_denial_and_shutdown_end_background_polling() -> TestResult {
     for shutdown in [false, true] {
         let mut fake = FakeAuth::new(Duration::ZERO).await?;
@@ -1039,6 +1042,8 @@ async fn device_denial_and_shutdown_end_background_polling() -> TestResult {
         .await;
         ctx.manager.start(OAuthProvider::GitHubCopilot).await?;
         fake.next_hit().await?; // device authorization request
+        // Keep fixture migrations and the final status read outside the virtual-time scope.
+        tokio::time::pause();
         if shutdown {
             ctx.manager.shutdown().await;
         } else {
@@ -1048,6 +1053,7 @@ async fn device_denial_and_shutdown_end_background_polling() -> TestResult {
             }
         }
         tokio::time::advance(Duration::from_secs(60)).await;
+        tokio::time::resume();
         for _ in 0..100 {
             tokio::task::yield_now().await;
         }
