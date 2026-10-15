@@ -22,6 +22,9 @@ ui-message-stream.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 axum.workspace = true
+# OAuth PKCE uses OS randomness and URL-safe encoding; SHA-256 is shared with db below.
+base64.workspace = true
+rand.workspace = true
 futures-core.workspace = true
 futures-util.workspace = true
 http.workspace = true

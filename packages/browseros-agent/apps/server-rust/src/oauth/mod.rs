@@ -6,6 +6,8 @@ mod callback_server;
 mod providers;
 mod token_manager;
 
+pub(crate) use token_manager::expires_at;
+
 pub use callback_server::CallbackServer;
 pub use providers::{OAuthProvider, ProviderSpec};
 pub use token_manager::{
