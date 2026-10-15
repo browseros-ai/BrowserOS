@@ -91,7 +91,7 @@ pub struct TokenManager {
     callback_port: u16,
     providers: HashMap<OAuthProvider, ProviderSpec>,
     pending: Mutex<HashMap<String, PendingFlow>>,
-    refreshes: Mutex<HashMap<OAuthProvider, (Uuid, RefreshFuture)>>,
+    refreshes: Arc<Mutex<HashMap<OAuthProvider, (Uuid, RefreshFuture)>>>,
     stopped: CancellationToken,
 }
 
@@ -123,7 +123,7 @@ impl TokenManager {
             callback_port,
             providers: providers.into_iter().map(|s| (s.provider, s)).collect(),
             pending: Mutex::new(HashMap::new()),
-            refreshes: Mutex::new(HashMap::new()),
+            refreshes: Arc::new(Mutex::new(HashMap::new())),
             stopped: CancellationToken::new(),
         })
     }
@@ -372,7 +372,7 @@ impl TokenManager {
             ))
         };
         let mut refreshes = self.refreshes.lock().await;
-        let (id, refresh) = if let Some(existing) = refreshes.get(&provider) {
+        let refresh = if let Some((_, existing)) = refreshes.get(&provider) {
             existing.clone()
         } else {
             let tokens = self
@@ -392,27 +392,30 @@ impl TokenManager {
             let browseros_id = self.browseros_id.clone();
             let http = self.http.clone();
             let spec = spec.clone();
+            let completed = self.refreshes.clone();
             // Start eagerly: dropping an HTTP/chat waiter must not cancel a rotating refresh
             // token exchange after the provider has already consumed the old refresh token.
             let task = tokio::spawn(async move {
-                execute_refresh(store, browseros_id, http, spec, tokens).await
+                let result = execute_refresh(store, browseros_id, http, spec, tokens).await;
+                // Cleanup belongs to the producer, not the request awaiting it. Otherwise an
+                // aborted turn could leave a completed failure cached across the next login.
+                let mut refreshes = completed.lock().await;
+                if refreshes
+                    .get(&provider)
+                    .is_some_and(|(current, _)| *current == id)
+                {
+                    refreshes.remove(&provider);
+                }
+                result
             });
             let refresh = async move { task.await.map_err(upstream)? }
                 .boxed()
                 .shared();
             refreshes.insert(provider, (id, refresh.clone()));
-            (id, refresh)
+            refresh
         };
         drop(refreshes);
-        let result = refresh.await;
-        let mut refreshes = self.refreshes.lock().await;
-        if refreshes
-            .get(&provider)
-            .is_some_and(|(current, _)| *current == id)
-        {
-            refreshes.remove(&provider);
-        }
-        result.map(credentials)
+        refresh.await.map(credentials)
     }
 
     pub async fn shutdown(&self) {

@@ -80,12 +80,12 @@ pub async fn store_token_with_manager(
     if !truthy(access_token) {
         return text_plain(StatusCode::BAD_REQUEST, "Missing accessToken");
     }
-    let input = token_input(&body);
-    match input {
-        Ok(input) if manager.store_token(provider, input).await.is_ok() => {
-            Json(json!({"ok": true})).into_response()
-        }
-        _ => text_plain(StatusCode::INTERNAL_SERVER_ERROR, "Failed to store token"),
+    if let Ok(input) = token_input(&body)
+        && manager.store_token(provider, input).await.is_ok()
+    {
+        Json(json!({"ok": true})).into_response()
+    } else {
+        text_plain(StatusCode::INTERNAL_SERVER_ERROR, "Failed to store token")
     }
 }
 
@@ -114,7 +114,8 @@ fn truthy(value: &Value) -> bool {
 }
 
 fn token_input(body: &Value) -> Result<TokenInput, ()> {
-    // Bun SQLite converts scalar values for TEXT columns but rejects structured JSON. Avoid adding schema validation that would turn these 500s into 400s.
+    // Bun SQLite converts scalar values for TEXT columns but rejects structured JSON.
+    // Avoid schema validation that would turn these existing 500s into 400s.
     fn sqlite_text(value: &Value) -> Result<String, ()> {
         match value {
             Value::String(s) => Ok(s.clone()),

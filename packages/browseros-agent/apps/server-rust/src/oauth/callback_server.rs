@@ -126,13 +126,18 @@ async fn callback(State(state): State<CallbackState>, request: Request) -> Respo
     match request.uri().path() {
         "/cancel" => {
             state.cancel.cancel();
-            (StatusCode::OK, "Login cancelled").into_response()
+            plain_text(StatusCode::OK, "Login cancelled")
         }
         "/auth/callback" => {
-            let query: HashMap<String, String> =
+            // URLSearchParams.get() returns the first duplicate, unlike collect::<HashMap>().
+            let mut query: HashMap<String, String> = HashMap::new();
+            for (key, value) in
                 url::form_urlencoded::parse(request.uri().query().unwrap_or_default().as_bytes())
-                    .into_owned()
-                    .collect();
+            {
+                query
+                    .entry(key.into_owned())
+                    .or_insert_with(|| value.into_owned());
+            }
             let error = query.get("error").filter(|s| !s.is_empty());
             let result = if let Some(error) = error {
                 Err(query
@@ -166,8 +171,18 @@ async fn callback(State(state): State<CallbackState>, request: Request) -> Respo
             };
             ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], html).into_response()
         }
-        _ => (StatusCode::NOT_FOUND, "Not found").into_response(),
+        _ => plain_text(StatusCode::NOT_FOUND, "Not found"),
     }
+}
+
+fn plain_text(status: StatusCode, text: &'static str) -> Response {
+    // Bun.serve infers this exact content type for new Response(string).
+    (
+        status,
+        [(header::CONTENT_TYPE, "text/plain;charset=utf-8")],
+        text,
+    )
+        .into_response()
 }
 
 fn upstream(error: impl std::fmt::Display) -> OAuthError {

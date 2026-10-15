@@ -1,6 +1,6 @@
 //! OAuth for the three subscription providers (ChatGPT Pro via PKCE + the `127.0.0.1:1455`
 //! callback listener; GitHub Copilot and Qwen Code via device codes), token persistence and
-//! single-flight refresh. `chat` pulls credentials from here at turn start. Implemented by P10.
+//! single-flight refresh. `chat` pulls credentials from here at turn start.
 
 mod callback_server;
 mod providers;

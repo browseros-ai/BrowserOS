@@ -913,3 +913,145 @@ async fn route_untyped_body_and_text_errors_match_bun_goldens() -> TestResult {
     ctx.manager.shutdown().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn abandoned_refresh_waiter_does_not_cache_credentials_across_login() -> TestResult {
+    let mut fake = FakeAuth::new(Duration::from_millis(50)).await?;
+    let ctx = Context::new(&fake, 0).await?;
+    ctx.put(OAuthProvider::ChatGptPro, 1, "refresh").await?;
+    fake.reply(
+        "/chatgpt-pro/token",
+        StatusCode::OK,
+        "application/json",
+        json!({"access_token":"rotated","expires_in":3600}),
+    )
+    .await;
+    let manager = ctx.manager.clone();
+    let waiter = tokio::spawn(async move { manager.credentials(OAuthProvider::ChatGptPro).await });
+    fake.next_hit().await?;
+    waiter.abort();
+    // The provider has consumed the old refresh token; persistence must finish even though
+    // the initiating turn disappeared. A subsequent login must never see this cached result.
+    for _ in 0..100 {
+        if ctx
+            .store
+            .get("installation-a", "chatgpt-pro")
+            .await?
+            .is_some_and(|t| t.access_token == "rotated")
+        {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        ctx.store
+            .get("installation-a", "chatgpt-pro")
+            .await?
+            .ok_or("missing rotation")?
+            .access_token,
+        "rotated"
+    );
+    ctx.manager
+        .store_token(
+            OAuthProvider::ChatGptPro,
+            TokenInput {
+                access_token: "fresh-login".into(),
+                refresh_token: None,
+                expires_at: None,
+            },
+        )
+        .await?;
+    assert_eq!(
+        ctx.manager
+            .credentials(OAuthProvider::ChatGptPro)
+            .await?
+            .access_token,
+        "fresh-login"
+    );
+    ctx.manager.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_refresh_waiters_share_the_failure() -> TestResult {
+    let fake = FakeAuth::new(Duration::from_millis(50)).await?;
+    let ctx = Context::new(&fake, 0).await?;
+    ctx.put(OAuthProvider::QwenCode, 1, "bad").await?;
+    fake.reply(
+        "/qwen-code/token",
+        StatusCode::UNAUTHORIZED,
+        "application/json",
+        json!({}),
+    )
+    .await;
+    let mut tasks = Vec::new();
+    for _ in 0..16 {
+        let manager = ctx.manager.clone();
+        tasks.push(tokio::spawn(async move {
+            manager.credentials(OAuthProvider::QwenCode).await
+        }));
+    }
+    for task in tasks {
+        assert_eq!(
+            task.await?
+                .err()
+                .ok_or("refresh unexpectedly succeeded")?
+                .to_string(),
+            "Qwen Code session expired. Please re-login."
+        );
+    }
+    assert_eq!(fake.inner.requests.lock().await.len(), 1);
+    assert!(!ctx.manager.try_status("qwen-code").await?.authenticated);
+    Ok(())
+}
+
+#[tokio::test(start_paused = true)]
+async fn device_denial_and_shutdown_end_background_polling() -> TestResult {
+    for shutdown in [false, true] {
+        let mut fake = FakeAuth::new(Duration::ZERO).await?;
+        let ctx = Context::new(&fake, 0).await?;
+        fake.reply(
+            "/github-copilot/authorize",
+            StatusCode::OK,
+            "application/json",
+            json!({
+                "device_code":"device","user_code":"ABCD","verification_uri":"https://verify.test",
+                "expires_in":600,"interval":1
+            }),
+        )
+        .await;
+        fake.reply(
+            "/github-copilot/token",
+            StatusCode::BAD_REQUEST,
+            "application/json",
+            json!({"error":"access_denied"}),
+        )
+        .await;
+        ctx.manager.start(OAuthProvider::GitHubCopilot).await?;
+        fake.next_hit().await?; // device authorization request
+        if shutdown {
+            ctx.manager.shutdown().await;
+        } else {
+            fake.next_hit().await?; // terminal token response
+            for _ in 0..100 {
+                tokio::task::yield_now().await;
+            }
+        }
+        tokio::time::advance(Duration::from_secs(60)).await;
+        for _ in 0..100 {
+            tokio::task::yield_now().await;
+        }
+        assert_eq!(
+            fake.inner.requests.lock().await.len(),
+            if shutdown { 1 } else { 2 }
+        );
+        assert!(
+            !ctx.manager
+                .try_status("github-copilot")
+                .await?
+                .authenticated
+        );
+        ctx.manager.shutdown().await;
+    }
+    Ok(())
+}
