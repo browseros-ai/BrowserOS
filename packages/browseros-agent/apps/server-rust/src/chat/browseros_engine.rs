@@ -323,6 +323,11 @@ impl ChatEngine for BrowserOsEngine {
         );
         true
     }
+
+    /// `DELETE /chat/{id}` reports this as `sessionCount`.
+    fn session_count(&self) -> usize {
+        BrowserOsEngine::session_count(self)
+    }
 }
 
 impl Inner {

@@ -772,18 +772,3 @@ fn run_crashed() -> ChatError {
         details: None,
     }
 }
-
-/// The 500 an engine stub answers until its piece lands (kept for `browseros_engine`'s S0 stub).
-pub(crate) fn not_implemented() -> ChatError {
-    ChatError {
-        code: ChatErrorCode::Unknown,
-        title: "Something went wrong".to_owned(),
-        message: "Chat is not implemented yet in server-rust".to_owned(),
-        retryable: false,
-        provider: None,
-        status_code: Some(501),
-        docs_url: None,
-        retry_after_seconds: None,
-        details: None,
-    }
-}

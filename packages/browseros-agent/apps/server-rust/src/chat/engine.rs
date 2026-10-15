@@ -209,4 +209,17 @@ impl ChatEngine for ScriptedEngine {
             .iter()
             .any(|turn| turn.conversation_id == conversation_id)
     }
+
+    /// Conversations that ran a turn and were not forgotten since.
+    fn session_count(&self) -> usize {
+        let forgotten = self.forgotten();
+        let mut live: Vec<Uuid> = self
+            .started_turns()
+            .into_iter()
+            .filter(|id| !forgotten.contains(id))
+            .collect();
+        live.sort_unstable();
+        live.dedup();
+        live.len()
+    }
 }

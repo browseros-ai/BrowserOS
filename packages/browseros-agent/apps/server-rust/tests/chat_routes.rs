@@ -978,6 +978,8 @@ async fn delete_reports_found_and_not_found_sessions() -> TestResult {
     );
 
     body_bytes(h.post_chat(false, &inline_body(conversation)).await?).await?;
+    // Another live session: `sessionCount` is what the built-in engine still holds.
+    body_bytes(h.post_chat(false, &inline_body(Uuid::new_v4())).await?).await?;
     let deleted = h
         .send(
             false,
@@ -988,7 +990,7 @@ async fn delete_reports_found_and_not_found_sessions() -> TestResult {
     assert_eq!(
         String::from_utf8(body_bytes(deleted).await?)?,
         format!(
-            r#"{{"success":true,"message":"Session {conversation} deleted","sessionCount":0}}"#
+            r#"{{"success":true,"message":"Session {conversation} deleted","sessionCount":1}}"#
         )
     );
     // The built-in engine is asked to forget on every DELETE (TS `sessionStore.delete`), found or not.
