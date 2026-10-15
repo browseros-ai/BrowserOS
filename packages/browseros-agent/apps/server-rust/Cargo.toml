@@ -47,6 +47,11 @@ sea-orm.workspace = true
 sea-orm-migration.workspace = true
 sha2.workspace = true
 
+# P13: process telemetry uses the same SDKs as claw, with build-time public keys.
+posthog-rs.workspace = true
+sentry.workspace = true
+time.workspace = true
+
 [dev-dependencies]
 # P14: rmcp test server standing in for loopback /mcp in tests/browseros_engine.rs.
 rmcp.workspace = true
