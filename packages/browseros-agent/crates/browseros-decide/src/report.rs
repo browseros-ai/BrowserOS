@@ -178,14 +178,20 @@ fn said(outcome: &Outcome, actions: usize, changed: usize) -> String {
         Status::Satisfied => format!(
             "{did}{moved}, and then said every requirement of the goal was visible on the page."
         ),
+        // A report ends a run, it does not describe it. This arm used to assert
+        // that nothing on the page had been changed, which was a claim about
+        // the whole run made by the sentence for its last step. Measured live:
+        // a run added an item to a cart and then reported, and told the caller
+        // in the same object as `changed: 1` that it had changed nothing. The
+        // caller read that and concluded the errand had failed.
         Status::Answered => {
             let what = outcome
                 .answer
                 .as_ref()
                 .map_or("something", |answer| answer.asked.as_str());
             format!(
-                "It answered the goal by choosing to {what} the page, and the result is attached. \
-                 Nothing on the page was changed."
+                "{did}{moved}, then answered the goal by choosing to {what} the page. The result \
+                 is attached."
             )
         }
         Status::Blocked(why) => format!("{did}{moved}, then stopped: {why}."),
@@ -396,8 +402,12 @@ mod tests {
         assert!(told.wants_the_caller());
     }
 
+    /// Renamed from an_answered_run_says_nothing_was_changed, which asserted
+    /// the sentence said that unconditionally. It is only true when the run
+    /// took no action, and a run that acted and then reported was telling the
+    /// caller it had done nothing.
     #[test]
-    fn an_answered_run_says_nothing_was_changed() {
+    fn an_answered_run_hands_the_text_back_raw() {
         let mut got = outcome(Status::Answered, vec![]);
         got.answer = Some(Answer {
             asked: "read".to_string(),
@@ -407,7 +417,11 @@ mod tests {
         let told = tell(&got);
 
         assert_eq!(told.status, "answered");
-        assert!(told.said.contains("Nothing on the page was changed"));
+        assert!(
+            told.said.starts_with("It took no action"),
+            "this run genuinely took none, got {:?}",
+            told.said
+        );
         assert_eq!(
             told.answer
                 .as_ref()
@@ -458,5 +472,59 @@ mod tests {
     fn a_run_that_did_nothing_does_not_claim_it_did() {
         let told = tell(&outcome(Status::BudgetSpent, vec![]));
         assert!(told.said.starts_with("It took no action"), "{}", told.said);
+    }
+
+    /// Measured live: a run clicked an add-to-cart button and then reported,
+    /// and the sentence said it had changed nothing in the same object that
+    /// said it had changed one thing. The caller read the sentence.
+    #[test]
+    fn a_report_after_an_action_does_not_claim_the_run_changed_nothing() {
+        let mut got = outcome(Status::Answered, vec![step(true), step(false)]);
+        got.answer = Some(Answer {
+            asked: "grep".to_string(),
+            text: Some("two matching lines".to_string()),
+            pictured: false,
+        });
+
+        let told = tell(&got);
+
+        assert_eq!(told.actions, 2);
+        assert_eq!(told.changed, 1);
+        assert!(
+            !told.said.contains("Nothing on the page was changed"),
+            "got {:?}",
+            told.said
+        );
+        assert!(
+            told.said
+                .starts_with("It took 2 actions, 1 of which changed the page"),
+            "the sentence counts what the run did, got {:?}",
+            told.said
+        );
+        assert!(
+            told.said.contains("choosing to grep"),
+            "got {:?}",
+            told.said
+        );
+    }
+
+    /// A report that was the whole run still reads as one.
+    #[test]
+    fn a_report_with_no_actions_before_it_says_so() {
+        let mut got = outcome(Status::Answered, vec![]);
+        got.answer = Some(Answer {
+            asked: "read".to_string(),
+            text: Some("the page".to_string()),
+            pictured: false,
+        });
+
+        let told = tell(&got);
+
+        assert!(
+            told.said
+                .starts_with("It took no action, then answered the goal"),
+            "got {:?}",
+            told.said
+        );
     }
 }
