@@ -41,6 +41,10 @@ async fn manager_temp_home() -> Result {
         .env("XDG_CONFIG_HOME", dir.path().join(".config"))
         .env("APPDATA", dir.path().join("AppData/Roaming"))
         .env("LOCALAPPDATA", dir.path().join("AppData/Local"))
+        // harness-integrations prefers these over HOME (catalog.rs, skills/types.rs);
+        // an agent-launched shell (e.g. rtr) sets them, which would escape the temp HOME.
+        .env_remove("CLAUDE_CONFIG_DIR")
+        .env_remove("COPILOT_HOME")
         .output()?;
     assert!(
         output.status.success(),
