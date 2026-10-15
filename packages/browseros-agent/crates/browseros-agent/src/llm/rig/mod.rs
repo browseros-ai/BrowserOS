@@ -15,6 +15,7 @@ mod copilot;
 mod errors;
 mod overlay;
 mod transport;
+mod wire_calls;
 
 pub(crate) use build::build;
 
@@ -30,6 +31,7 @@ use rig_core::operation::Completion;
 use rig_core::streaming::{CompletionStream, Item, PartKind, StreamEvent};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 pub(crate) struct RigModel {
@@ -159,8 +161,10 @@ const COMPAT_TEXT_ID: &str = "txt-0";
 const COMPAT_REASONING_ID: &str = "reasoning-0";
 
 /// Turns rig's part events into `ModelEvent`s with the AI SDK provider's [`Lifecycle`]. Native part
-/// ids are `<random>_<part index>`, unique per call. Tool calls get our id at `Start` (rig names
-/// the provider's call id only at `End`); `ToolCall` pairs it with the provider's.
+/// ids are `<random>_<part index>`, unique per call. A tool call is named, from its `Start`, by
+/// the provider's own id as the raw wire reported it ([`wire_calls`]; rig names it only at `End`),
+/// falling back to ours on wires without call ids; its empty argument fragments, which rig drops,
+/// are restored where the wire had them.
 ///
 /// **Call order = start order.** rig holds a Responses reasoning item open until the item it
 /// precedes completes, so its `End` follows that item's. A consumer that appends calls as they end
@@ -183,6 +187,11 @@ struct Translator {
     /// `CompatChat`: whether the single UI text / reasoning part is open.
     text_open: bool,
     reasoning_open: bool,
+    /// What the raw wire says about this reply's tool calls.
+    wire: Arc<wire_calls::WireToolCalls>,
+    /// rig part index of a tool call → (its position among the reply's calls, non-empty argument
+    /// fragments seen so far), to line rig's fragments up with the wire's.
+    tools: HashMap<usize, (usize, usize)>,
     /// The reply's serialized `Origin`, read once, the first time a block needs it.
     origin: Option<Option<Value>>,
     queue: VecDeque<Result<ModelEvent, ModelError>>,
@@ -200,6 +209,8 @@ impl Translator {
             ended: BTreeMap::new(),
             text_open: false,
             reasoning_open: false,
+            wire: Arc::default(),
+            tools: HashMap::new(),
             origin: None,
             queue: VecDeque::new(),
         }
@@ -213,10 +224,11 @@ impl Translator {
                 }
                 let stream = this.stream.as_mut()?;
                 // Biased: a cancelled turn never reads one more provider event.
+                // Scoped so the request rig opens inside this poll reports its raw tool calls.
                 let next = tokio::select! {
                     biased;
                     _ = this.cancel.cancelled() => None,
-                    item = stream.next() => Some(item),
+                    item = wire_calls::WIRE_TOOL_CALLS.scope(this.wire.clone(), stream.next()) => Some(item),
                 };
                 match next {
                     None => this.fail(ModelError::Cancelled),
@@ -315,6 +327,12 @@ impl Translator {
                 let part = self.part(index, Kind::ToolCall);
                 part.arguments.push_str(&json);
                 let id = part.id.clone();
+                if !json.is_empty() {
+                    self.restore_empty_fragments(index, &id);
+                    if let Some((_, nonempty)) = self.tools.get_mut(&index) {
+                        *nonempty += 1;
+                    }
+                }
                 self.push(ModelEvent::ToolInputDelta { id, delta: json });
             }
             StreamEvent::End { content, .. } => self.on_end(index, content),
@@ -331,7 +349,15 @@ impl Translator {
             }
             Lifecycle::CompatChat => {}
         }
+        let wire_id = (kind == Kind::ToolCall).then(|| {
+            let position = self.tools.len();
+            self.tools.insert(index, (position, 0));
+            self.wire.id(position)
+        });
         let part = self.part(index, kind);
+        if let Some(Some(wire_id)) = wire_id {
+            part.id = wire_id;
+        }
         if part.ui_closed {
             return;
         }
@@ -413,6 +439,20 @@ impl Translator {
                 provider_metadata: None,
             },
         });
+    }
+
+    /// Emits the empty fragments the wire streamed for the call at `index` since its last
+    /// non-empty one (rig drops them; the SDK forwards each as a `tool-input-delta`).
+    fn restore_empty_fragments(&mut self, index: usize, id: &str) {
+        let Some(&(position, nonempty)) = self.tools.get(&index) else {
+            return;
+        };
+        for _ in 0..self.wire.empties_after(position, nonempty) {
+            self.push(ModelEvent::ToolInputDelta {
+                id: id.to_owned(),
+                delta: String::new(),
+            });
+        }
     }
 
     /// `Native`: a part starting at `index` ends every other open reasoning part's UI part.
@@ -521,7 +561,10 @@ impl Translator {
         };
         let tool_name = call.function.name.as_str().to_owned();
         let (id, streamed) = match opened {
-            Some(part) => (part.id, part.arguments),
+            Some(part) => {
+                self.restore_empty_fragments(index, &part.id);
+                (part.id, part.arguments)
+            }
             // A wire that reports a call only at its end still opens it first, so the loop
             // always sees start → (deltas) → call.
             None => {
@@ -530,7 +573,12 @@ impl Translator {
                 } else if self.lifecycle == Lifecycle::Native {
                     self.close_native_reasoning(index);
                 }
-                let id = format!("{}_{index}", self.prefix);
+                let provider_id = call.id.wire();
+                let id = if provider_id.is_empty() {
+                    format!("{}_{index}", self.prefix)
+                } else {
+                    provider_id.into_owned()
+                };
                 self.push(ModelEvent::ToolInputStart {
                     id: id.clone(),
                     tool_name: tool_name.clone(),

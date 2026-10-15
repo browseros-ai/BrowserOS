@@ -209,7 +209,12 @@ impl HttpClientExt for PolicyClient {
         let inner = self.inner.clone();
         let policy = Arc::clone(&self.policy);
         let request = req.map(Into::into);
-        async move { inner.send_streaming(policy.apply(request).await?).await }
+        // Read now, synchronously: rig calls this inside the translator's scoped poll.
+        let calls = super::wire_calls::WIRE_TOOL_CALLS.try_with(Arc::clone).ok();
+        async move {
+            let response = inner.send_streaming(policy.apply(request).await?).await?;
+            Ok(super::wire_calls::observe(response, calls))
+        }
     }
 }
 
