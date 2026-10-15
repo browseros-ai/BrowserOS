@@ -163,6 +163,8 @@ async fn run_probe(spec: acp_client::LaunchSpec, cwd: PathBuf, timeout: Duration
         client_version: env!("CARGO_PKG_VERSION").into(),
         control_timeout: remaining(),
         stderr_tail_lines: 20,
+        shutdown_grace: TEARDOWN_GRACE,
+        ..ClientOptions::default()
     };
     let conn = match AgentConnection::connect(spec, options, Arc::new(CancelAll)).await {
         Ok(conn) => conn,

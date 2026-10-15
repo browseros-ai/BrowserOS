@@ -482,6 +482,8 @@ impl AcpRuntime {
             client_version: env!("CARGO_PKG_VERSION").into(),
             control_timeout: self.config.control_timeout,
             stderr_tail_lines: 20,
+            shutdown_grace: SHUTDOWN_GRACE,
+            ..ClientOptions::default()
         };
         AgentConnection::connect(
             policy.launch.spec.clone(),

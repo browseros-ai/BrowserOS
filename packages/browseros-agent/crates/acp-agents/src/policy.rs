@@ -144,12 +144,45 @@ fn launch_identity(spec: &LaunchSpec) -> Value {
     json!({"program": spec.program, "args": spec.args, "env": spec.env, "cwd": spec.cwd})
 }
 
+/// SHA-256 of the canonical JSON (object keys sorted at every level). Launch fingerprints are
+/// persisted, so they must not change with serde_json's `preserve_order` feature (DECISIONS 17).
 fn digest(value: &Value) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    Sha256::digest(bytes)
+    let mut canonical = String::new();
+    write_canonical(value, &mut canonical);
+    Sha256::digest(canonical.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn write_canonical(value: &Value, out: &mut String) {
+    match value {
+        Value::Object(object) => {
+            let mut entries: Vec<_> = object.iter().collect();
+            entries.sort_by_key(|(key, _)| *key);
+            out.push('{');
+            for (index, (key, value)) in entries.into_iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                out.push_str(&Value::String(key.clone()).to_string());
+                out.push(':');
+                write_canonical(value, out);
+            }
+            out.push('}');
+        }
+        Value::Array(items) => {
+            out.push('[');
+            for (index, item) in items.iter().enumerate() {
+                if index > 0 {
+                    out.push(',');
+                }
+                write_canonical(item, out);
+            }
+            out.push(']');
+        }
+        scalar => out.push_str(&scalar.to_string()),
+    }
 }
 
 /// Builds the turn's policy. Resolves the launch, which may write the node shim and query the
@@ -237,20 +270,28 @@ fn spawn_env(agent: &AgentDefinition) -> BTreeMap<String, String> {
             .map(|custom| custom.env.clone())
             .unwrap_or_default(),
         AgentKind::Codex => {
-            let mut config = json!({
-                "developer_instructions": BROWSEROS_ACP_INSTRUCTIONS,
-                "plugins": {
+            // Inserted in TS key order, which is also sorted order: the JSON string (part of the
+            // persisted launch fingerprint) is identical with or without `preserve_order`.
+            let mut config = serde_json::Map::new();
+            config.insert(
+                "developer_instructions".into(),
+                json!(BROWSEROS_ACP_INSTRUCTIONS),
+            );
+            if let Some(model) = non_empty(agent.model_id.as_ref()) {
+                config.insert("model".into(), json!(model));
+            }
+            if let Some(effort) = non_empty(agent.reasoning_effort.as_ref()) {
+                config.insert("model_reasoning_effort".into(), json!(effort));
+            }
+            config.insert(
+                "plugins".into(),
+                json!({
                     "browser@openai-bundled": {"enabled": false},
                     "chrome@openai-bundled": {"enabled": false},
                     "computer-use@openai-bundled": {"enabled": false},
-                },
-            });
-            if let Some(model) = non_empty(agent.model_id.as_ref()) {
-                config["model"] = json!(model);
-            }
-            if let Some(effort) = non_empty(agent.reasoning_effort.as_ref()) {
-                config["model_reasoning_effort"] = json!(effort);
-            }
+                }),
+            );
+            let config = Value::Object(config);
             BTreeMap::from([
                 ("CODEX_CONFIG".into(), config.to_string()),
                 ("INITIAL_AGENT_MODE".into(), "agent-full-access".into()),
@@ -350,5 +391,30 @@ fn controls(agent: &AgentDefinition) -> SessionControls {
         reasoning_effort: non_empty(agent.reasoning_effort.as_ref())
             .map(|effort| (effort_key, effort.to_owned())),
         full_access_modes,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digest_ignores_object_key_order_at_every_level() {
+        let mut first = serde_json::Map::new();
+        first.insert("b".into(), json!({"y": 1, "x": [{"q": 1, "p": 2}]}));
+        first.insert("a".into(), json!("é\"quoted\""));
+        let mut second = serde_json::Map::new();
+        second.insert("a".into(), json!("é\"quoted\""));
+        second.insert("b".into(), json!({"x": [{"p": 2, "q": 1}], "y": 1}));
+        assert_eq!(
+            digest(&Value::Object(first)),
+            digest(&Value::Object(second))
+        );
+        let mut canonical = String::new();
+        write_canonical(
+            &json!({"b": [1, {"d": null, "c": true}], "a": "é"}),
+            &mut canonical,
+        );
+        assert_eq!(canonical, r#"{"a":"é","b":[1,{"c":true,"d":null}]}"#);
     }
 }

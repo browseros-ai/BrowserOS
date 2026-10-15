@@ -152,6 +152,17 @@ fn codex_policy_configures_through_the_environment() -> TestResult {
             },
         })
     );
+    // Byte-for-byte TS `JSON.stringify`: the string is part of the persisted launch fingerprint.
+    let expected = format!(
+        concat!(
+            r#"{{"developer_instructions":{},"model":"model-x","model_reasoning_effort":"high","#,
+            r#""plugins":{{"browser@openai-bundled":{{"enabled":false}},"#,
+            r#""chrome@openai-bundled":{{"enabled":false}},"#,
+            r#""computer-use@openai-bundled":{{"enabled":false}}}}}}"#
+        ),
+        serde_json::to_string(BROWSEROS_ACP_INSTRUCTIONS)?
+    );
+    assert_eq!(policy.launch.spec.env.get("CODEX_CONFIG"), Some(&expected));
     assert_eq!(
         policy
             .launch
