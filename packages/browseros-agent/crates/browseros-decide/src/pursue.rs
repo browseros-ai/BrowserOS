@@ -147,6 +147,14 @@ pub struct Decided {
     /// Which judgement was weakest, in the gate's own words.
     pub weakest: Option<&'static str>,
     pub margin: Option<f64>,
+    /// The margin this decision had to clear, which its consequence set.
+    ///
+    /// Reported beside the margin because a margin alone says nothing: 0.23 is
+    /// comfortable for a report and refused for a submit. A share is reported
+    /// too and is the least useful of the three, because it is not comparable
+    /// between a question offering eleven options and one offering two hundred
+    /// and fifty four, which is why the gate reads the margin instead.
+    pub needed: Option<f64>,
     pub share: Option<f64>,
     /// The gate's sentence, where it had one.
     pub why: Option<String>,
@@ -1044,6 +1052,13 @@ fn decided_of(
         verdict,
         weakest: short.map(|(which, _)| which.as_str()),
         margin: short.map(|(_, lead)| lead.margin),
+        needed: short.map(|(_, lead)| {
+            if lead.distributed {
+                consequence.margin()
+            } else {
+                consequence.share_bar()
+            }
+        }),
         share: short.map(|(_, lead)| lead.share),
         why,
         batch,

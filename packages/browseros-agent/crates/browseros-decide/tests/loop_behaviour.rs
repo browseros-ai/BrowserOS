@@ -1132,6 +1132,15 @@ async fn a_declined_decision_says_what_it_tried_and_why_it_was_refused() {
         "it reports how far the weakest judgement actually led, got {:?}",
         first.margin
     );
+    assert_eq!(
+        first.needed,
+        Some(0.30),
+        "and the bar it had to clear, because a margin alone says nothing"
+    );
+    assert!(
+        first.margin < first.needed,
+        "which is the whole of why it did not run"
+    );
     assert!(
         first
             .why

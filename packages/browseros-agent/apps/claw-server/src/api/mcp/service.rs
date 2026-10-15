@@ -1818,6 +1818,9 @@ fn pursue_structured(told: &browseros_decide::report::Told) -> Value {
                 if let Some(margin) = decided.margin {
                     one["margin"] = json!(margin);
                 }
+                if let Some(needed) = decided.needed {
+                    one["needed"] = json!(needed);
+                }
                 if let Some(share) = decided.share {
                     one["share"] = json!(share);
                 }
@@ -1927,6 +1930,7 @@ fn pursue_output_schema() -> Value {
                         "verdict": { "type": "string", "description": "ran, explored, or handed_back." },
                         "weakest": { "type": "string", "description": "Which judgement was least certain, in words." },
                         "margin": { "type": "number", "description": "How far the weakest judgement led its runner-up by." },
+                        "needed": { "type": "number", "description": "The margin it had to clear. Compare with `margin`: a margin alone says nothing, because 0.23 is comfortable for a report and refused for a submit." },
                         "share": { "type": "number" },
                         "why": { "type": "string", "description": "What the gate made of it, where it had something to say." },
                         "batch": { "type": "integer", "description": "Which part of the page this decision was asked about, from one." },
