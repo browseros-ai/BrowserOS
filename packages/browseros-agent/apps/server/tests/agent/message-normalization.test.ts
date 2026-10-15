@@ -6,6 +6,7 @@ import {
   normalizeMessagesForModel,
   stripReasoningFromModelMessages,
 } from '../../src/agent/message-normalization'
+import { serializesReasoningContent } from '../../src/agent/provider-factory'
 import type { ResolvedAgentConfig } from '../../src/agent/types'
 
 type ToolResultContentPart = Extract<
@@ -315,5 +316,63 @@ describe('stripReasoningFromModelMessages', () => {
     ]
 
     expect(stripReasoningFromModelMessages(messages)).toBe(messages)
+  })
+
+  // Guards the #2921 regression end to end: this is the per-step pipeline
+  // prepareStep applies on every step (normalize, then strip reasoning only when
+  // the provider serializes reasoning_content). Step one returned reasoning plus
+  // a tool call; step two must send the tool call WITHOUT reasoning to an
+  // openai-compatible provider, but keep reasoning for a native provider that
+  // replays it.
+  test('step two drops replayed reasoning for openai-compatible but keeps it for a native provider (#2921)', () => {
+    const stepTwoInbound: ModelMessage[] = [
+      { role: 'user', content: 'search for cats' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'call the search tool' },
+          {
+            type: 'tool-call',
+            toolCallId: 't1',
+            toolName: 'search',
+            input: { q: 'cats' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 't1',
+            toolName: 'search',
+            output: { type: 'text', value: 'found' },
+          },
+        ],
+      },
+    ]
+
+    const perStep = (provider: string): ModelMessage[] => {
+      const normalized = normalizeMessagesForModel(
+        stepTwoInbound,
+        getMessageNormalizationOptions(cfg({ provider })),
+      )
+      return serializesReasoningContent(provider)
+        ? stripReasoningFromModelMessages(normalized)
+        : normalized
+    }
+
+    const assistantPartTypes = (messages: ModelMessage[]): string[] => {
+      const assistant = messages.find((m) => m.role === 'assistant')
+      if (!assistant || typeof assistant.content === 'string') return []
+      return assistant.content.map((part) => part.type)
+    }
+
+    expect(
+      assistantPartTypes(perStep(LLM_PROVIDERS.OPENAI_COMPATIBLE)),
+    ).toEqual(['tool-call'])
+    expect(assistantPartTypes(perStep(LLM_PROVIDERS.ANTHROPIC))).toContain(
+      'reasoning',
+    )
   })
 })
