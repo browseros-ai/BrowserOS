@@ -67,12 +67,21 @@ impl ConversationHistory {
                 Ok(Some(stored))
                     if !stored.messages.is_empty() && belongs_to(&stored.summary, target) =>
                 {
-                    tracing::info!(
-                        %conversation_id,
-                        message_count = stored.messages.len(),
-                        "hydrated conversation history from database"
-                    );
-                    return stored.messages;
+                    match stored.ui_messages() {
+                        Ok(messages) => {
+                            tracing::info!(
+                                %conversation_id,
+                                message_count = messages.len(),
+                                "hydrated conversation history from database"
+                            );
+                            return messages;
+                        }
+                        Err(error) => tracing::warn!(
+                            %conversation_id,
+                            %error,
+                            "stored conversation is not a UIMessage list; starting fresh"
+                        ),
+                    }
                 }
                 Ok(_) => {}
                 Err(error) => {
@@ -102,7 +111,15 @@ impl ConversationHistory {
     ) {
         let (target_type, agent_id) = match target {
             TargetKey::BrowserOs => (TargetType::BrowserOs, None),
-            TargetKey::Acp { agent_id, .. } => (TargetType::Acp, Some(agent_id.to_string())),
+            // TS writes the agent's type (`claude|codex|custom`) as the row's target.
+            TargetKey::Acp { kind, agent_id } => (
+                match kind {
+                    AgentKind::Claude => TargetType::Claude,
+                    AgentKind::Codex => TargetType::Codex,
+                    AgentKind::Custom => TargetType::Custom,
+                },
+                Some(agent_id.to_string()),
+            ),
         };
         let save = SaveConversation {
             id: conversation_id,
@@ -135,7 +152,7 @@ impl ConversationHistory {
 /// built-in agent and an ACP agent (or two ACP agents) must not bleed history across them.
 fn belongs_to(summary: &crate::db::ConversationSummary, target: &TargetKey) -> bool {
     match target {
-        TargetKey::BrowserOs => summary.target_type == Some(TargetType::BrowserOs),
+        TargetKey::BrowserOs => summary.target_type == TargetType::BrowserOs,
         TargetKey::Acp { agent_id, .. } => {
             summary.agent_id.as_deref() == Some(agent_id.to_string().as_str())
         }

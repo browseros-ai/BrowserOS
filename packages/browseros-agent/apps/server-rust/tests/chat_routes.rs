@@ -36,7 +36,7 @@ use std::{
 };
 use tokio::sync::Notify;
 use tower::ServiceExt as _;
-use ui_message_stream::{ChunkStream, FinishReason, UiChunk, UiMessage, sse};
+use ui_message_stream::{ChunkStream, FinishReason, UiChunk, sse};
 use uuid::Uuid;
 
 type TestResult = Result<(), Box<dyn Error>>;
@@ -81,13 +81,14 @@ impl ChatRecords for MemoryRecords {
 fn provider_row(id: &str, provider_type: &str) -> ProviderRow {
     ProviderRow {
         id: id.to_owned(),
+        kind: "llm".to_owned(),
         provider_type: provider_type.to_owned(),
         name: "Stored".to_owned(),
         model_id: Some("stored-model".to_owned()),
         is_default: false,
         base_url: None,
         headers: None,
-        supports_images: Some(false),
+        supports_images: false,
         context_window: Some(64_000),
         temperature: 0.2,
         api_key: Some("stored-key".to_owned()),
@@ -98,6 +99,8 @@ fn provider_row(id: &str, provider_type: &str) -> ProviderRow {
         region: None,
         reasoning_effort: None,
         reasoning_summary: None,
+        working_directory: None,
+        custom_config: None,
         created_at: 1,
         updated_at: 1,
     }
@@ -878,13 +881,15 @@ async fn history_hydrates_from_the_owning_target_or_previous_conversation() -> T
             id: Uuid::nil(),
             last_user_message: None,
             origin: None,
-            target_type: Some(target_type),
+            target_type,
             agent_id,
             last_messaged_at: 1,
             created_at: 1,
             updated_at: 1,
         },
-        messages: vec![UiMessage::user("old".into(), Some(text.into()), vec![])],
+        messages: vec![
+            json!({ "id": "old", "role": "user", "parts": [{ "type": "text", "text": text }] }),
+        ],
     };
 
     // A browseros-owned row hydrates a persisted browseros turn.
@@ -897,7 +902,7 @@ async fn history_hydrates_from_the_owning_target_or_previous_conversation() -> T
     locked(&h.records.conversations).insert(
         foreign,
         stored(
-            TargetType::Acp,
+            TargetType::Claude,
             Some(Uuid::new_v4().to_string()),
             "acp history",
         ),
@@ -1083,5 +1088,74 @@ async fn deleting_a_panel_validates_the_tab_id_like_js_number() -> TestResult {
         String::from_utf8(frame.to_vec())?,
         "data: {\"assignments\":[]}\n\n"
     );
+    Ok(())
+}
+
+// ───── the production records adapter over the real SQLite stores ─────
+
+#[tokio::test]
+async fn db_records_classify_acp_rows_and_persist_through_the_conversation_store() -> TestResult {
+    let dir = tempfile::tempdir()?;
+    let (db, _) = Database::open(&BrowserosPaths::new(dir.path().to_path_buf())).await?;
+    let agent = db
+        .agents()
+        .create(server_rust::db::CreateAgent {
+            kind: AgentKind::Codex,
+            name: "Codex".into(),
+            model_id: None,
+            reasoning_effort: None,
+            working_directory: None,
+            custom_config: None,
+        })
+        .await?;
+    let engine = Arc::new(ScriptedEngine::new(script()));
+    let chat = ChatService::new(ChatDeps {
+        runs: ConversationRuns::new(Arc::new(ServerActivity::new()), Duration::from_secs(5)),
+        records: Arc::new(server_rust::chat::DbChatRecords::new(&db)),
+        browseros: engine.clone(),
+        acp: Arc::new(ScriptedEngine::new(script())),
+        oauth: token_manager(dir.path()).await?,
+        tabs: None,
+        use_mock_llm: false,
+    });
+    let router = Router::new()
+        .route("/chat", post(chat::post_chat))
+        .layer(Extension(RequestTrust { trusted_app: true }))
+        .with_state(chat);
+
+    // An ACP agent row named as a browseros provider is the "coding agent" 400.
+    let response = router
+        .clone()
+        .oneshot(json_request(
+            "POST",
+            "/chat",
+            &json!({ "conversationId": Uuid::new_v4(), "providerId": agent.id }),
+        )?)
+        .await?;
+    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body_json(response).await?,
+        json!({ "error": format!("Provider {} is a coding agent and cannot serve a browseros chat request", agent.id) })
+    );
+
+    // A completed turn is in SQLite by the time the stream ends.
+    let conversation = Uuid::new_v4();
+    let response = router
+        .oneshot(json_request("POST", "/chat", &inline_body(conversation))?)
+        .await?;
+    body_bytes(response).await?;
+    let stored = db
+        .conversations()
+        .get(conversation)
+        .await?
+        .ok_or("not persisted")?;
+    assert_eq!(stored.summary.target_type, TargetType::BrowserOs);
+    assert_eq!(
+        stored.summary.last_user_message.as_deref(),
+        Some("hello world")
+    );
+    let messages = stored.ui_messages()?;
+    assert_eq!(messages.len(), 2);
+    assert_eq!(messages[1].id, "assistant-1");
     Ok(())
 }

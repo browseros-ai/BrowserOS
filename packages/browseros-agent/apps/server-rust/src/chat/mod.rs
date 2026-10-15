@@ -117,26 +117,11 @@ impl DbChatRecords {
 #[async_trait::async_trait]
 impl ChatRecords for DbChatRecords {
     async fn provider(&self, id: &str) -> DbResult<Option<ProviderRecord>> {
-        // Agents first: an ACP row must produce the "coding agent" 400 whether or not
-        // `ProviderStore` filters by `kind` (TS checks `row.kind !== 'llm'` on the one table).
-        if let Ok(agent_id) = Uuid::parse_str(id)
-            && self.agents.get(agent_id).await?.is_some()
-        {
-            return Ok(Some(ProviderRecord::CodingAgent { id: id.to_owned() }));
-        }
-        Ok(self
-            .providers
-            .get(id)
-            .await?
-            .map(|row| ProviderRecord::Llm(Box::new(row))))
+        Ok(self.providers.get(id).await?.map(provider_record))
     }
 
     async fn default_provider(&self) -> DbResult<Option<ProviderRecord>> {
-        Ok(self
-            .providers
-            .default()
-            .await?
-            .map(|row| ProviderRecord::Llm(Box::new(row))))
+        Ok(self.providers.default().await?.map(provider_record))
     }
 
     async fn agent(&self, id: Uuid) -> DbResult<Option<AcpAgentRow>> {
@@ -149,6 +134,17 @@ impl ChatRecords for DbChatRecords {
 
     async fn save_conversation(&self, input: SaveConversation) -> DbResult<()> {
         self.conversations.save(input).await
+    }
+}
+
+/// One `providers` row as hydration sees it: ACP agents share the table (`kind = 'acp'`) and may
+/// even be the selected default, and naming one on the browseros path is a 400 (TS checks
+/// `row.kind !== 'llm'`).
+fn provider_record(row: crate::db::ProviderRow) -> ProviderRecord {
+    if row.kind == "llm" {
+        ProviderRecord::Llm(Box::new(row))
+    } else {
+        ProviderRecord::CodingAgent { id: row.id }
     }
 }
 

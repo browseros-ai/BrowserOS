@@ -765,7 +765,7 @@ pub fn hydrate_provider(
             .context_window
             .map(|window| window as f64)
             .or(turn.context_window_size),
-        supports_images: row.supports_images.unwrap_or(true),
+        supports_images: row.supports_images,
         reasoning_effort: row.reasoning_effort.clone(),
         reasoning_summary: row.reasoning_summary.clone(),
     })
