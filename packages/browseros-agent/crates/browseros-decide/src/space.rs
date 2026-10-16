@@ -9,6 +9,8 @@
 //!
 //! There is no model call in this module.
 
+use std::collections::HashMap;
+
 use serde_json::{Value, json};
 
 use crate::kind::{self, Kind};
@@ -131,14 +133,33 @@ impl ActionSpace {
             }
         }
         let mut ordered: Vec<Candidate> = Vec::new();
+        // Which of a row of identically named controls is the one this goal
+        // means. Only one of them can be offered, so it had better be the right
+        // one.
+        let speaks_for = speaks_for_its_description(view, goal);
 
         // One place that decides whether a candidate can still be added, so the
         // two passes below cannot drift apart on the rules.
         let add = |ordered: &mut Vec<Candidate>, control: &Control| -> bool {
+            // A control whose name it shares with others on the page is offered
+            // only as the row the goal names. Which one survived used to be
+            // whichever the ordering reached first, and on a commercial results
+            // page that is the sponsored row at the top: asked for Sensodyne,
+            // three runs out of three added a Colgate and reported the goal met.
             let candidate = candidate_of(control);
+            if let Some(winner) = speaks_for.get(&candidate.descriptor.to_string())
+                && *winner != control.reference
+            {
+                return false;
+            }
             // A duplicate is worse than an omission. Two options the model
             // cannot tell apart divide the probability between them, so neither
-            // leads the other and the margin the gate reads is zero.
+            // leads the other and the margin the gate reads is zero. Describing
+            // them by their row instead was measured and was worse: it grew one
+            // page from 363 candidates to 499, cost twice the tokens, and the
+            // margins fell from 0.19 to 0.25 down to 0.01 to 0.19, because rows
+            // that differ only by a price are no easier to tell apart than
+            // names that do not differ at all.
             if ordered.iter().any(|kept| {
                 kept.reference == candidate.reference || kept.descriptor == candidate.descriptor
             }) {
@@ -398,6 +419,69 @@ const MEANINGFUL_ROLES: &[&str] = &[
     "tab",
     "treeitem",
 ];
+
+/// For each control description shared by more than one control, which one the
+/// goal means.
+///
+/// A listing page calls every one of its buttons "Add to cart", and only one of
+/// them can be offered, because options the model cannot tell apart split the
+/// answer between them. The question is therefore not whether to drop the
+/// duplicates but which one to keep, and page order is the wrong answer: the top
+/// row of a commercial results page is an advertisement for something else.
+///
+/// So each duplicate is scored by the row it sits in, which is the product title
+/// nearest above it in page order, against the words of the goal. Keyed on the
+/// whole description rather than the name, because two controls can share a name
+/// and still be different options: a ticked and an unticked filter both called
+/// "Sony" are two answers, not one.
+///
+/// Nothing here calls the model. A model call to choose what to ask the model
+/// about would be circular.
+fn speaks_for_its_description(view: &PageView, goal: &str) -> HashMap<String, String> {
+    let mut shared: HashMap<String, usize> = HashMap::new();
+    for control in &view.controls {
+        if control.is_offerable() {
+            *shared
+                .entry(candidate_of(control).descriptor.to_string())
+                .or_default() += 1;
+        }
+    }
+    shared.retain(|_, count| *count > 1);
+    if shared.is_empty() {
+        return HashMap::new();
+    }
+
+    let wanted = relevance::words(goal);
+    let mut best: HashMap<String, (usize, String)> = HashMap::new();
+    let mut row: Vec<String> = Vec::new();
+    for control in &view.controls {
+        if control.name.chars().count() > ROW_WORTH_KEEPING {
+            row = relevance::words(&control.name);
+        }
+        let described = candidate_of(control).descriptor.to_string();
+        if !shared.contains_key(&described) {
+            continue;
+        }
+        let overlap = row
+            .iter()
+            .filter(|word| wanted.iter().any(|want| want == *word))
+            .count();
+        let entry = best
+            .entry(described)
+            .or_insert((0, control.reference.clone()));
+        // Strictly greater, so a tie keeps the earlier row and the ordering
+        // stays the page's own.
+        if overlap > entry.0 {
+            *entry = (overlap, control.reference.clone());
+        }
+    }
+    best.into_iter()
+        .map(|(described, (_, reference))| (described, reference))
+        .collect()
+}
+
+/// A name long enough to be a product title rather than a label or a price.
+const ROW_WORTH_KEEPING: usize = 18;
 
 fn candidate_of(control: &Control) -> Candidate {
     // A role the accessibility tree invented is not a description. A facet
