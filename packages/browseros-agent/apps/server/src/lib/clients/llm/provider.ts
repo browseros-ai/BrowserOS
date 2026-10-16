@@ -145,6 +145,17 @@ function createMoonshotModel(config: ResolvedLLMConfig): LanguageModel {
   })(config.model)
 }
 
+function createNvidiaModel(config: ResolvedLLMConfig): LanguageModel {
+  if (!config.baseUrl) throw new Error('NVIDIA provider requires baseUrl')
+  if (!config.apiKey) throw new Error('NVIDIA provider requires apiKey')
+  return createOpenAICompatible({
+    ...(config.headers && { headers: config.headers }),
+    name: 'nvidia',
+    baseURL: config.baseUrl,
+    apiKey: config.apiKey,
+  })(config.model)
+}
+
 function createQwenCodeModel(config: ResolvedLLMConfig): LanguageModel {
   if (!config.apiKey) throw new Error('Qwen Code requires OAuth authentication')
   // Managed OAuth provider: user custom headers are deliberately not forwarded.
@@ -187,6 +198,7 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.BEDROCK]: createBedrockModel,
   [LLM_PROVIDERS.OPENAI_COMPATIBLE]: createOpenAICompatibleModel,
   [LLM_PROVIDERS.MOONSHOT]: createMoonshotModel,
+  [LLM_PROVIDERS.NVIDIA]: createNvidiaModel,
   [LLM_PROVIDERS.CHATGPT_PRO]: createChatGPTProModel,
   [LLM_PROVIDERS.GITHUB_COPILOT]: createGitHubCopilotModel,
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeModel,
