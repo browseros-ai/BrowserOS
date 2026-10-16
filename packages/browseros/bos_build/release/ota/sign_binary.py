@@ -18,6 +18,7 @@ from ...lib.utils import (
     log_error,
     log_success,
     IS_MACOS,
+    redact_sensitive_text,
 )
 from ...steps.sign.windows import sign_with_codesigntool
 
@@ -120,11 +121,12 @@ def _resolve_notarization_credentials(
 
 
 def _submit_notarization(submission_path: Path, env: EnvConfig) -> bool:
+    """Validate and store credentials before submitting an OTA archive."""
     assert env.macos_notarization_apple_id is not None
     assert env.macos_notarization_team_id is not None
     assert env.macos_notarization_password is not None
 
-    subprocess.run(
+    credential_result = subprocess.run(
         [
             "xcrun", "notarytool", "store-credentials", "notarytool-profile",
             "--apple-id", env.macos_notarization_apple_id,
@@ -135,6 +137,25 @@ def _submit_notarization(submission_path: Path, env: EnvConfig) -> bool:
         text=True,
         check=False,
     )
+    # Apple validates credentials before writing the profile. A failed setup
+    # must preserve its error instead of submitting with a missing or stale
+    # profile, which can mask agreement/authentication failures on CI runners.
+    if credential_result.returncode != 0:
+        log_error(
+            "Notarization credential setup failed "
+            f"(exit code {credential_result.returncode})"
+        )
+        credentials = (
+            env.macos_notarization_apple_id,
+            env.macos_notarization_team_id,
+            env.macos_notarization_password,
+        )
+        for output in (credential_result.stderr, credential_result.stdout):
+            # Redact before trimming so whitespace-bearing secrets still match.
+            safe_output = redact_sensitive_text(output, credentials).strip()
+            if safe_output:
+                log_error(safe_output)
+        return False
 
     log_info("Submitting for notarization (this may take a while)...")
     result = subprocess.run(
