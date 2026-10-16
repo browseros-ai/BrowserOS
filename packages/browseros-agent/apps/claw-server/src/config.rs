@@ -537,6 +537,28 @@ mod tests {
 // server instructions, run's own description and the managed skill all behave
 // differently when it is present. It sits with the other configuration because
 // the skill loader is a service and must not reach up into the API layer to ask.
+/// Where the decision model credential comes from.
+///
+/// Three states rather than two, because the environment case is real and a boolean cannot say
+/// it: the loop works, the page shows nothing, and the user pastes a token they did not need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenSource {
+    /// Saved through the API. Takes precedence.
+    Settings,
+    /// `JEV_TOKEN` in the server's environment.
+    Environment,
+    /// Neither, so the pursue tool is not offered.
+    None,
+}
+
+impl TokenSource {
+    /// Whether a credential exists at all, by either route.
+    #[must_use]
+    pub fn is_present(self) -> bool {
+        self != Self::None
+    }
+}
+
 /// Whether the decision loop is offered by this server.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PursueOffering {
@@ -548,10 +570,14 @@ pub enum PursueOffering {
 }
 
 impl PursueOffering {
-    /// Asks the environment, now.
+    /// Reads the answer off the credential's source.
+    ///
+    /// A token saved in the settings and `JEV_TOKEN` both offer the loop. Which of the two wins
+    /// is decided in the settings store, so that nothing here has to know there are two places
+    /// to look, and so the answer cannot differ between layers.
     #[must_use]
-    pub fn read() -> Self {
-        if credential().is_some() {
+    pub fn of(source: TokenSource) -> Self {
+        if source.is_present() {
             Self::Offered
         } else {
             Self::Absent
@@ -564,12 +590,6 @@ impl PursueOffering {
     }
 }
 
-/// The credential itself, for the one place that builds a client with it.
-///
-/// Separate from [`PursueOffering`] because the value is a secret and the answer
-/// to "should this exist" is not. Never logged.
-pub fn credential() -> Option<String> {
-    std::env::var("JEV_TOKEN")
-        .ok()
-        .filter(|token| !token.trim().is_empty())
-}
+// The credential itself is read from the settings store, which owns the precedence between a
+// saved token and JEV_TOKEN. A second reader of the environment here is how the two answers
+// drift apart, so there is not one.

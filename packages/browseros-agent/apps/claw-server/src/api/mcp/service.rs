@@ -248,8 +248,17 @@ impl ClawMcpService {
     /// `declare_agent_name` gates the optional `agentName` fallback to clients on
     /// 2026-07-28 or later. Older peers negotiated `initialize`, still carry their
     /// identity in the handshake, and must keep receiving the schema unchanged.
+    /// Whether the loop is offered, asked of the settings store each time.
+    ///
+    /// Read rather than cached, so a token saved in the settings page shows up in the next
+    /// `tools/list` without a restart. Caching it here is the one way to make the setting look
+    /// like it did not work.
+    fn pursue_offering(&self) -> PursueOffering {
+        PursueOffering::of(self.state.agent_settings.jev_token_source())
+    }
+
     fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
-        let pursue = PursueOffering::read();
+        let pursue = self.pursue_offering();
         let decorate = |tool: Tool| {
             let tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
             if declare_agent_name {
@@ -308,7 +317,7 @@ impl ClawMcpService {
         }
         let started_at = StdInstant::now();
 
-        let Some(token) = crate::api::mcp::pursue::credential() else {
+        let Some(token) = self.state.agent_settings.jev_credential() else {
             return self
                 .refuse_pursue(
                     started,
@@ -1278,7 +1287,7 @@ impl ServerHandler for ClawMcpService {
             .with_server_info(implementation)
             .with_instructions(mcp_instructions(
                 self.state.agent_settings.human_help(),
-                PursueOffering::read(),
+                self.pursue_offering(),
             ))
     }
 
@@ -1349,13 +1358,14 @@ impl ServerHandler for ClawMcpService {
         if name == MARK_SKILL_RUN_TOOL_NAME {
             return Some(with_session_arg(self.mark_skill_run_tool.clone()));
         }
-        if name == PURSUE_TOOL_NAME && PursueOffering::read().is_offered() {
+        if name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered() {
             return Some(with_session_arg(self.pursue_tool.clone()));
         }
+        let pursue = self.pursue_offering();
         self.find_tool_index(name).map(|index| {
             with_session_arg(with_pursue_fallback_note(
                 self.catalog[index].to_mcp_tool(),
-                PursueOffering::read(),
+                pursue,
             ))
         })
     }
@@ -1370,7 +1380,7 @@ impl ServerHandler for ClawMcpService {
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
-        let is_pursue = request.name == PURSUE_TOOL_NAME && PursueOffering::read().is_offered();
+        let is_pursue = request.name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
             && !is_save_skill
@@ -2537,10 +2547,11 @@ mod tests {
     }
 
     /// `pursue` is listed only when the server holds a credential for the
-    /// decision model, so an exact tool list has to say so. Without this the
-    /// suite passes or fails depending on whose shell ran it.
-    fn expect_pursue_if_credentialled(expected: &mut Vec<String>) {
-        if PursueOffering::read().is_offered() {
+    /// decision model, so an exact tool list has to say so. Asked of this
+    /// service's own settings store rather than of the ambient environment,
+    /// which is what used to make the suite pass or fail by whose shell ran it.
+    fn expect_pursue_if_credentialled(service: &ClawMcpService, expected: &mut Vec<String>) {
+        if service.pursue_offering().is_offered() {
             expected.push(PURSUE_TOOL_NAME.to_string());
         }
     }
@@ -3149,7 +3160,7 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::On, PursueOffering::read()).as_str())
+            Some(mcp_instructions(HumanHelp::On, service.pursue_offering()).as_str())
         );
         let instructions = info
             .instructions
@@ -3157,9 +3168,8 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("BrowserOS neo instructions missing"))?;
         assert!(instructions.contains("BrowserOS neo — the browser for agents"));
         // Which tool the instructions name depends on whether the loop is
-        // offered, and a developer machine with a credential set is the one
-        // place that difference shows up in a test run.
-        if PursueOffering::read().is_offered() {
+        // offered, which this service's own settings store answers.
+        if service.pursue_offering().is_offered() {
             assert!(instructions.contains("Reach for pursue first"));
         } else {
             assert!(instructions.contains("Reach for run first"));
@@ -3276,7 +3286,7 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expect_pursue_if_credentialled(&mut expected);
+        expect_pursue_if_credentialled(&service, &mut expected);
         expected.push(REQUEST_HELP_TOOL_NAME.to_string());
         expected.push(AWAIT_HELP_TOOL_NAME.to_string());
         assert_eq!(names, expected);
@@ -3502,7 +3512,7 @@ mod tests {
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
         expected.push(SAVE_SKILL_TOOL_NAME.to_string());
         expected.push(MARK_SKILL_RUN_TOOL_NAME.to_string());
-        expect_pursue_if_credentialled(&mut expected);
+        expect_pursue_if_credentialled(&service, &mut expected);
         for declare_agent_name in [false, true] {
             assert_eq!(tool_names(&service, declare_agent_name), expected);
         }
@@ -3520,7 +3530,7 @@ mod tests {
 
         assert_eq!(
             service.get_info().instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::Off, PursueOffering::read()).as_str())
+            Some(mcp_instructions(HumanHelp::Off, service.pursue_offering()).as_str())
         );
         Ok(())
     }

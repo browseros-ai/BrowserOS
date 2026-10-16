@@ -15,8 +15,10 @@ import {
 } from 'bun:test'
 import type {
   AgentSettings,
+  SaveJevTokenRequest,
   UpdateAgentSettingsRequest,
 } from '@browseros/claw-api'
+import { JevTokenSource } from '@browseros/claw-api'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { parseHTML } from 'linkedom'
 import { act, type ComponentProps } from 'react'
@@ -24,14 +26,29 @@ import type { Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
 import * as api from '@/modules/api/client'
 
+const settingsOf = (overrides: Partial<AgentSettings> = {}): AgentSettings => ({
+  humanHelpEnabled: true,
+  jevTokenSource: JevTokenSource.None,
+  ...overrides,
+})
+
 const server: {
   read: () => Promise<AgentSettings>
   save: (body: UpdateAgentSettingsRequest) => Promise<AgentSettings>
   saves: UpdateAgentSettingsRequest[]
+  saveToken: (body: SaveJevTokenRequest) => Promise<AgentSettings>
+  removeToken: () => Promise<AgentSettings>
+  tokenSaves: SaveJevTokenRequest[]
+  tokenRemovals: number
 } = {
-  read: async () => ({ humanHelpEnabled: true }),
-  save: async (body) => body,
+  read: async () => settingsOf(),
+  save: async (body) => settingsOf(body),
   saves: [],
+  saveToken: async () =>
+    settingsOf({ jevTokenSource: JevTokenSource.Settings }),
+  removeToken: async () => settingsOf(),
+  tokenSaves: [],
+  tokenRemovals: 0,
 }
 const captured: { event: string; properties?: Record<string, unknown> }[] = []
 
@@ -42,6 +59,14 @@ mock.module('@/modules/api/client', () => ({
     updateAgentSettings: (body: UpdateAgentSettingsRequest) => {
       server.saves.push(body)
       return server.save(body)
+    },
+    saveJevToken: (body: SaveJevTokenRequest) => {
+      server.tokenSaves.push(body)
+      return server.saveToken(body)
+    },
+    removeJevToken: () => {
+      server.tokenRemovals += 1
+      return server.removeToken()
     },
   }),
 }))
@@ -98,21 +123,21 @@ function switchIn(page: Document | Element): Element {
 
 describe('Settings screen', () => {
   it('tests that the switch is on when the server has human help on', () => {
-    const toggle = switchIn(renderPage({ humanHelpEnabled: true }))
+    const toggle = switchIn(renderPage(settingsOf({ humanHelpEnabled: true })))
 
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     expect(toggle.hasAttribute('disabled')).toBe(false)
   })
 
   it('tests that the switch is off when the server has human help off', () => {
-    const toggle = switchIn(renderPage({ humanHelpEnabled: false }))
+    const toggle = switchIn(renderPage(settingsOf({ humanHelpEnabled: false })))
 
     expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(toggle.hasAttribute('disabled')).toBe(false)
   })
 
   it('tests that the switch is named by its title and described by its explanation', () => {
-    const page = renderPage({ humanHelpEnabled: true })
+    const page = renderPage(settingsOf({ humanHelpEnabled: true }))
     const toggle = switchIn(page)
     const textOf = (id: string | null) =>
       id ? page.getElementById(id)?.textContent : undefined
@@ -139,9 +164,14 @@ describe('Settings screen interactions', () => {
   let client: QueryClient
 
   beforeEach(async () => {
-    server.read = async () => ({ humanHelpEnabled: true })
-    server.save = async (body) => body
+    server.read = async () => settingsOf({ humanHelpEnabled: true })
+    server.save = async (body) => settingsOf(body)
     server.saves = []
+    server.saveToken = async () =>
+      settingsOf({ jevTokenSource: JevTokenSource.Settings })
+    server.removeToken = async () => settingsOf()
+    server.tokenSaves = []
+    server.tokenRemovals = 0
     captured.length = 0
 
     const dom = parseHTML(
@@ -224,7 +254,7 @@ describe('Settings screen interactions', () => {
     // Until the server answers, the switch shows its default: on.
     expect(switchIn(container).getAttribute('aria-checked')).toBe('true')
 
-    read.resolve({ humanHelpEnabled: false })
+    read.resolve(settingsOf({ humanHelpEnabled: false }))
     await settle()
 
     expect(switchIn(container).hasAttribute('disabled')).toBe(false)
@@ -263,7 +293,7 @@ describe('Settings screen interactions', () => {
     expect(switchIn(container).hasAttribute('disabled')).toBe(true)
     expect(captured).toEqual([])
 
-    save.resolve({ humanHelpEnabled: false })
+    save.resolve(settingsOf({ humanHelpEnabled: false }))
     await settle()
 
     expect(switchIn(container).hasAttribute('disabled')).toBe(false)
@@ -271,7 +301,7 @@ describe('Settings screen interactions', () => {
   })
 
   it('tests that the switch and analytics follow the value the server saved', async () => {
-    server.save = async () => ({ humanHelpEnabled: true })
+    server.save = async () => settingsOf({ humanHelpEnabled: true })
     await mount()
     await clickSwitch()
 
@@ -303,7 +333,7 @@ describe('Settings screen interactions', () => {
     await clickSwitch()
     expect(saveError()).toBe('Could not save this setting. Try again.')
 
-    server.save = async (body) => body
+    server.save = async (body) => settingsOf(body)
     await clickSwitch()
 
     expect(saveError()).toBeUndefined()
@@ -311,5 +341,135 @@ describe('Settings screen interactions', () => {
     expect(captured).toEqual([
       { event: 'human_help_toggled', properties: { enabled: false } },
     ])
+  })
+  // --- the decision model credential ---------------------------------------
+
+  function tokenField(): HTMLInputElement | null {
+    return container.querySelector(
+      '#jev-token-input',
+    ) as unknown as HTMLInputElement | null
+  }
+
+  function buttonNamed(label: string): HTMLElement | null {
+    return (Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === label,
+    ) ?? null) as unknown as HTMLElement | null
+  }
+
+  // The field is uncontrolled, so setting its value is all a user does.
+  async function type(value: string) {
+    const field = tokenField()
+    if (!field) throw new Error('no token field')
+    field.value = value
+  }
+
+  async function click(label: string) {
+    const button = buttonNamed(label)
+    if (!button) throw new Error(`no ${label} button`)
+    await act(async () => {
+      button.dispatchEvent(new window.Event('click', { bubbles: true }))
+    })
+    await settle()
+  }
+
+  async function submitToken() {
+    const form = container.querySelector('form')
+    if (!form) throw new Error('no token form')
+    await act(async () => {
+      form.dispatchEvent(new window.Event('submit', { bubbles: true }))
+    })
+    await settle()
+  }
+
+  it('tests that a server with no token offers a field to paste one into', async () => {
+    await mount()
+
+    expect(tokenField()).not.toBeNull()
+    expect(tokenField()?.getAttribute('type')).toBe('password')
+    expect(container.textContent).toContain(
+      'Without one the tool is not offered',
+    )
+    expect(buttonNamed('Remove')).toBeNull()
+  })
+
+  it('tests that a blank field saves nothing rather than storing a blank', async () => {
+    await mount()
+
+    await submitToken()
+    expect(server.tokenSaves).toEqual([])
+    await type('   ')
+    await submitToken()
+    expect(server.tokenSaves).toEqual([])
+  })
+
+  it('tests that a pasted token is sent trimmed and the field is cleared', async () => {
+    await mount()
+    await type('  jev-a-token  ')
+    await submitToken()
+
+    expect(server.tokenSaves).toEqual([{ token: 'jev-a-token' }])
+    // The reply said a token is saved, so the field gives way to it.
+    expect(tokenField()).toBeNull()
+    expect(container.textContent).toContain('A token is saved')
+  })
+
+  it('tests that a saved token can be removed', async () => {
+    server.read = async () =>
+      settingsOf({ jevTokenSource: JevTokenSource.Settings })
+    await mount()
+
+    expect(tokenField()).toBeNull()
+    await click('Remove')
+
+    expect(server.tokenRemovals).toBe(1)
+    expect(tokenField()).not.toBeNull()
+  })
+
+  it('tests that replacing a saved token asks for the new one first', async () => {
+    server.read = async () =>
+      settingsOf({ jevTokenSource: JevTokenSource.Settings })
+    await mount()
+    await click('Replace')
+
+    expect(tokenField()).not.toBeNull()
+    expect(server.tokenRemovals).toBe(0)
+    expect(server.tokenSaves).toEqual([])
+  })
+
+  /// The case a boolean could not have expressed, and the reason the reply
+  /// carries a source instead.
+  it('tests that a token in the environment is named rather than ignored', async () => {
+    server.read = async () =>
+      settingsOf({ jevTokenSource: JevTokenSource.Environment })
+    await mount()
+
+    expect(container.textContent).toContain('token in the server')
+    expect(container.textContent).toContain('takes precedence')
+    // And a token may still be pasted over it.
+    expect(tokenField()).not.toBeNull()
+  })
+
+  it('tests that a failed token save says so and keeps what was typed', async () => {
+    server.saveToken = async () => {
+      throw new Error('nope')
+    }
+    await mount()
+    await type('jev-a-token')
+    await submitToken()
+
+    expect(container.textContent).toContain('Could not save that')
+    expect(tokenField()?.value).toBe('jev-a-token')
+  })
+
+  it('tests that a saved token is not rendered back into the page', async () => {
+    const secret = 'not-a-real-token-0123456789'
+    await mount()
+    await type(secret)
+    await submitToken()
+
+    expect(server.tokenSaves).toEqual([{ token: secret }])
+    // The field gave way to Replace and Remove, and nothing carries the value.
+    expect(container.innerHTML).not.toContain(secret)
+    expect(container.querySelector('[value]')).toBeNull()
   })
 })

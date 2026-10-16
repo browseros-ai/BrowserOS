@@ -1,3 +1,4 @@
 {
-  "humanHelpEnabled": false
+  "humanHelpEnabled": false,
+  "jevTokenSource": "environment"
 }

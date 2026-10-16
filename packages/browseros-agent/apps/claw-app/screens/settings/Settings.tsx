@@ -4,17 +4,27 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
+import type { AgentSettings } from '@browseros/claw-api'
+import { JevTokenSource } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   useAgentSettings,
+  useRemoveJevToken,
+  useSaveJevToken,
   useUpdateAgentSettings,
 } from '@/modules/api/agent-settings.hooks'
 
 const HUMAN_HELP_SWITCH_ID = 'human-help-switch'
 const HUMAN_HELP_TITLE_ID = 'human-help-title'
 const HUMAN_HELP_DESCRIPTION_ID = 'human-help-description'
+const JEV_INPUT_ID = 'jev-token-input'
+const JEV_TITLE_ID = 'jev-token-title'
+const JEV_DESCRIPTION_ID = 'jev-token-description'
 
 /**
  * Server-owned agent tool settings. The switch shows the server's value, and
@@ -96,7 +106,129 @@ export function Settings() {
               Could not save this setting. Try again.
             </p>
           )}
+          <JevToken
+            source={settings.data?.jevTokenSource ?? JevTokenSource.None}
+          />
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * The decision model credential, which is the one thing that decides whether
+ * agents are offered `pursue` at all.
+ *
+ * Three states rather than two: a saved token, a token in the server's
+ * environment, or neither. Naming the environment case is what stops a user
+ * pasting a token they did not need.
+ */
+function JevToken({ source }: { source: JevTokenSource }) {
+  // Uncontrolled on purpose: the credential lives in the field the user typed
+  // it into and is read once on submit, rather than being mirrored into React
+  // state and re-rendered.
+  const field = useRef<HTMLInputElement>(null)
+  const [replacing, setReplacing] = useState(false)
+  const save = useSaveJevToken()
+  const remove = useRemoveJevToken()
+  const queryClient = useQueryClient()
+
+  const publish = (saved: AgentSettings) => {
+    queryClient.setQueryData(useAgentSettings.getKey(), saved)
+    if (field.current) field.current.value = ''
+    setReplacing(false)
+  }
+
+  const saved = source === JevTokenSource.Settings
+  const showField = !saved || replacing
+  const busy = save.isPending || remove.isPending
+
+  return (
+    <div className="border-ledger-divider border-t px-5 py-4">
+      <div className="flex flex-col gap-1">
+        <span id={JEV_TITLE_ID} className="font-medium text-ink text-sm">
+          Ultrafast decision loop
+        </span>
+        <span
+          id={JEV_DESCRIPTION_ID}
+          className="text-[13px] text-ink-2 leading-snug"
+        >
+          {saved
+            ? 'A token is saved, so agents are offered pursue, which decides each step with a typed model instead of a prompt.'
+            : source === JevTokenSource.Environment
+              ? 'Using the token in the server’s environment. A token saved here takes precedence over it.'
+              : 'Paste a token to offer agents pursue, which decides each step with a typed model instead of a prompt. Without one the tool is not offered at all.'}
+        </span>
+      </div>
+
+      {showField ? (
+        <form
+          className="mt-3 flex items-start gap-2"
+          onSubmit={(event) => {
+            event.preventDefault()
+            const token = field.current?.value.trim()
+            if (!token) return
+            save.mutate({ token }, { onSuccess: publish })
+          }}
+        >
+          <Input
+            ref={field}
+            id={JEV_INPUT_ID}
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            aria-labelledby={JEV_TITLE_ID}
+            aria-describedby={JEV_DESCRIPTION_ID}
+            placeholder="Paste your token"
+            disabled={busy}
+          />
+          <Button type="submit" disabled={busy}>
+            Save
+          </Button>
+          {saved && (
+            <Button
+              type="button"
+              variant="ghost"
+              disabled={busy}
+              onClick={() => {
+                if (field.current) field.current.value = ''
+                setReplacing(false)
+              }}
+            >
+              Cancel
+            </Button>
+          )}
+        </form>
+      ) : (
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            disabled={busy}
+            onClick={() => setReplacing(true)}
+          >
+            Replace
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            disabled={busy}
+            onClick={() => remove.mutate(undefined, { onSuccess: publish })}
+          >
+            Remove
+          </Button>
+        </div>
+      )}
+
+      <p className="mt-2 text-[12px] text-ink-3 leading-snug">
+        Agents pick up the change on their next tool list. An already installed
+        skill follows after BrowserOS neo restarts.
+      </p>
+
+      {(save.isError || remove.isError) && (
+        <p role="alert" className="mt-2 text-[13px] text-destructive">
+          Could not save that. Try again.
+        </p>
       )}
     </div>
   )

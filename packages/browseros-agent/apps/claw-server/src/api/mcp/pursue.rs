@@ -42,7 +42,7 @@ use crate::ids::SessionId;
 /// is loaded: it is written to disk once per launch.
 // Both live in config so the skill loader, which is a service, can ask the same
 // question without reaching up into this layer.
-pub use crate::config::{PursueOffering, credential};
+pub use crate::config::PursueOffering;
 
 /// How long to let a page keep changing before reading it anyway.
 ///
