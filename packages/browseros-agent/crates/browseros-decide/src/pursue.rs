@@ -551,6 +551,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         let moved = after.as_ref().map_or_else(Vec::new, |now| {
             view.what_moved(now, &run.goal, MOVED_REPORTED)
         });
+        run.remember(said(&decision, changed, target_name.as_deref(), &moved));
         trail.push(step_of(
             &decision,
             changed,
@@ -558,7 +559,6 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             moved,
             supplied.as_deref(),
         ));
-        run.remember(said(&decision, changed));
 
         if changed {
             run.unchanged = 0;
@@ -919,15 +919,34 @@ fn step_of(
 /// report the few things the goal is about rather than the clock.
 const MOVED_REPORTED: usize = 3;
 
-fn said(decision: &Decision, changed: bool) -> String {
+fn said(decision: &Decision, changed: bool, target_name: Option<&str>, moved: &[Moved]) -> String {
     let what = decision.operation.as_str();
     let how = decision.how.map(How::as_str).unwrap_or("");
-    let on = decision.target.as_deref().unwrap_or("the page");
-    if changed {
-        format!("{what} {how} on {on}, and the page changed")
-    } else {
-        format!("{what} {how} on {on}, and the page did not change")
+    // By name, because a ref means nothing to a model that cannot remember
+    // minting it. "clicked Add to cart" is a fact about the goal; "ACT CLICK on
+    // e119" is a fact about our own bookkeeping.
+    let on = target_name
+        .map(|name| format!("{name:?}"))
+        .or_else(|| decision.target.clone())
+        .unwrap_or_else(|| "the page".to_string());
+    if !changed {
+        return format!("{what} {how} on {on}, and the page did not change");
     }
+    if moved.is_empty() {
+        return format!("{what} {how} on {on}, and the page changed");
+    }
+    // The effects, in the same words the caller is told them in. This is the
+    // whole of the run's memory of having succeeded: the model is documented as
+    // holding nothing between calls, so a cart that went from empty to full is
+    // evidence it can only have from here. Without it a goal that is already met
+    // reads exactly like one that has not been started, and the next decision
+    // does the same thing again.
+    let effects = moved
+        .iter()
+        .map(|change| format!("{:?} became {:?}", change.was, change.now))
+        .collect::<Vec<_>>()
+        .join(", and ");
+    format!("{what} {how} on {on}, and {effects}")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1000,5 +1019,60 @@ fn end(
         goal_met,
         unlabelled_images: view.as_ref().map_or(0, |view| view.unlabelled_images),
         ended_on: view,
+    }
+}
+
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+    use crate::gate::Lead;
+
+    fn clicked() -> Decision {
+        Decision {
+            operation: Operation::Act,
+            operation_lead: Lead::default(),
+            how: Some(How::Click),
+            how_lead: None,
+            target: Some("e119".to_string()),
+            target_lead: None,
+            value: None,
+            value_lead: None,
+            key: None,
+            key_lead: None,
+            direction: None,
+            none_of_these: false,
+            goal_met: None,
+            input_tokens: 0,
+        }
+    }
+
+    /// The whole of the run's memory of having succeeded. Without the effects,
+    /// a goal that is already met reads like one that was never started.
+    #[test]
+    fn the_memory_carries_what_the_action_did_to_the_page() {
+        let moved = vec![Moved {
+            reference: "e57".to_string(),
+            was: "0 items in cart".to_string(),
+            now: "1 item in cart".to_string(),
+        }];
+        let remembered = said(&clicked(), true, Some("Add to cart"), &moved);
+        assert!(remembered.contains("Add to cart"), "{remembered}");
+        assert!(remembered.contains("0 items in cart"), "{remembered}");
+        assert!(remembered.contains("1 item in cart"), "{remembered}");
+    }
+
+    /// A ref is our own bookkeeping and means nothing to a model that cannot
+    /// remember minting it.
+    #[test]
+    fn the_memory_names_the_control_rather_than_its_reference() {
+        let remembered = said(&clicked(), true, Some("Add to cart"), &[]);
+        assert!(remembered.contains("Add to cart"), "{remembered}");
+        assert!(!remembered.contains("e119"), "{remembered}");
+    }
+
+    #[test]
+    fn an_action_that_moved_nothing_still_says_so() {
+        let remembered = said(&clicked(), false, Some("Add to cart"), &[]);
+        assert!(remembered.contains("did not change"), "{remembered}");
     }
 }
