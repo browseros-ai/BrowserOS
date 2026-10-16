@@ -163,8 +163,12 @@ impl AppState {
             }
         }));
         let tab_registry = TabRegistry::new(session_tabs.clone());
-        let browser =
-            BrowserService::new(config.cdp_port, sessions.ownership(), tab_registry.clone());
+        let browser = BrowserService::new(
+            config.cdp_port,
+            sessions.ownership(),
+            tab_registry.clone(),
+            config.native.capabilities,
+        );
         let live_recordings = LiveRecordingBus::new();
         let recording_ingest = RecordingIngestService::new(
             recordings.clone(),
@@ -288,6 +292,7 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
+            native: Default::default(),
         });
 
         let _state = AppState::new_with_home(config, dir.path().join("home")).await?;

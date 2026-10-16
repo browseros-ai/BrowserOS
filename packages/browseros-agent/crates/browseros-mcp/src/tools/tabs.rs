@@ -19,11 +19,14 @@ pages then keep going to that group instead of a second one being started for th
 same task, and the tabs already in it read as yours again. If you no longer have \
 the id, find it in the listing: after a reconnect your tabs read as another \
 agent's, and your group is titled with your own name as <yourName>/<task>. Only \
-action=\"new\" reclaims; groupId is ignored on the other actions. \
-When browser_target is bound, listings and page operations include only normal \
-windows of that regular profile. OAuth/window.open popups return page_out_of_scope; \
-use explicit browser_target clear for browser-wide work. With no normal window, \
-use separate windows create after browser_profiles load; tabs new never creates one.";
+action=\"new\" reclaims; groupId is ignored on the other actions.";
+const PROFILE_NOTE: &str = "\
+Listings and page operations include only normal windows of one regular profile: the \
+browser_target selection, or the original Default profile (directory \"Default\") when \
+none is set, whatever window is focused. OAuth/window.open popups return \
+page_out_of_scope. With no selection and no Default window, tabs new opens the page in a \
+new inactive Default window; with a selection and no normal window, use windows create \
+after browser_profiles load.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -57,12 +60,15 @@ struct TabsArgs {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def::<TabsArgs>(
-        "tabs",
-        DESCRIPTION,
-        Some(super::open_world_annotations()),
-        handler,
-    )
+    crate::framework::ToolDef {
+        feature_note: super::profile_note(PROFILE_NOTE),
+        ..super::def::<TabsArgs>(
+            "tabs",
+            DESCRIPTION,
+            Some(super::open_world_annotations()),
+            handler,
+        )
+    }
 }
 
 /// Whether a tab group is currently open. A listing failure answers `true` so

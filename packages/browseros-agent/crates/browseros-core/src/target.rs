@@ -1,8 +1,8 @@
 //! Immutable execution views over a shared browser runtime. Task hosts own logical binding;
 //! views capture it once and keep management callable even when normal admission fails.
 use crate::{
-    BrowserContextId, BrowserProfileId, BrowserSession, CoreError, PageId, SessionId, TabId,
-    TargetError, WindowId,
+    BrowserContextId, BrowserProfileId, BrowserSession, CoreError, NativeCapabilities,
+    NativeFeature, PageId, SessionId, TabId, TargetError, WindowId,
 };
 use crate::{
     input::Input,
@@ -10,7 +10,7 @@ use crate::{
     observer::Observer,
     page_signals::PageSignals,
     pages::{MovePageOptions, NewPageOptions, PageCreation, PageInfo, PageSession},
-    profiles::{BrowserProfileInfo, LoadProfileOutcome, ProfileSelector},
+    profiles::{BrowserProfileInfo, LoadProfileOutcome, ProfileSelector, default_profile},
     screenshot::{ScreenshotCaptureOptions, ScreenshotCaptureResult},
     windows::WindowInfo,
 };
@@ -64,6 +64,15 @@ pub struct CapturedScope {
     pub context_id: Option<BrowserContextId>,
     pub placement_window: Option<WindowId>,
     pub connection_epoch: u64,
+    pub source: TargetSource,
+}
+/// Where a capture's target came from. An explicit binding is the task host's saved override;
+/// the default (the original Default profile) is resolved again from the live catalog on every
+/// capture, so its process-lifetime handles are always fresh and it is never persisted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetSource {
+    Explicit,
+    Default,
 }
 pub struct PageListing {
     pub pages: Vec<PageInfo>,
@@ -82,6 +91,13 @@ pub trait PageAdmission: Send + Sync {
 pub struct BrowserView {
     session: Arc<BrowserSession>,
     binding: Option<TargetBinding>,
+    /// A saved binding this view did not apply because the native browser lacks profile
+    /// targeting. Routing is unbound; hosts only disclose it, and it stays persisted so a
+    /// capable browser retries it later.
+    unapplied: Option<TargetBinding>,
+    /// Which target this capture used; None for unbound views (host infrastructure, and every
+    /// call on a native without profile targeting).
+    source: Option<TargetSource>,
     capture: Result<Option<CapturedScope>, TargetError>,
     unbound_default_window: Option<WindowId>,
     signals: Arc<PageSignals>,
@@ -95,6 +111,11 @@ pub struct BrowserView {
     // View clones share immutable native creation identities/epochs; global reconciliation
     // can replace a PageId's registry entry without rewriting this call's creation authority.
     creation_receipts: Arc<std::sync::RwLock<HashMap<PageId, PageCreation>>>,
+    // The window this admitted view opened for a windowless Default profile. Placement is
+    // captured once and never refreshes, so without this every page opened through the same
+    // call (Promise.all in a run) would open its own window. Shared by clones; the async lock
+    // makes creation single-flight.
+    default_window: Arc<tokio::sync::Mutex<Option<WindowId>>>,
 }
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -139,6 +160,19 @@ impl WindowSelection {
     }
 }
 impl CapturedScope {
+    /// The failure once this capture's live identity can no longer be trusted (connection epoch
+    /// changed, handle or context gone). An explicit binding needs explicit reselection; the
+    /// default has no saved handle to repair, so the next call simply resolves it afresh.
+    fn gone(&self) -> TargetError {
+        match self.source {
+            TargetSource::Explicit => {
+                TargetError::ProfileGone(self.profile.browser_profile_id.clone())
+            }
+            TargetSource::Default => TargetError::DefaultProfileUnavailable(
+                "the Default profile or browser connection changed during this call".into(),
+            ),
+        }
+    }
     fn pin(&self) -> Option<WindowId> {
         match self.binding.intent.window {
             Some(WindowSelection::Pinned { window_id }) => Some(window_id),
@@ -203,44 +237,97 @@ fn capture_error(error: CoreError, id: &BrowserProfileId) -> TargetError {
         _ => TargetError::ProfileGone(id.clone()),
     }
 }
+/// Every failure to resolve the default is the same recoverable state for the agent: select
+/// a profile explicitly, or retry once the browser settles. The reason is kept for diagnosis.
+fn default_capture_error(error: CoreError) -> TargetError {
+    match error {
+        CoreError::Target(TargetError::DefaultProfileUnavailable(reason)) => {
+            TargetError::DefaultProfileUnavailable(reason)
+        }
+        error => TargetError::DefaultProfileUnavailable(error.to_string()),
+    }
+}
 
 impl BrowserView {
+    /// Admits one call. Precedence: an explicit saved binding, then (with no binding) the
+    /// browser's original Default profile; both run through the same scoped execution. Natives
+    /// without profile targeting keep the unbound routing they always had. The result is
+    /// immutable: rebinding, loading or reconnecting later never refreshes this view.
     pub async fn capture(
         session: Arc<BrowserSession>,
         binding: Option<TargetBinding>,
         unbound_default_window: Option<WindowId>,
     ) -> Self {
+        Self::capture_with(session, binding, unbound_default_window, true).await
+    }
+    /// Admission for profile management (discovery and selection). Same precedence as
+    /// [`Self::capture`], but an unloaded Default is captured as it is instead of being loaded:
+    /// choosing or listing profiles must never load an unrelated profile as a side effect.
+    pub async fn capture_for_management(
+        session: Arc<BrowserSession>,
+        binding: Option<TargetBinding>,
+        unbound_default_window: Option<WindowId>,
+    ) -> Self {
+        Self::capture_with(session, binding, unbound_default_window, false).await
+    }
+    async fn capture_with(
+        session: Arc<BrowserSession>,
+        binding: Option<TargetBinding>,
+        unbound_default_window: Option<WindowId>,
+        load_default: bool,
+    ) -> Self {
         let mut view = Self::unbound(session, unbound_default_window);
-        if let Some(binding) = binding {
-            // No lock or host store is retained. Rebinding later cannot change this call's context
-            // or chosen placement; a failed capture still carries the intent for management.
-            view.capture = view
-                .capture_scope(&binding)
-                .await
-                .map(Some)
-                .map_err(|err| capture_error(err, &binding.intent.browser_profile_id));
-            view.binding = Some(binding);
-            let scope = view.scope().ok().flatten().cloned();
-            let pages = view.session.pages.clone();
-            let connection = view.session.connection();
-            let windows = view.signal_windows.clone();
-            view.signals = PageSignals::scoped(
-                &view.session.page_signals,
-                Arc::new(move |page| {
-                    let Some(scope) = &scope else {
-                        return false;
-                    };
-                    connection.is_connected()
-                        && connection.connection_epoch() == scope.connection_epoch
-                        && windows
-                            .read()
-                            .ok()
-                            .is_some_and(|windows| pages.admitted_cached(page, scope, &windows))
-                }),
-            );
-            if view.scope().ok().flatten().is_some() {
-                let _ = view.validate_live().await;
+        // Older natives cannot honor regular-profile routing (they ignore the context params),
+        // so they keep the unbound path, send no getProfiles, and only disclose an explicit
+        // binding saved on a newer browser. A capable browser retries it on a later capture.
+        if !view.supports(NativeFeature::ProfileTargeting) {
+            view.unapplied = binding;
+            return view;
+        }
+        // No lock or host store is retained. Rebinding later cannot change this call's context
+        // or chosen placement; a failed capture still carries an explicit intent for management.
+        let (binding, capture) = match binding {
+            Some(binding) => {
+                let capture = view
+                    .capture_scope(&binding, TargetSource::Explicit)
+                    .await
+                    .map(Some)
+                    .map_err(|err| capture_error(err, &binding.intent.browser_profile_id));
+                view.source = Some(TargetSource::Explicit);
+                (Some(binding), capture)
             }
+            None => {
+                view.source = Some(TargetSource::Default);
+                match view.capture_default(load_default).await {
+                    Ok(scope) => (Some(scope.binding.clone()), Ok(Some(scope))),
+                    // No silent fallback to the focused window or another profile: ordinary
+                    // calls fail admission, while profile management stays usable.
+                    Err(err) => (None, Err(default_capture_error(err))),
+                }
+            }
+        };
+        view.capture = capture;
+        view.binding = binding;
+        let scope = view.scope().ok().flatten().cloned();
+        let pages = view.session.pages.clone();
+        let connection = view.session.connection();
+        let windows = view.signal_windows.clone();
+        view.signals = PageSignals::scoped(
+            &view.session.page_signals,
+            Arc::new(move |page| {
+                let Some(scope) = &scope else {
+                    return false;
+                };
+                connection.is_connected()
+                    && connection.connection_epoch() == scope.connection_epoch
+                    && windows
+                        .read()
+                        .ok()
+                        .is_some_and(|windows| pages.admitted_cached(page, scope, &windows))
+            }),
+        );
+        if view.scope().ok().flatten().is_some() {
+            let _ = view.validate_live().await;
         }
         view
     }
@@ -250,10 +337,13 @@ impl BrowserView {
             expected_created_page: None,
             expected_creation_epoch: None,
             creation_receipts: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            default_window: Arc::new(tokio::sync::Mutex::new(None)),
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             session,
             binding: None,
+            unapplied: None,
+            source: None,
             capture: Ok(None),
             unbound_default_window,
         }
@@ -269,6 +359,27 @@ impl BrowserView {
     }
     pub fn admission_error(&self) -> Option<&TargetError> {
         self.capture.as_ref().err()
+    }
+    /// The saved binding capture left unapplied on a native without profile targeting.
+    pub fn unapplied_binding(&self) -> Option<&TargetBinding> {
+        self.unapplied.as_ref()
+    }
+    /// Explicit binding or the implicit default; None for unbound views. With the default,
+    /// `binding()` is the effective (unsaved) binding, so every scoped reader treats it alike.
+    #[must_use]
+    pub fn target_source(&self) -> Option<TargetSource> {
+        self.source
+    }
+    #[must_use]
+    pub fn native(&self) -> NativeCapabilities {
+        self.session.native()
+    }
+    #[must_use]
+    pub fn supports(&self, feature: NativeFeature) -> bool {
+        self.session.native().supports(feature)
+    }
+    pub fn require(&self, feature: NativeFeature) -> Result<(), CoreError> {
+        self.session.native().require(feature)
     }
 
     /// Derive before spawning creation follow-up work, then carry this same view through every
@@ -348,7 +459,7 @@ impl BrowserView {
         if let Some(scope) = self.scope()? {
             return Ok(Some(crate::connection::EpochGuard {
                 expected: scope.connection_epoch,
-                invalidated: TargetError::ProfileGone(scope.profile.browser_profile_id.clone()),
+                invalidated: scope.gone(),
             }));
         }
         Ok(self
@@ -396,7 +507,10 @@ impl BrowserView {
         Ok(())
     }
 
+    /// Every profile management path (load, resolve, status) reads the catalog here first,
+    /// so this is where an unsupported native is refused before `Browser.getProfiles`.
     pub async fn list_profiles(&self) -> Result<Vec<BrowserProfileInfo>, CoreError> {
+        self.require(NativeFeature::ProfileTargeting)?;
         #[derive(Deserialize)]
         struct Reply {
             profiles: Vec<BrowserProfileInfo>,
@@ -497,6 +611,9 @@ impl BrowserView {
         &self,
         window: WindowSelection,
     ) -> Result<TargetIntent, CoreError> {
+        // Older natives' windows lack the identity sidecar; refuse as unsupported rather
+        // than reporting every window as ineligible.
+        self.require(NativeFeature::ProfileTargeting)?;
         let windows = self.read_windows().await?;
         let native = windows
             .iter()
@@ -513,18 +630,89 @@ impl BrowserView {
         self.resolve_intent(&ProfileSelector::Id(id), Some(window))
             .await
     }
-    async fn capture_scope(&self, binding: &TargetBinding) -> Result<CapturedScope, CoreError> {
-        let epoch = self.session.connection().connection_epoch();
-        let guard = crate::connection::EpochGuard {
-            expected: epoch,
-            invalidated: TargetError::ProfileGone(binding.intent.browser_profile_id.clone()),
-        };
+    async fn read_catalog(
+        &self,
+        guard: &crate::connection::EpochGuard,
+    ) -> Result<Vec<BrowserProfileInfo>, CoreError> {
         let catalog = crate::ProtocolSession::root(self.session.connection())
             .with_epoch_guard(Some(guard.clone()))
             .send_value("Browser.getProfiles", json!({}))
             .await
             .map_err(native_missing)?;
-        let profile = decode::<Vec<BrowserProfileInfo>>(catalog["profiles"].clone())?
+        decode(catalog["profiles"].clone())
+    }
+    async fn capture_scope(
+        &self,
+        binding: &TargetBinding,
+        source: TargetSource,
+    ) -> Result<CapturedScope, CoreError> {
+        let epoch = self.session.connection().connection_epoch();
+        let guard = crate::connection::EpochGuard {
+            expected: epoch,
+            invalidated: TargetError::ProfileGone(binding.intent.browser_profile_id.clone()),
+        };
+        let catalog = self.read_catalog(&guard).await?;
+        self.scope_in_catalog(catalog, binding, source, guard).await
+    }
+    /// Resolves the original Default profile afresh for this call. Its handles are process
+    /// lifetime, so they are never saved: each capture reads the live catalog, loads Default if
+    /// needed and allowed (an existing profile only; loading opens no window), and then
+    /// captures it like an explicit binding, including placement and the epoch guard.
+    async fn capture_default(&self, load: bool) -> Result<CapturedScope, CoreError> {
+        let epoch = self.session.connection().connection_epoch();
+        let guard = crate::connection::EpochGuard {
+            expected: epoch,
+            invalidated: TargetError::DefaultProfileUnavailable(
+                "the browser connection changed while resolving the Default profile".into(),
+            ),
+        };
+        let mut catalog = self.read_catalog(&guard).await?;
+        let profile = default_profile(&catalog).cloned().ok_or_else(|| {
+            TargetError::DefaultProfileUnavailable(format!(
+                "no profile with directory \"{}\" exists",
+                crate::DEFAULT_PROFILE_DIRECTORY
+            ))
+        })?;
+        if load && (!profile.loaded || profile.browser_context_id.is_none()) {
+            // A concurrent capture may load it too; the native joins that load. Cancellation
+            // can leave the load running, which only leaves Default loaded for the next call.
+            crate::ProtocolSession::root(self.session.connection())
+                .with_epoch_guard(Some(guard.clone()))
+                .send_value(
+                    "Browser.loadProfile",
+                    json!({"browserProfileId": profile.browser_profile_id.as_str()}),
+                )
+                .await
+                .map_err(|err| {
+                    TargetError::DefaultProfileUnavailable(format!(
+                        "loading the Default profile failed: {err}"
+                    ))
+                })?;
+            catalog = self.read_catalog(&guard).await?;
+        }
+        // The effective binding uses this capture's live handle. Revision 0 never collides with
+        // a saved override, whose revisions start at 1; nothing writes it to the host store.
+        let binding = TargetBinding {
+            intent: TargetIntent {
+                browser_profile_id: profile.browser_profile_id,
+                directory: profile.directory,
+                name: profile.name,
+                window: None,
+            },
+            revision: 0,
+        };
+        self.scope_in_catalog(catalog, &binding, TargetSource::Default, guard)
+            .await
+    }
+    async fn scope_in_catalog(
+        &self,
+        catalog: Vec<BrowserProfileInfo>,
+        binding: &TargetBinding,
+        source: TargetSource,
+        guard: crate::connection::EpochGuard,
+    ) -> Result<CapturedScope, CoreError> {
+        let epoch = guard.expected;
+        let profile = catalog
             .into_iter()
             .find(|profile| {
                 profile.browser_profile_id == binding.intent.browser_profile_id
@@ -569,6 +757,7 @@ impl BrowserView {
             profile,
             placement_window,
             connection_epoch: epoch,
+            source,
         })
     }
     pub async fn status(&self, binding: &TargetBinding) -> TargetStatus {
@@ -602,7 +791,7 @@ impl BrowserView {
             }
             _ => Vec::new(),
         };
-        match self.capture_scope(binding).await {
+        match self.capture_scope(binding, TargetSource::Explicit).await {
             Ok(scope) => TargetStatus {
                 profile,
                 windows,
@@ -636,7 +825,7 @@ impl BrowserView {
                 profile.browser_profile_id == scope.profile.browser_profile_id
                     && profile.directory == scope.binding.intent.directory
             })
-            .ok_or_else(|| TargetError::ProfileGone(scope.profile.browser_profile_id.clone()))?;
+            .ok_or_else(|| scope.gone())?;
         // Catalog discovery is an async handoff. A restart invalidates the saved identity
         // even when its returned handle/directory happen to match an unloaded capture.
         self.check_epoch(scope)?;
@@ -649,7 +838,7 @@ impl BrowserView {
             let error = if !scope.profile.loaded && scope.context_id.is_none() {
                 TargetError::ProfileNotLoaded(scope.profile.browser_profile_id.clone())
             } else {
-                TargetError::ProfileGone(scope.profile.browser_profile_id.clone())
+                scope.gone()
             };
             return Err(error.into());
         }
@@ -679,7 +868,7 @@ impl BrowserView {
         if !self.session.is_connected()
             || self.session.connection().connection_epoch() != scope.connection_epoch
         {
-            return Err(TargetError::ProfileGone(scope.profile.browser_profile_id.clone()).into());
+            return Err(scope.gone().into());
         }
         Ok(())
     }
@@ -839,6 +1028,11 @@ impl BrowserView {
         url: &str,
         mut opts: NewPageOptions,
     ) -> Result<PageInfo, CoreError> {
+        // An explicit context asks createTab for profile routing, the same gated behavior the
+        // raw guard refuses; older natives would ignore it and open in the last-active window.
+        if opts.browser_context_id.is_some() {
+            self.require(NativeFeature::ProfileTargeting)?;
+        }
         let Some(scope) = self.scope()? else {
             if self.expected_created_page.is_some() {
                 return Err(cdp_policy::unsupported("Browser.createTab"));
@@ -849,9 +1043,6 @@ impl BrowserView {
             return Ok(fresh);
         };
         scope.context()?;
-        let window = opts.window_id.or(scope.placement_window).ok_or_else(|| {
-            TargetError::NoProfileWindow(scope.profile.browser_profile_id.clone())
-        })?;
         if opts
             .browser_context_id
             .as_ref()
@@ -862,6 +1053,15 @@ impl BrowserView {
             }
             .into());
         }
+        let window = match opts.window_id.or(scope.placement_window) {
+            Some(window) => window,
+            None if scope.source == TargetSource::Default => self.create_default_window().await?,
+            None => {
+                return Err(
+                    TargetError::NoProfileWindow(scope.profile.browser_profile_id.clone()).into(),
+                );
+            }
+        };
         self.validate_window(window).await?;
         if let Some(group) = &opts.tab_group_id {
             self.validate_group(group, Some(window)).await?;
@@ -904,6 +1104,28 @@ impl BrowserView {
                 .await?;
         }
         access.fresh().await
+    }
+    /// The default profile has no normal window yet: open one (normal and inactive, in the
+    /// captured Default context) instead of failing or using another profile's window. It goes
+    /// through the scoped root policy, which validates the reply against this capture, and is
+    /// reused by every later creation through the same admitted view. The caller then creates
+    /// its tab in it with createTab, so each page is identified by its own creation reply (the
+    /// window keeps the browser's initial tab). An explicit target without a window keeps
+    /// `no_profile_window` instead.
+    pub(super) async fn create_default_window(&self) -> Result<WindowId, CoreError> {
+        let mut opened = self.default_window.lock().await;
+        if let Some(window) = *opened
+            && self.validate_window(window).await.is_ok()
+        {
+            return Ok(window);
+        }
+        let created = Box::pin(self.scoped_root_cdp("Browser.createWindow", json!({}))).await?;
+        let window = created["window"]["windowId"]
+            .as_i64()
+            .map(WindowId)
+            .ok_or_else(|| cdp_policy::unsupported("Browser.createWindow"))?;
+        *opened = Some(window);
+        Ok(window)
     }
     pub async fn close_page(&self, page: PageId) -> Result<(), CoreError> {
         if self.epoch_guard()?.is_none() {
@@ -1012,6 +1234,9 @@ impl BrowserView {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CoreError> {
+        // Raw CDP passes the native gate before any routing. Only methods and (method,
+        // parameter) pairs a FEATURES row lists can be refused; internal calls never send them.
+        self.native().check_raw(method, &params)?;
         if self.scope()?.is_none() {
             if self.expected_created_page.is_some() {
                 // An unbound creation callback remains global in routing, but it cannot
@@ -1044,6 +1269,7 @@ impl BrowserView {
         method: &str,
         params_json: &str,
     ) -> Result<String, CoreError> {
+        self.native().check_raw_json(method, params_json)?;
         if self.epoch_guard()?.is_none() {
             return self
                 .session

@@ -21,12 +21,12 @@ mod targeting_tests;
 mod tests;
 
 pub use framework::{
-    BrowserToolDefaults, BrowserToolOptions, InnerCallHook, InnerCallRecord, OutputFileAccess,
-    StaticTargetStore, TargetStore, ToolCtx, ToolDef, ToolMetadata, ToolResult, catalog,
-    execute_tool, extract_page_id, result_page_id,
+    BrowserToolDefaults, BrowserToolOptions, FeatureNote, InnerCallHook, InnerCallRecord,
+    OutputFileAccess, StaticTargetStore, TargetStore, ToolCtx, ToolDef, ToolMetadata, ToolResult,
+    catalog, execute_tool, extract_page_id, result_page_id, unapplied_target_note,
 };
 pub use service::{
-    BROWSER_MCP_INSTRUCTIONS, BrowserMcpService, BrowserMcpServiceOptions, BrowserSessionProvider,
+    BrowserMcpService, BrowserMcpServiceOptions, BrowserSessionProvider,
     BrowserToolExecutedCallback, BrowserToolExecutionEvent, BrowserToolLifecycleCallback,
-    BrowserToolLifecycleEvent,
+    BrowserToolLifecycleEvent, browser_mcp_instructions,
 };

@@ -665,6 +665,14 @@ impl BrowserView {
             }
             "Browser.createTab" => {
                 self.inject_context(method, &mut params)?;
+                let scope = self.scope()?.ok_or_else(|| unsupported(method))?;
+                if params.get("windowId").is_none()
+                    && scope.placement_window.is_none()
+                    && scope.source == super::TargetSource::Default
+                {
+                    // Supply only the placement; every other argument the caller passed stays.
+                    params["windowId"] = json!(Box::pin(self.create_default_window()).await?.0);
+                }
                 admission
                     .windows
                     .push(self.placement(method, &mut params).await?);

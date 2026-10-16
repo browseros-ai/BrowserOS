@@ -107,7 +107,17 @@ impl JsonSchema for TargetOutput {
                         "action": { "type": "string", "const": "get" },
                         "bound": { "type": "boolean" },
                         "binding": binding(),
-                        "status": status()
+                        "status": status(),
+                        // Present only without a stored binding: the Default profile that
+                        // unselected calls use, as resolved by the reporting call itself.
+                        "default": {
+                            "type": "object",
+                            "properties": {
+                                "directory": { "type": "string" },
+                                "status": status()
+                            },
+                            "required": ["directory", "status"]
+                        }
                     },
                     "required": ["action", "bound"],
                     "dependentRequired": { "binding": ["status"], "status": ["binding"] }

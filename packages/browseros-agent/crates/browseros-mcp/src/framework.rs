@@ -1,7 +1,10 @@
 //! Tool registry and execution framework for BrowserOS MCP tools.
 
 use crate::{response::ToolResponse, tools};
-use browseros_core::{BrowserView, CoreError, PageId, TargetBinding, TargetIntent, WindowId};
+use browseros_core::{
+    BrowserView, CoreError, NativeCapabilities, NativeFeature, PageId, TargetBinding, TargetIntent,
+    WindowId,
+};
 use futures_util::future::BoxFuture;
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool, ToolAnnotations};
 use schemars::{JsonSchema, generate::SchemaSettings};
@@ -256,13 +259,47 @@ pub struct ToolDef {
     pub output_schema: Option<Arc<JsonObject>>,
     pub annotations: Option<ToolAnnotations>,
     pub metadata: ToolMetadata,
+    /// Documentation that only applies when the native browser has a feature. It is appended
+    /// to `description` for capable browsers and omitted otherwise, so an older browser's
+    /// tool list never teaches a surface it cannot use.
+    pub feature_note: Option<FeatureNote>,
     pub handler: ToolHandler,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureNote {
+    pub feature: NativeFeature,
+    pub text: &'static str,
+}
+
 impl ToolDef {
+    /// Whether discovery should offer this tool for the connected native. Hidden tools stay
+    /// in the catalog (stable `get_tool` schemas for cached clients); `execute_tool` refuses
+    /// them, so a list is a hint and the refusal is the authority.
     #[must_use]
-    pub fn to_mcp_tool(&self) -> Tool {
-        let mut tool = Tool::new(self.name, self.description, self.input_schema.clone());
+    pub fn available(&self, native: NativeCapabilities) -> bool {
+        self.metadata
+            .requires
+            .is_none_or(|feature| native.supports(feature))
+    }
+
+    #[must_use]
+    pub fn description_for(&self, native: NativeCapabilities) -> String {
+        match self.feature_note {
+            Some(note) if native.supports(note.feature) => {
+                format!("{}\n\n{}", self.description, note.text)
+            }
+            _ => self.description.to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn to_mcp_tool(&self, native: NativeCapabilities) -> Tool {
+        let mut tool = Tool::new(
+            self.name,
+            self.description_for(native),
+            self.input_schema.clone(),
+        );
         if let Some(output_schema) = &self.output_schema {
             tool = tool.with_raw_output_schema(output_schema.clone());
         }
@@ -281,6 +318,9 @@ pub struct ToolMetadata {
     pub accepts_page_arg: bool,
     /// Management can recover a stale binding and therefore bypasses view admission.
     pub manages_target: bool,
+    /// Native feature the whole tool needs. Unsupported natives do not list the tool, and
+    /// `execute_tool` refuses it before admission or its handler can send anything.
+    pub requires: Option<NativeFeature>,
 }
 
 #[derive(Debug, Clone)]
@@ -380,6 +420,13 @@ pub async fn execute_tool(
     ctx: &ToolCtx,
 ) -> ToolExecResult<ToolResult> {
     ctx.throw_if_cancelled()?;
+    // First, before admission or the handler: this is the authority for a hidden tool that a
+    // client still calls from a cached list, by name, or as run's `tool:*` primitive.
+    if let Some(feature) = def.metadata.requires
+        && let Err(err) = ctx.browser.require(feature)
+    {
+        return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));
+    }
     let primary_page = extract_page_id(def.metadata.accepts_page_arg, &raw_args).map(PageId);
     // Reject before invoking a handler or exposing page signals. Management is
     // intentionally admitted even when the captured profile or strict pin is gone.
@@ -442,6 +489,24 @@ pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> 
         .signals()
         .pending_dialog_line(&page)
         .map(ToolResult::error)
+}
+
+/// One line a host appends to an outer tool result while a saved profile target is not
+/// applied (see `BrowserView::capture`). It reports routing only; it never gates anything.
+#[must_use]
+pub fn unapplied_target_note(view: &BrowserView) -> Option<String> {
+    let binding = view.unapplied_binding()?;
+    let feature = NativeFeature::ProfileTargeting;
+    let reported = match view.native().browseros_version() {
+        Some(version) => format!("this browser reports BrowserOS {version}"),
+        None => "this browser's BrowserOS version is unknown".to_string(),
+    };
+    Some(format!(
+        "Note: saved profile target \"{}\" ({}) was not applied: {feature} needs BrowserOS {} or newer and {reported}. This call used browser-wide routing.",
+        binding.intent.name,
+        binding.intent.browser_profile_id,
+        feature.min_browseros(),
+    ))
 }
 
 #[must_use]

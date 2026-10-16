@@ -1,4 +1,5 @@
 pub mod browser;
+pub mod capabilities;
 pub mod connection;
 pub mod content_markdown;
 pub mod error;
@@ -18,17 +19,18 @@ pub mod types;
 pub mod windows;
 
 pub use browser::Browser;
+pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature};
 pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
 pub use page_signals::{ConsoleEntry, ConsoleLevel, PageDialog, PageSignals};
 pub use profiles::{
-    BrowserProfileInfo, LoadProfileOutcome, ProfileCandidate, ProfileMeta, ProfileSelector,
-    resolve_profile,
+    BrowserProfileInfo, DEFAULT_PROFILE_DIRECTORY, LoadProfileOutcome, ProfileCandidate,
+    ProfileMeta, ProfileSelector, default_profile, resolve_profile,
 };
 pub use session::{BrowserSession, BrowserSessionHooks};
 pub use target::{
     BrowserView, CapturedScope, PageAdmission, PageListing, TargetBinding, TargetIntent,
-    TargetStatus, WindowSelection,
+    TargetSource, TargetStatus, WindowSelection,
 };
 pub use types::{
     BrowserContextId, BrowserProfileId, FrameId, PageId, Ref, SessionId, TabId, TargetId, WindowId,

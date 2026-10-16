@@ -62,6 +62,11 @@ func writeDogfoodSidecarConfig(path string, cfg config.Config, resourcesDir stri
 		Flags: dogfoodSidecarFlags{
 			AllowRemoteInMCP: false,
 		},
+		// The server gates native features on this; only the launched app's release stamp
+		// counts, never the dogfood mode itself.
+		Instance: dogfoodSidecarInstance{
+			BrowserOSVersion: nativeBrowserOSVersion(cfg.BrowserOSAppPath),
+		},
 	}, "", "  ")
 	if err != nil {
 		return err

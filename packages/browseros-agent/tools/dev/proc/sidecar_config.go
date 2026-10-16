@@ -11,6 +11,9 @@ type SidecarConfigOptions struct {
 	Ports        Ports
 	ResourcesDir string
 	ExecutionDir string
+	// BrowserBinary is the browser the server will drive, when the launcher knows it. Its
+	// release bundle stamp becomes instance.browseros_version; see NativeBrowserOSVersion.
+	BrowserBinary string
 }
 
 type sidecarConfigFile struct {
@@ -65,6 +68,9 @@ func WriteSidecarConfig(path string, opts SidecarConfigOptions) error {
 		},
 		Flags: sidecarFlags{
 			AllowRemoteInMCP: false,
+		},
+		Instance: sidecarInstance{
+			BrowserOSVersion: NativeBrowserOSVersion(opts.BrowserBinary),
 		},
 	}, "", "  ")
 	if err != nil {

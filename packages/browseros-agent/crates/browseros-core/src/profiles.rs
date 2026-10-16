@@ -79,3 +79,18 @@ pub fn resolve_profile(
         }),
     }
 }
+
+/// Directory of the browser's original profile. The native catalog reports each profile's
+/// directory as its path base name, which survives renames; display names can be renamed or
+/// duplicated (another profile may be named "Default") and never select the default.
+pub const DEFAULT_PROFILE_DIRECTORY: &str = "Default";
+
+/// The profile a task uses when it has no explicit browser target: for now the original
+/// Chromium profile. This is the one place the default is chosen, so a later user setting
+/// replaces this rule rather than its callers. List order, last-used and focus never count.
+#[must_use]
+pub fn default_profile(profiles: &[BrowserProfileInfo]) -> Option<&BrowserProfileInfo> {
+    profiles
+        .iter()
+        .find(|profile| profile.directory == DEFAULT_PROFILE_DIRECTORY)
+}

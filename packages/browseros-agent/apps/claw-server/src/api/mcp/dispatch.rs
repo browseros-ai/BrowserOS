@@ -274,6 +274,11 @@ const EFFECTS: &[NamedToolEffect] = &[
         run: effects::page_ownership_notice::apply,
     },
     NamedToolEffect {
+        // Also an appended label: a saved profile target the native could not apply.
+        name: "scope-notice",
+        run: effects::scope_notice::apply,
+    },
+    NamedToolEffect {
         name: "helper-discovery",
         run: helper_runtime::discovery,
     },
@@ -705,12 +710,10 @@ mod tests {
             api::mcp::test_support::{ProfileConnection, tool_call},
             services::sessions::{ScopedGroupKey, TabGroup},
         };
-        use browseros_core::{
-            BrowserSessionHooks, WindowId, pages::NewPageOptions, target::BrowserView,
-        };
+        use browseros_core::{WindowId, pages::NewPageOptions, target::BrowserView};
         use std::{sync::atomic::Ordering, task::Poll};
         let native = ProfileConnection::new();
-        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -851,12 +854,10 @@ mod tests {
             api::mcp::test_support::{ProfileConnection, tool_call},
             services::sessions::{ScopedGroupKey, TabGroup},
         };
-        use browseros_core::{
-            BrowserSessionHooks, WindowId, pages::NewPageOptions, target::BrowserView,
-        };
+        use browseros_core::{WindowId, pages::NewPageOptions, target::BrowserView};
         use std::sync::atomic::Ordering;
         let native = ProfileConnection::new();
-        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -956,9 +957,9 @@ mod tests {
         Arc<crate::api::mcp::test_support::ProfileConnection>,
     )> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
-        use browseros_core::{BrowserSessionHooks, target::BrowserView};
+        use browseros_core::target::BrowserView;
         let native = ProfileConnection::new();
-        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = if script {
             tool_call(
@@ -1149,10 +1150,10 @@ mod tests {
         action: &str,
     ) -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
-        use browseros_core::{BrowserSessionHooks, pages::NewPageOptions, target::BrowserView};
+        use browseros_core::{pages::NewPageOptions, target::BrowserView};
         use std::{sync::atomic::Ordering, task::Poll};
         let native = ProfileConnection::new();
-        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"new"})).await?;
         call.browser_session = Some(browser.clone());
@@ -1261,10 +1262,7 @@ mod tests {
     async fn stale_binding_blocks_execution_while_management_recovers() -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(
-            transport.clone(),
-            browseros_core::BrowserSessionHooks::default(),
-        );
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"list"})).await?;
         let binding = call
@@ -1338,14 +1336,172 @@ mod tests {
         Ok(())
     }
 
+    /// A binding saved on a newer browser meets an older native. The call runs with unbound
+    /// routing, the outer result says so exactly once, and the saved intent stays put. A client
+    /// still holding a list with the hidden profile tools is refused without profile CDP.
+    #[tokio::test]
+    async fn older_native_runs_saved_binding_unbound_and_refuses_hidden_tools() -> anyhow::Result<()>
+    {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new();
+        let older = BrowserSession::new_with_native(
+            transport.clone(),
+            browseros_core::BrowserSessionHooks::default(),
+            browseros_core::NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+        );
+        older.pages.list().await?;
+        let mut call = tool_call("tabs", json!({"action":"list"})).await?;
+        let binding = call
+            .state
+            .targets
+            .set(
+                &call.session_id,
+                ProfileConnection::binding("eng", 1, 1).intent,
+            )
+            .await?;
+        call.browser_session = Some(older.clone());
+        call.view = Some(BrowserView::capture(older.clone(), Some(binding.clone()), None).await);
+        let profile_reads = || {
+            transport
+                .calls
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .iter()
+                .filter(|(method, _)| method.starts_with("Browser.") && method.contains("Profile"))
+                .count()
+        };
+
+        let state = call.state.clone();
+        let session_id = call.session_id.clone();
+        let listed = dispatch_tool_call(call).await?;
+        assert_ne!(listed.is_error, Some(true), "{listed:?}");
+        let notes = listed
+            .content
+            .iter()
+            .filter_map(|content| content.as_text())
+            .filter(|content| content.text.contains("was not applied"))
+            .count();
+        assert_eq!(notes, 1, "{listed:?}");
+        // Unbound routing: the "ops" profile's tab is listed next to eng's.
+        let text = listed
+            .content
+            .iter()
+            .filter_map(|content| content.as_text())
+            .map(|content| content.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        for tab in ["Tab 101", "Tab 102", "Tab 103"] {
+            assert!(text.contains(tab), "{tab} missing from {text}");
+        }
+        assert_eq!(state.targets.get(&session_id).await, Some(binding));
+
+        let mut cached = tool_call("browser_profiles", json!({})).await?;
+        cached.browser_session = Some(older.clone());
+        cached.view = Some(BrowserView::capture(older, None, None).await);
+        let refused = dispatch_tool_call(cached).await?;
+        assert_eq!(refused.is_error, Some(true));
+        assert!(
+            refused
+                .content
+                .iter()
+                .filter_map(|content| content.as_text())
+                .any(|content| content
+                    .text
+                    .contains("native_feature_unavailable: profile targeting")),
+            "{refused:?}"
+        );
+        assert_eq!(profile_reads(), 0);
+        Ok(())
+    }
+
+    /// With no saved selection a capable native's call runs in the original Default profile,
+    /// not the focused window. A selection made after admission does not move the admitted
+    /// run or its detached grouping, and the default itself is never saved for the task.
+    #[tokio::test]
+    async fn unselected_run_uses_the_default_profile_and_keeps_it_after_rebind()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        let transport = ProfileConnection::new().with_default_profile();
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
+        browser.pages.list().await?;
+        let mut call = tool_call(
+            "run",
+            json!({"code":"return await browser.pages.newPage('https://synthetic.test/default');"}),
+        )
+        .await?;
+        call.browser_session = Some(browser.clone());
+        call.view = Some(BrowserView::capture(browser.clone(), None, None).await);
+        assert_eq!(call.state.targets.get(&call.session_id).await, None);
+        call.state
+            .targets
+            .set(
+                &call.session_id,
+                ProfileConnection::binding("ops", 1, 2).intent,
+            )
+            .await?;
+        let group_created = transport.group_created.notified();
+        let DispatchExecution::Completed(outcome) = execute_with_cancellation(&call).await else {
+            anyhow::bail!("unexpected cancellation")
+        };
+        assert!(
+            !outcome.result.is_error,
+            "{:?}",
+            dispatch_error_text(&outcome.result)
+        );
+        tokio::time::timeout(std::time::Duration::from_secs(2), group_created).await?;
+        let identity = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+        let ownership = call.state.sessions.ownership();
+        let lock = ownership
+            .group_operation_lock(&identity.ownership_key)
+            .await;
+        let _guard = lock.lock().await;
+        let tab = transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|tab| tab["url"] == "https://synthetic.test/default")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("created tab missing"))?;
+        assert_eq!(tab["windowId"], 4);
+        assert_eq!(tab["browserProfileId"], "default");
+        assert!(tab.get("groupId").is_some());
+        assert!(
+            ownership
+                .groups(&identity.ownership_key)
+                .await
+                .iter()
+                .all(|group| group.window_id == Some(browseros_core::WindowId(4)))
+        );
+        let creation = transport
+            .calls
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .iter()
+            .find(|(method, _)| method == "Browser.createTab")
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("createTab missing"))?;
+        assert_eq!(creation.1["browserContextId"], "ctx-default");
+        // Only the explicit selection made after admission is stored; the default never was.
+        assert_eq!(
+            call.state
+                .targets
+                .get(&call.session_id)
+                .await
+                .map(|binding| binding.intent.browser_profile_id.0),
+            Some("ops".to_string())
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn run_creation_and_hook_keep_admitted_view_after_rebind() -> anyhow::Result<()> {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let browser = BrowserSession::new(
-            transport.clone(),
-            browseros_core::BrowserSessionHooks::default(),
-        );
+        let browser = crate::api::mcp::test_support::current_session(transport.clone());
         browser.pages.list().await?;
         let mut call = tool_call(
             "run",
@@ -1976,6 +2132,7 @@ mod tests {
                 "tab-groups",
                 "session-naming",
                 "page-ownership-notice",
+                "scope-notice",
                 "helper-discovery",
             ]
         );

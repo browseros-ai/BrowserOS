@@ -1,4 +1,8 @@
-use crate::{BrowserProfileId, PageId, Ref, WindowId, profiles::ProfileCandidate};
+use crate::{
+    BrowserProfileId, PageId, Ref, WindowId,
+    capabilities::{BrowserOsVersion, NativeFeature},
+    profiles::ProfileCandidate,
+};
 use browseros_cdp::CdpError;
 use std::fmt;
 
@@ -57,6 +61,19 @@ pub enum CoreError {
         target: CoveredElementTarget,
         blocker: String,
     },
+    /// A gated native operation was refused before it was sent. See `crate::capabilities`.
+    #[error(
+        "native_feature_unavailable: {feature} needs BrowserOS {required} or newer; {}. The operation was not sent to the browser.",
+        match reported {
+            Some(version) => format!("this browser reports BrowserOS {version}"),
+            None => "this browser's BrowserOS version is unknown".to_string(),
+        }
+    )]
+    NativeFeatureUnavailable {
+        feature: NativeFeature,
+        required: BrowserOsVersion,
+        reported: Option<BrowserOsVersion>,
+    },
     #[error(transparent)]
     Cdp(#[from] CdpError),
     #[error(transparent)]
@@ -80,6 +97,10 @@ pub enum TargetError {
     },
     #[error("profile_gone: {0}; reselect or clear the target")]
     ProfileGone(BrowserProfileId),
+    /// No explicit target and the original Default profile cannot be used for this call.
+    /// Nothing falls back to another profile; selecting one explicitly recovers.
+    #[error("default_profile_unavailable: {0}; select a profile with browser_target set, or retry")]
+    DefaultProfileUnavailable(String),
     #[error("profile_not_loaded: {0}; use browser_profiles load")]
     ProfileNotLoaded(BrowserProfileId),
     #[error("profile_load_failed: {0}")]

@@ -2,7 +2,7 @@ use super::TabRegistry;
 use crate::services::sessions::PageOwnership;
 use browseros_cdp::{CdpClient, ConnectOptions, ReconnectPolicy};
 use browseros_core::{
-    BrowserSession, BrowserSessionHooks,
+    BrowserSession, BrowserSessionHooks, NativeCapabilities,
     pages::{OnPageDetached, PageManagerHooks},
 };
 use serde::Serialize;
@@ -40,6 +40,9 @@ pub struct BrowserLinkStatus {
 
 pub struct BrowserService {
     cdp_port: u16,
+    /// Launch-config identity of the browser on `cdp_port`, copied into every session this
+    /// service creates (one per CDP epoch) so views and discovery share one gate decision.
+    native: NativeCapabilities,
     ownership: Arc<PageOwnership>,
     state_tx: watch::Sender<BrowserConnectionState>,
     initial_attempt_tx: watch::Sender<bool>,
@@ -57,6 +60,7 @@ impl BrowserService {
         cdp_port: u16,
         ownership: Arc<PageOwnership>,
         tab_registry: Arc<TabRegistry>,
+        native: NativeCapabilities,
     ) -> Arc<Self> {
         let (state_tx, _) = watch::channel(BrowserConnectionState {
             connected: false,
@@ -66,6 +70,7 @@ impl BrowserService {
         let (initial_attempt_tx, _) = watch::channel(false);
         Arc::new(Self {
             cdp_port,
+            native,
             ownership,
             state_tx,
             initial_attempt_tx,
@@ -179,7 +184,7 @@ impl BrowserService {
                 ownership.remove_page(&page_id).await;
             });
         });
-        let session = BrowserSession::new(
+        let session = BrowserSession::new_with_native(
             Arc::new(client),
             BrowserSessionHooks {
                 page_manager: PageManagerHooks {
@@ -187,6 +192,7 @@ impl BrowserService {
                     ..PageManagerHooks::default()
                 },
             },
+            self.native,
         );
         if let Err(error) = self
             .tab_registry
@@ -434,7 +440,12 @@ mod tests {
             Duration::from_secs(60),
         );
         Ok((
-            BrowserService::new(0, sessions.ownership(), TabRegistry::new(session_tabs)),
+            BrowserService::new(
+                0,
+                sessions.ownership(),
+                TabRegistry::new(session_tabs),
+                NativeCapabilities::default(),
+            ),
             root,
         ))
     }

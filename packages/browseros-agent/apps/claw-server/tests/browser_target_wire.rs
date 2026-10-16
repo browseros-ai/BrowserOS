@@ -3,7 +3,9 @@
 //! through the real router, task store, tool dispatch, effects, and wire envelope.
 
 use browseros_cdp::{CdpError, CdpEvent};
-use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, SessionId};
+use browseros_core::{
+    BrowserSession, BrowserSessionHooks, CdpConnection, NativeCapabilities, SessionId,
+};
 use claw_server::{AppState, build_router, config::Config};
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -13,6 +15,11 @@ use std::{
 };
 use tempfile::TempDir;
 use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
+
+/// The first native release with profile targeting, which this wire test models.
+fn current_native() -> NativeCapabilities {
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
+}
 
 struct NativeProfiles {
     profiles: Mutex<Vec<Value>>,
@@ -27,7 +34,9 @@ impl NativeProfiles {
                 loaded_engineering_profile(),
                 json!({"browserProfileId":"native-ops", "name":"Operations",
                     "directory":"Synthetic-Ops", "loaded":false}),
+                original_profile(),
             ]),
+            // Engineering's window is the focused one; the original profile has its own.
             windows: Mutex::new(
                 [11, 12]
                     .into_iter()
@@ -36,11 +45,20 @@ impl NativeProfiles {
                         "isActive":id == 11, "isVisible":true, "tabCount":0,
                         "browserProfileId":"native-eng", "liveBrowserContextId":"ctx-eng"})
                     })
+                    .chain([json!({"windowId":21, "windowType":"normal", "bounds":{},
+                        "isActive":false, "isVisible":true, "tabCount":0,
+                        "browserProfileId":"native-default", "liveBrowserContextId":"ctx-default"})])
                     .collect(),
             ),
             events: broadcast::channel(8).0,
         })
     }
+}
+
+/// The browser's original profile: directory "Default", renamed by the user.
+fn original_profile() -> Value {
+    json!({"browserProfileId":"native-default", "name":"Personal",
+        "directory":"Default", "loaded":true, "browserContextId":"ctx-default"})
 }
 
 fn loaded_engineering_profile() -> Value {
@@ -165,14 +183,19 @@ impl HttpPeer {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
+            native: claw_server::config::NativeIdentity {
+                capabilities: current_native(),
+                asserted: false,
+            },
         });
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
         let native = NativeProfiles::new();
         state
             .browser
-            .set_session_for_testing(BrowserSession::new(
+            .set_session_for_testing(BrowserSession::new_with_native(
                 native.clone(),
                 BrowserSessionHooks::default(),
+                current_native(),
             ))
             .await;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -267,10 +290,11 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
         .call("browser_target", json!({"action":"get"}), None)
         .await?;
     let handle = task_handle(&unbound)?;
-    assert_eq!(
-        structured(&unbound)?,
-        &json!({"action":"get", "bound":false})
-    );
+    // No stored selection: the call reports the original Default profile it uses, not the
+    // focused Engineering window and not browser-wide routing.
+    let default_target = json!({"action":"get", "bound":false, "default":{"directory":"Default",
+        "status":{"profile":original_profile(), "windows":[21], "placementWindowId":21, "error":null}}});
+    assert_eq!(structured(&unbound)?, &default_target);
     peer.call(
         "browser_target",
         json!({"action":"set", "browserProfileId":"native-eng"}),
@@ -342,6 +366,14 @@ async fn browser_target_http_roundtrip_preserves_window_revision_and_native_stat
             .as_str()
             .is_some_and(|error| error.contains("pinned_window_closed"))
     );
+
+    // Clearing the stored override returns the task to Default; nothing new is stored.
+    peer.call("browser_target", json!({"action":"clear"}), Some(handle))
+        .await?;
+    let cleared = peer
+        .call("browser_target", json!({"action":"get"}), Some(handle))
+        .await?;
+    assert_eq!(structured(&cleared)?, &default_target);
     Ok(())
 }
 
@@ -357,7 +389,8 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
     assert_eq!(
         listed,
         &json!({"action":"list", "profiles":[loaded_engineering_profile(),
-        {"browserProfileId":"native-ops", "name":"Operations", "directory":"Synthetic-Ops", "loaded":false}]})
+        {"browserProfileId":"native-ops", "name":"Operations", "directory":"Synthetic-Ops", "loaded":false},
+        original_profile()]})
     );
     peer.call(
         "browser_target",

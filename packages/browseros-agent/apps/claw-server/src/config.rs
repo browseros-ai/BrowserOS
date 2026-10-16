@@ -1,3 +1,4 @@
+use browseros_core::NativeCapabilities;
 use clap::Parser;
 use serde::Deserialize;
 use std::{
@@ -16,6 +17,9 @@ const DEFAULT_SESSION_RETENTION_MS: u64 = 60 * 60 * 1000;
 const DEFAULT_SESSION_SWEEP_INTERVAL_MS: u64 = 60 * 1000;
 const DEFAULT_REPLAY_RETENTION_DAYS: u64 = 7;
 const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
+/// Developer assertion of the native BrowserOS version for builds whose launch config does
+/// not carry a usable one (dev/dogfood sidecars, stale local stamps). Logged at startup.
+pub const NATIVE_VERSION_ENV: &str = "CLAW_NATIVE_BROWSEROS_VERSION";
 const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 
 #[derive(Debug, Parser)]
@@ -65,6 +69,23 @@ pub struct Config {
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
     pub dev_mode: bool,
+    /// Read once per process. Every discovery and execution path gates native features on
+    /// this one value, which `BrowserService` copies into each browser session.
+    pub native: NativeIdentity,
+}
+
+/// The connected browser's native identity as this process learned it.
+///
+/// The browser that launches claw-server writes its compiled-in BrowserOS version into the
+/// launch config (`instance.browseros_version`), separately from whichever OTA server build
+/// it starts, and normally keeps this server as its child; a different browser comes with a
+/// relaunched server and its own config. Dev and dogfood launchers write the config
+/// themselves, so their value is only as good as the launcher's knowledge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct NativeIdentity {
+    pub capabilities: NativeCapabilities,
+    /// True when [`NATIVE_VERSION_ENV`] supplied the version instead of the launch config.
+    pub asserted: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -105,6 +126,10 @@ struct SidecarConfig {
     flags: SidecarFlags,
     #[serde(default)]
     replay: Option<SidecarReplay>,
+    /// Untyped on purpose: a missing, malformed or wrong-typed identity must leave the
+    /// native unknown (gated features hidden), never fail startup and with it all browsing.
+    #[serde(default)]
+    instance: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -170,6 +195,7 @@ impl Config {
             .unwrap_or_else(|| cwd.join("resources"));
         let dev_mode = sidecar.flags.dev_mode.unwrap_or(default_dev_mode);
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
+        let native = resolve_native_identity(env, sidecar.instance.as_ref());
 
         Ok(Self {
             server_port,
@@ -197,6 +223,7 @@ impl Config {
                 .map(|replay| replay.retention_days.get())
                 .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS),
             dev_mode,
+            native,
         })
     }
 
@@ -225,6 +252,27 @@ impl Config {
 /// Selects Claw dev mode from the Rust build profile when config does not override it.
 fn dev_mode_fallback() -> bool {
     cfg!(debug_assertions)
+}
+
+/// Dev mode never implies native support: only a reported or explicitly asserted version
+/// counts.
+fn resolve_native_identity(
+    env: &ConfigEnv,
+    instance: Option<&serde_json::Value>,
+) -> NativeIdentity {
+    if let Some(asserted) = env.get(NATIVE_VERSION_ENV).and_then(clean_string) {
+        return NativeIdentity {
+            capabilities: NativeCapabilities::from_browseros_version(Some(&asserted)),
+            asserted: true,
+        };
+    }
+    let reported = instance
+        .and_then(|instance| instance.get("browseros_version"))
+        .and_then(serde_json::Value::as_str);
+    NativeIdentity {
+        capabilities: NativeCapabilities::from_browseros_version(reported),
+        asserted: false,
+    }
 }
 
 fn resolve_path(cwd: &Path, path: PathBuf) -> PathBuf {
@@ -288,7 +336,8 @@ mod tests {
         assert!(!super::PursueOffering::Absent.is_offered());
     }
 
-    use super::{Cli, CliAction, Config, ConfigEnv};
+    use super::{Cli, CliAction, Config, ConfigEnv, NATIVE_VERSION_ENV};
+    use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
     use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
     use tempfile::tempdir;
@@ -528,6 +577,93 @@ mod tests {
         assert_eq!(cfg.public_mcp_url(), "http://127.0.0.1:9444/mcp");
         // Proxy configured: the source of truth is the proxy port.
         assert_eq!(cfg.public_base_url(), "http://127.0.0.1:9444");
+        Ok(())
+    }
+
+    fn load_native(sidecar: &str, vars: &[(&str, &str)]) -> anyhow::Result<Config> {
+        let dir = tempdir()?;
+        let config_path = dir.path().join("sidecar.json");
+        fs::write(&config_path, sidecar)?;
+        let vars = vars
+            .iter()
+            .map(|(key, value)| ((*key).to_string(), (*value).to_string()))
+            .collect();
+        Config::load_with_env(
+            &config_path,
+            &ConfigEnv::with_vars(vars, dir.path().join("home")),
+        )
+    }
+
+    #[test]
+    fn reads_the_browser_written_native_version() -> anyhow::Result<()> {
+        // Shape written by the native BuildServerConfigJson.
+        let cfg = load_native(
+            r#"{"ports":{"cdp":9000,"server":9100,"proxy":9100},"flags":{"allow_remote_in_mcp":false},
+                "instance":{"install_id":"i","browseros_version":"0.51.1.3","chromium_version":"155.0.8311.26"}}"#,
+            &[],
+        )?;
+        assert_eq!(
+            cfg.native.capabilities.browseros_version(),
+            Some(BrowserOsVersion::new(0, 51, 1, 3))
+        );
+        assert!(
+            cfg.native
+                .capabilities
+                .supports(NativeFeature::ProfileTargeting)
+        );
+        assert!(!cfg.native.asserted);
+        let older = load_native(r#"{"instance":{"browseros_version":"0.51.1.2"}}"#, &[])?;
+        assert!(
+            !older
+                .native
+                .capabilities
+                .supports(NativeFeature::ProfileTargeting)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn missing_blank_or_wrong_typed_instance_is_unknown_and_still_starts() -> anyhow::Result<()> {
+        for sidecar in [
+            r#"{}"#,
+            r#"{"instance":{"browseros_version":"","chromium_version":""}}"#,
+            r#"{"instance":{"browseros_version":51}}"#,
+            r#"{"instance":"0.51.1.3"}"#,
+            r#"{"instance":null}"#,
+            r#"{"instance":{"browseros_version":"not-a-version"}}"#,
+        ] {
+            let cfg = load_native(sidecar, &[])?;
+            assert_eq!(
+                cfg.native.capabilities.browseros_version(),
+                None,
+                "{sidecar}"
+            );
+            assert!(!cfg.native.asserted);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn developer_assertion_overrides_and_is_marked() -> anyhow::Result<()> {
+        let cfg = load_native(
+            r#"{"instance":{"browseros_version":""}}"#,
+            &[(NATIVE_VERSION_ENV, "0.51.1.3")],
+        )?;
+        assert!(
+            cfg.native
+                .capabilities
+                .supports(NativeFeature::ProfileTargeting)
+        );
+        assert!(cfg.native.asserted);
+        let blank = load_native(
+            r#"{"instance":{"browseros_version":"0.51.1.2"}}"#,
+            &[(NATIVE_VERSION_ENV, "  ")],
+        )?;
+        assert!(!blank.native.asserted);
+        assert_eq!(
+            blank.native.capabilities.browseros_version(),
+            Some(BrowserOsVersion::new(0, 51, 1, 2))
+        );
         Ok(())
     }
 }

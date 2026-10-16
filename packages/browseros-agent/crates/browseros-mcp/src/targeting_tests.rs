@@ -8,8 +8,9 @@ use crate::{
 };
 use browseros_cdp::{CdpError, CdpEvent};
 use browseros_core::{
-    BrowserProfileId, BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, SessionId,
-    TargetBinding, TargetIntent, WindowId, WindowSelection, pages::NewPageOptions,
+    BrowserProfileId, BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection,
+    NativeCapabilities, SessionId, TargetBinding, TargetIntent, WindowId, WindowSelection,
+    pages::NewPageOptions,
 };
 use futures_util::future::BoxFuture;
 use serde_json::{Value, json};
@@ -114,6 +115,19 @@ impl FixtureConnection {
         })
     }
 
+    /// Adds the browser's original profile (directory "Default", renamed "Work") with one
+    /// normal window, as a capable native has. Fixtures without it model a deleted Default.
+    fn with_default_profile(self: Arc<Self>) -> Arc<Self> {
+        self.change(|state| {
+            let mut original = profile("original", "Work", true);
+            original["directory"] = json!("Default");
+            state.profiles.push(original);
+            state.windows.push(window(50, "original", "normal", false));
+            state.tabs.push(tab(501, 50, "original"));
+        });
+        self
+    }
+
     fn change(&self, change: impl FnOnce(&mut NativeFixture)) {
         change(
             &mut self
@@ -208,6 +222,18 @@ impl FixtureConnection {
                     .unwrap_or(0);
                 let created = window(id, profile, "normal", false);
                 state.windows.push(created.clone());
+                // Like the native, a window created with a URL opens it as its first tab.
+                if let Some(url) = params["url"].as_str() {
+                    let tab_id = 1 + state
+                        .tabs
+                        .iter()
+                        .filter_map(|tab| tab["tabId"].as_i64())
+                        .max()
+                        .unwrap_or(0);
+                    let mut first = tab(tab_id, id, profile);
+                    first["url"] = json!(url);
+                    state.tabs.push(first);
+                }
                 Ok(json!({ "window": created }))
             }
             "Browser.createTab" => {
@@ -487,8 +513,12 @@ fn data(result: ToolResult) -> anyhow::Result<Value> {
 
 #[tokio::test]
 async fn target_output_schema_preserves_full_readback_through_content_gate() -> anyhow::Result<()> {
-    let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let connection = FixtureConnection::new().with_default_profile();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let mut options = super::tests::service_options(session);
     // Hosts suppress legacy structured responses on the wire. Declared output
     // schemas are the existing exception that must retain management readbacks.
@@ -499,9 +529,17 @@ async fn target_output_schema_preserves_full_readback_through_content_gate() -> 
     };
     let get = call("browser_target", json!({})).await?;
     assert_eq!(get.is_error, Some(false));
+    // No stored selection: the readback names the original Default profile in use.
     assert_eq!(
         get.structured_content,
-        Some(json!({ "action": "get", "bound": false }))
+        Some(json!({ "action": "get", "bound": false, "default": {
+            "directory": "Default",
+            "status": {
+                "profile": { "browserProfileId": "original", "name": "Work", "directory": "Default",
+                    "loaded": true, "browserContextId": "context-original" },
+                "windows": [50], "placementWindowId": 50, "error": null
+            }
+        }}))
     );
 
     let initial =
@@ -567,7 +605,11 @@ async fn target_output_schema_preserves_full_readback_through_content_gate() -> 
 #[tokio::test]
 async fn profiles_output_schema_preserves_descriptors_and_load_outcomes() -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let mut options = super::tests::service_options(session);
     options.include_structured_content = Some(false);
     let service = BrowserMcpService::new(options);
@@ -629,7 +671,11 @@ async fn profiles_output_schema_preserves_descriptors_and_load_outcomes() -> any
 async fn standalone_selection_load_and_window_creation_are_separate_and_persist()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let service = BrowserMcpService::new(super::tests::service_options(session));
     let call = |name: &'static str, args: Value| {
         service.call_tool_for_testing(name, args, CancellationToken::new())
@@ -730,7 +776,11 @@ async fn standalone_selection_load_and_window_creation_are_separate_and_persist(
 async fn granular_and_script_paths_project_normal_windows_after_global_reconciliation()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let global = session.pages.list().await?;
     let store = Arc::new(StaticTargetStore::new());
     store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
@@ -805,7 +855,11 @@ impl InnerCallHook for RebindHook {
 async fn direct_tool_and_root_page_raw_calls_share_capture_across_rebinding() -> anyhow::Result<()>
 {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
     let mut captured = ctx(session.clone(), store.clone()).await?;
@@ -856,7 +910,11 @@ async fn direct_tool_and_root_page_raw_calls_share_capture_across_rebinding() ->
 async fn mutating_target_actions_in_run_reject_before_store_or_native_changes() -> anyhow::Result<()>
 {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
     let captured = ctx(session, store.clone()).await?;
@@ -903,7 +961,11 @@ async fn mutating_target_actions_in_run_reject_before_store_or_native_changes() 
 async fn missing_ambiguous_and_invalid_selectors_preserve_binding_without_creation()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     let before = store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
     let captured = ctx(session, store.clone()).await?;
@@ -935,7 +997,11 @@ async fn missing_ambiguous_and_invalid_selectors_preserve_binding_without_creati
 async fn management_recovers_closed_pin_and_deleted_profile_without_admitting_old_view()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     let unbound = ctx(session.clone(), store.clone()).await?;
     data(
@@ -992,7 +1058,11 @@ async fn management_recovers_closed_pin_and_deleted_profile_without_admitting_ol
 async fn bound_raw_policy_and_explicit_window_group_conflicts_fail_before_dispatch()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let pages = session.pages.list().await?;
     let page = pages
         .iter()
@@ -1045,9 +1115,29 @@ async fn bound_raw_policy_and_explicit_window_group_conflicts_fail_before_dispat
                 || (call.method == "Target.attachToTarget"
                     && call.params["targetId"] == "forbidden"))
     );
+    // Clearing the override returns later calls to the original Default profile, which keeps
+    // the same scoped raw policy instead of opening browser-wide passthrough.
+    connection.clone().with_default_profile();
     store.clear().await.map_err(anyhow::Error::msg)?;
-    let unbound = ctx(session, store).await?;
-    data(call(&unbound, "run", json!({ "code": "return await browser.cdp('Target.attachToTarget', { targetId: 'forbidden' });" })).await?)?;
+    let defaulted = ctx(session.clone(), store).await?;
+    let refused = call(&defaulted, "run", json!({ "code": "return await browser.cdp('Target.attachToTarget', { targetId: 'forbidden' });" })).await?;
+    assert!(
+        refused.is_error && text(&refused).contains("target_scope_unsupported"),
+        "{}",
+        text(&refused)
+    );
+    assert!(!connection.calls().iter().any(
+        |call| call.method == "Target.attachToTarget" && call.params["targetId"] == "forbidden"
+    ));
+    // Global passthrough remains available to host infrastructure through an unbound view.
+    let global = BrowserView::unbound(session, None);
+    global
+        .cdp(
+            "Target.attachToTarget",
+            json!({ "targetId": "forbidden" }),
+            None,
+        )
+        .await?;
     assert!(connection.calls().iter().any(
         |call| call.method == "Target.attachToTarget" && call.params["targetId"] == "forbidden"
     ));
@@ -1061,7 +1151,11 @@ async fn bound_raw_policy_and_explicit_window_group_conflicts_fail_before_dispat
 async fn bound_viewport_screenshot_measures_and_captures_only_through_guarded_page()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let pages = session.pages.list().await?;
     let page_for_tab = |tab: i64| {
         pages
@@ -1151,7 +1245,11 @@ async fn bound_viewport_screenshot_measures_and_captures_only_through_guarded_pa
 async fn script_creation_default_group_does_not_restrict_explicit_working_window()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     let mut selected = intent("eng");
     selected.window = Some(WindowSelection::Working {
@@ -1222,7 +1320,11 @@ async fn script_creation_default_group_does_not_restrict_explicit_working_window
 #[tokio::test]
 async fn granular_creation_default_group_checks_its_actual_window() -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
     let mut captured = ctx(session, store).await?;
@@ -1307,7 +1409,11 @@ async fn granular_creation_default_group_checks_its_actual_window() -> anyhow::R
 async fn downloads_adapter_evaluates_only_captured_extension_workers_and_detaches()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
     let captured = ctx(session, store).await?;
@@ -1358,7 +1464,11 @@ async fn static_store_serializes_revisions_and_clear_does_not_reuse_them() -> an
 #[tokio::test]
 async fn stale_response_readback_does_not_expose_global_dialog_text() -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let page = session
         .pages
         .list()
@@ -1417,7 +1527,11 @@ async fn stale_response_readback_does_not_expose_global_dialog_text() -> anyhow:
 async fn loading_inside_run_is_allowed_but_does_not_refresh_its_captured_context()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     store
         .set(intent("closed"))
@@ -1479,7 +1593,11 @@ impl InnerCallHook for ClosePinHook {
 async fn closing_a_strict_pin_during_run_never_uses_another_same_profile_window()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
     let store = Arc::new(StaticTargetStore::new());
     let unbound = ctx(session.clone(), store.clone()).await?;
     data(
@@ -1514,6 +1632,616 @@ async fn closing_a_strict_pin_during_run_never_uses_another_same_profile_window(
             .map_err(anyhow::Error::msg)?
             .map(|binding| binding.revision),
         Some(1)
+    );
+    Ok(())
+}
+
+fn older_native() -> NativeCapabilities {
+    NativeCapabilities::from_browseros_version(Some("0.51.1.2"))
+}
+
+fn profile_operations(connection: &FixtureConnection) -> Vec<String> {
+    connection
+        .calls()
+        .into_iter()
+        .map(|call| call.method)
+        .filter(|method| {
+            matches!(
+                method.as_str(),
+                "Browser.getProfiles" | "Browser.loadProfile"
+            )
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn older_native_refuses_profile_tools_and_run_primitives_before_sending() -> anyhow::Result<()>
+{
+    for native in [older_native(), NativeCapabilities::default()] {
+        let connection = FixtureConnection::new();
+        let session = BrowserSession::new_with_native(
+            connection.clone(),
+            BrowserSessionHooks::default(),
+            native,
+        );
+        let store = Arc::new(StaticTargetStore::new());
+        let ctx = ctx(session, store.clone()).await?;
+        // Direct calls stand in for a client still holding a list from a capable browser.
+        for (name, args) in [
+            ("browser_profiles", json!({})),
+            (
+                "browser_profiles",
+                json!({ "action": "load", "name": "eng" }),
+            ),
+            ("browser_target", json!({ "action": "get" })),
+            ("browser_target", json!({ "action": "set", "name": "eng" })),
+            (
+                "browser_target",
+                json!({ "action": "set_window", "windowId": 20 }),
+            ),
+            ("browser_target", json!({ "action": "clear" })),
+        ] {
+            let result = call(&ctx, name, args.clone()).await?;
+            assert!(result.is_error, "{native}: {name} {args}");
+            assert!(
+                text(&result).contains(
+                    "native_feature_unavailable: profile targeting needs BrowserOS 0.51.1.3"
+                ),
+                "{native}: {}",
+                text(&result)
+            );
+        }
+        assert!(store.get().await.map_err(anyhow::Error::msg)?.is_none());
+
+        // The SDK omits the exports, and the primitive behind them is refused in Rust even
+        // when a script reaches it through the raw bridge.
+        let run = data(
+            call(
+                &ctx,
+                "run",
+                json!({ "code": "const kinds = [typeof browser.profiles, typeof browser.target]; let refused = null; try { await __browserosCall('tool:browser_profiles', '[{}]', false); } catch (error) { refused = String(error.message || error); } const pages = await browser.pages.list(); return { kinds, refused, pages: pages.length };" }),
+            )
+            .await?,
+        )?;
+        assert_eq!(run["value"]["kinds"], json!(["undefined", "undefined"]));
+        assert!(
+            run["value"]["refused"]
+                .as_str()
+                .is_some_and(|message| message.contains("native_feature_unavailable")),
+            "{run}"
+        );
+        // Ordinary unbound browsing still sees every tab.
+        assert_eq!(run["value"]["pages"], json!(4));
+        assert!(profile_operations(&connection).is_empty(), "{native}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn capable_native_exposes_run_profile_exports() -> anyhow::Result<()> {
+    let session = BrowserSession::new_with_native(
+        FixtureConnection::new().with_default_profile(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let ctx = ctx(session, Arc::new(StaticTargetStore::new())).await?;
+    let run = data(
+        call(
+            &ctx,
+            "run",
+            json!({ "code": "const listed = await browser.profiles({ action: 'list' }); return { kinds: [typeof browser.profiles, typeof browser.target], count: listed.profiles.length };" }),
+        )
+        .await?,
+    )?;
+    assert_eq!(run["value"]["kinds"], json!(["function", "function"]));
+    assert_eq!(run["value"]["count"], json!(6));
+    Ok(())
+}
+
+#[test]
+fn discovery_omits_profile_surfaces_for_older_natives() {
+    let names = |native: NativeCapabilities| {
+        catalog()
+            .into_iter()
+            .filter(|tool| tool.available(native))
+            .map(|tool| tool.name)
+            .collect::<Vec<_>>()
+    };
+    let description = |name: &str, native: NativeCapabilities| {
+        catalog()
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .map(|tool| {
+                tool.to_mcp_tool(native)
+                    .description
+                    .unwrap_or_default()
+                    .to_string()
+            })
+            .unwrap_or_default()
+    };
+    let current = crate::tests::current_native();
+    assert!(names(current).contains(&"browser_profiles"));
+    assert!(names(current).contains(&"browser_target"));
+    assert!(description("run", current).contains("Profile management: browser.profiles"));
+    assert!(description("tabs", current).contains("the original Default profile"));
+    assert!(description("windows", current).contains("browser_target task selection"));
+    for older in [older_native(), NativeCapabilities::default()] {
+        let listed = names(older);
+        assert!(!listed.contains(&"browser_profiles"), "{older}");
+        assert!(!listed.contains(&"browser_target"), "{older}");
+        assert!(listed.contains(&"run") && listed.contains(&"tabs"));
+        for tool in ["run", "tabs", "windows"] {
+            let text = description(tool, older);
+            assert!(!text.contains("browser_profiles"), "{older} {tool}: {text}");
+            assert!(!text.contains("browser_target"), "{older} {tool}: {text}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn hidden_tools_keep_stable_schemas_for_cached_clients() -> anyhow::Result<()> {
+    use rmcp::handler::server::ServerHandler;
+    let session = BrowserSession::new_with_native(
+        FixtureConnection::new(),
+        BrowserSessionHooks::default(),
+        older_native(),
+    );
+    let service = BrowserMcpService::new(super::tests::service_options(session));
+    let schema = |name: &str| {
+        service
+            .get_tool(name)
+            .map(|tool| serde_json::to_value(tool.input_schema.as_ref()))
+            .transpose()
+    };
+    let expected = catalog()
+        .into_iter()
+        .find(|tool| tool.name == "browser_target")
+        .map(|tool| serde_json::to_value(tool.input_schema.as_ref()))
+        .transpose()?;
+    assert!(expected.is_some());
+    assert_eq!(schema("browser_target")?, expected);
+    assert!(schema("browser_profiles")?.is_some());
+    let refused = service
+        .call_tool_for_testing("browser_profiles", json!({}), CancellationToken::new())
+        .await?;
+    assert_eq!(refused.is_error, Some(true));
+    Ok(())
+}
+
+#[tokio::test]
+async fn saved_binding_on_an_older_native_runs_unbound_with_one_outer_note() -> anyhow::Result<()> {
+    // The same in-memory selection outlives a browser swap: a capable session saves it, the
+    // provider then yields an older native, and a capable native later applies it again.
+    let connection = FixtureConnection::new();
+    let capable = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let older = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        older_native(),
+    );
+    let use_older = Arc::new(AtomicBool::new(false));
+    let mut options = super::tests::service_options(capable.clone());
+    options.browser_session = None;
+    options.browser_session_provider = Some({
+        let use_older = use_older.clone();
+        Arc::new(move || {
+            let session = if use_older.load(Ordering::SeqCst) {
+                older.clone()
+            } else {
+                capable.clone()
+            };
+            Box::pin(async move { Some(session) })
+        })
+    });
+    let service = BrowserMcpService::new(options);
+    let call = |name: &'static str, args: Value| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    let selected = call("browser_target", json!({ "action": "set", "name": "eng" })).await?;
+    assert_eq!(selected.is_error, Some(false));
+
+    use_older.store(true, Ordering::SeqCst);
+    let profile_reads = profile_operations(&connection).len();
+    let note = |result: &rmcp::model::CallToolResult| {
+        result
+            .content
+            .iter()
+            .filter_map(|content| content.as_text())
+            .filter(|content| content.text.contains("was not applied"))
+            .map(|content| content.text.clone())
+            .collect::<Vec<_>>()
+    };
+    let listed = call("tabs", json!({ "action": "list" })).await?;
+    assert_eq!(listed.is_error, Some(false));
+    let notes = note(&listed);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("saved profile target \"eng\" (eng)"));
+    assert!(notes[0].contains("BrowserOS 0.51.1.3 or newer"));
+    assert!(notes[0].contains("this browser reports BrowserOS 0.51.1.2"));
+    // Unbound routing: the other profile's tab is visible too.
+    assert!(
+        listed
+            .structured_content
+            .as_ref()
+            .and_then(|data| data["pages"].as_array())
+            .is_some_and(|pages| pages.len() == 4)
+    );
+    let script = call(
+        "run",
+        json!({ "code": "const text = JSON.stringify(await browser.pages.list()); return text.includes('was not applied');" }),
+    )
+    .await?;
+    assert_eq!(note(&script).len(), 1);
+    assert_eq!(
+        script
+            .structured_content
+            .as_ref()
+            .map(|data| &data["value"]),
+        Some(&json!(false))
+    );
+    assert_eq!(profile_operations(&connection).len(), profile_reads);
+
+    // A capable native retries the retained selection with live identity checks.
+    use_older.store(false, Ordering::SeqCst);
+    let bound = call("tabs", json!({ "action": "list" })).await?;
+    assert!(note(&bound).is_empty());
+    assert!(
+        bound
+            .structured_content
+            .as_ref()
+            .and_then(|data| data["pages"].as_array())
+            .is_some_and(|pages| pages.len() == 2)
+    );
+    assert!(profile_operations(&connection).len() > profile_reads);
+    Ok(())
+}
+
+fn creations(connection: &FixtureConnection) -> Vec<(String, Value)> {
+    connection
+        .calls()
+        .into_iter()
+        .filter(|call| {
+            matches!(
+                call.method.as_str(),
+                "Browser.createTab" | "Browser.createWindow"
+            )
+        })
+        .map(|call| (call.method, call.params))
+        .collect()
+}
+
+/// With no selection, granular tools, run's direct primitives, tool:* and raw CDP all use the
+/// original Default profile (renamed "Work"), even though sales owns the focused window.
+#[tokio::test]
+async fn tools_and_run_share_the_default_profile_without_a_selection() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let store = Arc::new(StaticTargetStore::new());
+    let ctx = ctx(session, store.clone()).await?;
+
+    data(
+        call(
+            &ctx,
+            "tabs",
+            json!({ "action": "new", "url": "https://tool.test/" }),
+        )
+        .await?,
+    )?;
+    assert_eq!(creations(&connection)[0].1["windowId"], json!(50));
+    let run = data(
+        call(
+            &ctx,
+            "run",
+            json!({ "code": "const page = await browser.open('https://run.test/'); const info = await page.info(); const direct = await browser.pages.newPage('https://direct.test/'); const listed = await browser.pages.list(); const windows = await browser.windows({ action: 'list' }); await browser.cdp('History.getRecent', { maxResults: 1 }); return { info, direct, listed: listed.map((p) => p.windowId), windows: windows.count };" }),
+        )
+        .await?,
+    )?;
+    assert_eq!(run["value"]["info"]["windowId"], json!(50), "{run}");
+    // pages.newPage returns its page id; the listing below shows it in Default's window too.
+    assert!(run["value"]["direct"].is_number(), "{run}");
+    assert!(
+        run["value"]["listed"]
+            .as_array()
+            .is_some_and(|ids| !ids.is_empty() && ids.iter().all(|id| *id == json!(50))),
+        "{run}"
+    );
+    assert_eq!(run["value"]["windows"], json!(1));
+    data(call(&ctx, "history", json!({})).await?)?;
+    let created = data(call(&ctx, "windows", json!({ "action": "create" })).await?)?;
+    assert!(
+        created["window"]["windowId"].as_i64().is_some(),
+        "{created}"
+    );
+
+    for (method, params) in creations(&connection) {
+        match method.as_str() {
+            "Browser.createTab" => assert_eq!(params["windowId"], json!(50), "{params}"),
+            _ => assert_eq!(
+                params["browserContextId"],
+                json!("context-original"),
+                "{params}"
+            ),
+        }
+    }
+    assert!(
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "History.getRecent")
+            .all(|call| call.params["browserContextId"] == "context-original")
+    );
+    // The default is never written as a task selection.
+    assert!(store.get().await.map_err(anyhow::Error::msg)?.is_none());
+    Ok(())
+}
+
+#[tokio::test]
+async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    connection.change(|state| {
+        state.windows.retain(|window| window["windowId"] != 50);
+        state.tabs.retain(|tab| tab["windowId"] != 50);
+    });
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let listing_ctx = ctx(session.clone(), Arc::new(StaticTargetStore::new())).await?;
+    data(call(&listing_ctx, "tabs", json!({ "action": "list" })).await?)?;
+    assert!(creations(&connection).is_empty(), "listing opened a window");
+
+    data(
+        call(
+            &listing_ctx,
+            "tabs",
+            json!({ "action": "new", "url": "https://first.test/" }),
+        )
+        .await?,
+    )?;
+    // An inactive normal Default window first, then the page created in it by createTab.
+    let created = creations(&connection);
+    assert_eq!(created.len(), 2, "{created:?}");
+    let (method, params) = &created[0];
+    assert_eq!(method, "Browser.createWindow");
+    assert_eq!(params["browserContextId"], json!("context-original"));
+    assert_eq!(params["windowType"], json!("normal"));
+    let window = connection
+        .state
+        .lock()
+        .unwrap_or_else(|err| panic!("fixture poisoned: {err}"))
+        .windows
+        .last()
+        .cloned()
+        .unwrap_or_default();
+    assert_eq!(window["isActive"], json!(false));
+    assert_eq!(created[1].0, "Browser.createTab");
+    assert_eq!(created[1].1["windowId"], window["windowId"]);
+    assert_eq!(created[1].1["url"], json!("https://first.test/"));
+
+    // The next call captures that window as Default's placement and creates tabs there.
+    let run_ctx = ctx(session, Arc::new(StaticTargetStore::new())).await?;
+    let run = data(
+        call(&run_ctx, "run", json!({ "code": "const page = await browser.open('https://second.test/'); return await page.info();" }))
+            .await?,
+    )?;
+    assert_eq!(run["value"]["windowId"], window["windowId"], "{run}");
+    let created = creations(&connection);
+    assert_eq!(created.len(), 3, "{created:?}");
+    assert_eq!(created[2].0, "Browser.createTab");
+    assert_eq!(created[2].1["windowId"], window["windowId"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_selection_overrides_default_and_clear_restores_it() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let service = BrowserMcpService::new(super::tests::service_options(session.clone()));
+    let call_service = |name: &'static str, args: Value| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    let tab_window = |result: &rmcp::model::CallToolResult| {
+        connection
+            .calls()
+            .into_iter()
+            .rfind(|call| call.method == "Browser.createTab")
+            .map(|call| call.params["windowId"].clone())
+            .filter(|_| result.is_error != Some(true))
+    };
+
+    let defaulted = call_service("tabs", json!({ "action": "new" })).await?;
+    assert_eq!(tab_window(&defaulted), Some(json!(50)));
+    call_service("browser_target", json!({ "action": "set", "name": "eng" })).await?;
+    let explicit = call_service("tabs", json!({ "action": "new" })).await?;
+    assert_eq!(tab_window(&explicit), Some(json!(20)));
+
+    // A strict pin stays strict; it never widens back to Default.
+    call_service(
+        "browser_target",
+        json!({ "action": "set_window", "windowId": 10, "strict": true }),
+    )
+    .await?;
+    let pinned = call_service("tabs", json!({ "action": "new" })).await?;
+    assert_eq!(tab_window(&pinned), Some(json!(10)));
+
+    call_service("browser_target", json!({ "action": "clear" })).await?;
+    let cleared = call_service("tabs", json!({ "action": "new" })).await?;
+    assert_eq!(tab_window(&cleared), Some(json!(50)));
+    let get = call_service("browser_target", json!({})).await?;
+    let data = get.structured_content.unwrap_or_default();
+    assert_eq!(data["bound"], json!(false));
+    assert_eq!(
+        data["default"]["status"]["profile"]["directory"],
+        json!("Default")
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_admitted_default_view_ignores_a_later_selection() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let store = Arc::new(StaticTargetStore::new());
+    let admitted = ctx(session, store.clone()).await?;
+    // Rebinding after admission affects later calls only.
+    store.set(intent("eng")).await.map_err(anyhow::Error::msg)?;
+    let run = data(
+        call(&admitted, "run", json!({ "code": "const page = await browser.open('https://late.test/'); return await page.info();" }))
+            .await?,
+    )?;
+    assert_eq!(run["value"]["windowId"], json!(50), "{run}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn missing_default_refuses_work_but_selection_recovers() -> anyhow::Result<()> {
+    // This fixture has no profile with directory "Default" (deleted or never created).
+    let connection = FixtureConnection::new();
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let service = BrowserMcpService::new(super::tests::service_options(session));
+    let call_service = |name: &'static str, args: Value| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    for (name, args) in [
+        ("tabs", json!({ "action": "new" })),
+        (
+            "run",
+            json!({ "code": "return await browser.open('https://nowhere.test/');" }),
+        ),
+        ("windows", json!({ "action": "create" })),
+    ] {
+        let refused = call_service(name, args).await?;
+        assert_eq!(refused.is_error, Some(true), "{name}");
+        assert!(
+            refused
+                .content
+                .iter()
+                .filter_map(|content| content.as_text())
+                .any(|content| content.text.contains("default_profile_unavailable")),
+            "{name}: {refused:?}"
+        );
+    }
+    assert!(creations(&connection).is_empty());
+    let get = call_service("browser_target", json!({})).await?;
+    assert!(get.structured_content.as_ref().is_some_and(|data| {
+        data["default"]["status"]["error"]
+            .as_str()
+            .is_some_and(|error| error.contains("default_profile_unavailable"))
+    }));
+    // Profile management is admitted without the default and recovers explicitly.
+    let selected =
+        call_service("browser_target", json!({ "action": "set", "name": "eng" })).await?;
+    assert_eq!(selected.is_error, Some(false));
+    let opened = call_service("tabs", json!({ "action": "new" })).await?;
+    assert_eq!(opened.is_error, Some(false), "{opened:?}");
+    assert_eq!(creations(&connection)[0].1["windowId"], json!(20));
+    Ok(())
+}
+
+#[tokio::test]
+async fn profile_management_never_loads_an_unloaded_default() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    connection.change(|state| {
+        let original = state
+            .profiles
+            .iter_mut()
+            .find(|profile| profile["directory"] == "Default");
+        if let Some(original) = original {
+            original["loaded"] = json!(false);
+            if let Some(fields) = original.as_object_mut() {
+                fields.remove("browserContextId");
+            }
+        }
+    });
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let service = BrowserMcpService::new(super::tests::service_options(session));
+    let call_service = |name: &'static str, args: Value| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    let loads = || {
+        connection
+            .calls()
+            .iter()
+            .filter(|call| call.method == "Browser.loadProfile")
+            .count()
+    };
+    for (name, args) in [
+        ("browser_profiles", json!({ "action": "list" })),
+        ("browser_target", json!({})),
+        (
+            "browser_target",
+            json!({ "action": "set", "name": "sales" }),
+        ),
+        ("browser_target", json!({ "action": "clear" })),
+    ] {
+        let result = call_service(name, args.clone()).await?;
+        assert_eq!(result.is_error, Some(false), "{name} {args}: {result:?}");
+    }
+    assert_eq!(loads(), 0, "management loaded the default profile");
+    // Ordinary work needs Default's live context, so it loads that existing profile.
+    let listed = call_service("tabs", json!({ "action": "list" })).await?;
+    assert_eq!(listed.is_error, Some(false), "{listed:?}");
+    assert_eq!(loads(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn one_run_without_a_default_window_opens_one_window_for_all_pages() -> anyhow::Result<()> {
+    let connection = FixtureConnection::new().with_default_profile();
+    connection.change(|state| {
+        state.windows.retain(|window| window["windowId"] != 50);
+        state.tabs.retain(|tab| tab["windowId"] != 50);
+    });
+    let session = BrowserSession::new_with_native(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+    );
+    let ctx = ctx(session, Arc::new(StaticTargetStore::new())).await?;
+    let run = data(
+        call(
+            &ctx,
+            "run",
+            json!({ "code": "const a = await browser.open('https://a.test/'); const b = await browser.open('https://b.test/'); const [c, d] = await Promise.all([browser.open('https://c.test/'), browser.open('https://d.test/')]); return [await a.info(), await b.info(), await c.info(), await d.info()].map((page) => page.windowId);" }),
+        )
+        .await?,
+    )?;
+    let windows = run["value"].as_array().cloned().unwrap_or_default();
+    assert_eq!(windows.len(), 4, "{run}");
+    assert!(windows.iter().all(|window| *window == windows[0]), "{run}");
+    let created = creations(&connection);
+    assert_eq!(
+        created
+            .iter()
+            .filter(|(method, _)| method == "Browser.createWindow")
+            .count(),
+        1,
+        "{created:?}"
     );
     Ok(())
 }

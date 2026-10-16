@@ -54,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
     };
     let config = Arc::new(claw_server::config::Config::load(config_path)?);
     let _guard = init_tracing(config.clone())?;
+    log_native_identity(&config);
     // A boot that fails before the server binds used to leave no reason in the log: the error went
     // to stderr (which the supervising browser does not capture) and the buffered file appender
     // never flushed it. Capture panics synchronously and record the startup outcome so the failure
@@ -95,6 +96,21 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     outcome
+}
+
+/// Records which native features this process will offer, and why. An asserted version is a
+/// developer's claim about an unstamped build, not the browser's own report.
+fn log_native_identity(config: &claw_server::config::Config) {
+    let native = config.native.capabilities;
+    if config.native.asserted {
+        warn!(
+            %native,
+            env = claw_server::config::NATIVE_VERSION_ENV,
+            "native BrowserOS version asserted by environment"
+        );
+    } else {
+        info!(%native, "native BrowserOS identity from launch config");
+    }
 }
 
 async fn run(
@@ -394,6 +410,7 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
+            native: Default::default(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let shutdown = state.shutdown.clone();
@@ -443,6 +460,7 @@ mod tests {
             session_sweep_interval: Duration::from_secs(60),
             replay_retention_days: 7,
             dev_mode: false,
+            native: Default::default(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let mut runtime = AppRuntime::start(state);
