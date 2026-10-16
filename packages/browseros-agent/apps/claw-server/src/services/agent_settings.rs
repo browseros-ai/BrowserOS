@@ -161,9 +161,7 @@ impl AgentSettingsStore {
         let file = TokenFile {
             jev_token: token.clone(),
         };
-        self.files
-            .write_json_private(JEV_TOKEN_FILE, &file)
-            .await?;
+        self.files.write_json_private(JEV_TOKEN_FILE, &file).await?;
         if let Ok(mut live) = self.jev_token.write() {
             *live = Some(token);
         }
@@ -296,7 +294,10 @@ mod tests {
         let dir = tempdir()?;
         let store = with_environment(dir.path(), Some("from-the-environment")).await;
         assert_eq!(store.jev_token_source(), TokenSource::Environment);
-        assert_eq!(store.jev_credential().as_deref(), Some("from-the-environment"));
+        assert_eq!(
+            store.jev_credential().as_deref(),
+            Some("from-the-environment")
+        );
         Ok(())
     }
 
@@ -325,7 +326,10 @@ mod tests {
         store.set_jev_token("from-the-settings").await?;
         store.clear_jev_token().await?;
         assert_eq!(store.jev_token_source(), TokenSource::Environment);
-        assert_eq!(store.jev_credential().as_deref(), Some("from-the-environment"));
+        assert_eq!(
+            store.jev_credential().as_deref(),
+            Some("from-the-environment")
+        );
         Ok(())
     }
 
@@ -355,7 +359,12 @@ mod tests {
     async fn tests_that_a_pasted_file_is_refused_rather_than_stored() -> anyhow::Result<()> {
         let dir = tempdir()?;
         let store = store_in(dir.path()).await;
-        assert!(store.set_jev_token(&"x".repeat(MAX_JEV_TOKEN + 1)).await.is_err());
+        assert!(
+            store
+                .set_jev_token(&"x".repeat(MAX_JEV_TOKEN + 1))
+                .await
+                .is_err()
+        );
         assert_eq!(store.jev_token_source(), TokenSource::None);
         Ok(())
     }
@@ -375,7 +384,10 @@ mod tests {
     async fn tests_that_a_corrupt_token_file_leaves_no_saved_token() -> anyhow::Result<()> {
         let dir = tempdir()?;
         tokio::fs::write(dir.path().join(JEV_TOKEN_FILE), "{not json").await?;
-        assert_eq!(store_in(dir.path()).await.jev_token_source(), TokenSource::None);
+        assert_eq!(
+            store_in(dir.path()).await.jev_token_source(),
+            TokenSource::None
+        );
         Ok(())
     }
 
@@ -383,7 +395,10 @@ mod tests {
     async fn tests_that_an_unreadable_token_file_leaves_no_saved_token() -> anyhow::Result<()> {
         let dir = tempdir()?;
         tokio::fs::create_dir(dir.path().join(JEV_TOKEN_FILE)).await?;
-        assert_eq!(store_in(dir.path()).await.jev_token_source(), TokenSource::None);
+        assert_eq!(
+            store_in(dir.path()).await.jev_token_source(),
+            TokenSource::None
+        );
         Ok(())
     }
 
@@ -391,7 +406,10 @@ mod tests {
     async fn tests_that_an_empty_token_object_leaves_no_saved_token() -> anyhow::Result<()> {
         let dir = tempdir()?;
         tokio::fs::write(dir.path().join(JEV_TOKEN_FILE), "{}").await?;
-        assert_eq!(store_in(dir.path()).await.jev_token_source(), TokenSource::None);
+        assert_eq!(
+            store_in(dir.path()).await.jev_token_source(),
+            TokenSource::None
+        );
         Ok(())
     }
 

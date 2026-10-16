@@ -224,7 +224,10 @@ mod tests {
     #[test]
     fn the_guidance_still_contains_both_sentences_that_get_swapped() {
         assert_eq!(BROWSER_GUIDANCE.matches(RUN_FIRST_CHOICE).count(), 1);
-        assert_eq!(SHARED_BROWSER_GUIDANCE.matches(RUN_FIRST_COMPOSE).count(), 1);
+        assert_eq!(
+            SHARED_BROWSER_GUIDANCE.matches(RUN_FIRST_COMPOSE).count(),
+            1
+        );
     }
 
     /// A production install has no credential, and the one promise made about
@@ -313,7 +316,10 @@ mod tests {
 
     #[test]
     fn tests_that_instructions_with_human_help_off_say_to_ask_in_chat() {
-        assert!(mcp_instructions(HumanHelp::Off, PursueOffering::Absent, current()).contains(ASK_IN_CHAT));
+        assert!(
+            mcp_instructions(HumanHelp::Off, PursueOffering::Absent, current())
+                .contains(ASK_IN_CHAT)
+        );
     }
 
     #[test]
@@ -357,8 +363,7 @@ mod tests {
             NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
             NativeCapabilities::default(),
         ] {
-            let instructions =
-                mcp_instructions(HumanHelp::On, PursueOffering::Absent, older);
+            let instructions = mcp_instructions(HumanHelp::On, PursueOffering::Absent, older);
             assert!(!instructions.contains("browser_profiles"), "{older}");
             assert!(!instructions.contains("browser_target"), "{older}");
             assert!(!instructions.contains("Default profile"), "{older}");

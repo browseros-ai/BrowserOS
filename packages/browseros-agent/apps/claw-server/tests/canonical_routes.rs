@@ -2253,8 +2253,8 @@ async fn tests_that_saving_the_human_help_switch_leaves_a_saved_token_alone() ->
 {
     let app = test_app().await?;
     request_jev_token(&app, "PUT", Some(json!({ "token": "jev-a-token" }))).await?;
-    let (_, bytes) = put_agent_settings(&app, json!({ "humanHelpEnabled": false }).to_string())
-        .await?;
+    let (_, bytes) =
+        put_agent_settings(&app, json!({ "humanHelpEnabled": false }).to_string()).await?;
     let body = json_body(&bytes)?;
     assert_eq!(body["humanHelpEnabled"], json!(false));
     assert_eq!(body["jevTokenSource"], json!("settings"));
