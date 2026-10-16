@@ -938,6 +938,96 @@ mod tests {
         Ok(())
     }
 
+    /// The Linux pre-flight doctor prunes `seaql_migrations` rows based on the
+    /// packaged binary, even when a newer self-updated server wrote them. The
+    /// schema and user data are still present, so startup must tolerate DDL that
+    /// is already applied, re-record the migrations, and preserve those rows.
+    #[tokio::test]
+    async fn repeated_doctor_ledger_pruning_keeps_startup_recoverable() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("missing").join(DATABASE_FILENAME);
+        let Some(parent) = path.parent() else {
+            anyhow::bail!("database path has no parent");
+        };
+        assert!(!parent.exists());
+
+        let first = Database::open(&path).await?;
+        first
+            .connection()
+            .execute_unprepared(
+                "INSERT INTO feedback_invite \
+                    (install_id, shown_at_ms, outcome, settled_at_ms, dismissed_at_ms) \
+                 VALUES ('install-1', 1000, 'dismissed', 2000, 1500)",
+            )
+            .await?;
+        first
+            .connection()
+            .execute_unprepared(
+                "INSERT INTO run_error_budget (day, sent, suppressed) \
+                 VALUES ('2026-09-30', 7, 3)",
+            )
+            .await?;
+        first.close().await?;
+
+        for attempt in 1..=2 {
+            let mut conn = SqliteConnection::connect_with(&sqlite_options(&path)).await?;
+            let deleted = sqlx::query("DELETE FROM seaql_migrations WHERE version IN (?, ?, ?, ?)")
+                .bind("m0017_add_run_error_budget")
+                .bind("m0018_add_feedback_invite")
+                .bind("m0019_add_feedback_invite_dismissal")
+                .bind("m0020_add_feedback_invite_snooze")
+                .execute(&mut conn)
+                .await?
+                .rows_affected();
+            assert_eq!(deleted, 4, "doctor pass {attempt} should prune four rows");
+            conn.close().await?;
+
+            let reopened = Database::open(&path).await?;
+            let migrations = reopened
+                .connection()
+                .query_all(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT version FROM seaql_migrations".to_string(),
+                ))
+                .await?;
+            assert_eq!(
+                migrations.len(),
+                20,
+                "doctor pass {attempt} was not repaired"
+            );
+
+            let feedback = reopened
+                .connection()
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT dismissed_at_ms FROM feedback_invite WHERE install_id = 'install-1'"
+                        .to_string(),
+                ))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("feedback invite row should survive"))?;
+            assert_eq!(
+                feedback.try_get::<Option<i64>>("", "dismissed_at_ms")?,
+                Some(1500)
+            );
+
+            let budget = reopened
+                .connection()
+                .query_one(Statement::from_string(
+                    DbBackend::Sqlite,
+                    "SELECT sent, suppressed FROM run_error_budget WHERE day = '2026-09-30'"
+                        .to_string(),
+                ))
+                .await?
+                .ok_or_else(|| anyhow::anyhow!("run-error budget row should survive"))?;
+            assert_eq!(budget.try_get::<i64>("", "sent")?, 7);
+            assert_eq!(budget.try_get::<i64>("", "suppressed")?, 3);
+            reopened.close().await?;
+        }
+
+        assert!(!append_suffix(&path, ".bak").exists());
+        Ok(())
+    }
+
     fn sqlite_options(path: &Path) -> SqliteConnectOptions {
         SqliteConnectOptions::new()
             .filename(path)
