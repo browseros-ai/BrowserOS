@@ -243,6 +243,36 @@ pub struct Jev {
     endpoint: String,
 }
 
+/// Writes the request to a file when `JEV_DUMP_DIR` names one, for reading what
+/// a decision was actually asked.
+///
+/// Off unless the variable is set. Every question is built from the page in
+/// front of the run, so the only way to judge whether a decision had what it
+/// needed is to read the request that carried it: a run can be diagnosed from
+/// its answers only as far as the answers were answerable.
+///
+/// The body only. The credential travels in a header and is never written here.
+fn record(asking: &Request<'_>) {
+    let Ok(directory) = std::env::var("JEV_DUMP_DIR") else {
+        return;
+    };
+    if directory.trim().is_empty() {
+        return;
+    }
+    let Ok(body) = serde_json::to_string_pretty(asking) else {
+        return;
+    };
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|since| since.as_micros())
+        .unwrap_or_default();
+    let _ = std::fs::create_dir_all(&directory);
+    let _ = std::fs::write(
+        std::path::Path::new(&directory).join(format!("ask-{at}.json")),
+        body,
+    );
+}
+
 impl Jev {
     pub fn new(token: impl Into<String>) -> Self {
         Self {
@@ -295,16 +325,18 @@ impl Jev {
         for (id, question) in questions {
             question.validate(id)?;
         }
+        let asking = Request {
+            state,
+            model: &self.model,
+            questions,
+        };
+        record(&asking);
         let send = self
             .http
             .post(&self.endpoint)
             .bearer_auth(&self.token)
             .timeout(budget)
-            .json(&Request {
-                state,
-                model: &self.model,
-                questions,
-            })
+            .json(&asking)
             .send();
         let response = match tokio::time::timeout(budget, send).await {
             Ok(Ok(response)) => response,
