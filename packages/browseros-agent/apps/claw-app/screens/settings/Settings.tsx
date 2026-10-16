@@ -7,11 +7,12 @@
 import type { AgentSettings } from '@browseros/claw-api'
 import { JevTokenSource } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useRef, useState, useSyncExternalStore } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import { isFlagEnabled, subscribeToFlags } from '@/modules/analytics/posthog'
 import {
   useAgentSettings,
   useRemoveJevToken,
@@ -22,6 +23,13 @@ import {
 const HUMAN_HELP_SWITCH_ID = 'human-help-switch'
 const HUMAN_HELP_TITLE_ID = 'human-help-title'
 const HUMAN_HELP_DESCRIPTION_ID = 'human-help-description'
+/**
+ * The flag that reveals the token field.
+ *
+ * Hidden unless PostHog says otherwise for this install, which is also what an
+ * install with analytics turned off gets: no evaluation, so no field.
+ */
+const TOKEN_FIELD_FLAG = 'ultrafast-token-field'
 const JEV_INPUT_ID = 'jev-token-input'
 const JEV_TITLE_ID = 'jev-token-title'
 const JEV_DESCRIPTION_ID = 'jev-token-description'
@@ -32,6 +40,13 @@ const JEV_DESCRIPTION_ID = 'jev-token-description'
  */
 export function Settings() {
   const settings = useAgentSettings()
+  // false as the server snapshot, so a static render and a cold open agree:
+  // the field was never there, rather than appearing a beat late.
+  const tokenFieldEnabled = useSyncExternalStore(
+    subscribeToFlags,
+    () => isFlagEnabled(TOKEN_FIELD_FLAG),
+    () => false,
+  )
   const updateSettings = useUpdateAgentSettings()
   const queryClient = useQueryClient()
 
@@ -106,9 +121,11 @@ export function Settings() {
               Could not save this setting. Try again.
             </p>
           )}
-          <JevToken
-            source={settings.data?.jevTokenSource ?? JevTokenSource.None}
-          />
+          {tokenFieldEnabled && (
+            <JevToken
+              source={settings.data?.jevTokenSource ?? JevTokenSource.None}
+            />
+          )}
         </div>
       )}
     </div>

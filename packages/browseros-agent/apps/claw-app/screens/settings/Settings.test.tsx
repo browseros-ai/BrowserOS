@@ -24,6 +24,7 @@ import { parseHTML } from 'linkedom'
 import { act, type ComponentProps } from 'react'
 import type { Root } from 'react-dom/client'
 import { renderToStaticMarkup } from 'react-dom/server'
+import * as posthog from '@/modules/analytics/posthog'
 import * as api from '@/modules/api/client'
 
 const settingsOf = (overrides: Partial<AgentSettings> = {}): AgentSettings => ({
@@ -71,11 +72,23 @@ mock.module('@/modules/api/client', () => ({
   }),
 }))
 
+// Only the transport is replaced. The flag reader is the real one, driven
+// through the same function PostHog's callback drives it with, because
+// `mock.module` is process wide and a stubbed reader here would fight the
+// module's own tests over which implementation is the real one.
 mock.module('@/modules/analytics/posthog', () => ({
+  ...posthog,
   capture: (event: string, properties?: Record<string, unknown>) => {
     captured.push({ event, properties })
   },
 }))
+
+/** What an `onFeatureFlags` arrival looks like, for one flag. */
+function setFlag(key: string, enabled: boolean): void {
+  posthog.applyFlags(enabled ? [key] : [])
+}
+
+const TOKEN_FIELD_FLAG = 'ultrafast-token-field'
 
 // base-ui's switch toggles a hidden checkbox with a PointerEvent, which
 // linkedom lacks. A plain button keeps the props the screen relies on.
@@ -173,6 +186,9 @@ describe('Settings screen interactions', () => {
     server.tokenSaves = []
     server.tokenRemovals = 0
     captured.length = 0
+    // The field is behind a flag; the tests below are about the field, and the
+    // gate itself is tested separately.
+    setFlag(TOKEN_FIELD_FLAG, true)
 
     const dom = parseHTML(
       '<!doctype html><html><body><div id="root"></div></body></html>',
@@ -471,5 +487,65 @@ describe('Settings screen interactions', () => {
     // The field gave way to Replace and Remove, and nothing carries the value.
     expect(container.innerHTML).not.toContain(secret)
     expect(container.querySelector('[value]')).toBeNull()
+  })
+  // --- the flag that reveals the field -------------------------------------
+
+  it('tests that the field is hidden when the flag is off', async () => {
+    setFlag(TOKEN_FIELD_FLAG, false)
+    await mount()
+
+    expect(tokenField()).toBeNull()
+    expect(buttonNamed('Save')).toBeNull()
+    expect(container.textContent).not.toContain('Ultrafast decision loop')
+    // The rest of the page is unaffected.
+    expect(switchIn(container)).not.toBeNull()
+  })
+
+  /// The field must be absent on the first render rather than appear a beat
+  /// later, which is the difference a user actually notices.
+  it('tests that the field is hidden before any flag has been evaluated', async () => {
+    setFlag(TOKEN_FIELD_FLAG, false)
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={client}>
+          <Settings />
+        </QueryClientProvider>,
+      )
+    })
+
+    // Read before settling, so this is the first paint and not the steady state.
+    expect(container.textContent).not.toContain('Ultrafast decision loop')
+    await settle()
+    expect(container.textContent).not.toContain('Ultrafast decision loop')
+  })
+
+  it('tests that the field appears when the flag turns on without a reload', async () => {
+    setFlag(TOKEN_FIELD_FLAG, false)
+    await mount()
+    expect(tokenField()).toBeNull()
+
+    // What onFeatureFlags arriving after the first render looks like.
+    await act(async () => {
+      setFlag(TOKEN_FIELD_FLAG, true)
+    })
+    await settle()
+
+    expect(tokenField()).not.toBeNull()
+  })
+
+  /// A flag that could strand a saved credential would be worse than the
+  /// thing it was hiding, so what the flag hides is only the field.
+  it('tests that the flag does not touch anything but the field', async () => {
+    server.read = async () =>
+      settingsOf({ jevTokenSource: JevTokenSource.Settings })
+    setFlag(TOKEN_FIELD_FLAG, false)
+    await mount()
+
+    // No way to remove it from here, which is the accepted cost, but the
+    // switch still works and the server was never asked to change.
+    expect(buttonNamed('Remove')).toBeNull()
+    expect(server.tokenRemovals).toBe(0)
+    await clickSwitch()
+    expect(server.saves).toEqual([{ humanHelpEnabled: false }])
   })
 })
