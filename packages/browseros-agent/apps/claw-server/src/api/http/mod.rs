@@ -141,8 +141,10 @@ pub(super) fn internal(request_id: &RequestId, source: AppError) -> CanonicalErr
     )
 }
 
-/// Rejects browser-page requests to the loopback MCP endpoint. Browser fetches
-/// carry `origin` or `sec-fetch-site`; native MCP clients do not.
+/// Rejects browser-page requests to the loopback MCP endpoint. The `Origin`
+/// header identifies a browser page; Electron clients may also carry the
+/// browser-default `Sec-Fetch-*` metadata, so that metadata is not sufficient
+/// to reject an otherwise native MCP request.
 async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
     // The nested /mcp service shadows the router's `/{*path}` preflight route,
     // so answer OPTIONS here to keep loopback preflight behavior consistent.
@@ -150,7 +152,7 @@ async fn mcp_request_hygiene(req: Request, next: Next) -> Response {
         return StatusCode::NO_CONTENT.into_response();
     }
     let headers = req.headers();
-    if headers.contains_key(header::ORIGIN) || headers.contains_key("sec-fetch-site") {
+    if headers.contains_key(header::ORIGIN) {
         return AppError::forbidden("unsupported request").into_response();
     }
     let needs_json = match *req.method() {
