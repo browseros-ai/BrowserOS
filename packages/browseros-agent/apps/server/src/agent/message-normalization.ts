@@ -220,3 +220,44 @@ export function normalizeMessagesForModel(
 
   return changed ? normalized : messages
 }
+
+// The @ai-sdk/openai-compatible serializer re-emits an assistant reasoning part
+// as a top-level `reasoning_content` field on the request. `reasoning_content`
+// is response-only in the chat-completions schema, so strict gateways (Mistral,
+// Cerebras, Fireworks) reject a replayed one with 400/422. stripReasoningParts
+// already removes reasoning from the pre-run UIMessage history, but the assistant
+// turn a multi-step tool loop generates mid-run never passes through that path:
+// it is built from the running steps and replayed on the next step. Strip it here
+// at the model-message boundary, which prepareStep runs on every step. Reasoning
+// stays in the durable, client-displayed history; only the replayed copy is
+// cleaned, and the model generates fresh reasoning for the new step.
+export function stripReasoningFromModelMessages(
+  messages: ModelMessage[],
+): ModelMessage[] {
+  let changed = false
+  const result: ModelMessage[] = []
+
+  for (const message of messages) {
+    if (message.role !== 'assistant') {
+      result.push(message)
+      continue
+    }
+    if (typeof message.content === 'string') {
+      result.push(message)
+      continue
+    }
+    const content = message.content.filter((part) => part.type !== 'reasoning')
+    if (content.length === message.content.length) {
+      result.push(message)
+      continue
+    }
+    changed = true
+    // A reasoning-only assistant turn (no text, no tool call) would serialize to
+    // an empty assistant message, which strict providers also reject; drop it
+    // rather than replay an empty turn.
+    if (content.length === 0) continue
+    result.push({ ...message, content })
+  }
+
+  return changed ? result : messages
+}

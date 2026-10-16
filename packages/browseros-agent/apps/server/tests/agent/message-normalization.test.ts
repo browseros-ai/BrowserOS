@@ -4,7 +4,9 @@ import type { ModelMessage, ToolResultPart } from 'ai'
 import {
   getMessageNormalizationOptions,
   normalizeMessagesForModel,
+  stripReasoningFromModelMessages,
 } from '../../src/agent/message-normalization'
+import { serializesReasoningContent } from '../../src/agent/provider-factory'
 import type { ResolvedAgentConfig } from '../../src/agent/types'
 
 type ToolResultContentPart = Extract<
@@ -193,5 +195,184 @@ describe('normalizeMessagesForModel', () => {
 
     expect(out).toHaveLength(1)
     expect(out[0].role).toBe('tool')
+  })
+})
+
+function assistantReasoningPartCount(message: ModelMessage): number {
+  if (message.role !== 'assistant' || typeof message.content === 'string') {
+    return 0
+  }
+  return message.content.filter((part) => part.type === 'reasoning').length
+}
+
+describe('stripReasoningFromModelMessages', () => {
+  // The exact #2921 shape: a mid-run assistant turn carrying GLM reasoning plus
+  // the tool call. Replaying the reasoning as `reasoning_content` is what strict
+  // gateways (Mistral) reject with 422.
+  test('drops the reasoning part but keeps the tool call', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'search for cats' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'I should call the search tool' },
+          {
+            type: 'tool-call',
+            toolCallId: 't1',
+            toolName: 'search',
+            input: { q: 'cats' },
+          },
+        ],
+      },
+    ]
+
+    const out = stripReasoningFromModelMessages(messages)
+
+    expect(out).toHaveLength(2)
+    expect(assistantReasoningPartCount(out[1])).toBe(0)
+    const assistant = out[1] as { content: Array<Record<string, unknown>> }
+    expect(assistant.content).toEqual([
+      {
+        type: 'tool-call',
+        toolCallId: 't1',
+        toolName: 'search',
+        input: { q: 'cats' },
+      },
+    ])
+  })
+
+  test('keeps assistant text when reasoning is stripped', () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'thinking out loud' },
+          { type: 'text', text: 'Here is the answer.' },
+        ],
+      },
+    ]
+
+    const out = stripReasoningFromModelMessages(messages)
+
+    const assistant = out[0] as { content: Array<Record<string, unknown>> }
+    expect(assistant.content).toEqual([
+      { type: 'text', text: 'Here is the answer.' },
+    ])
+  })
+
+  test('drops a reasoning-only assistant turn entirely', () => {
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: [{ type: 'reasoning', text: 'no visible output' }],
+      },
+    ]
+
+    const out = stripReasoningFromModelMessages(messages)
+
+    expect(out).toHaveLength(1)
+    expect(out[0].role).toBe('user')
+  })
+
+  test('leaves user, tool, and string-content assistant messages untouched', () => {
+    const messages: ModelMessage[] = [
+      { role: 'system', content: 'be helpful' },
+      { role: 'user', content: 'question' },
+      { role: 'assistant', content: 'plain string answer' },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 't1',
+            toolName: 'search',
+            output: { type: 'text', value: 'done' },
+          },
+        ],
+      },
+    ]
+
+    const out = stripReasoningFromModelMessages(messages)
+
+    // No assistant message had a reasoning part, so nothing changed: same
+    // reference back, like normalizeMessagesForModel.
+    expect(out).toBe(messages)
+  })
+
+  test('returns the same array when there is no reasoning to strip', () => {
+    const messages: ModelMessage[] = [
+      {
+        role: 'assistant',
+        content: [
+          {
+            type: 'tool-call',
+            toolCallId: 't1',
+            toolName: 'search',
+            input: { q: 'x' },
+          },
+        ],
+      },
+    ]
+
+    expect(stripReasoningFromModelMessages(messages)).toBe(messages)
+  })
+
+  // Guards the #2921 regression end to end: this is the per-step pipeline
+  // prepareStep applies on every step (normalize, then strip reasoning only when
+  // the provider serializes reasoning_content). Step one returned reasoning plus
+  // a tool call; step two must send the tool call WITHOUT reasoning to an
+  // openai-compatible provider, but keep reasoning for a native provider that
+  // replays it.
+  test('step two drops replayed reasoning for openai-compatible but keeps it for a native provider (#2921)', () => {
+    const stepTwoInbound: ModelMessage[] = [
+      { role: 'user', content: 'search for cats' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'call the search tool' },
+          {
+            type: 'tool-call',
+            toolCallId: 't1',
+            toolName: 'search',
+            input: { q: 'cats' },
+          },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 't1',
+            toolName: 'search',
+            output: { type: 'text', value: 'found' },
+          },
+        ],
+      },
+    ]
+
+    const perStep = (provider: string): ModelMessage[] => {
+      const normalized = normalizeMessagesForModel(
+        stepTwoInbound,
+        getMessageNormalizationOptions(cfg({ provider })),
+      )
+      return serializesReasoningContent(provider)
+        ? stripReasoningFromModelMessages(normalized)
+        : normalized
+    }
+
+    const assistantPartTypes = (messages: ModelMessage[]): string[] => {
+      const assistant = messages.find((m) => m.role === 'assistant')
+      if (!assistant || typeof assistant.content === 'string') return []
+      return assistant.content.map((part) => part.type)
+    }
+
+    expect(
+      assistantPartTypes(perStep(LLM_PROVIDERS.OPENAI_COMPATIBLE)),
+    ).toEqual(['tool-call'])
+    expect(assistantPartTypes(perStep(LLM_PROVIDERS.ANTHROPIC))).toContain(
+      'reasoning',
+    )
   })
 })

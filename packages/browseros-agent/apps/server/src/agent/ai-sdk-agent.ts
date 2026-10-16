@@ -31,10 +31,14 @@ import {
 import {
   getMessageNormalizationOptions,
   normalizeMessagesForModel,
+  stripReasoningFromModelMessages,
 } from './message-normalization'
 import { buildNudgeToolSet } from './nudge-tools'
 import { buildSystemPrompt } from './prompt'
-import { createLanguageModel } from './provider-factory'
+import {
+  createLanguageModel,
+  serializesReasoningContent,
+} from './provider-factory'
 import { buildAgentReasoningConfig } from './reasoning-config'
 import type { ResolvedAgentConfig } from './types'
 
@@ -308,19 +312,24 @@ export class AiSdkAgent {
       const normalizationOptions = getMessageNormalizationOptions(
         config.resolvedConfig,
       )
+      const stripReplayedReasoning = serializesReasoningContent(
+        config.resolvedConfig.provider,
+      )
       const prepareStep = async (options: {
         messages: ModelMessage[]
         steps: ReadonlyArray<StepWithUsage>
         model: LanguageModel
         runtimeContext: unknown
-      }) =>
-        compactionPrepareStep({
-          ...options,
-          messages: normalizeMessagesForModel(
-            options.messages,
-            normalizationOptions,
-          ),
-        })
+      }) => {
+        let messages = normalizeMessagesForModel(
+          options.messages,
+          normalizationOptions,
+        )
+        if (stripReplayedReasoning) {
+          messages = stripReasoningFromModelMessages(messages)
+        }
+        return compactionPrepareStep({ ...options, messages })
+      }
 
       const agent = new ToolLoopAgent({
         model,
