@@ -343,6 +343,35 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         ));
 
         if decision.operation == Operation::Done {
+            // A change the run never made is not a change the page holds. Once
+            // the page text that travels is chosen for the goal, the goal's own
+            // words are on the page, and a goal about adding a toothpaste to a
+            // cart reads as met by a results page listing toothpaste: measured
+            // three times out of three, one decision, no action, "satisfied".
+            //
+            // The model is documented as answering the question as written and
+            // as losing reliability on multi-hop conditions, and "is this in the
+            // cart" from a page that merely names it is two hops. So a
+            // completion claim about a goal that asks for a change is only
+            // accepted once something has observably changed. It is handed back
+            // rather than refused, because the goal may genuinely have been
+            // satisfied before the run started, and the caller can see the page.
+            if asks_for_a_change(&run.goal) && !trail.iter().any(|step| step.page_changed) {
+                return end(
+                    &run,
+                    Status::NeedsInput(
+                        Handback::Unverifiable,
+                        "it read this page as already satisfying the goal, and nothing on the \
+                         page has changed, so that claim cannot be checked from here. Read the \
+                         page, or name the control that would make the change."
+                            .to_string(),
+                    ),
+                    Some(view),
+                    &space,
+                    trail,
+                    goal_met,
+                );
+            }
             return end(&run, Status::Satisfied, Some(view), &space, trail, goal_met);
         }
         if decision.operation == Operation::Blocked {
@@ -918,6 +947,24 @@ fn step_of(
 /// A live page has a countdown on it, so a step that moved everything should
 /// report the few things the goal is about rather than the clock.
 const MOVED_REPORTED: usize = 3;
+
+/// Whether the goal asks for the page to end up different than it started.
+///
+/// Deliberately a word list. The alternative is asking the model, and a
+/// question about whether to trust the model's answer cannot be settled by
+/// another of its answers. Being wrong in the permissive direction costs a
+/// completion claim that is handed back for the caller to check, which is the
+/// safer of the two mistakes.
+fn asks_for_a_change(goal: &str) -> bool {
+    const CHANGES: &[&str] = &[
+        "add", "set", "tick", "untick", "check", "uncheck", "toggle", "select", "choose", "pick",
+        "fill", "type", "enter", "write", "submit", "apply", "search", "sort", "filter", "narrow",
+        "buy", "order", "book", "pay", "remove", "delete", "clear", "sign in", "log in", "upload",
+        "download", "click", "press", "open", "go to", "navigate",
+    ];
+    let goal = goal.to_lowercase();
+    CHANGES.iter().any(|verb| goal.contains(verb))
+}
 
 fn said(decision: &Decision, changed: bool, target_name: Option<&str>, moved: &[Moved]) -> String {
     let what = decision.operation.as_str();
