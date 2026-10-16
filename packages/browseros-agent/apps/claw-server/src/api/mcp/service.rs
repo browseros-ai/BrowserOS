@@ -3329,7 +3329,7 @@ mod tests {
             .catalog
             .iter()
             .find(|tool| tool.name == RUN_TOOL_NAME)
-            .map(ToolDef::to_mcp_tool)
+            .map(|tool| tool.to_mcp_tool(service.native()))
             .ok_or_else(|| anyhow::anyhow!("run is missing from the catalogue"))?;
         let description = run
             .description
@@ -3360,7 +3360,8 @@ mod tests {
     async fn a_granular_tool_is_left_alone_by_the_recast() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
-        for tool in service.catalog.iter().map(ToolDef::to_mcp_tool) {
+        let native = service.native();
+        for tool in service.catalog.iter().map(|tool| tool.to_mcp_tool(native)) {
             if tool.name == RUN_TOOL_NAME {
                 continue;
             }

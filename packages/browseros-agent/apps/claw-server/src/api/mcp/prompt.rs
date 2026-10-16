@@ -319,7 +319,7 @@ mod tests {
     #[test]
     fn tests_that_the_setting_swaps_only_the_help_paragraph() {
         let on = mcp_instructions(HumanHelp::On, PursueOffering::Absent, current());
-        let off = mcp_instructions(HumanHelp::Off, PursueOffering::Absent);
+        let off = mcp_instructions(HumanHelp::Off, PursueOffering::Absent, current());
         let on = on.split("\n\n").collect::<Vec<_>>();
         let off = off.split("\n\n").collect::<Vec<_>>();
         assert_eq!(on.len(), off.len());
@@ -348,7 +348,7 @@ mod tests {
 
     #[test]
     fn profile_guidance_is_offered_only_to_capable_natives() {
-        let capable = mcp_instructions(HumanHelp::On, current());
+        let capable = mcp_instructions(HumanHelp::On, PursueOffering::Absent, current());
         assert!(capable.contains("Choose\nanother profile once for the task"));
         // The default rule is what agents rely on when they never select a profile.
         assert!(capable.contains("original Default profile (directory \"Default\")"));
@@ -357,7 +357,8 @@ mod tests {
             NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
             NativeCapabilities::default(),
         ] {
-            let instructions = mcp_instructions(HumanHelp::On, older);
+            let instructions =
+                mcp_instructions(HumanHelp::On, PursueOffering::Absent, older);
             assert!(!instructions.contains("browser_profiles"), "{older}");
             assert!(!instructions.contains("browser_target"), "{older}");
             assert!(!instructions.contains("Default profile"), "{older}");
