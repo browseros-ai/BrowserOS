@@ -1,6 +1,10 @@
 use super::{error, internal};
 use crate::{
-    AppState, error::CanonicalError, error::RequestId, services::agent_settings::HumanHelp,
+    AppState,
+    config::TokenSource,
+    error::CanonicalError,
+    error::RequestId,
+    services::agent_settings::{HumanHelp, MAX_JEV_TOKEN},
 };
 use axum::{
     Extension, Json,
@@ -8,7 +12,8 @@ use axum::{
     http::StatusCode,
 };
 use claw_api::models::{
-    AgentSettings, TelemetryState, UpdateAgentSettingsRequest, UpdateTelemetryRequest,
+    AgentSettings, JevTokenSource, SaveJevTokenRequest, TelemetryState, UpdateAgentSettingsRequest,
+    UpdateTelemetryRequest,
 };
 
 pub(super) async fn telemetry(State(state): State<AppState>) -> Json<TelemetryState> {
@@ -37,9 +42,7 @@ pub(super) async fn update_telemetry(
 }
 
 pub(super) async fn agent(State(state): State<AppState>) -> Json<AgentSettings> {
-    Json(to_contract_agent_settings(
-        state.agent_settings.human_help(),
-    ))
+    Json(settings_of(&state))
 }
 
 pub(super) async fn update_agent(
@@ -61,13 +64,72 @@ pub(super) async fn update_agent(
         .set_human_help(human_help)
         .await
         .map_err(|source| internal(&request_id, source))?;
-    Ok(Json(to_contract_agent_settings(human_help)))
+    Ok(Json(settings_of(&state)))
+}
+
+/// Stores the decision model credential, which offers the pursue tool.
+///
+/// Its own route rather than a field on `update_agent`, so that saving a switch can never clear
+/// a credential. The reply carries the source and never the token.
+pub(super) async fn save_jev_token(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    payload: Result<Json<SaveJevTokenRequest>, JsonRejection>,
+) -> Result<Json<AgentSettings>, CanonicalError> {
+    let Json(payload) = payload.map_err(|_| {
+        error(
+            &request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            "token must be a string",
+        )
+    })?;
+    if payload.token.trim().is_empty() || payload.token.trim().len() > MAX_JEV_TOKEN {
+        return Err(error(
+            &request_id,
+            StatusCode::BAD_REQUEST,
+            "invalid_request",
+            &format!("token must be between 1 and {MAX_JEV_TOKEN} characters"),
+        ));
+    }
+    state
+        .agent_settings
+        .set_jev_token(&payload.token)
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    Ok(Json(settings_of(&state)))
+}
+
+/// Forgets the stored credential. `JEV_TOKEN`, if set, becomes the credential again.
+pub(super) async fn remove_jev_token(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+) -> Result<Json<AgentSettings>, CanonicalError> {
+    state
+        .agent_settings
+        .clear_jev_token()
+        .await
+        .map_err(|source| internal(&request_id, source))?;
+    Ok(Json(settings_of(&state)))
 }
 
 fn to_contract_state(state: crate::analytics::TelemetryState) -> TelemetryState {
     TelemetryState::new(state.distinct_id, state.enabled, state.consent)
 }
 
-fn to_contract_agent_settings(human_help: HumanHelp) -> AgentSettings {
-    AgentSettings::new(human_help.is_enabled())
+/// The settings as the client sees them, read from the store rather than from whatever the
+/// handler happened to be given, so a reply cannot disagree with what the server will do next.
+fn settings_of(state: &AppState) -> AgentSettings {
+    AgentSettings::new(
+        state.agent_settings.human_help().is_enabled(),
+        to_contract_source(state.agent_settings.jev_token_source()),
+    )
+}
+
+fn to_contract_source(source: TokenSource) -> JevTokenSource {
+    match source {
+        TokenSource::Settings => JevTokenSource::Settings,
+        TokenSource::Environment => JevTokenSource::Environment,
+        TokenSource::None => JevTokenSource::None,
+    }
 }

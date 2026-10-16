@@ -128,16 +128,21 @@ describe('ClawApiClient', () => {
         const request =
           input instanceof Request ? input : new Request(input, init)
         requests.push(request)
-        return Response.json({ humanHelpEnabled: false })
+        return Response.json({
+          humanHelpEnabled: false,
+          jevTokenSource: 'none',
+        })
       },
     })
 
-    await expect(client.getAgentSettings()).resolves.toEqual({
+    const settings = {
       humanHelpEnabled: false,
-    })
+      jevTokenSource: 'none',
+    } as const
+    await expect(client.getAgentSettings()).resolves.toEqual(settings)
     await expect(
       client.updateAgentSettings({ humanHelpEnabled: false }),
-    ).resolves.toEqual({ humanHelpEnabled: false })
+    ).resolves.toEqual(settings)
 
     expect(requests.map((request) => request.method)).toEqual(['GET', 'PUT'])
     for (const request of requests) {
@@ -147,6 +152,37 @@ describe('ClawApiClient', () => {
     await expect(requests[1]?.text()).resolves.toBe(
       '{"humanHelpEnabled":false}',
     )
+  })
+
+  it('saves and removes the decision model token on its own route', async () => {
+    const requests: Request[] = []
+    const client = new ClawApiClient(baseUrl, {
+      fetch: async (input, init) => {
+        const request =
+          input instanceof Request ? input : new Request(input, init)
+        requests.push(request)
+        return Response.json({
+          humanHelpEnabled: true,
+          jevTokenSource: request.method === 'PUT' ? 'settings' : 'none',
+        })
+      },
+    })
+
+    await expect(
+      client.saveJevToken({ token: 'jev-a-token' }),
+    ).resolves.toEqual({ humanHelpEnabled: true, jevTokenSource: 'settings' })
+    await expect(client.removeJevToken()).resolves.toEqual({
+      humanHelpEnabled: true,
+      jevTokenSource: 'none',
+    })
+
+    expect(requests.map((request) => request.method)).toEqual(['PUT', 'DELETE'])
+    for (const request of requests) {
+      expect(new URL(request.url).pathname).toBe(
+        '/api/v1/settings/agent/jev-token',
+      )
+    }
+    await expect(requests[0]?.text()).resolves.toBe('{"token":"jev-a-token"}')
   })
 
   it('maps contract operations across JSON, NDJSON, text, blob, path, query, and headers', async () => {

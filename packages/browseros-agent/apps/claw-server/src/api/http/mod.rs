@@ -62,6 +62,10 @@ pub fn router(state: AppState) -> Router<AppState> {
             "/api/v1/settings/agent",
             get(settings::agent).put(settings::update_agent),
         )
+        .route(
+            "/api/v1/settings/agent/jev-token",
+            put(settings::save_jev_token).delete(settings::remove_jev_token),
+        )
         .route("/api/v1/sessions", get(sessions::list))
         .route("/api/v1/sessions/{session_id}", get(sessions::get))
         .route(

@@ -1,11 +1,14 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { PostHog } from 'posthog-js'
 import {
+  applyFlags,
   createPostHogConfig,
+  isFlagEnabled,
   maskCapturedReplayRequest,
   reconcileSessionRecording,
   reconcileTelemetryIdentity,
   sanitizeProperties,
+  subscribeToFlags,
 } from './posthog'
 
 const originalChrome = globalThis.chrome
@@ -77,7 +80,9 @@ describe('BrowserClaw PostHog privacy', () => {
       distinctID: 'anonymous-install-id',
     })
     expect(config.advanced_disable_decide).toBeUndefined()
-    expect(config.advanced_disable_feature_flags_on_first_load).toBe(true)
+    // Flags are evaluated, because a settings surface is gated on one, but
+    // never polled: a control vanishing mid-interaction is a bug report.
+    expect(config.advanced_disable_feature_flags_on_first_load).toBe(false)
     expect(config.remote_config_refresh_interval_ms).toBe(0)
     expect(config.save_campaign_params).toBe(false)
     expect(config.save_referrer).toBe(false)
@@ -145,5 +150,39 @@ describe('BrowserClaw PostHog privacy', () => {
     calls.length = 0
     reconcileSessionRecording(client, false, true)
     expect(calls).toEqual(['stop', 'opt-out'])
+  })
+})
+
+describe('BrowserClaw PostHog feature flags', () => {
+  it('reports a flag as off until PostHog has said otherwise', () => {
+    applyFlags([])
+    expect(isFlagEnabled('ultrafast-token-field')).toBe(false)
+    expect(isFlagEnabled('a-flag-that-does-not-exist')).toBe(false)
+  })
+
+  it('reports a flag as on once it has been evaluated', () => {
+    applyFlags(['ultrafast-token-field'])
+    expect(isFlagEnabled('ultrafast-token-field')).toBe(true)
+  })
+
+  /// Replaced rather than merged, so a flag turned off upstream disappears
+  /// instead of lingering for the life of the tab.
+  it('forgets a flag that a later evaluation leaves out', () => {
+    applyFlags(['ultrafast-token-field'])
+    applyFlags(['some-other-flag'])
+    expect(isFlagEnabled('ultrafast-token-field')).toBe(false)
+    expect(isFlagEnabled('some-other-flag')).toBe(true)
+  })
+
+  it('tells its subscribers when flags arrive, and stops when they leave', () => {
+    let told = 0
+    const unsubscribe = subscribeToFlags(() => {
+      told += 1
+    })
+    applyFlags(['ultrafast-token-field'])
+    expect(told).toBe(1)
+    unsubscribe()
+    applyFlags([])
+    expect(told).toBe(1)
   })
 })

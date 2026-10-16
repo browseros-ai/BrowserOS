@@ -327,6 +327,15 @@ fn clean_string(value: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    /// A blank or whitespace credential is no credential, which is what keeps a
+    /// half-set variable from advertising a tool that cannot run. Asserted as a
+    /// shape rather than through the environment, which no test here owns.
+    #[test]
+    fn the_offering_is_a_yes_or_a_no() {
+        assert!(super::PursueOffering::Offered.is_offered());
+        assert!(!super::PursueOffering::Absent.is_offered());
+    }
+
     use super::{Cli, CliAction, Config, ConfigEnv, NATIVE_VERSION_ENV};
     use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
@@ -658,3 +667,65 @@ mod tests {
         Ok(())
     }
 }
+
+// The decision loop is one environment variable away from being a different
+// product, and more than one layer needs the answer: the MCP catalogue, the
+// server instructions, run's own description and the managed skill all behave
+// differently when it is present. It sits with the other configuration because
+// the skill loader is a service and must not reach up into the API layer to ask.
+/// Where the decision model credential comes from.
+///
+/// Three states rather than two, because the environment case is real and a boolean cannot say
+/// it: the loop works, the page shows nothing, and the user pastes a token they did not need.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenSource {
+    /// Saved through the API. Takes precedence.
+    Settings,
+    /// `JEV_TOKEN` in the server's environment.
+    Environment,
+    /// Neither, so the pursue tool is not offered.
+    None,
+}
+
+impl TokenSource {
+    /// Whether a credential exists at all, by either route.
+    #[must_use]
+    pub fn is_present(self) -> bool {
+        self != Self::None
+    }
+}
+
+/// Whether the decision loop is offered by this server.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PursueOffering {
+    /// There is a credential, so the loop can run and is advertised.
+    Offered,
+    /// There is none. Everything behaves exactly as it did before the loop
+    /// existed, which is what every production install sees.
+    Absent,
+}
+
+impl PursueOffering {
+    /// Reads the answer off the credential's source.
+    ///
+    /// A token saved in the settings and `JEV_TOKEN` both offer the loop. Which of the two wins
+    /// is decided in the settings store, so that nothing here has to know there are two places
+    /// to look, and so the answer cannot differ between layers.
+    #[must_use]
+    pub fn of(source: TokenSource) -> Self {
+        if source.is_present() {
+            Self::Offered
+        } else {
+            Self::Absent
+        }
+    }
+
+    #[must_use]
+    pub fn is_offered(self) -> bool {
+        self == Self::Offered
+    }
+}
+
+// The credential itself is read from the settings store, which owns the precedence between a
+// saved token and JEV_TOKEN. A second reader of the environment here is how the two answers
+// drift apart, so there is not one.
