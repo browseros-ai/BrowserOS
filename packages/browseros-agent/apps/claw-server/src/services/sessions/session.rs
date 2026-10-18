@@ -33,6 +33,7 @@ pub struct Session {
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
     task_declared: AtomicBool,
+    cleanup_tip_sent: AtomicBool,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -80,6 +81,7 @@ impl Session {
             dispatches_drained: Notify::new(),
             operator_stop_requested: AtomicBool::new(false),
             task_declared: AtomicBool::new(false),
+            cleanup_tip_sent: AtomicBool::new(false),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -191,6 +193,13 @@ impl Session {
     #[must_use]
     pub fn try_mark_task_declared(&self) -> bool {
         self.task_declared
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+    }
+
+    #[must_use]
+    pub(crate) fn try_mark_cleanup_tip(&self) -> bool {
+        self.cleanup_tip_sent
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
     }
