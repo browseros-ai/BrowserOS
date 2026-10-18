@@ -5,7 +5,7 @@ use crate::{
             ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token,
             operator_cancellation_result,
         },
-        effects::tab_groups::apply_agent_tab_group_title,
+        effects::{tab_groups::apply_agent_tab_group_title, task_cleanup},
         naming::{normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
@@ -1295,6 +1295,7 @@ impl ServerHandler for ClawMcpService {
             .with_server_info(implementation)
             .with_instructions(mcp_instructions(
                 self.state.agent_settings.human_help(),
+                self.state.agent_settings.close_tab_groups_after_task(),
                 self.pursue_offering(),
                 self.native(),
             ))
@@ -1560,7 +1561,7 @@ impl ServerHandler for ClawMcpService {
             dispatch_tool_call(call).await
         };
 
-        let finished = finish_tool_call(
+        let mut finished = finish_tool_call(
             started.session.as_ref(),
             &tool_name,
             tool_started_at,
@@ -1568,6 +1569,14 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
+        if let Ok(result) = &mut finished {
+            task_cleanup::apply(
+                result,
+                Some(started.session.as_ref()),
+                self.state.agent_settings.close_tab_groups_after_task(),
+                context.ct.is_cancelled(),
+            );
+        }
         attach_session_handle(finished, session_handle, presented_handle).map(Into::into)
     }
 }
@@ -3178,7 +3187,9 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::On, service.pursue_offering(), native).as_str())
+            Some(
+                mcp_instructions(HumanHelp::On, false, service.pursue_offering(), native).as_str()
+            )
         );
         let instructions = info
             .instructions
@@ -3552,6 +3563,7 @@ mod tests {
             Some(
                 mcp_instructions(
                     HumanHelp::Off,
+                    false,
                     service.pursue_offering(),
                     call.state.config.native.capabilities,
                 )
