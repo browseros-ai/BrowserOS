@@ -1,4 +1,5 @@
 {
   "humanHelpEnabled": false,
+  "closeTabGroupsAfterTask": false,
   "jevTokenSource": "environment"
 }
