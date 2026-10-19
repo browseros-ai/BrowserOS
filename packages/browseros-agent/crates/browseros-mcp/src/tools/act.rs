@@ -175,8 +175,9 @@ struct ActArgs {
     diff: Option<ActDiff>,
     /// Treat the entered value as a secret: keep it out of the local audit log
     /// (stored as "[redacted]") and skip its screenshot. Password and payment-card
-    /// fields are detected automatically; set this for values neo cannot classify
-    /// (custom widgets, canvas inputs, type_at by coordinates).
+    /// fields are detected automatically; set this for values neo cannot classify,
+    /// such as custom widgets, canvas inputs, or a field inside a cross-origin
+    /// iframe (for example a hosted card form) typed via type/type_at.
     sensitive: Option<bool>,
 }
 
@@ -208,11 +209,18 @@ fn handler<'a>(
         let console_start = ctx.browser.signals().console_mark(&page_id);
         let input = ctx.browser.input(page_id.clone()).await?;
         let mut sensitivity = ActSensitivity::default();
-        if args.kind.is_dialog() {
-            if let Some(err) = run_kind(&args, &input, &mut sensitivity).await? {
-                return Ok(Some(err));
+        // Honor an explicit sensitive flag before the action runs: a value must
+        // still be redacted if the action later errors out (for example a stale ref
+        // on a sibling field) after this field was already filled.
+        if args.sensitive.unwrap_or(false) {
+            sensitivity.redact_all = true;
+        }
+        let outcome: ToolExecResult<Option<ToolResult>> = if args.kind.is_dialog() {
+            let result = run_kind(&args, &input, &mut sensitivity).await;
+            if matches!(result, Ok(None)) {
+                ctx.browser.signals().clear_dialog(&page_id);
             }
-            ctx.browser.signals().clear_dialog(&page_id);
+            result
         } else {
             // A confirm/prompt/beforeunload opened by this action freezes the
             // renderer, so the action's CDP ack never returns; race it against the
@@ -228,32 +236,33 @@ fn handler<'a>(
             };
             tokio::select! {
                 biased;
-                result = run_kind(&args, &input, &mut sensitivity) => {
-                    if let Some(err) = result? {
-                        return Ok(Some(err));
-                    }
-                }
+                result = run_kind(&args, &input, &mut sensitivity) => result,
                 () = dialog => {
-                    return Ok(Some(pending_dialog_result(ctx, page_id.clone()).unwrap_or_else(
+                    Ok(Some(pending_dialog_result(ctx, page_id.clone()).unwrap_or_else(
                         || {
                             text_result(
                                 "a JavaScript dialog is open on this page; use act kind=\"dialog_accept\" or \"dialog_dismiss\" before other actions".to_string(),
                                 None,
                             )
                         },
-                    )));
+                    )))
                 }
             }
-        }
-        if args.sensitive.unwrap_or(false) {
-            sensitivity.redact_all = true;
-        }
+        };
+        // Attach redaction hints before propagating any error or early return, so a
+        // secret entered into the page before a failure is still kept out of the
+        // ledger and its screenshot is skipped.
         if sensitivity.redact_all || !sensitivity.refs.is_empty() {
             response.set_audit_hints(AuditHints {
                 sensitive_refs: std::mem::take(&mut sensitivity.refs),
                 redact_all_values: sensitivity.redact_all,
                 skip_screenshot: true,
             });
+        }
+        match outcome {
+            Ok(Some(early)) => return Ok(Some(early)),
+            Ok(None) => {}
+            Err(err) => return Err(err),
         }
         response.data(json!({ "kind": args.kind.as_str() }));
         if let Some(detail) = resolve_diff_detail(args.diff) {

@@ -445,28 +445,27 @@ impl Input {
         .unwrap_or(false)
     }
 
-    /// Best-effort: true when the currently focused element (piercing shadow roots)
-    /// is a password or payment-card field. For `type`, which targets focus.
+    /// Best-effort: true when the currently focused element is a password or
+    /// payment-card field. For `type`, which targets focus. Descends shadow roots
+    /// and same-origin iframes to the real focused element; a cross-origin iframe is
+    /// opaque, so a secret typed into one relies on the explicit `sensitive` flag.
     pub async fn focused_field_is_sensitive(&self) -> bool {
-        self.evaluate_sensitive(&format!(
-            "(()=>{{const pred={predicate};\
-             let el=document.activeElement;\
-             while(el&&el.shadowRoot&&el.shadowRoot.activeElement)el=el.shadowRoot.activeElement;\
-             return pred(el);}})()",
-            predicate = SENSITIVE_FIELD_PREDICATE
-        ))
+        self.evaluate_sensitive(
+            &FOCUSED_SENSITIVE_JS.replace("__PRED__", SENSITIVE_FIELD_PREDICATE),
+        )
         .await
     }
 
     /// Best-effort: true when the element at the viewport point is a password or
-    /// payment-card field. For `type_at`, which targets coordinates.
+    /// payment-card field. For `type_at`, which targets coordinates. Descends shadow
+    /// roots and same-origin iframes (translating the point into the frame); a
+    /// cross-origin iframe is opaque and relies on the explicit `sensitive` flag.
     pub async fn point_field_is_sensitive(&self, x: f64, y: f64) -> bool {
-        self.evaluate_sensitive(&format!(
-            "(()=>{{const pred={predicate};\
-             return pred(document.elementFromPoint({x},{y}));}})()",
-            predicate = SENSITIVE_FIELD_PREDICATE
-        ))
-        .await
+        let expression = POINT_SENSITIVE_JS
+            .replace("__PRED__", SENSITIVE_FIELD_PREDICATE)
+            .replace("__X__", &x.to_string())
+            .replace("__Y__", &y.to_string());
+        self.evaluate_sensitive(&expression).await
     }
 
     async fn evaluate_sensitive(&self, expression: &str) -> bool {
@@ -543,6 +542,35 @@ const SENSITIVE_FIELD_PREDICATE: &str = "(el)=>{\
 fn sensitive_field_fn() -> String {
     format!("function(){{const pred={SENSITIVE_FIELD_PREDICATE};return pred(this);}}")
 }
+
+/// Resolves the real focused element, descending shadow roots and same-origin
+/// iframes, then applies the predicate. `__PRED__` is replaced with the predicate.
+/// The loop is capped so a pathological tree cannot spin.
+const FOCUSED_SENSITIVE_JS: &str = "(()=>{const pred=__PRED__;\
+  let el=document.activeElement;\
+  for(let i=0;i<32&&el;i++){\
+    if(el.shadowRoot&&el.shadowRoot.activeElement){el=el.shadowRoot.activeElement;continue;}\
+    if(el.tagName==='IFRAME'){let d=null;try{d=el.contentDocument;}catch(e){d=null;}\
+      if(d&&d.activeElement){el=d.activeElement;continue;}}\
+    break;\
+  }\
+  return pred(el);})()";
+
+/// Resolves the element at a viewport point, descending shadow roots and
+/// same-origin iframes (translating the point into each frame), then applies the
+/// predicate. `__PRED__`, `__X__`, `__Y__` are replaced before evaluation.
+const POINT_SENSITIVE_JS: &str = "(()=>{const pred=__PRED__;\
+  let x=__X__,y=__Y__;\
+  let el=document.elementFromPoint(x,y);\
+  for(let i=0;i<32&&el;i++){\
+    if(el.shadowRoot){const inner=el.shadowRoot.elementFromPoint(x,y);\
+      if(inner&&inner!==el){el=inner;continue;}}\
+    if(el.tagName==='IFRAME'){let d=null;try{d=el.contentDocument;}catch(e){d=null;}\
+      if(d){const r=el.getBoundingClientRect();x=x-r.left;y=y-r.top;\
+        const inner=d.elementFromPoint(x,y);if(inner){el=inner;continue;}}}\
+    break;\
+  }\
+  return pred(el);})()";
 
 const SELECT_OPTION_FN: &str = "function(val){\
   for(var i=0;i<this.options.length;i++){\
