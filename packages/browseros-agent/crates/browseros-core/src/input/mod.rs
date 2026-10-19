@@ -426,6 +426,65 @@ impl Input {
         Ok(())
     }
 
+    /// Best-effort: true when the ref resolves to a password or payment-card field.
+    /// Used by the audit layer to redact the value before it is persisted; a read
+    /// failure returns false (the explicit `sensitive` flag is the deterministic path).
+    pub async fn ref_field_is_sensitive(&self, ref_id: &Ref) -> bool {
+        let Ok(resolved) = self.observer.resolve_ref(ref_id).await else {
+            return false;
+        };
+        call_on_element(
+            &resolved.session,
+            resolved.backend_node_id,
+            &sensitive_field_fn(),
+            None,
+        )
+        .await
+        .ok()
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    }
+
+    /// Best-effort: true when the currently focused element (piercing shadow roots)
+    /// is a password or payment-card field. For `type`, which targets focus.
+    pub async fn focused_field_is_sensitive(&self) -> bool {
+        self.evaluate_sensitive(&format!(
+            "(()=>{{const pred={predicate};\
+             let el=document.activeElement;\
+             while(el&&el.shadowRoot&&el.shadowRoot.activeElement)el=el.shadowRoot.activeElement;\
+             return pred(el);}})()",
+            predicate = SENSITIVE_FIELD_PREDICATE
+        ))
+        .await
+    }
+
+    /// Best-effort: true when the element at the viewport point is a password or
+    /// payment-card field. For `type_at`, which targets coordinates.
+    pub async fn point_field_is_sensitive(&self, x: f64, y: f64) -> bool {
+        self.evaluate_sensitive(&format!(
+            "(()=>{{const pred={predicate};\
+             return pred(document.elementFromPoint({x},{y}));}})()",
+            predicate = SENSITIVE_FIELD_PREDICATE
+        ))
+        .await
+    }
+
+    async fn evaluate_sensitive(&self, expression: &str) -> bool {
+        let Ok(session) = self.page_session().await else {
+            return false;
+        };
+        let result: Result<Value, _> = session
+            .send(
+                "Runtime.evaluate",
+                json!({ "expression": expression, "returnByValue": true }),
+            )
+            .await;
+        result
+            .ok()
+            .and_then(|value| value.get("result")?.get("value")?.as_bool())
+            .unwrap_or(false)
+    }
+
     async fn page_session(&self) -> Result<ProtocolSession, CoreError> {
         match &self.access {
             Some(access) => Ok(access.session().await?.session),
@@ -466,6 +525,23 @@ impl Input {
             }
         }
     }
+}
+
+/// A field is sensitive when it is an `<input type=password>` or carries an
+/// autocomplete token for a password, a one-time code, or a payment card. Written
+/// as a JS arrow `(el) => bool` so it can run against `this`, `activeElement`, or
+/// `elementFromPoint`.
+const SENSITIVE_FIELD_PREDICATE: &str = "(el)=>{\
+  if(!el)return false;\
+  const type=((el.getAttribute&&el.getAttribute('type'))||el.type||'').toLowerCase();\
+  if(el.tagName==='INPUT'&&type==='password')return true;\
+  const ac=((el.getAttribute&&el.getAttribute('autocomplete'))||'').toLowerCase();\
+  return ac.split(/\\s+/).some(t=>t==='current-password'||t==='new-password'||t==='one-time-code'||t.startsWith('cc-'));\
+}";
+
+/// The sensitivity predicate wrapped for `Runtime.callFunctionOn` against a node (`this`).
+fn sensitive_field_fn() -> String {
+    format!("function(){{const pred={SENSITIVE_FIELD_PREDICATE};return pred(this);}}")
 }
 
 const SELECT_OPTION_FN: &str = "function(val){\

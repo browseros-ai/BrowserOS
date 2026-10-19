@@ -8,7 +8,7 @@ use crate::{
         diff::{DiffDetail, format_diff_result},
         snapshot::format_snapshot_result,
     },
-    framework::{ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
+    framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
 };
 use browseros_core::{ConsoleEntry, PageId, settle::SettleOutcome};
 use rmcp::model::ContentBlock;
@@ -43,6 +43,7 @@ pub struct ToolResponse {
     structured_content: Option<Value>,
     post_actions: Vec<PostAction>,
     console_summaries: Vec<ConsoleSummary>,
+    audit_hints: Option<AuditHints>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +52,7 @@ pub struct BuiltToolResponse {
     pub is_error: bool,
     pub structured_content: Option<Value>,
     pub metadata_tab_id: Option<i64>,
+    pub audit_hints: Option<AuditHints>,
 }
 
 impl ToolResponse {
@@ -76,6 +78,12 @@ impl ToolResponse {
         merge_structured(&mut self.structured_content, value);
     }
 
+    /// Record host-only audit hints (secret redaction, screenshot suppression) for
+    /// this dispatch. Carried to the claw-server audit layer, never to the client.
+    pub fn set_audit_hints(&mut self, hints: AuditHints) {
+        self.audit_hints = Some(hints);
+    }
+
     pub fn append_result(&mut self, result: ToolResult) {
         self.content.extend(result.content);
         if result.is_error {
@@ -83,6 +91,9 @@ impl ToolResponse {
         }
         if let Some(structured) = result.structured_content {
             self.data(structured);
+        }
+        if result.audit_hints.is_some() {
+            self.audit_hints = result.audit_hints;
         }
     }
 
@@ -161,6 +172,7 @@ impl ToolResponse {
             is_error: self.has_error,
             structured_content: self.structured_content.clone(),
             metadata_tab_id: None,
+            audit_hints: self.audit_hints.clone(),
         })
     }
 
@@ -399,6 +411,7 @@ impl BuiltToolResponse {
             content: self.content,
             is_error: self.is_error,
             structured_content: self.structured_content,
+            audit_hints: self.audit_hints,
         }
     }
 }

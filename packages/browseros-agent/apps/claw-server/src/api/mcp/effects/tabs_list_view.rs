@@ -32,6 +32,7 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
             content: vec![ContentBlock::text(render_tabs(&annotated))],
             structured_content: Some(json!({ "pages": annotated })),
             is_error: false,
+            audit_hints: None,
         }))
     })
 }

@@ -599,6 +599,7 @@ pub(super) fn operator_cancellation_result() -> ToolResult {
             "cancellationReason": CANCELLATION_REASON,
             "cancellationKind": "cockpit.operator-cancelled"
         })),
+        audit_hints: None,
     }
 }
 

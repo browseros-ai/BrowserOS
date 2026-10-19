@@ -64,6 +64,7 @@ mod tests {
             content: vec![ContentBlock::text("ok"), image.clone()],
             is_error: false,
             structured_content: Some(json!({ "pages": [] })),
+            audit_hints: None,
         };
 
         for _ in 0..5 {
