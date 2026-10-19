@@ -656,8 +656,6 @@ export interface components {
     AgentSettings: {
       /** @description Whether agents are offered request_human_help and await_human_help. When false, agents are told to report a block in their own chat instead. */
       humanHelpEnabled: boolean
-      /** @description Whether agents should close their task's tab groups when finished. Defaults to false. */
-      closeTabGroupsAfterTask: boolean
       jevTokenSource: components['schemas']['JevTokenSource']
     }
     /**
@@ -671,8 +669,6 @@ export interface components {
     }
     UpdateAgentSettingsRequest: {
       humanHelpEnabled: boolean
-      /** @description Whether to close task tab groups when finished. Omission preserves the current value. */
-      closeTabGroupsAfterTask?: boolean
     }
     /** @enum {string} */
     SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'

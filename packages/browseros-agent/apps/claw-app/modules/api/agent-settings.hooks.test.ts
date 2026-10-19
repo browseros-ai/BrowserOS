@@ -6,17 +6,14 @@ import * as api from './client'
 
 const on: AgentSettings = {
   humanHelpEnabled: true,
-  closeTabGroupsAfterTask: false,
   jevTokenSource: JevTokenSource.None,
 }
 const off: AgentSettings = {
   humanHelpEnabled: false,
-  closeTabGroupsAfterTask: false,
   jevTokenSource: JevTokenSource.None,
 }
-let read = Promise.withResolvers<AgentSettings>()
-let readStarted = Promise.withResolvers<void>()
-let savedSettings = off
+const read = Promise.withResolvers<AgentSettings>()
+const readStarted = Promise.withResolvers<void>()
 
 mock.module('./client', () => ({
   ...api,
@@ -25,7 +22,7 @@ mock.module('./client', () => ({
       readStarted.resolve()
       return read.promise
     },
-    updateAgentSettings: async () => savedSettings,
+    updateAgentSettings: async () => off,
   }),
 }))
 
@@ -36,51 +33,39 @@ const { useAgentSettings, useUpdateAgentSettings } = await import(
 afterAll(() => mock.restore())
 
 describe('agent settings save ordering', () => {
-  it.each([
-    ['human help', off],
-    ['tab cleanup', { ...on, closeTabGroupsAfterTask: true }],
-  ] as const)(
-    'tests that a %s save survives an older settings read that answers after it',
-    async (_setting, saved) => {
-      read = Promise.withResolvers<AgentSettings>()
-      readStarted = Promise.withResolvers<void>()
-      savedSettings = saved
-      const client = new QueryClient({
-        defaultOptions: { queries: { retry: false } },
-      })
-      client.setQueryData(useAgentSettings.getKey(), on)
-      // A refetch that read the old value before the save but answers after it.
-      // The transport ignores AbortSignal, so cancelling must also drop its answer.
-      const pendingRead = client
-        .fetchQuery({ ...useAgentSettings.getOptions(), staleTime: 0 })
-        .catch(() => undefined)
-      await readStarted.promise
-      const mutation = new MutationObserver(
-        client,
-        useUpdateAgentSettings.getOptions(),
+  it('tests that a save survives an older settings read that answers after it', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    })
+    client.setQueryData(useAgentSettings.getKey(), on)
+    // A refetch that read the old value before the save but answers after it.
+    // The transport ignores AbortSignal, so cancelling must also drop its answer.
+    const pendingRead = client
+      .fetchQuery({ ...useAgentSettings.getOptions(), staleTime: 0 })
+      .catch(() => undefined)
+    await readStarted.promise
+    const mutation = new MutationObserver(
+      client,
+      useUpdateAgentSettings.getOptions(),
+    )
+    const unsubscribe = mutation.subscribe(() => {})
+    try {
+      await mutation.mutate(
+        { humanHelpEnabled: false },
+        {
+          onSuccess: (saved) =>
+            client.setQueryData(useAgentSettings.getKey(), saved),
+        },
       )
-      const unsubscribe = mutation.subscribe(() => {})
-      try {
-        await mutation.mutate(
-          {
-            humanHelpEnabled: saved.humanHelpEnabled,
-            closeTabGroupsAfterTask: saved.closeTabGroupsAfterTask,
-          },
-          {
-            onSuccess: (saved) =>
-              client.setQueryData(useAgentSettings.getKey(), saved),
-          },
-        )
-        read.resolve(on)
-        await pendingRead
-        expect(
-          client.getQueryData<AgentSettings>(useAgentSettings.getKey()),
-        ).toEqual(saved)
-      } finally {
-        read.resolve(on)
-        unsubscribe()
-        client.clear()
-      }
-    },
-  )
+      read.resolve(on)
+      await pendingRead
+      expect(
+        client.getQueryData<AgentSettings>(useAgentSettings.getKey()),
+      ).toEqual(off)
+    } finally {
+      read.resolve(on)
+      unsubscribe()
+      client.clear()
+    }
+  })
 })

@@ -7,7 +7,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
         Arc,
-        atomic::{AtomicBool, AtomicU8, Ordering},
+        atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
@@ -33,7 +33,6 @@ pub struct Session {
     dispatches_drained: Notify,
     operator_stop_requested: AtomicBool,
     task_declared: AtomicBool,
-    cleanup_guidance: AtomicU8,
     cancel: CancellationToken,
     last_activity: Mutex<Instant>,
 }
@@ -42,14 +41,6 @@ struct DispatchState {
     accepting: bool,
     active: BTreeMap<DispatchId, CancellationToken>,
     pending_operator_audits: BTreeSet<DispatchId>,
-}
-
-#[repr(u8)]
-enum CleanupGuidance {
-    // Stateless discovery may have taught ON before this task had a session handle.
-    Unknown,
-    Off,
-    On,
 }
 
 impl Session {
@@ -89,7 +80,6 @@ impl Session {
             dispatches_drained: Notify::new(),
             operator_stop_requested: AtomicBool::new(false),
             task_declared: AtomicBool::new(false),
-            cleanup_guidance: AtomicU8::new(CleanupGuidance::Unknown as u8),
             cancel: CancellationToken::new(),
             last_activity: Mutex::new(now),
         })
@@ -203,26 +193,6 @@ impl Session {
         self.task_declared
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
             .is_ok()
-    }
-
-    #[must_use]
-    pub(crate) fn try_mark_cleanup_tip(&self, enabled: bool) -> bool {
-        let policy = if enabled {
-            CleanupGuidance::On
-        } else {
-            CleanupGuidance::Off
-        } as u8;
-        self.cleanup_guidance.swap(policy, Ordering::AcqRel) != policy
-    }
-
-    /// A legacy initialize already taught preservation, so its first OFF reply needs no tip.
-    pub(crate) fn seed_cleanup_off(&self) {
-        let _ = self.cleanup_guidance.compare_exchange(
-            CleanupGuidance::Unknown as u8,
-            CleanupGuidance::Off as u8,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        );
     }
 
     /// Keeps Stop-owned calls active until their effects finish and audit reconciliation is queued.

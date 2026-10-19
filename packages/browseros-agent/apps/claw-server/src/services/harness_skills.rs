@@ -147,37 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn tests_that_packaged_guides_defer_to_the_server_cleanup_preference() {
-        let root_guide = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../../../skills/browseros-neo/SKILL.md"
-        ));
-        let mut cleanup_lines = Vec::new();
-        for guide in [embedded_browserclaw_skill(), root_guide] {
-            let line = guide
-                .lines()
-                .find(|line| line.contains("server's tab-group cleanup preference"));
-            assert!(
-                line.is_some(),
-                "guide must defer to the server cleanup preference"
-            );
-            let line = line.unwrap_or_default();
-            assert!(line.contains("latest"));
-            assert!(line.contains("when enabled"));
-            assert!(line.contains("after finishing"));
-            assert!(
-                line.contains("`tab_groups` action=\"close\" groupId=\"<your task group id>\"")
-            );
-            assert!(line.contains("Preserve useful pages otherwise"));
-            assert!(line.contains("explicit user requests to keep results open"));
-            assert!(line.contains("user's and other agents' groups"));
-            assert!(!guide.contains("Preserve useful pages that the user may want to inspect instead of closing them when the task ends."));
-            cleanup_lines.push(line);
-        }
-        assert_eq!(cleanup_lines[0], cleanup_lines[1]);
-    }
-
-    #[test]
     fn a_server_with_the_loop_installs_a_guide_that_prefers_it()
     -> Result<(), Box<dyn std::error::Error>> {
         let root = tempdir()?;

@@ -25,12 +25,6 @@ export interface AgentSettings {
      */
     humanHelpEnabled: boolean;
     /**
-     * Whether agents should close their task's tab groups when finished. Defaults to false.
-     * @type {boolean}
-     * @memberof AgentSettings
-     */
-    closeTabGroupsAfterTask: boolean;
-    /**
      *
      * @type {JevTokenSource}
      * @memberof AgentSettings
@@ -101,12 +95,6 @@ export interface UpdateAgentSettingsRequest {
      * @memberof UpdateAgentSettingsRequest
      */
     humanHelpEnabled: boolean;
-    /**
-     * Whether to close task tab groups when finished. Omission preserves the current value.
-     * @type {boolean}
-     * @memberof UpdateAgentSettingsRequest
-     */
-    closeTabGroupsAfterTask?: boolean;
 }
 
 /**

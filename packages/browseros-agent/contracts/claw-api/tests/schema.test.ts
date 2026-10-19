@@ -27,29 +27,6 @@ function yaml(name: string): Record<string, unknown> {
   >
 }
 
-describe('agent settings API schema', () => {
-  test('tests that cleanup is required in responses and optional in updates', () => {
-    const schemas = yaml('schemas/settings.yaml') as Record<
-      string,
-      { required: string[]; properties: Record<string, { type: string }> }
-    >
-    expect(schemas.AgentSettings?.required).toContain('closeTabGroupsAfterTask')
-    expect(
-      schemas.AgentSettings?.properties.closeTabGroupsAfterTask?.type,
-    ).toBe('boolean')
-    expect(schemas.UpdateAgentSettingsRequest?.required).toEqual([
-      'humanHelpEnabled',
-    ])
-    expect(
-      schemas.UpdateAgentSettingsRequest?.properties.closeTabGroupsAfterTask
-        ?.type,
-    ).toBe('boolean')
-    expect(
-      schemas.UpdateAgentSettingsRequest?.properties.closeTabGroupsAfterTask,
-    ).not.toHaveProperty('nullable', true)
-  })
-})
-
 describe('session visual API schema', () => {
   test('owns preview and screenshot routes beneath sessions', () => {
     const openapi = yaml('openapi.yaml') as {

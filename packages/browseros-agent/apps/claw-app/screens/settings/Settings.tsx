@@ -23,9 +23,6 @@ import {
 const HUMAN_HELP_SWITCH_ID = 'human-help-switch'
 const HUMAN_HELP_TITLE_ID = 'human-help-title'
 const HUMAN_HELP_DESCRIPTION_ID = 'human-help-description'
-const CLOSE_TAB_GROUPS_SWITCH_ID = 'close-tab-groups-switch'
-const CLOSE_TAB_GROUPS_TITLE_ID = 'close-tab-groups-title'
-const CLOSE_TAB_GROUPS_DESCRIPTION_ID = 'close-tab-groups-description'
 /**
  * The flag that reveals the token field.
  *
@@ -37,7 +34,10 @@ const JEV_INPUT_ID = 'jev-token-input'
 const JEV_TITLE_ID = 'jev-token-title'
 const JEV_DESCRIPTION_ID = 'jev-token-description'
 
-/** Server-owned preferences for agent tools and task cleanup. */
+/**
+ * Server-owned agent tool settings. The switch shows the server's value, and
+ * a change applies to the next tool list an agent reads.
+ */
 export function Settings() {
   const settings = useAgentSettings()
   // false as the server snapshot, so a static render and a cold open agree:
@@ -51,45 +51,14 @@ export function Settings() {
   const queryClient = useQueryClient()
 
   const handleHumanHelpChange = (humanHelpEnabled: boolean) => {
-    const current = queryClient.getQueryData<AgentSettings>(
-      useAgentSettings.getKey(),
-    )
-    if (!current) {
-      return
-    }
-
     updateSettings.mutate(
-      {
-        humanHelpEnabled,
-        closeTabGroupsAfterTask: current.closeTabGroupsAfterTask,
-      },
+      { humanHelpEnabled },
       {
         onSuccess: (saved) => {
           queryClient.setQueryData(useAgentSettings.getKey(), saved)
           track(AnalyticsEvent.HumanHelpToggled, {
             enabled: saved.humanHelpEnabled,
           })
-        },
-      },
-    )
-  }
-
-  const handleCloseTabGroupsChange = (closeTabGroupsAfterTask: boolean) => {
-    const current = queryClient.getQueryData<AgentSettings>(
-      useAgentSettings.getKey(),
-    )
-    if (!current) {
-      return
-    }
-
-    updateSettings.mutate(
-      {
-        humanHelpEnabled: current.humanHelpEnabled,
-        closeTabGroupsAfterTask,
-      },
-      {
-        onSuccess: (saved) => {
-          queryClient.setQueryData(useAgentSettings.getKey(), saved)
         },
       },
     )
@@ -141,33 +110,6 @@ export function Settings() {
               // does not flip on load unless the user turned it off.
               checked={settings.data?.humanHelpEnabled ?? true}
               onCheckedChange={handleHumanHelpChange}
-              disabled={!settings.data || updateSettings.isPending}
-            />
-          </label>
-          <label
-            htmlFor={CLOSE_TAB_GROUPS_SWITCH_ID}
-            className="flex items-center justify-between gap-6 border-ledger-divider border-t px-5 py-4"
-          >
-            <span className="flex flex-col gap-1">
-              <span
-                id={CLOSE_TAB_GROUPS_TITLE_ID}
-                className="font-medium text-ink text-sm"
-              >
-                Close tab groups after the agent finishes a task
-              </span>
-              <span
-                id={CLOSE_TAB_GROUPS_DESCRIPTION_ID}
-                className="text-[13px] text-ink-2 leading-snug"
-              >
-                Asks agents to close their own task groups when finished.
-              </span>
-            </span>
-            <Switch
-              id={CLOSE_TAB_GROUPS_SWITCH_ID}
-              aria-labelledby={CLOSE_TAB_GROUPS_TITLE_ID}
-              aria-describedby={CLOSE_TAB_GROUPS_DESCRIPTION_ID}
-              checked={settings.data?.closeTabGroupsAfterTask ?? false}
-              onCheckedChange={handleCloseTabGroupsChange}
               disabled={!settings.data || updateSettings.isPending}
             />
           </label>

@@ -20,16 +20,13 @@ AgentSettings:
   type: object
   description: User settings for the tools BrowserOS neo offers to agents.
   additionalProperties: false
-  required: [humanHelpEnabled, closeTabGroupsAfterTask, jevTokenSource]
+  required: [humanHelpEnabled, jevTokenSource]
   properties:
     humanHelpEnabled:
       type: boolean
       description: >-
         Whether agents are offered request_human_help and await_human_help. When false, agents
         are told to report a block in their own chat instead.
-    closeTabGroupsAfterTask:
-      type: boolean
-      description: Whether agents should close their task's tab groups when finished. Defaults to false.
     jevTokenSource:
       $ref: '#/JevTokenSource'
 JevTokenSource:
@@ -58,6 +55,3 @@ UpdateAgentSettingsRequest:
   properties:
     humanHelpEnabled:
       type: boolean
-    closeTabGroupsAfterTask:
-      type: boolean
-      description: Whether to close task tab groups when finished. Omission preserves the current value.

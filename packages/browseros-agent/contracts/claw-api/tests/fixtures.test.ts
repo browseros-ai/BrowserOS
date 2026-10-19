@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { AgentSettings, CockpitStats } from '@browseros/claw-api'
+import type { CockpitStats } from '@browseros/claw-api'
 import { parse } from 'yaml'
 
 const fixturesDir = join(import.meta.dir, '../fixtures')
@@ -23,20 +23,6 @@ function yaml(name: string): Record<string, unknown> {
 function jsonRoundTrip<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
-
-describe('agent settings API fixture', () => {
-  test('tests that settings include the cleanup preference', () => {
-    const settings = fixture('agent-settings.json') as AgentSettings
-    expect(settings.closeTabGroupsAfterTask).toBe(false)
-    const schemas = yaml('schemas/settings.yaml') as {
-      AgentSettings: { required: string[] }
-    }
-    expect(Object.keys(settings).toSorted()).toEqual(
-      schemas.AgentSettings.required.toSorted(),
-    )
-    expect(jsonRoundTrip(settings)).toEqual(settings)
-  })
-})
 
 describe('session visual API fixtures', () => {
   test('uses resource IDs in session and dispatch DTOs', () => {

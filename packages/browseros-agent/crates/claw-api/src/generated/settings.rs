@@ -17,9 +17,6 @@ pub struct AgentSettings {
     /// Whether agents are offered request_human_help and await_human_help. When false, agents are told to report a block in their own chat instead.
     #[serde(rename = "humanHelpEnabled")]
     pub human_help_enabled: bool,
-    /// Whether agents should close their task's tab groups when finished. Defaults to false.
-    #[serde(rename = "closeTabGroupsAfterTask")]
-    pub close_tab_groups_after_task: bool,
     #[serde(rename = "jevTokenSource")]
     pub jev_token_source: models::JevTokenSource,
 }
@@ -28,12 +25,10 @@ impl AgentSettings {
     /// User settings for the tools BrowserOS neo offers to agents.
     pub fn new(
         human_help_enabled: bool,
-        close_tab_groups_after_task: bool,
         jev_token_source: models::JevTokenSource,
     ) -> AgentSettings {
         AgentSettings {
             human_help_enabled,
-            close_tab_groups_after_task,
             jev_token_source,
         }
     }
@@ -104,20 +99,11 @@ impl TelemetryState {
 pub struct UpdateAgentSettingsRequest {
     #[serde(rename = "humanHelpEnabled")]
     pub human_help_enabled: bool,
-    /// Whether to close task tab groups when finished. Omission preserves the current value.
-    #[serde(
-        rename = "closeTabGroupsAfterTask",
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub close_tab_groups_after_task: Option<bool>,
 }
 
 impl UpdateAgentSettingsRequest {
     pub fn new(human_help_enabled: bool) -> UpdateAgentSettingsRequest {
-        UpdateAgentSettingsRequest {
-            human_help_enabled,
-            close_tab_groups_after_task: None,
-        }
+        UpdateAgentSettingsRequest { human_help_enabled }
     }
 }
 

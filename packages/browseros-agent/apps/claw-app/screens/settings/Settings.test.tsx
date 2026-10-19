@@ -29,7 +29,6 @@ import * as api from '@/modules/api/client'
 
 const settingsOf = (overrides: Partial<AgentSettings> = {}): AgentSettings => ({
   humanHelpEnabled: true,
-  closeTabGroupsAfterTask: false,
   jevTokenSource: JevTokenSource.None,
   ...overrides,
 })
@@ -129,9 +128,9 @@ function renderPage(settings?: AgentSettings): Document {
   return page.document
 }
 
-function switchIn(page: Document | Element, id = 'human-help-switch'): Element {
-  const element = page.querySelector(`#${id}[role="switch"]`)
-  if (!element) throw new Error(`no ${id} switch`)
+function switchIn(page: Document | Element): Element {
+  const element = page.querySelector('[role="switch"]')
+  if (!element) throw new Error('no switch')
   return element
 }
 
@@ -163,44 +162,6 @@ describe('Settings screen', () => {
     expect(textOf(toggle.getAttribute('aria-describedby'))).toBe(
       'Lets agents pause and ask you to take over the page for a sign-in, a code, or a captcha. When off, agents tell you what they need in their own chat instead.',
     )
-  })
-
-  it.each([true, false])(
-    'tests that cleanup shows the server value %s',
-    (closeTabGroupsAfterTask) => {
-      const toggle = switchIn(
-        renderPage(settingsOf({ closeTabGroupsAfterTask })),
-        'close-tab-groups-switch',
-      )
-
-      expect(toggle.getAttribute('aria-checked')).toBe(
-        String(closeTabGroupsAfterTask),
-      )
-      expect(toggle.hasAttribute('disabled')).toBe(false)
-    },
-  )
-
-  it('tests that cleanup has an accessible title and description below human help', () => {
-    const page = renderPage(settingsOf())
-    const toggle = switchIn(page, 'close-tab-groups-switch')
-    const textOf = (id: string | null) =>
-      id ? page.getElementById(id)?.textContent : undefined
-
-    expect(page.querySelector(`label[for="${toggle.id}"]`)).not.toBeNull()
-    expect(textOf(toggle.getAttribute('aria-labelledby'))).toBe(
-      'Close tab groups after the agent finishes a task',
-    )
-    expect(textOf(toggle.getAttribute('aria-describedby'))).toBe(
-      'Asks agents to close their own task groups when finished.',
-    )
-    expect(
-      Array.from(page.querySelectorAll('[role="switch"]')).map((element) =>
-        textOf(element.getAttribute('aria-labelledby')),
-      ),
-    ).toEqual([
-      'Ask for human help',
-      'Close tab groups after the agent finishes a task',
-    ])
   })
 })
 
@@ -287,9 +248,9 @@ describe('Settings screen interactions', () => {
     await settle()
   }
 
-  async function clickSwitch(id = 'human-help-switch') {
+  async function clickSwitch() {
     await act(async () => {
-      switchIn(container, id).dispatchEvent(
+      switchIn(container).dispatchEvent(
         new window.Event('click', { bubbles: true }),
       )
     })
@@ -308,30 +269,12 @@ describe('Settings screen interactions', () => {
     expect(switchIn(container).hasAttribute('disabled')).toBe(true)
     // Until the server answers, the switch shows its default: on.
     expect(switchIn(container).getAttribute('aria-checked')).toBe('true')
-    expect(
-      switchIn(container, 'close-tab-groups-switch').hasAttribute('disabled'),
-    ).toBe(true)
-    expect(
-      switchIn(container, 'close-tab-groups-switch').getAttribute(
-        'aria-checked',
-      ),
-    ).toBe('false')
 
-    read.resolve(
-      settingsOf({ humanHelpEnabled: false, closeTabGroupsAfterTask: true }),
-    )
+    read.resolve(settingsOf({ humanHelpEnabled: false }))
     await settle()
 
     expect(switchIn(container).hasAttribute('disabled')).toBe(false)
     expect(switchIn(container).getAttribute('aria-checked')).toBe('false')
-    expect(
-      switchIn(container, 'close-tab-groups-switch').hasAttribute('disabled'),
-    ).toBe(false)
-    expect(
-      switchIn(container, 'close-tab-groups-switch').getAttribute(
-        'aria-checked',
-      ),
-    ).toBe('true')
   })
 
   it('tests that a load error shows a notice instead of the switch', async () => {
@@ -350,46 +293,35 @@ describe('Settings screen interactions', () => {
     await mount()
     await clickSwitch()
 
-    expect(server.saves).toEqual([
-      { humanHelpEnabled: false, closeTabGroupsAfterTask: false },
-    ])
+    expect(server.saves).toEqual([{ humanHelpEnabled: false }])
     expect(switchIn(container).getAttribute('aria-checked')).toBe('false')
     expect(captured).toEqual([
       { event: 'human_help_toggled', properties: { enabled: false } },
     ])
   })
 
-  it.each(['human-help-switch', 'close-tab-groups-switch'])(
-    'tests that both switches are disabled while %s is saving',
-    async (id) => {
-      const save = Promise.withResolvers<AgentSettings>()
-      server.save = () => save.promise
-      await mount()
-      await clickSwitch(id)
+  it('tests that the switch is disabled and nothing is tracked while a save is pending', async () => {
+    const save = Promise.withResolvers<AgentSettings>()
+    server.save = () => save.promise
+    await mount()
+    await clickSwitch()
 
-      for (const toggle of container.querySelectorAll('[role="switch"]')) {
-        expect(toggle.hasAttribute('disabled')).toBe(true)
-      }
-      expect(captured).toEqual([])
+    expect(switchIn(container).hasAttribute('disabled')).toBe(true)
+    expect(captured).toEqual([])
 
-      save.resolve(settingsOf(server.saves[0]))
-      await settle()
+    save.resolve(settingsOf({ humanHelpEnabled: false }))
+    await settle()
 
-      for (const toggle of container.querySelectorAll('[role="switch"]')) {
-        expect(toggle.hasAttribute('disabled')).toBe(false)
-      }
-      expect(captured).toHaveLength(id === 'human-help-switch' ? 1 : 0)
-    },
-  )
+    expect(switchIn(container).hasAttribute('disabled')).toBe(false)
+    expect(captured).toHaveLength(1)
+  })
 
   it('tests that the switch and analytics follow the value the server saved', async () => {
     server.save = async () => settingsOf({ humanHelpEnabled: true })
     await mount()
     await clickSwitch()
 
-    expect(server.saves).toEqual([
-      { humanHelpEnabled: false, closeTabGroupsAfterTask: false },
-    ])
+    expect(server.saves).toEqual([{ humanHelpEnabled: false }])
     expect(switchIn(container).getAttribute('aria-checked')).toBe('true')
     expect(captured).toEqual([
       { event: 'human_help_toggled', properties: { enabled: true } },
@@ -426,135 +358,6 @@ describe('Settings screen interactions', () => {
       { event: 'human_help_toggled', properties: { enabled: false } },
     ])
   })
-
-  it.each([true, false])(
-    'tests that toggling cleanup from %s preserves human help and caches the save',
-    async (closeTabGroupsAfterTask) => {
-      server.read = async () =>
-        settingsOf({ humanHelpEnabled: false, closeTabGroupsAfterTask })
-      await mount()
-      await clickSwitch('close-tab-groups-switch')
-
-      const saved = settingsOf({
-        humanHelpEnabled: false,
-        closeTabGroupsAfterTask: !closeTabGroupsAfterTask,
-      })
-      expect(server.saves).toEqual([
-        {
-          humanHelpEnabled: false,
-          closeTabGroupsAfterTask: !closeTabGroupsAfterTask,
-        },
-      ])
-      expect(
-        switchIn(container, 'close-tab-groups-switch').getAttribute(
-          'aria-checked',
-        ),
-      ).toBe(String(!closeTabGroupsAfterTask))
-      expect(
-        client.getQueryData<AgentSettings>(useAgentSettings.getKey()),
-      ).toEqual(saved)
-      expect(captured).toEqual([])
-    },
-  )
-
-  it('tests that human help preserves the latest cached cleanup value', async () => {
-    await mount()
-    await act(async () => {
-      client.setQueryData(
-        useAgentSettings.getKey(),
-        settingsOf({ closeTabGroupsAfterTask: true }),
-      )
-      switchIn(container).dispatchEvent(
-        new window.Event('click', { bubbles: true }),
-      )
-    })
-    await settle()
-
-    expect(server.saves).toEqual([
-      { humanHelpEnabled: false, closeTabGroupsAfterTask: true },
-    ])
-    expect(
-      switchIn(container, 'close-tab-groups-switch').getAttribute(
-        'aria-checked',
-      ),
-    ).toBe('true')
-  })
-
-  it('tests that cleanup preserves the latest cached human help value', async () => {
-    await mount()
-    await act(async () => {
-      client.setQueryData(
-        useAgentSettings.getKey(),
-        settingsOf({ humanHelpEnabled: false }),
-      )
-      switchIn(container, 'close-tab-groups-switch').dispatchEvent(
-        new window.Event('click', { bubbles: true }),
-      )
-    })
-    await settle()
-
-    expect(server.saves).toEqual([
-      { humanHelpEnabled: false, closeTabGroupsAfterTask: true },
-    ])
-    expect(switchIn(container).getAttribute('aria-checked')).toBe('false')
-  })
-
-  it('tests that cleanup follows the saved response instead of the requested value', async () => {
-    server.save = async () => settingsOf()
-    await mount()
-    await clickSwitch('close-tab-groups-switch')
-
-    expect(server.saves).toEqual([
-      { humanHelpEnabled: true, closeTabGroupsAfterTask: true },
-    ])
-    expect(
-      switchIn(container, 'close-tab-groups-switch').getAttribute(
-        'aria-checked',
-      ),
-    ).toBe('false')
-    expect(
-      client.getQueryData<AgentSettings>(useAgentSettings.getKey()),
-    ).toEqual(settingsOf())
-    expect(captured).toEqual([])
-  })
-
-  it.each([true, false])(
-    'tests that failed cleanup saves preserve %s and can be retried',
-    async (closeTabGroupsAfterTask) => {
-      const original = settingsOf({ closeTabGroupsAfterTask })
-      server.read = async () => original
-      server.save = async () => {
-        throw new Error('internal_error')
-      }
-      await mount()
-      await clickSwitch('close-tab-groups-switch')
-
-      expect(saveError()).toBe('Could not save this setting. Try again.')
-      expect(
-        switchIn(container, 'close-tab-groups-switch').getAttribute(
-          'aria-checked',
-        ),
-      ).toBe(String(closeTabGroupsAfterTask))
-      expect(
-        client.getQueryData<AgentSettings>(useAgentSettings.getKey()),
-      ).toEqual(original)
-      expect(
-        switchIn(container, 'close-tab-groups-switch').hasAttribute('disabled'),
-      ).toBe(false)
-      expect(captured).toEqual([])
-
-      server.save = async (body) => settingsOf(body)
-      await clickSwitch('close-tab-groups-switch')
-
-      expect(saveError()).toBeUndefined()
-      expect(
-        switchIn(container, 'close-tab-groups-switch').getAttribute(
-          'aria-checked',
-        ),
-      ).toBe(String(!closeTabGroupsAfterTask))
-      expect(captured).toEqual([])
-    },
-  )
   // --- the decision model credential ---------------------------------------
 
   function tokenField(): HTMLInputElement | null {
@@ -743,8 +546,6 @@ describe('Settings screen interactions', () => {
     expect(buttonNamed('Remove')).toBeNull()
     expect(server.tokenRemovals).toBe(0)
     await clickSwitch()
-    expect(server.saves).toEqual([
-      { humanHelpEnabled: false, closeTabGroupsAfterTask: false },
-    ])
+    expect(server.saves).toEqual([{ humanHelpEnabled: false }])
   })
 })
