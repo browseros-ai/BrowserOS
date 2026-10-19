@@ -181,6 +181,7 @@ struct ServiceLifecycle {
     client_info: Option<ClientInfo>,
     session_id: Option<SessionId>,
     started: bool,
+    cleanup_initialized_off: bool,
     /// Whether this connection has already been told its session went away.
     ///
     /// A legacy connection is identified by its transport session, so unlike a stateless
@@ -243,6 +244,23 @@ impl ClawMcpService {
 
     fn native(&self) -> browseros_core::NativeCapabilities {
         self.state.config.native.capabilities
+    }
+
+    fn info_for_cleanup(&self, enabled: bool) -> InitializeResult {
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .build();
+        let mut implementation = Implementation::new(SERVER_NAME, VERSION);
+        implementation.title = Some(SERVER_TITLE.to_string());
+        InitializeResult::new(capabilities)
+            .with_server_info(implementation)
+            .with_instructions(mcp_instructions(
+                self.state.agent_settings.human_help(),
+                enabled,
+                self.pursue_offering(),
+                self.native(),
+            ))
     }
 
     fn find_tool_index(&self, name: &str) -> Option<usize> {
@@ -1041,6 +1059,9 @@ impl ClawMcpService {
         let started = self
             .start_session_in_store(session_id, SessionClient::resolve(Some(client), None))
             .await?;
+        if lifecycle.cleanup_initialized_off {
+            started.session.seed_cleanup_off();
+        }
         lifecycle.started = true;
         Ok(started)
     }
@@ -1285,20 +1306,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
 
 impl ServerHandler for ClawMcpService {
     fn get_info(&self) -> InitializeResult {
-        let capabilities = ServerCapabilities::builder()
-            .enable_tools()
-            .enable_tool_list_changed()
-            .build();
-        let mut implementation = Implementation::new(SERVER_NAME, VERSION);
-        implementation.title = Some(SERVER_TITLE.to_string());
-        InitializeResult::new(capabilities)
-            .with_server_info(implementation)
-            .with_instructions(mcp_instructions(
-                self.state.agent_settings.human_help(),
-                self.state.agent_settings.close_tab_groups_after_task(),
-                self.pursue_offering(),
-                self.native(),
-            ))
+        self.info_for_cleanup(self.state.agent_settings.close_tab_groups_after_task())
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -1312,7 +1320,9 @@ impl ServerHandler for ClawMcpService {
     ) -> Result<InitializeResult, McpError> {
         context.peer.set_peer_info(request.clone());
         self.set_client_info(&request).await;
-        let info = self.get_info();
+        let cleanup = self.state.agent_settings.close_tab_groups_after_task();
+        self.lifecycle.lock().await.cleanup_initialized_off = !cleanup;
+        let info = self.info_for_cleanup(cleanup);
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return Ok(info);
         };
