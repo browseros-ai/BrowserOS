@@ -5,7 +5,7 @@ use crate::{
             ToolCall, ToolIdentity, dispatch_tool_call, linked_cancel_token,
             operator_cancellation_result,
         },
-        effects::tab_groups::apply_agent_tab_group_title,
+        effects::{tab_groups::apply_agent_tab_group_title, task_cleanup},
         naming::{normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
@@ -181,6 +181,7 @@ struct ServiceLifecycle {
     client_info: Option<ClientInfo>,
     session_id: Option<SessionId>,
     started: bool,
+    cleanup_initialized_off: bool,
     /// Whether this connection has already been told its session went away.
     ///
     /// A legacy connection is identified by its transport session, so unlike a stateless
@@ -243,6 +244,23 @@ impl ClawMcpService {
 
     fn native(&self) -> browseros_core::NativeCapabilities {
         self.state.config.native.capabilities
+    }
+
+    fn info_for_cleanup(&self, enabled: bool) -> InitializeResult {
+        let capabilities = ServerCapabilities::builder()
+            .enable_tools()
+            .enable_tool_list_changed()
+            .build();
+        let mut implementation = Implementation::new(SERVER_NAME, VERSION);
+        implementation.title = Some(SERVER_TITLE.to_string());
+        InitializeResult::new(capabilities)
+            .with_server_info(implementation)
+            .with_instructions(mcp_instructions(
+                self.state.agent_settings.human_help(),
+                enabled,
+                self.pursue_offering(),
+                self.native(),
+            ))
     }
 
     fn find_tool_index(&self, name: &str) -> Option<usize> {
@@ -1041,6 +1059,9 @@ impl ClawMcpService {
         let started = self
             .start_session_in_store(session_id, SessionClient::resolve(Some(client), None))
             .await?;
+        if lifecycle.cleanup_initialized_off {
+            started.session.seed_cleanup_off();
+        }
         lifecycle.started = true;
         Ok(started)
     }
@@ -1285,19 +1306,7 @@ const SUPPORTED_PROTOCOL_VERSIONS: &[ProtocolVersion] = &[
 
 impl ServerHandler for ClawMcpService {
     fn get_info(&self) -> InitializeResult {
-        let capabilities = ServerCapabilities::builder()
-            .enable_tools()
-            .enable_tool_list_changed()
-            .build();
-        let mut implementation = Implementation::new(SERVER_NAME, VERSION);
-        implementation.title = Some(SERVER_TITLE.to_string());
-        InitializeResult::new(capabilities)
-            .with_server_info(implementation)
-            .with_instructions(mcp_instructions(
-                self.state.agent_settings.human_help(),
-                self.pursue_offering(),
-                self.native(),
-            ))
+        self.info_for_cleanup(self.state.agent_settings.close_tab_groups_after_task())
     }
 
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
@@ -1311,7 +1320,9 @@ impl ServerHandler for ClawMcpService {
     ) -> Result<InitializeResult, McpError> {
         context.peer.set_peer_info(request.clone());
         self.set_client_info(&request).await;
-        let info = self.get_info();
+        let cleanup = self.state.agent_settings.close_tab_groups_after_task();
+        self.lifecycle.lock().await.cleanup_initialized_off = !cleanup;
+        let info = self.info_for_cleanup(cleanup);
         let Some(session_id) = session_id_from_extensions(&context.extensions) else {
             return Ok(info);
         };
@@ -1560,7 +1571,7 @@ impl ServerHandler for ClawMcpService {
             dispatch_tool_call(call).await
         };
 
-        let finished = finish_tool_call(
+        let mut finished = finish_tool_call(
             started.session.as_ref(),
             &tool_name,
             tool_started_at,
@@ -1568,6 +1579,14 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
+        if let Ok(result) = &mut finished {
+            task_cleanup::apply(
+                result,
+                Some(started.session.as_ref()),
+                self.state.agent_settings.close_tab_groups_after_task(),
+                context.ct.is_cancelled(),
+            );
+        }
         attach_session_handle(finished, session_handle, presented_handle).map(Into::into)
     }
 }
@@ -3178,7 +3197,9 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::On, service.pursue_offering(), native).as_str())
+            Some(
+                mcp_instructions(HumanHelp::On, false, service.pursue_offering(), native).as_str()
+            )
         );
         let instructions = info
             .instructions
@@ -3552,6 +3573,7 @@ mod tests {
             Some(
                 mcp_instructions(
                     HumanHelp::Off,
+                    false,
                     service.pursue_offering(),
                     call.state.config.native.capabilities,
                 )

@@ -13,7 +13,7 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 - Call `name_session` early with a 2-3 word task label, the best-fit `category`, and a short PII-free `summary` you can search for later; tabs group as `<client>/<name>` in the cockpit.
 - Open your own tab with `tabs` action `"new"` for work of your own. You may also use the user's tabs and other agents' tabs: ownership is a label telling you whose a tab is, never a barrier.
 - A tab that is not yours is still someone's. Leave it as you found it unless the user asked you to change it, and prefer your own tab for anything exploratory.
-- Preserve useful pages that the user may want to inspect instead of closing them when the task ends.
+- Follow the server's tab-group cleanup preference from its latest instructions or tool tip, replacing earlier cleanup guidance: when enabled, close only your task's groups with `tab_groups` action="close" groupId="<your task group id>" after finishing. Preserve useful pages otherwise. Honor explicit user requests to keep results open; leave the user's and other agents' groups alone.
 - Give independent subtasks their own tabs, at most 5 at a time unless the user asks for more.
 
 ## Core loop: snapshot -> act -> verify

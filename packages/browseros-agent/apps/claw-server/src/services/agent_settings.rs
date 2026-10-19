@@ -1,6 +1,6 @@
 //! The user's agent-tool settings, persisted as `agent-settings.json` in the BrowserClaw dir.
-//! Loaded once at startup: a missing, corrupt, or unreadable file keeps human help on and never
-//! fails the start. The value is mirrored in an atomic because MCP `initialize`,
+//! Loaded once at startup: a missing, corrupt, or unreadable file keeps human help on and
+//! cleanup off. Values are mirrored in atomics because MCP `initialize`,
 //! `server/discover`, and `tools/list` read it synchronously.
 //!
 //! The decision model credential lives here too, in a file of its own. Two reasons it is not a
@@ -53,17 +53,19 @@ struct TokenFile {
     jev_token: String,
 }
 
-/// The file's shape. A missing key keeps human help on, so `{}` changes nothing.
+/// Missing keys preserve the defaults for older settings files.
 #[derive(Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 struct SettingsFile {
     human_help_enabled: bool,
+    close_tab_groups_after_task: bool,
 }
 
 impl Default for SettingsFile {
     fn default() -> Self {
         Self {
             human_help_enabled: true,
+            close_tab_groups_after_task: false,
         }
     }
 }
@@ -71,6 +73,7 @@ impl Default for SettingsFile {
 pub struct AgentSettingsStore {
     files: JsonStore,
     human_help_enabled: AtomicBool,
+    close_tab_groups_after_task: AtomicBool,
     /// Whether a saved token exists, for the synchronous readers that only need
     /// to know whether to offer the tool.
     jev_token_saved: AtomicBool,
@@ -96,12 +99,12 @@ impl AgentSettingsStore {
     /// A test that asserted precedence by reading the real environment would pass or fail by
     /// whose shell ran it, which this codebase has been bitten by before.
     pub async fn load_with_environment(files: JsonStore, from_environment: Option<String>) -> Self {
-        let human_help = match files.read_json::<SettingsFile>(AGENT_SETTINGS_FILE).await {
-            Ok(file) => HumanHelp::from_enabled(file.human_help_enabled),
-            Err(AppError::StorageNotFound(_)) => HumanHelp::On,
+        let settings = match files.read_json::<SettingsFile>(AGENT_SETTINGS_FILE).await {
+            Ok(file) => file,
+            Err(AppError::StorageNotFound(_)) => SettingsFile::default(),
             Err(error) => {
-                tracing::warn!(%error, "agent settings unreadable; keeping human help on");
-                HumanHelp::On
+                tracing::warn!(%error, "agent settings unreadable; using defaults");
+                SettingsFile::default()
             }
         };
         // A credential that cannot be read is the same as no credential: a server that will
@@ -116,7 +119,8 @@ impl AgentSettingsStore {
         };
         Self {
             files,
-            human_help_enabled: AtomicBool::new(human_help.is_enabled()),
+            human_help_enabled: AtomicBool::new(settings.human_help_enabled),
+            close_tab_groups_after_task: AtomicBool::new(settings.close_tab_groups_after_task),
             jev_token_saved: AtomicBool::new(saved.is_some()),
             jev_token: RwLock::new(saved),
             jev_token_from_environment: from_environment.as_deref().and_then(usable),
@@ -187,13 +191,35 @@ impl AgentSettingsStore {
 
     /// Saves first and only then updates the live value, so a failed save changes nothing.
     pub async fn set_human_help(&self, human_help: HumanHelp) -> AppResult<()> {
+        self.set_settings(Some(human_help), None).await
+    }
+
+    #[must_use]
+    pub fn close_tab_groups_after_task(&self) -> bool {
+        self.close_tab_groups_after_task.load(Ordering::Acquire)
+    }
+
+    pub async fn set_close_tab_groups_after_task(&self, enabled: bool) -> AppResult<()> {
+        self.set_settings(None, Some(enabled)).await
+    }
+
+    /// Updates both preferences in one write; omitted values are read under the write lock.
+    pub(crate) async fn set_settings(
+        &self,
+        human_help: Option<HumanHelp>,
+        cleanup: Option<bool>,
+    ) -> AppResult<()> {
         let _write = self.writes.lock().await;
         let file = SettingsFile {
-            human_help_enabled: human_help.is_enabled(),
+            human_help_enabled: human_help.unwrap_or_else(|| self.human_help()).is_enabled(),
+            close_tab_groups_after_task: cleanup
+                .unwrap_or_else(|| self.close_tab_groups_after_task()),
         };
         self.files.write_json(AGENT_SETTINGS_FILE, &file).await?;
         self.human_help_enabled
-            .store(human_help.is_enabled(), Ordering::Release);
+            .store(file.human_help_enabled, Ordering::Release);
+        self.close_tab_groups_after_task
+            .store(file.close_tab_groups_after_task, Ordering::Release);
         Ok(())
     }
 }
@@ -277,6 +303,100 @@ mod tests {
         let store = store_in(dir.path()).await;
         assert!(store.set_human_help(HumanHelp::Off).await.is_err());
         assert_eq!(store.human_help(), HumanHelp::On);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_cleanup_defaults_off_for_missing_old_and_invalid_files()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        assert!(!store_in(dir.path()).await.close_tab_groups_after_task());
+        for (contents, human_help) in [
+            ("{}", HumanHelp::On),
+            (r#"{"humanHelpEnabled":false}"#, HumanHelp::Off),
+            ("{not json", HumanHelp::On),
+            (r#"{"closeTabGroupsAfterTask":"true"}"#, HumanHelp::On),
+            (r#"{"closeTabGroupsAfterTask":null}"#, HumanHelp::On),
+        ] {
+            tokio::fs::write(dir.path().join(AGENT_SETTINGS_FILE), contents).await?;
+            let store = store_in(dir.path()).await;
+            assert!(!store.close_tab_groups_after_task(), "{contents}");
+            assert_eq!(store.human_help(), human_help, "{contents}");
+        }
+        tokio::fs::remove_file(dir.path().join(AGENT_SETTINGS_FILE)).await?;
+        tokio::fs::create_dir(dir.path().join(AGENT_SETTINGS_FILE)).await?;
+        assert!(!store_in(dir.path()).await.close_tab_groups_after_task());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_cleanup_survives_a_restart_in_both_states() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let store = store_in(dir.path()).await;
+        store.set_human_help(HumanHelp::Off).await?;
+        for enabled in [true, false] {
+            store.set_close_tab_groups_after_task(enabled).await?;
+            assert_eq!(store.close_tab_groups_after_task(), enabled);
+            let restarted = store_in(dir.path()).await;
+            assert_eq!(restarted.close_tab_groups_after_task(), enabled);
+            assert_eq!(restarted.human_help(), HumanHelp::Off);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_human_help_updates_preserve_enabled_cleanup() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let store = store_in(dir.path()).await;
+        store.set_close_tab_groups_after_task(true).await?;
+        for human_help in [HumanHelp::Off, HumanHelp::On] {
+            store.set_human_help(human_help).await?;
+            assert!(store.close_tab_groups_after_task());
+            let restarted = store_in(dir.path()).await;
+            assert!(restarted.close_tab_groups_after_task());
+            assert_eq!(restarted.human_help(), human_help);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_failed_updates_keep_both_previous_settings() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let store = store_in(dir.path()).await;
+        store.set_human_help(HumanHelp::Off).await?;
+        store.set_close_tab_groups_after_task(true).await?;
+        tokio::fs::remove_file(dir.path().join(AGENT_SETTINGS_FILE)).await?;
+        tokio::fs::create_dir(dir.path().join(AGENT_SETTINGS_FILE)).await?;
+
+        assert!(store.set_close_tab_groups_after_task(false).await.is_err());
+        assert_eq!(store.human_help(), HumanHelp::Off);
+        assert!(store.close_tab_groups_after_task());
+        assert!(store.set_human_help(HumanHelp::On).await.is_err());
+        assert_eq!(store.human_help(), HumanHelp::Off);
+        assert!(store.close_tab_groups_after_task());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_concurrent_independent_updates_preserve_both_settings() -> anyhow::Result<()>
+    {
+        let dir = tempdir()?;
+        let store = store_in(dir.path()).await;
+        for _ in 0..16 {
+            store.set_human_help(HumanHelp::On).await?;
+            store.set_close_tab_groups_after_task(false).await?;
+            let (human_help, cleanup) = tokio::join!(
+                store.set_human_help(HumanHelp::Off),
+                store.set_close_tab_groups_after_task(true),
+            );
+            human_help?;
+            cleanup?;
+            assert_eq!(store.human_help(), HumanHelp::Off);
+            assert!(store.close_tab_groups_after_task());
+            let restarted = store_in(dir.path()).await;
+            assert_eq!(restarted.human_help(), HumanHelp::Off);
+            assert!(restarted.close_tab_groups_after_task());
+        }
         Ok(())
     }
 
