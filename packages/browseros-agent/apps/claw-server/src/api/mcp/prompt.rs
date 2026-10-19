@@ -61,7 +61,7 @@ const SHARED_BROWSER_GUIDANCE: &str = r#"Shared with other agents:
   the id when you first see it so you can skip the lookup later. Only you know
   which task you are continuing, so only you can say.
 - Preserve useful pages: leave anything the user may want to inspect open
-  instead of closing it when the task ends.
+  when the task ends, unless a tool reply asks you to close your task's tab group.
 - If your tools offer agentName, it is an optional fallback for your client
   application: "claude", "codex", "cursor", "opencode", "antigravity", "vscode",
   or "zed". For another application, use its short product name. Put your task

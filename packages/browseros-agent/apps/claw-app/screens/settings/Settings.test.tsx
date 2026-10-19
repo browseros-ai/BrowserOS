@@ -29,6 +29,7 @@ import * as api from '@/modules/api/client'
 
 const settingsOf = (overrides: Partial<AgentSettings> = {}): AgentSettings => ({
   humanHelpEnabled: true,
+  taskCleanupTipEnabled: false,
   jevTokenSource: JevTokenSource.None,
   ...overrides,
 })
@@ -135,6 +136,15 @@ function switchIn(page: Document | Element): Element {
 }
 
 describe('Settings screen', () => {
+  it('tests that the cleanup tip switch is off by default and explains the tip', () => {
+    const page = renderPage(settingsOf())
+    const toggle = page.querySelector('#task-cleanup-tip-switch')
+    expect(toggle?.getAttribute('aria-checked')).toBe('false')
+    expect(page.body.textContent).toContain(
+      'When you finish this task, close your task’s tab group.',
+    )
+  })
+
   it('tests that the switch is on when the server has human help on', () => {
     const toggle = switchIn(renderPage(settingsOf({ humanHelpEnabled: true })))
 
@@ -260,6 +270,29 @@ describe('Settings screen interactions', () => {
   function saveError(): string | null | undefined {
     return container.querySelector('[role="alert"]')?.textContent
   }
+
+  it('tests that the cleanup tip switch saves both states without changing human help', async () => {
+    server.read = async () => settingsOf({ humanHelpEnabled: false })
+    await mount()
+    for (const enabled of [true, false]) {
+      await act(async () => {
+        container
+          .querySelector('#task-cleanup-tip-switch')
+          ?.dispatchEvent(new window.Event('click', { bubbles: true }))
+      })
+      await settle()
+      expect(server.saves.at(-1)).toEqual({
+        humanHelpEnabled: false,
+        taskCleanupTipEnabled: enabled,
+      })
+      expect(
+        container
+          .querySelector('#task-cleanup-tip-switch')
+          ?.getAttribute('aria-checked'),
+      ).toBe(String(enabled))
+      expect(switchIn(container).getAttribute('aria-checked')).toBe('false')
+    }
+  })
 
   it('tests that the switch is disabled until settings load', async () => {
     const read = Promise.withResolvers<AgentSettings>()

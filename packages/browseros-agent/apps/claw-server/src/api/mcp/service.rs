@@ -1568,7 +1568,14 @@ impl ServerHandler for ClawMcpService {
             result,
         )
         .await;
-        attach_session_handle(finished, session_handle, presented_handle).map(Into::into)
+        let mut result = attach_session_handle(finished, session_handle, presented_handle)?;
+        if self.state.agent_settings.task_cleanup_tip_enabled() && !result.is_error.unwrap_or(false)
+        {
+            result.content.push(rmcp::model::ContentBlock::text(
+                "Tip: When you finish this task, close your task’s tab group.",
+            ));
+        }
+        Ok(result.into())
     }
 }
 
