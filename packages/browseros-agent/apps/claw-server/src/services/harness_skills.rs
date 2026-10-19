@@ -162,6 +162,7 @@ mod tests {
                 "guide must defer to the server cleanup preference"
             );
             let line = line.unwrap_or_default();
+            assert!(line.contains("latest"));
             assert!(line.contains("when enabled"));
             assert!(line.contains("after finishing"));
             assert!(

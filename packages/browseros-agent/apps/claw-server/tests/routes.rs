@@ -731,6 +731,16 @@ fn cleanup_tip_count(body: &Value) -> usize {
         .count()
 }
 
+fn cleanup_off_tip_count(body: &Value) -> usize {
+    body["result"]["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|block| block["text"].as_str())
+        .filter(|text| text.starts_with("Tip: Tab-group cleanup is off"))
+        .count()
+}
+
 fn cleanup_handle(body: &Value) -> anyhow::Result<&str> {
     body["result"]["_meta"]["com.browseros.neo/session"]
         .as_str()
@@ -870,7 +880,16 @@ async fn tests_that_cleanup_errors_and_off_calls_do_not_consume_the_tip() -> any
             .await?;
         let repeated = stateless_mcp_request(&app.router, "tools/call",
             json!({ "name": "name_session", "arguments": { "name": "ready task", "session": handle } }), None).await?;
-        assert_eq!(cleanup_tip_count(&repeated), 0, "{repeated}");
+        assert_eq!(
+            cleanup_tip_count(&repeated),
+            usize::from(enabled),
+            "{repeated}"
+        );
+        assert_eq!(
+            cleanup_off_tip_count(&repeated),
+            usize::from(!enabled),
+            "{repeated}"
+        );
     }
     Ok(())
 }
@@ -922,6 +941,7 @@ async fn tests_that_cleanup_reaches_a_connected_legacy_session_after_enabling() 
     )
     .await?;
     assert_eq!(cleanup_tip_count(&off), 0, "{off}");
+    assert_eq!(cleanup_off_tip_count(&off), 0, "{off}");
     app.state
         .agent_settings
         .set_close_tab_groups_after_task(true)
@@ -939,6 +959,236 @@ async fn tests_that_cleanup_reaches_a_connected_legacy_session_after_enabling() 
         assert_ne!(body["result"]["isError"], true, "{body}");
         assert_eq!(cleanup_tip_count(&body), expected, "{body}");
         assert!(body["result"]["_meta"].is_null());
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_cleanup_retraction_follows_stateless_handle_policy_changes()
+-> anyhow::Result<()> {
+    let app = test_app().await?;
+    app.state
+        .agent_settings
+        .set_close_tab_groups_after_task(true)
+        .await?;
+    let first = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "policy task" } }),
+        Some("Codex"),
+    )
+    .await?;
+    assert_eq!(cleanup_tip_count(&first), 1, "{first}");
+    let handle = cleanup_handle(&first)?;
+    for enabled in [false, true, false] {
+        app.state
+            .agent_settings
+            .set_close_tab_groups_after_task(enabled)
+            .await?;
+        let error = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": "name_session", "arguments": { "name": "!!!", "session": handle } }),
+            None,
+        )
+        .await?;
+        assert_eq!(error["result"]["isError"], true, "{error}");
+        assert_eq!(cleanup_handle(&error)?, handle);
+        assert_eq!(
+            cleanup_tip_count(&error) + cleanup_off_tip_count(&error),
+            0,
+            "{error}"
+        );
+        for first_reply in [true, false] {
+            let reply = stateless_mcp_request(&app.router, "tools/call",
+                json!({ "name": "name_session", "arguments": { "name": "policy task", "session": handle } }), None).await?;
+            assert_ne!(reply["result"]["isError"], true, "{reply}");
+            assert_eq!(cleanup_handle(&reply)?, handle);
+            assert_eq!(
+                cleanup_tip_count(&reply),
+                usize::from(first_reply && enabled),
+                "{reply}"
+            );
+            assert_eq!(
+                cleanup_off_tip_count(&reply),
+                usize::from(first_reply && !enabled),
+                "{reply}"
+            );
+            assert!(
+                reply["result"]["content"][0]["text"]
+                    .as_str()
+                    .is_some_and(|text| text.starts_with("renamed to codex/policy-task")),
+                "{reply}"
+            );
+            assert!(reply["result"]["structuredContent"].is_null());
+            if first_reply && !enabled {
+                let text = reply["result"]["content"].to_string();
+                assert!(text.contains("preserve useful pages"), "{reply}");
+                assert!(text.contains("do not close your task groups"), "{reply}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_cleanup_retraction_covers_legacy_initialize_and_tool_guidance()
+-> anyhow::Result<()> {
+    for before_first_tool in [true, false] {
+        let app = test_app().await?;
+        app.state
+            .agent_settings
+            .set_close_tab_groups_after_task(true)
+            .await?;
+        let session_id = initialize_mcp(&app).await?;
+        let headers = [("mcp-session-id", session_id.as_str())];
+        if !before_first_tool {
+            let (status, _, on) = request_json_with_headers(
+                &app.router,
+                "POST",
+                "/mcp",
+                Some(name_session_request(2, "policy task")),
+                &headers,
+            )
+            .await?;
+            assert_eq!(status, StatusCode::OK, "{on}");
+            assert_eq!(cleanup_tip_count(&on), 1, "{on}");
+        }
+        app.state
+            .agent_settings
+            .set_close_tab_groups_after_task(false)
+            .await?;
+        let (_, _, error) = request_json_with_headers(
+            &app.router,
+            "POST",
+            "/mcp",
+            Some(name_session_request(3, "!!!")),
+            &headers,
+        )
+        .await?;
+        assert_eq!(error["result"]["isError"], true, "{error}");
+        assert_eq!(cleanup_off_tip_count(&error), 0, "{error}");
+        for (id, enabled, expected) in [(4, false, 1), (5, false, 0), (6, true, 1), (7, true, 0)] {
+            app.state
+                .agent_settings
+                .set_close_tab_groups_after_task(enabled)
+                .await?;
+            let (status, _, reply) = request_json_with_headers(
+                &app.router,
+                "POST",
+                "/mcp",
+                Some(name_session_request(id, "policy task")),
+                &headers,
+            )
+            .await?;
+            assert_eq!(status, StatusCode::OK, "{reply}");
+            assert_ne!(reply["result"]["isError"], true, "{reply}");
+            assert_eq!(
+                cleanup_tip_count(&reply),
+                if enabled { expected } else { 0 },
+                "{reply}"
+            );
+            assert_eq!(
+                cleanup_off_tip_count(&reply),
+                if enabled { 0 } else { expected },
+                "{reply}"
+            );
+            assert!(reply["result"]["_meta"].is_null());
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_cleanup_retraction_invalidates_stateless_discovery_before_first_success()
+-> anyhow::Result<()> {
+    let app = test_app().await?;
+    app.state
+        .agent_settings
+        .set_close_tab_groups_after_task(true)
+        .await?;
+    let discovered =
+        stateless_mcp_request(&app.router, "server/discover", json!({}), Some("Codex")).await?;
+    assert!(
+        discovered["result"]["instructions"]
+            .as_str()
+            .is_some_and(|text| text.contains("Close tab groups after the agent finishes a task")),
+        "{discovered}"
+    );
+    app.state
+        .agent_settings
+        .set_close_tab_groups_after_task(false)
+        .await?;
+    let error = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "!!!" } }),
+        Some("Codex"),
+    )
+    .await?;
+    assert_eq!(error["result"]["isError"], true, "{error}");
+    assert_eq!(cleanup_off_tip_count(&error), 0, "{error}");
+    let handle = cleanup_handle(&error)?;
+    for expected in [1, 0] {
+        let reply = stateless_mcp_request(&app.router, "tools/call",
+            json!({ "name": "name_session", "arguments": { "name": "discovery task", "session": handle } }), None).await?;
+        assert_eq!(cleanup_handle(&reply)?, handle);
+        assert_eq!(cleanup_tip_count(&reply), 0, "{reply}");
+        assert_eq!(cleanup_off_tip_count(&reply), expected, "{reply}");
+    }
+    let independent = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "separate task" } }),
+        Some("Codex"),
+    )
+    .await?;
+    assert_ne!(cleanup_handle(&independent)?, handle);
+    assert_eq!(cleanup_off_tip_count(&independent), 1, "{independent}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_cleanup_retraction_concurrent_changes_emit_one_tip_per_policy()
+-> anyhow::Result<()> {
+    let app = test_app().await?;
+    app.state
+        .agent_settings
+        .set_close_tab_groups_after_task(true)
+        .await?;
+    let first = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "name_session", "arguments": { "name": "concurrent task" } }),
+        Some("Codex"),
+    )
+    .await?;
+    assert_eq!(cleanup_tip_count(&first), 1, "{first}");
+    let handle = cleanup_handle(&first)?;
+    for enabled in [false, true, false] {
+        app.state
+            .agent_settings
+            .set_close_tab_groups_after_task(enabled)
+            .await?;
+        let params = json!({ "name": "name_session", "arguments": { "name": "concurrent task", "session": handle } });
+        let (left, right) = tokio::try_join!(
+            stateless_mcp_request(&app.router, "tools/call", params.clone(), None),
+            stateless_mcp_request(&app.router, "tools/call", params, None),
+        )?;
+        for reply in [&left, &right] {
+            assert_ne!(reply["result"]["isError"], true, "{reply}");
+            assert_eq!(cleanup_handle(reply)?, handle);
+        }
+        assert_eq!(
+            cleanup_tip_count(&left) + cleanup_tip_count(&right),
+            usize::from(enabled),
+            "{left}\n{right}"
+        );
+        assert_eq!(
+            cleanup_off_tip_count(&left) + cleanup_off_tip_count(&right),
+            usize::from(!enabled),
+            "{left}\n{right}"
+        );
     }
     Ok(())
 }
