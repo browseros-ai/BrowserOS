@@ -102,8 +102,9 @@ impl TelemetryState {
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateAgentSettingsRequest {
-    #[serde(rename = "humanHelpEnabled")]
-    pub human_help_enabled: bool,
+    /// Omit to preserve the saved human help preference.
+    #[serde(rename = "humanHelpEnabled", skip_serializing_if = "Option::is_none")]
+    pub human_help_enabled: Option<bool>,
     /// Omit to preserve the saved cleanup tip preference.
     #[serde(
         rename = "taskCleanupTipEnabled",
@@ -113,9 +114,9 @@ pub struct UpdateAgentSettingsRequest {
 }
 
 impl UpdateAgentSettingsRequest {
-    pub fn new(human_help_enabled: bool) -> UpdateAgentSettingsRequest {
+    pub fn new() -> UpdateAgentSettingsRequest {
         UpdateAgentSettingsRequest {
-            human_help_enabled,
+            human_help_enabled: None,
             task_cleanup_tip_enabled: None,
         }
     }

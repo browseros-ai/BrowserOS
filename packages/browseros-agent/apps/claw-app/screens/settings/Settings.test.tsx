@@ -129,8 +129,11 @@ function renderPage(settings?: AgentSettings): Document {
   return page.document
 }
 
-function switchIn(page: Document | Element): Element {
-  const element = page.querySelector('[role="switch"]')
+function switchIn(
+  page: Document | Element,
+  selector = '[role="switch"]',
+): Element {
+  const element = page.querySelector(selector)
   if (!element) throw new Error('no switch')
   return element
 }
@@ -138,26 +141,21 @@ function switchIn(page: Document | Element): Element {
 describe('Settings screen', () => {
   it('tests that the cleanup tip switch is off by default and explains the tip', () => {
     const page = renderPage(settingsOf())
-    const toggle = page.querySelector('#task-cleanup-tip-switch')
-    expect(toggle?.getAttribute('aria-checked')).toBe('false')
+    const toggle = switchIn(page, '#task-cleanup-tip-switch')
+    expect(toggle.getAttribute('aria-checked')).toBe('false')
     expect(page.body.textContent).toContain(
       'When you finish this task, close your task’s tab group.',
     )
   })
 
-  it('tests that the switch is on when the server has human help on', () => {
-    const toggle = switchIn(renderPage(settingsOf({ humanHelpEnabled: true })))
-
-    expect(toggle.getAttribute('aria-checked')).toBe('true')
-    expect(toggle.hasAttribute('disabled')).toBe(false)
-  })
-
-  it('tests that the switch is off when the server has human help off', () => {
-    const toggle = switchIn(renderPage(settingsOf({ humanHelpEnabled: false })))
-
-    expect(toggle.getAttribute('aria-checked')).toBe('false')
-    expect(toggle.hasAttribute('disabled')).toBe(false)
-  })
+  it.each([true, false])(
+    'tests that human help reflects the saved value %p',
+    (humanHelpEnabled) => {
+      const toggle = switchIn(renderPage(settingsOf({ humanHelpEnabled })))
+      expect(toggle.getAttribute('aria-checked')).toBe(String(humanHelpEnabled))
+      expect(toggle.hasAttribute('disabled')).toBe(false)
+    },
+  )
 
   it('tests that the switch is named by its title and described by its explanation', () => {
     const page = renderPage(settingsOf({ humanHelpEnabled: true }))
@@ -258,9 +256,9 @@ describe('Settings screen interactions', () => {
     await settle()
   }
 
-  async function clickSwitch() {
+  async function clickSwitch(selector?: string) {
     await act(async () => {
-      switchIn(container).dispatchEvent(
+      switchIn(container, selector).dispatchEvent(
         new window.Event('click', { bubbles: true }),
       )
     })
@@ -271,26 +269,33 @@ describe('Settings screen interactions', () => {
     return container.querySelector('[role="alert"]')?.textContent
   }
 
-  it('tests that the cleanup tip switch saves both states without changing human help', async () => {
-    server.read = async () => settingsOf({ humanHelpEnabled: false })
+  it('tests that both cleanup tip states preserve human-help changes made in another settings page', async () => {
+    let saved = settingsOf()
+    server.read = async () => ({ ...saved })
+    server.save = async (body) => {
+      saved = { ...saved, ...body }
+      return saved
+    }
     await mount()
-    for (const enabled of [true, false]) {
-      await act(async () => {
-        container
-          .querySelector('#task-cleanup-tip-switch')
-          ?.dispatchEvent(new window.Event('click', { bubbles: true }))
-      })
-      await settle()
-      expect(server.saves.at(-1)).toEqual({
-        humanHelpEnabled: false,
-        taskCleanupTipEnabled: enabled,
-      })
+
+    for (const [taskCleanupTipEnabled, humanHelpEnabled] of [
+      [true, false],
+      [false, true],
+    ] as const) {
+      // The other page changes human help after this page loaded its value.
+      saved = { ...saved, humanHelpEnabled }
+      await clickSwitch('#task-cleanup-tip-switch')
+
+      expect(server.saves.at(-1)).toEqual({ taskCleanupTipEnabled })
+      expect(saved).toMatchObject({ humanHelpEnabled, taskCleanupTipEnabled })
+      expect(switchIn(container).getAttribute('aria-checked')).toBe(
+        String(humanHelpEnabled),
+      )
       expect(
-        container
-          .querySelector('#task-cleanup-tip-switch')
-          ?.getAttribute('aria-checked'),
-      ).toBe(String(enabled))
-      expect(switchIn(container).getAttribute('aria-checked')).toBe('false')
+        switchIn(container, '#task-cleanup-tip-switch').getAttribute(
+          'aria-checked',
+        ),
+      ).toBe(String(taskCleanupTipEnabled))
     }
   })
 

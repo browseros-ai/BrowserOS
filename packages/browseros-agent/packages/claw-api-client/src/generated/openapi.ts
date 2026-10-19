@@ -670,7 +670,8 @@ export interface components {
       token: string
     }
     UpdateAgentSettingsRequest: {
-      humanHelpEnabled: boolean
+      /** @description Omit to preserve the saved human help preference. */
+      humanHelpEnabled?: boolean
       /** @description Omit to preserve the saved cleanup tip preference. */
       taskCleanupTipEnabled?: boolean
     }

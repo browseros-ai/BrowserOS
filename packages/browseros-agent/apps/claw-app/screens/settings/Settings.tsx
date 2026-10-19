@@ -68,10 +68,7 @@ export function Settings() {
 
   const handleCleanupTipChange = (taskCleanupTipEnabled: boolean) => {
     updateSettings.mutate(
-      {
-        humanHelpEnabled: settings.data?.humanHelpEnabled ?? true,
-        taskCleanupTipEnabled,
-      },
+      { taskCleanupTipEnabled },
       {
         onSuccess: (saved) => {
           queryClient.setQueryData(useAgentSettings.getKey(), saved)

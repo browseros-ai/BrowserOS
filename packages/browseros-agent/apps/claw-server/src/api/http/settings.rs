@@ -50,15 +50,19 @@ pub(super) async fn update_agent(
     State(state): State<AppState>,
     payload: Result<Json<UpdateAgentSettingsRequest>, JsonRejection>,
 ) -> Result<Json<AgentSettings>, CanonicalError> {
-    let Json(payload) = payload.map_err(|_| {
+    let invalid_settings = || {
         error(
             &request_id,
             StatusCode::BAD_REQUEST,
             "invalid_request",
             "humanHelpEnabled and taskCleanupTipEnabled must be booleans",
         )
-    })?;
-    let human_help = HumanHelp::from_enabled(payload.human_help_enabled);
+    };
+    let Json(payload) = payload.map_err(|_| invalid_settings())?;
+    if payload.human_help_enabled.is_none() && payload.task_cleanup_tip_enabled.is_none() {
+        return Err(invalid_settings());
+    }
+    let human_help = payload.human_help_enabled.map(HumanHelp::from_enabled);
     state
         .agent_settings
         .update(human_help, payload.task_cleanup_tip_enabled)

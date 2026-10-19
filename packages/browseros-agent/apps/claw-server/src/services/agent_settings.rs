@@ -196,15 +196,16 @@ impl AgentSettingsStore {
 
     /// Saves first and only then updates the live value, so a failed save changes nothing.
     pub async fn set_human_help(&self, human_help: HumanHelp) -> AppResult<()> {
-        self.update(human_help, None).await
+        self.update(Some(human_help), None).await
     }
 
     pub async fn update(
         &self,
-        human_help: HumanHelp,
+        human_help: Option<HumanHelp>,
         task_cleanup_tip_enabled: Option<bool>,
     ) -> AppResult<()> {
         let _write = self.writes.lock().await;
+        let human_help = human_help.unwrap_or_else(|| self.human_help());
         let file = SettingsFile {
             human_help_enabled: human_help.is_enabled(),
             task_cleanup_tip_enabled: task_cleanup_tip_enabled

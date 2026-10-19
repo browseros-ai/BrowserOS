@@ -2122,6 +2122,27 @@ async fn tests_that_cleanup_tip_is_opt_in_and_saved_independently() -> anyhow::R
 }
 
 #[tokio::test]
+async fn tests_that_cleanup_only_updates_preserve_the_saved_human_help_choice() -> anyhow::Result<()>
+{
+    let app = test_app().await?;
+    for (human_help, cleanup_tip) in [(false, true), (true, false)] {
+        let (status, _) =
+            put_agent_settings(&app, json!({ "humanHelpEnabled": human_help }).to_string()).await?;
+        assert_eq!(status, StatusCode::OK);
+
+        let (status, bytes) = put_agent_settings(
+            &app,
+            json!({ "taskCleanupTipEnabled": cleanup_tip }).to_string(),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        assert_agent_settings(&json_body(&bytes)?, human_help);
+        assert_eq!(json_body(&bytes)?["taskCleanupTipEnabled"], cleanup_tip);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn tests_that_turning_human_help_off_is_saved_and_read_back() -> anyhow::Result<()> {
     let app = test_app().await?;
     let (status, bytes) =

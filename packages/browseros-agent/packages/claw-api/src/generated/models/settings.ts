@@ -96,11 +96,11 @@ export interface TelemetryState {
  */
 export interface UpdateAgentSettingsRequest {
     /**
-     *
+     * Omit to preserve the saved human help preference.
      * @type {boolean}
      * @memberof UpdateAgentSettingsRequest
      */
-    humanHelpEnabled: boolean;
+    humanHelpEnabled?: boolean;
     /**
      * Omit to preserve the saved cleanup tip preference.
      * @type {boolean}
