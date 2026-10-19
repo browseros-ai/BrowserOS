@@ -656,6 +656,8 @@ export interface components {
     AgentSettings: {
       /** @description Whether agents are offered request_human_help and await_human_help. When false, agents are told to report a block in their own chat instead. */
       humanHelpEnabled: boolean
+      /** @description Whether successful MCP tool replies include a tip to close the task's tab group when finished. */
+      taskCleanupTipEnabled: boolean
       jevTokenSource: components['schemas']['JevTokenSource']
     }
     /**
@@ -668,7 +670,10 @@ export interface components {
       token: string
     }
     UpdateAgentSettingsRequest: {
-      humanHelpEnabled: boolean
+      /** @description Omit to preserve the saved human help preference. */
+      humanHelpEnabled?: boolean
+      /** @description Omit to preserve the saved cleanup tip preference. */
+      taskCleanupTipEnabled?: boolean
     }
     /** @enum {string} */
     SessionStatus: 'live' | 'done' | 'failed' | 'cancelled'

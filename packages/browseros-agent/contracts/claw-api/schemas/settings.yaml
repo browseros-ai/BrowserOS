@@ -20,13 +20,16 @@ AgentSettings:
   type: object
   description: User settings for the tools BrowserOS neo offers to agents.
   additionalProperties: false
-  required: [humanHelpEnabled, jevTokenSource]
+  required: [humanHelpEnabled, taskCleanupTipEnabled, jevTokenSource]
   properties:
     humanHelpEnabled:
       type: boolean
       description: >-
         Whether agents are offered request_human_help and await_human_help. When false, agents
         are told to report a block in their own chat instead.
+    taskCleanupTipEnabled:
+      type: boolean
+      description: Whether successful MCP tool replies include a tip to close the task's tab group when finished.
     jevTokenSource:
       $ref: '#/JevTokenSource'
 JevTokenSource:
@@ -51,7 +54,11 @@ SaveJevTokenRequest:
 UpdateAgentSettingsRequest:
   type: object
   additionalProperties: false
-  required: [humanHelpEnabled]
+  minProperties: 1
   properties:
     humanHelpEnabled:
       type: boolean
+      description: Omit to preserve the saved human help preference.
+    taskCleanupTipEnabled:
+      type: boolean
+      description: Omit to preserve the saved cleanup tip preference.

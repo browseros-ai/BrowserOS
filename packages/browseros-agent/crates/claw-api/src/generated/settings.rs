@@ -17,6 +17,9 @@ pub struct AgentSettings {
     /// Whether agents are offered request_human_help and await_human_help. When false, agents are told to report a block in their own chat instead.
     #[serde(rename = "humanHelpEnabled")]
     pub human_help_enabled: bool,
+    /// Whether successful MCP tool replies include a tip to close the task's tab group when finished.
+    #[serde(rename = "taskCleanupTipEnabled")]
+    pub task_cleanup_tip_enabled: bool,
     #[serde(rename = "jevTokenSource")]
     pub jev_token_source: models::JevTokenSource,
 }
@@ -25,10 +28,12 @@ impl AgentSettings {
     /// User settings for the tools BrowserOS neo offers to agents.
     pub fn new(
         human_help_enabled: bool,
+        task_cleanup_tip_enabled: bool,
         jev_token_source: models::JevTokenSource,
     ) -> AgentSettings {
         AgentSettings {
             human_help_enabled,
+            task_cleanup_tip_enabled,
             jev_token_source,
         }
     }
@@ -97,13 +102,23 @@ impl TelemetryState {
 
 #[derive(Clone, Default, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UpdateAgentSettingsRequest {
-    #[serde(rename = "humanHelpEnabled")]
-    pub human_help_enabled: bool,
+    /// Omit to preserve the saved human help preference.
+    #[serde(rename = "humanHelpEnabled", skip_serializing_if = "Option::is_none")]
+    pub human_help_enabled: Option<bool>,
+    /// Omit to preserve the saved cleanup tip preference.
+    #[serde(
+        rename = "taskCleanupTipEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub task_cleanup_tip_enabled: Option<bool>,
 }
 
 impl UpdateAgentSettingsRequest {
-    pub fn new(human_help_enabled: bool) -> UpdateAgentSettingsRequest {
-        UpdateAgentSettingsRequest { human_help_enabled }
+    pub fn new() -> UpdateAgentSettingsRequest {
+        UpdateAgentSettingsRequest {
+            human_help_enabled: None,
+            task_cleanup_tip_enabled: None,
+        }
     }
 }
 

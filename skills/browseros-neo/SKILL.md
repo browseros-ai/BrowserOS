@@ -27,7 +27,7 @@ Do not fall back to another browser tool because the connection is missing. Say 
 - Call `name_session` early with a 2-3 word task label, the best-fit `category`, and a short PII-free `summary` you can search for later; tabs group as `<client>/<name>` in the cockpit.
 - Open your own tab with `tabs` action `"new"` for work of your own. You may also use the user's tabs and other agents' tabs: ownership is a label telling you whose a tab is, never a barrier.
 - A tab that is not yours is still someone's. Leave it as you found it unless the user asked you to change it, and prefer your own tab for anything exploratory.
-- Preserve useful pages that the user may want to inspect instead of closing them when the task ends.
+- Preserve useful pages when the task ends, unless a tool reply asks you to close your task's tab group.
 - Give independent subtasks their own tabs, at most 5 at a time unless the user asks for more.
 
 ## Core loop: snapshot -> act -> verify

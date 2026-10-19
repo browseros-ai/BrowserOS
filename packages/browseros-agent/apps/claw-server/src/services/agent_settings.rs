@@ -58,12 +58,14 @@ struct TokenFile {
 #[serde(default, rename_all = "camelCase")]
 struct SettingsFile {
     human_help_enabled: bool,
+    task_cleanup_tip_enabled: bool,
 }
 
 impl Default for SettingsFile {
     fn default() -> Self {
         Self {
             human_help_enabled: true,
+            task_cleanup_tip_enabled: false,
         }
     }
 }
@@ -71,6 +73,7 @@ impl Default for SettingsFile {
 pub struct AgentSettingsStore {
     files: JsonStore,
     human_help_enabled: AtomicBool,
+    task_cleanup_tip_enabled: AtomicBool,
     /// Whether a saved token exists, for the synchronous readers that only need
     /// to know whether to offer the tool.
     jev_token_saved: AtomicBool,
@@ -96,12 +99,12 @@ impl AgentSettingsStore {
     /// A test that asserted precedence by reading the real environment would pass or fail by
     /// whose shell ran it, which this codebase has been bitten by before.
     pub async fn load_with_environment(files: JsonStore, from_environment: Option<String>) -> Self {
-        let human_help = match files.read_json::<SettingsFile>(AGENT_SETTINGS_FILE).await {
-            Ok(file) => HumanHelp::from_enabled(file.human_help_enabled),
-            Err(AppError::StorageNotFound(_)) => HumanHelp::On,
+        let settings = match files.read_json::<SettingsFile>(AGENT_SETTINGS_FILE).await {
+            Ok(file) => file,
+            Err(AppError::StorageNotFound(_)) => SettingsFile::default(),
             Err(error) => {
-                tracing::warn!(%error, "agent settings unreadable; keeping human help on");
-                HumanHelp::On
+                tracing::warn!(%error, "agent settings unreadable; keeping defaults");
+                SettingsFile::default()
             }
         };
         // A credential that cannot be read is the same as no credential: a server that will
@@ -116,7 +119,8 @@ impl AgentSettingsStore {
         };
         Self {
             files,
-            human_help_enabled: AtomicBool::new(human_help.is_enabled()),
+            human_help_enabled: AtomicBool::new(settings.human_help_enabled),
+            task_cleanup_tip_enabled: AtomicBool::new(settings.task_cleanup_tip_enabled),
             jev_token_saved: AtomicBool::new(saved.is_some()),
             jev_token: RwLock::new(saved),
             jev_token_from_environment: from_environment.as_deref().and_then(usable),
@@ -185,15 +189,33 @@ impl AgentSettingsStore {
         HumanHelp::from_enabled(self.human_help_enabled.load(Ordering::Acquire))
     }
 
+    #[must_use]
+    pub fn task_cleanup_tip_enabled(&self) -> bool {
+        self.task_cleanup_tip_enabled.load(Ordering::Acquire)
+    }
+
     /// Saves first and only then updates the live value, so a failed save changes nothing.
     pub async fn set_human_help(&self, human_help: HumanHelp) -> AppResult<()> {
+        self.update(Some(human_help), None).await
+    }
+
+    pub async fn update(
+        &self,
+        human_help: Option<HumanHelp>,
+        task_cleanup_tip_enabled: Option<bool>,
+    ) -> AppResult<()> {
         let _write = self.writes.lock().await;
+        let human_help = human_help.unwrap_or_else(|| self.human_help());
         let file = SettingsFile {
             human_help_enabled: human_help.is_enabled(),
+            task_cleanup_tip_enabled: task_cleanup_tip_enabled
+                .unwrap_or_else(|| self.task_cleanup_tip_enabled()),
         };
         self.files.write_json(AGENT_SETTINGS_FILE, &file).await?;
         self.human_help_enabled
             .store(human_help.is_enabled(), Ordering::Release);
+        self.task_cleanup_tip_enabled
+            .store(file.task_cleanup_tip_enabled, Ordering::Release);
         Ok(())
     }
 }

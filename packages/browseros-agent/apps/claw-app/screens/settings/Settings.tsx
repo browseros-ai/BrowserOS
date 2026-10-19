@@ -23,6 +23,9 @@ import {
 const HUMAN_HELP_SWITCH_ID = 'human-help-switch'
 const HUMAN_HELP_TITLE_ID = 'human-help-title'
 const HUMAN_HELP_DESCRIPTION_ID = 'human-help-description'
+const CLEANUP_TIP_SWITCH_ID = 'task-cleanup-tip-switch'
+const CLEANUP_TIP_TITLE_ID = 'task-cleanup-tip-title'
+const CLEANUP_TIP_DESCRIPTION_ID = 'task-cleanup-tip-description'
 /**
  * The flag that reveals the token field.
  *
@@ -35,8 +38,7 @@ const JEV_TITLE_ID = 'jev-token-title'
 const JEV_DESCRIPTION_ID = 'jev-token-description'
 
 /**
- * Server-owned agent tool settings. The switch shows the server's value, and
- * a change applies to the next tool list an agent reads.
+ * Server-owned agent settings. Switches show the server's saved values.
  */
 export function Settings() {
   const settings = useAgentSettings()
@@ -64,6 +66,17 @@ export function Settings() {
     )
   }
 
+  const handleCleanupTipChange = (taskCleanupTipEnabled: boolean) => {
+    updateSettings.mutate(
+      { taskCleanupTipEnabled },
+      {
+        onSuccess: (saved) => {
+          queryClient.setQueryData(useAgentSettings.getKey(), saved)
+        },
+      },
+    )
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-8 pt-8 pb-16">
       <header className="flex flex-col gap-1">
@@ -71,7 +84,7 @@ export function Settings() {
           Settings
         </h1>
         <p className="text-ink-2 text-sm">
-          Choose which BrowserOS neo tools your agents can use.
+          Choose the tools and tips your agents receive.
         </p>
       </header>
 
@@ -110,6 +123,33 @@ export function Settings() {
               // does not flip on load unless the user turned it off.
               checked={settings.data?.humanHelpEnabled ?? true}
               onCheckedChange={handleHumanHelpChange}
+              disabled={!settings.data || updateSettings.isPending}
+            />
+          </label>
+          <label
+            htmlFor={CLEANUP_TIP_SWITCH_ID}
+            className="flex items-center justify-between gap-6 border-ledger-divider border-t px-5 py-4"
+          >
+            <span className="flex flex-col gap-1">
+              <span
+                id={CLEANUP_TIP_TITLE_ID}
+                className="font-medium text-ink text-sm"
+              >
+                Include tab group cleanup tip
+              </span>
+              <span
+                id={CLEANUP_TIP_DESCRIPTION_ID}
+                className="text-[13px] text-ink-2 leading-snug"
+              >
+                When you finish this task, close your task’s tab group.
+              </span>
+            </span>
+            <Switch
+              id={CLEANUP_TIP_SWITCH_ID}
+              aria-labelledby={CLEANUP_TIP_TITLE_ID}
+              aria-describedby={CLEANUP_TIP_DESCRIPTION_ID}
+              checked={settings.data?.taskCleanupTipEnabled ?? false}
+              onCheckedChange={handleCleanupTipChange}
               disabled={!settings.data || updateSettings.isPending}
             />
           </label>

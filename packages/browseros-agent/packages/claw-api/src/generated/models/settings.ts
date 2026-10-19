@@ -25,6 +25,12 @@ export interface AgentSettings {
      */
     humanHelpEnabled: boolean;
     /**
+     * Whether successful MCP tool replies include a tip to close the task's tab group when finished.
+     * @type {boolean}
+     * @memberof AgentSettings
+     */
+    taskCleanupTipEnabled: boolean;
+    /**
      *
      * @type {JevTokenSource}
      * @memberof AgentSettings
@@ -90,11 +96,17 @@ export interface TelemetryState {
  */
 export interface UpdateAgentSettingsRequest {
     /**
-     *
+     * Omit to preserve the saved human help preference.
      * @type {boolean}
      * @memberof UpdateAgentSettingsRequest
      */
-    humanHelpEnabled: boolean;
+    humanHelpEnabled?: boolean;
+    /**
+     * Omit to preserve the saved cleanup tip preference.
+     * @type {boolean}
+     * @memberof UpdateAgentSettingsRequest
+     */
+    taskCleanupTipEnabled?: boolean;
 }
 
 /**

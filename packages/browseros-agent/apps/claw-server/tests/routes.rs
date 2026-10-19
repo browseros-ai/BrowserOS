@@ -722,6 +722,57 @@ async fn stateless_mcp_request(
 }
 
 #[tokio::test]
+async fn tests_that_cleanup_tip_is_included_only_when_enabled() -> anyhow::Result<()> {
+    const TIP: &str = "Tip: When you finish this task, close your task’s tab group.";
+    let app = test_app().await?;
+    let session_id = initialize_mcp(&app).await?;
+    let mut modern_handle = Value::Null;
+
+    for (index, enabled) in [false, true, true, false, true].into_iter().enumerate() {
+        let (status, _) = request_json(
+            &app.router,
+            "PUT",
+            "/api/v1/settings/agent",
+            Some(json!({ "humanHelpEnabled": true, "taskCleanupTipEnabled": enabled })),
+        )
+        .await?;
+        assert_eq!(status, StatusCode::OK);
+        for name in ["cleanup-test", "!!!"] {
+            let (_, _, legacy) = request_json_with_headers(
+                &app.router,
+                "POST",
+                "/mcp",
+                Some(name_session_request(index as u64 + 10, name)),
+                &[("mcp-session-id", &session_id)],
+            )
+            .await?;
+            let modern = stateless_mcp_request(
+                &app.router,
+                "tools/call",
+                json!({
+                    "name": "name_session",
+                    "arguments": { "name": name, "session": modern_handle }
+                }),
+                Some("Codex"),
+            )
+            .await?;
+            modern_handle = modern["result"]["_meta"]["com.browseros.neo/session"].clone();
+            for reply in [legacy, modern] {
+                assert_eq!(reply["result"]["isError"], name == "!!!", "{reply}");
+                let tips = reply["result"]["content"]
+                    .as_array()
+                    .ok_or_else(|| anyhow::anyhow!("missing content: {reply}"))?
+                    .iter()
+                    .filter(|block| block["text"] == TIP)
+                    .count();
+                assert_eq!(tips, usize::from(enabled && name != "!!!"), "{reply}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn mcp_stateless_product_precedence_fallback_and_reuse() -> anyhow::Result<()> {
     let app = test_app().await?;
     for (reported, declared, expected) in [
