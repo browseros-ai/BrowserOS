@@ -1534,6 +1534,7 @@ print(json.dumps({
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-server.yml",
+            "release-docker.yml",
             "release-extensions.yml",
             "release-macos.yml",
         ):
@@ -3825,6 +3826,32 @@ class RepairUpdateFeedWorkflowTest(unittest.TestCase):
         self.assertIn("args+=(--publish)", publish)
         self.assertIn('release feeds publish-local "${args[@]}"', publish)
         self.assertNotIn("--allow-downgrade", publish)
+
+
+
+class DockerImageWorkflowTest(unittest.TestCase):
+    PUSH_STEP = "Push amd64 and arm64"
+
+    def setUp(self):
+        self.workflow = yaml.safe_load(
+            (WORKFLOW_DIR / "release-docker.yml").read_text(encoding="utf-8")
+        )
+        self.job = self.workflow["jobs"]["image"]
+        self.steps = {step.get("name"): step for step in self.job["steps"]}
+
+    def test_only_the_image_job_can_write_packages(self):
+        self.assertEqual(self.workflow["permissions"], {})
+        self.assertEqual(self.job["permissions"], {"contents": "read", "packages": "write"})
+
+    def test_smoke_test_gates_the_push(self):
+        names = [step.get("name") for step in self.job["steps"]]
+        self.assertLess(names.index("Smoke test"), names.index(self.PUSH_STEP))
+        self.assertNotIn("--push", self.steps["Build amd64 for the smoke test"]["run"])
+        self.assertIn("--push", self.steps[self.PUSH_STEP]["run"])
+
+    def test_inputs_reach_shell_only_through_environment(self):
+        for step in self.job["steps"]:
+            self.assertNotIn("${{ inputs.", step.get("run", ""))
 
 
 if __name__ == "__main__":

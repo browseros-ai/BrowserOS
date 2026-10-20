@@ -34,6 +34,7 @@ live.
 | Release an extension CRX to alpha | `gh workflow run release-extensions.yml` |
 | Preview or promote extension feeds | `gh workflow run release-extension-feeds.yml` |
 | Repair a tracked browser/server appcast | `gh workflow run repair-update-feed.yml` |
+| Publish the Neo Docker image | `gh workflow run release-docker.yml -f version=<version>` |
 | Grab today's signed mac build | Download the `nightly-browseros` / `nightly-browserclaw` prerelease |
 | Check the patch stack | `browseros dev doctor` |
 
@@ -369,6 +370,7 @@ non-interactive Python surface the build steps depend on.
 | [`docs/warpbuild-ci.md`](docs/warpbuild-ci.md) | A Linux or Windows cloud build is slow, stuck, or expensive |
 | [`docs/nightly-macos-ci.md`](docs/nightly-macos-ci.md) | You are debugging a signed nightly or setting up the Mac builder |
 | [`docs/windows-install-verification.md`](docs/windows-install-verification.md) | You are hand-verifying a Windows installer before shipping |
+| [`docs/docker-image.md`](docs/docker-image.md) | You are building, testing, or publishing the Neo Docker image |
 
 Team-only context lives in the `.internal-docs/` submodule (private; nothing
 there is needed to build BrowserOS):

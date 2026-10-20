@@ -25,6 +25,7 @@ on:
       - ".github/workflows/release-browserclaw.yml"
       - ".github/workflows/release-claw-onboard.yml"
       - ".github/workflows/release-claw-server.yml"
+      - ".github/workflows/release-docker.yml"
       - ".github/workflows/release-extension-feeds.yml"
       - ".github/workflows/release-extensions.yml"
       - ".github/workflows/release-linux.yml"

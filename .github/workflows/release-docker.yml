@@ -1,0 +1,81 @@
+name: "Release: Neo Docker image"
+
+# Publishes ghcr.io/browseros-ai/neo:<version> for linux/amd64 and linux/arm64
+# from a Neo version whose Linux release has both packages on the CDN. The
+# amd64 image is smoke-tested before anything is pushed; `browseros release
+# docker` refuses a version missing either package. Tag latest only for a
+# version that has been promoted. See
+# packages/browseros/bos_build/docs/docker-image.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Neo version with amd64 and arm64 Linux packages on the CDN (e.g. 0.52.0.1)"
+        required: true
+        type: string
+      latest:
+        description: "Also tag :latest (only for a promoted version)"
+        type: boolean
+        default: false
+
+permissions: {}
+
+concurrency:
+  group: release-docker
+  cancel-in-progress: false
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write
+    env:
+      VERSION: ${{ inputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v8.3.2
+
+      # QEMU builds the arm64 image on this x64 runner. It only runs apt and
+      # dpkg, so emulation is slow but reliable.
+      - uses: docker/setup-qemu-action@v4
+
+      - uses: docker/setup-buildx-action@v4
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build amd64 for the smoke test
+        run: |
+          uv run --directory packages/browseros browseros release docker \
+            --version "$VERSION" --platform linux/amd64
+
+      - name: Smoke test
+        working-directory: packages/browseros/docker/neo
+        env:
+          NEO_VERSION: ${{ inputs.version }}
+          NEO_DATA: ${{ runner.temp }}/neo-data
+        run: |
+          set -euo pipefail
+          if ! docker compose up -d --wait --wait-timeout 180 || ! python3 smoke.py; then
+            docker compose logs
+            exit 1
+          fi
+          docker compose down
+
+      - name: Push amd64 and arm64
+        env:
+          LATEST: ${{ inputs.latest }}
+        run: |
+          set -euo pipefail
+          args=(--version "$VERSION" --push)
+          if [ "$LATEST" = true ]; then
+            args+=(--latest)
+          fi
+          uv run --directory packages/browseros browseros release docker "${args[@]}"
