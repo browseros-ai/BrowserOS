@@ -3,7 +3,7 @@ use crate::{
     api::mcp::dispatch::{
         ToolCall, ToolObserver, ToolObserverContext, extract_page_id, result_page_id,
     },
-    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+    db::audit_log::{RecordToolDispatchInput, redacted_args_json, result_meta},
     ids::DispatchId,
     services::{
         audit::{AuditEvent, AuditPreview},
@@ -76,7 +76,7 @@ pub async fn record_local_tool_dispatch(
             target_id: None,
             url: None,
             title: None,
-            args_json: bounded_args_json(dispatch.raw_args),
+            args_json: redacted_args_json(dispatch.raw_args, dispatch.result.audit_hints.as_ref()),
             result_meta: tool_result_meta(dispatch.result, false),
             duration_ms: dispatch.duration_ms,
             created_at: None,
@@ -117,6 +117,12 @@ async fn build_event(
         _ => None,
     }
     .or_else(|| call.page_snapshot.clone());
+    // A sensitive dispatch skips its screenshot: a password or payment form would
+    // otherwise sit on disk as an image beside the redacted args.
+    let skip_screenshot = result
+        .audit_hints
+        .as_ref()
+        .is_some_and(|hints| hints.skip_screenshot);
     Some(AuditEvent {
         input: RecordToolDispatchInput {
             agent_id: bounded_text(
@@ -138,7 +144,7 @@ async fn build_event(
             title: live
                 .as_ref()
                 .map(|page| bounded_text(&page.title, AUDIT_TITLE_MAX)),
-            args_json: bounded_args_json(&call.raw_args),
+            args_json: redacted_args_json(&call.raw_args, result.audit_hints.as_ref()),
             result_meta: tool_result_meta(result, cancelled),
             duration_ms,
             // Stamp the tool's start so a script dispatch sorts before the child
@@ -150,7 +156,11 @@ async fn build_event(
             tool_output_token_estimate: estimate_tool_output_tokens(&result.content),
             token_estimator_version: TOKEN_ESTIMATOR_VERSION,
         },
-        preview: Some(preview_callback(call, &identity.session)),
+        preview: if skip_screenshot {
+            None
+        } else {
+            Some(preview_callback(call, &identity.session))
+        },
     })
 }
 
@@ -272,6 +282,7 @@ mod tests {
                 "cancellationReason": "Operation cancelled by the User",
                 "cancellationKind": "cockpit.operator-cancelled"
             })),
+            audit_hints: None,
         };
         apply(ToolObserverContext {
             call: &call,
@@ -333,6 +344,7 @@ mod tests {
             ],
             is_error: false,
             structured_content: Some(json!({ "ignored": true })),
+            audit_hints: None,
         };
 
         record_local_tool_dispatch(
@@ -425,6 +437,59 @@ mod tests {
                 .as_deref()
                 .is_some_and(|value| value.len() <= 1024)
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn sensitive_dispatch_redacts_args_and_skips_screenshot() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call(
+            "act",
+            json!({ "page": 1, "kind": "fill", "ref": "e1", "value": "hunter2" }),
+        )
+        .await?;
+        let result = ToolResult {
+            content: vec![ContentBlock::text("ok (fill)")],
+            is_error: false,
+            structured_content: Some(json!({ "kind": "fill" })),
+            audit_hints: Some(browseros_mcp::AuditHints {
+                sensitive_refs: vec!["e1".to_string()],
+                redact_all_values: false,
+                skip_screenshot: true,
+            }),
+        };
+
+        let event = build_event(&call, &result, 1, false)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("event missing"))?;
+
+        assert!(event.input.args_json.contains("[redacted]"));
+        assert!(!event.input.args_json.contains("hunter2"));
+        // A sensitive dispatch is never screenshotted.
+        assert!(event.preview.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn ordinary_dispatch_keeps_its_value_and_screenshot() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call(
+            "act",
+            json!({ "page": 1, "kind": "fill", "ref": "e1", "value": "london" }),
+        )
+        .await?;
+        let result = ToolResult {
+            content: vec![ContentBlock::text("ok (fill)")],
+            is_error: false,
+            structured_content: Some(json!({ "kind": "fill" })),
+            audit_hints: None,
+        };
+
+        let event = build_event(&call, &result, 1, false)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("event missing"))?;
+
+        // No hints: the ledger is unchanged and the screenshot is still attached.
+        assert!(event.input.args_json.contains("london"));
+        assert!(event.preview.is_some());
         Ok(())
     }
 }

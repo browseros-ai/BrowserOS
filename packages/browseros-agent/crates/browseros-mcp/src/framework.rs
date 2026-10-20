@@ -323,11 +323,35 @@ pub struct ToolMetadata {
     pub requires: Option<NativeFeature>,
 }
 
+/// Internal, host-only hints a tool emits so the claw-server audit layer can keep
+/// secrets out of the ledger. Never serialized to the client: `into_call_tool_result`
+/// does not copy it, so it rides only on the in-process `ToolResult`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditHints {
+    /// Refs whose value must be redacted from `args_json` (matches the top-level
+    /// `ref` or a `fields[]` entry's `ref`).
+    pub sensitive_refs: Vec<String>,
+    /// Redact every `value`/`text`/`fields[].value` regardless of ref. Set when the
+    /// target has no ref to key on (`type`, `type_at`) or the caller forces it.
+    pub redact_all_values: bool,
+    /// Skip the audit screenshot for this dispatch.
+    pub skip_screenshot: bool,
+}
+
+impl AuditHints {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sensitive_refs.is_empty() && !self.redact_all_values && !self.skip_screenshot
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ToolResult {
     pub content: Vec<ContentBlock>,
     pub is_error: bool,
     pub structured_content: Option<Value>,
+    /// Host-only audit hints. Not sent to the client (see `AuditHints`).
+    pub audit_hints: Option<AuditHints>,
 }
 
 impl ToolResult {
@@ -337,6 +361,7 @@ impl ToolResult {
             content: vec![ContentBlock::text(text)],
             is_error: false,
             structured_content,
+            audit_hints: None,
         }
     }
 
@@ -346,6 +371,7 @@ impl ToolResult {
             content: vec![ContentBlock::image(data, mime_type)],
             is_error: false,
             structured_content: Some(structured),
+            audit_hints: None,
         }
     }
 
@@ -355,6 +381,7 @@ impl ToolResult {
             content: vec![ContentBlock::text(message)],
             is_error: true,
             structured_content: None,
+            audit_hints: None,
         }
     }
 

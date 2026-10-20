@@ -977,6 +977,61 @@ pub fn bounded_args_json(value: &serde_json::Value) -> String {
     truncate_utf8(&safe_stringify(value), ARGS_JSON_MAX)
 }
 
+/// Replaces a redacted secret with this fixed marker. The original length is
+/// dropped on purpose so the ledger leaks neither the value nor its size.
+const REDACTED_MARKER: &str = "[redacted]";
+
+/// Like `bounded_args_json`, but first strips secret values the tool flagged. For a
+/// sensitive `fill`, only the values of the flagged refs are replaced (sibling
+/// fields such as a username stay readable); `redact_all_values` replaces every
+/// `value`/`text`/`fields[].value`, used when the target carried no ref to key on.
+pub fn redacted_args_json(
+    value: &serde_json::Value,
+    hints: Option<&browseros_mcp::AuditHints>,
+) -> String {
+    match hints {
+        Some(hints) if hints.redact_all_values || !hints.sensitive_refs.is_empty() => {
+            let mut redacted = value.clone();
+            redact_args(&mut redacted, hints);
+            bounded_args_json(&redacted)
+        }
+        _ => bounded_args_json(value),
+    }
+}
+
+fn redact_args(value: &mut serde_json::Value, hints: &browseros_mcp::AuditHints) {
+    let serde_json::Value::Object(object) = value else {
+        return;
+    };
+    let redact_top = hints.redact_all_values
+        || object
+            .get("ref")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|ref_id| hints.sensitive_refs.iter().any(|r| r == ref_id));
+    if redact_top {
+        for key in ["value", "text"] {
+            if object.contains_key(key) {
+                object.insert(key.to_string(), json!(REDACTED_MARKER));
+            }
+        }
+    }
+    if let Some(serde_json::Value::Array(fields)) = object.get_mut("fields") {
+        for field in fields {
+            let serde_json::Value::Object(entry) = field else {
+                continue;
+            };
+            let matches = hints.redact_all_values
+                || entry
+                    .get("ref")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|ref_id| hints.sensitive_refs.iter().any(|r| r == ref_id));
+            if matches && entry.contains_key("value") {
+                entry.insert("value".to_string(), json!(REDACTED_MARKER));
+            }
+        }
+    }
+}
+
 pub fn result_meta(
     is_error: bool,
     cancelled: bool,
@@ -1046,9 +1101,10 @@ fn truncate_utf8(value: &str, max_bytes: usize) -> String {
 mod tests {
     use super::{
         AuditLog, ListTasksQuery, RecordToolDispatchInput, TaskStatus, bounded_args_json,
-        result_meta,
+        redacted_args_json, result_meta,
     };
     use crate::db::{DATABASE_FILENAME, Database};
+    use browseros_mcp::AuditHints;
     use browseros_mcp::token_estimate::estimate_tool_output_tokens;
     use rmcp::model::ContentBlock;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
@@ -1064,6 +1120,84 @@ mod tests {
     }
     use serde_json::json;
     use tempfile::tempdir;
+
+    fn parse(json_text: &str) -> serde_json::Value {
+        serde_json::from_str(json_text)
+            .unwrap_or_else(|err| panic!("args_json is valid JSON: {err}"))
+    }
+
+    #[test]
+    fn redacted_args_json_passes_through_without_hints() {
+        // No hints behaves exactly like bounded_args_json, byte for byte.
+        let args = json!({ "kind": "fill", "ref": "e1", "value": "secret" });
+        assert_eq!(redacted_args_json(&args, None), bounded_args_json(&args));
+        let empty = AuditHints::default();
+        assert_eq!(
+            redacted_args_json(&args, Some(&empty)),
+            bounded_args_json(&args)
+        );
+    }
+
+    #[test]
+    fn redacted_args_json_redacts_a_single_ref_fill() {
+        let args = json!({ "kind": "fill", "ref": "e1", "value": "hunter2" });
+        let hints = AuditHints {
+            sensitive_refs: vec!["e1".to_string()],
+            ..AuditHints::default()
+        };
+        let out = parse(&redacted_args_json(&args, Some(&hints)));
+        assert_eq!(out["value"], json!("[redacted]"));
+        // A ref the tool did not flag is untouched.
+        let other = AuditHints {
+            sensitive_refs: vec!["e2".to_string()],
+            ..AuditHints::default()
+        };
+        assert_eq!(
+            parse(&redacted_args_json(&args, Some(&other)))["value"],
+            json!("hunter2")
+        );
+    }
+
+    #[test]
+    fn redacted_args_json_redacts_only_the_flagged_field_entry() {
+        // A login form: the password ref is flagged, the username next to it is not.
+        let args = json!({
+            "kind": "fill",
+            "fields": [
+                { "ref": "e1", "value": "alice" },
+                { "ref": "e2", "value": "hunter2" },
+            ],
+        });
+        let hints = AuditHints {
+            sensitive_refs: vec!["e2".to_string()],
+            ..AuditHints::default()
+        };
+        let out = parse(&redacted_args_json(&args, Some(&hints)));
+        assert_eq!(out["fields"][0]["value"], json!("alice"));
+        assert_eq!(out["fields"][1]["value"], json!("[redacted]"));
+    }
+
+    #[test]
+    fn redacted_args_json_redact_all_covers_value_text_and_every_field() {
+        let args = json!({
+            "kind": "fill",
+            "value": "cvv-123",
+            "text": "typed-secret",
+            "fields": [
+                { "ref": "e1", "value": "card" },
+                { "ref": "e2", "value": "exp" },
+            ],
+        });
+        let hints = AuditHints {
+            redact_all_values: true,
+            ..AuditHints::default()
+        };
+        let out = parse(&redacted_args_json(&args, Some(&hints)));
+        assert_eq!(out["value"], json!("[redacted]"));
+        assert_eq!(out["text"], json!("[redacted]"));
+        assert_eq!(out["fields"][0]["value"], json!("[redacted]"));
+        assert_eq!(out["fields"][1]["value"], json!("[redacted]"));
+    }
 
     fn dispatch(session_id: &str, url: &str, is_error: bool) -> RecordToolDispatchInput {
         RecordToolDispatchInput {

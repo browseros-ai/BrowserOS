@@ -531,6 +531,7 @@ impl ClawMcpService {
             content: vec![rmcp::model::ContentBlock::text(said)],
             is_error: true,
             structured_content: None,
+            audit_hints: None,
         };
         self.record_pursue(started, raw_args, &result, started_at, dispatch_id)
             .await;
