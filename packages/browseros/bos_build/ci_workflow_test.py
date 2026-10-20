@@ -1618,7 +1618,8 @@ class LinuxReleaseSelectionTest(unittest.TestCase):
         )
 
     def run_plan(
-        self, products: str, arch: str, mode: str = "published", *, pinned: bool = False
+        self, products: str, arch: str, mode: str = "published", *, pinned: bool = False,
+        resource_versions: dict[str, str] | None = None,
     ):
         step = self.workflow["jobs"]["plan"]["steps"][0]
         self.assertNotIn("${{", step["run"])
@@ -1636,6 +1637,7 @@ class LinuxReleaseSelectionTest(unittest.TestCase):
                     "SERVER_VERSION": "0.0.68" if pinned else "",
                     "EXTENSION_VERSION": "0.2.30" if pinned else "",
                     "ONBOARDING_VERSION": "0.1.0" if pinned else "",
+                    **(resource_versions or {}),
                 },
                 capture_output=True,
                 text=True,
@@ -1691,6 +1693,18 @@ class LinuxReleaseSelectionTest(unittest.TestCase):
         result, outputs = self.run_plan("all", "all", pinned=True)
         self.assertNotEqual(result.returncode, 0)
         self.assertEqual(outputs, {})
+
+    def test_dual_architectures_reject_mutable_resource_selectors(self):
+        for name in ("SERVER_VERSION", "EXTENSION_VERSION", "ONBOARDING_VERSION"):
+            for alias in ("latest", "alpha", "../latest"):
+                with self.subTest(name=name, alias=alias):
+                    result, outputs = self.run_plan(
+                        "browserclaw", "all", pinned=True,
+                        resource_versions={name: alias},
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("::error::", result.stdout)
+                    self.assertEqual(outputs, {})
 
     def test_architecture_selection_and_metadata_ownership_are_explicit(self):
         triggers = self.workflow.get("on", self.workflow.get(True))

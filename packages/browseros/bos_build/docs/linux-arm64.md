@@ -108,6 +108,9 @@ A standalone `arch=all` build requires one product and explicit `server_version`
 resolve different mutable `latest` resources hours apart. The full Neo workflow
 supplies these exact versions automatically; an unpinned standalone request for
 both architectures fails before any browser runner is allocated.
+Server/onboarding pins must be numeric `MAJOR.MINOR.PATCH` releases; extension
+pins use the existing numeric Chrome version format. Mutable aliases such as
+`latest` and `alpha` are rejected both during planning and retry retention.
 
 Pass `--linux-arch arm64` (or `all`) to `browseros release github create`,
 `browseros release publish`, and `browseros release appcast` when binding those

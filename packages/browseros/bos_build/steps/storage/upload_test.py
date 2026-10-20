@@ -654,6 +654,14 @@ class UploadMetadataTest(unittest.TestCase):
                 after = {**arm64, "workflow_run_attempt": "2", "component_versions": versions}
                 self.assertEqual(merge_release_metadata(before, after), after)
 
+        for name in identity["component_versions"]:
+            for alias in ("latest", "alpha", "../latest"):
+                with self.subTest(name=name, alias=alias):
+                    versions = {**identity["component_versions"], name: alias}
+                    before = {**x64, "workflow_run_attempt": "1", "component_versions": versions}
+                    after = {**arm64, "workflow_run_attempt": "2", "component_versions": versions}
+                    self.assertEqual(merge_release_metadata(before, after), after)
+
 
 if __name__ == "__main__":
     unittest.main()

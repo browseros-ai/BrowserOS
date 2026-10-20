@@ -157,11 +157,16 @@ jobs:
           fi
           # Two serial builds can resolve mutable latest aliases hours apart.
           # Freeze all product resources before expanding a multi-arch matrix.
-          if [ "$ARCH" = all ] && \
-            { [ "$PRODUCTS" = all ] || [ -z "$SERVER_VERSION" ] || \
-              [ -z "$EXTENSION_VERSION" ] || [ -z "$ONBOARDING_VERSION" ]; }; then
-            echo "::error::arch=all requires one product and exact server_version, extension_version, and onboarding_version; use the full product release or supply all pins"
-            exit 1
+          if [ "$ARCH" = all ]; then
+            semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+            extension_pattern='^[0-9]+(\.[0-9]+){0,3}$'
+            if [ "$PRODUCTS" = all ] || \
+              ! [[ "$SERVER_VERSION" =~ $semver_pattern && \
+                   "$ONBOARDING_VERSION" =~ $semver_pattern && \
+                   "$EXTENSION_VERSION" =~ $extension_pattern ]]; then
+              echo "::error::arch=all requires one product and numeric server_version, extension_version, and onboarding_version; use the full product release or supply exact release versions"
+              exit 1
+            fi
           fi
           case "$PRODUCTS" in
             all)

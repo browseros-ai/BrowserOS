@@ -29,6 +29,7 @@ from ...release.prepared_resources import (
     PreparedResourcesManifest,
     load_prepared_resources,
 )
+from ...release.components import normalize_component_version
 from ...products.resource_sources import source_resources_for_product
 from ..package.linux_packaging import require_linux_artifacts
 
@@ -213,16 +214,20 @@ def _has_pinned_linux_identity(release: Dict) -> bool:
         return False
     try:
         source = source_resources_for_product(release.get("product", ""))
-    except ValueError:
-        return False
-    return all(
-        isinstance(versions.get(name), str) and bool(versions[name])
         for name in (
             source.server_component,
             source.extension_component,
             source.onboarding_component,
-        )
-    )
+        ):
+            version = versions.get(name)
+            if not isinstance(version, str):
+                return False
+            # Nonempty aliases such as `latest` still select mutable objects.
+            # Use each resource's existing release-version rules, not truthiness.
+            normalize_component_version(name, version)
+    except ValueError:
+        return False
+    return True
 
 
 def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
