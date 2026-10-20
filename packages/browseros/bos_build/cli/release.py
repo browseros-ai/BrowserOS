@@ -26,6 +26,7 @@ from . import (
     release_browser,
     release_candidate,
     release_component,
+    release_docker,
     release_feeds,
     release_resources,
     release_suite,
@@ -46,6 +47,7 @@ github_app = typer.Typer(
 app.add_typer(github_app, name="github")
 
 release_feeds.register(app)
+release_docker.register(app)
 app.add_typer(release_candidate.app, name="candidate")
 app.add_typer(release_browser.app, name="browser")
 app.add_typer(release_component.app, name="component")
