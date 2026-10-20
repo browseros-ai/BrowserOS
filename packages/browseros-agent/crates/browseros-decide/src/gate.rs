@@ -564,9 +564,20 @@ pub fn verdict(
         );
     }
     if decision.how == Some(How::Fill) && text.is_none() && decision.value.is_none() {
+        // Name the field. Stopping here is right, because only the caller has
+        // the text, but a caller told only that something was missing has to
+        // guess which field to supply and may well supply the wrong one. Named,
+        // it can run the errand again with one more value.
         return Verdict::HandBack(
             Handback::NoFieldNamed,
-            "this step needs text typed into a field, which the caller supplies".to_string(),
+            target_name.map_or_else(
+                || "this step needs text typed into a field, and no value was supplied".to_string(),
+                |field| {
+                    format!(
+                        "this step needs text typed into {field:?}, and no value supplied matches                          it; pass one named for that field and run this again"
+                    )
+                },
+            ),
         );
     }
     if decision.needs_target() && decision.target.is_none() {
@@ -798,6 +809,23 @@ mod tests {
             panic!("a move under its approval must not run");
         };
         assert!(said.contains("0.31"), "{said}");
+    }
+
+    /// Stopping is right, because only the caller has the text. Stopping
+    /// without saying which field is what makes the caller guess.
+    #[test]
+    fn a_fill_with_no_value_names_the_field_it_needed() {
+        let filling = read(&response(&[
+            (OPERATION, answer("ACT", 0.95)),
+            (ACT_HOW, answer("FILL", 0.95)),
+            (TARGET, answer("e17", 0.95)),
+        ]))
+        .expect("reads");
+        let Verdict::HandBack(why, said) = verdict(&filling, Some("Where to? "), None, None) else {
+            panic!("a fill with nothing to type must hand back");
+        };
+        assert_eq!(why, Handback::NoFieldNamed);
+        assert!(said.contains("Where to?"), "{said}");
     }
 
     /// A destination is not a control, so no approval can be asked about it.
