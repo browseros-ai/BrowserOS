@@ -2028,8 +2028,14 @@ mod cards {
         let lines = lines_of(LISTING);
         let first = lines.iter().position(|l| l.contains("ref=e4")).unwrap();
         let second = lines.iter().position(|l| l.contains("ref=e7")).unwrap();
-        assert_eq!(card_label(&lines, first).as_deref(), Some("Sensodyne Repair and Protect"));
-        assert_eq!(card_label(&lines, second).as_deref(), Some("Sensodyne Fresh Mint"));
+        assert_eq!(
+            card_label(&lines, first).as_deref(),
+            Some("Sensodyne Repair and Protect")
+        );
+        assert_eq!(
+            card_label(&lines, second).as_deref(),
+            Some("Sensodyne Fresh Mint")
+        );
     }
 
     /// The rating sits on every card and so tells none of them apart.
@@ -2053,7 +2059,10 @@ mod cards {
 "#;
         let lines = lines_of(inside);
         let at = lines.iter().position(|l| l.contains("ref=e3")).unwrap();
-        assert_eq!(card_label(&lines, at).as_deref(), Some("The card's own title"));
+        assert_eq!(
+            card_label(&lines, at).as_deref(),
+            Some("The card's own title")
+        );
     }
 
     /// The regression this was written for: on a contents page whose chapters
@@ -2070,7 +2079,10 @@ mod cards {
 "#;
         let lines = lines_of(nested);
         let at = lines.iter().position(|l| l.contains("ref=e2")).unwrap();
-        assert_ne!(card_label(&lines, at).as_deref(), Some("References and Borrowing"));
+        assert_ne!(
+            card_label(&lines, at).as_deref(),
+            Some("References and Borrowing")
+        );
     }
 
     #[test]

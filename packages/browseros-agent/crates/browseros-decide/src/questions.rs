@@ -797,6 +797,10 @@ mod approving {
         let Question::Noul { instructions, .. } = &asked[WORTH_ACTING_ON] else {
             panic!("the approval is a Noul");
         };
-        assert!(instructions["the_move_being_considered"].get("argument").is_none());
+        assert!(
+            instructions["the_move_being_considered"]
+                .get("argument")
+                .is_none()
+        );
     }
 }

@@ -348,9 +348,10 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                 .map(crate::space::describe);
             match descriptor {
                 Some(descriptor) => {
-                    let how = decision
-                        .how
-                        .map_or_else(|| decision.operation.as_str().to_string(), |how| how.as_str().to_string());
+                    let how = decision.how.map_or_else(
+                        || decision.operation.as_str().to_string(),
+                        |how| how.as_str().to_string(),
+                    );
                     // What the move would actually do with the control: the
                     // text a fill types, the value a select sets, the key a
                     // press sends.
@@ -360,7 +361,8 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         _ => decision.value.as_deref(),
                     };
                     let asked = questions::approval(&run.goal, &how, &descriptor, argument);
-                    let state = questions::state(&view, &space, &run.recent, run.here.retired.len());
+                    let state =
+                        questions::state(&view, &space, &run.recent, run.here.retired.len());
                     let left = Duration::from_secs(run.budget.max_seconds)
                         .saturating_sub(started.elapsed());
                     match oracle.ask_within(&state, &asked, left).await {
@@ -386,7 +388,12 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             None
         };
 
-        let judged = gate::verdict(&decision, target_name.as_deref(), supplied.as_deref(), worth);
+        let judged = gate::verdict(
+            &decision,
+            target_name.as_deref(),
+            supplied.as_deref(),
+            worth,
+        );
         // Recorded before it is acted on, so a decision that ends the run is in
         // the record that travels back with the ending.
         run.judged(decided_of(

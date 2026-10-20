@@ -481,7 +481,10 @@ async fn a_move_judged_not_worth_making_does_not_run() {
         Move::Act(decision) => decision.how == Some(How::Scroll),
         _ => false,
     });
-    assert!(!scrolled, "a refusal about the move must not scroll the page");
+    assert!(
+        !scrolled,
+        "a refusal about the move must not scroll the page"
+    );
 }
 
 /// The live failure the vocabulary was widened for, restated now that the

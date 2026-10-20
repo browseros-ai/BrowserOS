@@ -833,8 +833,14 @@ mod tests {
     #[test]
     fn a_target_that_is_not_a_control_keeps_its_lead_check() {
         let going = read(&response(&[
-            (OPERATION, spread("NAVIGATE", &[("NAVIGATE", 0.95), ("ACT", 0.01)])),
-            (DESTINATION, spread("checkout", &[("checkout", 0.30), ("basket", 0.28)])),
+            (
+                OPERATION,
+                spread("NAVIGATE", &[("NAVIGATE", 0.95), ("ACT", 0.01)]),
+            ),
+            (
+                DESTINATION,
+                spread("checkout", &[("checkout", 0.30), ("basket", 0.28)]),
+            ),
         ]))
         .expect("reads");
         assert!(going.needs_target() && !going.aims_at_a_control());
@@ -916,7 +922,11 @@ mod tests {
     fn an_ending_is_never_refused() {
         for named in ["DONE", "BLOCKED"] {
             let decision = read(&response(&[(OPERATION, answer(named, 0.11))])).expect("reads");
-            assert_eq!(verdict(&decision, None, None, None), Verdict::Execute, "{named}");
+            assert_eq!(
+                verdict(&decision, None, None, None),
+                Verdict::Execute,
+                "{named}"
+            );
         }
     }
 
@@ -927,7 +937,8 @@ mod tests {
             (DESTINATION, answer("the results page", 0.80)),
         ]))
         .expect("reads");
-        let Verdict::HandBack(why, _) = verdict(&decision, Some("the results page"), None, None) else {
+        let Verdict::HandBack(why, _) = verdict(&decision, Some("the results page"), None, None)
+        else {
             panic!("0.80 is under the 0.85 that leaving the page needs");
         };
         assert_eq!(why, Handback::TooRiskyToGuess);
