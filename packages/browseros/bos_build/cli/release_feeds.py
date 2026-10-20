@@ -90,6 +90,9 @@ def appcast_command(
         "--workflow-run-attempt",
         help="Require release metadata from this Actions run attempt",
     ),
+    linux_arch: str | None = typer.Option(
+        None, "--linux-arch", help="Expected Linux artifact set: x64, arm64, or all"
+    ),
 ):
     """Generate browser appcasts from R2 release metadata."""
     ctx = _create_context(version, product)
@@ -101,6 +104,7 @@ def appcast_command(
             allow_downgrade=allow_downgrade,
             platforms=platforms,
             macos_arch=macos_arch,
+            linux_arch=linux_arch,
             source_sha=source_sha,
             workflow_run_id=workflow_run_id,
             workflow_run_attempt=workflow_run_attempt,

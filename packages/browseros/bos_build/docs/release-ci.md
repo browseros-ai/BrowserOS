@@ -73,6 +73,7 @@ release, and preflight rejects anything else before allocating a version:
 | --- | --- | --- |
 | `platforms` | `all` (default), `macos`, `linux`, `windows` | native lanes to build; the others are skipped |
 | `macos_arch` | `universal` (default), `arm64` | macOS artifact set; non-default only when macOS is selected |
+| `linux_arch` | `x64` (default), `arm64`, `all` | Linux artifact set; non-default only when Linux is selected |
 | `publication` | `alpha` (default), `draft-only` | component publication, see below |
 
 `draft-only` passes `defer_finalize: true` to both component workflows. Each
@@ -89,7 +90,18 @@ created as usual from only the selected receipts.
 # Signed macOS arm64 test build with private component drafts.
 gh workflow run release-browserclaw.yml --ref main \
   -f platforms=macos -f macos_arch=arm64 -f publication=draft-only
+
+# Cross-compiled Linux arm64 test build with private resource drafts.
+gh workflow run release-browserclaw.yml --ref main \
+  -f platforms=linux -f linux_arch=arm64 -f publication=draft-only
 ```
+
+Linux arm64 uses the existing x64 WarpBuild runner and published arm64 server
+resources. `linux_arch=all` builds the x64 and arm64 AppImage/DEB pairs serially
+so their shared Linux release metadata cannot lose an architecture. The browser
+draft checks exactly the selected pairs. Pass the same `--linux-arch` selection
+to later release CLI validation/promotion. See [Linux arm64](linux-arm64.md) for
+the design, source-mode limit, retry provenance, and native verification gate.
 
 The deferred component drafts remain allocations bound to that source SHA: a
 later dispatch of the same SHA reuses them, and releases from other SHAs skip

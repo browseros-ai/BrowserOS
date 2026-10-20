@@ -42,12 +42,26 @@ def selected_release_platforms(platforms: str) -> Tuple[str, ...]:
 def expected_browser_artifact_keys(
     platforms: str,
     macos_arch: str,
+    linux_arch: str = "x64",
 ) -> Dict[str, set[str]]:
-    """Exact browser artifact keys selected by the top-level release inputs."""
+    """Resolve the complete artifact contract for drafts and publication.
+
+    Each Linux architecture owns an indivisible AppImage/DEB pair. Keeping that
+    policy here makes every publisher reject incomplete or unselected packages.
+    """
     expected: Dict[str, set[str]] = {}
     for platform in selected_release_platforms(platforms):
         if platform == "linux":
-            expected[platform] = {"x64_appimage", "x64_deb"}
+            if linux_arch not in ("x64", "arm64", "all"):
+                raise ValueError(
+                    f"Unknown Linux architecture '{linux_arch}'. Valid: x64, arm64, all"
+                )
+            architectures = ("x64", "arm64") if linux_arch == "all" else (linux_arch,)
+            expected[platform] = {
+                f"{arch}_{format_name}"
+                for arch in architectures
+                for format_name in ("appimage", "deb")
+            }
         elif platform == "win":
             expected[platform] = {"x64_installer", "x64_zip"}
         elif macos_arch == "universal":
@@ -72,9 +86,10 @@ def validate_release_metadata(
     source_sha: str = "",
     workflow_run_id: str = "",
     workflow_run_attempt: str = "",
+    linux_arch: str = "x64",
 ) -> Dict[str, Dict]:
     """Select and validate the exact R2 metadata for one release invocation."""
-    expected = expected_browser_artifact_keys(platforms, macos_arch)
+    expected = expected_browser_artifact_keys(platforms, macos_arch, linux_arch)
     provenance = {
         "source_sha": source_sha,
         "workflow_run_id": workflow_run_id,

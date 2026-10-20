@@ -11,12 +11,37 @@ on:
           - browseros
           - browserclaw
           - all
+      arch:
+        description: "Linux artifact set (arm64 cross-compiles on the x64 runner)"
+        type: choice
+        default: x64
+        options:
+          - x64
+          - arm64
+          - all
       upload_to_r2:
         description: "Upload release metadata/artifacts to R2"
         type: boolean
         default: true
+      server_version:
+        description: "Exact server resource version (required with arch=all)"
+        type: string
+        default: ""
+      extension_version:
+        description: "Exact extension resource version (required with arch=all)"
+        type: string
+        default: ""
+      onboarding_version:
+        description: "Exact onboarding resource version (required with arch=all)"
+        type: string
+        default: ""
   workflow_call:
     inputs:
+      arch:
+        description: "Linux artifact set: x64, arm64, or all"
+        required: false
+        type: string
+        default: x64
       products:
         description: "Product set to build: browseros, browserclaw, or all"
         required: false
@@ -97,13 +122,51 @@ jobs:
       - name: Resolve product matrix
         id: plan
         env:
+          ARCH: ${{ inputs.arch || 'x64' }}
           PRODUCTS: ${{ inputs.products || 'browseros' }}
           RESOURCE_MODE: ${{ inputs.resource_mode || 'published' }}
+          SERVER_VERSION: ${{ inputs.server_version || '' }}
+          EXTENSION_VERSION: ${{ inputs.extension_version || '' }}
+          ONBOARDING_VERSION: ${{ inputs.onboarding_version || '' }}
         run: |
           set -euo pipefail
+          case "$ARCH" in
+            x64|arm64) architectures="$(jq -cn --arg arch "$ARCH" '[$arch]')" ;;
+            all) architectures='["x64","arm64"]' ;;
+            *)
+              echo "::error::arch must be x64, arm64, or all"
+              exit 1
+              ;;
+          esac
+          case "$RESOURCE_MODE" in
+            published) ;;
+            source)
+              if [ "$ARCH" != x64 ]; then
+                echo "::error::Linux source mode supports only x64; arm64 requires published resources"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::resource_mode must be published or source"
+              exit 1
+              ;;
+          esac
           if [ "$PRODUCTS" = "all" ] && [ "$RESOURCE_MODE" = "source" ]; then
             echo "::error::source mode builds one candidate product per lane"
             exit 1
+          fi
+          # Two serial builds can resolve mutable latest aliases hours apart.
+          # Freeze all product resources before expanding a multi-arch matrix.
+          if [ "$ARCH" = all ]; then
+            semver_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+            extension_pattern='^[0-9]+(\.[0-9]+){0,3}$'
+            if [ "$PRODUCTS" = all ] || \
+              ! [[ "$SERVER_VERSION" =~ $semver_pattern && \
+                   "$ONBOARDING_VERSION" =~ $semver_pattern && \
+                   "$EXTENSION_VERSION" =~ $extension_pattern ]]; then
+              echo "::error::arch=all requires one product and numeric server_version, extension_version, and onboarding_version; use the full product release or supply exact release versions"
+              exit 1
+            fi
           fi
           case "$PRODUCTS" in
             all)
@@ -117,6 +180,8 @@ jobs:
               exit 1
               ;;
           esac
+          matrix="$(jq -cn --argjson products "$matrix" --argjson architectures "$architectures" \
+            '[$products[] as $product | $architectures[] as $arch | $product + {arch:$arch}]')"
           echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
 
   # WarpBuild provisions runners on demand via webhook; when none arrive
@@ -160,8 +225,12 @@ jobs:
             total="$(jq 'length' <<<"$jobs")"
             queued="$(jq '[.[] | select(.status == "queued")] | length' <<<"$jobs")"
             in_progress="$(jq '[.[] | select(.status == "in_progress")] | length' <<<"$jobs")"
-            if [ "$total" -gt 0 ] && [ "$queued" -eq 0 ]; then
-              echo "All $total build jobs picked up by runners."
+            # The matrix is serialized to own release.json. Later entries
+            # intentionally queue behind the first multi-hour build, so this
+            # watchdog only establishes that the shared runner can start work.
+            started="$(jq '[.[] | select(.status == "in_progress" or .status == "completed")] | length' <<<"$jobs")"
+            if [ "$started" -gt 0 ]; then
+              echo "Linux build runner picked up work; later matrix entries run serially."
               exit 0
             fi
             if [ "$(date +%s)" -ge "$deadline" ]; then
@@ -188,13 +257,16 @@ jobs:
     needs: plan
     strategy:
       fail-fast: false
+      # Both architectures merge the same product/version/linux/release.json.
+      # Keep its read/merge/write under one owner, including architecture retries.
+      max-parallel: 1
       matrix:
         include: ${{ fromJSON(needs.plan.outputs.matrix) }}
-    name: build (${{ matrix.product }} linux-x64)
+    name: build (${{ matrix.product }} linux-${{ matrix.arch }})
     uses: ./.github/workflows/build-browseros.yml
     with:
       platform: linux
-      arch: x64
+      arch: ${{ matrix.arch }}
       product: ${{ matrix.product }}
       runner: warp-custom-browseros-ubuntu-2204-x64-32x
       timeout-minutes: 660
