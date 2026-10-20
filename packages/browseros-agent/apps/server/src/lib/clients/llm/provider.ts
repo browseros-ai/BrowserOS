@@ -18,6 +18,7 @@ import { LLM_PROVIDERS } from '@browseros/shared/schemas/llm'
 import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { LanguageModel } from 'ai'
 import { createOpenRouterCompatibleFetch } from '../../openrouter-fetch'
+import { getOpenRouterReasoning } from '../../openrouter-reasoning'
 import { createCodexFetch } from '../oauth/codex-fetch'
 import { createCopilotFetch } from '../oauth/copilot-fetch'
 import {
@@ -65,7 +66,9 @@ function createOpenRouterModel(config: ResolvedLLMConfig): LanguageModel {
   return createOpenRouter({
     ...(config.headers && { headers: config.headers }),
     apiKey: config.apiKey,
-    extraBody: { reasoning: {} },
+    extraBody: {
+      reasoning: getOpenRouterReasoning(config.model, config.reasoningEffort),
+    },
     fetch: createOpenRouterCompatibleFetch(),
     ...(config.baseUrl && { baseURL: config.baseUrl }),
   })(config.model)

@@ -73,7 +73,9 @@ import {
   getModelPickerRows,
 } from './model-picker.helpers'
 import {
+  getDefaultReasoningEffort,
   getModelContextLength,
+  getModelInfo,
   getModelsForProvider,
   getReasoningEffortOptions,
   type ModelInfo,
@@ -126,13 +128,6 @@ function getTemperatureRange(type?: ProviderType): {
 } {
   if (type === 'anthropic') return { min: 0, max: 1 }
   return { min: 0, max: 2 }
-}
-
-/** Picks a sensible default effort from a model's allowed levels. */
-function pickDefaultEffort(options: string[]): string {
-  if (options.includes('medium')) return 'medium'
-  if (options.includes('high')) return 'high'
-  return options[Math.floor(options.length / 2)] ?? 'medium'
 }
 
 function formatContextWindow(tokens: number): string {
@@ -312,8 +307,9 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
   ])
 
   const modelInfoList = getModelsForProvider(watchedType as ProviderType)
-  const selectedModel: ModelInfo | undefined = modelInfoList.find(
-    (m) => m.modelId === watchedModelId,
+  const selectedModel: ModelInfo | undefined = getModelInfo(
+    watchedType as ProviderType,
+    watchedModelId,
   )
   const showReasoning = modelSupportsReasoning(selectedModel)
   const reasoningEffortOptions = getReasoningEffortOptions(selectedModel)
@@ -363,14 +359,14 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
 
   const commitModelId = (modelId: string, contextLength?: number) => {
     form.setValue('modelId', modelId)
-    const info = modelInfoList.find((m) => m.modelId === modelId)
+    const info = getModelInfo(watchedType as ProviderType, modelId)
     if (info?.supportsImages !== undefined) {
       form.setValue('supportsImages', info.supportsImages)
     }
     // Reset effort to a level this model actually supports.
     form.setValue(
       'reasoningEffort',
-      pickDefaultEffort(getReasoningEffortOptions(info)),
+      getDefaultReasoningEffort(watchedType as ProviderType, info),
     )
     track(MODEL_SELECTED_EVENT, {
       provider_type: watchedType,
@@ -605,7 +601,10 @@ export const NewProviderDialog: FC<NewProviderDialogProps> = ({
                 value={
                   reasoningEffortOptions.includes(field.value ?? '')
                     ? field.value
-                    : pickDefaultEffort(reasoningEffortOptions)
+                    : getDefaultReasoningEffort(
+                        watchedType as ProviderType,
+                        selectedModel,
+                      )
                 }
               >
                 <FormControl>

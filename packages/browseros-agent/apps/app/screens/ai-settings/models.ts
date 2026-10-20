@@ -49,14 +49,33 @@ export function getModelsForProvider(providerType: ProviderType): ModelInfo[] {
   const custom = CUSTOM_PROVIDER_MODELS[providerType]
   if (custom !== undefined) return custom
 
-  return getModelsDevModels(providerType).map(fromModelsDevModel)
+  return getModelsDevModels(providerType)
+    .filter((model) => {
+      // Curate new selections only. Keep the full snapshot for saved/custom IDs.
+      if (providerType === 'openrouter' && model.id.startsWith('minimax/')) {
+        return (
+          model.id === 'minimax/minimax-m3.1-flash:free' ||
+          model.id === 'minimax/minimax-m3'
+        )
+      }
+      // Bedrock has no published M3 or Flash route yet; do not invent one.
+      if (providerType === 'bedrock' && model.id.startsWith('minimax.')) {
+        return false
+      }
+      return true
+    })
+    .map(fromModelsDevModel)
 }
 
 export function getModelInfo(
   providerType: ProviderType,
   modelId: string,
 ): ModelInfo | undefined {
-  return getModelsForProvider(providerType).find((m) => m.modelId === modelId)
+  const custom = CUSTOM_PROVIDER_MODELS[providerType]
+  if (custom !== undefined) return custom.find((m) => m.modelId === modelId)
+
+  const model = getModelsDevModels(providerType).find((m) => m.id === modelId)
+  return model && fromModelsDevModel(model)
 }
 
 export function getModelContextLength(
@@ -91,4 +110,20 @@ export function getReasoningEffortOptions(
 ): string[] {
   const effort = model?.reasoningControls?.find((c) => c.type === 'effort')
   return effort?.values.length ? effort.values : DEFAULT_EFFORT_VALUES
+}
+
+export function getDefaultReasoningEffort(
+  providerType: ProviderType,
+  model: ModelInfo | undefined,
+): string {
+  if (
+    providerType === 'openrouter' &&
+    model?.modelId === 'minimax/minimax-m3.1-flash:free'
+  ) {
+    return 'max'
+  }
+  const options = getReasoningEffortOptions(model)
+  if (options.includes('medium')) return 'medium'
+  if (options.includes('high')) return 'high'
+  return options[Math.floor(options.length / 2)] ?? 'medium'
 }
