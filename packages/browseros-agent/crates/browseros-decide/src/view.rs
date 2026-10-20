@@ -648,8 +648,32 @@ fn depth_of(line: &str) -> usize {
 /// The test is nesting, not the name alone. A page with twenty "Add to cart"
 /// buttons has them as siblings in separate cards, and those are twenty
 /// different targets that all have to survive.
+/// Roles that hold a control rather than being one.
+///
+/// Markup does not oblige a wrapper to share its child's role. An autocomplete
+/// nests row inside gridcell inside button, all carrying the same name, and a
+/// results page wraps each Add to cart button in a clickable generic. Measured
+/// on one live dropdown, a single suggestion held 0.31 as its button and 0.09
+/// as its cell, which is 0.40 of the mass for one move.
+const WRAPPER_ROLES: [&str; 4] = ["generic", "gridcell", "cell", "row"];
+
 #[must_use]
 pub fn without_nested_twins(controls: Vec<(usize, Control)>) -> Vec<Control> {
+    // A wrapper holding a control of the same name is not a second target. The
+    // control inside it is the one that works, so the wrapper goes.
+    let wraps_the_same_thing = |index: usize| -> bool {
+        let (depth, me) = &controls[index];
+        if !WRAPPER_ROLES.contains(&me.role.as_str()) || me.name.trim().is_empty() {
+            return false;
+        }
+        controls[index + 1..]
+            .iter()
+            .take_while(|(other, _)| other > depth)
+            .any(|(_, inside)| {
+                !WRAPPER_ROLES.contains(&inside.role.as_str())
+                    && inside.name.trim().eq_ignore_ascii_case(me.name.trim())
+            })
+    };
     let twin = |index: usize| -> bool {
         let (depth, me) = &controls[index];
         if *depth == 0 || me.name.trim().is_empty() {
@@ -667,7 +691,7 @@ pub fn without_nested_twins(controls: Vec<(usize, Control)>) -> Vec<Control> {
             })
     };
     (0..controls.len())
-        .filter(|index| !twin(*index))
+        .filter(|index| !twin(*index) && !wraps_the_same_thing(*index))
         .map(|index| controls[index].1.clone())
         .collect()
 }
@@ -1746,7 +1770,40 @@ mod tests {
             at(2, "e2", "generic"),
             at(3, "e3", "button"),
         ]);
-        assert_eq!(kept.len(), 3, "different roles, and a level between them");
+        // The two buttons are different elements and both survive, which is
+        // what this test is about. The generic between them is a wrapper
+        // around the same-named button below it, so it folds into it.
+        let references: Vec<&str> = kept.iter().map(|c| c.reference.as_str()).collect();
+        assert_eq!(references, vec!["e1", "e3"]);
+    }
+
+    /// The autocomplete shape: a suggestion offered as a row, a cell and a
+    /// button is one suggestion.
+    #[test]
+    fn a_wrapper_around_a_control_of_the_same_name_folds_into_it() {
+        let at = |depth: usize, reference: &str, role: &str| {
+            (
+                depth,
+                Control {
+                    reference: reference.to_string(),
+                    clickable: false,
+                    role: role.to_string(),
+                    name: "sensodyne toothpaste 150g".to_string(),
+                    value: None,
+                    state: ControlState::default(),
+                    options: Vec::new(),
+                    guard: 0,
+                    group: None,
+                },
+            )
+        };
+        let kept = without_nested_twins(vec![
+            at(1, "e270", "row"),
+            at(2, "e271", "gridcell"),
+            at(3, "e280", "button"),
+        ]);
+        let references: Vec<&str> = kept.iter().map(|c| c.reference.as_str()).collect();
+        assert_eq!(references, vec!["e280"], "the control, not its wrappers");
     }
 
     /// An unnamed control cannot be told apart from its parent by name, so the
