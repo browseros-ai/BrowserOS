@@ -119,6 +119,26 @@ impl Consequence {
         }
     }
 
+    /// How sure the model has to be that a move is worth making, at this
+    /// consequence.
+    ///
+    /// The published guidance for a Noul is to use a coin flip when yes and no
+    /// are equally easy to act on, and to raise it when acting on a false yes
+    /// is expensive. A move that can be undone costs one step when it is wrong
+    /// and costs the whole run when it is wrongly refused, so the reversible
+    /// case sits at the coin flip and only an irreversible one is raised.
+    ///
+    /// Starting points, like the margins above, and for the same reason: they
+    /// were set against particular pages and the numbers they replace are the
+    /// argument for saying so.
+    #[must_use]
+    pub fn approval(self) -> f64 {
+        match self {
+            Self::Low | Self::Medium => 0.50,
+            Self::High => 0.80,
+        }
+    }
+
     /// The share a judgement needs when it reported no distribution to take a
     /// margin against.
     ///

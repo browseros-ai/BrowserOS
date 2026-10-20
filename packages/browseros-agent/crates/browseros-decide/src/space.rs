@@ -483,6 +483,15 @@ fn speaks_for_its_description(view: &PageView, goal: &str) -> HashMap<String, St
 /// A name long enough to be a product title rather than a label or a price.
 const ROW_WORTH_KEEPING: usize = 18;
 
+/// How one control is described to the model, as the option space describes it.
+///
+/// Public so a question asked about a control already chosen names it the same
+/// way the question that chose it did.
+#[must_use]
+pub fn describe(control: &Control) -> serde_json::Value {
+    candidate_of(control).descriptor
+}
+
 fn candidate_of(control: &Control) -> Candidate {
     // A role the accessibility tree invented is not a description. A facet
     // rendered as a styled label arrives as `LabelText`, which tells a model

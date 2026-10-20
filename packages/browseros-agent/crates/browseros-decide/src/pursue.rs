@@ -332,7 +332,48 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             .and_then(|key| run.offered.values.iter().find(|value| value.name == key))
             .map(|value| value.text.clone());
 
-        let judged = gate::verdict(&decision, target_name.as_deref(), supplied.as_deref());
+        // Whether this move is worth making. Asked only once a control has been
+        // settled on, because it names one, and only when the move could
+        // actually be carried out: a move with no argument to act with cannot
+        // be worth a model call to approve.
+        let worth = if decision.needs_target()
+            && decision.target.is_some()
+            && resolve(&decision, &run, &supplied).is_some()
+        {
+            let descriptor = decision
+                .target
+                .as_deref()
+                .and_then(|reference| view.control(reference))
+                .map(crate::space::describe);
+            match descriptor {
+                Some(descriptor) => {
+                    let how = decision
+                        .how
+                        .map_or_else(|| decision.operation.as_str().to_string(), |how| how.as_str().to_string());
+                    let asked = questions::approval(&run.goal, &how, &descriptor);
+                    let state = questions::state(&view, &space, &run.recent, run.retired.len());
+                    let left = Duration::from_secs(run.budget.max_seconds)
+                        .saturating_sub(started.elapsed());
+                    match oracle.ask_within(&state, &asked, left).await {
+                        Ok(response) => {
+                            run.decisions += 1;
+                            run.input_tokens += response.usage.input_tokens;
+                            response
+                                .answers
+                                .get(questions::WORTH_ACTING_ON)
+                                .and_then(|answer| answer.noul)
+                        }
+                        // A question that could not be asked is not a refusal.
+                        Err(_) => None,
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let judged = gate::verdict(&decision, target_name.as_deref(), supplied.as_deref(), worth);
         // Recorded before it is acted on, so a decision that ends the run is in
         // the record that travels back with the ending.
         run.judged(decided_of(
