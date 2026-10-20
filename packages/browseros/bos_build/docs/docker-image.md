@@ -81,6 +81,9 @@ cannot push to it until it is connected in the package settings.
 
 - **Ports inside the container are fixed:** noVNC 6080, MCP proxy 9010
   (`--browseros-proxy-port`), CDP 9110 and claw-server 9210 (pinned, loopback only).
+- **All state lives under `/data`.** The profile is `/data/profile`. claw-server's database,
+  recordings, skills and agent settings are `/data/browserclaw` (`BROWSERCLAW_DIR`); its
+  default, `~/.browserclaw`, is not on the volume.
 - **Remote MCP needs a profile setting.** Docker's port forwarding doesn't arrive from
   loopback, so the entrypoint merges `browseros.server.allow_remote_in_mcp: true` into
   the profile's `Local State` before Neo starts.
