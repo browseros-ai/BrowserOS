@@ -308,6 +308,12 @@ impl PageView {
         text: &str,
         refs: &RefMap,
     ) -> Self {
+        // URLs remain in public snapshots; this decision view uses names and states.
+        let text = text
+            .split('\n')
+            .map(without_link_url)
+            .collect::<Vec<_>>()
+            .join("\n");
         let lines: Vec<&str> = text.lines().collect();
         let mut by_ref: HashMap<&str, usize> = HashMap::new();
         for (index, line) in lines.iter().enumerate() {
@@ -900,6 +906,21 @@ fn json_string_at(line: &str, start: usize) -> Option<(String, usize)> {
     None
 }
 
+fn without_link_url(line: &str) -> &str {
+    if role_in(line).as_deref() != Some("link") {
+        return line;
+    }
+    let Some(start) = line.rfind(" [url=\"") else {
+        return line;
+    };
+    if json_string_at(line, start + " [url=".len())
+        .is_some_and(|(_, end)| line.get(end..) == Some("]"))
+    {
+        return &line[..start];
+    }
+    line
+}
+
 /// The first quoted run on the line, which the renderer writes as the name.
 fn name_in(line: &str) -> Option<String> {
     let start = line.find('"')?;
@@ -1029,6 +1050,70 @@ mod tests {
     use super::*;
     use browseros_core::snapshot::{AxProperty, AxValue};
     use browseros_core::{FrameId, snapshot::refs::MintRef};
+
+    #[test]
+    fn tests_that_urls_leave_page_details_alone() {
+        use browseros_core::snapshot::{RenderOptions, render_snapshot};
+
+        let mut nodes = vec![
+            ax("1", 1, "RootWebArea", "Shop"),
+            ax("2", 2, "listitem", ""),
+            ax("3", 3, "link", ""),
+            ax("4", 4, "link", "Sensodyne Repair and Protect"),
+            ax("5", 5, "button", "Add to cart"),
+            with_property(ax("6", 6, "link", ""), "expanded", serde_json::json!(false)),
+            ax("7", 7, "link", "Red shoes"),
+            ax("8", 8, "link", "Literal [url=\"example\"] label"),
+        ];
+        nodes[0].child_ids = Some(["2", "6", "7", "8"].map(String::from).into());
+        nodes[1].child_ids = Some(["3", "4", "5"].map(String::from).into());
+
+        let page = |nodes: &[AxNode]| {
+            let mut refs = RefMap::new();
+            let snapshot = render_snapshot(
+                nodes,
+                &mut RenderOptions {
+                    refs: &mut refs,
+                    frame_id: None,
+                    document_id: None,
+                    cursor_hits: None,
+                    base_depth: 0,
+                },
+            );
+            PageView::from_snapshot("https://shop.example", "Shop", &snapshot.text, &refs)
+        };
+        let expected = page(&nodes);
+        assert_eq!(
+            expected.control("e3").unwrap().group.as_deref(),
+            Some("Sensodyne Repair and Protect")
+        );
+        assert!(!expected.control("e1").unwrap().is_offerable());
+        assert_eq!(expected.control("e4").unwrap().state.expanded, Some(false));
+
+        // Long URLs and query brackets must not become names, states or page text.
+        let url = format!(
+            "https://shop.example/{}?ids[]=1&f[disabled]=1&q=\"hello\"",
+            "tracking/".repeat(200)
+        );
+        for node in nodes.iter_mut().filter(|node| {
+            node.role
+                .as_ref()
+                .and_then(|role| role.value.as_ref())
+                .and_then(serde_json::Value::as_str)
+                == Some("link")
+        }) {
+            node.properties
+                .get_or_insert_with(Vec::new)
+                .push(AxProperty {
+                    name: "url".into(),
+                    value: AxValue {
+                        value_type: "string".into(),
+                        value: Some(serde_json::json!(url)),
+                    },
+                });
+        }
+        assert_eq!(page(&nodes), expected);
+    }
 
     fn ax(node_id: &str, backend: i64, role: &str, name: &str) -> AxNode {
         AxNode {
