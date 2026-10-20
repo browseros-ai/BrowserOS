@@ -271,6 +271,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             run.url_before = Some(view.url.clone());
         }
         run.now_looking_at(view.fingerprint);
+        run.standing_on(view.arrangement);
         // Every page the run observes is somewhere it has stood, including the
         // one it started on, so coming back to the start counts as a return.
         run.standing_somewhere_new(view.fingerprint);
@@ -295,7 +296,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             &view,
             &run.goal,
             run.last_acted.as_deref(),
-            &run.retired,
+            &run.withheld(),
             insist,
         );
 
@@ -351,7 +352,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                         .how
                         .map_or_else(|| decision.operation.as_str().to_string(), |how| how.as_str().to_string());
                     let asked = questions::approval(&run.goal, &how, &descriptor);
-                    let state = questions::state(&view, &space, &run.recent, run.retired.len());
+                    let state = questions::state(&view, &space, &run.recent, run.here.retired.len());
                     let left = Duration::from_secs(run.budget.max_seconds)
                         .saturating_sub(started.elapsed());
                     match oracle.ask_within(&state, &asked, left).await {
@@ -799,7 +800,7 @@ async fn search<O: Oracle>(
         let moves = questions::available(&space, view, surface);
         let ways = questions::ways(&space, view);
         let asked = questions::build(&run.goal, &space, &moves, &ways, surface);
-        let state = questions::state(view, &space, &run.recent, run.retired.len());
+        let state = questions::state(view, &space, &run.recent, run.here.retired.len());
 
         let response = oracle
             .ask_within(&state, &asked, budget)
@@ -1089,7 +1090,7 @@ fn end(
         status,
         offered: space.offered.len(),
         omitted: space.omitted,
-        retired: run.retired.len(),
+        retired: run.retired_total,
         decisions: run.decisions,
         batches: run.batches_asked,
         input_tokens: run.input_tokens,

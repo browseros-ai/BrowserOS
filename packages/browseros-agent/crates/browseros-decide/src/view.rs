@@ -196,6 +196,20 @@ pub struct PageView {
     pub controls: Vec<Control>,
     /// Covers the whole page. A decision is made against one of these.
     pub fingerprint: u64,
+    /// Covers the arrangement of the page rather than everything on it.
+    ///
+    /// The fingerprint answers "is this decision still about this page", and it
+    /// has to include the text to do that. The page's memory asks a different
+    /// question, "is this the same page I was just looking at", and keying that
+    /// on the text throws the memory away whenever a character changes.
+    ///
+    /// A commercial page rewrites one every second. Two snapshots of the same
+    /// home page taken a second apart differ only in a deal countdown reading
+    /// `Ends in 08:54:33` and then `08:54:32`. Measured there, ten snapshots
+    /// one second apart produced ten distinct fingerprints, and the note saying
+    /// a control had been tried and did nothing reached the model zero times
+    /// across fifteen requests of one run.
+    pub arrangement: u64,
     /// Images on the page carrying no accessible name.
     ///
     /// This model reads an accessibility tree, so an image with no name says
@@ -269,6 +283,7 @@ impl PageView {
             text: text.into(),
             controls,
             fingerprint: 0,
+            arrangement: 0,
             // The typed path has no rendered lines to scan, and the nodes it
             // does have are only the referenced ones, so this is reported as
             // unknown rather than guessed at.
@@ -276,6 +291,7 @@ impl PageView {
         };
         view.budget_text(Self::TEXT_BUDGET);
         view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
+        view.arrangement = arrangement_of(&view.url, &view.controls);
         view
     }
 
@@ -369,12 +385,14 @@ impl PageView {
             text: text.to_string(),
             controls,
             fingerprint: 0,
+            arrangement: 0,
             unlabelled_images: unlabelled_images(&lines),
         };
         // Budget before fingerprinting, so the hash covers the text that
         // travels to the model and not the whole document.
         view.budget_text(Self::TEXT_BUDGET);
         view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
+        view.arrangement = arrangement_of(&view.url, &view.controls);
         view
     }
 
@@ -398,10 +416,12 @@ impl PageView {
             text: text.to_string(),
             controls,
             fingerprint: 0,
+            arrangement: 0,
             unlabelled_images: unlabelled_images(&text.lines().collect::<Vec<_>>()),
         };
         view.budget_text(Self::TEXT_BUDGET);
         view.fingerprint = fingerprint_of(&view.url, &view.title, &view.text, &view.controls);
+        view.arrangement = arrangement_of(&view.url, &view.controls);
         view
     }
 
@@ -606,6 +626,22 @@ fn guard_of(control: &Control) -> u64 {
 /// deliberately exclude it: a control's identity must not move because
 /// unrelated copy did, or the narrow check becomes as blunt as this one and the
 /// loop refuses work for no reason.
+/// Covers where the page is and what can be acted on, and nothing that a clock
+/// or a carousel rewrites.
+///
+/// Names cannot be part of it: on the page this was measured against, the
+/// countdown lives inside a link's name. What is left is the reference and the
+/// role of each control, which is what changes when the page really changes.
+fn arrangement_of(url: &str, controls: &[Control]) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    for control in controls {
+        control.reference.hash(&mut hasher);
+        control.role.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 fn fingerprint_of(url: &str, title: &str, text: &str, controls: &[Control]) -> u64 {
     let mut hasher = DefaultHasher::new();
     url.hash(&mut hasher);

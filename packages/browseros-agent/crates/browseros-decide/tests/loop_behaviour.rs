@@ -193,6 +193,7 @@ fn page(url: &str, fingerprint: u64, controls: Vec<Control>) -> PageView {
         text: "some visible text".to_string(),
         controls,
         fingerprint,
+        arrangement: fingerprint,
         unlabelled_images: 0,
     }
 }

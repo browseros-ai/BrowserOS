@@ -180,6 +180,7 @@ impl Driver for Shell {
             text: text.chars().take(4000).collect(),
             controls,
             fingerprint: hasher.finish(),
+            arrangement: hasher.finish(),
             unlabelled_images,
         })
     }

@@ -570,6 +570,7 @@ mod tests {
             text: "some text".to_string(),
             controls,
             fingerprint: 1,
+            arrangement: 1,
             unlabelled_images: 0,
         }
     }

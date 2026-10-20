@@ -613,6 +613,7 @@ mod tests {
             text: String::new(),
             controls,
             fingerprint: 1,
+            arrangement: 1,
             unlabelled_images: 0,
         }
     }
