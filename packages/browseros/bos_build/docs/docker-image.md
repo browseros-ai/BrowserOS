@@ -72,10 +72,13 @@ A new ghcr package starts private. After the first push, open the package's sett
 on GitHub and change its visibility to Public (the org must allow public packages).
 Public images pull without logging in.
 
-The Dockerfile's `org.opencontainers.image.source` label links the package to this
-repository, which is what lets the workflow's `GITHUB_TOKEN` push to it. A package
-first created by a manual push without that label is not linked, and the workflow
-cannot push to it until it is connected in the package settings.
+`browseros release docker --push` links the package to this repository by putting an
+`org.opencontainers.image.source` annotation on the pushed index (it also requests a
+provenance attestation so a single-platform push has an index to annotate). The
+Dockerfile's label of the same name is not enough on its own: GitHub reads the
+index, and the label only reaches the per-platform images. The link is what lets the
+workflow's `GITHUB_TOKEN` push; a package created without it must be connected in its
+package settings first.
 
 ## Runtime notes for maintainers
 

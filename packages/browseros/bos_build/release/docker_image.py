@@ -25,6 +25,11 @@ from typing import ContextManager, Iterator, Optional, Protocol
 from ..lib.paths import get_package_root
 
 DEFAULT_REPOSITORY = "ghcr.io/browseros-ai/neo"
+# GitHub links a ghcr package to its repository from this annotation on the
+# pushed index; the Dockerfile's matching LABEL only reaches the per-platform
+# image configs. An unlinked package rejects pushes from the workflow's
+# GITHUB_TOKEN.
+IMAGE_SOURCE = "https://github.com/browseros-ai/BrowserOS"
 RELEASE_JSON_URL = "https://cdn.browseros.com/releases/browserclaw/{version}/linux/release.json"
 
 # Docker platform -> artifact key in a Linux release.json. Docker says amd64
@@ -158,7 +163,17 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
     argv += ["--build-arg", f"NEO_VERSION={request.version}"]
     for tag in tags:
         argv += ["--tag", tag]
-    argv.append("--push" if request.push else "--load")
+    if request.push:
+        # Index annotations fail on an export without an index, so request the
+        # provenance attestation explicitly: it makes even a single-platform
+        # push an index. Local loads stay plain images.
+        argv += [
+            "--push",
+            "--provenance", "mode=min",
+            "--annotation", f"index:org.opencontainers.image.source={IMAGE_SOURCE}",
+        ]
+    else:
+        argv.append("--load")
     staging = ops.staged_deb(request.deb) if request.deb is not None else nullcontext(None)
     with staging as deb_dir:
         if deb_dir is not None:

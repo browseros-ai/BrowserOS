@@ -66,6 +66,9 @@ class PushTest(unittest.TestCase):
                     "--build-arg", "NEO_VERSION=0.52.0.1",
                     "--tag", "ghcr.io/browseros-ai/neo:0.52.0.1",
                     "--push",
+                    "--provenance", "mode=min",
+                    "--annotation",
+                    "index:org.opencontainers.image.source=https://github.com/browseros-ai/BrowserOS",
                     str(CONTEXT),
                 ]
             ],
