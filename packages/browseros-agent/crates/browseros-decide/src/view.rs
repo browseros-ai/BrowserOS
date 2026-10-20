@@ -154,6 +154,18 @@ pub struct Control {
     pub options: Vec<String>,
     /// Covers this control alone. Compared before acting on it.
     pub guard: u64,
+    /// The label of the repeated block this control sits in, where the page
+    /// has one.
+    ///
+    /// A listing page calls every one of its buttons "Add to cart", and the
+    /// thing that tells them apart is the card each sits in. Without it the
+    /// only way to stop them splitting the answer is to drop all but one,
+    /// which discards sixty-four real targets and picks the survivor by word
+    /// overlap. With it they are sixty-five options the model can choose
+    /// between.
+    ///
+    /// Absent on the typed path, which has no tree to walk.
+    pub group: Option<String>,
 }
 
 impl Control {
@@ -242,6 +254,8 @@ impl PageView {
                 options: options_of(node, &by_node_id),
                 state,
                 guard: 0,
+                group: None,
+                // The typed path has no rendered tree to find a card in.
             };
             controls.push(control);
         }
@@ -340,6 +354,7 @@ impl PageView {
                     value: value_in(line),
                     state,
                     guard: 0,
+                    group: card_label(&lines, index),
                 },
             ));
         }
@@ -657,6 +672,116 @@ pub fn without_nested_twins(controls: Vec<(usize, Control)>) -> Vec<Control> {
         .collect()
 }
 
+/// Roles that mark one repeated thing among many of its kind.
+const CARD_ROLES: [&str; 3] = ["listitem", "article", "row"];
+
+/// How much of a card's label travels to the model.
+///
+/// A product title runs to two hundred characters of marketing copy, and that
+/// multiplied by a batch of options is most of a question's budget.
+const LABEL_BUDGET: usize = 80;
+
+/// Names that sit on every card and so distinguish none of them.
+fn says_nothing_about_which_card(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    ["rating", "review", "out of 5", "stars"]
+        .iter()
+        .any(|noise| lower.contains(noise))
+}
+
+/// The label of the card this control sits in, read from the rendered tree.
+///
+/// The card is the nearest ancestor whose role is one of [`CARD_ROLES`]. Its
+/// label is the heading inside it, failing that the longest link, which on a
+/// product card is the title and on a search result is the result itself.
+///
+/// Two exclusions are not optional, and the second was paid for. Text inside a
+/// nested card belongs to that card. Text inside this control's own subtree is
+/// content rather than a container: without that rule, a documentation page
+/// whose chapters nest described "Understanding Ownership" as sitting inside
+/// "References and Borrowing", which is one of its own sections, and the case
+/// that had always passed went to zero.
+fn card_label(lines: &[&str], index: usize) -> Option<String> {
+    let my_depth = depth_of(lines[index]);
+    let my_reference = reference_in(lines[index]);
+
+    let mut shallower = my_depth;
+    let mut card: Option<(usize, usize)> = None;
+    for at in (0..index).rev() {
+        let depth = depth_of(lines[at]);
+        if depth >= shallower {
+            continue;
+        }
+        shallower = depth;
+        if role_in(lines[at]).is_some_and(|role| CARD_ROLES.contains(&role.as_str())) {
+            card = Some((at, depth));
+            break;
+        }
+        if depth == 0 {
+            break;
+        }
+    }
+    let (card, card_depth) = card?;
+
+    // Where this control's own subtree ends.
+    let mine_ends = lines[index + 1..]
+        .iter()
+        .position(|line| depth_of(line) <= my_depth)
+        .map_or(lines.len(), |at| index + 1 + at);
+
+    let mut best: Option<(usize, String)> = None;
+    let mut nested_until: Option<usize> = None;
+    for (at, line) in lines.iter().enumerate().skip(card + 1) {
+        let depth = depth_of(line);
+        if depth <= card_depth {
+            break;
+        }
+        if let Some(inner) = nested_until {
+            if depth > inner {
+                continue;
+            }
+            nested_until = None;
+        }
+        let Some(role) = role_in(line) else { continue };
+        if CARD_ROLES.contains(&role.as_str()) {
+            nested_until = Some(depth);
+            continue;
+        }
+        if at > index && at < mine_ends {
+            continue;
+        }
+        if reference_in(line).is_some() && reference_in(line) == my_reference {
+            continue;
+        }
+        if !matches!(role.as_str(), "heading" | "link") {
+            continue;
+        }
+        let Some(name) = name_in(line) else { continue };
+        if name.trim().is_empty() || says_nothing_about_which_card(&name) {
+            continue;
+        }
+        let score = usize::from(role == "heading") * 1000 + name.len();
+        if best.as_ref().is_none_or(|(had, _)| score > *had) {
+            best = Some((score, name));
+        }
+    }
+    best.map(|(_, name)| trimmed_to_budget(&name))
+}
+
+/// Cuts a label to the budget on a word boundary, so it ends as a phrase
+/// rather than mid-word.
+fn trimmed_to_budget(name: &str) -> String {
+    let name = name.trim();
+    if name.chars().count() <= LABEL_BUDGET {
+        return name.to_string();
+    }
+    let cut: String = name.chars().take(LABEL_BUDGET).collect();
+    match cut.rfind(char::is_whitespace) {
+        Some(at) if at > LABEL_BUDGET / 2 => cut[..at].trim_end().to_string(),
+        _ => cut.trim_end().to_string(),
+    }
+}
+
 fn reference_in(line: &str) -> Option<&str> {
     let start = line.find("[ref=")? + "[ref=".len();
     let rest = &line[start..];
@@ -787,6 +912,7 @@ mod tests {
             state: ControlState::default(),
             options: Vec::new(),
             guard: 0,
+            group: None,
         }
     }
 
@@ -1560,6 +1686,7 @@ mod tests {
             state: ControlState::default(),
             options: Vec::new(),
             guard: 0,
+            group: None,
         };
         let kept = without_nested_twins(vec![(1, twin("e1")), (2, twin("e2"))]);
         assert_eq!(kept.len(), 1);
@@ -1586,6 +1713,7 @@ mod tests {
                         state: ControlState::default(),
                         options: Vec::new(),
                         guard: 0,
+                        group: None,
                     },
                 )
             })
@@ -1609,6 +1737,7 @@ mod tests {
                     state: ControlState::default(),
                     options: Vec::new(),
                     guard: 0,
+                    group: None,
                 },
             )
         };
@@ -1636,6 +1765,7 @@ mod tests {
                     state: ControlState::default(),
                     options: Vec::new(),
                     guard: 0,
+                    group: None,
                 },
             )
         };
@@ -1779,5 +1909,89 @@ mod tests {
             "got {:?}",
             view.obstructed()
         );
+    }
+}
+
+#[cfg(test)]
+mod cards {
+    use super::*;
+
+    fn lines_of(text: &str) -> Vec<&str> {
+        text.lines().collect()
+    }
+
+    const LISTING: &str = r#"- list
+  - listitem [ref=e1]
+    - heading "Sensodyne Repair and Protect" [ref=e2]
+    - link "4.4 out of 5 stars, 16,700 reviews" [ref=e3]
+    - button "Add to cart" [ref=e4]
+  - listitem [ref=e5]
+    - heading "Sensodyne Fresh Mint" [ref=e6]
+    - button "Add to cart" [ref=e7]
+"#;
+
+    #[test]
+    fn a_button_is_labelled_by_the_card_it_sits_in() {
+        let lines = lines_of(LISTING);
+        let first = lines.iter().position(|l| l.contains("ref=e4")).unwrap();
+        let second = lines.iter().position(|l| l.contains("ref=e7")).unwrap();
+        assert_eq!(card_label(&lines, first).as_deref(), Some("Sensodyne Repair and Protect"));
+        assert_eq!(card_label(&lines, second).as_deref(), Some("Sensodyne Fresh Mint"));
+    }
+
+    /// The rating sits on every card and so tells none of them apart.
+    #[test]
+    fn a_rating_is_not_a_label() {
+        let lines = lines_of(LISTING);
+        let at = lines.iter().position(|l| l.contains("ref=e4")).unwrap();
+        let label = card_label(&lines, at).unwrap();
+        assert!(!label.contains("out of 5"), "{label}");
+    }
+
+    /// A label taken from inside the control is content, not a container. A
+    /// heading nested in the control would otherwise outscore the card's own.
+    #[test]
+    fn a_label_never_comes_from_inside_the_control() {
+        let inside = r#"- list
+  - listitem [ref=e1]
+    - heading "The card's own title" [ref=e2]
+    - link "Buy now" [ref=e3]
+      - heading "Inside the control" [ref=e4]
+"#;
+        let lines = lines_of(inside);
+        let at = lines.iter().position(|l| l.contains("ref=e3")).unwrap();
+        assert_eq!(card_label(&lines, at).as_deref(), Some("The card's own title"));
+    }
+
+    /// The regression this was written for: on a contents page whose chapters
+    /// nest, the sections are a card of their own and their titles belong to
+    /// it, not to the chapter above them.
+    #[test]
+    fn a_nested_card_keeps_its_own_label() {
+        let nested = r#"- list
+  - listitem [ref=e1]
+    - link "Understanding Ownership" [ref=e2]
+    - list
+      - listitem [ref=e3]
+        - link "References and Borrowing" [ref=e4]
+"#;
+        let lines = lines_of(nested);
+        let at = lines.iter().position(|l| l.contains("ref=e2")).unwrap();
+        assert_ne!(card_label(&lines, at).as_deref(), Some("References and Borrowing"));
+    }
+
+    #[test]
+    fn a_control_outside_any_card_has_no_label() {
+        let lines = lines_of("- button \"Go\" [ref=e1]\n");
+        assert_eq!(card_label(&lines, 0), None);
+    }
+
+    #[test]
+    fn a_long_title_is_cut_on_a_word_boundary() {
+        let long = "Sensodyne Toothpaste Repair and Protect Tooth Paste for Daily Sensitivity Relief and Cavity Protection";
+        let cut = trimmed_to_budget(long);
+        assert!(cut.chars().count() <= LABEL_BUDGET, "{cut}");
+        assert!(!cut.ends_with(' '));
+        assert!(long.starts_with(&cut), "{cut}");
     }
 }

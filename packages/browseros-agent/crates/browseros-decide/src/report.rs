@@ -496,6 +496,7 @@ mod tests {
                 state: crate::view::ControlState::default(),
                 options: Vec::new(),
                 guard: 0,
+                group: None,
             },
             crate::view::Control {
                 reference: "e8".to_string(),
@@ -509,6 +510,7 @@ mod tests {
                 },
                 options: Vec::new(),
                 guard: 0,
+                group: None,
             },
         ];
         // Disabled controls are not offered, so they are not shown either.
@@ -524,6 +526,7 @@ mod tests {
             },
             options: Vec::new(),
             guard: 0,
+            group: None,
         });
         let view = PageView::from_snapshot_parts(
             "https://example.test/results",

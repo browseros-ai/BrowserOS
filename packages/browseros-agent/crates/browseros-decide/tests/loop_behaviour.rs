@@ -118,6 +118,7 @@ fn control(reference: &str, role: &str, name: &str) -> Control {
         },
         options: Vec::new(),
         guard: 0,
+        group: None,
     }
 }
 

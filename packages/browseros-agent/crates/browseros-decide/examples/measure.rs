@@ -146,6 +146,7 @@ fn controls_from(snapshot: &str) -> (Vec<Control>, usize) {
             state,
             options: Vec::new(),
             guard: hasher.finish(),
+            group: None,
         });
     }
     (controls, unlabelled_images)

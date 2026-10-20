@@ -503,6 +503,14 @@ fn candidate_of(control: &Control) -> Candidate {
         format!("{role} {:?}", control.name)
     };
     let mut descriptor = json!({ "control": label });
+    // What tells one of sixty-five identical buttons from another. Withheld
+    // when it only repeats the control's own name, which describes nothing.
+    if let Some(group) = control.group.as_deref()
+        && !group.is_empty()
+        && !group.eq_ignore_ascii_case(control.name.trim())
+    {
+        descriptor["inside"] = json!(group);
+    }
     if let Some(state) = control.state.describe() {
         descriptor["current"] = json!(state);
     }
@@ -542,6 +550,7 @@ mod tests {
             state: ControlState::default(),
             options: Vec::new(),
             guard: 0,
+            group: None,
         }
     }
 
