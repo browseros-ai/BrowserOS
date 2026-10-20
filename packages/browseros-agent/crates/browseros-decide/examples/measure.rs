@@ -146,6 +146,7 @@ fn controls_from(snapshot: &str) -> (Vec<Control>, usize) {
             state,
             options: Vec::new(),
             guard: hasher.finish(),
+            group: None,
         });
     }
     (controls, unlabelled_images)
@@ -179,6 +180,7 @@ impl Driver for Shell {
             text: text.chars().take(4000).collect(),
             controls,
             fingerprint: hasher.finish(),
+            arrangement: hasher.finish(),
             unlabelled_images,
         })
     }

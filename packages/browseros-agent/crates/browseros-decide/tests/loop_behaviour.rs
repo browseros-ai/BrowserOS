@@ -4,7 +4,7 @@
 //! fake browser exists so they can be replayed in milliseconds and so a
 //! regression is caught by `cargo test` rather than by a live errand.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -24,6 +24,13 @@ struct Scripted {
     /// What was asked each turn, so a test can assert on the request as well as
     /// on the outcome.
     asked: RefCell<Vec<Vec<String>>>,
+    /// What every move is judged worth doing, unless a scenario says otherwise.
+    ///
+    /// The loop asks this about the control it has settled on, in a request of
+    /// its own. Answering it without consuming a turn is what lets a scenario
+    /// be written about the decisions it cares about rather than about every
+    /// call the loop happens to make.
+    worth: Cell<f64>,
 }
 
 impl Scripted {
@@ -40,11 +47,28 @@ impl Scripted {
                     .collect(),
             ),
             asked: RefCell::new(Vec::new()),
+            worth: Cell::new(0.9),
         }
     }
 
+    /// Judges every move worth this much, for a scenario about the approval.
+    fn judging_moves_worth(self, worth: f64) -> Self {
+        self.worth.set(worth);
+        self
+    }
+
+    /// The decision requests, which is what a scenario is written about.
+    ///
+    /// The approval is asked on its own about a control already chosen, so it
+    /// is left out here: a scenario counting how many times the page was
+    /// searched is not counting that.
     fn heads_asked(&self) -> Vec<Vec<String>> {
-        self.asked.borrow().clone()
+        self.asked
+            .borrow()
+            .iter()
+            .filter(|heads| heads.as_slice() != ["worth_acting_on"])
+            .cloned()
+            .collect()
     }
 }
 
@@ -58,6 +82,20 @@ impl Oracle for Scripted {
         self.asked
             .borrow_mut()
             .push(questions.keys().cloned().collect());
+        // The approval is asked on its own and answered without spending a
+        // turn, so every scenario below still reads as the decisions it writes.
+        if questions.len() == 1 && questions.contains_key("worth_acting_on") {
+            return Ok(Response {
+                model: "jev-1.13.0".to_string(),
+                answers: [("worth_acting_on".to_string(), noul(self.worth.get()))]
+                    .into_iter()
+                    .collect(),
+                usage: Usage {
+                    input_tokens: 100,
+                    output_tokens: 0,
+                },
+            });
+        }
         let mut turns = self.turns.borrow_mut();
         if turns.is_empty() {
             // Running out of script means the loop asked more than the scenario
@@ -76,6 +114,18 @@ impl Oracle for Scripted {
     }
 }
 
+fn noul(probability: f64) -> RawAnswer {
+    RawAnswer {
+        answer_type: "noul".to_string(),
+        noul: Some(probability),
+        choice: None,
+        score: None,
+        probabilities: None,
+        legend: None,
+        confidence: None,
+    }
+}
+
 fn choice(value: &str, confidence: f64) -> RawAnswer {
     RawAnswer {
         answer_type: "choice".to_string(),
@@ -90,10 +140,24 @@ fn choice(value: &str, confidence: f64) -> RawAnswer {
 
 /// A scripted answer that reports its distribution, which is what the margin
 /// gate and the pagination stop both read.
+/// A scripted answer that reports a distribution shaped like a real one.
+///
+/// The leftover mass is spread over further options rather than dropped,
+/// because the published confidence is measured against an even split and an
+/// even split depends on how many ways the mass could have gone. A two entry
+/// distribution says the question had two options, which is a different
+/// question from the one these scenarios mean.
 fn spread(value: &str, share: f64, runner_up: f64) -> RawAnswer {
     let mut probabilities = BTreeMap::new();
     probabilities.insert(value.to_string(), share);
     probabilities.insert("__runner_up".to_string(), runner_up);
+    let left = (1.0 - share - runner_up).max(0.0);
+    if left > 0.0 {
+        let each = left / 7.0;
+        for index in 0..7 {
+            probabilities.insert(format!("__other_{index}"), each);
+        }
+    }
     RawAnswer {
         answer_type: "choice".to_string(),
         noul: None,
@@ -118,6 +182,7 @@ fn control(reference: &str, role: &str, name: &str) -> Control {
         },
         options: Vec::new(),
         guard: 0,
+        group: None,
     }
 }
 
@@ -128,6 +193,7 @@ fn page(url: &str, fingerprint: u64, controls: Vec<Control>) -> PageView {
         text: "some visible text".to_string(),
         controls,
         fingerprint,
+        arrangement: fingerprint,
         unlabelled_images: 0,
     }
 }
@@ -362,9 +428,62 @@ async fn a_run_that_cannot_retire_anything_still_stops_rather_than_looping() {
         outcome.status
     );
     assert!(
-        outcome.decisions <= Budget::default().max_steps + 2,
+        // Up to two calls per step now: the decision, and the approval asked
+        // about the control it settled on.
+        outcome.decisions <= Budget::default().max_steps * 2 + 2,
         "it asked {} times, which is not bounded by the budget",
         outcome.decisions
+    );
+}
+
+/// A move the model picked and then judged not worth making does not run.
+///
+/// This is the whole point of asking: a control can lead its alternatives and
+/// still be the wrong thing to do, and on a page where several controls each
+/// serve the goal a lead cannot say which.
+#[tokio::test]
+async fn a_move_judged_not_worth_making_does_not_run() {
+    let view = page(
+        "https://example.test/start",
+        1,
+        vec![
+            control("e1", "link", "Go"),
+            control("e2", "link", "Elsewhere"),
+        ],
+    );
+    let driver = Fake::new(view);
+    let oracle = Scripted::new(vec![
+        vec![
+            ("operation", choice("ACT", 0.95)),
+            ("act_how", choice("CLICK", 0.95)),
+            ("target", choice("e1", 0.95)),
+        ];
+        6
+    ])
+    .judging_moves_worth(0.20);
+
+    let outcome = advance(&oracle, &driver, run_for("go somewhere")).await;
+
+    assert!(
+        outcome.trail.is_empty(),
+        "nothing should have been acted on, trail was {:?}",
+        outcome.trail
+    );
+    assert!(
+        matches!(outcome.status, Status::Stalled(_) | Status::NeedsInput(..)),
+        "ended as {:?}",
+        outcome.status
+    );
+    // And it did not answer a refusal about the move by moving the page. The
+    // control sits on screen; scrolling past it is what used to take the one
+    // control that worked out of reach.
+    let scrolled = driver.ran().iter().any(|act| match act {
+        Move::Act(decision) => decision.how == Some(How::Scroll),
+        _ => false,
+    });
+    assert!(
+        !scrolled,
+        "a refusal about the move must not scroll the page"
     );
 }
 
@@ -614,13 +733,19 @@ async fn the_outcome_reports_what_actually_happened() {
 
     let outcome = advance(&oracle, &driver, run_for("go somewhere")).await;
 
-    assert_eq!(outcome.decisions, 2);
+    // Three model calls: the decision that clicked, the approval asked about
+    // the control it chose, and the decision that ended the run. The approval
+    // costs tokens, so it is counted rather than hidden.
+    assert_eq!(outcome.decisions, 3);
     assert_eq!(outcome.trail.len(), 1, "one action was taken");
     assert_eq!(outcome.trail[0].operation, Operation::Act);
     assert!(outcome.trail[0].page_changed);
     assert_eq!(outcome.url_before, "https://example.test/start");
     assert!(outcome.url_after.contains("after-e1"));
-    assert_eq!(outcome.input_tokens, 2_000, "both decisions are billed");
+    assert_eq!(
+        outcome.input_tokens, 2_100,
+        "every call is billed, the approval included"
+    );
 }
 
 /// The loop used to read the page twice per step: once at the top and once

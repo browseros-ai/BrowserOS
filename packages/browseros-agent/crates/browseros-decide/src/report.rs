@@ -203,6 +203,19 @@ fn try_next(outcome: &Outcome) -> Option<String> {
             "This one needs you to name the control. I will not guess at it."
         }
         Status::NeedsInput(Handback::NoFieldNamed, _) => {
+            // Named where the run knows the field, because the caller's next
+            // move is to supply a value for exactly that one.
+            if let Some(field) = outcome
+                .decided
+                .iter()
+                .rev()
+                .find(|decided| decided.verdict == "handed_back")
+                .and_then(|decided| decided.target_name.as_deref())
+            {
+                return Some(format!(
+                    "Pass a value for {field:?} and run this again, and I will type it in."
+                ));
+            }
             "Pass the text to type as a value, and I will put it in the field."
         }
         Status::Stalled(Stuck::NotConfident) => match weakest {
@@ -496,6 +509,7 @@ mod tests {
                 state: crate::view::ControlState::default(),
                 options: Vec::new(),
                 guard: 0,
+                group: None,
             },
             crate::view::Control {
                 reference: "e8".to_string(),
@@ -509,6 +523,7 @@ mod tests {
                 },
                 options: Vec::new(),
                 guard: 0,
+                group: None,
             },
         ];
         // Disabled controls are not offered, so they are not shown either.
@@ -524,6 +539,7 @@ mod tests {
             },
             options: Vec::new(),
             guard: 0,
+            group: None,
         });
         let view = PageView::from_snapshot_parts(
             "https://example.test/results",
@@ -882,5 +898,64 @@ mod tests {
                     .to_string(),
             ]
         );
+    }
+}
+
+#[cfg(test)]
+mod naming_the_missing_field {
+    use super::*;
+    use crate::pursue::Decided;
+
+    fn handed_back_on(field: Option<&str>) -> Outcome {
+        let mut outcome = Outcome {
+            status: Status::NeedsInput(
+                Handback::NoFieldNamed,
+                "this step needs text typed into a field".to_string(),
+            ),
+            offered: 12,
+            omitted: 0,
+            retired: 0,
+            decisions: 2,
+            batches: 1,
+            input_tokens: 2_000,
+            trail: Vec::new(),
+            decided: Vec::new(),
+            url_before: "https://example.test/".to_string(),
+            url_after: "https://example.test/".to_string(),
+            title: "A page".to_string(),
+            goal_met: None,
+            unlabelled_images: 0,
+            ended_on: None,
+        };
+        outcome.decided = vec![Decided {
+            operation: "ACT",
+            how: Some("FILL"),
+            target: Some("e17".to_string()),
+            target_name: field.map(str::to_string),
+            verdict: "handed_back",
+            weakest: None,
+            margin: None,
+            needed: None,
+            share: None,
+            why: None,
+            batch: 1,
+            input_tokens: 1_000,
+        }];
+        outcome
+    }
+
+    /// A caller told only that something was missing has to guess which field.
+    #[test]
+    fn the_advice_names_the_field_to_supply() {
+        let told = tell(&handed_back_on(Some("Where to? ")));
+        let advice = told.try_next.expect("a hand-back carries advice");
+        assert!(advice.contains("Where to?"), "{advice}");
+    }
+
+    #[test]
+    fn an_unnamed_field_still_gets_the_general_advice() {
+        let told = tell(&handed_back_on(None));
+        let advice = told.try_next.expect("a hand-back carries advice");
+        assert!(advice.contains("value"), "{advice}");
     }
 }

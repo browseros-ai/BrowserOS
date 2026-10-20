@@ -46,6 +46,11 @@ pub struct Lead {
     /// Without one the margin is not a margin, and judging it as though it were
     /// would make a missing signal read as a landslide.
     pub distributed: bool,
+    /// How many options the question offered.
+    ///
+    /// Needed because the published statistic is relative to an even split, and
+    /// an even split depends on how many ways the mass could have gone.
+    pub options: usize,
 }
 
 impl Lead {
@@ -59,10 +64,26 @@ impl Lead {
     #[must_use]
     pub fn clears(self, consequence: Consequence) -> bool {
         if self.distributed {
-            self.margin >= consequence.margin() && self.share >= FLOOR
+            self.confidence() >= consequence.clarity()
         } else {
             self.share >= consequence.share_bar()
         }
+    }
+
+    /// The published statistic: how far the top sits above an even split.
+    ///
+    /// `(p_max - 1/n) / (1 - 1/n)`. A margin takes no account of how many
+    /// options were offered, so the same 0.15 means a coin flip between two and
+    /// a strong read among two hundred. This is the comparison the
+    /// documentation reports, and it is what answers the objection this
+    /// module's own header raises against an absolute share.
+    #[must_use]
+    pub fn confidence(self) -> f64 {
+        if self.options < 2 {
+            return self.share;
+        }
+        let even = 1.0 / self.options as f64;
+        ((self.share - even) / (1.0 - even)).clamp(0.0, 1.0)
     }
 }
 
@@ -81,6 +102,7 @@ pub fn lead(response: &Response, head: &str) -> Lead {
         margin: share,
         share,
         distributed: false,
+        options: 0,
     };
     let Some(probabilities) = &answer.probabilities else {
         return undistributed;
@@ -96,11 +118,13 @@ pub fn lead(response: &Response, head: &str) -> Lead {
             margin: *only,
             share: *only,
             distributed: false,
+            options: 1,
         },
         [top, second, ..] => Lead {
             margin: top - second,
             share: *top,
             distributed: true,
+            options: ranked.len(),
         },
     }
 }
@@ -155,6 +179,8 @@ pub enum Weakest {
     Target,
     Key,
     Value,
+    /// Whether the move was worth making at all.
+    Worth,
 }
 
 impl Weakest {
@@ -166,6 +192,7 @@ impl Weakest {
             Self::Target => "which control to use it on",
             Self::Key => "which key to press",
             Self::Value => "which value to type",
+            Self::Worth => "whether this move was worth making",
         }
     }
 }
@@ -187,6 +214,7 @@ impl Decision {
                 margin: 1.0,
                 share: 1.0,
                 distributed: true,
+                options: 2,
             },
             how: Some(How::Scroll),
             how_lead: None,
@@ -229,7 +257,17 @@ impl Decision {
         if self.operation == Operation::Act && self.how_lead.is_some() {
             judgements.push((Weakest::How, self.how_lead.unwrap_or_default()));
         }
-        if self.needs_target() {
+        // The target's lead is still measured and still reported. For a
+        // control it is no longer what decides, because a lead cannot answer
+        // the question that matters on a page where several controls each
+        // serve the goal: two good options agreeing and two bad ones tying
+        // look identical to it. `worth_acting_on` answers it instead.
+        //
+        // A destination key and a tab id are not controls, so no approval can
+        // be asked about them: nothing on the page describes them. They keep
+        // the lead check, or a confident decision to navigate would follow a
+        // barely chosen destination with nothing weighing it at all.
+        if self.needs_target() && !self.aims_at_a_control() {
             judgements.push((Weakest::Target, self.target_lead.unwrap_or_default()));
         }
         if self.how == Some(How::Press) {
@@ -509,7 +547,12 @@ pub enum Verdict {
 /// refused: it is the one move whose argument comes from outside, and refusing
 /// it even when the argument has arrived is what made the hand-back a dead end.
 #[must_use]
-pub fn verdict(decision: &Decision, target_name: Option<&str>, text: Option<&str>) -> Verdict {
+pub fn verdict(
+    decision: &Decision,
+    target_name: Option<&str>,
+    text: Option<&str>,
+    worth: Option<f64>,
+) -> Verdict {
     // An ending touches nothing, so there is nothing to gate.
     if decision.operation.is_ending() {
         return Verdict::Execute;
@@ -521,9 +564,20 @@ pub fn verdict(decision: &Decision, target_name: Option<&str>, text: Option<&str
         );
     }
     if decision.how == Some(How::Fill) && text.is_none() && decision.value.is_none() {
+        // Name the field. Stopping here is right, because only the caller has
+        // the text, but a caller told only that something was missing has to
+        // guess which field to supply and may well supply the wrong one. Named,
+        // it can run the errand again with one more value.
         return Verdict::HandBack(
             Handback::NoFieldNamed,
-            "this step needs text typed into a field, which the caller supplies".to_string(),
+            target_name.map_or_else(
+                || "this step needs text typed into a field, and no value was supplied".to_string(),
+                |field| {
+                    format!(
+                        "this step needs text typed into {field:?}, and no value supplied matches                          it; pass one named for that field and run this again"
+                    )
+                },
+            ),
         );
     }
     if decision.needs_target() && decision.target.is_none() {
@@ -531,6 +585,29 @@ pub fn verdict(decision: &Decision, target_name: Option<&str>, text: Option<&str
     }
 
     let consequence = decision.operation.consequence(decision.how, target_name);
+
+    // Whether this move is worth making, asked about the one control the run
+    // settled on. A second control that would also have served cannot lower
+    // this, which is the property the target's lead lacks.
+    if decision.needs_target()
+        && let Some(worth) = worth
+        && worth < consequence.approval()
+    {
+        let said = format!(
+            "{} on {} was judged worth doing at only {worth:.2}, under the {:.2} this needs",
+            decision.operation.as_str(),
+            target_name.unwrap_or("the chosen control"),
+            consequence.approval(),
+        );
+        // Looking at more of the page does not make a submit any safer, which
+        // is the rule this gate already held for a lead short of the high bar.
+        return if consequence == Consequence::High {
+            Verdict::HandBack(Handback::TooRiskyToGuess, said)
+        } else {
+            Verdict::Explore(said)
+        };
+    }
+
     let Some((which, lead)) = decision.short_of(consequence) else {
         return Verdict::Execute;
     };
@@ -664,10 +741,29 @@ mod tests {
     /// that happens to be reported first.
     #[test]
     fn the_least_certain_judgement_is_the_one_that_counts() {
-        let decision = clicking(0.31);
+        let decision = read(&response(&[
+            (OPERATION, answer("ACT", 0.99)),
+            (ACT_HOW, answer("CLICK", 0.31)),
+            (TARGET, answer("e1", 0.99)),
+        ]))
+        .expect("reads");
         let (weakest, confidence) = decision.weakest();
-        assert_eq!(weakest, Weakest::Target);
+        assert_eq!(weakest, Weakest::How);
         assert!((confidence - 0.31).abs() < f64::EPSILON);
+    }
+
+    /// The target's lead is still measured and reported, and no longer decides.
+    /// A control chosen at 0.31 among many is not a reason to refuse: that is
+    /// what `worth_acting_on` is asked instead.
+    #[test]
+    fn the_targets_lead_is_reported_and_does_not_gate() {
+        let decision = clicking(0.31);
+        assert!(decision.target_lead.is_some(), "still measured");
+        assert_ne!(decision.weakest().0, Weakest::Target);
+        assert_eq!(
+            verdict(&decision, Some("Next page"), None, Some(0.82)),
+            Verdict::Execute
+        );
     }
 
     /// Enter and Escape do opposite things, so a certain press with an unsure
@@ -687,7 +783,7 @@ mod tests {
     #[test]
     fn a_sure_click_on_a_harmless_control_runs() {
         assert_eq!(
-            verdict(&clicking(0.9), Some("Next page"), None),
+            verdict(&clicking(0.9), Some("Next page"), None, None),
             Verdict::Execute
         );
     }
@@ -695,10 +791,87 @@ mod tests {
     /// Looking at more of the page does not make a submit any safer.
     #[test]
     fn an_unsure_click_on_something_expensive_is_handed_back_not_explored() {
-        let Verdict::HandBack(why, _) = verdict(&clicking(0.70), Some("Place order"), None) else {
+        // The operation itself is short of the high bar, which is what this
+        // has always been about: the target's own lead no longer gates.
+        let Verdict::HandBack(why, _) =
+            verdict(&clicking(0.99), Some("Place order"), None, Some(0.70))
+        else {
             panic!("a high stakes action short of its bar must not be explored");
         };
         assert_eq!(why, Handback::TooRiskyToGuess);
+    }
+
+    /// And the same control, with the move judged not worth making.
+    #[test]
+    fn a_move_judged_not_worth_making_is_explored_rather_than_run() {
+        let Verdict::Explore(said) = verdict(&clicking(0.99), Some("Next page"), None, Some(0.31))
+        else {
+            panic!("a move under its approval must not run");
+        };
+        assert!(said.contains("0.31"), "{said}");
+    }
+
+    /// Stopping is right, because only the caller has the text. Stopping
+    /// without saying which field is what makes the caller guess.
+    #[test]
+    fn a_fill_with_no_value_names_the_field_it_needed() {
+        let filling = read(&response(&[
+            (OPERATION, answer("ACT", 0.95)),
+            (ACT_HOW, answer("FILL", 0.95)),
+            (TARGET, answer("e17", 0.95)),
+        ]))
+        .expect("reads");
+        let Verdict::HandBack(why, said) = verdict(&filling, Some("Where to? "), None, None) else {
+            panic!("a fill with nothing to type must hand back");
+        };
+        assert_eq!(why, Handback::NoFieldNamed);
+        assert!(said.contains("Where to?"), "{said}");
+    }
+
+    /// A destination is not a control, so no approval can be asked about it.
+    /// Without its lead it would be gated by nothing at all.
+    #[test]
+    fn a_target_that_is_not_a_control_keeps_its_lead_check() {
+        let going = read(&response(&[
+            (
+                OPERATION,
+                spread("NAVIGATE", &[("NAVIGATE", 0.95), ("ACT", 0.01)]),
+            ),
+            (
+                DESTINATION,
+                spread("checkout", &[("checkout", 0.30), ("basket", 0.28)]),
+            ),
+        ]))
+        .expect("reads");
+        assert!(going.needs_target() && !going.aims_at_a_control());
+        let judged = verdict(&going, None, None, None);
+        assert!(
+            matches!(judged, Verdict::Explore(_) | Verdict::HandBack(..)),
+            "a barely chosen destination must not run: {judged:?}"
+        );
+    }
+
+    /// And an approval that could not be asked is a refusal rather than a free
+    /// pass, now that the target's lead no longer gates a control.
+    #[test]
+    fn an_unavailable_approval_does_not_let_a_move_through() {
+        let refused = verdict(&clicking(0.99), Some("Place order"), None, Some(0.0));
+        assert!(matches!(refused, Verdict::HandBack(..)), "{refused:?}");
+    }
+
+    /// An expensive control needs more than a coin flip to be worth doing.
+    #[test]
+    fn what_a_move_has_to_be_worth_rises_with_what_it_would_cost() {
+        assert_eq!(Consequence::Low.approval(), 0.50);
+        assert_eq!(Consequence::Medium.approval(), 0.50);
+        assert_eq!(Consequence::High.approval(), 0.80);
+        // 0.70 clears a click and does not clear a submit.
+        assert_eq!(
+            verdict(&clicking(0.99), Some("Next page"), None, Some(0.70)),
+            Verdict::Execute
+        );
+        let refused = verdict(&clicking(0.99), Some("Place your order"), None, Some(0.70));
+        assert!(matches!(refused, Verdict::HandBack(..)), "{refused:?}");
     }
 
     /// The measured regression that made a run refuse every Sony listing on a
@@ -707,7 +880,7 @@ mod tests {
     fn noise_cancellation_does_not_raise_the_bar() {
         let listing = "SONY WH-1000XM5 Wireless Noise Cancellation Headphones";
         assert_eq!(
-            verdict(&clicking(0.80), Some(listing), None),
+            verdict(&clicking(0.80), Some(listing), None, None),
             Verdict::Execute
         );
     }
@@ -721,7 +894,7 @@ mod tests {
         ]))
         .expect("reads");
         assert!(decision.none_of_these);
-        let Verdict::HandBack(why, _) = verdict(&decision, None, None) else {
+        let Verdict::HandBack(why, _) = verdict(&decision, None, None, None) else {
             panic!("there is nothing to act on");
         };
         assert_eq!(why, Handback::NothingOffered);
@@ -733,7 +906,7 @@ mod tests {
     #[test]
     fn a_low_consequence_move_on_a_hunch_is_explored_rather_than_run() {
         let decision = read(&response(&[(OPERATION, answer("WAIT", 0.20))])).expect("reads");
-        let Verdict::Explore(_) = verdict(&decision, None, None) else {
+        let Verdict::Explore(_) = verdict(&decision, None, None, None) else {
             panic!("0.20 is under the 0.60 floor, and reading ends the run");
         };
     }
@@ -741,7 +914,7 @@ mod tests {
     #[test]
     fn a_confident_low_consequence_move_runs() {
         let decision = read(&response(&[(OPERATION, answer("WAIT", 0.88))])).expect("reads");
-        assert_eq!(verdict(&decision, None, None), Verdict::Execute);
+        assert_eq!(verdict(&decision, None, None, None), Verdict::Execute);
     }
 
     /// A completion claim is the caller's to judge, not the gate's.
@@ -749,7 +922,11 @@ mod tests {
     fn an_ending_is_never_refused() {
         for named in ["DONE", "BLOCKED"] {
             let decision = read(&response(&[(OPERATION, answer(named, 0.11))])).expect("reads");
-            assert_eq!(verdict(&decision, None, None), Verdict::Execute, "{named}");
+            assert_eq!(
+                verdict(&decision, None, None, None),
+                Verdict::Execute,
+                "{named}"
+            );
         }
     }
 
@@ -760,7 +937,8 @@ mod tests {
             (DESTINATION, answer("the results page", 0.80)),
         ]))
         .expect("reads");
-        let Verdict::HandBack(why, _) = verdict(&decision, Some("the results page"), None) else {
+        let Verdict::HandBack(why, _) = verdict(&decision, Some("the results page"), None, None)
+        else {
             panic!("0.80 is under the 0.85 that leaving the page needs");
         };
         assert_eq!(why, Handback::TooRiskyToGuess);
@@ -770,7 +948,7 @@ mod tests {
     fn a_scroll_the_code_chose_is_not_judged_at_all() {
         let decision = Decision::scroll_down();
         assert_eq!(decision.how, Some(How::Scroll));
-        assert_eq!(verdict(&decision, None, None), Verdict::Execute);
+        assert_eq!(verdict(&decision, None, None, None), Verdict::Execute);
     }
 
     #[test]
@@ -804,7 +982,7 @@ mod tests {
         assert!(decision.operation_lead.distributed);
         assert!((decision.operation_lead.margin - 0.52).abs() < 0.01);
         assert_eq!(
-            verdict(&decision, Some("World"), None),
+            verdict(&decision, Some("World"), None, None),
             Verdict::Execute,
             "0.63 against 0.11 is not a coin toss"
         );
@@ -829,7 +1007,7 @@ mod tests {
         );
         assert!(decision.operation_lead.share < FLOOR);
         assert!(
-            matches!(verdict(&decision, None, None), Verdict::Explore(_)),
+            matches!(verdict(&decision, None, None, None), Verdict::Explore(_)),
             "0.20 of the answer is not enough however far ahead of the rest it is"
         );
     }
@@ -859,13 +1037,16 @@ mod tests {
             ]))
             .expect("reads")
         };
+        // The same evidence, judged against what it would cost to be wrong.
         assert_eq!(
-            verdict(&narrow("e1"), Some("Brand: Corsair"), None),
+            verdict(&narrow("e1"), Some("Brand: Corsair"), None, Some(0.70)),
             Verdict::Execute,
-            "a filter leading by 0.35 clears the medium margin"
+            "0.70 is worth doing on a filter"
         );
-        let Verdict::HandBack(why, _) = verdict(&narrow("e2"), Some("Place order"), None) else {
-            panic!("the same lead on a submit must not run");
+        let Verdict::HandBack(why, _) =
+            verdict(&narrow("e2"), Some("Place order"), None, Some(0.70))
+        else {
+            panic!("the same evidence on a submit must not run");
         };
         assert_eq!(why, Handback::TooRiskyToGuess);
     }
@@ -900,7 +1081,9 @@ mod tests {
             (TARGET, spread("e1", &[("e1", 0.60), ("e9", 0.25)])),
         ]))
         .expect("reads");
-        let Verdict::HandBack(why, _) = verdict(&decision, Some("Complete purchase"), None) else {
+        let Verdict::HandBack(why, _) =
+            verdict(&decision, Some("Complete purchase"), None, Some(0.70))
+        else {
             panic!("a purchase is not a filter");
         };
         assert_eq!(why, Handback::TooRiskyToGuess);

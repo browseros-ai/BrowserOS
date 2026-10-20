@@ -80,6 +80,34 @@ pub struct Known {
     pub searched: bool,
 }
 
+/// What this run has withheld from the page in front of it.
+///
+/// Separate from [`Known`] and keyed differently on purpose. `Known` answers
+/// questions about the page as the model was shown it, so it is keyed on the
+/// full fingerprint and forgotten whenever any of that changes, including the
+/// text. This answers "is this the same page I was just looking at", and keying
+/// that on the text throws it away whenever a character changes: a commercial
+/// page rewrites one every second, and ten snapshots of one home page a second
+/// apart produced ten distinct fingerprints.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct OnThisPage {
+    pub arrangement: u64,
+    /// Controls acted on here that changed nothing.
+    ///
+    /// The rule this replaces said a retry cannot clear whatever swallowed the
+    /// first attempt, which is true of a dialog over the control and false of a
+    /// page that has since moved on. Measured on the sibling implementation:
+    /// the only control that submits a search was offered three times, clicked
+    /// once while out of view, and never offered again across the nine
+    /// requests that followed.
+    pub retired: Vec<String>,
+    /// Controls judged not worth acting on while this page has been showing.
+    ///
+    /// Withheld from the next question, which is what makes the next question
+    /// different without moving the page under it.
+    pub set_aside: Vec<String>,
+}
+
 impl Known {
     /// Records a target, keeping whichever of the two held more of the answer.
     pub fn found(&mut self, reference: &str, share: f64, batch: usize) {
@@ -126,7 +154,11 @@ pub struct Run {
     /// A retry cannot clear whatever swallowed the first attempt, so these are
     /// never offered again. Without it a run spends its whole budget choosing
     /// one dead reference, which is exactly what a live errand did.
-    pub retired: Vec<String>,
+    /// How many controls were retired across the whole run, for the outcome.
+    /// What is withheld from a question lives on `known` and resets with the page.
+    pub retired_total: usize,
+    /// What has been withheld from the page in front of the run.
+    pub here: OnThisPage,
     /// The control the last action aimed at, so an unmoved page knows what to
     /// retire.
     pub last_acted: Option<String>,
@@ -216,7 +248,8 @@ impl Run {
             input_tokens: 0,
             recent: Vec::new(),
             decided: Vec::new(),
-            retired: Vec::new(),
+            retired_total: 0,
+            here: OnThisPage::default(),
             last_acted: None,
             repeating: None,
             recent_aims: Vec::new(),
@@ -251,6 +284,21 @@ impl Run {
         };
     }
 
+    /// Points what the run has withheld at the arrangement in front of it.
+    ///
+    /// Keyed coarsely on purpose: a deal countdown ticking once a second is
+    /// not a different page, and discarding what was withheld every step is
+    /// worse than having withheld nothing.
+    pub fn standing_on(&mut self, arrangement: u64) {
+        if self.here.arrangement == arrangement {
+            return;
+        }
+        self.here = OnThisPage {
+            arrangement,
+            ..OnThisPage::default()
+        };
+    }
+
     #[must_use]
     pub fn offering(mut self, offered: Offered) -> Self {
         self.offered = offered;
@@ -265,11 +313,39 @@ impl Run {
         let Some(reference) = self.last_acted.take() else {
             return false;
         };
-        if self.retired.contains(&reference) {
+        if self.here.retired.contains(&reference) {
             return false;
         }
-        self.retired.push(reference);
+        self.here.retired.push(reference);
+        self.retired_total += 1;
         true
+    }
+
+    /// Withholds a control the model judged not worth acting on, for as long as
+    /// this page is showing.
+    pub fn set_aside(&mut self, reference: impl Into<String>) {
+        let reference = reference.into();
+        if !self.here.set_aside.contains(&reference) {
+            self.here.set_aside.push(reference);
+        }
+    }
+
+    /// Offers again everything that was set aside on this page.
+    ///
+    /// Called when an action moved the page: a control judged not worth acting
+    /// on was judged against a page that no longer exists. What was retired is
+    /// left alone, because that is a claim about the control rather than about
+    /// the moment.
+    pub fn reconsider_set_aside(&mut self) {
+        self.here.set_aside.clear();
+    }
+
+    /// Everything withheld from the next question about this page.
+    #[must_use]
+    pub fn withheld(&self) -> Vec<String> {
+        let mut all = self.here.retired.clone();
+        all.extend(self.here.set_aside.iter().cloned());
+        all
     }
 
     /// Whether this is the second time running that the run would aim here.
@@ -375,6 +451,47 @@ impl Run {
 mod tests {
     use super::*;
 
+    /// The live defect this key exists for: a deal countdown ticking once a
+    /// second changed the fingerprint, and with it everything the run had
+    /// withheld from the page it was still looking at.
+    #[test]
+    fn a_ticking_clock_does_not_discard_what_was_withheld() {
+        let mut run = Run::new("x", Budget::default());
+        run.standing_on(42);
+        run.last_acted = Some("e1".to_string());
+        assert!(run.retire_last());
+        run.set_aside("e2");
+
+        // The same arrangement, a different fingerprint.
+        run.now_looking_at(999);
+        run.standing_on(42);
+        assert_eq!(run.withheld(), vec!["e1".to_string(), "e2".to_string()]);
+
+        // A different arrangement is a different page.
+        run.standing_on(43);
+        assert!(run.withheld().is_empty());
+    }
+
+    /// A control set aside was judged against a page that has since moved. A
+    /// run that rejects Search while a box is empty, then fills the box, has
+    /// to be able to reach Search again.
+    #[test]
+    fn a_control_set_aside_is_offered_again_once_the_page_moves() {
+        let mut run = Run::new("x", Budget::default());
+        run.standing_on(1);
+        run.set_aside("e_search");
+        run.last_acted = Some("e_box".to_string());
+        assert!(run.retire_last());
+        assert_eq!(run.withheld().len(), 2);
+
+        run.reconsider_set_aside();
+        assert_eq!(
+            run.withheld(),
+            vec!["e_box".to_string()],
+            "what was retired stays, what was set aside is offered again"
+        );
+    }
+
     #[test]
     fn retiring_the_same_control_twice_only_counts_once() {
         let mut run = Run::new("x", Budget::default());
@@ -382,14 +499,15 @@ mod tests {
         assert!(run.retire_last());
         run.last_acted = Some("e1".to_string());
         assert!(!run.retire_last(), "already retired");
-        assert_eq!(run.retired.len(), 1);
+        assert_eq!(run.here.retired.len(), 1);
+        assert_eq!(run.retired_total, 1, "the run counts it once");
     }
 
     #[test]
     fn retiring_with_nothing_aimed_at_is_not_an_error() {
         let mut run = Run::new("x", Budget::default());
         assert!(!run.retire_last());
-        assert!(run.retired.is_empty());
+        assert!(run.here.retired.is_empty());
     }
 
     #[test]

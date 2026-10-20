@@ -42,6 +42,8 @@ pub const DESTINATION: &str = "destination";
 pub const TAB: &str = "tab";
 pub const PRESS_KEY: &str = "press_key";
 pub const GOAL_MET: &str = "goal_met";
+/// Whether the move the run has settled on is worth making.
+pub const WORTH_ACTING_ON: &str = "worth_acting_on";
 
 /// Roles each way of acting can aim at. Narrowing a head's options is both
 /// cheaper, since every head repeats its list as input tokens, and more honest,
@@ -236,6 +238,62 @@ pub fn ways(space: &ActionSpace, view: &PageView) -> Vec<How> {
 
 fn ask(goal: &str, question: impl Into<String>) -> Value {
     json!({ "goal": goal, "question": question.into(), "rules": RULES })
+}
+
+/// Whether to carry out the move that has been chosen.
+///
+/// A Noul, because the question is not comparative and the margin it replaces
+/// could not help being. A Choice over controls reports which one leads, and on
+/// a page where several controls each serve the goal that is unanswerable: two
+/// good answers agreeing and two bad ones tying produce the same distribution.
+/// A measured home page put a search button at 0.46 against an autocomplete
+/// suggestion at 0.31, both of which reach the results, and the move was
+/// discarded for leading by too little. This asks about one move, so a second
+/// control that would also have served cannot lower the answer.
+///
+/// The wording is load bearing and cost two live attempts. Asking whether a
+/// move would "advance the goal" is read as asking whether it achieves it, and
+/// clicking a search button scored 0.54 because searching puts nothing in a
+/// cart. Asking whether it is a good next step, with the criteria saying in as
+/// many words that a step counts when it does not finish the goal, moved the
+/// same move to 0.60 and typing into an empty box from 0.73 to 0.87.
+/// `argument` is the text a fill would type, the value a select would set, or
+/// the key a press would send. Without it two opposite moves ask an identical
+/// question: a select choosing one option or another, or a press of Enter
+/// against a press of Escape, are the same control and the same verb.
+#[must_use]
+pub fn approval(
+    goal: &str,
+    how: &str,
+    control: &Value,
+    argument: Option<&str>,
+) -> BTreeMap<String, Question> {
+    let mut considered = json!({ "how": how, "control": control });
+    if let Some(argument) = argument {
+        considered["argument"] = json!(argument);
+    }
+    let mut asked = BTreeMap::new();
+    asked.insert(
+        WORTH_ACTING_ON.to_string(),
+        Question::Noul {
+            instructions: json!({
+                "goal": goal,
+                "the_move_being_considered": considered,
+                "question": "Would carrying out `the_move_being_considered` be a good next step toward the goal?",
+                "rules": RULES,
+            }),
+            criteria: Some(json!({
+                "true": "it is a sensible next step: it makes progress toward the goal, or it is \
+                         the step that has to happen before the goal can be reached. A step counts \
+                         even when it does not finish the goal by itself, and it counts even when \
+                         some other control on the page would have served just as well.",
+                "false": "it makes no progress toward the goal, or it leads away from the goal, or \
+                          it undoes something this run already did, or the page is already in the \
+                          state it would put it in",
+            })),
+        },
+    );
+    asked
 }
 
 /// Builds every question for one step.
@@ -514,6 +572,7 @@ mod tests {
             },
             options: Vec::new(),
             guard: 0,
+            group: None,
         }
     }
 
@@ -524,6 +583,7 @@ mod tests {
             text: "some text".to_string(),
             controls,
             fingerprint: 1,
+            arrangement: 1,
             unlabelled_images: 0,
         }
     }
@@ -697,6 +757,50 @@ mod tests {
         assert!(
             criteria.contains_key("7"),
             "chosen by page id, not by title"
+        );
+    }
+}
+
+#[cfg(test)]
+mod approving {
+    use super::*;
+
+    #[test]
+    fn the_approval_names_the_argument_the_move_would_use() {
+        let control = json!({ "control": "textbox \"Search\"" });
+        let asked = approval("find a thing", "FILL", &control, Some("sensodyne"));
+        let Question::Noul { instructions, .. } = &asked[WORTH_ACTING_ON] else {
+            panic!("the approval is a Noul");
+        };
+        assert_eq!(
+            instructions["the_move_being_considered"]["argument"],
+            json!("sensodyne")
+        );
+    }
+
+    /// Two presses of opposite keys must not ask the same question.
+    #[test]
+    fn two_moves_differing_only_in_their_argument_ask_different_questions() {
+        let control = json!({ "control": "textbox \"Search\"" });
+        let enter = approval("x", "PRESS", &control, Some("Enter"));
+        let escape = approval("x", "PRESS", &control, Some("Escape"));
+        assert_ne!(
+            format!("{:?}", enter[WORTH_ACTING_ON]),
+            format!("{:?}", escape[WORTH_ACTING_ON])
+        );
+    }
+
+    #[test]
+    fn a_move_with_no_argument_omits_the_field() {
+        let control = json!({ "control": "button \"Go\"" });
+        let asked = approval("x", "CLICK", &control, None);
+        let Question::Noul { instructions, .. } = &asked[WORTH_ACTING_ON] else {
+            panic!("the approval is a Noul");
+        };
+        assert!(
+            instructions["the_move_being_considered"]
+                .get("argument")
+                .is_none()
         );
     }
 }

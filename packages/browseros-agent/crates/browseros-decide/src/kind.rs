@@ -193,6 +193,7 @@ mod tests {
             state: ControlState::default(),
             options: Vec::new(),
             guard: 0,
+            group: None,
         }
     }
 

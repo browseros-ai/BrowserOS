@@ -483,6 +483,15 @@ fn speaks_for_its_description(view: &PageView, goal: &str) -> HashMap<String, St
 /// A name long enough to be a product title rather than a label or a price.
 const ROW_WORTH_KEEPING: usize = 18;
 
+/// How one control is described to the model, as the option space describes it.
+///
+/// Public so a question asked about a control already chosen names it the same
+/// way the question that chose it did.
+#[must_use]
+pub fn describe(control: &Control) -> serde_json::Value {
+    candidate_of(control).descriptor
+}
+
 fn candidate_of(control: &Control) -> Candidate {
     // A role the accessibility tree invented is not a description. A facet
     // rendered as a styled label arrives as `LabelText`, which tells a model
@@ -503,6 +512,14 @@ fn candidate_of(control: &Control) -> Candidate {
         format!("{role} {:?}", control.name)
     };
     let mut descriptor = json!({ "control": label });
+    // What tells one of sixty-five identical buttons from another. Withheld
+    // when it only repeats the control's own name, which describes nothing.
+    if let Some(group) = control.group.as_deref()
+        && !group.is_empty()
+        && !group.eq_ignore_ascii_case(control.name.trim())
+    {
+        descriptor["inside"] = json!(group);
+    }
     if let Some(state) = control.state.describe() {
         descriptor["current"] = json!(state);
     }
@@ -542,6 +559,7 @@ mod tests {
             state: ControlState::default(),
             options: Vec::new(),
             guard: 0,
+            group: None,
         }
     }
 
@@ -595,6 +613,7 @@ mod tests {
             text: String::new(),
             controls,
             fingerprint: 1,
+            arrangement: 1,
             unlabelled_images: 0,
         }
     }

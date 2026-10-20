@@ -271,6 +271,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             run.url_before = Some(view.url.clone());
         }
         run.now_looking_at(view.fingerprint);
+        run.standing_on(view.arrangement);
         // Every page the run observes is somewhere it has stood, including the
         // one it started on, so coming back to the start counts as a return.
         run.standing_somewhere_new(view.fingerprint);
@@ -295,7 +296,7 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             &view,
             &run.goal,
             run.last_acted.as_deref(),
-            &run.retired,
+            &run.withheld(),
             insist,
         );
 
@@ -332,7 +333,67 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
             .and_then(|key| run.offered.values.iter().find(|value| value.name == key))
             .map(|value| value.text.clone());
 
-        let judged = gate::verdict(&decision, target_name.as_deref(), supplied.as_deref());
+        // Whether this move is worth making. Asked only once a control has been
+        // settled on, because it names one, and only when the move could
+        // actually be carried out: a move with no argument to act with cannot
+        // be worth a model call to approve.
+        let worth = if decision.needs_target()
+            && decision.target.is_some()
+            && resolve(&decision, &run, &supplied).is_some()
+        {
+            let descriptor = decision
+                .target
+                .as_deref()
+                .and_then(|reference| view.control(reference))
+                .map(crate::space::describe);
+            match descriptor {
+                Some(descriptor) => {
+                    let how = decision.how.map_or_else(
+                        || decision.operation.as_str().to_string(),
+                        |how| how.as_str().to_string(),
+                    );
+                    // What the move would actually do with the control: the
+                    // text a fill types, the value a select sets, the key a
+                    // press sends.
+                    let argument = match decision.how {
+                        Some(How::Fill) => supplied.as_deref(),
+                        Some(How::Press) => decision.key.as_deref(),
+                        _ => decision.value.as_deref(),
+                    };
+                    let asked = questions::approval(&run.goal, &how, &descriptor, argument);
+                    let state =
+                        questions::state(&view, &space, &run.recent, run.here.retired.len());
+                    let left = Duration::from_secs(run.budget.max_seconds)
+                        .saturating_sub(started.elapsed());
+                    match oracle.ask_within(&state, &asked, left).await {
+                        Ok(response) => {
+                            run.decisions += 1;
+                            run.input_tokens += response.usage.input_tokens;
+                            response
+                                .answers
+                                .get(questions::WORTH_ACTING_ON)
+                                .and_then(|answer| answer.noul)
+                        }
+                        // An approval that could not be asked is a refusal.
+                        // Returning None here skips the check in `verdict`, and
+                        // since the target's lead no longer gates, that left a
+                        // click on an expensive control judged by the operation
+                        // and the verb alone.
+                        Err(_) => Some(0.0),
+                    }
+                }
+                None => None,
+            }
+        } else {
+            None
+        };
+
+        let judged = gate::verdict(
+            &decision,
+            target_name.as_deref(),
+            supplied.as_deref(),
+            worth,
+        );
         // Recorded before it is acted on, so a decision that ends the run is in
         // the record that travels back with the ending.
         run.judged(decided_of(
@@ -431,8 +492,29 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     );
                 }
                 // Asking the identical question of the identical page returns
-                // the identical answer, so the honest response is to change what
-                // the next decision can see.
+                // the identical answer, so something has to change before
+                // asking again. Which thing depends on what fell short, and a
+                // fixed answer to that is expensive: a scroll issued on every
+                // refusal regardless of cause, including refusals about a
+                // control sitting on screen, moved the only control that
+                // submits a page's search out of the viewport, and the next
+                // decision clicked where it used to be.
+                if worth.is_some_and(|worth| {
+                    worth
+                        < decision
+                            .operation
+                            .consequence(decision.how, target_name.as_deref())
+                            .approval()
+                }) && let Some(reference) = decision.target.as_deref()
+                {
+                    // The page is fine. This move is not. Withhold it and ask
+                    // again, which changes the question without moving the
+                    // page under it.
+                    run.set_aside(reference);
+                    continue;
+                }
+                // Nothing here could be settled on, so show the page something
+                // else.
                 run.spent += 1;
                 let scroll = Decision::scroll_down();
                 let _ = driver.perform(&Move::Act(Box::new(scroll))).await;
@@ -447,6 +529,18 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         run.declined = 0;
 
         let Some(next) = resolve(&decision, &run, &supplied) else {
+            // A move that cannot be built is not a reason to end the run while
+            // the page still holds other controls. Found live: a flight search
+            // whose form was already complete aimed at the departure date,
+            // `fill_value` correctly answered none_of_these because no supplied
+            // value belongs in a date field, and the run stopped there with the
+            // only useful move, pressing Search, still on the page.
+            if let Some(reference) = decision.target.as_deref()
+                && !run.here.set_aside.contains(&reference.to_string())
+            {
+                run.set_aside(reference);
+                continue;
+            }
             return end(
                 &run,
                 Status::NeedsInput(
@@ -591,6 +685,13 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
 
         if changed {
             run.unchanged = 0;
+            // A control was set aside because the move was not worth making on
+            // the page as it stood. The page has moved, so that judgement is
+            // about a page that is gone: a run that rejects Search while a
+            // required box is empty, then fills the box, has to be able to
+            // reach Search again. Retirement is not cleared with it, because
+            // a control that did nothing when acted on is a different claim.
+            run.reconsider_set_aside();
             // The page moved. Whether the run got anywhere is a different
             // question, and asking whether anything changed cannot answer it:
             // on a lap of a loop everything changes every time. Measured live,
@@ -758,7 +859,7 @@ async fn search<O: Oracle>(
         let moves = questions::available(&space, view, surface);
         let ways = questions::ways(&space, view);
         let asked = questions::build(&run.goal, &space, &moves, &ways, surface);
-        let state = questions::state(view, &space, &run.recent, run.retired.len());
+        let state = questions::state(view, &space, &run.recent, run.here.retired.len());
 
         let response = oracle
             .ask_within(&state, &asked, budget)
@@ -1048,7 +1149,7 @@ fn end(
         status,
         offered: space.offered.len(),
         omitted: space.omitted,
-        retired: run.retired.len(),
+        retired: run.retired_total,
         decisions: run.decisions,
         batches: run.batches_asked,
         input_tokens: run.input_tokens,
