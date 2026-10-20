@@ -46,6 +46,11 @@ pub struct Lead {
     /// Without one the margin is not a margin, and judging it as though it were
     /// would make a missing signal read as a landslide.
     pub distributed: bool,
+    /// How many options the question offered.
+    ///
+    /// Needed because the published statistic is relative to an even split, and
+    /// an even split depends on how many ways the mass could have gone.
+    pub options: usize,
 }
 
 impl Lead {
@@ -59,10 +64,26 @@ impl Lead {
     #[must_use]
     pub fn clears(self, consequence: Consequence) -> bool {
         if self.distributed {
-            self.margin >= consequence.margin() && self.share >= FLOOR
+            self.confidence() >= consequence.clarity()
         } else {
             self.share >= consequence.share_bar()
         }
+    }
+
+    /// The published statistic: how far the top sits above an even split.
+    ///
+    /// `(p_max - 1/n) / (1 - 1/n)`. A margin takes no account of how many
+    /// options were offered, so the same 0.15 means a coin flip between two and
+    /// a strong read among two hundred. This is the comparison the
+    /// documentation reports, and it is what answers the objection this
+    /// module's own header raises against an absolute share.
+    #[must_use]
+    pub fn confidence(self) -> f64 {
+        if self.options < 2 {
+            return self.share;
+        }
+        let even = 1.0 / self.options as f64;
+        ((self.share - even) / (1.0 - even)).clamp(0.0, 1.0)
     }
 }
 
@@ -81,6 +102,7 @@ pub fn lead(response: &Response, head: &str) -> Lead {
         margin: share,
         share,
         distributed: false,
+        options: 0,
     };
     let Some(probabilities) = &answer.probabilities else {
         return undistributed;
@@ -96,11 +118,13 @@ pub fn lead(response: &Response, head: &str) -> Lead {
             margin: *only,
             share: *only,
             distributed: false,
+            options: 1,
         },
         [top, second, ..] => Lead {
             margin: top - second,
             share: *top,
             distributed: true,
+            options: ranked.len(),
         },
     }
 }
@@ -190,6 +214,7 @@ impl Decision {
                 margin: 1.0,
                 share: 1.0,
                 distributed: true,
+                options: 2,
             },
             how: Some(How::Scroll),
             how_lead: None,

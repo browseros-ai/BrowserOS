@@ -140,10 +140,24 @@ fn choice(value: &str, confidence: f64) -> RawAnswer {
 
 /// A scripted answer that reports its distribution, which is what the margin
 /// gate and the pagination stop both read.
+/// A scripted answer that reports a distribution shaped like a real one.
+///
+/// The leftover mass is spread over further options rather than dropped,
+/// because the published confidence is measured against an even split and an
+/// even split depends on how many ways the mass could have gone. A two entry
+/// distribution says the question had two options, which is a different
+/// question from the one these scenarios mean.
 fn spread(value: &str, share: f64, runner_up: f64) -> RawAnswer {
     let mut probabilities = BTreeMap::new();
     probabilities.insert(value.to_string(), share);
     probabilities.insert("__runner_up".to_string(), runner_up);
+    let left = (1.0 - share - runner_up).max(0.0);
+    if left > 0.0 {
+        let each = left / 7.0;
+        for index in 0..7 {
+            probabilities.insert(format!("__other_{index}"), each);
+        }
+    }
     RawAnswer {
         answer_type: "choice".to_string(),
         noul: None,

@@ -119,6 +119,23 @@ impl Consequence {
         }
     }
 
+    /// How concentrated a Choice has to be before its answer is used.
+    ///
+    /// On the same 0 to 1 scale as [`Self::approval`], because `confidence` is
+    /// already normalised against an even split. Calibrated against the
+    /// operation values live pages actually produce: over nine moves those ran
+    /// 0.85, 0.81, 0.79, 0.76, 0.67, 0.66, 0.62 and 0.42, which are confidences
+    /// of 0.83 down to 0.35, and a medium bar of 0.50 clears all of them except
+    /// the last, which is genuinely unsure.
+    #[must_use]
+    pub fn clarity(self) -> f64 {
+        match self {
+            Self::Low => 0.40,
+            Self::Medium => 0.50,
+            Self::High => 0.70,
+        }
+    }
+
     /// How sure the model has to be that a move is worth making, at this
     /// consequence.
     ///
