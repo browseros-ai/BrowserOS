@@ -47,7 +47,9 @@ class ImageError(ValueError):
 @dataclass(frozen=True)
 class ImageRequest:
     """What to build. Without push the image is loaded into local Docker,
-    which holds one platform, so it defaults to the host's architecture."""
+    which holds one platform, so it defaults to the host's architecture. An
+    explicit platform (or a .deb's own) may differ from the host on purpose,
+    e.g. to test an amd64 package on Apple silicon under emulation."""
 
     version: str = ""
     repository: str = DEFAULT_REPOSITORY

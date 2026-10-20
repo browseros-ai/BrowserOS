@@ -67,8 +67,9 @@ only matters until then.
 Everything Neo keeps lives under `/data`:
 
 ```
-/data/profile     the Neo profile: logins, cookies, history, settings
-/data/downloads   Neo's Downloads folder
+/data/profile      the Neo profile: logins, cookies, history, settings
+/data/browserclaw  agent data: sessions, recordings, skills, agent settings
+/data/downloads    Neo's Downloads folder
 ```
 
 - **Sign in once.** Logins survive `docker compose down` / `up` and image upgrades.

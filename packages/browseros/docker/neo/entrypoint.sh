@@ -12,6 +12,9 @@ set -euo pipefail
 
 readonly PROFILE=/data/profile
 readonly DOWNLOADS=/data/downloads
+# claw-server's database, recordings, skills and agent settings. It defaults to
+# ~/.browserclaw, which is not on the volume and would vanish with the container.
+readonly CLAW_DATA=/data/browserclaw
 readonly NEO_HOME=/home/neo
 readonly XDG_DIR=/tmp/neo-xdg
 readonly CONFIGURED=/tmp/neo-configured
@@ -42,7 +45,8 @@ die() { log "$*" >&2; exit 1; }
 # a wrapper shell that dies on SIGTERM while the program keeps running.
 spawn_as_neo() {
   (exec setpriv --reuid=neo --regid=neo --init-groups \
-    env HOME="$NEO_HOME" USER=neo DISPLAY=:1 XDG_RUNTIME_DIR="$XDG_DIR" LANG=C.UTF-8 "$@") &
+    env HOME="$NEO_HOME" USER=neo DISPLAY=:1 XDG_RUNTIME_DIR="$XDG_DIR" LANG=C.UTF-8 \
+      BROWSERCLAW_DIR="$CLAW_DATA" "$@") &
 }
 
 # Bind-mounted host folders are owned by the host user; running Neo as that
@@ -55,8 +59,8 @@ apply_ids() {
 }
 
 prepare_data() {
-  mkdir -p "$PROFILE" "$DOWNLOADS" "$XDG_DIR" "$NEO_HOME/.config/gtk-3.0" "$NEO_HOME/.config/gtk-4.0"
-  chown neo:neo /data "$PROFILE" "$DOWNLOADS" "$XDG_DIR"
+  mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR" "$NEO_HOME/.config/gtk-3.0" "$NEO_HOME/.config/gtk-4.0"
+  chown neo:neo /data "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
   chmod 700 "$XDG_DIR"
   ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
@@ -116,6 +120,8 @@ start_display() {
 # container was started with security options that allow it (README).
 sandbox_flags=(--no-sandbox)
 is_true "$NEO_SANDBOX" && sandbox_flags=()
+# Reject a malformed NEO_HUMAN_HELP now, not after Neo has started.
+is_true "$NEO_HUMAN_HELP" || :
 
 # --no-sandbox is deliberate here, so drop Chromium's "unsupported command-line
 # flag" bar for it. Written only in that mode: the same policy would also hide
@@ -198,7 +204,8 @@ shutdown() {
     for _ in $(seq 1 150); do kill -0 "$neo_pid" 2>/dev/null || break; sleep 0.1; done
     kill -KILL "$neo_pid" 2>/dev/null || true
   fi
-  kill -TERM "$configure_pid" "$websockify_pid" "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
+  [ -n "$configure_pid" ] && kill -TERM "$configure_pid" 2>/dev/null || true
+  kill -TERM "$websockify_pid" "$openbox_pid" "$vncconfig_pid" "$xvnc_pid" 2>/dev/null || true
   wait 2>/dev/null || true
   exit "$code"
 }
@@ -215,6 +222,16 @@ configure_neo &
 configure_pid=$!
 
 while [ "$stopping" = 0 ]; do
+  # A failed configure (Neo never ready, settings rejected) would otherwise
+  # leave the container unhealthy forever; exiting lets Docker restart it.
+  if [ -n "$configure_pid" ] && ! kill -0 "$configure_pid" 2>/dev/null; then
+    if wait "$configure_pid"; then
+      configure_pid=""
+    else
+      log "Could not configure Neo; stopping the container"
+      shutdown 1
+    fi
+  fi
   for name in xvnc openbox websockify; do
     pid_var="${name}_pid"
     if ! kill -0 "${!pid_var}" 2>/dev/null; then
