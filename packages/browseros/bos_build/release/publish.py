@@ -49,10 +49,12 @@ class PublishModule(Step):
         source_sha: str = "",
         workflow_run_id: str = "",
         workflow_run_attempt: str = "",
+        linux_arch: Optional[str] = None,
     ):
         self.selected_platforms = platforms or PLATFORMS
         self.allow_missing_platforms = platforms is None
         self.macos_arch = macos_arch
+        self.linux_arch = linux_arch
         self.source_sha = source_sha
         self.workflow_run_id = workflow_run_id
         self.workflow_run_attempt = workflow_run_attempt
@@ -98,7 +100,9 @@ class PublishModule(Step):
         loaded_platforms = [
             platform for platform in self.selected_platforms if platform in metadata
         ]
-        if any(
+        # An explicit architecture binds an exact pair even without provenance
+        # flags. None preserves legacy unbound promotion; bound calls default x64.
+        if self.linux_arch is not None or any(
             (
                 self.source_sha,
                 self.workflow_run_id,
@@ -115,6 +119,7 @@ class PublishModule(Step):
                         product_id=context.product.id,
                         platforms=selection,
                         macos_arch=self.macos_arch,
+                        linux_arch=self.linux_arch or "x64",
                         source_sha=self.source_sha,
                         workflow_run_id=self.workflow_run_id,
                         workflow_run_attempt=self.workflow_run_attempt,

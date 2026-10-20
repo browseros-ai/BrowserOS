@@ -126,6 +126,75 @@ class ReleaseContractTest(unittest.TestCase):
                 workflow_run_attempt="1",
             )
 
+    def test_linux_selection_requires_its_exact_architecture_pairs(self):
+        for selection, expected_keys in (
+            ("arm64", {"arm64_appimage", "arm64_deb"}),
+            ("all", {"x64_appimage", "x64_deb", "arm64_appimage", "arm64_deb"}),
+        ):
+            with self.subTest(selection=selection):
+                metadata = {"linux": _release_metadata("linux", expected_keys)}
+                contract = dict(
+                    version="0.49.0",
+                    product_id="browserclaw",
+                    platforms="linux",
+                    macos_arch="universal",
+                    linux_arch=selection,
+                    source_sha="a" * 40,
+                    workflow_run_id="123",
+                )
+                selected = validate_release_metadata(metadata, **contract)
+                self.assertEqual(set(selected), {"linux"})
+                self.assertEqual(set(selected["linux"]["artifacts"]), expected_keys)
+
+                del metadata["linux"]["artifacts"]["arm64_deb"]
+                with self.assertRaisesRegex(RuntimeError, "artifact keys"):
+                    validate_release_metadata(metadata, **contract)
+
+                metadata["linux"] = self.metadata["linux"]
+                with self.assertRaisesRegex(RuntimeError, "artifact keys"):
+                    validate_release_metadata(metadata, **contract)
+
+    def test_linux_selection_rejects_unknown_architectures(self):
+        with self.assertRaisesRegex(ValueError, "Linux architecture"):
+            validate_release_metadata(
+                self.metadata,
+                version="0.49.0",
+                product_id="browserclaw",
+                platforms="linux",
+                macos_arch="universal",
+                linux_arch="arm64;true",
+            )
+
+    def test_linux_retry_receipt_can_bind_a_run_but_cannot_claim_one_attempt(self):
+        release = _release_metadata(
+            "linux",
+            {
+                "x64_appimage",
+                "x64_deb",
+                "arm64_appimage",
+                "arm64_deb",
+            },
+        )
+        del release["workflow_run_attempt"]
+        for key, artifact in release["artifacts"].items():
+            artifact["workflow_run_attempt"] = "2" if key.startswith("arm64") else "1"
+        contract = dict(
+            version="0.49.0",
+            product_id="browserclaw",
+            platforms="linux",
+            macos_arch="universal",
+            linux_arch="all",
+            workflow_run_id="123",
+        )
+        self.assertEqual(
+            validate_release_metadata({"linux": release}, **contract),
+            {"linux": release},
+        )
+        with self.assertRaisesRegex(RuntimeError, "workflow_run_attempt"):
+            validate_release_metadata(
+                {"linux": release}, workflow_run_attempt="2", **contract
+            )
+
     def test_one_run_accepts_platforms_from_different_rerun_attempts(self):
         self.metadata["win"]["workflow_run_attempt"] = "2"
 

@@ -23,6 +23,14 @@ on:
         options:
           - universal
           - arm64
+      linux_arch:
+        description: "Linux artifact set (arm64 uses the x64 build runner)"
+        type: choice
+        default: x64
+        options:
+          - x64
+          - arm64
+          - all
       publication:
         description: "alpha: publish components, alpha OTA/feeds. draft-only: private component drafts, no tags/aliases/feeds/Slack"
         type: choice
@@ -50,6 +58,7 @@ jobs:
       build_macos: ${{ steps.selection.outputs.build_macos }}
       build_windows: ${{ steps.selection.outputs.build_windows }}
       macos_arch: ${{ steps.selection.outputs.macos_arch }}
+      linux_arch: ${{ steps.selection.outputs.linux_arch }}
       onboarding_version: ${{ steps.release.outputs.onboarding_version }}
       platforms: ${{ steps.selection.outputs.platforms }}
       publication: ${{ steps.selection.outputs.publication }}
@@ -63,6 +72,7 @@ jobs:
         id: selection
         env:
           MACOS_ARCH: ${{ inputs.macos_arch }}
+          LINUX_ARCH: ${{ inputs.linux_arch }}
           PLATFORMS: ${{ inputs.platforms }}
           PUBLICATION: ${{ inputs.publication }}
         run: |
@@ -88,6 +98,17 @@ jobs:
             echo "::error::macos_arch=$MACOS_ARCH requires platforms to include macos"
             exit 1
           fi
+          case "$LINUX_ARCH" in
+            x64|arm64|all) ;;
+            *)
+              echo "::error::linux_arch must be x64, arm64, or all"
+              exit 1
+              ;;
+          esac
+          if [ "$build_linux" != true ] && [ "$LINUX_ARCH" != x64 ]; then
+            echo "::error::linux_arch=$LINUX_ARCH requires platforms to include linux"
+            exit 1
+          fi
           case "$PUBLICATION" in
             alpha|draft-only) ;;
             *)
@@ -100,6 +121,7 @@ jobs:
             echo "build_macos=$build_macos"
             echo "build_windows=$build_windows"
             echo "macos_arch=$MACOS_ARCH"
+            echo "linux_arch=$LINUX_ARCH"
             echo "platforms=$PLATFORMS"
             echo "publication=$PUBLICATION"
           } >> "$GITHUB_OUTPUT"
@@ -192,7 +214,7 @@ jobs:
   # without a status function keeps the implicit success() over `needs`, so
   # a selected lane still requires preflight and both exact components.
   linux:
-    name: Linux x64
+    name: Linux ${{ inputs.linux_arch }}
     needs: [preflight, server, extension, components]
     if: needs.preflight.outputs.build_linux == 'true'
     uses: ./.github/workflows/release-linux.yml
@@ -201,6 +223,7 @@ jobs:
       contents: read
     with:
       products: browserclaw
+      arch: ${{ needs.preflight.outputs.linux_arch }}
       upload_to_r2: true
       resource_mode: published
       ref: ${{ needs.preflight.outputs.source_sha }}
@@ -287,6 +310,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MACOS_ARCH: ${{ needs.preflight.outputs.macos_arch }}
+          LINUX_ARCH: ${{ needs.preflight.outputs.linux_arch }}
           PLATFORMS: ${{ needs.preflight.outputs.platforms }}
           R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
@@ -301,6 +325,7 @@ jobs:
             --product browserclaw \
             --platforms "$PLATFORMS" \
             --macos-arch "$MACOS_ARCH" \
+            --linux-arch "$LINUX_ARCH" \
             --source-sha "$SOURCE_SHA" \
             --workflow-run-id "$GITHUB_RUN_ID" \
             --target "$SOURCE_SHA"

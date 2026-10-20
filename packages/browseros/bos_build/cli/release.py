@@ -210,6 +210,9 @@ def publish(
         "--workflow-run-attempt",
         help="Require release metadata from this Actions run attempt",
     ),
+    linux_arch: Optional[str] = typer.Option(
+        None, "--linux-arch", help="Expected Linux artifact set: x64, arm64, or all"
+    ),
 ):
     """Publish versioned artifacts to download/ paths (make live)."""
     release_ctx = create_release_context(version, product=product)
@@ -219,6 +222,7 @@ def publish(
         PublishModule(
             platforms=platforms,
             macos_arch=macos_arch,
+            linux_arch=linux_arch,
             source_sha=source_sha,
             workflow_run_id=workflow_run_id,
             workflow_run_attempt=workflow_run_attempt,
@@ -309,6 +313,9 @@ def github_create(
         "--target",
         help="Commit SHA or branch for the release tag",
     ),
+    linux_arch: Optional[str] = typer.Option(
+        None, "--linux-arch", help="Expected Linux artifact set: x64, arm64, or all"
+    ),
 ):
     """Create GitHub release from R2 artifacts
 
@@ -327,6 +334,7 @@ def github_create(
         title=title,
         platforms=platforms,
         macos_arch=macos_arch,
+        linux_arch=linux_arch,
         source_sha=source_sha,
         workflow_run_id=workflow_run_id,
         workflow_run_attempt=workflow_run_attempt,
@@ -344,6 +352,7 @@ def github_create(
             PublishModule(
                 platforms=publish_platforms,
                 macos_arch=macos_arch,
+                linux_arch=linux_arch,
                 source_sha=source_sha,
                 workflow_run_id=workflow_run_id,
                 workflow_run_attempt=workflow_run_attempt,

@@ -155,9 +155,11 @@ gh workflow run release-browserclaw.yml --ref main
 ```
 
 BrowserOS has no platform, component, extension-channel, or signing inputs.
-BrowserOS neo accepts `platforms`, `macos_arch`, and `publication`, whose
+BrowserOS neo accepts `platforms`, `macos_arch`, `linux_arch`, and `publication`, whose
 defaults are the full release; `publication=draft-only` keeps both components
 private for test builds (see [`docs/release-ci.md`](docs/release-ci.md#dispatch)).
+Linux defaults to x64; select `linux_arch=arm64` or `all` for the published-resource
+arm64 lane. See [the Linux arm64 design and build instructions](docs/linux-arm64.md).
 The workflow freezes the dispatch SHA, publishes the product server and
 extension to alpha in strict order, and passes their exact output versions into
 every native browser lane. The committed onboarding version is pinned too, so queued

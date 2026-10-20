@@ -358,6 +358,20 @@ def _github_metadata(product: str = "browserclaw"):
     }
 
 
+def _linux_metadata():
+    """A complete arm64 receipt from the same frozen Neo release transaction."""
+    release = {**_github_metadata()["win"], "platform": "linux", "artifacts": {}}
+    for key, filename in (
+        ("arm64_appimage", "BrowserOS_neo_v0.49.0_arm64.AppImage"),
+        ("arm64_deb", "BrowserOS_neo_v0.49.0_arm64.deb"),
+    ):
+        release["artifacts"][key] = {
+            "filename": filename,
+            "url": f"https://cdn.browseros.com/releases/browserclaw/0.49.0/linux/{filename}",
+        }
+    return {"linux": release}
+
+
 class GithubCreateCliIntegrityTest(unittest.TestCase):
     def invoke_create(self, *extra: str):
         return invoke(
@@ -406,6 +420,61 @@ class GithubCreateCliIntegrityTest(unittest.TestCase):
 
         self.assertNotEqual(result.exit_code, 0)
         self.assertIn("No release metadata", plain_output(result))
+
+    def test_linux_arm64_draft_transfers_only_the_selected_pair(self):
+        metadata = _linux_metadata()
+        names = [
+            artifact["filename"] for artifact in metadata["linux"]["artifacts"].values()
+        ]
+        with (
+            self.patches(metadata),
+            mock.patch.object(
+                github_module, "create_github_release", return_value=(True, "draft")
+            ),
+            mock.patch.object(
+                github_module,
+                "download_and_upload_artifacts",
+                return_value=[(name, True) for name in names],
+            ) as transfer,
+            mock.patch.object(
+                github_module,
+                "inspect_github_release",
+                return_value={"isDraft": True, "assets": names},
+            ),
+        ):
+            result = self.invoke_create(
+                "--platforms",
+                "linux",
+                "--linux-arch",
+                "arm64",
+                "--source-sha",
+                "a" * 40,
+                "--workflow-run-id",
+                "123",
+            )
+        self.assertEqual(result.exit_code, 0, plain_output(result))
+        self.assertEqual(transfer.call_args.args[2], metadata)
+
+    def test_linux_arm64_draft_rejects_a_stale_x64_receipt_before_creation(self):
+        metadata = _linux_metadata()
+        metadata["linux"]["artifacts"] = {
+            "x64_appimage": {
+                "filename": "x64.AppImage",
+                "url": "https://cdn.browseros.com/x64.AppImage",
+            },
+            "x64_deb": {
+                "filename": "amd64.deb",
+                "url": "https://cdn.browseros.com/amd64.deb",
+            },
+        }
+        with (
+            self.patches(metadata),
+            mock.patch.object(github_module, "create_github_release") as create,
+        ):
+            result = self.invoke_create("--platforms", "linux", "--linux-arch", "arm64")
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("artifact keys mismatch", plain_output(result))
+        create.assert_not_called()
 
     def test_failed_asset_transfer_makes_actual_cli_exit_nonzero(self):
         with (
@@ -764,6 +833,43 @@ class PublishCliIntegrityTest(unittest.TestCase):
             "Skipping platforms with no release metadata: macos, linux",
             plain_output(result),
         )
+
+    def test_arm64_promotion_requires_a_complete_pair_and_uses_arm64_aliases(self):
+        metadata = _linux_metadata()
+        with (
+            self.patches(metadata),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+            mock.patch.object(
+                publish_module, "copy_to_download_path", return_value=True
+            ) as copy,
+        ):
+            result = self.invoke_publish("--platform", "linux", "--linux-arch", "arm64")
+            self.assertEqual(result.exit_code, 0, plain_output(result))
+            self.assertEqual(
+                {call.args[3] for call in copy.call_args_list},
+                {
+                    "download/BrowserOS_neo-arm64.AppImage",
+                    "download/BrowserOS_neo-arm64.deb",
+                },
+            )
+
+            copy.reset_mock()
+            del metadata["linux"]["artifacts"]["arm64_deb"]
+            result = self.invoke_publish("--platform", "linux", "--linux-arch", "arm64")
+            self.assertNotEqual(result.exit_code, 0)
+            self.assertIn("artifact keys mismatch", plain_output(result))
+            copy.assert_not_called()
+
+    def test_explicit_x64_selection_rejects_arm64_before_promoting_aliases(self):
+        with (
+            self.patches(_linux_metadata()),
+            mock.patch.object(publish_module, "get_r2_client", return_value=object()),
+            mock.patch.object(publish_module, "copy_to_download_path", return_value=True) as copy,
+        ):
+            result = self.invoke_publish("--platform", "linux", "--linux-arch", "x64")
+        self.assertNotEqual(result.exit_code, 0)
+        self.assertIn("artifact keys mismatch", plain_output(result))
+        copy.assert_not_called()
 
     def test_missing_explicit_platform_makes_actual_cli_exit_nonzero(self):
         with (

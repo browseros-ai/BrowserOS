@@ -205,7 +205,12 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                     build_with["onboarding-version"],
                     "${{ inputs.onboarding_version || '' }}",
                 )
-                self.assertEqual(build_with["arch"], "x64")
+                self.assertEqual(
+                    build_with["arch"],
+                    "${{ matrix.arch }}"
+                    if workflow_name == "release-linux.yml"
+                    else "x64",
+                )
 
     def test_persistent_macos_lane_uses_one_source_build(self):
         workflow = self.load_workflow("release-macos.yml")
@@ -919,6 +924,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
     NEO_DISPATCH_INPUTS = {
         "platforms": ("choice", ["all", "macos", "linux", "windows"], "all"),
         "macos_arch": ("choice", ["universal", "arm64"], "universal"),
+        "linux_arch": ("choice", ["x64", "arm64", "all"], "x64"),
         "publication": ("choice", ["alpha", "draft-only"], "alpha"),
     }
     NEO_ALPHA = "${{ needs.preflight.outputs.publication == 'alpha' }}"
@@ -1602,6 +1608,101 @@ print(json.dumps({
         self.assertEqual(keychain_cleanup["if"], "always()")
 
 
+class LinuxReleaseSelectionTest(unittest.TestCase):
+    """Execute the shipped planner before any expensive Chromium runner starts."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = yaml.safe_load(
+            (WORKFLOW_DIR / "release-linux.yml").read_text(encoding="utf-8")
+        )
+
+    def run_plan(
+        self, products: str, arch: str, mode: str = "published", *, pinned: bool = False
+    ):
+        step = self.workflow["jobs"]["plan"]["steps"][0]
+        self.assertNotIn("${{", step["run"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "output"
+            output.touch()
+            result = subprocess.run(
+                [git_bash_path(), "-c", step["run"]],
+                env={
+                    **os.environ,
+                    "GITHUB_OUTPUT": str(output),
+                    "PRODUCTS": products,
+                    "ARCH": arch,
+                    "RESOURCE_MODE": mode,
+                    "SERVER_VERSION": "0.0.68" if pinned else "",
+                    "EXTENSION_VERSION": "0.2.30" if pinned else "",
+                    "ONBOARDING_VERSION": "0.1.0" if pinned else "",
+                },
+                capture_output=True,
+                text=True,
+            )
+            outputs = dict(
+                line.split("=", 1)
+                for line in output.read_text(encoding="utf-8").splitlines()
+            )
+        return result, outputs
+
+    def test_planner_expands_only_selected_products_and_architectures(self):
+        cases = (
+            ("browserclaw", "x64", [{"product": "browserclaw", "arch": "x64"}]),
+            ("browserclaw", "arm64", [{"product": "browserclaw", "arch": "arm64"}]),
+            ("browserclaw", "all", [
+                {"product": "browserclaw", "arch": "x64"},
+                {"product": "browserclaw", "arch": "arm64"},
+            ]),
+            ("all", "arm64", [
+                {"product": "browseros", "arch": "arm64"},
+                {"product": "browserclaw", "arch": "arm64"},
+            ]),
+        )
+        for products, arch, expected in cases:
+            with self.subTest(products=products, arch=arch):
+                result, outputs = self.run_plan(products, arch, pinned=arch == "all")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(outputs["matrix"]), expected)
+
+    def test_unsupported_selections_fail_before_emitting_a_matrix(self):
+        for products, arch, mode in (
+            ("browserclaw", "arm64;true", "published"),
+            ("browserclaw", "", "published"),
+            ("browserclaw;true", "arm64", "published"),
+            ("browserclaw", "arm64", "source"),
+            ("browserclaw", "all", "source"),
+            ("all", "x64", "source"),
+            ("browserclaw", "x64", "typo"),
+            ("browserclaw", "all", "published"),
+        ):
+            with self.subTest(products=products, arch=arch, mode=mode):
+                result, outputs = self.run_plan(products, arch, mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("::error::", result.stdout)
+                self.assertEqual(outputs, {})
+
+        result, outputs = self.run_plan("browserclaw", "x64", "source")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(outputs["matrix"]), [
+            {"product": "browserclaw", "arch": "x64"},
+        ])
+
+        result, outputs = self.run_plan("all", "all", pinned=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(outputs, {})
+
+    def test_architecture_selection_and_metadata_ownership_are_explicit(self):
+        triggers = self.workflow.get("on", self.workflow.get(True))
+        dispatch = triggers["workflow_dispatch"]["inputs"]["arch"]
+        self.assertEqual(dispatch["options"], ["x64", "arm64", "all"])
+        self.assertEqual(dispatch["default"], "x64")
+        self.assertEqual(triggers["workflow_call"]["inputs"]["arch"]["default"], "x64")
+        build = self.workflow["jobs"]["build"]
+        self.assertEqual(build["strategy"]["max-parallel"], 1)
+        self.assertEqual(build["with"]["arch"], "${{ matrix.arch }}")
+
+
 class NeoReleaseSelectionTest(unittest.TestCase):
     """Behavior of Neo's lane selection, draft gate and quiet test builds."""
 
@@ -1621,12 +1722,15 @@ class NeoReleaseSelectionTest(unittest.TestCase):
             if step.get("name") == step_name
         )
 
-    def run_selection(self, platforms: str, macos_arch: str, publication: str):
+    def run_selection(
+        self, platforms: str, macos_arch: str, publication: str, linux_arch: str = "x64"
+    ):
         step = self.step(self.neo, "preflight", "Validate release selection")
         self.assertEqual(
             step["env"],
             {
                 "MACOS_ARCH": "${{ inputs.macos_arch }}",
+                "LINUX_ARCH": "${{ inputs.linux_arch }}",
                 "PLATFORMS": "${{ inputs.platforms }}",
                 "PUBLICATION": "${{ inputs.publication }}",
             },
@@ -1641,6 +1745,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                     **os.environ,
                     "GITHUB_OUTPUT": str(output),
                     "MACOS_ARCH": macos_arch,
+                    "LINUX_ARCH": linux_arch,
                     "PLATFORMS": platforms,
                     "PUBLICATION": publication,
                 },
@@ -1664,6 +1769,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 "build_macos": "true",
                 "build_windows": "true",
                 "macos_arch": "universal",
+                "linux_arch": "x64",
                 "platforms": "all",
                 "publication": "alpha",
             },
@@ -1680,10 +1786,43 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 "build_macos": "true",
                 "build_windows": "false",
                 "macos_arch": "arm64",
+                "linux_arch": "x64",
                 "platforms": "macos",
                 "publication": "draft-only",
             },
         )
+
+    def test_preflight_selects_linux_arm64_and_forwards_the_same_contract(self):
+        for arch in ("arm64", "all"):
+            result, outputs = self.run_selection(
+                "linux", "universal", "draft-only", arch
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(outputs["linux_arch"], arch)
+            self.assertEqual(outputs["build_linux"], "true")
+            self.assertEqual(outputs["build_macos"], "false")
+            self.assertEqual(outputs["build_windows"], "false")
+
+        linux = self.neo["jobs"]["linux"]
+        self.assertEqual(
+            linux["with"]["arch"], "${{ needs.preflight.outputs.linux_arch }}"
+        )
+        finalize = self.step(self.neo, "finalize", "Create or refresh browser draft")
+        self.assertEqual(
+            finalize["env"]["LINUX_ARCH"], "${{ needs.preflight.outputs.linux_arch }}"
+        )
+        self.assertIn('--linux-arch "$LINUX_ARCH"', finalize["run"])
+
+    def test_preflight_rejects_unused_or_invalid_linux_architecture(self):
+        for platforms, arch in (
+            ("macos", "arm64"),
+            ("windows", "all"),
+            ("linux", "bad;true"),
+        ):
+            result, outputs = self.run_selection(platforms, "universal", "alpha", arch)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("::error::", result.stdout)
+            self.assertEqual(outputs, {})
 
     def test_preflight_rejects_unsupported_or_meaningless_requests(self):
         cases = (
