@@ -473,8 +473,29 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     );
                 }
                 // Asking the identical question of the identical page returns
-                // the identical answer, so the honest response is to change what
-                // the next decision can see.
+                // the identical answer, so something has to change before
+                // asking again. Which thing depends on what fell short, and a
+                // fixed answer to that is expensive: a scroll issued on every
+                // refusal regardless of cause, including refusals about a
+                // control sitting on screen, moved the only control that
+                // submits a page's search out of the viewport, and the next
+                // decision clicked where it used to be.
+                if worth.is_some_and(|worth| {
+                    worth
+                        < decision
+                            .operation
+                            .consequence(decision.how, target_name.as_deref())
+                            .approval()
+                }) && let Some(reference) = decision.target.as_deref()
+                {
+                    // The page is fine. This move is not. Withhold it and ask
+                    // again, which changes the question without moving the
+                    // page under it.
+                    run.set_aside(reference);
+                    continue;
+                }
+                // Nothing here could be settled on, so show the page something
+                // else.
                 run.spent += 1;
                 let scroll = Decision::scroll_down();
                 let _ = driver.perform(&Move::Act(Box::new(scroll))).await;
@@ -489,6 +510,18 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
         run.declined = 0;
 
         let Some(next) = resolve(&decision, &run, &supplied) else {
+            // A move that cannot be built is not a reason to end the run while
+            // the page still holds other controls. Found live: a flight search
+            // whose form was already complete aimed at the departure date,
+            // `fill_value` correctly answered none_of_these because no supplied
+            // value belongs in a date field, and the run stopped there with the
+            // only useful move, pressing Search, still on the page.
+            if let Some(reference) = decision.target.as_deref()
+                && !run.here.set_aside.contains(&reference.to_string())
+            {
+                run.set_aside(reference);
+                continue;
+            }
             return end(
                 &run,
                 Status::NeedsInput(

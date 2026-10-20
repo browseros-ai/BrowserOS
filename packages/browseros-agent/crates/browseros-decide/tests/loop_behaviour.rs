@@ -474,6 +474,14 @@ async fn a_move_judged_not_worth_making_does_not_run() {
         "ended as {:?}",
         outcome.status
     );
+    // And it did not answer a refusal about the move by moving the page. The
+    // control sits on screen; scrolling past it is what used to take the one
+    // control that worked out of reach.
+    let scrolled = driver.ran().iter().any(|act| match act {
+        Move::Act(decision) => decision.how == Some(How::Scroll),
+        _ => false,
+    });
+    assert!(!scrolled, "a refusal about the move must not scroll the page");
 }
 
 /// The live failure the vocabulary was widened for, restated now that the
