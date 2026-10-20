@@ -351,7 +351,15 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                     let how = decision
                         .how
                         .map_or_else(|| decision.operation.as_str().to_string(), |how| how.as_str().to_string());
-                    let asked = questions::approval(&run.goal, &how, &descriptor);
+                    // What the move would actually do with the control: the
+                    // text a fill types, the value a select sets, the key a
+                    // press sends.
+                    let argument = match decision.how {
+                        Some(How::Fill) => supplied.as_deref(),
+                        Some(How::Press) => decision.key.as_deref(),
+                        _ => decision.value.as_deref(),
+                    };
+                    let asked = questions::approval(&run.goal, &how, &descriptor, argument);
                     let state = questions::state(&view, &space, &run.recent, run.here.retired.len());
                     let left = Duration::from_secs(run.budget.max_seconds)
                         .saturating_sub(started.elapsed());
@@ -364,8 +372,12 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
                                 .get(questions::WORTH_ACTING_ON)
                                 .and_then(|answer| answer.noul)
                         }
-                        // A question that could not be asked is not a refusal.
-                        Err(_) => None,
+                        // An approval that could not be asked is a refusal.
+                        // Returning None here skips the check in `verdict`, and
+                        // since the target's lead no longer gates, that left a
+                        // click on an expensive control judged by the operation
+                        // and the verb alone.
+                        Err(_) => Some(0.0),
                     }
                 }
                 None => None,
@@ -666,6 +678,13 @@ pub async fn advance<O: Oracle, D: Driver>(oracle: &O, driver: &D, mut run: Run)
 
         if changed {
             run.unchanged = 0;
+            // A control was set aside because the move was not worth making on
+            // the page as it stood. The page has moved, so that judgement is
+            // about a page that is gone: a run that rejects Search while a
+            // required box is empty, then fills the box, has to be able to
+            // reach Search again. Retirement is not cleared with it, because
+            // a control that did nothing when acted on is a different claim.
+            run.reconsider_set_aside();
             // The page moved. Whether the run got anywhere is a different
             // question, and asking whether anything changed cannot answer it:
             // on a lap of a loop everything changes every time. Measured live,

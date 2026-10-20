@@ -257,15 +257,28 @@ fn ask(goal: &str, question: impl Into<String>) -> Value {
 /// cart. Asking whether it is a good next step, with the criteria saying in as
 /// many words that a step counts when it does not finish the goal, moved the
 /// same move to 0.60 and typing into an empty box from 0.73 to 0.87.
+/// `argument` is the text a fill would type, the value a select would set, or
+/// the key a press would send. Without it two opposite moves ask an identical
+/// question: a select choosing one option or another, or a press of Enter
+/// against a press of Escape, are the same control and the same verb.
 #[must_use]
-pub fn approval(goal: &str, how: &str, control: &Value) -> BTreeMap<String, Question> {
+pub fn approval(
+    goal: &str,
+    how: &str,
+    control: &Value,
+    argument: Option<&str>,
+) -> BTreeMap<String, Question> {
+    let mut considered = json!({ "how": how, "control": control });
+    if let Some(argument) = argument {
+        considered["argument"] = json!(argument);
+    }
     let mut asked = BTreeMap::new();
     asked.insert(
         WORTH_ACTING_ON.to_string(),
         Question::Noul {
             instructions: json!({
                 "goal": goal,
-                "the_move_being_considered": { "how": how, "control": control },
+                "the_move_being_considered": considered,
                 "question": "Would carrying out `the_move_being_considered` be a good next step toward the goal?",
                 "rules": RULES,
             }),
@@ -745,5 +758,45 @@ mod tests {
             criteria.contains_key("7"),
             "chosen by page id, not by title"
         );
+    }
+}
+
+#[cfg(test)]
+mod approving {
+    use super::*;
+
+    #[test]
+    fn the_approval_names_the_argument_the_move_would_use() {
+        let control = json!({ "control": "textbox \"Search\"" });
+        let asked = approval("find a thing", "FILL", &control, Some("sensodyne"));
+        let Question::Noul { instructions, .. } = &asked[WORTH_ACTING_ON] else {
+            panic!("the approval is a Noul");
+        };
+        assert_eq!(
+            instructions["the_move_being_considered"]["argument"],
+            json!("sensodyne")
+        );
+    }
+
+    /// Two presses of opposite keys must not ask the same question.
+    #[test]
+    fn two_moves_differing_only_in_their_argument_ask_different_questions() {
+        let control = json!({ "control": "textbox \"Search\"" });
+        let enter = approval("x", "PRESS", &control, Some("Enter"));
+        let escape = approval("x", "PRESS", &control, Some("Escape"));
+        assert_ne!(
+            format!("{:?}", enter[WORTH_ACTING_ON]),
+            format!("{:?}", escape[WORTH_ACTING_ON])
+        );
+    }
+
+    #[test]
+    fn a_move_with_no_argument_omits_the_field() {
+        let control = json!({ "control": "button \"Go\"" });
+        let asked = approval("x", "CLICK", &control, None);
+        let Question::Noul { instructions, .. } = &asked[WORTH_ACTING_ON] else {
+            panic!("the approval is a Noul");
+        };
+        assert!(instructions["the_move_being_considered"].get("argument").is_none());
     }
 }

@@ -257,11 +257,19 @@ impl Decision {
         if self.operation == Operation::Act && self.how_lead.is_some() {
             judgements.push((Weakest::How, self.how_lead.unwrap_or_default()));
         }
-        // The target's lead is still measured and still reported. It is no
-        // longer what decides, because a lead cannot answer the question that
-        // matters on a page where several controls each serve the goal: two
-        // good options agreeing and two bad ones tying look identical to it.
-        // `worth_acting_on` answers it instead.
+        // The target's lead is still measured and still reported. For a
+        // control it is no longer what decides, because a lead cannot answer
+        // the question that matters on a page where several controls each
+        // serve the goal: two good options agreeing and two bad ones tying
+        // look identical to it. `worth_acting_on` answers it instead.
+        //
+        // A destination key and a tab id are not controls, so no approval can
+        // be asked about them: nothing on the page describes them. They keep
+        // the lead check, or a confident decision to navigate would follow a
+        // barely chosen destination with nothing weighing it at all.
+        if self.needs_target() && !self.aims_at_a_control() {
+            judgements.push((Weakest::Target, self.target_lead.unwrap_or_default()));
+        }
         if self.how == Some(How::Press) {
             judgements.push((Weakest::Key, self.key_lead.unwrap_or_default()));
         }
@@ -790,6 +798,31 @@ mod tests {
             panic!("a move under its approval must not run");
         };
         assert!(said.contains("0.31"), "{said}");
+    }
+
+    /// A destination is not a control, so no approval can be asked about it.
+    /// Without its lead it would be gated by nothing at all.
+    #[test]
+    fn a_target_that_is_not_a_control_keeps_its_lead_check() {
+        let going = read(&response(&[
+            (OPERATION, spread("NAVIGATE", &[("NAVIGATE", 0.95), ("ACT", 0.01)])),
+            (DESTINATION, spread("checkout", &[("checkout", 0.30), ("basket", 0.28)])),
+        ]))
+        .expect("reads");
+        assert!(going.needs_target() && !going.aims_at_a_control());
+        let judged = verdict(&going, None, None, None);
+        assert!(
+            matches!(judged, Verdict::Explore(_) | Verdict::HandBack(..)),
+            "a barely chosen destination must not run: {judged:?}"
+        );
+    }
+
+    /// And an approval that could not be asked is a refusal rather than a free
+    /// pass, now that the target's lead no longer gates a control.
+    #[test]
+    fn an_unavailable_approval_does_not_let_a_move_through() {
+        let refused = verdict(&clicking(0.99), Some("Place order"), None, Some(0.0));
+        assert!(matches!(refused, Verdict::HandBack(..)), "{refused:?}");
     }
 
     /// An expensive control needs more than a coin flip to be worth doing.

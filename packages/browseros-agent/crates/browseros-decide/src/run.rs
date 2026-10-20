@@ -330,6 +330,16 @@ impl Run {
         }
     }
 
+    /// Offers again everything that was set aside on this page.
+    ///
+    /// Called when an action moved the page: a control judged not worth acting
+    /// on was judged against a page that no longer exists. What was retired is
+    /// left alone, because that is a claim about the control rather than about
+    /// the moment.
+    pub fn reconsider_set_aside(&mut self) {
+        self.here.set_aside.clear();
+    }
+
     /// Everything withheld from the next question about this page.
     #[must_use]
     pub fn withheld(&self) -> Vec<String> {
@@ -460,6 +470,26 @@ mod tests {
         // A different arrangement is a different page.
         run.standing_on(43);
         assert!(run.withheld().is_empty());
+    }
+
+    /// A control set aside was judged against a page that has since moved. A
+    /// run that rejects Search while a box is empty, then fills the box, has
+    /// to be able to reach Search again.
+    #[test]
+    fn a_control_set_aside_is_offered_again_once_the_page_moves() {
+        let mut run = Run::new("x", Budget::default());
+        run.standing_on(1);
+        run.set_aside("e_search");
+        run.last_acted = Some("e_box".to_string());
+        assert!(run.retire_last());
+        assert_eq!(run.withheld().len(), 2);
+
+        run.reconsider_set_aside();
+        assert_eq!(
+            run.withheld(),
+            vec!["e_box".to_string()],
+            "what was retired stays, what was set aside is offered again"
+        );
     }
 
     #[test]
