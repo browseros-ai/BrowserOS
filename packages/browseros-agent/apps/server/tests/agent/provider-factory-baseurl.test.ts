@@ -82,7 +82,9 @@ mock.module('../../src/lib/openrouter-fetch', () => ({
   createOpenRouterCompatibleFetch: () => globalThis.fetch,
 }))
 
-const { createLanguageModel } = await import('../../src/agent/provider-factory')
+const { createLanguageModel, serializesReasoningContent } = await import(
+  '../../src/agent/provider-factory'
+)
 
 beforeEach(() => {
   lastCallArgs.anthropic = null
@@ -318,5 +320,34 @@ describe('createAzureFactory baseUrl handling', () => {
         apiKey: 'az-key',
       }),
     ).rejects.toThrow(/apiKey and either resourceName or baseUrl/)
+  })
+})
+
+describe('serializesReasoningContent', () => {
+  // The openai-compatible serializer re-emits reasoning as `reasoning_content`;
+  // these providers route through it, so replayed reasoning must be stripped.
+  it.each([
+    LLM_PROVIDERS.OPENAI_COMPATIBLE,
+    LLM_PROVIDERS.LMSTUDIO,
+    LLM_PROVIDERS.OLLAMA,
+    LLM_PROVIDERS.MOONSHOT,
+    LLM_PROVIDERS.QWEN_CODE,
+    LLM_PROVIDERS.GITHUB_COPILOT,
+  ])('is true for %s (openai-compatible serializer)', (provider) => {
+    expect(serializesReasoningContent(provider)).toBe(true)
+  })
+
+  // Native and OpenRouter providers carry signed or encrypted reasoning that
+  // must be replayed intact, so they must not be stripped.
+  it.each([
+    LLM_PROVIDERS.ANTHROPIC,
+    LLM_PROVIDERS.OPENAI,
+    LLM_PROVIDERS.GOOGLE,
+    LLM_PROVIDERS.OPENROUTER,
+    LLM_PROVIDERS.AZURE,
+    LLM_PROVIDERS.BEDROCK,
+    LLM_PROVIDERS.CHATGPT_PRO,
+  ])('is false for %s', (provider) => {
+    expect(serializesReasoningContent(provider)).toBe(false)
   })
 })
