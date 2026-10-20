@@ -288,15 +288,35 @@ impl PageDriver {
         // with the field supplied by the run rather than by the model, and
         // focusing it is what makes Enter land in the box that was just filled
         // rather than wherever the page left the focus.
-        if matches!(decision.how, Some(How::Press | How::Submit))
-            && let Some(reference) = decision.target.as_deref()
-        {
-            self.run(
-                self.reach.act,
-                Operation::Act,
-                json!({ "page": self.page, "kind": "focus", "ref": reference }),
-            )
-            .await?;
+        // Focus the chosen control before acting on it.
+        //
+        // For a press or a submit this is what makes the key land in the box
+        // that was just filled rather than wherever the page left the focus:
+        // `ActKind::Press` reads `key` and ignores `ref`, and a failure to
+        // focus stops the step rather than pressing a key at something else.
+        //
+        // For everything else it is a guard. Focusing a control scrolls it into
+        // view, and a click dispatched at a point outside the viewport does
+        // nothing while reporting success: measured on a live page, a button at
+        // top -50 against a 941px viewport returned Done and the url never
+        // changed. The loop reads that as the control being dead and strikes it
+        // off, and on a results page the control it strikes off is an Add to
+        // cart button.
+        //
+        // A control that cannot be focused is not treated as a failed step
+        // here, because plenty act perfectly well without taking focus. Only a
+        // press and a submit, which genuinely depend on it, still stop.
+        if let Some(reference) = decision.target.as_deref() {
+            let focusing = self
+                .run(
+                    self.reach.act,
+                    Operation::Act,
+                    json!({ "page": self.page, "kind": "focus", "ref": reference }),
+                )
+                .await;
+            if matches!(decision.how, Some(How::Press | How::Submit)) {
+                focusing?;
+            }
         }
         self.run(self.reach.act, Operation::Act, args).await?;
         // No sleep here. The observe that follows waits for the page to stop
