@@ -57,9 +57,10 @@ while a native browser lane waits for a runner.
 ## Dispatch
 
 A dispatch without inputs is a full release: it publishes the product's server
-and extension, updates alpha, builds Linux x64, signed Windows x64, and signed
-macOS universal, uploads browser deliverables, and creates a draft browser
-GitHub release. `release-browseros.yml` has no release-shape inputs.
+and extension, updates alpha, builds signed Windows x64 and signed macOS
+universal, uploads browser deliverables, and creates a draft browser GitHub
+release. Neo builds both Linux x64 and arm64 by default; BrowserOS builds Linux
+x64. `release-browseros.yml` has no release-shape inputs.
 
 ```bash
 gh workflow run release-browseros.yml --ref main
@@ -73,7 +74,7 @@ release, and preflight rejects anything else before allocating a version:
 | --- | --- | --- |
 | `platforms` | `all` (default), `macos`, `linux`, `windows` | native lanes to build; the others are skipped |
 | `macos_arch` | `universal` (default), `arm64` | macOS artifact set; non-default only when macOS is selected |
-| `linux_arch` | `x64` (default), `arm64`, `all` | Linux artifact set; non-default only when Linux is selected |
+| `linux_arch` | `all` (default), `x64`, `arm64` | Linux artifact set; default is accepted when Linux is skipped; `arm64` requires Linux |
 | `publication` | `alpha` (default), `draft-only` | component publication, see below |
 
 `draft-only` passes `defer_finalize: true` to both component workflows. Each
