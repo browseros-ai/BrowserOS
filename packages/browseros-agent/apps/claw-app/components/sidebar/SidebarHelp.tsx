@@ -1,4 +1,4 @@
-import { Activity, BookOpen, RotateCcw } from 'lucide-react'
+import { Activity, BookOpen } from 'lucide-react'
 import type { ComponentType, SVGProps } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import {
@@ -25,19 +25,13 @@ export const helpItems: HelpItem[] = [
     url: 'https://docs.browseros.com/browserclaw',
     icon: BookOpen,
   },
-  {
-    name: 'Revisit Onboarding',
-    url: 'chrome://browseros-onboarding',
-    icon: RotateCcw,
-  },
   { name: 'Diagnostics', url: '/diagnostics', icon: Activity, internal: true },
 ]
 
 /**
- * Opens a help target in a new tab. Uses `chrome.tabs.create` rather than
- * an <a>/window.open because the onboarding target is a chrome:// URL,
- * which the browser blocks from anchor navigations; the tabs API (the
- * extension holds the `tabs` permission) is allowed to open it.
+ * Opens an external help target in a new browser tab through the tabs API
+ * (the extension holds the `tabs` permission), which also handles chrome://
+ * targets that anchor navigations would block.
  */
 export function openHelpTarget(url: string): void {
   chrome.tabs.create({ url })
