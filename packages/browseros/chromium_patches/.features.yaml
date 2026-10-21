@@ -405,6 +405,24 @@ features:
       - "chrome/browser/profiles/profile_manager.cc"
       - "chrome/browser/profiles/profile_manager.h"
 
+      # Explicit password metadata/storage and acknowledged, cancellable filling.
+      - "chrome/browser/devtools/protocol/autofill_handler.cc"
+      - "chrome/browser/devtools/protocol/autofill_handler.h"
+      - "components/password_manager/core/browser/password_store/password_store.cc"
+      - "components/password_manager/core/browser/password_store/password_store.h"
+      - "components/password_manager/core/browser/password_store/password_store_consumer.cc"
+      - "components/password_manager/core/browser/password_store/password_store_interface.h"
+      - "third_party/blink/public/devtools_protocol/domains/Autofill.pdl"
+      - "components/password_manager/core/browser/password_store/get_logins_with_affiliations_request_handler.cc"
+      - "components/password_manager/core/browser/password_store/get_logins_with_affiliations_request_handler.h"
+      - "components/password_manager/core/browser/password_store/login_database.cc"
+      - "components/password_manager/core/browser/password_store/login_database.h"
+      - "components/password_manager/core/browser/password_store/login_database_async_helper.cc"
+      - "components/password_manager/core/browser/password_store/login_database_async_helper.h"
+      - "components/password_manager/core/browser/password_store/password_store_backend.h"
+      - "components/password_manager/core/browser/password_store/password_store_built_in_backend.cc"
+      - "components/password_manager/core/browser/password_store/password_store_built_in_backend.h"
+      - "components/password_manager/core/browser/password_store/password_store_change.h"
   # ── LAYER 5: FIXES ────────────────────────────────────────
 
   chromium-ui-fixes:

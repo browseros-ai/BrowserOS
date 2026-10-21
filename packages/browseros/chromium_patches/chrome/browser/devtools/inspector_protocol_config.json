@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/devtools/inspector_protocol_config.json b/chrome/browser/devtools/inspector_protocol_config.json
-index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..f5483c6c3497e8332d1f588467d6c29df66bacbd 100644
+index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..168000235e16ca00d682ffa54b4da497e4235c05 100644
 --- a/chrome/browser/devtools/inspector_protocol_config.json
 +++ b/chrome/browser/devtools/inspector_protocol_config.json
 @@ -18,9 +18,21 @@
@@ -25,3 +25,12 @@ index 9bee8d21f5c89c70a591d084ae067d6b5acf40a8..f5483c6c3497e8332d1f588467d6c29d
              {
                  "domain": "Target",
                  "include": [ "setRemoteLocations", "createTarget" ],
+@@ -58,7 +70,7 @@
+             },
+             {
+                 "domain": "Autofill",
+-                "async": [ "setAddresses", "trigger" ]
++                "async": [ "setAddresses", "trigger", "listCredentials", "addCredential", "fillCredential" ]
+             },
+             {
+                 "domain": "PWA",
