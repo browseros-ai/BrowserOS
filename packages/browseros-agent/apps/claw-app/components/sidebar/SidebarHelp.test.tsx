@@ -14,7 +14,7 @@ afterEach(() => {
 })
 
 describe('SidebarHelp', () => {
-  it('renders the help label and both entries when expanded', () => {
+  it('renders the help label and its entries when expanded', () => {
     const html = renderToStaticMarkup(
       <TooltipProvider>
         <MemoryRouter initialEntries={['/diagnostics']}>
@@ -24,15 +24,14 @@ describe('SidebarHelp', () => {
     )
     expect(html).toContain('Help')
     expect(html).toContain('Docs')
-    expect(html).toContain('Revisit Onboarding')
+    expect(html).not.toContain('Revisit Onboarding')
     expect(html).toContain('Diagnostics')
     expect(html).toContain('aria-current="page"')
   })
 
-  it('pins Docs and onboarding to their exact targets', () => {
+  it('pins each help entry to its exact target', () => {
     expect(helpItems.map((item) => [item.name, item.url])).toEqual([
       ['Docs', 'https://docs.browseros.com/browserclaw'],
-      ['Revisit Onboarding', 'chrome://browseros-onboarding'],
       ['Diagnostics', '/diagnostics'],
     ])
   })
@@ -44,11 +43,11 @@ describe('SidebarHelp', () => {
       value: { tabs: { create } },
     })
 
-    openHelpTarget('chrome://browseros-onboarding')
+    openHelpTarget('https://docs.browseros.com/browserclaw')
 
     expect(create).toHaveBeenCalledTimes(1)
     expect(create).toHaveBeenCalledWith({
-      url: 'chrome://browseros-onboarding',
+      url: 'https://docs.browseros.com/browserclaw',
     })
   })
 })
