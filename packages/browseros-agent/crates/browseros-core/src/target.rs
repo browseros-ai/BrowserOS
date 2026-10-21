@@ -1086,13 +1086,18 @@ impl BrowserView {
         // page_access(PageId) here would adopt a replacement reconciled during that await.
         let creating_view = self.with_expected_created_page(&creation.original)?;
         let access = PageAccess::new(creating_view.clone(), creation.original);
-        for _ in 0..crate::timeouts::NEW_PAGE_READY_ATTEMPTS {
-            let fresh = access.fresh().await?;
-            if !fresh.is_loading || fresh.load_progress >= 1.0 {
-                break;
-            }
-            tokio::time::sleep(crate::timeouts::NEW_PAGE_READY_POLL).await;
-        }
+        // The same question the unbound creation path asks, answered the same
+        // way: the page's content going quiet, not load_progress reaching 1.0.
+        // fresh() is kept on both sides because it is the admission check, not
+        // the wait.
+        let created = access.fresh().await?;
+        let _ = crate::settle::wait_for_page_ready(
+            self.session.pages.as_ref(),
+            created.page_id.clone(),
+            crate::timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        access.fresh().await?;
         if let Some(group) = opts.tab_group_id {
             let fresh = access.fresh().await?;
             creating_view

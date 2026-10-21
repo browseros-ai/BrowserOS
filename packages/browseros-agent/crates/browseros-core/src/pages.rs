@@ -455,19 +455,21 @@ impl PageManager {
         let root = root.with_epoch_guard(Some(creation.guard.clone()));
         let tab_id = creation.original.tab_id.0;
 
+        // Retry only until the new tab answers at all. Readiness used to be
+        // decided here too, by polling load_progress to 1.0 for up to 3000ms,
+        // which is the load event rather than the page being usable: measured
+        // on this surface, three of seven page opens returned on that
+        // exhaustion having learned nothing, and the work that followed each
+        // took under 25ms. Stability answers it below instead.
         let mut tab = None;
-        for _attempt in 0..timeouts::NEW_PAGE_READY_ATTEMPTS {
+        for _attempt in 0..timeouts::NEW_PAGE_ANSWERS_ATTEMPTS {
             let result = root
                 .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
                 .await;
             match result {
                 Ok(result) => {
-                    let fresh = self.created_readback(&creation, result.tab).await?;
-                    let ready = !fresh.is_loading || fresh.load_progress >= 1.0;
-                    tab = Some(fresh);
-                    if ready {
-                        break;
-                    }
+                    tab = Some(self.created_readback(&creation, result.tab).await?);
+                    break;
                 }
                 Err(err @ CoreError::Target(_)) => return Err(err),
                 Err(_) => {}
@@ -476,6 +478,24 @@ impl PageManager {
         }
         let mut tab = tab
             .ok_or_else(|| CoreError::Message(format!("Tab {tab_id} not found after creation")))?;
+
+        // The page is registered now, so the wait can watch its content. The
+        // outcome is advisory: a page still moving at the ceiling is handed
+        // back anyway, which is what the ceiling is for.
+        let _ = crate::settle::wait_for_page_ready(
+            self,
+            creation.original.page_id.clone(),
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        // Read the tab once more so the caller sees the settled title and url
+        // rather than the ones it had a quiet interval ago.
+        if let Ok(result) = root
+            .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
+            .await
+        {
+            tab = self.created_readback(&creation, result.tab).await?;
+        }
 
         if let Some(group_id) = opts.tab_group_id {
             // The readiness loop can await registry locks and sleeps. Refresh the ORIGINAL

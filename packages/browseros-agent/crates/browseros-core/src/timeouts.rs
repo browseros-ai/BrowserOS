@@ -12,7 +12,11 @@ pub const WAIT_FOR_CONNECTION_TIMEOUT: Duration = Duration::from_secs(5);
 pub const WAIT_FOR_CONNECTION_POLL: Duration = Duration::from_millis(50);
 pub const WAIT_FOR_LOAD_TIMEOUT: Duration = Duration::from_secs(30);
 pub const WAIT_FOR_LOAD_POLL: Duration = Duration::from_millis(150);
-pub const NEW_PAGE_READY_ATTEMPTS: usize = 30;
+/// How many times to ask a freshly created tab for its info before giving up.
+///
+/// Only about the tab answering, not about it finishing. Readiness is decided
+/// by `ARRIVAL_READY_BUDGET` against the page's own content.
+pub const NEW_PAGE_ANSWERS_ATTEMPTS: usize = 10;
 pub const NEW_PAGE_READY_POLL: Duration = Duration::from_millis(100);
 /// Total automatic post-action settle budget.
 ///
