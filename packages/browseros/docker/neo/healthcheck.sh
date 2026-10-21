@@ -1,6 +1,6 @@
 #!/bin/sh
 # Healthy only when an agent and a viewer can both use the container:
-# - the entrypoint has applied agent settings (NEO_HUMAN_HELP),
+# - the entrypoint has applied agent settings (human help off),
 # - claw-server is connected to Neo, checked through the MCP proxy on 9010 so
 #   the port agents use is part of the check (/system/health would pass while
 #   that connection is down; /system/ready returns 503 until it is up),

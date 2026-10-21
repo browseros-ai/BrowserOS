@@ -54,11 +54,17 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Image version | image tag | `NEO_VERSION` | `latest` |
 | Owner of files in the data folder | `-e PUID=… -e PGID=…` | `PUID`, `PGID` | 1000 / 1000 |
 | Starting screen size | `-e NEO_SCREEN=1920x1080` | `NEO_SCREEN` | `1600x1000` |
-| Agents may ask you for help | `-e NEO_HUMAN_HELP=true` | `NEO_HUMAN_HELP` | `false` |
+| MCP tool set (see below) | `-e BROWSERCLAW_MODE=desktop` | `BROWSERCLAW_MODE` | `hosted` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
 | Extra Neo command-line flags | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
 
 Ports inside the container are always 6080 and 9010; change only the host side.
+
+`BROWSERCLAW_MODE=hosted` gives agents the browser tools only. Skills (`save_skill`,
+`mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
+your agent's own harness keeps its workflows and asks you for help itself. Instead of calling
+`name_session`, an agent names its task with an optional `taskName` argument on any tool call.
+`desktop` restores the full tool set of the BrowserOS app.
 The viewer's screen follows the browser tab's size once it connects, so `NEO_SCREEN`
 only matters until then.
 

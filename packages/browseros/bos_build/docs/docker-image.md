@@ -11,7 +11,7 @@ for building and publishing it.
 |---|---|
 | `docker/neo/Dockerfile` | The image. Picks the `.deb` for each architecture from the version's public `release.json` and checks its sha256, so it builds without `bos_build` |
 | `docker/neo/entrypoint.sh` | Container supervisor: Xvnc, openbox, websockify, Neo restart loop, profile setup, clean shutdown |
-| `docker/neo/smoke.py` | End-to-end check from the host: viewer, MCP from outside the container, human help, an agent tab |
+| `docker/neo/smoke.py` | End-to-end check from the host: viewer, MCP from outside the container, hosted tool set, an agent tab |
 | `bos_build/release/docker_image.py` | `build_image`: preflight that each architecture was published, tag policy, buildx invocation |
 | `bos_build/cli/release_docker.py` | `browseros release docker`, a thin wrapper |
 | `.github/workflows/release-docker.yml` | Dispatch workflow: build amd64, smoke test, push both architectures |
@@ -96,5 +96,7 @@ package settings first.
 - **The sandbox is off by default** (`NEO_SANDBOX=false`): Docker's default seccomp
   profile blocks the user namespaces it needs. With the sandbox off, a managed policy
   hides Chromium's `--no-sandbox` warning bar.
-- **Human help is off by default** (`NEO_HUMAN_HELP=false`), applied through
-  `/api/v1/settings/agent` on every start before the container reports healthy.
+- **claw-server runs in hosted mode** (`BROWSERCLAW_MODE=hosted`): agents get the browser
+  tools without skills, human help or `name_session`, and name tasks with a `taskName`
+  argument. The entrypoint also turns human help off through `/api/v1/settings/agent` on
+  every start, before the container reports healthy, for claw-servers that predate the mode.

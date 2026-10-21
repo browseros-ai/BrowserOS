@@ -4,10 +4,10 @@
 It talks to the container the way a developer does: through the published
 viewer and MCP ports. Passing means the noVNC viewer is served, an agent
 outside the container can reach Neo's MCP server (which proves the
-allow_remote_in_mcp setting works through Docker's port forwarding), human
-help matches the expected setting, and an agent-opened tab loads.
+allow_remote_in_mcp setting works through Docker's port forwarding), agents get
+the hosted tool set (BROWSERCLAW_MODE=hosted), and an agent-opened tab loads.
 
-  python3 smoke.py [--vnc-port 6080] [--mcp-port 9010] [--expect-human-help]
+  python3 smoke.py [--vnc-port 6080] [--mcp-port 9010]
 
 Standard library only, so it runs anywhere python3 does.
 """
@@ -19,6 +19,8 @@ import urllib.request
 
 PROTOCOL = "2025-06-18"
 HUMAN_HELP_TOOLS = {"request_human_help", "await_human_help"}
+# Server tools a hosted claw-server does not offer.
+HOSTED_HIDDEN_TOOLS = HUMAN_HELP_TOOLS | {"name_session", "save_skill", "mark_skill_run"}
 
 
 class McpClient:
@@ -89,6 +91,22 @@ class McpClient:
         return text
 
 
+def accepts_task_name(client: McpClient) -> bool:
+    """Whether this claw-server knows the taskName argument, in either mode.
+
+    A server older than BROWSERCLAW_MODE rejects it as an unknown field. That is
+    what separates "the bundled server predates hosted mode" from "the image's
+    BROWSERCLAW_MODE never reached claw-server".
+    """
+    try:
+        client.tool("tabs", {"action": "list", "taskName": "docker smoke"})
+    except RuntimeError as error:
+        if "taskName" not in str(error):
+            raise
+        return False
+    return True
+
+
 def check(label: str, condition: bool, detail: str = "") -> None:
     print(f"{'ok  ' if condition else 'FAIL'} {label}{f' ({detail})' if detail else ''}")
     if not condition:
@@ -99,7 +117,6 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="End-to-end check of a running BrowserOS neo container.")
     parser.add_argument("--vnc-port", type=int, default=6080)
     parser.add_argument("--mcp-port", type=int, default=9010)
-    parser.add_argument("--expect-human-help", action="store_true")
     parser.add_argument("--url", default="https://example.com")
     args = parser.parse_args()
 
@@ -121,15 +138,27 @@ def main() -> None:
     check("MCP initialize from the host", bool(client.session_id), info.get("serverInfo", {}).get("name", ""))
     client.notify("notifications/initialized")
 
-    tools = {tool["name"] for tool in client.call("tools/list")["tools"]}
+    listed = client.call("tools/list")["tools"]
+    tools = {tool["name"] for tool in listed}
     check("MCP lists the tabs tool", "tabs" in tools, f"{len(tools)} tools")
-    has_help = bool(tools & HUMAN_HELP_TOOLS)
-    check(
-        "human help " + ("enabled" if args.expect_human_help else "disabled"),
-        has_help == args.expect_human_help,
-    )
+    check("human help disabled", not tools & HUMAN_HELP_TOOLS)
+    tabs = next(tool for tool in listed if tool["name"] == "tabs")
+    hosted = "taskName" in tabs["inputSchema"].get("properties", {})
+    if hosted:
+        hidden = tools & HOSTED_HIDDEN_TOOLS
+        check("hosted mode hides server-only tools", not hidden, ", ".join(sorted(hidden)))
+    else:
+        check(
+            "claw-server is not in desktop mode",
+            not accepts_task_name(client),
+            "it knows taskName, so BROWSERCLAW_MODE did not reach it",
+        )
+        print("skip hosted mode: this Neo's claw-server predates BROWSERCLAW_MODE")
 
-    opened = client.tool("tabs", {"action": "new", "url": args.url})
+    new_tab = {"action": "new", "url": args.url}
+    if hosted:
+        new_tab["taskName"] = "docker smoke"
+    opened = client.tool("tabs", new_tab)
     check("agent opened a tab", "opened page" in opened, opened.splitlines()[0] if opened else "")
 
 
