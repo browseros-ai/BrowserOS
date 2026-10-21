@@ -148,6 +148,15 @@ impl Observer {
         self.state.lock().await.refs.clone()
     }
 
+    /// The structural fingerprint of the last capture.
+    ///
+    /// Cheap, and the right pre-check before asking for a diff: an unchanged
+    /// arrangement means no control moved, appeared or went away, whatever the
+    /// page's countdowns and carousels did meanwhile.
+    pub async fn arrangement(&self) -> u64 {
+        self.state.lock().await.refs.arrangement()
+    }
+
     pub async fn resolve_ref(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {
         let entry = self
             .state
