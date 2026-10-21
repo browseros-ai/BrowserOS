@@ -67,6 +67,9 @@ struct CaptureContext {
 #[derive(Debug, Default)]
 struct ObserverState {
     baseline: Option<SnapshotObservation>,
+    /// The arrangement committed alongside `baseline`, so a later diff can say
+    /// whether any control actually moved rather than whether any text did.
+    baseline_arrangement: Option<u64>,
     refs: RefMap,
     ref_scope: Option<RefScope>,
 }
@@ -131,17 +134,28 @@ impl Observer {
     }
 
     pub async fn diff(&self) -> Result<SnapshotDiff, CoreError> {
-        let before = self.state.lock().await.baseline.clone();
+        let (before, before_arrangement) = {
+            let state = self.state.lock().await;
+            (state.baseline.clone(), state.baseline_arrangement)
+        };
         let result = self.capture().await?;
+        let after_arrangement = result.refs.arrangement();
         self.commit(result.clone()).await;
-        Ok(diff_snapshot_observations(
+        let mut diff = diff_snapshot_observations(
             before.as_ref(),
             &SnapshotObservation {
                 text: result.text,
                 url: Some(result.url),
             },
             DiffOptions::default(),
-        ))
+        );
+        // A url change already decided it, and that rule wins: an SPA can swap
+        // the whole page behind an identical set of controls.
+        if diff.arrangement_changed.is_none() {
+            diff.arrangement_changed =
+                before_arrangement.map(|before| before != after_arrangement);
+        }
+        Ok(diff)
     }
 
     pub async fn last_refs(&self) -> RefMap {
@@ -415,6 +429,7 @@ impl Observer {
             text: result.text,
             url: Some(result.url),
         });
+        state.baseline_arrangement = Some(result.refs.arrangement());
         state.refs = result.refs;
         state.ref_scope = result.scope;
     }

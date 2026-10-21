@@ -9,6 +9,12 @@ pub struct SnapshotDiff {
     pub url_changed: bool,
     pub before_url: Option<String>,
     pub after_url: Option<String>,
+    /// Whether any control moved, appeared or went away.
+    ///
+    /// A narrower question than `changed`, which is a text diff and so reads
+    /// a ticking countdown or a rotating ad as the page having changed. None
+    /// when there was no baseline to compare an arrangement against.
+    pub arrangement_changed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -54,6 +60,9 @@ pub fn diff_snapshots(before: &str, after: &str, opts: DiffOptions) -> SnapshotD
         url_changed: false,
         before_url: None,
         after_url: None,
+        // Filled in by the caller that holds both arrangements. A text diff
+        // on its own cannot answer the structural question.
+        arrangement_changed: None,
     }
 }
 
@@ -73,6 +82,8 @@ pub fn diff_snapshot_observations(
             url_changed: true,
             before_url: before_url.map(ToString::to_string),
             after_url: after_url.map(ToString::to_string),
+            // A different url is a different page by any instrument.
+            arrangement_changed: Some(true),
         };
     }
 
@@ -331,5 +342,39 @@ mod tests {
         assert!(diff.changed);
         assert!(!diff.url_changed);
         assert_eq!(diff.after_url.as_deref(), Some("https://example.com/form"));
+    }
+
+    /// The textual verdict and the structural one are allowed to disagree,
+    /// and on a page carrying a countdown they must.
+    #[test]
+    fn a_text_diff_alone_does_not_answer_whether_the_page_moved() {
+        let before = SnapshotObservation {
+            text: "link \"Deal of the Day, Ends in 08:54:33\"".to_string(),
+            url: Some("https://example.com/".to_string()),
+        };
+        let after = SnapshotObservation {
+            text: "link \"Deal of the Day, Ends in 08:54:32\"".to_string(),
+            url: Some("https://example.com/".to_string()),
+        };
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+        assert!(diff.changed, "the text really did change");
+        assert_eq!(
+            diff.arrangement_changed, None,
+            "a text diff cannot answer the structural question on its own"
+        );
+    }
+
+    #[test]
+    fn a_url_change_is_a_change_of_page_whatever_the_controls_did() {
+        let before = SnapshotObservation {
+            text: "button \"Go\"".to_string(),
+            url: Some("https://example.com/".to_string()),
+        };
+        let after = SnapshotObservation {
+            text: "button \"Go\"".to_string(),
+            url: Some("https://example.com/next".to_string()),
+        };
+        let diff = diff_snapshot_observations(Some(&before), &after, DiffOptions::default());
+        assert_eq!(diff.arrangement_changed, Some(true));
     }
 }
