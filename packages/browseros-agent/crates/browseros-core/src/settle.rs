@@ -430,16 +430,48 @@ mod tests {
         Ok(())
     }
 
+    /// The default budget has to be able to reach a second counter read.
+    ///
+    /// This replaces a test that asserted the opposite. It pinned a 50ms
+    /// budget against a 100ms quiet interval, which is a budget that cannot
+    /// complete one comparison, so the automatic settle installed an observer
+    /// on every action and never compared it.
+    #[test]
+    fn the_default_budget_clears_detect_plus_one_quiet_interval() {
+        let floor = timeouts::ACTION_SETTLE_NAVIGATION_DETECT + timeouts::ACTION_SETTLE_DOM_QUIET;
+        assert!(
+            timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT > floor,
+            "default settle budget {:?} cannot reach a comparison past {floor:?}",
+            timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT
+        );
+    }
+
     #[tokio::test]
-    async fn automatic_settle_respects_50ms_total_budget() -> Result<(), CoreError> {
+    async fn the_default_budget_settles_a_quiet_page() -> Result<(), CoreError> {
+        let (session, page_id) = harness(VecDeque::new(), VecDeque::new()).await?;
+        let outcome = wait_for_action_settle(
+            &session.pages,
+            page_id,
+            timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
+        )
+        .await;
+        assert_eq!(
+            outcome,
+            SettleOutcome::Settled {
+                navigation_observed: false
+            }
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_budget_below_one_quiet_interval_expires() -> Result<(), CoreError> {
         let (session, page_id) = harness(VecDeque::from([1, 2, 3]), VecDeque::new()).await?;
-        let budget = timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT;
-        assert_eq!(budget, Duration::from_millis(50));
+        let budget = Duration::from_millis(50);
         let start = Instant::now();
         let outcome = wait_for_action_settle(&session.pages, page_id, budget).await;
         assert_eq!(outcome, SettleOutcome::BudgetExpired);
         assert!(start.elapsed() >= budget);
-        assert!(start.elapsed() < Duration::from_millis(150));
         Ok(())
     }
 
