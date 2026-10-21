@@ -6,7 +6,7 @@ use axum::{
 use browseros_core::{NativeCapabilities, PageId, TargetId, screenshot::ScreenshotCaptureOptions};
 use claw_server::{
     AppState, build_router,
-    config::{Config, NativeIdentity},
+    config::{Config, NativeIdentity, ServerMode},
     db::audit_log::{RecordToolDispatchInput, TaskStatus, bounded_args_json, result_meta},
     identity::{ClientIdentity, ConversationIdentity},
     ids::{ConvoId, DispatchId, ProfileId, SessionId},
@@ -65,6 +65,19 @@ async fn test_app_with_native(
     start_browser: bool,
     native: NativeCapabilities,
 ) -> anyhow::Result<TestApp> {
+    test_app_with_native_and_mode(cdp_port, start_browser, native, ServerMode::Desktop).await
+}
+
+async fn hosted_test_app() -> anyhow::Result<TestApp> {
+    test_app_with_native_and_mode(49337, false, current_native(), ServerMode::Hosted).await
+}
+
+async fn test_app_with_native_and_mode(
+    cdp_port: u16,
+    start_browser: bool,
+    native: NativeCapabilities,
+    mode: ServerMode,
+) -> anyhow::Result<TestApp> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let config = Arc::new(Config {
@@ -82,6 +95,7 @@ async fn test_app_with_native(
             capabilities: native,
             asserted: false,
         },
+        mode,
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let browser_task = if start_browser {
@@ -2654,4 +2668,82 @@ fn tab_json(tab: &MockTab) -> Value {
         object.insert("groupId".to_string(), json!(group_id));
     }
     value
+}
+
+/// A hosted server refuses the tools it hides with what to do instead, and starts no
+/// session for them.
+#[tokio::test]
+async fn hosted_mode_refuses_hidden_tools_with_the_alternative() -> anyhow::Result<()> {
+    let app = hosted_test_app().await?;
+    for (tool, expected) in [
+        ("name_session", "taskName"),
+        ("save_skill", "Skills are not available"),
+        ("mark_skill_run", "Skills are not available"),
+        ("request_human_help", "tell the user"),
+        ("await_human_help", "tell the user"),
+    ] {
+        let body = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": tool, "arguments": { "name": "task", "reason": "sign in" } }),
+            Some("Claude Code"),
+        )
+        .await?;
+        assert_eq!(body["result"]["isError"], true, "{body}");
+        let text = body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(text.contains(expected), "{tool}: {text}");
+        assert!(
+            body["result"]["_meta"]["com.browseros.neo/session"].is_null(),
+            "{body}"
+        );
+    }
+    Ok(())
+}
+
+/// `taskName` on any call names the session before the tool runs, and a value that cannot
+/// become a label fails the call without touching the name. Desktop accepts it too, though
+/// only hosted advertises it.
+#[tokio::test]
+async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
+    for app in [hosted_test_app().await?, test_app().await?] {
+        let mode = app.state.config.mode;
+        let first = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": "tabs", "arguments": {
+                "action": "list", "taskName": "Invoice Processing"
+            } }),
+            Some("Claude Code"),
+        )
+        .await?;
+        let handle = first["result"]["_meta"]["com.browseros.neo/session"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("{mode:?}: missing session handle: {first}"))?;
+        let session = app
+            .state
+            .sessions
+            .lookup(&SessionId::new(handle))
+            .await
+            .ok_or_else(|| anyhow::anyhow!("{mode:?}: missing session"))?;
+        assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
+
+        let rejected = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({ "name": "tabs", "arguments": {
+                "action": "list", "session": handle, "taskName": "!!!"
+            } }),
+            Some("Claude Code"),
+        )
+        .await?;
+        assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+        let text = rejected["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default();
+        assert!(text.contains("taskName"), "{mode:?}: {text}");
+        assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
+    }
+    Ok(())
 }

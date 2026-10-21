@@ -150,6 +150,7 @@ async fn test_router(root: &Path) -> anyhow::Result<Router> {
         replay_retention_days: 7,
         dev_mode: false,
         native: Default::default(),
+        mode: Default::default(),
     });
     let state = AppState::new_with_home(config, root.join("home")).await?;
     Ok(build_router(state))

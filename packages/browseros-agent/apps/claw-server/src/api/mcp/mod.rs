@@ -3,6 +3,7 @@ pub mod distill;
 pub mod effects;
 pub mod guards;
 pub mod helper_runtime;
+pub mod hosted;
 pub mod naming;
 pub mod observers;
 mod prompt;

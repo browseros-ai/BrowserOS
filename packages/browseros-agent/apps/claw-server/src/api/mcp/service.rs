@@ -6,11 +6,13 @@ use crate::{
             operator_cancellation_result,
         },
         effects::tab_groups::apply_agent_tab_group_title,
-        naming::{normalize_small_name, session_group_title},
+        hosted,
+        naming::{SESSION_NAME_INPUT_MAX_LEN, normalize_small_name, session_group_title},
         observers::audit::{LocalToolDispatch, record_local_tool_dispatch},
         prompt::mcp_instructions,
         pursue::PursueOffering,
     },
+    config::ServerMode,
     identity::{ClientIdentity, ClientInfo, ProfileView},
     ids::{DispatchId, SessionId},
     services::{
@@ -52,12 +54,11 @@ use uuid::Uuid;
 
 const SERVER_NAME: &str = "browseros-neo";
 const SERVER_TITLE: &str = "BrowserOS neo";
-const NAME_SESSION_TOOL_NAME: &str = "name_session";
+pub(super) const NAME_SESSION_TOOL_NAME: &str = "name_session";
 const NAME_SESSION_DESCRIPTION: &str = "Name this browser session at the start of a task: a small lowercase 2-3 word label for what it is doing, e.g. \"invoice processing\", a `category` for the kind of task, and a short `summary`. Tabs are grouped as <client>/<name>; the label stays on this machine, the summary powers audit search and is also recorded for analytics, and the category is used for anonymous aggregate analytics. Call again to update.";
 const NAME_SESSION_CATEGORY_DESCRIPTION: &str = "The kind of task, for anonymous aggregate analytics only; the free-form name is never sent. Pick the closest fit from the list.";
 const NAME_SESSION_SUMMARY_DESCRIPTION: &str = "One or two short lines saying what this task is, phrased so you can find it again by searching later. No names, emails, URLs, file paths, or account numbers.";
 const SUMMARY_MAX_LEN: usize = 200;
-const NAME_SESSION_INPUT_MAX_LEN: usize = 64;
 /// `_meta` key the stateless session handle is returned under, per the MCP `_meta`
 /// convention (namespaced by owner). Clients read it from a tool result and echo it
 /// as the `session` argument on subsequent calls.
@@ -71,14 +72,18 @@ const AGENT_NAME_ARG: &str = "agentName";
 // moment an agent is deciding how to keep continuity.
 pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session` and in result text. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your client application: claude, codex, cursor, opencode, antigravity, vscode, or zed. For another application, use its short product name. Put your task name in name_session, not here. BrowserOS prefers recognized MCP client metadata for the visible prefix; this fallback is used when that metadata does not identify a known product.";
-const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
+/// The sentence of [`AGENT_NAME_ARG_DESCRIPTION`] a hosted server rewrites, since it offers
+/// `taskName` instead of `name_session`.
+const AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in name_session, not here.";
+const HOSTED_AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in taskName, not here.";
+pub(super) const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
-const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
+pub(super) const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
 const RUN_TOOL_NAME: &str = "run";
 const MARK_SKILL_RUN_DESCRIPTION: &str = "Mark this browser session as a run of a saved skill so BrowserOS neo records the run and its cost once the session ends. Call this once, at the start, when you are running a skill, with the skill's name.";
-const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
+pub(super) const REQUEST_HELP_TOOL_NAME: &str = "request_human_help";
 const REQUEST_HELP_DESCRIPTION: &str = "Ask a human to take over this page when you hit something only a person can do: a sign-in, a one-time code, a captcha, an account choice, or an approval you should not make yourself. Give a short `reason` (what you need), optional `details` (what the human should know), an optional `resumeHint` (what you will do after, so the human knows the task continues), and an optional `kind` (login, captcha, approval, other). This blocks for a short while and returns a status. If the status is \"waiting\", call await_human_help to keep waiting; do nothing else on the page until the status is \"resolved\". The cockpit shows your request so a human can take over the tab and hand control back.";
-const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
+pub(super) const AWAIT_HELP_TOOL_NAME: &str = "await_human_help";
 const PURSUE_TOOL_NAME: &str = "pursue";
 /// What the caller is told about `pursue`, and it has to earn every line.
 ///
@@ -245,6 +250,20 @@ impl ClawMcpService {
         self.state.config.native.capabilities
     }
 
+    fn mode(&self) -> ServerMode {
+        self.state.config.mode
+    }
+
+    /// Human help as this server offers it: the setting on desktop, always off when hosted,
+    /// where the remote agent's own harness decides when to involve a person.
+    fn human_help(&self) -> HumanHelp {
+        if self.mode().is_hosted() {
+            HumanHelp::Off
+        } else {
+            self.state.agent_settings.human_help()
+        }
+    }
+
     fn find_tool_index(&self, name: &str) -> Option<usize> {
         self.catalog.iter().position(|tool| tool.name == name)
     }
@@ -263,13 +282,16 @@ impl ClawMcpService {
 
     fn listed_tools(&self, declare_agent_name: bool) -> Vec<Tool> {
         let pursue = self.pursue_offering();
+        let mode = self.mode();
         let decorate = |tool: Tool| {
-            let tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
-            if declare_agent_name {
-                with_agent_name_arg(tool)
-            } else {
-                tool
+            let mut tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
+            if mode.is_hosted() {
+                tool = hosted::with_task_name_arg(tool);
             }
+            if declare_agent_name {
+                tool = with_agent_name_arg(tool, mode);
+            }
+            tool
         };
         // Tools whose native feature the connected browser lacks are not offered. The list is
         // fixed for the process (the identity is), and execute_tool refuses cached callers.
@@ -281,19 +303,46 @@ impl ClawMcpService {
             .map(|tool| tool.to_mcp_tool(native))
             .map(&decorate)
             .collect::<Vec<_>>();
-        tools.push(decorate(self.name_session_tool.clone()));
-        tools.push(decorate(self.save_skill_tool.clone()));
-        tools.push(decorate(self.mark_skill_run_tool.clone()));
+        let mut local = vec![
+            self.name_session_tool.clone(),
+            self.save_skill_tool.clone(),
+            self.mark_skill_run_tool.clone(),
+        ];
         // Offered only when the server has a credential for the decision model.
         // A tool that can only fail is worse than one that is not there.
         if pursue.is_offered() {
-            tools.push(decorate(self.pursue_tool.clone()));
+            local.push(self.pursue_tool.clone());
         }
-        if self.state.agent_settings.human_help() == HumanHelp::On {
-            tools.push(decorate(self.request_help_tool.clone()));
-            tools.push(decorate(self.await_help_tool.clone()));
+        if self.human_help() == HumanHelp::On {
+            local.push(self.request_help_tool.clone());
+            local.push(self.await_help_tool.clone());
         }
+        tools.extend(
+            local
+                .into_iter()
+                .filter(|tool| hosted::refusal(mode, &tool.name).is_none())
+                .map(&decorate),
+        );
         tools
+    }
+
+    /// Renames the session from a call's `taskName` before its tool runs, so a first
+    /// `tabs new` already opens the group under the new title. Repeating the current label
+    /// costs nothing, so agents may send it on every call.
+    async fn apply_task_name(&self, started: &StartedSession, label: String) {
+        if started.session.label().await == label {
+            return;
+        }
+        started.session.rename(label).await;
+        let browser = self.state.browser.session().await;
+        apply_agent_tab_group_title(
+            browser.as_ref(),
+            &self.state.sessions.ownership(),
+            started.session.convo_id(),
+            started.session.as_ref(),
+            started.session.child_token(),
+        )
+        .await;
     }
 
     /// Pursues a whole outcome on one page, deciding each step here.
@@ -787,7 +836,7 @@ impl ClawMcpService {
     ) -> CallToolResult {
         // Only new asks are refused: a request opened before the switch flipped still resolves
         // through await_human_help, so no waiting agent is stranded.
-        if self.state.agent_settings.human_help() == HumanHelp::Off {
+        if self.human_help() == HumanHelp::Off {
             return CallToolResult::error(vec![rmcp::model::ContentBlock::text(
                 HUMAN_HELP_OFF_MESSAGE,
             )]);
@@ -1295,7 +1344,8 @@ impl ServerHandler for ClawMcpService {
         InitializeResult::new(capabilities)
             .with_server_info(implementation)
             .with_instructions(mcp_instructions(
-                self.state.agent_settings.human_help(),
+                self.mode(),
+                self.human_help(),
                 self.pursue_offering(),
                 self.native(),
             ))
@@ -1388,6 +1438,12 @@ impl ServerHandler for ClawMcpService {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
+        // Refused before a session is resolved, so a tool the mode does not offer starts nothing.
+        if let Some(message) = hosted::refusal(self.mode(), &request.name) {
+            return Ok(
+                CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]).into(),
+            );
+        }
         let is_name_session = request.name == NAME_SESSION_TOOL_NAME;
         let is_save_skill = request.name == SAVE_SKILL_TOOL_NAME;
         let is_mark_skill_run = request.name == MARK_SKILL_RUN_TOOL_NAME;
@@ -1427,6 +1483,15 @@ impl ServerHandler for ClawMcpService {
             map.remove("session");
             map.remove(AGENT_NAME_ARG);
         }
+        // Accepted in every mode though only hosted advertises it; see `hosted`.
+        let task_name = match hosted::take_task_name(&mut raw_args) {
+            Ok(task_name) => task_name,
+            Err(message) => {
+                return Ok(
+                    CallToolResult::error(vec![rmcp::model::ContentBlock::text(message)]).into(),
+                );
+            }
+        };
         let presented_handle = provided_handle.clone();
         let modern = protocol_version_from_extensions(&context.extensions)
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28)
@@ -1466,6 +1531,9 @@ impl ServerHandler for ClawMcpService {
                 .correlate_group(started.session.id(), group)
                 .await
                 .map_err(|error| McpError::invalid_request(error.to_string(), None))?;
+        }
+        if let Some(label) = task_name {
+            self.apply_task_name(&started, label).await;
         }
         started.session.touch(tokio::time::Instant::now()).await;
         started.session.mark_used();
@@ -1608,7 +1676,7 @@ async fn rename_session(
     let Some(raw_name) = raw_args.get("name").and_then(Value::as_str) else {
         return Err("name must be a string");
     };
-    if raw_name.chars().count() > NAME_SESSION_INPUT_MAX_LEN {
+    if raw_name.chars().count() > SESSION_NAME_INPUT_MAX_LEN {
         return Err("name must be at most 64 characters");
     }
     let label = normalize_small_name(raw_name);
@@ -1684,7 +1752,7 @@ fn name_session_tool() -> Tool {
     let Value::Object(input_schema) = json!({
         "type": "object",
         "properties": {
-            "name": { "type": "string", "maxLength": NAME_SESSION_INPUT_MAX_LEN },
+            "name": { "type": "string", "maxLength": SESSION_NAME_INPUT_MAX_LEN },
             "category": {
                 "type": "string",
                 "enum": crate::analytics::events::TASK_CATEGORY_VALUES,
@@ -2310,12 +2378,20 @@ fn with_session_arg(mut tool: Tool) -> Tool {
 /// Offers a product-name fallback to modern clients in one consistent schema.
 /// Metadata is optional per request, so tools/list never caches a caller identity
 /// or changes the schema based on whether that request happened to identify it.
-fn with_agent_name_arg(mut tool: Tool) -> Tool {
+fn with_agent_name_arg(mut tool: Tool, mode: ServerMode) -> Tool {
+    let description = if mode.is_hosted() {
+        Cow::Owned(
+            AGENT_NAME_ARG_DESCRIPTION
+                .replace(AGENT_NAME_TASK_SENTENCE, HOSTED_AGENT_NAME_TASK_SENTENCE),
+        )
+    } else {
+        Cow::Borrowed(AGENT_NAME_ARG_DESCRIPTION)
+    };
     let mut schema = tool.input_schema.as_ref().clone();
     if let Some(Value::Object(properties)) = schema.get_mut("properties") {
         properties.insert(
             AGENT_NAME_ARG.to_string(),
-            json!({ "type": "string", "description": AGENT_NAME_ARG_DESCRIPTION }),
+            json!({ "type": "string", "description": description }),
         );
     }
     tool.input_schema = Arc::new(schema);
@@ -3186,7 +3262,15 @@ mod tests {
         assert_eq!(info.server_info.title.as_deref(), Some(SERVER_TITLE));
         assert_eq!(
             info.instructions.as_deref(),
-            Some(mcp_instructions(HumanHelp::On, service.pursue_offering(), native).as_str())
+            Some(
+                mcp_instructions(
+                    ServerMode::Desktop,
+                    HumanHelp::On,
+                    service.pursue_offering(),
+                    native
+                )
+                .as_str()
+            )
         );
         let instructions = info
             .instructions
@@ -3292,6 +3376,77 @@ mod tests {
 
         let (anonymous, _) = service.resolve_modern_session(None, None, None).await?;
         assert_eq!(anonymous.session.agent().slug(), "agent");
+        Ok(())
+    }
+
+    /// Hosted lists the browser catalog (plus pursue when credentialled) and nothing that
+    /// assumes a local harness or a watching person, even with human help on in settings.
+    #[tokio::test]
+    async fn hosted_surface_is_the_catalog_with_task_name_on_every_tool() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), ServerMode::Hosted)
+                .await?;
+        assert_eq!(call.state.agent_settings.human_help(), HumanHelp::On);
+        let service = ClawMcpService::new(call.state);
+        let tools = service.listed_tools(true);
+        let names = tools
+            .iter()
+            .map(|tool| tool.name.to_string())
+            .collect::<Vec<_>>();
+        let mut expected = service
+            .catalog
+            .iter()
+            .filter(|tool| tool.available(service.native()))
+            .map(|tool| tool.name.to_string())
+            .collect::<Vec<_>>();
+        expect_pursue_if_credentialled(&service, &mut expected);
+        assert_eq!(names, expected);
+        for tool in &tools {
+            let schema = Value::Object(tool.input_schema.as_ref().clone());
+            assert_eq!(
+                schema["properties"][hosted::TASK_NAME_ARG]["type"],
+                "string",
+                "{}",
+                tool.name
+            );
+            let agent_name = schema["properties"][AGENT_NAME_ARG]["description"]
+                .as_str()
+                .unwrap_or_default();
+            assert!(
+                agent_name.contains(HOSTED_AGENT_NAME_TASK_SENTENCE),
+                "{agent_name}"
+            );
+        }
+        assert_eq!(
+            service.get_info().instructions.as_deref(),
+            Some(
+                mcp_instructions(
+                    ServerMode::Hosted,
+                    HumanHelp::Off,
+                    service.pursue_offering(),
+                    service.native(),
+                )
+                .as_str()
+            )
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn desktop_surface_never_advertises_task_name() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
+        let service = ClawMcpService::new(call.state);
+        for tool in service.listed_tools(true) {
+            let schema = Value::Object(tool.input_schema.as_ref().clone());
+            assert_eq!(schema["properties"][hosted::TASK_NAME_ARG], Value::Null);
+            let agent_name = schema["properties"][AGENT_NAME_ARG]["description"]
+                .as_str()
+                .unwrap_or_default();
+            assert!(
+                agent_name.contains(AGENT_NAME_TASK_SENTENCE),
+                "{agent_name}"
+            );
+        }
         Ok(())
     }
 
@@ -3561,6 +3716,7 @@ mod tests {
             service.get_info().instructions.as_deref(),
             Some(
                 mcp_instructions(
+                    ServerMode::Desktop,
                     HumanHelp::Off,
                     service.pursue_offering(),
                     call.state.config.native.capabilities,
