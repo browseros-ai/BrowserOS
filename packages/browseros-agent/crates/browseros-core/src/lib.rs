@@ -2,6 +2,7 @@ pub mod browser;
 pub mod capabilities;
 pub mod connection;
 pub mod content_markdown;
+pub mod credentials;
 pub mod error;
 pub mod frames;
 pub mod input;

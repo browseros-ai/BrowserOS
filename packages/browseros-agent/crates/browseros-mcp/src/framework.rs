@@ -159,6 +159,10 @@ impl ToolCtx {
 /// only for operations the host selects. `browseros-mcp` cannot reach the host's guards
 /// or audit store, so the host supplies this through [`ToolCtx::inner_call_hook`].
 pub trait InnerCallHook: Send + Sync {
+    /// Marks password-bearing script input before authorization or dispatch can
+    /// fail. Hosts suppress parent source/audit previews even after cancellation.
+    fn mark_credential_input(&self) {}
+
     /// Authorize a primitive about to run against the caller's ownership.
     /// `page` is the primitive's target page id, when it addresses one.
     /// `Err(reason)` rejects the primitive and the reason is surfaced to the
@@ -442,6 +446,22 @@ impl From<std::io::Error> for ToolError {
 }
 
 pub async fn execute_tool(
+    def: &ToolDef,
+    raw_args: Value,
+    ctx: &ToolCtx,
+) -> ToolExecResult<ToolResult> {
+    let mut result = execute_tool_inner(def, raw_args, ctx).await?;
+    if def.name == "credentials" {
+        result.audit_hints = Some(AuditHints {
+            redact_all_values: true,
+            skip_screenshot: true,
+            ..result.audit_hints.unwrap_or_default()
+        });
+    }
+    Ok(result)
+}
+
+async fn execute_tool_inner(
     def: &ToolDef,
     raw_args: Value,
     ctx: &ToolCtx,

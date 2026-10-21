@@ -610,7 +610,7 @@ fn result_text(result: &crate::framework::ToolResult) -> String {
 }
 
 #[test]
-fn catalog_order_matches_typescript_registry() {
+fn catalog_order_is_stable() {
     let names = catalog().iter().map(|tool| tool.name).collect::<Vec<_>>();
     assert_eq!(
         names,
@@ -620,6 +620,7 @@ fn catalog_order_matches_typescript_registry() {
             "tabs",
             "tab_groups",
             "history",
+            "credentials",
             "navigate",
             "snapshot",
             "diff",
@@ -652,6 +653,7 @@ fn catalog_page_metadata_matches_host_dispatch_contract() {
             ("tabs", true),
             ("tab_groups", false),
             ("history", false),
+            ("credentials", true),
             ("navigate", true),
             ("snapshot", true),
             ("diff", true),
@@ -819,13 +821,16 @@ fn run_has_compat_output_schema() {
 }
 
 #[test]
-fn only_targeting_tools_and_run_advertise_output_schemas() {
+fn structured_tools_advertise_output_schemas() {
     let advertised = catalog()
         .into_iter()
         .filter(|tool| tool.output_schema.is_some())
         .map(|tool| tool.name)
         .collect::<Vec<_>>();
-    assert_eq!(advertised, ["browser_profiles", "browser_target", "run"]);
+    assert_eq!(
+        advertised,
+        ["browser_profiles", "browser_target", "credentials", "run"]
+    );
 }
 
 #[test]
@@ -1882,3 +1887,6 @@ fn optional_enum_arguments_keep_their_variants_and_stay_optional() {
         .unwrap_or_else(|| panic!("act should declare required arguments"));
     assert!(!required.iter().any(|entry| entry == "button"));
 }
+
+#[path = "credentials_tests.rs"]
+mod credentials_tests;

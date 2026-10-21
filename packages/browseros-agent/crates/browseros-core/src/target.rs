@@ -1417,3 +1417,6 @@ impl BrowserView {
 
 #[cfg(test)]
 mod tests;
+
+#[path = "credential_routing.rs"]
+mod credentials;

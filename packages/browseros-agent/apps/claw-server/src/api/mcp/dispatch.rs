@@ -83,6 +83,9 @@ pub struct ToolCall {
     /// from its arguments the way it is for a granular tool. The script hook records what
     /// the script actually touched, and `effects::page_ownership_notice` reports it.
     pub foreign_pages: Arc<std::sync::Mutex<std::collections::BTreeMap<u32, String>>>,
+    /// Shared with script hooks, including calls that fail or are cancelled
+    /// before they can return runtime audit hints.
+    pub sensitive_credentials: Arc<std::sync::atomic::AtomicBool>,
     /// Original snapshots and deep dispatch guards, captured before detached grouping.
     /// A reusable PageId must never let a later callback adopt its replacement tab.
     pub(crate) created_page_snapshots:
@@ -134,6 +137,7 @@ impl ToolCall {
             ToolFlags::default()
         };
         Self {
+            sensitive_credentials: Arc::default(),
             foreign_pages: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             created_page_snapshots: Arc::default(),
             catalog,

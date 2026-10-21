@@ -989,14 +989,51 @@ pub fn redacted_args_json(
     value: &serde_json::Value,
     hints: Option<&browseros_mcp::AuditHints>,
 ) -> String {
-    match hints {
-        Some(hints) if hints.redact_all_values || !hints.sensitive_refs.is_empty() => {
-            let mut redacted = value.clone();
-            redact_args(&mut redacted, hints);
-            bounded_args_json(&redacted)
-        }
-        _ => bounded_args_json(value),
+    // Explicit password fields are sensitive even when admission/cancellation
+    // prevented the handler from supplying runtime hints. Scrub before bounding,
+    // since truncation can otherwise persist a prefix of the secret.
+    let mut redacted = value.clone();
+    redact_password_fields(&mut redacted);
+    if let Some(hints) = hints {
+        redact_args(&mut redacted, hints);
     }
+    bounded_args_json(&redacted)
+}
+
+fn redact_password_fields(value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if key == "password" {
+                    *value = json!(REDACTED_MARKER);
+                    changed = true;
+                } else {
+                    changed |= redact_password_fields(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                changed |= redact_password_fields(value);
+            }
+        }
+        serde_json::Value::String(text) => {
+            // Raw CDP paramsJson crosses as a serialized object in an argument
+            // array. Preserve other strings byte-for-byte, including JSON whose
+            // formatting the script might rely on. Parent source uses its hint.
+            if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
+                && (nested.is_object() || nested.is_array())
+                && redact_password_fields(&mut nested)
+                && let Ok(scrubbed) = serde_json::to_string(&nested)
+            {
+                *text = scrubbed;
+                changed = true;
+            }
+        }
+        _ => {}
+    }
+    changed
 }
 
 fn redact_args(value: &mut serde_json::Value, hints: &browseros_mcp::AuditHints) {
@@ -1009,7 +1046,7 @@ fn redact_args(value: &mut serde_json::Value, hints: &browseros_mcp::AuditHints)
             .and_then(serde_json::Value::as_str)
             .is_some_and(|ref_id| hints.sensitive_refs.iter().any(|r| r == ref_id));
     if redact_top {
-        for key in ["value", "text"] {
+        for key in ["value", "text", "code"] {
             if object.contains_key(key) {
                 object.insert(key.to_string(), json!(REDACTED_MARKER));
             }
@@ -1124,6 +1161,19 @@ mod tests {
     fn parse(json_text: &str) -> serde_json::Value {
         serde_json::from_str(json_text)
             .unwrap_or_else(|err| panic!("args_json is valid JSON: {err}"))
+    }
+
+    #[test]
+    fn redacts_passwords_in_script_arrays_and_serialized_cdp_parameters() {
+        let args = json!([
+            1,
+            "Autofill.fillCredential",
+            json!({"username":"synthetic-user", "password":"synthetic-cdp-secret"}).to_string()
+        ]);
+        let output = redacted_args_json(&args, None);
+        assert!(!output.contains("synthetic-cdp-secret"));
+        assert!(output.contains("synthetic-user"));
+        assert!(output.contains("[redacted]"));
     }
 
     #[test]

@@ -6,6 +6,17 @@
       "commands": ["enable", "getFullAXTree"]
     },
     {
+      "domain": "Autofill",
+      "types": ["CredentialInfo", "CredentialContext", "CredentialResult"],
+      "commands": [
+        "getCredentialContext",
+        "listCredentials",
+        "addCredential",
+        "fillCredential",
+        "cancelCredentialOperation"
+      ]
+    },
+    {
       "domain": "Bookmarks",
       "types": ["BookmarkNode"],
       "commands": ["getBookmarks"]

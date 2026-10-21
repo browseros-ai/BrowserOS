@@ -308,6 +308,9 @@ const BOOTSTRAP_JS: &str = r#"
       waitForTime: (ms) => tool('wait', { value: ms }),
       wait: (opts) => tool('wait', opts),
 
+      ...(__browserosFeatures.credentials
+        ? { credentials: (opts) => tool('credentials', opts) }
+        : {}),
       screenshot: (opts) => tool('screenshot', opts),
       pdf: (opts) => tool('pdf', opts),
       // A real function is serialized here, before the JSON boundary drops it.
@@ -339,6 +342,9 @@ const BOOTSTRAP_JS: &str = r#"
     page: (pageId) => pageHandle(pageId),
     open: async (url, opts) => pageHandle(await call('pages.newPage', [url, opts])),
     history: (opts) => call('tool:history', [opts]),
+    ...(__browserosFeatures.credentials
+      ? { credentials: (opts) => call('tool:credentials', [opts]) }
+      : {}),
     // Discovery only: Rust refuses tool:browser_profiles/browser_target on older natives
     // whether or not a script finds a way to call them.
     ...(__browserosFeatures.profileTargeting
@@ -837,6 +843,18 @@ impl BrowserBridge {
     ) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
+        // Mark before host authorization/native gating: even a rejected call may
+        // have a password literal in its parent script or serialized CDP input.
+        let credential_input = method == "tool:credentials"
+            || matches!(method, "cdp" | "cdpJsonForPage")
+                && args.iter().any(|arg| {
+                    arg.as_str().is_some_and(|name| {
+                        matches!(name, "Autofill.addCredential" | "Autofill.fillCredential")
+                    })
+                });
+        if credential_input && let Some(hook) = &self.ctx.inner_call_hook {
+            hook.mark_credential_input();
+        }
         // Kept for the audit record and the self-healing distiller; dispatch
         // consumes the owned args below.
         let recorded_args = Value::Array(args.clone());
@@ -1287,6 +1305,7 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         // variants and the dialog pair, so the SDK reaches every act kind.
         "act" => tools::act::definition(),
         "history" => tools::history::definition(),
+        "credentials" => tools::credentials::definition(),
         "browser_profiles" => tools::browser_profiles::definition(),
         "browser_target" => tools::browser_target::definition(),
         _ => return None,
@@ -1353,6 +1372,13 @@ fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
 /// variants) carry the page id as their first argument; the rest address no
 /// specific page.
 fn target_page(method: &str, args: &[Value]) -> Option<u32> {
+    if method == "tool:credentials" && args.first().is_some_and(Value::is_object) {
+        return args
+            .first()?
+            .get("page")?
+            .as_u64()
+            .and_then(|page| u32::try_from(page).ok());
+    }
     let page_first = method.starts_with("observe.")
         || method.starts_with("input.")
         || method.starts_with("nav.")

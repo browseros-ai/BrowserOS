@@ -23,6 +23,19 @@ fn validate_parameters(method: &str, params: &Value, allowed: &[&str]) -> Result
 
 fn page_parameters(method: &str) -> Option<&'static [&'static str]> {
     match method {
+        "Autofill.getCredentialContext" => Some(&[]),
+        "Autofill.listCredentials" => {
+            Some(&["operationId", "documentId", "query", "limit", "cursor"])
+        }
+        "Autofill.addCredential" => Some(&["operationId", "documentId", "username", "password"]),
+        "Autofill.fillCredential" => Some(&[
+            "operationId",
+            "documentId",
+            "credentialId",
+            "username",
+            "password",
+        ]),
+        "Autofill.cancelCredentialOperation" => Some(&["operationId"]),
         "Runtime.enable" => Some(&[]),
         "Runtime.disable" => Some(&[]),
         "Runtime.evaluate" => Some(&[

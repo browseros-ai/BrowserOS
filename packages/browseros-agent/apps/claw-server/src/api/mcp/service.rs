@@ -3307,6 +3307,7 @@ mod tests {
         let mut expected = service
             .catalog
             .iter()
+            .filter(|tool| tool.available(service.native()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
@@ -3534,6 +3535,7 @@ mod tests {
         let mut expected = service
             .catalog
             .iter()
+            .filter(|tool| tool.available(service.native()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
