@@ -1,17 +1,13 @@
 diff --git a/chrome/browser/ui/views/profiles/avatar_toolbar_button_state_manager.cc b/chrome/browser/ui/views/profiles/avatar_toolbar_button_state_manager.cc
-index a514402e94a08f13a364ea9340b17d9787bd3bb5..beb6e7fd3d65da696f2c4d30d180bdd66cf7b09b 100644
+index a514402e94a08f13a364ea9340b17d9787bd3bb5..a1662b39c3713771735b8358704950dd7b45b3d5 100644
 --- a/chrome/browser/ui/views/profiles/avatar_toolbar_button_state_manager.cc
 +++ b/chrome/browser/ui/views/profiles/avatar_toolbar_button_state_manager.cc
-@@ -2499,8 +2499,13 @@ void AvatarToolbarButtonStateManager::CreateStatesAndListeners(
+@@ -2499,8 +2499,9 @@ void AvatarToolbarButtonStateManager::CreateStatesAndListeners(
              /*state_observer=*/this);
  
  #if BUILDFLAG(ENABLE_DICE_SUPPORT)
 -    if (syncer::IsReplaceSyncPromosWithSignInPromosEnabled() ||
 -        switches::IsAvatarSyncPromoFeatureEnabled()) {
-+    // The pill promos ("Sign in to BrowserOS?", sync, batch upload) all lead
-+    // to browser sign-in, which is impossible when DICE is disabled for the
-+    // profile (sign-in disallowed, e.g. BrowserOS neo). Account consistency is
-+    // fixed for the profile's lifetime, so checking once here is sufficient.
 +    if (AccountConsistencyModeManager::IsDiceEnabledForProfile(profile) &&
 +        (syncer::IsReplaceSyncPromosWithSignInPromosEnabled() ||
 +         switches::IsAvatarSyncPromoFeatureEnabled())) {

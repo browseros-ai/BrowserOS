@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/startup/infobar_utils.cc b/chrome/browser/ui/startup/infobar_utils.cc
-index 598e361a2988674243dd6ace9cc63de2f74ed1e1..4093bc2d815297b594d4c771a1f8995a91a5c452 100644
+index 598e361a2988674243dd6ace9cc63de2f74ed1e1..83ddc9e218440a245644a89e924ae67f4bda25f1 100644
 --- a/chrome/browser/ui/startup/infobar_utils.cc
 +++ b/chrome/browser/ui/startup/infobar_utils.cc
 @@ -17,6 +17,7 @@
@@ -31,14 +31,11 @@ index 598e361a2988674243dd6ace9cc63de2f74ed1e1..4093bc2d815297b594d4c771a1f8995a
    if (ObsoleteSystem::IsObsoleteNowOrSoon()) {
      PrefService* local_state = g_browser_process->local_state();
      if (!local_state ||
-@@ -320,7 +307,11 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
+@@ -320,7 +307,8 @@ void AddInfoBarsIfNecessary(BrowserWindowInterface* browser,
  #endif  // BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN) || BUILDFLAG(IS_LINUX)
  
    // The default browser prompt should only be shown after the first run.
 -  if (is_first_run == chrome::startup::IsFirstRun::kNo) {
-+  // BrowserClaw (BrowserOS neo) is a dedicated agent browser, not the user's
-+  // everyday browser, so it never asks to become the default browser. This
-+  // also drops the pin and default-PDF-viewer prompts chained off it.
 +  if (is_first_run == chrome::startup::IsFirstRun::kNo &&
 +      !browseros::IsBrowserClawProduct()) {
  #if BUILDFLAG(IS_MAC) || BUILDFLAG(IS_WIN)
