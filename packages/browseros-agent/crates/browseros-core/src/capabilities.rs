@@ -33,17 +33,20 @@ pub enum NativeFeature {
     /// PR #2908: saved-profile discovery/loading, window/tab identity sidecars, and
     /// profile-scoped routing for History and tab/window creation.
     ProfileTargeting,
+    /// Saved-password inventory, explicit storage and acknowledged native filling.
+    Credentials,
 }
 
 impl NativeFeature {
     /// Every feature, for hosts that publish a flag per feature (the run runtime).
-    pub const ALL: &'static [Self] = &[Self::ProfileTargeting];
+    pub const ALL: &'static [Self] = &[Self::ProfileTargeting, Self::Credentials];
 
     /// Stable camelCase key for machine-readable surfaces such as run's feature flags.
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::ProfileTargeting => "profileTargeting",
+            Self::Credentials => "credentials",
         }
     }
 
@@ -118,22 +121,37 @@ struct FeatureSpec {
 }
 
 /// The only place feature requirements live. Keep rows in release order.
-const FEATURES: &[FeatureSpec] = &[FeatureSpec {
-    feature: NativeFeature::ProfileTargeting,
-    label: "profile targeting",
-    min_browseros: BrowserOsVersion::new(0, 51, 1, 3),
-    raw_methods: &["Browser.getProfiles", "Browser.loadProfile"],
-    raw_params: &[
-        ("History.search", "browserContextId"),
-        ("History.getRecent", "browserContextId"),
-        ("History.deleteUrl", "browserContextId"),
-        ("History.deleteRange", "browserContextId"),
-        // Declared before #2908, but older natives accepted and ignored it and opened in the
-        // last-active window. Honoring the selected profile is the new behavior gated here.
-        ("Browser.createTab", "browserContextId"),
-        ("Browser.createWindow", "browserContextId"),
-    ],
-}];
+const FEATURES: &[FeatureSpec] = &[
+    FeatureSpec {
+        feature: NativeFeature::ProfileTargeting,
+        label: "profile targeting",
+        min_browseros: BrowserOsVersion::new(0, 51, 1, 3),
+        raw_methods: &["Browser.getProfiles", "Browser.loadProfile"],
+        raw_params: &[
+            ("History.search", "browserContextId"),
+            ("History.getRecent", "browserContextId"),
+            ("History.deleteUrl", "browserContextId"),
+            ("History.deleteRange", "browserContextId"),
+            // Declared before #2908, but older natives accepted and ignored it and opened in the
+            // last-active window. Honoring the selected profile is the new behavior gated here.
+            ("Browser.createTab", "browserContextId"),
+            ("Browser.createWindow", "browserContextId"),
+        ],
+    },
+    FeatureSpec {
+        feature: NativeFeature::Credentials,
+        label: "credentials",
+        min_browseros: BrowserOsVersion::new(0, 51, 2, 1),
+        raw_methods: &[
+            "Autofill.getCredentialContext",
+            "Autofill.listCredentials",
+            "Autofill.addCredential",
+            "Autofill.fillCredential",
+            "Autofill.cancelCredentialOperation",
+        ],
+        raw_params: &[],
+    },
+];
 
 /// The connected browser's native identity, fixed for one server process.
 ///

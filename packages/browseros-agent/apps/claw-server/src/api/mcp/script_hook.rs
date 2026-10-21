@@ -2,7 +2,7 @@ use crate::{
     api::mcp::dispatch::{ToolCall, ToolIdentity},
     api::mcp::effects::{ownership_claims, tab_groups, tabs_list_view},
     clock::now_epoch_ms,
-    db::audit_log::{RecordToolDispatchInput, bounded_args_json, result_meta},
+    db::audit_log::{RecordToolDispatchInput, redacted_script_args, result_meta},
     ids::DispatchId,
     services::helpers,
 };
@@ -39,6 +39,12 @@ impl ScriptInnerCallHook {
 }
 
 impl InnerCallHook for ScriptInnerCallHook {
+    fn mark_credential_input(&self) {
+        self.call
+            .sensitive_credentials
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
     fn acquire_tool_guard<'a>(
         &'a self,
         tool_name: &'a str,
@@ -116,6 +122,7 @@ impl InnerCallHook for ScriptInnerCallHook {
         let from_helper = record.from_helper;
         let output_token_estimate = record.output_token_estimate;
         let raw_args = record.args.clone();
+        let args_json = redacted_script_args(record.method, record.args);
         Box::pin(async move {
             let Some(identity) = self.identity() else {
                 return;
@@ -163,7 +170,7 @@ impl InnerCallHook for ScriptInnerCallHook {
                     .map(|page| page.target_id.as_str().to_string()),
                 url: live.as_ref().map(|page| page.url.clone()),
                 title: live.as_ref().map(|page| page.title.clone()),
-                args_json: bounded_args_json(&raw_args),
+                args_json,
                 result_meta: child_result_meta(is_error, from_helper),
                 duration_ms,
                 // None: child rows keep their completion time so they sort after
@@ -181,7 +188,12 @@ impl InnerCallHook for ScriptInnerCallHook {
                     // code-mode audits show each primitive like granular tools.
                     // Only for page-targeting primitives; page-less ones (windows,
                     // tab groups) have nothing meaningful to shoot.
-                    if page.is_some() {
+                    if page.is_some()
+                        && !self
+                            .call
+                            .sensitive_credentials
+                            .load(std::sync::atomic::Ordering::Relaxed)
+                    {
                         crate::api::mcp::observers::audit::persist_screenshot(
                             &self.call.state,
                             self.call.session_id.as_str(),

@@ -119,10 +119,28 @@ async fn build_event(
     .or_else(|| call.page_snapshot.clone());
     // A sensitive dispatch skips its screenshot: a password or payment form would
     // otherwise sit on disk as an image beside the redacted args.
-    let skip_screenshot = result
-        .audit_hints
-        .as_ref()
-        .is_some_and(|hints| hints.skip_screenshot);
+    let sensitive_script = call
+        .sensitive_credentials
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let script_hints = browseros_mcp::AuditHints {
+        redact_all_values: true,
+        skip_screenshot: true,
+        ..Default::default()
+    };
+    // Source can embed credentials even when admission, syntax checking or
+    // cancellation prevents the bridge from discovering that call. Keep child
+    // step metadata, but never persist raw run source in the audit ledger.
+    let audit_hints = if sensitive_script || call.tool().name == "run" {
+        Some(&script_hints)
+    } else {
+        result.audit_hints.as_ref()
+    };
+    let skip_screenshot = sensitive_script
+        || call.tool().name == "credentials"
+        || result
+            .audit_hints
+            .as_ref()
+            .is_some_and(|hints| hints.skip_screenshot);
     Some(AuditEvent {
         input: RecordToolDispatchInput {
             agent_id: bounded_text(
@@ -144,7 +162,7 @@ async fn build_event(
             title: live
                 .as_ref()
                 .map(|page| bounded_text(&page.title, AUDIT_TITLE_MAX)),
-            args_json: redacted_args_json(&call.raw_args, result.audit_hints.as_ref()),
+            args_json: redacted_args_json(&call.raw_args, audit_hints),
             result_meta: tool_result_meta(result, cancelled),
             duration_ms,
             // Stamp the tool's start so a script dispatch sorts before the child
@@ -465,6 +483,69 @@ mod tests {
         assert!(event.input.args_json.contains("[redacted]"));
         assert!(!event.input.args_json.contains("hunter2"));
         // A sensitive dispatch is never screenshotted.
+        assert!(event.preview.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn credential_early_failure_redacts_password_without_runtime_hints() -> anyhow::Result<()>
+    {
+        let call = crate::api::mcp::test_support::tool_call(
+            "credentials",
+            json!({
+                "action":"fill", "page":1, "username":"synthetic-user",
+                "password":{"unexpected":"synthetic-credential-secret"}
+            }),
+        )
+        .await?;
+        let result = ToolResult::error("unsupported native browser");
+        let event = build_event(&call, &result, 1, true)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("event missing"))?;
+        assert!(event.input.args_json.contains("synthetic-user"));
+        assert!(event.input.args_json.contains("[redacted]"));
+        assert!(
+            !event
+                .input
+                .args_json
+                .contains("synthetic-credential-secret")
+        );
+        assert!(event.preview.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_credential_script_redacts_parent_source_and_suppresses_preview()
+    -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call(
+            "run",
+            json!({
+                "code":"await browser.credentials({action:'add',password:'synthetic-run-secret'});"
+            }),
+        )
+        .await?;
+        call.sensitive_credentials
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        let result = ToolResult::error("cancelled");
+        let event = build_event(&call, &result, 1, true)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing event"))?;
+        assert!(event.input.args_json.contains("[redacted]"));
+        assert!(!event.input.args_json.contains("synthetic-run-secret"));
+        assert!(event.preview.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn credential_script_is_sensitive_even_before_the_bridge_runs() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("run", json!({
+            "code":"await sleep(99999); await browser.credentials({action:'add',password:'synthetic-unreached-secret'});"
+        })).await?;
+        let result = ToolResult::error("cancelled before execution");
+        let event = build_event(&call, &result, 1, true)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing event"))?;
+        assert!(!event.input.args_json.contains("synthetic-unreached-secret"));
         assert!(event.preview.is_none());
         Ok(())
     }

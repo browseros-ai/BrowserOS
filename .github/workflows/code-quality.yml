@@ -29,9 +29,12 @@ jobs:
         with:
           bun-version-file: packages/browseros-agent/package.json
 
-      # Run Biome through the repo's own lint script (bunx @biomejs/biome) so CI
-      # uses the exact same Biome as local `bun run lint`, instead of a version
-      # pinned separately in a setup action that drifts from package.json.
+      # A fresh checkout has no local Biome binary. Install the locked dependencies
+      # first so bunx uses the repository version rather than downloading latest.
+      - name: Install dependencies
+        run: bun ci
+
+      # Keep the lint command shared with local development.
       - name: Run Biome
         run: bun run lint
 

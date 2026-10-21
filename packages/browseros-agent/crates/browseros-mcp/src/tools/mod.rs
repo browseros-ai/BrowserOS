@@ -5,6 +5,7 @@ use rmcp::model::ToolAnnotations;
 pub mod act;
 pub mod browser_profiles;
 pub mod browser_target;
+pub mod credentials;
 pub mod diff;
 pub mod download;
 pub mod evaluate;
@@ -32,6 +33,7 @@ pub fn catalog() -> Vec<ToolDef> {
         tabs::definition(),
         tab_groups::definition(),
         history::definition(),
+        credentials::definition(),
         navigate::definition(),
         snapshot::definition(),
         diff::definition(),
@@ -112,12 +114,16 @@ fn metadata_for_tool(name: &str) -> ToolMetadata {
     ToolMetadata {
         // Both profile tools are hidden together on older natives: a saved selection cannot
         // block ordinary work there (capture runs it unbound), so get/clear are not needed.
-        requires: matches!(name, "browser_target" | "browser_profiles")
-            .then_some(NativeFeature::ProfileTargeting),
+        requires: match name {
+            "browser_target" | "browser_profiles" => Some(NativeFeature::ProfileTargeting),
+            "credentials" => Some(NativeFeature::Credentials),
+            _ => None,
+        },
         manages_target: matches!(name, "browser_target" | "browser_profiles"),
         accepts_page_arg: matches!(
             name,
-            "tabs"
+            "credentials"
+                | "tabs"
                 | "navigate"
                 | "snapshot"
                 | "diff"

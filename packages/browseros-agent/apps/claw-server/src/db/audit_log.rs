@@ -981,22 +981,79 @@ pub fn bounded_args_json(value: &serde_json::Value) -> String {
 /// dropped on purpose so the ledger leaks neither the value nor its size.
 const REDACTED_MARKER: &str = "[redacted]";
 
-/// Like `bounded_args_json`, but first strips secret values the tool flagged. For a
-/// sensitive `fill`, only the values of the flagged refs are replaced (sibling
-/// fields such as a username stay readable); `redact_all_values` replaces every
-/// `value`/`text`/`fields[].value`, used when the target carried no ref to key on.
+/// Scrubs explicit password fields even without runtime hints, before bounding.
+/// Hints additionally redact selected field values or all values/script source.
+/// Typed credential metadata remains readable; raw CDP strings use the separate
+/// context-aware script boundary below, including when their JSON is malformed.
 pub fn redacted_args_json(
     value: &serde_json::Value,
     hints: Option<&browseros_mcp::AuditHints>,
 ) -> String {
-    match hints {
-        Some(hints) if hints.redact_all_values || !hints.sensitive_refs.is_empty() => {
-            let mut redacted = value.clone();
-            redact_args(&mut redacted, hints);
-            bounded_args_json(&redacted)
-        }
-        _ => bounded_args_json(value),
+    // Explicit password fields are sensitive even when admission/cancellation
+    // prevented the handler from supplying runtime hints. Scrub before bounding,
+    // since truncation can otherwise persist a prefix of the secret.
+    let mut redacted = value.clone();
+    redact_password_fields(&mut redacted);
+    if let Some(hints) = hints {
+        redact_args(&mut redacted, hints);
     }
+    bounded_args_json(&redacted)
+}
+
+/// Script CDP parameters can be malformed, so parsing cannot authorize keeping
+/// their bytes. Credential params are omitted wholesale at this string boundary;
+/// typed tool options still retain metadata and scrub explicit password fields.
+pub fn redacted_script_args(method: &str, args: &serde_json::Value) -> String {
+    let mut sanitized = args.clone();
+    if let Some(values) = sanitized.as_array_mut()
+        && browseros_mcp::tools::credentials::is_credential_primitive(method, values)
+    {
+        let parameter = match method {
+            "cdp" => Some(1),
+            "cdpJsonForPage" => Some(2),
+            _ => None,
+        };
+        if let Some(parameter) = parameter.and_then(|index| values.get_mut(index)) {
+            *parameter = json!(REDACTED_MARKER);
+        }
+    }
+    redacted_args_json(&sanitized, None)
+}
+
+fn redact_password_fields(value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if key == "password" {
+                    *value = json!(REDACTED_MARKER);
+                    changed = true;
+                } else {
+                    changed |= redact_password_fields(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                changed |= redact_password_fields(value);
+            }
+        }
+        serde_json::Value::String(text) => {
+            // Raw CDP paramsJson crosses as a serialized object in an argument
+            // array. Preserve other strings byte-for-byte, including JSON whose
+            // formatting the script might rely on. Parent source uses its hint.
+            if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
+                && (nested.is_object() || nested.is_array())
+                && redact_password_fields(&mut nested)
+                && let Ok(scrubbed) = serde_json::to_string(&nested)
+            {
+                *text = scrubbed;
+                changed = true;
+            }
+        }
+        _ => {}
+    }
+    changed
 }
 
 fn redact_args(value: &mut serde_json::Value, hints: &browseros_mcp::AuditHints) {
@@ -1009,7 +1066,7 @@ fn redact_args(value: &mut serde_json::Value, hints: &browseros_mcp::AuditHints)
             .and_then(serde_json::Value::as_str)
             .is_some_and(|ref_id| hints.sensitive_refs.iter().any(|r| r == ref_id));
     if redact_top {
-        for key in ["value", "text"] {
+        for key in ["value", "text", "code"] {
             if object.contains_key(key) {
                 object.insert(key.to_string(), json!(REDACTED_MARKER));
             }
@@ -1124,6 +1181,32 @@ mod tests {
     fn parse(json_text: &str) -> serde_json::Value {
         serde_json::from_str(json_text)
             .unwrap_or_else(|err| panic!("args_json is valid JSON: {err}"))
+    }
+
+    #[test]
+    fn malformed_credential_cdp_parameters_are_redacted_before_parsing() {
+        let args = json!([
+            1,
+            "Autofill.fillCredential",
+            "{\"password\":\"synthetic-malformed-secret\",}"
+        ]);
+        let out = super::redacted_script_args("cdpJsonForPage", &args);
+        assert!(!out.contains("synthetic-malformed-secret"));
+        assert!(out.contains("Autofill.fillCredential"));
+        assert!(out.contains("[redacted]"));
+    }
+
+    #[test]
+    fn redacts_passwords_in_script_arrays_and_serialized_cdp_parameters() {
+        let args = json!([
+            1,
+            "Autofill.fillCredential",
+            json!({"username":"synthetic-user", "password":"synthetic-cdp-secret"}).to_string()
+        ]);
+        let output = redacted_args_json(&args, None);
+        assert!(!output.contains("synthetic-cdp-secret"));
+        assert!(output.contains("synthetic-user"));
+        assert!(output.contains("[redacted]"));
     }
 
     #[test]

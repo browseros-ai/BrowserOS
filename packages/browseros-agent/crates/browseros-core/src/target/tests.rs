@@ -210,6 +210,16 @@ impl Native {
                 ));
                 json!({"profile":saved,"loaded":loaded})
             }
+            "Autofill.getCredentialContext" => json!({"context":{
+                "browserProfileId":"eng","origin":"https://eng.test","documentId":"fixture-document"}}),
+            "Autofill.cancelCredentialOperation" => json!({}),
+            "Autofill.listCredentials" => {
+                let owner = params["browserContextId"]
+                    .as_str()
+                    .and_then(|context| context.strip_prefix("live-"))
+                    .ok_or(CdpError::SessionGone)?;
+                json!({"result":{"browserProfileId":owner,"credentials":[],"total":0}})
+            }
             "Browser.createWindow" => {
                 let id = state
                     .windows
@@ -3061,6 +3071,102 @@ async fn one_admitted_default_view_opens_at_most_one_window() -> TestResult {
     assert!(
         tabs.iter()
             .all(|call| call.params["windowId"].as_i64() == first.window_id.map(|id| id.0))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn credential_inventory_uses_selected_live_profile_without_opening_a_page() -> TestResult {
+    use crate::credentials::CredentialListOptions;
+    let native = Native::new();
+    let scoped = view_on(native.clone(), native_version("0.51.2.1"), None).await;
+    native.lock().tabs.clear();
+    native.lock().windows.clear();
+    let inventory = scoped
+        .list_credentials(None, CredentialListOptions::default())
+        .await?;
+    assert_eq!(inventory.browser_profile_id.as_str(), "eng");
+    assert!(inventory.credentials.is_empty());
+    let calls = native.calls("Autofill.listCredentials");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].params["browserContextId"], "live-eng");
+    assert!(calls[0].params.get("documentId").is_none());
+    assert!(calls[0].session.is_none());
+    assert!(native.calls("Browser.createTab").is_empty());
+    assert!(native.calls("Browser.createWindow").is_empty());
+    assert!(native.calls("Target.attachToTarget").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn older_native_cannot_dispatch_credentials_but_keeps_profile_support() -> TestResult {
+    let native = Native::new();
+    let scoped = view(native.clone(), None).await;
+    assert_eq!(scoped.list_profiles().await?.len(), 3);
+    let failure = scoped
+        .list_credentials(None, crate::credentials::CredentialListOptions::default())
+        .await
+        .err()
+        .ok_or("unexpected credential support")?;
+    assert_eq!(failure.code, "not_supported");
+    assert!(native.calls("Autofill.listCredentials").is_empty());
+    Ok(())
+}
+
+#[tokio::test]
+async fn credential_cancellation_reaches_original_session_after_tab_leaves_its_pin() -> TestResult {
+    use crate::credentials::CredentialSource;
+    let native = Native::new();
+    let scoped = view_on(
+        native.clone(),
+        native_version("0.51.2.1"),
+        Some(WindowSelection::Pinned {
+            window_id: WindowId(11),
+        }),
+    )
+    .await;
+    let page = page_id(&scoped, 1).await?;
+    let hold = Arc::new(tokio::sync::Notify::new());
+    *native
+        .dispatch_hold
+        .lock()
+        .unwrap_or_else(|error| panic!("fixture poisoned: {error}")) =
+        Some(("Autofill.fillCredential".into(), hold));
+    let caller = tokio::spawn(async move {
+        scoped
+            .fill_credential(
+                page,
+                CredentialSource::Provided {
+                    username: "synthetic-user".into(),
+                    password: "synthetic-password".into(),
+                },
+            )
+            .await
+    });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(1),
+        native.dispatch_started.notified(),
+    )
+    .await?;
+    native.lock().tabs[0]["windowId"] = json!(12);
+    caller.abort();
+    assert!(caller.await.is_err());
+    tokio::time::timeout(std::time::Duration::from_secs(1), async {
+        while native
+            .calls("Autofill.cancelCredentialOperation")
+            .is_empty()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await?;
+    let cleanup = native.calls("Autofill.cancelCredentialOperation");
+    let context = native.calls("Autofill.getCredentialContext");
+    assert_eq!(cleanup[0].session, context[0].session);
+    assert!(
+        cleanup[0].params["operationId"]
+            .as_str()
+            .is_some_and(|id| !id.is_empty())
     );
     Ok(())
 }

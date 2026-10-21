@@ -2940,6 +2940,102 @@
                             "$ref": "DOM.BackendNodeId"
                         }
                     ]
+                },
+                {
+                    "id": "CredentialInfo",
+                    "description": "BrowserOS saved password metadata. Passwords are never returned.",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "credentialId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "username",
+                            "type": "string"
+                        },
+                        {
+                            "name": "site",
+                            "type": "string"
+                        },
+                        {
+                            "name": "stores",
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
+                },
+                {
+                    "id": "CredentialContext",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "Browser.BrowserProfileID"
+                        },
+                        {
+                            "name": "origin",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "description": "Opaque current-document identity; required by page credential operations.",
+                            "type": "string"
+                        }
+                    ]
+                },
+                {
+                    "id": "CredentialResult",
+                    "type": "object",
+                    "properties": [
+                        {
+                            "name": "browserProfileId",
+                            "$ref": "Browser.BrowserProfileID"
+                        },
+                        {
+                            "name": "origin",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "status",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "credentials",
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "$ref": "CredentialInfo"
+                            }
+                        },
+                        {
+                            "name": "credential",
+                            "optional": true,
+                            "$ref": "CredentialInfo"
+                        },
+                        {
+                            "name": "total",
+                            "optional": true,
+                            "type": "integer"
+                        },
+                        {
+                            "name": "nextCursor",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "filledFields",
+                            "optional": true,
+                            "type": "array",
+                            "items": {
+                                "type": "string"
+                            }
+                        }
+                    ]
                 }
             ],
             "events": [
@@ -3013,6 +3109,130 @@
                 {
                     "name": "enable",
                     "description": "Enables autofill domain notifications."
+                },
+                {
+                    "name": "getCredentialContext",
+                    "description": "Captures the main-frame document before a credential operation is queued.",
+                    "returns": [
+                        {
+                            "name": "context",
+                            "$ref": "CredentialContext"
+                        }
+                    ]
+                },
+                {
+                    "name": "listCredentials",
+                    "description": "Page target: native site matches, documentId required. Browser target: an\nexplicit live regular browserContextId is required, even without open tabs.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "browserContextId",
+                            "optional": true,
+                            "$ref": "Browser.BrowserContextID"
+                        },
+                        {
+                            "name": "query",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "limit",
+                            "optional": true,
+                            "type": "integer"
+                        },
+                        {
+                            "name": "cursor",
+                            "optional": true,
+                            "type": "string"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CredentialResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "addCredential",
+                    "description": "Explicitly adds to the profile/device store. No pending form is required.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "username",
+                            "type": "string"
+                        },
+                        {
+                            "name": "password",
+                            "type": "string"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CredentialResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "fillCredential",
+                    "description": "Exactly one source: credentialId or username AND password. Does not submit\nor save. Only acknowledged fields in a recognized main-frame login form\nare reported. Native filling policy and reauthentication remain in force.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "documentId",
+                            "type": "string"
+                        },
+                        {
+                            "name": "credentialId",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "username",
+                            "optional": true,
+                            "type": "string"
+                        },
+                        {
+                            "name": "password",
+                            "optional": true,
+                            "type": "string"
+                        }
+                    ],
+                    "returns": [
+                        {
+                            "name": "result",
+                            "$ref": "CredentialResult"
+                        }
+                    ]
+                },
+                {
+                    "name": "cancelCredentialOperation",
+                    "description": "Cancels outstanding store reads / renderer work before its next handoff.\nAlready dispatched writes or field mutations cannot be undone.",
+                    "parameters": [
+                        {
+                            "name": "operationId",
+                            "type": "string"
+                        }
+                    ]
                 }
             ]
         },
