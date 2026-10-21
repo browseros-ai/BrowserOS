@@ -8,10 +8,11 @@ release workflow and its exact artifact checks.
 
 ## Interface and ownership
 
-The release selection is `linux_arch=x64|arm64|all`. It defaults to `x64` so
-existing dispatches, historical releases, and BrowserOS callers keep their
-current artifact contract. The reusable Linux workflow calls this input `arch`,
-matching the other platform workflows.
+The Neo release selection is `linux_arch=all|x64|arm64`, defaulting to `all` so
+routine releases include both Linux architectures. Explicit `x64` or `arm64`
+selections narrow the artifact contract. The standalone/reusable Linux workflow
+calls this input `arch` and keeps its `x64` default for BrowserOS and source-mode
+callers. CLI defaults remain compatible with historical release receipts.
 
 The deep module is the existing release metadata validator in `release/common.py`.
 Its interface accepts the selected platforms and architecture sets, then checks
@@ -87,7 +88,8 @@ gh workflow run release-browserclaw.yml --ref main \
 This binds the browser to exact published-resource versions created by the same
 release transaction and leaves a browser draft. `draft-only` creates private
 resource drafts/versioned objects and does not promote their aliases or feeds.
-Use `linux_arch=all` to build both architectures. An omitted selection builds x64.
+Omit `linux_arch` to build both architectures. Releases selecting only macOS or
+Windows accept the default without building Linux.
 
 Expected arm64 browser assets:
 
