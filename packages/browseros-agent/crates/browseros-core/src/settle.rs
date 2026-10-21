@@ -159,9 +159,10 @@ pub async fn read_readiness(session: &ProtocolSession) -> Result<ReadinessReadin
             json!({ "expression": READINESS_PROBE_JS, "returnByValue": true }),
         )
         .await?;
-    result.result.value.ok_or_else(|| {
-        CoreError::Message("the readiness probe returned nothing".to_string())
-    })
+    result
+        .result
+        .value
+        .ok_or_else(|| CoreError::Message("the readiness probe returned nothing".to_string()))
 }
 
 /// Waits until the page's content stops changing, or the ceiling is reached.
@@ -730,12 +731,9 @@ mod tests {
         )
         .await?;
         let start = Instant::now();
-        let outcome = super::wait_for_page_ready(
-            &session.pages,
-            page_id,
-            timeouts::ARRIVAL_READY_BUDGET,
-        )
-        .await;
+        let outcome =
+            super::wait_for_page_ready(&session.pages, page_id, timeouts::ARRIVAL_READY_BUDGET)
+                .await;
         assert_eq!(outcome, super::Readiness::Stable);
         assert!(
             start.elapsed() < Duration::from_millis(500),
@@ -775,12 +773,9 @@ mod tests {
         )
         .await?;
         let start = Instant::now();
-        let outcome = super::wait_for_page_ready(
-            &session.pages,
-            page_id,
-            timeouts::ARRIVAL_READY_BUDGET,
-        )
-        .await;
+        let outcome =
+            super::wait_for_page_ready(&session.pages, page_id, timeouts::ARRIVAL_READY_BUDGET)
+                .await;
         assert_eq!(outcome, super::Readiness::Stable);
         assert!(start.elapsed() < Duration::from_millis(500));
         Ok(())
@@ -820,12 +815,9 @@ mod tests {
         )
         .await?;
         let start = Instant::now();
-        let outcome = super::wait_for_page_ready(
-            &session.pages,
-            page_id,
-            timeouts::ARRIVAL_READY_BUDGET,
-        )
-        .await;
+        let outcome =
+            super::wait_for_page_ready(&session.pages, page_id, timeouts::ARRIVAL_READY_BUDGET)
+                .await;
         assert_eq!(outcome, super::Readiness::Stable);
         assert!(
             start.elapsed() >= Duration::from_millis(300),

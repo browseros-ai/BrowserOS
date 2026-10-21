@@ -152,8 +152,7 @@ impl Observer {
         // A url change already decided it, and that rule wins: an SPA can swap
         // the whole page behind an identical set of controls.
         if diff.arrangement_changed.is_none() {
-            diff.arrangement_changed =
-                before_arrangement.map(|before| before != after_arrangement);
+            diff.arrangement_changed = before_arrangement.map(|before| before != after_arrangement);
         }
         Ok(diff)
     }

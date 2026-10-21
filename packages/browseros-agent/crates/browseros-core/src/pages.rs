@@ -479,24 +479,6 @@ impl PageManager {
         let mut tab = tab
             .ok_or_else(|| CoreError::Message(format!("Tab {tab_id} not found after creation")))?;
 
-        // The page is registered now, so the wait can watch its content. The
-        // outcome is advisory: a page still moving at the ceiling is handed
-        // back anyway, which is what the ceiling is for.
-        let _ = crate::settle::wait_for_page_ready(
-            self,
-            creation.original.page_id.clone(),
-            timeouts::ARRIVAL_READY_BUDGET,
-        )
-        .await;
-        // Read the tab once more so the caller sees the settled title and url
-        // rather than the ones it had a quiet interval ago.
-        if let Ok(result) = root
-            .send::<_, NativeTabReply>("Browser.getTabInfo", json!({ "tabId": tab_id }))
-            .await
-        {
-            tab = self.created_readback(&creation, result.tab).await?;
-        }
-
         if let Some(group_id) = opts.tab_group_id {
             // The readiness loop can await registry locks and sleeps. Refresh the ORIGINAL
             // incarnation before the final native-tab mutation, never resolve its ID anew.
@@ -524,6 +506,19 @@ impl PageManager {
             }
         }
         self.publish_created_readback(&creation, &tab).await?;
+        // Readiness goes last, after every call that resolves this tab's
+        // identity. The wait can take a quiet interval or the whole ceiling,
+        // and a tab can be reconciled onto a new target while it does, so
+        // running it earlier would widen the window in which the native
+        // mutations above see a replacement and fail the creation outright.
+        // Its outcome is advisory: a page still moving at the ceiling is
+        // handed back anyway, which is what the ceiling is for.
+        let _ = crate::settle::wait_for_page_ready(
+            self,
+            creation.original.page_id.clone(),
+            timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
         Ok((creation, tab))
     }
 
