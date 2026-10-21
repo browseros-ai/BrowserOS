@@ -531,12 +531,8 @@ features:
       - extensions/browser/external_install_info.cc
       - extensions/browser/external_install_info.h
 
-  neo-no-signin:
-    description: "feat: no browser sign-in prompts in BrowserOS neo"
+  no-browser-signin:
+    description: "feat: disable browser sign-in"
     files:
-      # BrowserClaw disables DICE sign-in; the avatar pill promo only
-      # registers when sign-in is possible. The default-browser prompt
-      # skip lives in infobar_utils.cc, owned by misc.
-      - chrome/browser/signin/BUILD.gn
       - chrome/browser/signin/account_consistency_mode_manager.cc
       - chrome/browser/ui/views/profiles/avatar_toolbar_button_state_manager.cc
