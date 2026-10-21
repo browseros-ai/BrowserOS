@@ -35,7 +35,9 @@ const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
-Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `sleep(ms)`, `setTimeout`/`clearTimeout`, and nothing else. There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through page.evaluate, which runs inside the page.
+Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `setTimeout`/`clearTimeout`, and nothing else. (`sleep(ms)` exists for a deliberate pause and is almost never the right tool: opening, navigating and page-changing evaluates all return settled, so pausing after them only adds the time you picked.) There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through page.evaluate, which runs inside the page.
+
+Readiness is handled for you, so do not pause to let a page catch up. `browser.open`, `page.goto`/`back`/`forward`/`reload` return once the page has stopped changing, not merely once it has loaded. `page.evaluate` detects a script that changed the page and settles before returning, reporting `changed`. `page.click` and the other page actions read back a settled diff. If you find yourself writing `await sleep(...)` after any of these, the wait has already happened.
 
 One rule: anything that needs a page hangs off a page handle, anything that does not hangs off `browser`. Get a handle with `browser.open(url)`, or `browser.page(id)` for an id you already have. Page actions address a snapshot ref like "e12", never a CSS selector.
 
@@ -60,8 +62,8 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
   page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
-  page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. Use waitForTime only for a plain fixed pause; `await sleep(ms)` also works. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
-  page.evaluate(fn, arg?)            - runs INSIDE the page. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
+  page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. waitForTime is a plain fixed pause and a last resort: wait on the thing itself instead. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
+  page.evaluate(fn, arg?, opts?)     - runs INSIDE the page. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
   page.screenshot(opts?) / pdf(opts?)
     screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
   page.download(ref) / upload(ref, files)
@@ -85,7 +87,7 @@ const BOOTSTRAP_JS: &str = r#"
   const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 
   // Timers: the runtime is a bare engine, so bridge setTimeout/sleep to a real
-  // async sleep. For content that loads in, prefer browser.wait({ for: 'selector' }).
+  // async sleep. For content that loads in, prefer page.waitForSelector(sel).
   globalThis.sleep = (ms) => __browserosSleep(Number(ms) || 0);
   globalThis.setTimeout = (fn, ms) => {
     __browserosSleep(Number(ms) || 0).then(() => { if (typeof fn === 'function') fn(); });

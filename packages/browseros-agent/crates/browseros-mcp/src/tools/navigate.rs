@@ -8,7 +8,9 @@ use serde_json::json;
 const DESCRIPTION: &str = "\
 Navigate a page: load a url, or go back/forward/reload. \
 Returns a fresh snapshot of the resulting page \
-(navigation invalidates refs, so old [ref=eN] handles no longer apply).";
+(navigation invalidates refs, so old [ref=eN] handles no longer apply). \
+Returns once the page has stopped changing, not merely once it has loaded, \
+so do not pause afterwards to let it catch up.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
