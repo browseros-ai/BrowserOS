@@ -86,6 +86,9 @@ Core loop: snapshot -> act -> verify.
   re-snapshot before reusing them.
 - Still loading? wait for="text"/"selector" on something you expect, not a
   bare time wait.
+- Readiness is handled for you: tabs action="new", navigate and a page-changing
+  evaluate all return once the page has stopped changing, not merely once it
+  has loaded. Never pause afterwards to let a page catch up.
 
 Reading and output:
 - read extracts the page as markdown; grep searches it without a full dump.
