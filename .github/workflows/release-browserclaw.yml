@@ -1,9 +1,9 @@
 name: "Release: BrowserOS neo (full)"
 
-# Defaults reproduce the full release: every native lane, macOS universal,
-# public component releases with alpha OTA/feeds. Narrower dispatches select
-# lanes and keep components private; preflight validates every input once and
-# later jobs read only its outputs.
+# Defaults reproduce the full release: every native lane, Linux x64 and arm64,
+# macOS universal, and public component releases with alpha OTA/feeds. Narrower
+# dispatches select lanes and keep components private; preflight validates every
+# input once and later jobs read only its outputs.
 on:
   workflow_dispatch:
     inputs:
@@ -26,11 +26,11 @@ on:
       linux_arch:
         description: "Linux artifact set (arm64 uses the x64 build runner)"
         type: choice
-        default: x64
+        default: all
         options:
+          - all
           - x64
           - arm64
-          - all
       publication:
         description: "alpha: publish components, alpha OTA/feeds. draft-only: private component drafts, no tags/aliases/feeds/Slack"
         type: choice
@@ -105,7 +105,9 @@ jobs:
               exit 1
               ;;
           esac
-          if [ "$build_linux" != true ] && [ "$LINUX_ARCH" != x64 ]; then
+          # The default all is harmless when Linux is skipped. Keep accepting
+          # x64 for existing callers that supplied the previous default.
+          if [ "$build_linux" != true ] && [ "$LINUX_ARCH" = arm64 ]; then
             echo "::error::linux_arch=$LINUX_ARCH requires platforms to include linux"
             exit 1
           fi

@@ -5,12 +5,10 @@
  */
 
 import type { Skill } from '@browseros/claw-api'
-import { Plus } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { DeleteSkillDialog } from '@/components/skills/DeleteSkillDialog'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
-import { SkillFormDialog } from '@/components/skills/SkillFormDialog'
 import { Button } from '@/components/ui/button'
 import {
   Table,
@@ -43,25 +41,25 @@ export function Skills() {
 
   return (
     <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 pt-8 pb-16">
-      <header className="flex items-start justify-between gap-4">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
-            Skills
-          </h1>
+      <header className="flex flex-col gap-3">
+        <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
+          Skills
+        </h1>
+        <div className="flex flex-col gap-2">
+          <p className="font-semibold text-ink text-xl tracking-tight">
+            Stop retyping the same prompts.
+          </p>
           <p className="text-ink-2 text-sm">
-            Skills BrowserOS neo linked into your coding agents. Re-run one by
-            name.
+            A skill is a task you do often, saved under a short name. Type the
+            name to run it again.
+          </p>
+          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ink-2 text-sm">
+            To make one, finish a task and tell your agent
+            <code className="rounded bg-primary/10 px-2 py-px font-medium font-mono text-[13px] text-primary">
+              save this as a skill in neo
+            </code>
           </p>
         </div>
-        <SkillFormDialog
-          mode="create"
-          trigger={
-            <Button size="sm" className="rounded-9">
-              <Plus />
-              New skill
-            </Button>
-          }
-        />
       </header>
 
       {isError ? (
@@ -208,24 +206,11 @@ function SkillsNotice({ children }: { children: ReactNode }) {
 
 function SkillsEmpty() {
   return (
-    <div className="flex flex-col items-center gap-4 rounded-9 border border-ledger-border border-dashed bg-card px-6 py-16 text-center">
-      <div className="flex flex-col gap-1">
-        <p className="font-semibold text-base text-ink">No skills yet</p>
-        <p className="mx-auto max-w-md text-ink-2 text-sm">
-          When your coding agent saves a repeatable browser task with BrowserOS
-          neo, it shows up here, linked into your agents and re-runnable by
-          name. You can also write one yourself.
-        </p>
-      </div>
-      <SkillFormDialog
-        mode="create"
-        trigger={
-          <Button size="sm" className="rounded-9">
-            <Plus />
-            New skill
-          </Button>
-        }
-      />
+    <div className="flex flex-col items-center gap-1 rounded-9 border border-ledger-border border-dashed bg-card px-6 py-16 text-center">
+      <p className="font-semibold text-base text-ink">No skills yet</p>
+      <p className="mx-auto max-w-md text-ink-2 text-sm">
+        Your first one shows up here once your agent saves it.
+      </p>
     </div>
   )
 }

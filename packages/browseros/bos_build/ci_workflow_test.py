@@ -924,7 +924,7 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
     NEO_DISPATCH_INPUTS = {
         "platforms": ("choice", ["all", "macos", "linux", "windows"], "all"),
         "macos_arch": ("choice", ["universal", "arm64"], "universal"),
-        "linux_arch": ("choice", ["x64", "arm64", "all"], "x64"),
+        "linux_arch": ("choice", ["all", "x64", "arm64"], "all"),
         "publication": ("choice", ["alpha", "draft-only"], "alpha"),
     }
     NEO_ALPHA = "${{ needs.preflight.outputs.publication == 'alpha' }}"
@@ -1738,8 +1738,17 @@ class NeoReleaseSelectionTest(unittest.TestCase):
         )
 
     def run_selection(
-        self, platforms: str, macos_arch: str, publication: str, linux_arch: str = "x64"
+        self,
+        platforms: str,
+        macos_arch: str,
+        publication: str,
+        linux_arch: str | None = None,
     ):
+        if linux_arch is None:
+            triggers = self.neo.get("on", self.neo.get(True))
+            linux_arch = str(
+                triggers["workflow_dispatch"]["inputs"]["linux_arch"]["default"]
+            )
         step = self.step(self.neo, "preflight", "Validate release selection")
         self.assertEqual(
             step["env"],
@@ -1784,7 +1793,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 "build_macos": "true",
                 "build_windows": "true",
                 "macos_arch": "universal",
-                "linux_arch": "x64",
+                "linux_arch": "all",
                 "platforms": "all",
                 "publication": "alpha",
             },
@@ -1801,7 +1810,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
                 "build_macos": "true",
                 "build_windows": "false",
                 "macos_arch": "arm64",
-                "linux_arch": "x64",
+                "linux_arch": "all",
                 "platforms": "macos",
                 "publication": "draft-only",
             },
@@ -1831,7 +1840,7 @@ class NeoReleaseSelectionTest(unittest.TestCase):
     def test_preflight_rejects_unused_or_invalid_linux_architecture(self):
         for platforms, arch in (
             ("macos", "arm64"),
-            ("windows", "all"),
+            ("windows", "arm64"),
             ("linux", "bad;true"),
         ):
             result, outputs = self.run_selection(platforms, "universal", "alpha", arch)
