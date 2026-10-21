@@ -74,7 +74,7 @@ COPY --chmod=0755 healthcheck.sh /usr/local/bin/neo-healthcheck
 COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 
 ENV NEO_SCREEN=1600x1000 \
-    NEO_HUMAN_HELP=false \
+    BROWSERCLAW_MODE=hosted \
     NEO_SANDBOX=false \
     NEO_ARGS="" \
     PUID=1000 \

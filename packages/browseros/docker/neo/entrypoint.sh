@@ -25,8 +25,12 @@ readonly MCP_URL=http://127.0.0.1:9010
 readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
 
-: "${NEO_SCREEN:=1600x1000}" "${NEO_HUMAN_HELP:=false}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
+: "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
 : "${PUID:=1000}" "${PGID:=1000}"
+# claw-server's mode (README). hosted hides the MCP tools that assume an agent
+# harness on this machine or a person at the cockpit: skills, human help and
+# name_session, which taskName replaces.
+: "${BROWSERCLAW_MODE:=hosted}"
 
 is_true() {
   case "${1,,}" in
@@ -46,7 +50,7 @@ die() { log "$*" >&2; exit 1; }
 spawn_as_neo() {
   (exec setpriv --reuid=neo --regid=neo --init-groups \
     env HOME="$NEO_HOME" USER=neo DISPLAY=:1 XDG_RUNTIME_DIR="$XDG_DIR" LANG=C.UTF-8 \
-      BROWSERCLAW_DIR="$CLAW_DATA" "$@") &
+      BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_MODE="$BROWSERCLAW_MODE" "$@") &
 }
 
 # Bind-mounted host folders are owned by the host user; running Neo as that
@@ -120,8 +124,6 @@ start_display() {
 # container was started with security options that allow it (README).
 sandbox_flags=(--no-sandbox)
 is_true "$NEO_SANDBOX" && sandbox_flags=()
-# Reject a malformed NEO_HUMAN_HELP now, not after Neo has started.
-is_true "$NEO_HUMAN_HELP" || :
 
 # --no-sandbox is deliberate here, so drop Chromium's "unsupported command-line
 # flag" bar for it. Written only in that mode: the same policy would also hide
@@ -156,18 +158,17 @@ start_neo() {
 
 # Applies container-level agent settings once claw-server answers, then marks
 # the container configured; the healthcheck waits for that marker so agents
-# never connect before the settings hold. The setting persists in the profile,
-# and is re-applied on every start so NEO_HUMAN_HELP stays the source of truth.
+# never connect before the settings hold. Hosted mode already keeps human help
+# off, but a claw-server older than BROWSERCLAW_MODE ignores the mode and
+# defaults human help on, so it is switched off here too on every start.
 configure_neo() {
-  local human_help=false
-  is_true "$NEO_HUMAN_HELP" && human_help=true
   for _ in $(seq 1 240); do
     curl -fsS "$MCP_URL/system/ready" >/dev/null 2>&1 && break
     sleep 0.5
   done
   curl -fsS "$MCP_URL/system/ready" >/dev/null 2>&1 || { log "Neo did not become ready"; return 1; }
   curl -fsS -X PUT "$MCP_URL/api/v1/settings/agent" -H 'Content-Type: application/json' \
-    -d "{\"humanHelpEnabled\":$human_help}" >/dev/null || { log "Could not apply agent settings"; return 1; }
+    -d '{"humanHelpEnabled":false}' >/dev/null || { log "Could not apply agent settings"; return 1; }
   touch "$CONFIGURED"
   log "Ready. These are the container's ports; use the host ports you mapped with -p."
   log "  Viewer: http://localhost:6080"

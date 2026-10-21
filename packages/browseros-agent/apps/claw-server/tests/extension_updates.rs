@@ -298,6 +298,7 @@ async fn running_coordinator_reads_sessions_and_recovers_on_notification_and_tim
         replay_retention_days: 7,
         dev_mode: false,
         native: Default::default(),
+        mode: Default::default(),
     });
     let state = AppState::new_with_home(config, dir.path().join("home")).await?;
     let fixture = Fixture::new();

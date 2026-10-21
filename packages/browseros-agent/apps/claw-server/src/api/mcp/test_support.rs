@@ -1,7 +1,7 @@
 use crate::{
     AppState,
     api::mcp::dispatch::{ToolCall, ToolIdentity, linked_cancel_token},
-    config::Config,
+    config::{Config, ServerMode},
     identity::{ClientIdentity, ConversationIdentity},
     ids::SessionId,
     services::sessions::{ClawTargetStore, Session},
@@ -28,6 +28,14 @@ pub(crate) fn current_session(
 }
 
 pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolCall> {
+    tool_call_in_mode(tool_name, raw_args, ServerMode::Desktop).await
+}
+
+pub async fn tool_call_in_mode(
+    tool_name: &str,
+    raw_args: Value,
+    mode: ServerMode,
+) -> anyhow::Result<ToolCall> {
     let dir = tempfile::tempdir()?;
     let root = dir.path().join("browserclaw");
     let home = dir.path().join("home");
@@ -47,6 +55,7 @@ pub async fn tool_call(tool_name: &str, raw_args: Value) -> anyhow::Result<ToolC
             capabilities: current_native(),
             asserted: false,
         },
+        mode,
     });
     let state = AppState::new_with_home(config, home).await?;
     let session = Session::new(

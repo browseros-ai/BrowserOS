@@ -20,6 +20,8 @@ const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 /// Developer assertion of the native BrowserOS version for builds whose launch config does
 /// not carry a usable one (dev/dogfood sidecars, stale local stamps). Logged at startup.
 pub const NATIVE_VERSION_ENV: &str = "CLAW_NATIVE_BROWSEROS_VERSION";
+/// Selects the [`ServerMode`]. Unset or blank means desktop.
+pub const MODE_ENV: &str = "BROWSERCLAW_MODE";
 const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 
 #[derive(Debug, Parser)]
@@ -72,6 +74,37 @@ pub struct Config {
     /// Read once per process. Every discovery and execution path gates native features on
     /// this one value, which `BrowserService` copies into each browser session.
     pub native: NativeIdentity,
+    /// Read once per process from [`MODE_ENV`]; the MCP surface follows it.
+    pub mode: ServerMode,
+}
+
+/// How this server is deployed, fixed for the process by [`MODE_ENV`].
+///
+/// Desktop is the BrowserOS app on a person's own machine, with their agent harnesses
+/// installed beside it. Hosted is BrowserOS neo run as infrastructure (the Docker image) and
+/// driven remotely by an agent that brings its own harness. A hosted server cannot link
+/// skills into that agent or reach its user, so the MCP layer hides the tools that assume it
+/// can (see `api::mcp::hosted`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ServerMode {
+    #[default]
+    Desktop,
+    Hosted,
+}
+
+impl ServerMode {
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Hosted => "hosted",
+        }
+    }
+
+    #[must_use]
+    pub fn is_hosted(self) -> bool {
+        self == Self::Hosted
+    }
 }
 
 /// The connected browser's native identity as this process learned it.
@@ -196,6 +229,7 @@ impl Config {
         let dev_mode = sidecar.flags.dev_mode.unwrap_or(default_dev_mode);
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
         let native = resolve_native_identity(env, sidecar.instance.as_ref());
+        let mode = resolve_mode(env)?;
 
         Ok(Self {
             server_port,
@@ -224,6 +258,7 @@ impl Config {
                 .unwrap_or(DEFAULT_REPLAY_RETENTION_DAYS),
             dev_mode,
             native,
+            mode,
         })
     }
 
@@ -272,6 +307,19 @@ fn resolve_native_identity(
     NativeIdentity {
         capabilities: NativeCapabilities::from_browseros_version(reported),
         asserted: false,
+    }
+}
+
+/// Unlike a missing credential, an unrecognized mode fails startup: only an operator sets this
+/// variable, and quietly serving desktop tools to a hosted agent would hide their typo.
+fn resolve_mode(env: &ConfigEnv) -> anyhow::Result<ServerMode> {
+    let Some(raw) = env.get(MODE_ENV).and_then(clean_string) else {
+        return Ok(ServerMode::Desktop);
+    };
+    match raw.to_ascii_lowercase().as_str() {
+        "desktop" => Ok(ServerMode::Desktop),
+        "hosted" => Ok(ServerMode::Hosted),
+        _ => anyhow::bail!("{MODE_ENV} must be \"desktop\" or \"hosted\", got {raw:?}"),
     }
 }
 
@@ -336,7 +384,7 @@ mod tests {
         assert!(!super::PursueOffering::Absent.is_offered());
     }
 
-    use super::{Cli, CliAction, Config, ConfigEnv, NATIVE_VERSION_ENV};
+    use super::{Cli, CliAction, Config, ConfigEnv, MODE_ENV, NATIVE_VERSION_ENV, ServerMode};
     use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
     use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
@@ -665,6 +713,37 @@ mod tests {
             Some(BrowserOsVersion::new(0, 51, 1, 2))
         );
         Ok(())
+    }
+
+    #[test]
+    fn mode_defaults_to_desktop_and_reads_hosted_from_the_environment() -> anyhow::Result<()> {
+        assert_eq!(load_native("{}", &[])?.mode, ServerMode::Desktop);
+        assert_eq!(
+            load_native("{}", &[(MODE_ENV, "  ")])?.mode,
+            ServerMode::Desktop
+        );
+        assert_eq!(
+            load_native("{}", &[(MODE_ENV, "desktop")])?.mode,
+            ServerMode::Desktop
+        );
+        for hosted in ["hosted", " Hosted ", "HOSTED"] {
+            assert_eq!(
+                load_native("{}", &[(MODE_ENV, hosted)])?.mode,
+                ServerMode::Hosted,
+                "{hosted:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn an_unrecognized_mode_fails_startup_and_names_the_variable() {
+        let error = load_native("{}", &[(MODE_ENV, "hostd")])
+            .err()
+            .map(|error| error.to_string())
+            .unwrap_or_default();
+        assert!(error.contains(MODE_ENV), "{error}");
+        assert!(error.contains("\"hostd\""), "{error}");
     }
 }
 

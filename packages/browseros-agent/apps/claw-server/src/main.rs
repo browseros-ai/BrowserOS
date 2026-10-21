@@ -111,6 +111,11 @@ fn log_native_identity(config: &claw_server::config::Config) {
     } else {
         info!(%native, "native BrowserOS identity from launch config");
     }
+    info!(
+        mode = config.mode.as_str(),
+        env = claw_server::config::MODE_ENV,
+        "server mode"
+    );
 }
 
 async fn run(
@@ -411,6 +416,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let shutdown = state.shutdown.clone();
@@ -461,6 +467,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
         let state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let mut runtime = AppRuntime::start(state);

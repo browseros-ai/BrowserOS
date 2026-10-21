@@ -381,6 +381,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let audit_log = state.audit_log.clone();
@@ -434,6 +435,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         let preview_started = Arc::new(Notify::new());
@@ -481,6 +483,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
         let state = AppState::new_with_home(config, root.path().join("home")).await?;
         state
@@ -533,6 +536,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let host = format!("http://{}", listener.local_addr()?);
@@ -687,6 +691,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
         let mut state = AppState::new_with_home(config.clone(), root.path().join("home")).await?;
         let analytics = Arc::new(

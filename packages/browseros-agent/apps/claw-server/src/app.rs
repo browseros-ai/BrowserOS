@@ -293,6 +293,7 @@ mod tests {
             replay_retention_days: 7,
             dev_mode: false,
             native: Default::default(),
+            mode: Default::default(),
         });
 
         let _state = AppState::new_with_home(config, dir.path().join("home")).await?;

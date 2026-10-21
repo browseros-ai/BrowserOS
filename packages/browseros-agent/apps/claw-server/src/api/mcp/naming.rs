@@ -10,6 +10,8 @@ use crate::{
 };
 
 const SMALL_NAME_WORD_LIMIT: usize = 3;
+/// Longest raw label accepted from an agent, before normalization shortens it.
+pub const SESSION_NAME_INPUT_MAX_LEN: usize = 64;
 const SMALL_NAME_MAX_LEN: usize = 32;
 
 /// Normalizes a user-provided session label into a short tab-group slug.
