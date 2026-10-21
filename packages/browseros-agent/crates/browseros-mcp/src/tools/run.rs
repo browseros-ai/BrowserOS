@@ -845,13 +845,7 @@ impl BrowserBridge {
         let page = target_page(method, &args);
         // Mark before host authorization/native gating: even a rejected call may
         // have a password literal in its parent script or serialized CDP input.
-        let credential_input = method == "tool:credentials"
-            || matches!(method, "cdp" | "cdpJsonForPage")
-                && args.iter().any(|arg| {
-                    arg.as_str().is_some_and(|name| {
-                        matches!(name, "Autofill.addCredential" | "Autofill.fillCredential")
-                    })
-                });
+        let credential_input = crate::tools::credentials::is_credential_primitive(method, &args);
         if credential_input && let Some(hook) = &self.ctx.inner_call_hook {
             hook.mark_credential_input();
         }

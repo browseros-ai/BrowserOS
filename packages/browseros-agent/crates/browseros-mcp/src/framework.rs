@@ -335,8 +335,9 @@ pub struct AuditHints {
     /// Refs whose value must be redacted from `args_json` (matches the top-level
     /// `ref` or a `fields[]` entry's `ref`).
     pub sensitive_refs: Vec<String>,
-    /// Redact every `value`/`text`/`fields[].value` regardless of ref. Set when the
-    /// target has no ref to key on (`type`, `type_at`) or the caller forces it.
+    /// Redact every `value`/`text`/`fields[].value` regardless of ref, and script
+    /// `code` at the host audit boundary. Explicit passwords are always redacted.
+    /// Set when the target has no ref or the source itself may contain secrets.
     pub redact_all_values: bool,
     /// Skip the audit screenshot for this dispatch.
     pub skip_screenshot: bool,

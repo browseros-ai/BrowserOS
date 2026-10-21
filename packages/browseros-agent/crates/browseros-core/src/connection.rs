@@ -224,6 +224,23 @@ impl ProtocolSession {
         self.session_id == other.session_id
     }
 
+    /// Cleanup must reach the original session even after page-scope admission
+    /// has been revoked (for example a moved tab). Retain the socket epoch and
+    /// session identity; callers may only use this for idempotent cancellation.
+    pub(crate) fn cancellation_endpoint(&self) -> Self {
+        let mut endpoint = self.clone();
+        endpoint.admission = None;
+        if endpoint.epoch_guard.is_none() {
+            endpoint.epoch_guard = Some(EpochGuard {
+                expected: self.connection.connection_epoch(),
+                invalidated: crate::TargetError::CdpUnsupported {
+                    method: "credential cancellation".into(),
+                },
+            });
+        }
+        endpoint
+    }
+
     pub(crate) fn with_admission(mut self, admission: Arc<dyn ProtocolAdmission>) -> Self {
         self.admission = Some(admission);
         self

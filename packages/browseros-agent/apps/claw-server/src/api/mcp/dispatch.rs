@@ -137,7 +137,19 @@ impl ToolCall {
             ToolFlags::default()
         };
         Self {
-            sensitive_credentials: Arc::default(),
+            // Conservatively classify common credential-bearing source before
+            // target admission or execution. The bridge also marks dynamic calls.
+            sensitive_credentials: Arc::new(std::sync::atomic::AtomicBool::new(
+                tool_name == "credentials"
+                    || tool_name == "run"
+                        && raw_args
+                            .get("code")
+                            .and_then(Value::as_str)
+                            .is_some_and(|source| {
+                                let source = source.to_ascii_lowercase();
+                                source.contains("credential") || source.contains("password")
+                            }),
+            )),
             foreign_pages: Arc::new(std::sync::Mutex::new(std::collections::BTreeMap::new())),
             created_page_snapshots: Arc::default(),
             catalog,

@@ -127,7 +127,10 @@ async fn build_event(
         skip_screenshot: true,
         ..Default::default()
     };
-    let audit_hints = if sensitive_script {
+    // Source can embed credentials even when admission, syntax checking or
+    // cancellation prevents the bridge from discovering that call. Keep child
+    // step metadata, but never persist raw run source in the audit ledger.
+    let audit_hints = if sensitive_script || call.tool().name == "run" {
         Some(&script_hints)
     } else {
         result.audit_hints.as_ref()
@@ -529,6 +532,20 @@ mod tests {
             .ok_or_else(|| anyhow::anyhow!("missing event"))?;
         assert!(event.input.args_json.contains("[redacted]"));
         assert!(!event.input.args_json.contains("synthetic-run-secret"));
+        assert!(event.preview.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn credential_script_is_sensitive_even_before_the_bridge_runs() -> anyhow::Result<()> {
+        let call = crate::api::mcp::test_support::tool_call("run", json!({
+            "code":"await sleep(99999); await browser.credentials({action:'add',password:'synthetic-unreached-secret'});"
+        })).await?;
+        let result = ToolResult::error("cancelled before execution");
+        let event = build_event(&call, &result, 1, true)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("missing event"))?;
+        assert!(!event.input.args_json.contains("synthetic-unreached-secret"));
         assert!(event.preview.is_none());
         Ok(())
     }

@@ -21,8 +21,8 @@ impl Drop for PendingCredentialOperation {
         }
         let endpoint = self.endpoint.clone();
         let id = self.id.clone();
-        // Cleanup stays on the original socket epoch/session. Navigation may
-        // invalidate ordinary admission, so the native cancellation is best effort.
+        // Cleanup stays on the original socket epoch/session without ordinary
+        // page admission: a moved tab must still cancel its outstanding operation.
         tokio::spawn(async move {
             let _ = tokio::time::timeout(
                 Duration::from_secs(5),
@@ -86,7 +86,7 @@ impl BrowserView {
         let id = uuid::Uuid::new_v4().to_string();
         params["operationId"] = json!(id);
         let mut pending = PendingCredentialOperation {
-            endpoint: endpoint.clone(),
+            endpoint: endpoint.cancellation_endpoint(),
             id,
             armed: true,
         };
