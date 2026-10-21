@@ -116,18 +116,25 @@ struct ReadingResult {
 
 #[derive(Debug, Deserialize)]
 struct ReadingObject {
-    value: Option<Reading>,
+    value: Option<ReadinessReading>,
 }
 
+/// One reading of a page's readiness counter.
 #[derive(Debug, Clone, Copy, Deserialize)]
-struct Reading {
-    n: u64,
-    installed: bool,
-    showing: bool,
-    complete: bool,
+pub struct ReadinessReading {
+    /// Mutations the observer has seen since it was installed.
+    #[serde(rename = "n")]
+    pub count: u64,
+    /// Whether this call re-armed the observer. When it did, `count` started
+    /// over and cannot be compared with the reading before it.
+    pub installed: bool,
+    /// Whether the body has anything in it.
+    pub showing: bool,
+    /// Whether the document reports itself finished.
+    pub complete: bool,
 }
 
-impl Reading {
+impl ReadinessReading {
     /// Quiet is only evidence of readiness once there is something to be quiet
     /// about.
     ///
@@ -135,9 +142,26 @@ impl Reading {
     /// calling that ready hands back a blank page. `complete` is the other
     /// sufficient answer, and it is what keeps a genuinely empty document
     /// (about:blank, a 204) from burning the whole ceiling.
-    fn worth_settling_on(self) -> bool {
+    #[must_use]
+    pub fn settled_enough(self) -> bool {
         self.showing || self.complete
     }
+}
+
+/// Installs the readiness counter if it is missing, then reads it once.
+///
+/// For callers running their own loop and their own timeout, such as the
+/// navigation wait, which has a dialog check to interleave.
+pub async fn read_readiness(session: &ProtocolSession) -> Result<ReadinessReading, CoreError> {
+    let result: ReadingResult = session
+        .send(
+            "Runtime.evaluate",
+            json!({ "expression": READINESS_PROBE_JS, "returnByValue": true }),
+        )
+        .await?;
+    result.result.value.ok_or_else(|| {
+        CoreError::Message("the readiness probe returned nothing".to_string())
+    })
 }
 
 /// Waits until the page's content stops changing, or the ceiling is reached.
@@ -161,13 +185,10 @@ pub async fn wait_for_representation_stable(
             Ok(reading) => reading,
             Err(readiness) => return readiness,
         };
-        if !reading.installed
-            && previous == Some(reading.n)
-            && reading.worth_settling_on()
-        {
+        if !reading.installed && previous == Some(reading.count) && reading.settled_enough() {
             return Readiness::Stable;
         }
-        previous = Some(reading.n);
+        previous = Some(reading.count);
         if sleep_for_budget(timeouts::ACTION_SETTLE_DOM_QUIET, deadline)
             .await
             .is_err()
@@ -197,7 +218,7 @@ pub async fn wait_for_page_ready(
 async fn read_reading(
     session: &ProtocolSession,
     deadline: Instant,
-) -> Result<Reading, Readiness> {
+) -> Result<ReadinessReading, Readiness> {
     let result: ReadingResult = call_with_deadline(
         session.send(
             "Runtime.evaluate",
