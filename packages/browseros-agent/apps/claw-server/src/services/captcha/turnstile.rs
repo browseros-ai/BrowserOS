@@ -50,7 +50,9 @@ if (widget) {
     selector = path.join(' > ');
 }
 const wasVisible = visible(widget);
-const inputs = [...document.querySelectorAll('input[name="cf-turnstile-response"]')];
+const allInputs = [...document.querySelectorAll('input[name="cf-turnstile-response"]')];
+const inputs = widget ? [...widget.querySelectorAll('input[name="cf-turnstile-response"]')]
+    : (allInputs.length === 1 ? allInputs : []);
 for (const input of inputs) {
     input.value = args.token;
     input.dispatchEvent(new Event('input', {bubbles: true}));
@@ -250,12 +252,13 @@ async fn checkbox<P: CaptchaPage, B: CaptchaBackend>(
                 .is_some_and(|url| url.host_str() == Some("challenges.cloudflare.com"))
         })
         .collect();
-    frames.sort_by_key(|frame| {
-        challenge
-            .frame
-            .as_ref()
-            .is_none_or(|hint| frame.frame_id != hint.frame_id)
-    });
+    if let Some(hint) = &challenge.frame {
+        if frames.iter().any(|frame| frame.frame_id == hint.frame_id) {
+            frames.retain(|frame| frame.frame_id == hint.frame_id);
+        } else if frames.len() != 1 {
+            return Ok(None);
+        }
+    }
     for frame in frames {
         if let Some(rect) = checked(
             ctx,
@@ -530,6 +533,8 @@ mod tests {
         token_at: usize,
         pass_on_click: bool,
         rect: Option<Rect>,
+        secondary_rect: Option<Rect>,
+        selected_frame: bool,
         clicks: Vec<(f64, f64)>,
         navigated: bool,
         error: Option<PageError>,
@@ -548,6 +553,8 @@ mod tests {
                 token_at: usize::MAX,
                 pass_on_click: false,
                 rect: None,
+                secondary_rect: None,
+                selected_frame: false,
                 clicks: Vec::new(),
                 navigated: false,
                 error: None,
@@ -603,7 +610,7 @@ mod tests {
         }
 
         async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
-            Ok(vec![FrameRef {
+            let mut frames = vec![FrameRef {
                 frame_id: "fresh-frame".into(),
                 url: "https://challenges.cloudflare.com/turnstile/widget".into(),
                 rect: Some(Rect {
@@ -612,7 +619,15 @@ mod tests {
                     width: 300.0,
                     height: 65.0,
                 }),
-            }])
+            }];
+            if self.state().secondary_rect.is_some() {
+                frames.push(FrameRef {
+                    frame_id: "other-frame".into(),
+                    url: "https://challenges.cloudflare.com/turnstile/other-widget".into(),
+                    rect: None,
+                });
+            }
+            Ok(frames)
         }
 
         async fn eval_in_frame(&self, _: &FrameRef, _: &str) -> Result<Value, PageError> {
@@ -624,9 +639,12 @@ mod tests {
             frame: &FrameRef,
             selector: &str,
         ) -> Result<Option<Rect>, PageError> {
-            assert_eq!(frame.frame_id, "fresh-frame");
             assert_eq!(selector, "input[type=checkbox]");
-            Ok(self.state().rect)
+            Ok(if frame.frame_id == "fresh-frame" {
+                self.state().rect
+            } else {
+                self.state().secondary_rect
+            })
         }
 
         async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
@@ -753,6 +771,14 @@ mod tests {
             .try_reserve(42, "cap_test")
             .map_err(|_| anyhow::anyhow!("unexpected busy page"))?;
         let events = EventLog::new(CaptchaEventBus::new(), "cap_test".into(), 42);
+        let mut challenge = challenge();
+        if page.state().selected_frame {
+            challenge.frame = Some(FrameRef {
+                frame_id: "fresh-frame".into(),
+                url: "https://challenges.cloudflare.com/turnstile/widget".into(),
+                rect: None,
+            });
+        }
         Ok(solve(
             &SolveCtx {
                 page,
@@ -765,7 +791,7 @@ mod tests {
                 document: document(),
                 user_agent: None,
             },
-            &challenge(),
+            &challenge,
         )
         .await)
     }
@@ -829,6 +855,29 @@ mod tests {
         assert!((x - 142.0).abs() <= 2.0 && (y - 232.0).abs() <= 2.0);
         assert_eq!(result.attempts.checkbox, 1);
         assert!(backend.tasks().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_loading_widget_does_not_click_another_widget() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.selected_frame = true;
+            state.secondary_rect = Some(Rect {
+                x: 500.0,
+                y: 500.0,
+                width: 24.0,
+                height: 24.0,
+            });
+            state.pass_on_click = true;
+        }
+        let result = finish(&page, &FakeBackend::error(ProviderErrorKind::NotConfigured)).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::NeedsHuman, SolveReason::NoProvider)
+        );
+        assert!(page.state().clicks.is_empty());
         Ok(())
     }
 
