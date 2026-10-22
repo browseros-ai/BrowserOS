@@ -75,6 +75,7 @@
     "test:claw-api-contract": "bun test contracts/claw-api/tests/fixtures.test.ts contracts/claw-api/tests/schema.test.ts",
     "test:claw-mcp-smoke": "bun contracts/claw-mcp/tests/run.ts --smoke",
     "test:claw-mcp-contract": "bun contracts/claw-mcp/tests/run.ts",
+    "captcha:provider-check": "bun contracts/captcha/provider-check/check.ts",
     "env:examples": "bun scripts/env/generate-examples.ts",
     "env:examples:check": "bun scripts/env/generate-examples.ts --check",
     "env:migrate": "bun scripts/env/migrate-local.ts",
