@@ -212,7 +212,7 @@
     },
     "apps/claw-onboard": {
       "name": "@browseros/claw-onboard",
-      "version": "0.0.17",
+      "version": "0.0.18",
       "dependencies": {
         "@base-ui/react": "^1.8.0",
         "@browseros/shared": "workspace:*",
