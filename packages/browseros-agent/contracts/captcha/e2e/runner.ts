@@ -67,8 +67,11 @@ export function classifyOutcome(
 }
 
 function payload(text: string): unknown {
-  const clean = text
-    .replace(/\[(END_)?UNTRUSTED_PAGE_CONTENT[^\]]*\]/g, '')
+  // The opening line contains a trust notice; readiness notes follow the end fence.
+  const framed = text.match(
+    /^\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\n]*\n([\s\S]*?)\n\[END_UNTRUSTED_PAGE_CONTENT[^\]]*\]/,
+  )
+  const clean = (framed?.[1] ?? text)
     .replace(/Tip: this session is[\s\S]*$/, '')
     .trim()
   try {

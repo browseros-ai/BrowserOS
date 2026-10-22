@@ -10,7 +10,7 @@ test('tests that CLI defaults and repeated browser flags are preserved', () => {
     pages: 'fixtures',
     keys: 'placeholder',
     solveTimeout: 150_000,
-    headed: false,
+    headed: true,
   })
   expect(
     parseOptions([
@@ -67,6 +67,8 @@ test('tests that browser flags with spaces arrive as one argument and environmen
         }
       },
     )
+    expect(parseOptions(['--headless']).headed).toBe(false)
+    expect(parseOptions(['--headed']).headed).toBe(true)
     expect(process.env.BROWSEROS_BINARY).toBe(binary)
     expect(await Bun.file(wrapper).exists()).toBe(false)
   } finally {
