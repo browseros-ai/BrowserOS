@@ -67,6 +67,11 @@ impl InnerCallHook for ScriptInnerCallHook {
             let Some(page) = page else {
                 return Ok(());
             };
+            if let Some(captcha) = &self.call.state.captcha
+                && let Some(message) = captcha.reservations().busy_message(page)
+            {
+                return Err(message);
+            }
             let Some(identity) = self.identity() else {
                 return Ok(());
             };
@@ -347,6 +352,41 @@ mod tests {
 
     fn hook_for(call: &crate::api::mcp::dispatch::ToolCall) -> ScriptInnerCallHook {
         ScriptInnerCallHook::new(call.clone())
+    }
+
+    #[tokio::test]
+    async fn tests_that_captcha_busy_refuses_script_primitives_before_ownership()
+    -> anyhow::Result<()> {
+        let mut call = tool_call("run", serde_json::json!({"code":"return 1"})).await?;
+        crate::api::mcp::guards::captcha_busy::tests::enable_captcha(&mut call)?;
+        let service = call
+            .state
+            .captcha
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("missing service"))?;
+        let _lease = service
+            .reservations()
+            .try_reserve(42, "cap_test")
+            .map_err(|_| anyhow::anyhow!("busy"))?;
+        let hook = hook_for(&call);
+        let expected = "page 42 is busy: solve_captcha (request cap_test) is working on a unknown CAPTCHA (detecting, 0s). Wait for it to return, then take a fresh snapshot.";
+        assert_eq!(hook.authorize(Some(42)).await, Err(expected.into()));
+        assert!(
+            call.foreign_pages
+                .lock()
+                .map_err(|_| anyhow::anyhow!("poisoned"))?
+                .is_empty()
+        );
+        assert!(hook.authorize(Some(7)).await.is_ok());
+        assert!(hook.authorize(None).await.is_ok());
+        call.identity = None;
+        assert_eq!(
+            hook_for(&call).authorize(Some(42)).await,
+            Err(expected.into())
+        );
+        call.state.captcha = None;
+        assert!(hook_for(&call).authorize(Some(42)).await.is_ok());
+        Ok(())
     }
 
     #[tokio::test]

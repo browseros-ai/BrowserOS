@@ -1,3 +1,4 @@
+pub mod captcha_status;
 pub mod ownership_claims;
 pub mod page_ownership_notice;
 pub mod scope_notice;
