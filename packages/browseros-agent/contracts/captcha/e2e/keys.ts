@@ -3,10 +3,14 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 export type KeyMode = 'placeholder' | 'real' | 'none'
-const providers = ['CAPSOLVER', '2CAPTCHA'] as const
+const primary = 'BROWSEROS_CAPSOLVER_API_KEY_FILE'
 
 export async function configureKeys(mode: KeyMode, source = process.env) {
-  const env: Record<string, string | undefined> = {}
+  const env: Record<string, string | undefined> = Object.fromEntries(
+    Object.entries(source)
+      .filter(([name]) => /^BROWSEROS_.+_API_KEY_FILE$/.test(name))
+      .map(([name, value]) => [name, mode === 'real' ? value : undefined]),
+  )
   const directory =
     mode === 'placeholder'
       ? await mkdtemp(join(tmpdir(), 'captcha-keys-'))
@@ -15,30 +19,19 @@ export async function configureKeys(mode: KeyMode, source = process.env) {
     if (directory) await rm(directory, { recursive: true, force: true })
   }
   try {
-    for (const provider of providers) {
-      const name = `BROWSEROS_${provider}_API_KEY_FILE`
-      if (directory && provider === 'CAPSOLVER') {
-        env[name] = join(directory, provider.toLowerCase())
-        await writeFile(env[name], `captcha-e2e-placeholder-${provider}\n`, {
-          mode: 0o600,
-        })
-      } else if (mode === 'real') {
-        const path =
-          source[name] ||
-          join(
-            homedir(),
-            '.config/browseros/captcha',
-            `${provider.toLowerCase()}-api-key`,
-          )
-        const expanded = resolve(
-          path.startsWith('~/') ? join(homedir(), path.slice(2)) : path,
-        )
-        env[name] =
-          provider === 'CAPSOLVER' || (await Bun.file(expanded).exists())
-            ? expanded
-            : undefined
-      } else env[name] = undefined
-    }
+    if (directory) {
+      env[primary] = join(directory, 'capsolver')
+      await writeFile(env[primary], 'captcha-e2e-placeholder-CAPSOLVER\n', {
+        mode: 0o600,
+      })
+    } else if (mode === 'real') {
+      const path =
+        source[primary] ||
+        join(homedir(), '.config/browseros/captcha/capsolver-api-key')
+      env[primary] = resolve(
+        path.startsWith('~/') ? join(homedir(), path.slice(2)) : path,
+      )
+    } else env[primary] = undefined
     return { env, cleanup }
   } catch (error) {
     await cleanup()

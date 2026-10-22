@@ -5,7 +5,7 @@
 - `e2e/`: MCP runner and local contract stub. Run `bun run test:captcha-e2e -- --pages all`.
 - `docker/`: isolated browser/server test environment.
 
-The runner defaults to one temporary CapSolver placeholder key file and disables the backup. `--keys real` forwards `BROWSEROS_CAPSOLVER_API_KEY_FILE` and, only if its file exists, `BROWSEROS_2CAPTCHA_API_KEY_FILE`, without reading key contents. `--keys none` clears both. Use `--paid` to require paid paths to succeed. Without it, eligible provider failures remain UNVERIFIED. Only token lengths are saved.
+The runner defaults to one temporary CapSolver placeholder key file and clears other inherited provider keys. `--keys real` expands `BROWSEROS_CAPSOLVER_API_KEY_FILE` (default `~/.config/browseros/captcha/capsolver-api-key`) and forwards any other inherited `BROWSEROS_*_API_KEY_FILE` path as-is, without reading key contents. `--keys none` clears all matching key variables. Use `--paid` to require paid paths to succeed. Without it, eligible provider failures remain UNVERIFIED. Only token lengths are saved.
 
 The dev browser runs headed by default; use `--headless` to opt in to headless testing. `--headed` remains an alias for the default.
 
