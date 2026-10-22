@@ -2,183 +2,173 @@
  * @license
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
+ *
+ * The cockpit's first run, until the person's first agent activity. neo
+ * carries on the chat the onboarding page started: which AI apps it connected
+ * (Cockpit passes the real installed, user-facing harnesses), the one extra
+ * step Claude Cowork needs, then a demo of a chore and two tasks to try.
  */
 
 import { Check } from 'lucide-react'
-import { useState } from 'react'
-import { NavLink } from 'react-router'
+import { type CSSProperties, type ReactNode, useState } from 'react'
+import { HarnessIcon } from '@/components/harness/HarnessIcon'
+import type { Harness } from '@/components/harness/harness.types'
 import { cn } from '@/lib/utils'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
-  CONNECTED_COPY,
-  FOOTER_COPY,
-  HERO_COPY,
-  MANAGE_COPY,
-  type OnboardingState,
-  PANEL_COPY,
-  STARTER_PROMPT,
-  STARTER_PROMPT_LABEL,
+  FIRST_RUN_COPY,
+  GET_CLAUDE_URL,
+  TRY_PROMPTS,
 } from '@/screens/cockpit/cockpit-onboarding.helpers'
-import { StarterPromptTile } from './StarterPromptTile'
-import { VideoFeature } from './VideoFeature'
+import { InstallExtensionDialog } from '@/screens/mcp/InstallExtensionDialog'
+import { OnboardingDemo } from './OnboardingDemo'
+import { PromptPill } from './PromptPill'
 
 interface CockpitOnboardingProps {
-  state: Exclude<OnboardingState, 'ready'>
-  connectedHarnesses?: readonly string[]
+  connectedHarnesses?: readonly Harness[]
 }
 
 export function CockpitOnboarding({
-  state,
   connectedHarnesses = [],
 }: CockpitOnboardingProps) {
-  const [promptCopied, setPromptCopied] = useState(false)
-  const isWaiting = state === 'waiting'
-  const listening = isWaiting || promptCopied
-  const statusText = promptCopied
-    ? PANEL_COPY.copied
-    : isWaiting
-      ? PANEL_COPY.waiting
-      : PANEL_COPY.tieBack
-  const flagCopied = () => {
-    track(AnalyticsEvent.OnboardingTaskCopied)
-    setPromptCopied(true)
-    window.setTimeout(() => setPromptCopied(false), 8000)
-  }
+  const [coworkGuideOpen, setCoworkGuideOpen] = useState(false)
+  const found = connectedHarnesses.length > 0
+
   return (
-    <section
-      className="flex flex-col gap-8"
-      aria-label={HERO_COPY.eyebrow.toLowerCase()}
-    >
-      <OnboardingHero />
-      <div className="grid gap-6 md:grid-cols-12 md:items-stretch">
-        <div className="md:col-span-7">
-          <VideoFeature />
-        </div>
-        <StartPanel
-          className="md:col-span-5"
-          harnesses={connectedHarnesses}
-          listening={listening}
-          statusText={statusText}
-          onPromptCopied={flagCopied}
+    <section className="flex flex-col gap-3" aria-label="Getting started">
+      <h1 className="font-extrabold text-[40px] text-cyanotype-ink leading-[1.13] tracking-[-0.035em]">
+        {FIRST_RUN_COPY.headingLead}{' '}
+        <em className="font-medium font-serif text-[1.087em] tracking-[-0.015em]">
+          {FIRST_RUN_COPY.headingAccent}
+        </em>{' '}
+        {FIRST_RUN_COPY.headingTail}
+      </h1>
+
+      <div className="flex items-start gap-3">
+        <img
+          src="/icons/browserclaw.svg"
+          alt=""
+          aria-hidden
+          className="mt-0.5 size-[38px] shrink-0 rounded-[10px]"
         />
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <Line order={0}>
+            <Bubble lead>
+              {found ? FIRST_RUN_COPY.connected : FIRST_RUN_COPY.noneFound}
+            </Bubble>
+            {found ? (
+              <>
+                {connectedHarnesses.map((harness) => (
+                  <span
+                    key={harness}
+                    className="inline-flex h-[34px] items-center gap-2 rounded-full border border-border-2 bg-card pr-3 pl-2.5 font-semibold text-[14px] text-cyanotype-ink"
+                  >
+                    <HarnessIcon harness={harness} className="size-4" />
+                    {harness}
+                    <Check
+                      aria-label="connected"
+                      className="size-3.5 text-accent"
+                      strokeWidth={3}
+                    />
+                  </span>
+                ))}
+                <span className="text-[13px] text-ink-3">
+                  {FIRST_RUN_COPY.restartHint}
+                </span>
+              </>
+            ) : (
+              <a
+                href={GET_CLAUDE_URL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={() =>
+                  track(AnalyticsEvent.OnboardingLinkClicked, {
+                    link: 'get-claude',
+                  })
+                }
+                className="px-1 font-semibold text-[15px] text-ink-2 transition-colors hover:text-cyanotype-ink"
+              >
+                {FIRST_RUN_COPY.getClaude}
+              </a>
+            )}
+          </Line>
+          <Line order={1}>
+            <Bubble>{FIRST_RUN_COPY.cowork}</Bubble>
+            <button
+              type="button"
+              onClick={() => {
+                track(AnalyticsEvent.OnboardingLinkClicked, { link: 'cowork' })
+                setCoworkGuideOpen(true)
+              }}
+              className={cn(
+                'h-[38px] cursor-pointer rounded-full px-4 font-semibold text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25',
+                // With no app found, Cowork is the main way in.
+                found
+                  ? 'border border-border bg-card text-cyanotype-ink hover:bg-bg-canvas'
+                  : 'bg-accent text-accent-foreground hover:bg-accent-2',
+              )}
+            >
+              {FIRST_RUN_COPY.coworkAction}
+            </button>
+          </Line>
+          <Line order={2}>
+            <Bubble>{FIRST_RUN_COPY.watch}</Bubble>
+          </Line>
+        </div>
       </div>
-      <OnboardingFooter />
+
+      <OnboardingDemo />
+
+      <div className="flex flex-col gap-2">
+        <div className="flex items-start gap-3.5">
+          <span className="shrink-0 whitespace-nowrap pt-[11px] font-semibold text-[15px] text-ink leading-5">
+            {FIRST_RUN_COPY.tryLabel}
+          </span>
+          <div className="flex min-w-0 flex-1 flex-wrap gap-2.5">
+            {TRY_PROMPTS.map((prompt) => (
+              <PromptPill
+                key={prompt}
+                prompt={prompt}
+                onCopied={() => track(AnalyticsEvent.OnboardingTaskCopied)}
+              />
+            ))}
+          </div>
+        </div>
+        <p className="text-[14px] text-ink-3 leading-5">
+          {FIRST_RUN_COPY.tryHint}
+        </p>
+      </div>
+
+      <InstallExtensionDialog
+        open={coworkGuideOpen}
+        onOpenChange={setCoworkGuideOpen}
+      />
     </section>
   )
 }
 
-function OnboardingHero() {
-  return (
-    <header className="flex flex-col gap-3 pt-1">
-      <span className="font-mono text-[11px] text-ink-3 uppercase tracking-[0.14em]">
-        {HERO_COPY.eyebrow}
-      </span>
-      <h1 className="font-extrabold text-3xl leading-[1.15] tracking-tight md:text-4xl">
-        {HERO_COPY.h1Prefix}{' '}
-        <span className="font-medium font-serif text-accent italic">
-          {HERO_COPY.h1Accent}
-        </span>
-      </h1>
-      <p className="max-w-xl text-ink-3 text-sm">{HERO_COPY.subhead}</p>
-    </header>
-  )
-}
-
-interface StartPanelProps {
-  className?: string
-  harnesses: readonly string[]
-  listening: boolean
-  statusText: string
-  onPromptCopied: () => void
-}
-
-function StartPanel({
-  className,
-  harnesses,
-  listening,
-  statusText,
-  onPromptCopied,
-}: StartPanelProps) {
+/** One of neo's lines, landing a beat after the one above it. */
+function Line({ order, children }: { order: number; children: ReactNode }) {
+  const style: CSSProperties = { animationDelay: `${150 + order * 350}ms` }
   return (
     <div
+      style={style}
+      className="flex animate-fade-up flex-wrap items-center gap-2 motion-reduce:animate-none"
+    >
+      {children}
+    </div>
+  )
+}
+
+function Bubble({ lead, children }: { lead?: boolean; children: ReactNode }) {
+  return (
+    <span
       className={cn(
-        'flex flex-col gap-5 rounded-2xl border border-border-2 bg-card p-6',
-        className,
+        'rounded-[20px] bg-accent-tint px-4 py-2.5 font-medium text-[17px] text-cyanotype-ink leading-[22px]',
+        lead && 'rounded-tl-[6px]',
       )}
     >
-      <AgentChips harnesses={harnesses} />
-      <div className="flex flex-col gap-3">
-        <div className="flex flex-col gap-1">
-          <h2 className="font-semibold text-ink text-lg">
-            {PANEL_COPY.heading}
-          </h2>
-          <p className="text-ink-3 text-sm">{STARTER_PROMPT_LABEL}</p>
-        </div>
-        <StarterPromptTile
-          prompt={STARTER_PROMPT}
-          onCopied={onPromptCopied}
-          variant="block"
-        />
-      </div>
-      {/* Fixed-height slot: text swaps in place so a copy never reflows the
-          panel (and, via items-stretch, the video beside it). */}
-      <p className="flex min-h-[2.5rem] items-center gap-2 text-[12.5px] text-ink-3">
-        {listening && (
-          <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-accent" />
-        )}
-        <span>{statusText}</span>
-      </p>
-    </div>
-  )
-}
-
-function AgentChips({ harnesses }: { harnesses: readonly string[] }) {
-  if (harnesses.length === 0) return null
-  return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center gap-1.5 text-ink-2">
-        <Check className="size-4 shrink-0 text-accent" />
-        <span className="font-mono text-[11.5px] uppercase tracking-[0.08em]">
-          {harnesses.length} {CONNECTED_COPY.suffix}
-        </span>
-      </div>
-      <div className="flex flex-wrap gap-1.5">
-        {harnesses.map((harness) => (
-          <span
-            key={harness}
-            className="rounded-full border border-border-2 bg-muted px-2.5 py-1 font-mono text-[11px] text-ink-2"
-          >
-            {harness}
-          </span>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function OnboardingFooter() {
-  return (
-    <div className="flex items-center gap-5 pt-1 text-[12.5px]">
-      <NavLink
-        to={MANAGE_COPY.href}
-        onClick={() =>
-          track(AnalyticsEvent.OnboardingLinkClicked, { link: 'manage' })
-        }
-        className="text-ink-2 underline decoration-border-2 underline-offset-2 transition hover:decoration-ink-2"
-      >
-        {MANAGE_COPY.label}
-      </NavLink>
-      <a
-        href={FOOTER_COPY.docsHref}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={() =>
-          track(AnalyticsEvent.OnboardingLinkClicked, { link: 'docs' })
-        }
-        className="text-ink-2 underline decoration-border-2 underline-offset-2 transition hover:decoration-ink-2"
-      >
-        {FOOTER_COPY.docs}
-      </a>
-    </div>
+      {children}
+    </span>
   )
 }

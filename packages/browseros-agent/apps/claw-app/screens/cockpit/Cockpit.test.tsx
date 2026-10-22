@@ -156,6 +156,7 @@ function setConnectionsState(state: ConnectionsState) {
               state === 'installed'
                 ? [
                     {
+                      harness: 'Codex',
                       installed: true,
                       message: 'Configured in Codex.',
                     },
@@ -283,9 +284,10 @@ describe('Cockpit (v2)', () => {
       sessions: 'empty',
       stats: 'measured',
     })
-    expect(firstRun).toContain('You watch. Your agent')
-    expect(firstRun).toContain('Hand off your first task')
-    expect(firstRun).toContain('onboarding-recording/video.mp4')
+    expect(firstRun).toContain('I didn’t find an AI app yet.')
+    expect(firstRun).toContain('Watch me do one.')
+    expect(firstRun).toContain('Try one')
+    expect(firstRun).not.toContain('<video')
     expect(firstRun).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
 
@@ -294,8 +296,9 @@ describe('Cockpit (v2)', () => {
       sessions: 'empty',
       stats: 'measured',
     })
-    expect(waiting).toContain('Waiting for your first run')
-    expect(waiting).toContain('Manage agents')
+    expect(waiting).toContain('Your AI apps are connected.')
+    expect(waiting).toContain('Codex')
+    expect(waiting).toContain('Set up Cowork')
     expect(waiting).not.toContain('Since you started')
     expect(statsQueryEnabled()).toBe(false)
   })

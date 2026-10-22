@@ -35,43 +35,31 @@ export function getOnboardingState({
   return 'first-run'
 }
 
-export const HERO_COPY = {
-  eyebrow: 'WELCOME',
-  h1Prefix: 'You watch. Your agent',
-  h1Accent: 'works.',
-  subhead:
-    'Your agents are wired in. Watch a quick demo, then hand your first task to any of them.',
+/**
+ * neo's first-run chat in the cockpit. The onboarding page ends after the
+ * import, so this is where neo picks the conversation back up: the apps it
+ * connected (the cockpit has the real list; the page did not), the Claude
+ * Cowork step, then the demo. Plain words only: no MCP, server or config.
+ */
+export const FIRST_RUN_COPY = {
+  headingLead: 'What are your agents',
+  headingAccent: 'working on',
+  headingTail: 'right now?',
+  connected: 'Your AI apps are connected.',
+  restartHint: 'If one is open, restart it once.',
+  noneFound: 'I didn’t find an AI app yet.',
+  getClaude: 'Get Claude',
+  cowork: 'Using Claude Cowork? It needs one last step.',
+  coworkAction: 'Set up Cowork',
+  watch: 'Watch me do one.',
+  tryLabel: 'Try one',
+  tryHint: 'Paste one into Claude Code or Codex, then watch it here.',
 } as const
 
-export const PANEL_COPY = {
-  heading: 'Hand off your first task',
-  // Three status messages share one fixed-height slot so copying never
-  // reflows the panel. Keep each to at most two lines at panel width.
-  tieBack: 'Then come back here to watch it run.',
-  waiting: 'Waiting for your first run. Come back the moment you press enter.',
-  copied: 'Copied. Paste it into your agent, then watch it here.',
-} as const
+export const GET_CLAUDE_URL = 'https://claude.ai/download'
 
-export const MANAGE_COPY = {
-  label: 'Manage agents',
-  href: '/mcp',
-} as const
-
-export const STARTER_PROMPT_LABEL = 'Paste this prompt into your agent.'
-
-export const STARTER_PROMPT =
-  'Using BrowserOS neo, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV'
-
-export const CONNECTED_COPY = {
-  suffix: 'connected',
-} as const
-
-export const FOOTER_COPY = {
-  docs: 'Read the docs',
-  // Deep-link to the BrowserClaw section instead of the docs root
-  // so a first-run reader lands on install / first-run / MCP setup
-  // instead of BrowserOS's general index. Mintlify canonicalises
-  // the URL without a trailing slash, so we use the no-slash form
-  // to avoid triggering a redirect on every click.
-  docsHref: 'https://docs.browseros.com/browserclaw',
-} as const
+/** The same chore the demo shows first, then an everyday one. */
+export const TRY_PROMPTS = [
+  'Find the cheapest flight to New York next Friday.',
+  'Read me today’s top news.',
+] as const
