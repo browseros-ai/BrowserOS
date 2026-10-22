@@ -282,6 +282,39 @@ test('tests that classification follows all four outcome rules in order', () => 
   expect(check('error', 'error').outcome).toBe('FAIL')
 })
 
+test('tests that already_clear on a CAPTCHA needs independent acceptance', () => {
+  for (const family of ['turnstile', 'recaptcha_v2', 'hcaptcha'] as const) {
+    const page: CaptchaPage = {
+      ...(pages[0] as CaptchaPage),
+      family,
+      expect: ['already_clear'],
+    }
+    expect(
+      classifyOutcome(page, 'already_clear', 'accepted', 'already_passed'),
+    ).toEqual({ outcome: 'PASS', note: '' })
+    expect(
+      classifyOutcome(page, 'already_clear', 'rejected', 'already_passed'),
+    ).toEqual({ outcome: 'FAIL', note: 'false positive' })
+    expect(
+      classifyOutcome(page, 'already_clear', 'error', 'already_passed'),
+    ).toEqual({ outcome: 'FAIL', note: 'independent check failed' })
+    expect(
+      classifyOutcome(page, 'already_clear', 'n/a', 'already_passed'),
+    ).toEqual({ outcome: 'PASS', note: 'no independent check' })
+  }
+})
+
+test('tests that already_clear on a non-CAPTCHA page keeps its existing outcome', () => {
+  const page: CaptchaPage = {
+    ...(pages[1] as CaptchaPage),
+    expect: ['already_clear'],
+  }
+  for (const verdict of ['accepted', 'rejected', 'error', 'n/a'])
+    expect(
+      classifyOutcome(page, 'already_clear', verdict, 'no_captcha'),
+    ).toEqual({ outcome: 'PASS', note: '' })
+})
+
 test('tests that a widget timeout is an error and pages still close', async () => {
   const unready = [{ ...(pages[0] as CaptchaPage), ready: 'false' }]
   const records = await run('contract', { pages: unready }, unready)

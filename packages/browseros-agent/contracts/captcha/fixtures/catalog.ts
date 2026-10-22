@@ -67,6 +67,7 @@ export const FIXTURE_PAGES: readonly CaptchaPage[] = [
     'turnstile',
     '/turnstile-pass.html',
     '1x00000000000000000000AA',
+    ['solved', 'already_clear'],
   ),
   fixture(
     'turnstile-block',
@@ -124,7 +125,7 @@ export const DEMO_PAGES: readonly CaptchaPage[] = [
     family: 'turnstile',
     url: 'https://demo.turnstile.workers.dev/',
     sitekey: '1x00000000000000000000AA',
-    expect: ['solved'],
+    expect: ['solved', 'already_clear'],
     mayNeedPaid: false,
     ready:
       '(document.querySelector(".cf-turnstile > div")?.getBoundingClientRect().height ?? 0) > 0',
