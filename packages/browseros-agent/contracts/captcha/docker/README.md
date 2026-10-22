@@ -42,14 +42,13 @@ when the compilation cache is no longer useful.
 
 `none` mounts no keys. `placeholder` mounts one fake CapSolver file. `real`
 mounts `BROWSEROS_CAPSOLVER_API_KEY_FILE` read-only, defaulting to
-`~/.config/browseros/captcha/capsolver-api-key`. It also mounts
-`BROWSEROS_2CAPTCHA_API_KEY_FILE` only when that file exists (default
-`~/.config/browseros/captcha/2captcha-api-key`). These v1.1 contract variables
-point at the corresponding files under `/run/captcha/`. Contents are never
-read/copied by the harness, baked into images, or passed in build arguments.
-The solver tries CapSolver, then 2Captcha, then returns `needs_human`. Paid
-tests are reserved for the mediator's central run. Worker proofs use `none`
-or `placeholder`; the 2Captcha path is unverified: no key yet.
+`~/.config/browseros/captcha/capsolver-api-key`, at
+`/run/captcha/capsolver-api-key` in the container. Any other populated
+`BROWSEROS_*_API_KEY_FILE` in the runner's environment is forwarded unchanged,
+with its existing file mounted read-only at the same absolute path. There are
+no default backup paths. Contents are never read/copied by the harness, baked
+into images, or passed in build arguments. Paid tests are reserved for the
+mediator's central run. Worker proofs use `none` or `placeholder`.
 
 ## Image and OTA
 

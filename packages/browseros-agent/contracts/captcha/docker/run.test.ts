@@ -62,7 +62,6 @@ test('tests that real keys are mounted without reading or copying their contents
   await writeFile(source, 'fake-private-value')
   const env = {
     BROWSEROS_CAPSOLVER_API_KEY_FILE: source,
-    BROWSEROS_2CAPTCHA_API_KEY_FILE: join(dir, 'missing-backup'),
   }
   const args = await keyMounts('real', join(dir, 'unused'), env)
   expect(args.join(' ')).toContain(
@@ -78,22 +77,32 @@ test('tests that real keys are mounted without reading or copying their contents
   ).rejects.toThrow()
 })
 
-test('tests that real mode mounts an optional 2Captcha file only when it exists', async () => {
+test('tests that real mode forwards other configured key-file variables as-is', async () => {
   const dir = await temporary()
   const source = join(dir, 'fake-key')
   await writeFile(source, 'fake-private-value')
   const args = await keyMounts('real', dir, {
     BROWSEROS_CAPSOLVER_API_KEY_FILE: source,
-    BROWSEROS_2CAPTCHA_API_KEY_FILE: source,
+    BROWSEROS_EXAMPLE_API_KEY_FILE: source,
+    UNRELATED_API_KEY_FILE: '/unused',
   })
-  expect(args.join(' ')).toContain(
-    `src=${source},dst=/run/captcha/2captcha-api-key,readonly`,
-  )
-  expect(args.join(' ')).toContain(
-    'BROWSEROS_2CAPTCHA_API_KEY_FILE=/run/captcha/2captcha-api-key',
-  )
+  expect(args.join(' ')).toContain(`src=${source},dst=${source},readonly`)
+  expect(args.join(' ')).toContain(`BROWSEROS_EXAMPLE_API_KEY_FILE=${source}`)
   expect(args.filter((arg) => arg.startsWith('--mount'))).toHaveLength(2)
   expect(args.join(' ')).not.toContain('fake-private-value')
+  expect(args.join(' ')).not.toContain('UNRELATED_API_KEY_FILE')
+})
+
+test('tests that an explicitly configured extra key file must exist', async () => {
+  const dir = await temporary()
+  const source = join(dir, 'fake-key')
+  await writeFile(source, 'fake-private-value')
+  await expect(
+    keyMounts('real', dir, {
+      BROWSEROS_CAPSOLVER_API_KEY_FILE: source,
+      BROWSEROS_EXAMPLE_API_KEY_FILE: join(dir, 'missing'),
+    }),
+  ).rejects.toThrow()
 })
 
 async function harness(failure = '', extra: string[] = []) {

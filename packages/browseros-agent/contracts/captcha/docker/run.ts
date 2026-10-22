@@ -10,7 +10,7 @@ import {
   writeFile,
 } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, resolve } from 'node:path'
 import { McpSession } from '../../claw-mcp/tests/mcp-client'
 
 const root = resolve(import.meta.dir, '../../..')
@@ -78,19 +78,32 @@ export async function keyMounts(
 ) {
   if (mode === 'none') return []
   const args: string[] = []
-  const vendors = mode === 'real' ? ['capsolver', '2captcha'] : ['capsolver']
-  for (const vendor of vendors) {
-    const name = `${vendor}-api-key`
-    const variable = `BROWSEROS_${vendor.toUpperCase()}_API_KEY_FILE`
-    const source =
+  const primary = 'BROWSEROS_CAPSOLVER_API_KEY_FILE'
+  const files: Record<string, string> = {
+    [primary]:
       mode === 'real'
-        ? resolve(
-            env[variable] ?? join(homedir(), '.config/browseros/captcha', name),
-          )
-        : join(dir, name)
-    if (source.includes(','))
+        ? env[primary] ||
+          join(homedir(), '.config/browseros/captcha/capsolver-api-key')
+        : join(dir, 'capsolver-api-key'),
+  }
+  if (mode === 'real') {
+    for (const [variable, value] of Object.entries(env)) {
+      if (
+        variable !== primary &&
+        /^BROWSEROS_\w+_API_KEY_FILE$/.test(variable) &&
+        value
+      )
+        files[variable] = value
+    }
+  }
+  for (const [variable, value] of Object.entries(files)) {
+    const source = resolve(value)
+    const destination =
+      variable === primary ? '/run/captcha/capsolver-api-key' : value
+    if (!isAbsolute(destination))
+      throw new Error('Key-file paths must be absolute')
+    if (source.includes(',') || destination.includes(','))
       throw new Error('Key mount paths cannot contain commas')
-    if (vendor === '2captcha' && !(await Bun.file(source).exists())) continue
     if (mode === 'placeholder') {
       await writeFile(source, 'captcha-e2e-placeholder\n', { mode: 0o444 })
     }
@@ -98,8 +111,8 @@ export async function keyMounts(
     if (!(await stat(source)).isFile())
       throw new Error('Key path must be a regular file')
     args.push(
-      `--mount=type=bind,src=${source},dst=/run/captcha/${name},readonly`,
-      `--env=${variable}=/run/captcha/${name}`,
+      `--mount=type=bind,src=${source},dst=${destination},readonly`,
+      `--env=${variable}=${destination}`,
     )
   }
   return args
