@@ -244,6 +244,8 @@ pub struct ListTasksQuery {
     pub site: Option<String>,
     pub search: Option<String>,
     pub since: Option<i64>,
+    /// Inclusive upper bound on `started_at`, the mirror of `since`.
+    pub until: Option<i64>,
     pub cursor: Option<i64>,
     pub limit: Option<i64>,
 }
@@ -600,6 +602,7 @@ impl AuditLog {
             )
             .add_option(query.site.map(|value| tasks::Column::Site.eq(value)))
             .add_option(query.since.map(|value| tasks::Column::StartedAt.gte(value)))
+            .add_option(query.until.map(|value| tasks::Column::StartedAt.lte(value)))
             .add_option(search_condition)
             .add_option(query.cursor.map(|value| tasks::Column::CursorId.lt(value)));
         let mut tasks = Tasks::find()
