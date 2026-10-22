@@ -35,13 +35,13 @@ async function main(): Promise<number> {
         if (task === 'error') task += ` ${vendor.task.errorCode}`
         const message = vendor.message.replace(/[\r\n\t]/g, ' ')
         lines.push(
-          `${vendor.vendor.padEnd(12)}${vendor.status.padEnd(7)}balance=${balance.padEnd(6)} task=${task}  ${message}`.trimEnd(),
+          `${vendor.vendor.padEnd(12)}${vendor.status.padEnd(8)}balance=${balance.padEnd(6)} task=${task}  ${message}`.trimEnd(),
         )
       }
       lines.push(`paid tasks created: ${report.paidTasksCreated}`)
-      const { capsolver, capmonster } = report.paidSolvingReady
+      const { capsolver, '2captcha': twoCaptcha } = report.paidSolvingReady
       lines.push(
-        `paid solving ready: capsolver=${capsolver ? 'yes' : 'no'} capmonster=${capmonster ? 'yes' : 'no'}`,
+        `paid solving ready: capsolver=${capsolver ? 'yes' : 'no'} 2captcha=${twoCaptcha ? 'yes' : 'no'}`,
       )
       output(lines.join('\n'))
     }

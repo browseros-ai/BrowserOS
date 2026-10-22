@@ -42,8 +42,12 @@ Fetched with curl and opened in an isolated browser:
 - [Google](https://www.google.com/recaptcha/api2/demo): real key; `#recaptcha-demo-submit`; acceptance text `Verification Success`.
 - [Cloudflare](https://demo.turnstile.workers.dev/): public pass key, visible widget host, form posts to `/handler`; submitting its dummy token returned JSON with `"success":true`.
 - [hCaptcha](https://accounts.hcaptcha.com/demo): real key, rendered checkbox; no v1 acceptance check.
-- [CapMonster reCAPTCHA v2](https://capmonster.cloud/en/demo/recaptcha-v2/): rendered checkbox; `Check Captcha` posts to `/api/verify-recaptcha`; its client displays `reCAPTCHA passed successfully!` after server success. An invalid token returned HTTP 400 with `{"success":false}`.
+- [2Captcha reCAPTCHA v2](https://2captcha.com/demo/recaptcha-v2): live widget `#g-recaptcha`, real sitekey `6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u`; may need a paid solve.
+- [2Captcha Turnstile](https://2captcha.com/demo/cloudflare-turnstile): live widget `#cf-turnstile`, public interactive **test key** `3x00000000000000000000FF`; no paid solve required. Readiness checks the visible host because its iframe is inside a closed shadow root.
 
-CapSolver's own-domain demo search found guides pointing to external demos, not a hosted demo. `demo.capsolver.com` did not resolve; no speculative entry was added. CapMonster's v3/Enterprise demos are outside this catalog's supported families. No third-party production site is included.
+Both 2Captcha demos were inspected in BrowserOS neo. Their `main form button[type="submit"]` checks the token with `/api/v1/captcha-demo/<slug>/verify`; the client renders the server's JSON with `"success": true` only after acceptance. The Turnstile test checkbox was completed and submitted: its real response contained `"success": true` and `"result_with_testing_key": true`. The reCAPTCHA acceptance path was read from the deployed client; no paid demo solve was attempted. Inspecting these public demos needs no provider key.
 
-Paid solving remains **unverified**: the brief reports CapSolver `ERROR_KEY_DENIED_ACCESS` and a zero CapMonster balance. These fixtures never read provider API keys.
+CapSolver's own-domain demo search found guides pointing to external demos, not a hosted demo. `demo.capsolver.com` did not resolve; no speculative entry was added. No third-party production site is included.
+
+Provider readiness is checked separately by `bun run captcha:provider-check`.
+Both providers passed the live API check; paid solving on these demo pages remains **unverified**. These fixtures never read provider API keys.

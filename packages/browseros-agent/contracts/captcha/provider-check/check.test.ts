@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const key = 'unit-test-key-must-not-leak-123'
-type Vendor = 'capsolver' | 'capmonster'
+type Vendor = 'capsolver' | '2captcha'
 type RequestBody = { clientKey: string; task?: unknown; taskId?: unknown }
 type Handler = (
   vendor: Vendor,
@@ -19,27 +19,13 @@ let handler: Handler
 
 function successful(vendor: Vendor, method: string) {
   if (method === 'getBalance') return { errorId: 0, balance: 1.25 }
-  if (vendor === 'capmonster' && method === 'createTask')
+  if (vendor === '2captcha' && method === 'createTask')
     return { errorId: 0, taskId: 42 }
   return {
     errorId: 0,
     status: 'ready',
     solution:
-      vendor === 'capsolver'
-        ? { objects: [0, 4, 7] }
-        : {
-            answer: [
-              true,
-              false,
-              false,
-              false,
-              true,
-              false,
-              false,
-              true,
-              false,
-            ],
-          },
+      vendor === 'capsolver' ? { objects: [0, 4, 7] } : { click: [1, 5, 8] },
   }
 }
 
@@ -49,12 +35,12 @@ beforeEach(async () => {
   await writeFile(path, ` \n${key}\n `)
   env = {
     BROWSEROS_CAPSOLVER_API_KEY_FILE: path,
-    BROWSEROS_CAPMONSTER_API_KEY_FILE: path,
+    BROWSEROS_2CAPTCHA_API_KEY_FILE: path,
   }
   calls = []
   servers = []
   handler = successful
-  for (const vendor of ['capsolver', 'capmonster'] as const) {
+  for (const vendor of ['capsolver', '2captcha'] as const) {
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
@@ -77,7 +63,7 @@ afterEach(async () => {
 })
 
 function assertLocalSettings() {
-  for (const vendor of ['CAPSOLVER', 'CAPMONSTER']) {
+  for (const vendor of ['CAPSOLVER', '2CAPTCHA']) {
     expect(env[`BROWSEROS_${vendor}_API_KEY_FILE`]?.startsWith(directory)).toBe(
       true,
     )
@@ -104,7 +90,7 @@ async function run(options = {}) {
 async function cli(args: readonly string[] = []) {
   assertLocalSettings()
   const inherited = { ...process.env }
-  for (const vendor of ['CAPSOLVER', 'CAPMONSTER']) {
+  for (const vendor of ['CAPSOLVER', '2CAPTCHA']) {
     delete inherited[`BROWSEROS_${vendor}_API_KEY_FILE`]
     delete inherited[`BROWSEROS_${vendor}_API_URL`]
   }
@@ -128,7 +114,7 @@ test('tests that funded vendors run exactly one correctly shaped task', async ()
   const { report } = await run()
   expect(report.exitCode).toBe(0)
   expect(report.paidTasksCreated).toBe(2)
-  expect(report.paidSolvingReady).toEqual({ capsolver: true, capmonster: true })
+  expect(report.paidSolvingReady).toEqual({ capsolver: true, '2captcha': true })
   for (const result of report.vendors) {
     expect(result.status).toBe('ok')
     expect(result.balance).toBe(1.25)
@@ -149,13 +135,12 @@ test('tests that funded vendors run exactly one correctly shaped task', async ()
       question: '/m/015qff',
     },
   )
-  expect(
-    tasks.find(({ vendor }) => vendor === 'capmonster')?.body.task,
-  ).toEqual({
-    type: 'ComplexImageTask',
-    class: 'recaptcha',
-    imagesBase64: [base64],
-    metadata: { Grid: '3x3', TaskDefinition: '/m/015qff' },
+  expect(tasks.find(({ vendor }) => vendor === '2captcha')?.body.task).toEqual({
+    type: 'GridTask',
+    body: base64,
+    comment: 'Select all images with traffic lights',
+    rows: 3,
+    columns: 3,
   })
 })
 
@@ -166,7 +151,7 @@ test('tests that zero balances skip all paid tasks and exit one', async () => {
   expect(report.paidTasksCreated).toBe(0)
   expect(report.paidSolvingReady).toEqual({
     capsolver: false,
-    capmonster: false,
+    '2captcha': false,
   })
   expect(
     report.vendors.every(
@@ -216,7 +201,7 @@ test('tests that empty key files never reach a vendor', async () => {
   expect(calls).toHaveLength(0)
 })
 
-test('tests that CapMonster processing transitions to ready without resubmission', async () => {
+test('tests that 2Captcha processing transitions to ready without resubmission', async () => {
   let polls = 0
   handler = (vendor, method) => {
     if (method === 'getTaskResult' && ++polls === 1)
@@ -227,7 +212,7 @@ test('tests that CapMonster processing transitions to ready without resubmission
   expect(report.vendors[1]?.task.tiles).toEqual([0, 4, 7])
   expect(polls).toBe(2)
   expect(
-    calls.filter((c) => c.vendor === 'capmonster' && c.method === 'createTask'),
+    calls.filter((c) => c.vendor === '2captcha' && c.method === 'createTask'),
   ).toHaveLength(1)
   expect(
     calls
@@ -236,7 +221,7 @@ test('tests that CapMonster processing transitions to ready without resubmission
   ).toBe(true)
 })
 
-test('tests that CapMonster polling stops at its deadline', async () => {
+test('tests that 2Captcha polling stops at its deadline', async () => {
   handler = (vendor, method) =>
     method === 'getTaskResult'
       ? { errorId: 0, status: 'processing' }
@@ -315,7 +300,7 @@ test('tests that task errors fail readiness without retrying paid work', async (
   ).toBe(true)
   expect(report.paidSolvingReady).toEqual({
     capsolver: false,
-    capmonster: false,
+    '2captcha': false,
   })
   expect(report.exitCode).toBe(1)
 })
@@ -338,7 +323,7 @@ test('tests that balance-only skips funded tasks and retains exit one', async ()
   expect(result.stdout).toContain('task=skipped')
   expect(result.stdout).toContain('paid tasks created: 0')
   expect(result.stdout).toContain(
-    'paid solving ready: capsolver=no capmonster=no',
+    'paid solving ready: capsolver=no 2captcha=no',
   )
   expect(calls).toHaveLength(2)
 })
@@ -363,7 +348,7 @@ test('tests that the real CLI exits zero only when both tasks succeed', async ()
   expect(result.stdout).toMatch(/task=ok \d+ms tiles=\[0,4,7\]/)
   expect(result.stdout).toContain('paid tasks created: 2')
   expect(result.stdout).toContain(
-    'paid solving ready: capsolver=yes capmonster=yes',
+    'paid solving ready: capsolver=yes 2captcha=yes',
   )
   expect(result.stderr).toBe('')
 })
@@ -409,7 +394,7 @@ test('tests that JSON redacts escaped keys and both vendors keys', async () => {
   const otherKey = 'other-unit-test-key-"quoted"-\\-123'
   const otherPath = join(directory, 'other-key')
   await writeFile(otherPath, otherKey)
-  env.BROWSEROS_CAPMONSTER_API_KEY_FILE = otherPath
+  env.BROWSEROS_2CAPTCHA_API_KEY_FILE = otherPath
   handler = () => ({
     errorId: 1,
     errorCode: 'ERROR_ECHO',
@@ -443,9 +428,9 @@ test('tests that malformed JSON cannot authorize paid tasks', async () => {
   expect(report.paidTasksCreated).toBe(0)
 })
 
-test('tests that CapMonster rejects an invalid task ID without polling', async () => {
+test('tests that 2Captcha rejects an invalid task ID without polling', async () => {
   handler = (vendor, method) =>
-    vendor === 'capmonster' && method === 'createTask'
+    vendor === '2captcha' && method === 'createTask'
       ? { errorId: 0 }
       : successful(vendor, method)
   const { report } = await run()
@@ -453,7 +438,7 @@ test('tests that CapMonster rejects an invalid task ID without polling', async (
   expect(calls.some((c) => c.method === 'getTaskResult')).toBe(false)
 })
 
-test('tests that a failed CapMonster poll preserves its vendor error', async () => {
+test('tests that a failed 2Captcha poll preserves its vendor error', async () => {
   handler = (vendor, method) =>
     method === 'getTaskResult'
       ? {
@@ -468,7 +453,7 @@ test('tests that a failed CapMonster poll preserves its vendor error', async () 
 })
 
 test('tests that prefixed settings work with irrelevant unprefixed variables', async () => {
-  for (const vendor of ['CAPSOLVER', 'CAPMONSTER']) {
+  for (const vendor of ['CAPSOLVER', '2CAPTCHA']) {
     for (const suffix of ['API_KEY_FILE', 'API_URL']) {
       env[`${vendor}_${suffix}`] = 'invalid-alias'
     }
@@ -499,3 +484,87 @@ test('tests that HTTP errors preserve structured vendor error details', async ()
   expect(result.exitCode).toBe(1)
   expect(result.stdout + result.stderr).not.toContain(key)
 })
+
+test('tests that a missing optional 2Captcha key skips its checks and exits zero', async () => {
+  env.BROWSEROS_2CAPTCHA_API_KEY_FILE = join(directory, 'missing-optional-key')
+  const result = await cli()
+  expect(result.exitCode).toBe(0)
+  expect(result.stdout).toContain(
+    '2captcha    skipped balance=n/a    task=skipped  no key file; unverified: no key yet',
+  )
+  expect(result.stdout).toContain('paid tasks created: 1')
+  expect(result.stdout).toContain(
+    'paid solving ready: capsolver=yes 2captcha=no',
+  )
+  expect(result.stderr).toBe('')
+  expect(calls.some(({ vendor }) => vendor === '2captcha')).toBe(false)
+})
+
+test('tests that a configured zero 2Captcha balance fails readiness', async () => {
+  handler = (vendor, method) =>
+    vendor === '2captcha' && method === 'getBalance'
+      ? { errorId: 0, balance: 0 }
+      : successful(vendor, method)
+  const { report } = await run()
+  expect(report.exitCode).toBe(1)
+  expect(report.vendors[0]?.task.status).toBe('ok')
+  expect(report.vendors[1]).toMatchObject({
+    vendor: '2captcha',
+    status: 'ok',
+    balance: 0,
+    task: { status: 'skipped' },
+  })
+  expect(report.paidTasksCreated).toBe(1)
+  expect(report.paidSolvingReady).toEqual({
+    capsolver: true,
+    '2captcha': false,
+  })
+})
+
+test('tests that a configured 2Captcha vendor error fails the check', async () => {
+  handler = (vendor, method) =>
+    vendor === '2captcha'
+      ? {
+          errorId: 1,
+          errorCode: 'ERROR_KEY_DOES_NOT_EXIST',
+          errorDescription: 'invalid key',
+        }
+      : successful(vendor, method)
+  const { report } = await run()
+  expect(report.exitCode).toBe(1)
+  expect(report.vendors[0]?.task.status).toBe('ok')
+  expect(report.vendors[1]).toMatchObject({
+    status: 'error',
+    balance: null,
+    message: 'ERROR_KEY_DOES_NOT_EXIST: invalid key',
+  })
+  expect(report.paidTasksCreated).toBe(1)
+})
+
+test('tests that an unreadable optional key is an error rather than a skip', async () => {
+  env.BROWSEROS_2CAPTCHA_API_KEY_FILE = directory
+  const { report } = await run()
+  expect(report.vendors[1]?.status).toBe('error')
+  expect(report.exitCode).toBe(1)
+  expect(calls.some(({ vendor }) => vendor === '2captcha')).toBe(false)
+})
+
+test.each([
+  {},
+  { click: [0] },
+  { click: [10] },
+  { click: ['1'] },
+  { click: [1.5] },
+])(
+  'tests that malformed 2Captcha grid answers fail readiness: %j',
+  async (solution) => {
+    handler = (vendor, method) =>
+      vendor === '2captcha' && method === 'getTaskResult'
+        ? { errorId: 0, status: 'ready', solution }
+        : successful(vendor, method)
+    const { report } = await run()
+    expect(report.vendors[1]?.task.errorCode).toBe('INVALID_RESPONSE')
+    expect(report.paidSolvingReady['2captcha']).toBe(false)
+    expect(report.exitCode).toBe(1)
+  },
+)
