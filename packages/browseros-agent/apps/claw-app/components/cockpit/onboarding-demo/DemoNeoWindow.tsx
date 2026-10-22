@@ -15,9 +15,11 @@ const ROW_HEIGHT = 33
 /** The agent's tag: amber while it works, a tick once Claude has answered. */
 function AgentTag({
   state,
+  agent,
   className,
 }: {
   state: DemoFrame['neo']['agentTag']
+  agent: string
   className?: string
 }) {
   return (
@@ -37,7 +39,7 @@ function AgentTag({
           )}
         />
       )}
-      claude
+      {agent}
       {state === 'done' && (
         <Check aria-hidden className="size-2.5" strokeWidth={3} />
       )}
@@ -81,9 +83,12 @@ function SearchField({
 export function DemoNeoWindow({
   frame,
   fading,
+  agent,
 }: {
   frame: DemoFrame['neo']
   fading: boolean
+  /** The agent's name on neo's tab tag: "claude", or "codex" in ChatGPT. */
+  agent: string
 }) {
   const loaded = frame.loading === 'loaded'
   return (
@@ -110,6 +115,7 @@ export function DemoNeoWindow({
             {loaded ? 'Flights' : 'New Tab'}
           </span>
           <AgentTag
+            agent={agent}
             state={frame.agentTag}
             className={frame.agentTag === 'off' ? 'opacity-0' : ''}
           />
@@ -170,7 +176,10 @@ export function DemoNeoWindow({
             <em className="font-medium font-serif">working on</em> right now?
           </div>
           <div className="flex items-center gap-2.5 rounded-xl border border-border-2 bg-card px-[13px] py-[9px] text-[12.5px] text-ink-3 shadow-[0_6px_16px_-10px_rgb(1_18_63/0.2)]">
-            <AgentTag state={frame.agentTag === 'off' ? 'off' : 'working'} />
+            <AgentTag
+              agent={agent}
+              state={frame.agentTag === 'off' ? 'off' : 'working'}
+            />
             {frame.agentTag === 'off' ? 'Waiting for a task' : 'Starting…'}
           </div>
         </div>

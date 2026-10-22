@@ -3,15 +3,20 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * The cockpit's first-run demo as one pure timeline: `demoFrameAt(t)` returns
- * every visual fact of the drawn desktop at `t` ms into the ~32 s loop.
+ * The cockpit's first-run demo as one pure timeline: `demoFrameAt(t, app)`
+ * returns every visual fact of the drawn desktop at `t` ms into the ~32 s
+ * loop, for the app whose dock tile was clicked (Claude by default).
  *
- *   0–2 s       Desktop  your pointer opens the Claude app from the dock
- *   2–4.5 s     Switch   it opens on Chat; a callout says "Switch to Code"; click
- *   4.5–10 s    Ask      the chore types into the composer and is sent
+ *   0–2 s       Desktop  your pointer opens the app from the dock
+ *   2–4.5 s     Switch   Claude: Chat → Code · ChatGPT: Chat → Work ·
+ *                        Terminal: type `claude`, press return
+ *   4.5–10 s    Ask      the chore types in and is sent
  *   10–24 s     Watch    neo comes forward: ① navigate ② fill ③ read, "Cheapest" lands
- *   24–30 s     Done     Claude replies; "Works the same in Codex and Terminal."
+ *   24–30 s     Done     the app answers
  *   30–32.5 s   Hold, crossfade, loop
+ *
+ * Only the Desktop and Switch beats differ per app, inside the same 2.5 s,
+ * so the neo scene and every later beat share one clock.
  *
  * Because a frame is a function of time alone, pause, replay, the loop wrap
  * and reduced motion (which holds `DEMO_KEY_FRAMES.done`) all land on exact
@@ -66,14 +71,36 @@ function endOf(run: TypedRun): number {
   return run.times.at(-1) ?? 0
 }
 
-// Switch (owner, round 9): Code is not obvious, so the demo shows the click.
-// Claude opens on Chat, the pointer glides from the dock to the Chat | Code
-// toggle, a callout names the step, and the click flips it to Code.
+export type DemoApp = 'terminal' | 'claude' | 'chatgpt'
+
+/** The clickable dock tiles, in dock order (owner, round 10). */
+export const DEMO_APPS: readonly DemoApp[] = ['terminal', 'claude', 'chatgpt']
+export const DEFAULT_DEMO_APP: DemoApp = 'claude'
+
+// Switch: the step people miss in each app. Claude and ChatGPT open on Chat;
+// the pointer glides to the toggle, a callout names the step, and the click
+// flips it (rounds 9 and 10). In Terminal you start Claude Code instead.
 const OPEN = 2200
 const TO_TOGGLE = 2500
 const CALLOUT = 2900
 const CLICK = 3800
 const CALLOUT_GONE = 4200
+const COMMAND_RUN = typed('claude', 2700, () => 85)
+const RETURN_KEY = 3400
+const CLAUDE_CODE_STARTED = 3700
+
+const SWITCHES: Record<
+  DemoApp,
+  { callout: string | null; switchedAt: number; toToggle: boolean }
+> = {
+  claude: { callout: 'Switch to Code', switchedAt: CLICK, toToggle: true },
+  chatgpt: { callout: 'Switch to Work', switchedAt: CLICK, toToggle: true },
+  terminal: {
+    callout: null,
+    switchedAt: CLAUDE_CODE_STARTED,
+    toToggle: false,
+  },
+}
 
 // Ask: ~70 ms a character with a little jitter, so it reads as a person typing.
 const PROMPT_RUN = typed(
@@ -95,17 +122,16 @@ const FILLED = endOf(WHEN_RUN)
 const READ = WATCH + 6400
 const RING_STEP = 750
 const DONE = 22_000 + SWITCH_SHIFT
-const CAPTION = 27_500 + SWITCH_SHIFT
 const FADE_OUT = 29_400 + SWITCH_SHIFT
 
 export const DEMO_KEY_FRAMES = {
-  /** On Chat, the pointer on Code and the "Switch to Code" callout up. */
+  /** Before the switch: the callout up (Claude, ChatGPT), or `claude` typed. */
   switch: CLICK - 150,
   /** The prompt fully typed in the composer, not yet sent. */
   ask: endOf(PROMPT_RUN) + 200,
   /** ③ read lit and "Cheapest" landing. */
   watch: READ + 5000,
-  /** Claude's answer, with the Codex and Terminal line under the stage. */
+  /** The app's answer. Reduced motion holds this frame. */
   done: 28_500 + SWITCH_SHIFT,
 } as const
 
@@ -116,18 +142,23 @@ export interface DemoFrame {
   /** The whole stage fades out at the loop end and back in at its start. */
   fading: boolean
   pointer: { on: boolean; at: 'start' | 'dock' | 'toggle'; pressed: boolean }
-  /** The "Switch to Code" callout beside Claude's Chat | Code toggle. */
-  switchCallout: boolean
-  dock: { tip: boolean; claudeBounce: boolean; claudeRunning: boolean }
+  /** The callout beside the app's toggle ("Switch to Code"), if any. */
+  callout: string | null
+  /** The playing app's dock tile: its hover label, bounce and running dot. */
+  dock: { tip: boolean; bounce: boolean; running: boolean }
   /** Frontmost window: it sits on top and shows coloured traffic lights. */
-  front: 'neo' | 'claude'
-  claude: {
+  front: 'neo' | 'agent'
+  /** The AI app the person asks: Claude, Terminal or ChatGPT. */
+  agent: {
+    app: DemoApp
     open: boolean
-    /** Claude opens on Chat; the Switch beat flips it to Code. */
-    mode: 'chat' | 'code'
+    /** Past the Switch beat: Code (Claude), Work (ChatGPT), Claude Code running (Terminal). */
+    switched: boolean
+    /** The shell command typed before Claude Code starts (Terminal only). */
+    command: string
     composer: string
     sent: boolean
-    /** Claude's session is running: header renamed, orange dot in Recents. */
+    /** The session is running: header renamed, running dot in Recents. */
     working: boolean
     seconds: number
     /** The tool rows shown so far, and which one is lit. */
@@ -156,7 +187,6 @@ export interface DemoFrame {
     tagged: boolean
     agentPointer: 'off' | 'to' | 'when' | 'answer'
   }
-  caption: boolean
 }
 
 export type BadgeState = 'off' | 'live' | 'on'
@@ -191,28 +221,43 @@ function agentPointerAt(t: number): DemoFrame['neo']['agentPointer'] {
   return 'answer'
 }
 
-export function demoFrameAt(rawT: number): DemoFrame {
+function pointerAt(t: number, app: DemoApp): DemoFrame['pointer'] {
+  const { toToggle } = SWITCHES[app]
+  const switchPress = toToggle
+    ? between(t, CLICK, CLICK + 150)
+    : between(t, RETURN_KEY, RETURN_KEY + 150)
+  return {
+    on: between(t, 250, WATCH),
+    at: toToggle && t >= TO_TOGGLE ? 'toggle' : t >= 350 ? 'dock' : 'start',
+    // Terminal's press is the return key; the pointer rests on the dock.
+    pressed: between(t, 1500, 1650) || (toToggle && switchPress),
+  }
+}
+
+export function demoFrameAt(
+  rawT: number,
+  app: DemoApp = DEFAULT_DEMO_APP,
+): DemoFrame {
   const t = Math.min(Math.max(rawT, 0), DEMO_LOOP_MS)
+  const { callout, switchedAt, toToggle } = SWITCHES[app]
   const sent = t >= SUBMIT
   const done = t >= DONE
   const { ring, checked } = ringAt(t)
   return {
     fading: t < 60 || t >= FADE_OUT,
-    pointer: {
-      on: between(t, 250, WATCH),
-      at: t >= TO_TOGGLE ? 'toggle' : t >= 350 ? 'dock' : 'start',
-      pressed: between(t, 1500, 1650) || between(t, CLICK, CLICK + 150),
-    },
-    switchCallout: between(t, CALLOUT, CALLOUT_GONE),
+    pointer: pointerAt(t, app),
+    callout: callout && between(t, CALLOUT, CALLOUT_GONE) ? callout : null,
     dock: {
-      tip: between(t, 1250, TO_TOGGLE),
-      claudeBounce: between(t, 1500, 2350),
-      claudeRunning: t >= 1750,
+      tip: between(t, 1250, toToggle ? TO_TOGGLE : WATCH),
+      bounce: between(t, 1500, 2350),
+      running: t >= 1750,
     },
-    front: between(t, OPEN, WATCH) ? 'claude' : 'neo',
-    claude: {
+    front: between(t, OPEN, WATCH) ? 'agent' : 'neo',
+    agent: {
+      app,
       open: t >= OPEN,
-      mode: t >= CLICK ? 'code' : 'chat',
+      switched: t >= switchedAt,
+      command: app === 'terminal' ? shownAt(COMMAND_RUN, t) : '',
       composer: sent ? '' : shownAt(PROMPT_RUN, t),
       sent,
       working: sent && !done,
@@ -249,6 +294,5 @@ export function demoFrameAt(rawT: number): DemoFrame {
       tagged: t >= READ + 4700,
       agentPointer: agentPointerAt(t),
     },
-    caption: between(t, CAPTION, FADE_OUT),
   }
 }

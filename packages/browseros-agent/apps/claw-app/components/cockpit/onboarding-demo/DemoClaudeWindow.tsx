@@ -18,27 +18,29 @@ import {
 import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
 import { cn } from '@/lib/utils'
 import { CLAUDE_LIGHT } from './claude-light'
-import { Caret, DemoNeoMark, TrafficLights } from './demo-parts'
+import {
+  Caret,
+  DemoToolRows,
+  NeoConnectedChip,
+  TrafficLights,
+} from './demo-parts'
 import { DEMO_PROMPT, type DemoFrame } from './timeline'
 
 /** Claude's brand orange: the send button, the running dot, the spinner. */
 const CLAUDE_ORANGE = 'bg-(--claude-orange)'
 
-const TOOLS = [
-  { verb: 'navigate', arg: 'google.com/travel/flights' },
-  { verb: 'fill', arg: 'New York · Fri' },
-  { verb: 'read', arg: '5 flights' },
-] as const
-
-const RECENTS = ['Fix the signup bug', 'Sort my inbox', 'Tidy the README']
+/** Chat and Code keep different histories; the Switch beat changes both. */
+const RECENTS = {
+  chat: ['Weekend trip ideas', 'Thank-you note draft'],
+  code: ['Fix the signup bug', 'Sort my inbox', 'Tidy the README'],
+} as const
 
 /**
- * The Claude desktop app in Code mode, the way most people run Claude Code
- * (owner, round 5), in Claude's own default light colors (round 8). A
- * simplified drawing: the one sign
- * of the connection is the "BrowserOS neo ✓" chip under the composer. Tool
- * rows are two lines because one line of mono at the 11 px floor does not fit
- * this column; each row's number matches the badge it lights in neo.
+ * The Claude desktop app, the way most people run Claude Code (owner, round
+ * 5), in Claude's own default light colors (round 8). It opens on Chat, and
+ * the Switch beat moves it to Code (round 9): only then do the code recents,
+ * the code placeholder and the "BrowserOS neo ✓" chip (the one sign of the
+ * connection) appear. A simplified drawing, not a copy of the app.
  */
 export function DemoClaudeWindow({
   frame,
@@ -46,13 +48,14 @@ export function DemoClaudeWindow({
   fading,
   spinGlyph,
 }: {
-  frame: DemoFrame['claude']
+  frame: DemoFrame['agent']
   front: boolean
   fading: boolean
   spinGlyph: string
 }) {
   const typing = frame.composer.length > 0
-  const code = frame.mode === 'code'
+  const code = frame.switched
+  const mode = code ? 'code' : 'chat'
   const blank = code ? 'New session' : 'New chat'
   return (
     <div
@@ -130,7 +133,7 @@ export function DemoClaudeWindow({
             )}
           />
         </div>
-        {RECENTS.map((title) => (
+        {RECENTS[mode].map((title) => (
           <div
             key={title}
             className="mx-1.5 flex h-[23px] items-center truncate rounded-[7px] px-2 text-(--claude-text) text-[11px]"
@@ -160,50 +163,7 @@ export function DemoClaudeWindow({
           >
             {DEMO_PROMPT}
           </div>
-          <div className="mt-2.5 flex flex-col gap-[3px]">
-            {TOOLS.map((tool, index) => {
-              const lit = frame.litTool === index
-              return (
-                <div
-                  key={tool.verb}
-                  className={cn(
-                    '-mx-1.5 grid grid-cols-[16px_minmax(0,1fr)] gap-x-2 whitespace-nowrap rounded-[7px] px-1.5 py-1 font-mono text-[11px] leading-[15px] transition-[opacity,transform,background-color] duration-300 ease-out',
-                    index < frame.tools
-                      ? 'opacity-100'
-                      : 'translate-y-1 opacity-0',
-                    lit && 'bg-(--claude-selected)',
-                  )}
-                >
-                  <span
-                    className={cn(
-                      'row-span-2 -mt-px grid size-4 place-items-center rounded-full font-bold transition-colors duration-500',
-                      // The numbers are neo's badges: the one place neo blue
-                      // shows inside Claude's window.
-                      lit
-                        ? 'bg-accent text-accent-foreground'
-                        : 'bg-(--claude-toggle) text-(--claude-muted)',
-                    )}
-                  >
-                    {index + 1}
-                  </span>
-                  <span className="text-(--claude-text)">
-                    browseros-neo ·{' '}
-                    <b className="font-semibold text-(--claude-ink)">
-                      {tool.verb}
-                    </b>
-                  </span>
-                  <span
-                    className={cn(
-                      'transition-colors duration-500',
-                      lit ? 'text-(--claude-ink)' : 'text-(--claude-muted)',
-                    )}
-                  >
-                    {tool.arg}
-                  </span>
-                </div>
-              )
-            })}
-          </div>
+          <DemoToolRows shown={frame.tools} lit={frame.litTool} tone="claude" />
           <div className="mt-[9px] grid">
             <div
               className={cn(
@@ -241,7 +201,9 @@ export function DemoClaudeWindow({
                 </span>
               ) : (
                 <span className="text-(--claude-muted)">
-                  Describe a task or ask a question
+                  {code
+                    ? 'Describe a task or ask a question'
+                    : 'How can I help you today?'}
                 </span>
               )}
             </span>
@@ -261,15 +223,12 @@ export function DemoClaudeWindow({
               />
             )}
           </div>
-          <span className="mt-[7px] inline-flex h-5 items-center gap-[5px] self-start rounded-[10px] border border-(--claude-border) bg-(--claude-sidebar) pr-2 pl-1 font-medium text-(--claude-text) text-[11px]">
-            <DemoNeoMark className="size-[13px] rounded-[3px]" />
-            BrowserOS neo
-            <Check
-              aria-hidden
-              className="size-2.5 text-(--claude-muted)"
-              strokeWidth={3}
-            />
-          </span>
+          <NeoConnectedChip
+            className={cn(
+              'border-(--claude-border) bg-(--claude-sidebar) text-(--claude-text)',
+              !code && 'invisible opacity-0',
+            )}
+          />
         </div>
       </div>
     </div>

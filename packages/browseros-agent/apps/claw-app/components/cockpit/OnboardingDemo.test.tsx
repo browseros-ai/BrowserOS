@@ -62,11 +62,14 @@ describe('setStageMotionPaused', () => {
 })
 
 describe('OnboardingDemo', () => {
-  it('renders the drawn desktop with its controls and caption', () => {
+  it('describes the scene in text and keeps the drawing out of the a11y tree', () => {
     const html = renderToStaticMarkup(<OnboardingDemo />)
-    expect(html).toContain('role="img"')
+    expect(html).not.toContain('role="img"')
+    expect(html).toContain(
+      'class="sr-only">Demo on a Mac: you open the Claude app',
+    )
     expect(html).toContain('aria-label="Pause the demo"')
     expect(html).toContain('aria-label="Replay the demo"')
-    expect(html).toContain('Works the same in Codex and Terminal.')
+    expect(html).toContain('Click Terminal, Claude or ChatGPT to see it there.')
   })
 })
