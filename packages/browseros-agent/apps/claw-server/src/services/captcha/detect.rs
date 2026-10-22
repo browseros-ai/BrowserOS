@@ -119,7 +119,7 @@ if (/^Just a moment/i.test(document.title) || document.querySelector('#challenge
 
 fn script(main: bool) -> String {
     format!(
-        "(() => {{ /* captcha:{} */ {DOM_SCAN} {} return {{widgets, frames, checked, expired, complete, top: window === window.top}}; }})()",
+        "(() => {{ /* captcha:{} */ {DOM_SCAN} {} return {{widgets, frames, checked, expired, complete, top: window === window.top, url: location.href}}; }})()",
         if main { "main" } else { "frame" },
         if main { MAIN_SCAN } else { "" },
     )
@@ -134,6 +134,7 @@ struct Probe {
     complete: bool,
     #[serde(default)]
     top: bool,
+    url: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -292,7 +293,12 @@ async fn scan(
         widgets.retain(|w| w.challenge.kind != CaptchaKind::Turnstile);
     }
     for (frame, probe) in frames.iter().zip(&probes) {
-        let Some((kind, url)) = frame_kind(&frame.url) else {
+        // Page.getFrameTree omits URL fragments used to identify hCaptcha widgets.
+        let frame_url = probe
+            .as_ref()
+            .and_then(|p| p.url.as_deref())
+            .unwrap_or(&frame.url);
+        let Some((kind, url)) = frame_kind(frame_url) else {
             continue;
         };
         if url.path().ends_with("/bframe") || (full_page && kind == CaptchaKind::Turnstile) {
@@ -303,7 +309,7 @@ async fn scan(
             && (frame
                 .rect
                 .is_some_and(|r| r.width <= 0.0 || r.height <= 0.0)
-                || visibility.iter().any(|v| v.url == frame.url && !v.visible))
+                || visibility.iter().any(|v| v.url == frame_url && !v.visible))
         {
             continue;
         }
@@ -326,7 +332,7 @@ async fn scan(
             .position(|w| {
                 matches_kind(w)
                     && w.challenge.frame.is_none()
-                    && w.frame_url.as_deref() == Some(&frame.url)
+                    && w.frame_url.as_deref() == Some(frame_url)
             })
             .or_else(|| {
                 widgets.iter().position(|w| {
@@ -778,6 +784,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tests_that_fragment_stripped_frames_keep_widget_identity() -> Result<(), PageError> {
+        let base = "https://newassets.hcaptcha.com/captcha/v1/abc/static/hcaptcha.html";
+        let visible_url = format!("{base}#frame=checkbox&id=one&sitekey=key");
+        let hidden_url = format!("{base}#frame=challenge&id=one&sitekey=key");
+        let mut info = widget("hcaptcha", "active");
+        info["sitekey"] = json!("key");
+        info["frameUrl"] = json!(visible_url);
+        let mut main = probe(json!([info]));
+        main["frames"] = json!([
+            {"url":visible_url,"visible":true},
+            {"url":hidden_url,"visible":false}
+        ]);
+        let mut page = FakePage::new(json!([]));
+        page.main = Mutex::new(VecDeque::from([main]));
+        page.frames.push(frame("checkbox", base));
+        let mut frame_probe = probe(json!([]));
+        frame_probe["url"] = json!(visible_url);
+        page.frame_result = Ok(frame_probe);
+        let result = scan(&page).await?;
+        assert!(result.complete);
+        assert_eq!(result.challenges.len(), 1);
+        assert_eq!(result.challenges[0].state, ChallengeState::Active);
+        assert_eq!(
+            result.challenges[0]
+                .frame
+                .as_ref()
+                .map(|f| f.frame_id.as_str()),
+            Some("checkbox")
+        );
+        let mut hidden_probe = probe(json!([]));
+        hidden_probe["url"] = json!(hidden_url);
+        page.frame_result = Ok(hidden_probe);
+        page.frames[0].frame_id = "hidden".into();
+        let result = scan(&page).await?;
+        assert_eq!(result.challenges.len(), 1);
+        assert!(result.challenges[0].frame.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_other_unsupported_provider_frames_are_recognized() -> Result<(), PageError>
     {
         for (url, kind) in [
@@ -1000,6 +1046,116 @@ mod tests {
         let result = scan(&page).await?;
         assert!(!result.complete);
         assert_eq!(result.challenges[0].state, ChallengeState::Unknown);
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires CAPTCHA_LIVE_CDP_PORT, CAPTCHA_LIVE_FIXTURE_PORT and an isolated dev browser"]
+    async fn tests_that_live_detection_tracks_test_widgets()
+    -> Result<(), Box<dyn std::error::Error>> {
+        use std::sync::Arc;
+
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+
+        use super::super::page::LivePage;
+
+        let cdp_port: u16 = std::env::var("CAPTCHA_LIVE_CDP_PORT")?.parse()?;
+        let fixture_port: u16 = std::env::var("CAPTCHA_LIVE_FIXTURE_PORT")?.parse()?;
+        let output = std::path::PathBuf::from(std::env::var("CAPTCHA_LIVE_OUTPUT_DIR")?);
+        std::fs::create_dir_all(&output)?;
+        let mut results = Vec::new();
+        assert!((9000..=9999).contains(&cdp_port));
+        assert!(![9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215].contains(&cdp_port));
+        let connection = Arc::new(CdpClient::connect(ConnectOptions::new(cdp_port)).await?);
+        let browser = Browser::new(connection.clone());
+        for (route, expected) in [
+            ("no-captcha.html", None),
+            (
+                "recaptcha-v2.html",
+                Some((CaptchaKind::RecaptchaV2, ChallengeState::Active)),
+            ),
+            (
+                "turnstile-interactive.html",
+                Some((CaptchaKind::Turnstile, ChallengeState::Active)),
+            ),
+            (
+                "turnstile-pass.html",
+                Some((CaptchaKind::Turnstile, ChallengeState::Passed)),
+            ),
+            (
+                "hcaptcha.html",
+                Some((CaptchaKind::Hcaptcha, ChallengeState::Active)),
+            ),
+        ] {
+            let url = format!("http://127.0.0.1:{fixture_port}/{route}");
+            let id = browser.new_page(&url, NewPageOptions::default()).await?;
+            let page = LivePage::new(browser.view().await, id.clone());
+            let ready = format!(
+                "location.href === {} && document.readyState === 'complete' && {}",
+                serde_json::to_string(&url)?,
+                if expected.is_some() {
+                    "window.__captchaFixture?.rendered === true"
+                } else {
+                    "true"
+                }
+            );
+            tokio::time::timeout(Duration::from_secs(45), async {
+                while page.eval_main(&ready).await.ok() != Some(json!(true)) {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            })
+            .await?;
+            let deadline = Instant::now() + Duration::from_secs(30);
+            let before = loop {
+                let result = detect(&page, Duration::from_secs(2)).await?;
+                let matches = match expected {
+                    None => result.outcome == ScanOutcome::None && result.challenges.is_empty(),
+                    Some((kind, state)) => {
+                        result.challenges.len() == 1
+                            && result.challenges[0].kind == kind
+                            && result.challenges[0].state == state
+                            && result.challenges[0].frame.is_some()
+                    }
+                };
+                if result.complete && matches {
+                    break result;
+                }
+                assert!(Instant::now() < deadline, "{route}: {result:?}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            };
+            results.push(json!({"fixture":route,"before":before}));
+            if route == "recaptcha-v2.html" {
+                assert!(before.challenges[0].challenge_frame.is_none());
+                let frame = before.challenges[0].frame.as_ref().ok_or("no anchor")?;
+                let rect = page
+                    .query_rect_in_frame(frame, "#recaptcha-anchor")
+                    .await?
+                    .ok_or("no checkbox")?;
+                let (x, y) = rect.center();
+                page.click_at(x, y).await?;
+                let deadline = Instant::now() + Duration::from_secs(20);
+                loop {
+                    let after = detect(&page, Duration::from_secs(2)).await?;
+                    if after.complete
+                        && after.challenges.len() == 1
+                        && after.challenges[0].state == ChallengeState::Passed
+                    {
+                        assert_eq!(before.document, after.document);
+                        results.push(json!({"fixture":route,"after":after}));
+                        break;
+                    }
+                    assert!(Instant::now() < deadline, "{route}: {after:?}");
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+            browser.close_page(id).await?;
+            std::fs::write(
+                output.join("live-adapter-results.json"),
+                serde_json::to_vec_pretty(&results)?,
+            )?;
+        }
+        connection.disconnect().await;
         Ok(())
     }
 
