@@ -124,7 +124,7 @@ fn log_native_identity(config: &claw_server::config::Config) {
     }
     info!(
         mode = config.mode.as_str(),
-        env = claw_server::config::MODE_ENV,
+        env = claw_server::config::HOSTED_MODE_ENV,
         "server mode"
     );
     info!(

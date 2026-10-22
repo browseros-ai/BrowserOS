@@ -1,4 +1,4 @@
-//! What `BROWSERCLAW_MODE=hosted` changes about the MCP tool surface.
+//! What `BROWSERCLAW_HOSTED_MODE=1` changes about the MCP tool surface.
 //!
 //! A hosted server is BrowserOS neo run as infrastructure and driven by a remote agent that
 //! brings its own harness. Two groups of server tools assume things that are not true there:

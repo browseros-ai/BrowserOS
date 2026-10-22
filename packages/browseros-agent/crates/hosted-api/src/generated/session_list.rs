@@ -1,7 +1,7 @@
 /*
  * BrowserOS Neo Hosted API
  *
- * Read-only record of what agents did in a hosted BrowserOS neo: sessions, their tool calls with screenshots, and the page recording. Served only when claw-server runs with `BROWSERCLAW_MODE=hosted` (the Docker image's default).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
+ * Read-only record of what agents did in a hosted BrowserOS neo: sessions, their tool calls with screenshots, and the page recording. Served only when claw-server runs with `BROWSERCLAW_HOSTED_MODE=1` (the Docker image's default).  Compatibility: changes within `/v1` are additive. New response fields and new values of an extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields and values they do not know. Fields are never removed or renamed within `/v1`.
  *
  * The version of the OpenAPI document: 1.0.0
  *

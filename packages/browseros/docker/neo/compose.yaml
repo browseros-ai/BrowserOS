@@ -21,7 +21,7 @@ services:
       PUID: ${PUID:-1000}
       PGID: ${PGID:-1000}
       NEO_SCREEN: ${NEO_SCREEN:-1600x1000}
-      BROWSERCLAW_MODE: ${BROWSERCLAW_MODE:-hosted}
+      BROWSERCLAW_HOSTED_MODE: ${BROWSERCLAW_HOSTED_MODE:-1}
       NEO_SANDBOX: ${NEO_SANDBOX:-false}
       NEO_ARGS: ${NEO_ARGS:-}
     restart: unless-stopped

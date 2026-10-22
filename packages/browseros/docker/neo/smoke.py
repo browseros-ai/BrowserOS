@@ -5,7 +5,7 @@ It talks to the container the way a developer does: through the published
 viewer and MCP ports. Passing means the noVNC viewer is served, an agent
 outside the container can reach Neo's MCP server (which proves the
 allow_remote_in_mcp setting works through Docker's port forwarding), agents get
-the hosted tool set (BROWSERCLAW_MODE=hosted), and an agent-opened tab loads.
+the hosted tool set (BROWSERCLAW_HOSTED_MODE=1), and an agent-opened tab loads.
 
   python3 smoke.py [--vnc-port 6080] [--mcp-port 9010]
 
@@ -94,9 +94,9 @@ class McpClient:
 def accepts_task_name(client: McpClient) -> bool:
     """Whether this claw-server knows the taskName argument, in either mode.
 
-    A server older than BROWSERCLAW_MODE rejects it as an unknown field. That is
-    what separates "the bundled server predates hosted mode" from "the image's
-    BROWSERCLAW_MODE never reached claw-server".
+    A server older than hosted-mode support rejects it as an unknown field. That is
+    what separates "the bundled server predates hosted mode" from "hosted mode
+    is off". The latter can also mean the bundled server predates the current flag.
     """
     try:
         client.tool("tabs", {"action": "list", "taskName": "docker smoke"})
@@ -151,9 +151,9 @@ def main() -> None:
         check(
             "claw-server is not in desktop mode",
             not accepts_task_name(client),
-            "it knows taskName, so BROWSERCLAW_MODE did not reach it",
+            "it knows taskName, but hosted mode is off: check BROWSERCLAW_HOSTED_MODE and the bundled server version",
         )
-        print("skip hosted mode: this Neo's claw-server predates BROWSERCLAW_MODE")
+        print("skip hosted mode: this Neo's claw-server predates hosted-mode support")
 
     new_tab = {"action": "new", "url": args.url}
     if hosted:

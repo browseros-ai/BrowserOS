@@ -1,5 +1,5 @@
 /**
- * Codegen for the hosted API (`/v1`, served only in `BROWSERCLAW_MODE=hosted`). Reads the
+ * Codegen for the hosted API (`/v1`, served only in `BROWSERCLAW_HOSTED_MODE=1`). Reads the
  * partner-facing spec at `contracts/hosted-api/openapi.yaml` and emits Rust models into
  * `crates/hosted-api/src/generated`. claw-server's `/v1` handlers return only these types,
  * so the wire shape cannot drift from the published spec. The tree is never hand-edited:

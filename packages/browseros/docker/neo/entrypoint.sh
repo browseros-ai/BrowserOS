@@ -27,10 +27,9 @@ readonly SERVER_PORT=9210
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
 : "${PUID:=1000}" "${PGID:=1000}"
-# claw-server's mode (README). hosted hides the MCP tools that assume an agent
-# harness on this machine or a person at the cockpit: skills, human help and
-# name_session, which taskName replaces.
-: "${BROWSERCLAW_MODE:=hosted}"
+# Shared browser/server deployment flag (README). Hosted mode hides local-agent
+# MCP tools and enables hosted browser reporting; both processes require exact 1.
+: "${BROWSERCLAW_HOSTED_MODE:=1}"
 
 is_true() {
   case "${1,,}" in
@@ -43,6 +42,12 @@ is_true() {
 log() { printf '[neo] %s\n' "$*"; }
 die() { log "$*" >&2; exit 1; }
 
+# Validate before starting services so the browser and its server agree.
+case "$BROWSERCLAW_HOSTED_MODE" in
+  0 | 1) ;;
+  *) die "BROWSERCLAW_HOSTED_MODE must be 0 or 1, got '$BROWSERCLAW_HOSTED_MODE'" ;;
+esac
+
 # Starts "$@" as the neo user in the background. The subshell execs, so $! is
 # the program's own pid (setpriv, env and Neo's launcher all exec in turn) and
 # signals reach it directly; a plain backgrounded function would leave $! on
@@ -50,7 +55,7 @@ die() { log "$*" >&2; exit 1; }
 spawn_as_neo() {
   (exec setpriv --reuid=neo --regid=neo --init-groups \
     env HOME="$NEO_HOME" USER=neo DISPLAY=:1 XDG_RUNTIME_DIR="$XDG_DIR" LANG=C.UTF-8 \
-      BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_MODE="$BROWSERCLAW_MODE" "$@") &
+      BROWSERCLAW_DIR="$CLAW_DATA" BROWSERCLAW_HOSTED_MODE="$BROWSERCLAW_HOSTED_MODE" "$@") &
 }
 
 # Bind-mounted host folders are owned by the host user; running Neo as that
@@ -159,7 +164,7 @@ start_neo() {
 # Applies container-level agent settings once claw-server answers, then marks
 # the container configured; the healthcheck waits for that marker so agents
 # never connect before the settings hold. Hosted mode already keeps human help
-# off, but a claw-server older than BROWSERCLAW_MODE ignores the mode and
+# off, but a claw-server older than hosted-mode support ignores the flag and
 # defaults human help on, so it is switched off here too on every start.
 configure_neo() {
   for _ in $(seq 1 240); do
