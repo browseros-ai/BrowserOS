@@ -199,6 +199,8 @@ impl std::fmt::Debug for SolveAnswer {
 #[serde(rename_all = "snake_case")]
 pub enum ProviderName {
     Capsolver,
+    #[serde(rename = "2captcha")]
+    TwoCaptcha,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -6,6 +6,7 @@ pub mod providers;
 pub mod recaptcha;
 pub mod reservation;
 pub mod turnstile;
+pub mod twocaptcha;
 pub mod types;
 
 use std::sync::Arc;
