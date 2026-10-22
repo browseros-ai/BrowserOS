@@ -7,7 +7,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     config::ProviderConfig,
-    providers::VendorClient,
+    providers::{VendorClient, optional},
     types::{
         ProviderAnswer, ProviderError, ProviderErrorKind, ProviderName, SolveAnswer, SolveTask,
         TileGrid,
@@ -157,14 +157,10 @@ impl TwoCaptchaClient {
     ) -> Result<Value, ProviderError> {
         let paid = matches!(kind, RequestKind::Poll);
         check(deadline, cancel, paid)?;
-        let url = self.config.base_url.join(method).map_err(|_| {
-            error(
-                ProviderErrorKind::BadRequest,
-                "INVALID_URL",
-                "invalid API base URL",
-                paid,
-            )
-        })?;
+        let url = format!(
+            "{}/{method}",
+            self.config.base_url.as_str().trim_end_matches('/')
+        );
         body["clientKey"] = json!(self.config.key.expose());
         let submitting = matches!(kind, RequestKind::Create);
         let operation = async {
@@ -271,6 +267,12 @@ impl VendorClient for TwoCaptchaClient {
     fn supports(&self, task: &SolveTask) -> bool {
         !matches!(task, SolveTask::RecaptchaTiles(p) if p.question_text.trim().is_empty())
     }
+    fn attempt_budget(&self, task: &SolveTask) -> Duration {
+        match task {
+            SolveTask::RecaptchaTiles(_) => Duration::from_secs(30),
+            SolveTask::RecaptchaToken(_) | SolveTask::TurnstileToken(_) => Duration::from_secs(90),
+        }
+    }
     fn solve<'a>(
         &'a self,
         task: &'a SolveTask,
@@ -312,27 +314,21 @@ fn task_body(task: &SolveTask) -> Result<Value, ProviderError> {
         // https://2captcha.com/api-docs/recaptcha-v2-enterprise
         SolveTask::RecaptchaToken(p) => {
             let mut body = json!({"type":if p.enterprise { "RecaptchaV2EnterpriseTaskProxyless" } else { "RecaptchaV2TaskProxyless" },"websiteURL":p.website_url,"websiteKey":p.website_key,"isInvisible":p.invisible});
-            if let Some(s) = &p.enterprise_s {
+            if let Some(s) = p.enterprise_s.as_ref().filter(|s| !s.trim().is_empty()) {
                 if p.enterprise {
                     body["enterprisePayload"] = json!({"s":s});
                 } else {
                     body["recaptchaDataSValue"] = json!(s);
                 }
             }
-            if let Some(agent) = &p.user_agent {
-                body["userAgent"] = json!(agent);
-            }
+            optional(&mut body, "userAgent", &p.user_agent);
             body
         }
         // https://2captcha.com/api-docs/cloudflare-turnstile
         SolveTask::TurnstileToken(p) => {
             let mut body = json!({"type":"TurnstileTaskProxyless","websiteURL":p.website_url,"websiteKey":p.website_key});
-            if let Some(action) = &p.action {
-                body["action"] = json!(action);
-            }
-            if let Some(data) = &p.cdata {
-                body["data"] = json!(data);
-            }
+            optional(&mut body, "action", &p.action);
+            optional(&mut body, "data", &p.cdata);
             body
         }
     };
@@ -555,7 +551,7 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let url = format!("http://{}", listener.local_addr()?);
         let router = Router::new()
-            .route("/{method}", post(respond))
+            .route("/{*method}", post(respond))
             .with_state(state.clone());
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
@@ -613,6 +609,139 @@ mod tests {
                 &CancellationToken::new(),
             )
             .await
+    }
+
+    #[tokio::test]
+    async fn tests_that_two_captcha_attempt_budgets_depend_on_task() -> anyhow::Result<()> {
+        let mock = mock_server(vec![]).await?;
+        let client: &dyn VendorClient = &mock.client;
+        for task in [
+            token_task(false),
+            token_task(true),
+            SolveTask::TurnstileToken(TurnstileParams {
+                website_url: "https://example.test/".into(),
+                website_key: "site-key".into(),
+                action: None,
+                cdata: None,
+            }),
+        ] {
+            assert_eq!(client.attempt_budget(&task), Duration::from_secs(90));
+        }
+        assert_eq!(
+            client.attempt_budget(&tiles(TileGrid::ThreeByThree)),
+            Duration::from_secs(30)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_two_captcha_keeps_base_url_path_prefixes() -> anyhow::Result<()> {
+        for suffix in ["", "/"] {
+            let mut mock = mock_server(vec![
+                json!({"errorId":0,"taskId":42}),
+                ready(json!({"gRecaptchaResponse":"answer"})),
+            ])
+            .await?;
+            mock.client
+                .config
+                .base_url
+                .set_path(&format!("/mock/2captcha{suffix}"));
+            assert_eq!(
+                solve(&mock.client, &token_task(false)).await?.answer,
+                SolveAnswer::Token("answer".into())
+            );
+            let calls = mock.state.calls.lock().await;
+            assert_eq!(calls[0].0, "mock/2captcha/createTask");
+            assert_eq!(calls[1].0, "mock/2captcha/getTaskResult");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_two_captcha_omits_blank_optional_fields() -> anyhow::Result<()> {
+        for blank in ["", " \t\n "] {
+            for enterprise in [false, true] {
+                let SolveTask::RecaptchaToken(mut params) = token_task(enterprise) else {
+                    anyhow::bail!("wrong task")
+                };
+                params.enterprise_s = Some(blank.into());
+                params.user_agent = Some(blank.into());
+                params.page_action = Some(blank.into());
+                let mock = mock_server(vec![
+                    json!({"errorId":0,"taskId":42}),
+                    ready(json!({"gRecaptchaResponse":"answer"})),
+                ])
+                .await?;
+                assert!(
+                    solve(&mock.client, &SolveTask::RecaptchaToken(params))
+                        .await
+                        .is_ok()
+                );
+                let calls = mock.state.calls.lock().await;
+                let payload = &calls[0].1["task"];
+                for field in [
+                    "enterprisePayload",
+                    "recaptchaDataSValue",
+                    "userAgent",
+                    "pageAction",
+                ] {
+                    assert!(payload.get(field).is_none(), "{field} was sent");
+                }
+            }
+            let task = SolveTask::TurnstileToken(TurnstileParams {
+                website_url: "https://example.test/".into(),
+                website_key: "site-key".into(),
+                action: Some(blank.into()),
+                cdata: Some(blank.into()),
+            });
+            let mock = mock_server(vec![
+                json!({"errorId":0,"taskId":42}),
+                ready(json!({"token":"answer"})),
+            ])
+            .await?;
+            assert!(solve(&mock.client, &task).await.is_ok());
+            let calls = mock.state.calls.lock().await;
+            assert!(calls[0].1["task"].get("action").is_none());
+            assert!(calls[0].1["task"].get("data").is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_paid_task_deltas_include_both_vendors_after_charged_failover()
+    -> anyhow::Result<()> {
+        use super::super::providers::{CaptchaBackend, ProviderChain};
+        let primary = mock_server(vec![
+            ready(json!({"gRecaptchaResponse":"first"})),
+            json!({"errorId":0,"taskId":"accepted"}),
+            json!({"errorId":1,"errorCode":"ERROR_CAPTCHA_UNSOLVABLE"}),
+        ])
+        .await?;
+        let backup = mock_server(vec![
+            json!({"errorId":0,"taskId":42}),
+            ready(json!({"gRecaptchaResponse":"backup"})),
+        ])
+        .await?;
+        let chain = ProviderChain::new(&CaptchaConfig {
+            capsolver: Some(primary.client.config.clone()),
+            twocaptcha: Some(backup.client.config.clone()),
+            paid_task_limit: 3,
+        });
+        let task = token_task(false);
+        let cancel = CancellationToken::new();
+        chain
+            .solve(&task, Instant::now() + Duration::from_secs(10), &cancel)
+            .await?;
+        let before = chain.paid_tasks();
+        assert_eq!(before, 1);
+        let answer = chain
+            .solve(&task, Instant::now() + Duration::from_secs(10), &cancel)
+            .await?;
+        assert_eq!(answer.answer, SolveAnswer::Token("backup".into()));
+        assert_eq!(answer.provider, ProviderName::TwoCaptcha);
+        assert_eq!(chain.paid_tasks() - before, 2);
+        assert_eq!(chain.paid_tasks(), 3);
+        Ok(())
     }
 
     #[tokio::test]
@@ -1284,7 +1413,7 @@ mod tests {
         let error = chain
             .solve(
                 &token_task(false),
-                Instant::now() + Duration::from_secs(2),
+                Instant::now() + Duration::from_secs(10),
                 &CancellationToken::new(),
             )
             .await
@@ -1315,7 +1444,7 @@ mod tests {
         let error = chain
             .solve(
                 &token_task(false),
-                Instant::now() + Duration::from_secs(2),
+                Instant::now() + Duration::from_secs(10),
                 &cancel,
             )
             .await

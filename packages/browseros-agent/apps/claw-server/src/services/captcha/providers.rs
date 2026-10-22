@@ -19,9 +19,14 @@ use super::{
 };
 
 const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
+const MIN_SUBMISSION_BUDGET: Duration = Duration::from_secs(5);
 
 pub trait CaptchaBackend: Send + Sync {
     fn is_configured(&self) -> bool;
+    /// With a `ProviderChain`, read `paid_tasks()` before and after this call to
+    /// count charged attempts, including failed vendors before a successful fallback.
+    /// Deltas are per-call only without overlapping solves; the counter also includes
+    /// in-flight reservations. `ProviderAnswer` carries the last vendor's task ID only.
     fn solve(
         &self,
         task: &SolveTask,
@@ -33,6 +38,12 @@ pub trait CaptchaBackend: Send + Sync {
 pub trait VendorClient: Send + Sync {
     fn name(&self) -> ProviderName;
     fn supports(&self, task: &SolveTask) -> bool;
+    fn attempt_budget(&self, task: &SolveTask) -> Duration {
+        match task {
+            SolveTask::RecaptchaTiles(_) => ATTEMPT_TIMEOUT,
+            SolveTask::RecaptchaToken(_) | SolveTask::TurnstileToken(_) => Duration::from_secs(60),
+        }
+    }
     fn solve<'a>(
         &'a self,
         task: &'a SolveTask,
@@ -103,17 +114,28 @@ impl CaptchaBackend for ProviderChain {
                 continue;
             }
             let provider = client.name();
+            let started = Instant::now();
+            if cancel.is_cancelled()
+                || deadline.saturating_duration_since(started) < MIN_SUBMISSION_BUDGET
+            {
+                errors.push("provider attempt cancelled or insufficient time remaining".into());
+                return Err(ProviderError {
+                    provider: Some(provider),
+                    kind: if cancel.is_cancelled() {
+                        ProviderErrorKind::Cancelled
+                    } else {
+                        ProviderErrorKind::Timeout
+                    },
+                    message: errors.join("; "),
+                    charged,
+                });
+            }
             let result = async {
-                if cancel.is_cancelled() || Instant::now() >= deadline {
-                    return Err(ProviderError { provider: Some(provider), kind: if cancel.is_cancelled() {ProviderErrorKind::Cancelled} else {ProviderErrorKind::Timeout}, message: "provider attempt cancelled or deadline exceeded".into(), charged:false });
-                }
                 let mut slot = PaidSlot::reserve(&self.paid, self.limit).ok_or_else(|| ProviderError {provider:Some(provider),kind:ProviderErrorKind::SpendLimit,message:"paid-task limit reached".into(),charged:false})?;
-                let started = Instant::now();
                 tracing::debug!(target: "captcha", provider = ?provider, task_type = task.label(), "provider task started");
                 // Keep the reservation if the caller drops this future after submission.
                 slot.charged = true;
-                let attempt_timeout = if matches!(task, SolveTask::RecaptchaTiles(_)) { ATTEMPT_TIMEOUT } else { Duration::from_secs(60) };
-                let result = client.solve(task, deadline.min(started + attempt_timeout), cancel).await;
+                let result = client.solve(task, deadline.min(started + client.attempt_budget(task)), cancel).await;
                 if let Err(error) = &result { slot.charged = error.charged; }
                 tracing::debug!(target: "captcha", provider = ?provider, task_type = task.label(), latency_ms = started.elapsed().as_millis() as u64, success = result.is_ok(), "provider task finished");
                 result
@@ -538,7 +560,7 @@ fn validate_site(url: &str, key: &str) -> Result<(), ()> {
     Ok(())
 }
 
-fn optional(payload: &mut Value, name: &str, value: &Option<String>) {
+pub(super) fn optional(payload: &mut Value, name: &str, value: &Option<String>) {
     if let Some(value) = value.as_ref().filter(|value| !value.trim().is_empty()) {
         payload[name] = json!(value);
     }
@@ -732,7 +754,7 @@ mod tests {
             ..Default::default()
         }));
         let app = Router::new()
-            .route("/{method}", post(handle))
+            .route("/{*method}", post(handle))
             .with_state(state.clone());
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, app).await;
@@ -817,6 +839,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tests_that_capsolver_keeps_base_url_path_prefixes() -> anyhow::Result<()> {
+        for suffix in ["", "/"] {
+            let mut mock = vendor(vec![
+                json!({"errorId":0,"taskId":"job"}).into(),
+                json!({"errorId":0,"status":"ready","solution":{"token":"answer"}}).into(),
+            ])
+            .await?;
+            mock.url = format!("{}mock/capsolver{suffix}", mock.url);
+            let chain = ProviderChain::new(&config(Some(&mock), 1)?);
+            let answer = solve(&chain, &turnstile()).await?;
+            assert_eq!(answer.answer, SolveAnswer::Token("answer".into()));
+            let state = mock.state.lock().await;
+            assert_eq!(state.requests[0].0, "/mock/capsolver/createTask");
+            assert_eq!(state.requests[1].0, "/mock/capsolver/getTaskResult");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_single_tile_has_object_is_a_valid_boolean_answer() -> anyhow::Result<()> {
         for (has_object, expected) in [(true, vec![0]), (false, vec![])] {
             let mock = vendor(vec![
@@ -890,11 +931,20 @@ mod tests {
             delay: Duration::from_secs(2),
         }])
         .await?;
-        let chain = ProviderChain::new(&config(Some(&primary), 100)?);
+        let provider = config(Some(&primary), 100)?
+            .capsolver
+            .ok_or_else(|| anyhow::anyhow!("missing provider"))?;
+        let chain = ProviderChain::with_clients(
+            vec![Box::new(BudgetVendor(
+                CapsolverClient::new(&provider, Client::new()),
+                Duration::from_millis(150),
+            ))],
+            100,
+        );
         let result = chain
             .solve(
                 &recaptcha(),
-                Instant::now() + Duration::from_millis(150),
+                Instant::now() + Duration::from_secs(10),
                 &CancellationToken::new(),
             )
             .await;
@@ -920,7 +970,7 @@ mod tests {
         };
         let task = recaptcha();
         let (result, ()) = tokio::join!(
-            chain.solve(&task, Instant::now() + Duration::from_secs(5), &cancel),
+            chain.solve(&task, Instant::now() + Duration::from_secs(10), &cancel),
             interrupt
         );
         let Err(error) = result else {
@@ -956,13 +1006,22 @@ mod tests {
     async fn tests_that_deadlines_stop_polling_and_expired_calls_do_not_submit()
     -> anyhow::Result<()> {
         let mock = vendor(vec![json!({"errorId":0,"taskId":"accepted"}).into()]).await?;
-        let chain = ProviderChain::new(&config(Some(&mock), 100)?);
+        let provider = config(Some(&mock), 100)?
+            .capsolver
+            .ok_or_else(|| anyhow::anyhow!("missing provider"))?;
+        let chain = ProviderChain::with_clients(
+            vec![Box::new(BudgetVendor(
+                CapsolverClient::new(&provider, Client::new()),
+                Duration::from_millis(100),
+            ))],
+            100,
+        );
         for elapsed in [true, false] {
             let deadline = Instant::now()
                 + if elapsed {
                     Duration::ZERO
                 } else {
-                    Duration::from_millis(100)
+                    Duration::from_secs(10)
                 };
             let Err(error) = chain
                 .solve(&recaptcha(), deadline, &CancellationToken::new())
@@ -1054,6 +1113,65 @@ mod tests {
         assert_eq!(first.load(Ordering::Relaxed), 1);
         assert_eq!(second.load(Ordering::Relaxed), 1);
         assert_eq!(chain.paid_tasks(), 1);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_short_deadlines_skip_paid_attempts_before_reserving() -> anyhow::Result<()>
+    {
+        for (remaining_ms, limit, succeeds) in [
+            (0, 1, false),
+            (4999, 0, false),
+            (4999, 1, false),
+            (5000, 1, true),
+        ] {
+            let (client, calls) = fake("READY", None, true, true);
+            let (backup, backup_calls) = fake("BACKUP", None, true, true);
+            let chain = ProviderChain::with_clients(vec![client, backup], limit);
+            let result = chain
+                .solve(
+                    &recaptcha(),
+                    Instant::now() + Duration::from_millis(remaining_ms),
+                    &CancellationToken::new(),
+                )
+                .await;
+            if succeeds {
+                assert_eq!(result?.answer, SolveAnswer::Token("fake-token".into()));
+            } else {
+                let error = result
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("late task was submitted"))?;
+                assert_eq!(
+                    (error.kind, error.charged),
+                    (ProviderErrorKind::Timeout, false)
+                );
+            }
+            assert_eq!(calls.load(Ordering::Relaxed), u32::from(succeeds));
+            assert_eq!(backup_calls.load(Ordering::Relaxed), 0);
+            assert_eq!(chain.paid_tasks(), u32::from(succeeds));
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_short_deadlines_never_reach_the_mock_vendor() -> anyhow::Result<()> {
+        let mock = vendor(vec![]).await?;
+        let chain = ProviderChain::new(&config(Some(&mock), 1)?);
+        let error = chain
+            .solve(
+                &recaptcha(),
+                Instant::now() + Duration::from_millis(4999),
+                &CancellationToken::new(),
+            )
+            .await
+            .err()
+            .ok_or_else(|| anyhow::anyhow!("late task was submitted"))?;
+        assert_eq!(
+            (error.kind, error.charged),
+            (ProviderErrorKind::Timeout, false)
+        );
+        assert!(mock.state.lock().await.requests.is_empty());
+        assert_eq!(chain.paid_tasks(), 0);
         Ok(())
     }
 
@@ -1333,6 +1451,104 @@ mod tests {
                 }
             })
         }
+    }
+
+    struct BudgetVendor<T>(T, Duration);
+
+    impl<T: VendorClient> VendorClient for BudgetVendor<T> {
+        fn name(&self) -> ProviderName {
+            self.0.name()
+        }
+        fn supports(&self, task: &SolveTask) -> bool {
+            self.0.supports(task)
+        }
+        fn attempt_budget(&self, _task: &SolveTask) -> Duration {
+            self.1
+        }
+        fn solve<'a>(
+            &'a self,
+            task: &'a SolveTask,
+            deadline: Instant,
+            cancel: &'a CancellationToken,
+        ) -> BoxFuture<'a, Result<ProviderAnswer, ProviderError>> {
+            self.0.solve(task, deadline, cancel)
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_vendor_attempt_budgets_are_used_and_capped_by_the_overall_deadline()
+    -> anyhow::Result<()> {
+        for (task, delay, overall, elapsed, succeeds) in [
+            (recaptcha(), 65, 120, 65, true),
+            (turnstile(), 65, 120, 65, true),
+            (recaptcha(), 95, 120, 90, false),
+            (turnstile(), 95, 80, 80, false),
+        ] {
+            let chain = ProviderChain::with_clients(
+                vec![Box::new(BudgetVendor(
+                    SlowVendor(Duration::from_secs(delay)),
+                    Duration::from_secs(90),
+                ))],
+                1,
+            );
+            let started = Instant::now();
+            let result = chain
+                .solve(
+                    &task,
+                    started + Duration::from_secs(overall),
+                    &CancellationToken::new(),
+                )
+                .await;
+            if succeeds {
+                assert_eq!(result?.answer, SolveAnswer::Token("delayed-token".into()));
+            } else {
+                let error = result
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("deadline ignored"))?;
+                assert_eq!(
+                    (error.kind, error.charged),
+                    (ProviderErrorKind::Timeout, true)
+                );
+            }
+            assert_eq!(started.elapsed(), Duration::from_secs(elapsed));
+            assert_eq!(chain.paid_tasks(), 1);
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_late_failover_keeps_prior_charges_without_submitting_again()
+    -> anyhow::Result<()> {
+        for (overall, succeeds) in [(34, false), (35, true)] {
+            let (backup, calls) = fake("BACKUP", None, true, true);
+            let chain = ProviderChain::with_clients(
+                vec![Box::new(SlowVendor(Duration::from_secs(35))), backup],
+                2,
+            );
+            let started = Instant::now();
+            let result = chain
+                .solve(
+                    &tiles(TileGrid::ThreeByThree),
+                    started + Duration::from_secs(overall),
+                    &CancellationToken::new(),
+                )
+                .await;
+            if succeeds {
+                assert!(result.is_ok());
+            } else {
+                let error = result
+                    .err()
+                    .ok_or_else(|| anyhow::anyhow!("late backup was submitted"))?;
+                assert_eq!(
+                    (error.kind, error.charged),
+                    (ProviderErrorKind::Timeout, true)
+                );
+            }
+            assert_eq!(calls.load(Ordering::Relaxed), u32::from(succeeds));
+            assert_eq!(chain.paid_tasks(), 1 + u32::from(succeeds));
+            assert_eq!(started.elapsed(), Duration::from_secs(30));
+        }
+        Ok(())
     }
 
     #[tokio::test(start_paused = true)]
