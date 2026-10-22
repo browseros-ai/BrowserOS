@@ -58,9 +58,9 @@ impl TabReservations {
     pub fn busy_message(&self, page: u32) -> Option<String> {
         let active = self.active(page)?;
         Some(format!(
-            "page {page} is busy: solve_captcha (request {}) is working on a {} CAPTCHA ({}, {}s). Wait for it to return, then take a fresh snapshot.",
+            "page {page} is busy: solve_captcha (request {}) is working on {} CAPTCHA ({}, {}s). Wait for it to return, then take a fresh snapshot.",
             active.request_id,
-            active.kind.map_or("unknown", CaptchaKind::as_str),
+            kind_with_article(active.kind),
             step_label(active.step),
             active.started_at.elapsed().as_secs()
         ))
@@ -68,13 +68,22 @@ impl TabReservations {
     pub fn status_line(&self, page: u32) -> Option<String> {
         let active = self.active(page)?;
         Some(format!(
-            "CAPTCHA: solve_captcha (request {}) is solving a {} CAPTCHA on this page — {}, {}s elapsed. Do not act on this page until it returns.",
+            "CAPTCHA: solve_captcha (request {}) is solving {} CAPTCHA on this page — {}, {}s elapsed. Do not act on this page until it returns.",
             active.request_id,
-            active.kind.map_or("unknown", CaptchaKind::as_str),
+            kind_with_article(active.kind),
             step_label(active.step),
             active.started_at.elapsed().as_secs()
         ))
     }
+}
+
+fn kind_with_article(kind: Option<CaptchaKind>) -> String {
+    let kind = kind.unwrap_or(CaptchaKind::Unknown);
+    let article = match kind {
+        CaptchaKind::Unknown | CaptchaKind::Arkose | CaptchaKind::AwsWaf => "an",
+        _ => "a",
+    };
+    format!("{article} {}", kind.as_str())
 }
 
 fn step_label(step: SolveStep) -> String {
@@ -191,8 +200,39 @@ mod tests {
             .get_mut(&42)
             .ok_or_else(|| anyhow::anyhow!("missing"))?
             .started_at = Instant::now() - std::time::Duration::from_millis(12_500);
-        assert_eq!(reservations.busy_message(42), Some("page 42 is busy: solve_captcha (request cap_test) is working on a unknown CAPTCHA (detecting, 12s). Wait for it to return, then take a fresh snapshot.".into()));
-        assert_eq!(reservations.status_line(42), Some("CAPTCHA: solve_captcha (request cap_test) is solving a unknown CAPTCHA on this page — detecting, 12s elapsed. Do not act on this page until it returns.".into()));
+        assert_eq!(reservations.busy_message(42), Some("page 42 is busy: solve_captcha (request cap_test) is working on an unknown CAPTCHA (detecting, 12s). Wait for it to return, then take a fresh snapshot.".into()));
+        assert_eq!(reservations.status_line(42), Some("CAPTCHA: solve_captcha (request cap_test) is solving an unknown CAPTCHA on this page — detecting, 12s elapsed. Do not act on this page until it returns.".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_busy_and_status_text_choose_the_article_for_the_kind() -> anyhow::Result<()> {
+        let reservations = Arc::<TabReservations>::default();
+        let lease = reservations
+            .try_reserve(42, "cap_test")
+            .map_err(|_| anyhow::anyhow!("busy"))?;
+        for (kind, phrase) in [
+            (None, "an unknown"),
+            (Some(CaptchaKind::Unknown), "an unknown"),
+            (Some(CaptchaKind::RecaptchaV2), "a recaptcha_v2"),
+            (Some(CaptchaKind::Turnstile), "a turnstile"),
+            (Some(CaptchaKind::Arkose), "an arkose"),
+            (Some(CaptchaKind::AwsWaf), "an aws_waf"),
+        ] {
+            lease.set_progress(kind, SolveStep::Detecting);
+            assert_eq!(
+                reservations.busy_message(42),
+                Some(format!(
+                    "page 42 is busy: solve_captcha (request cap_test) is working on {phrase} CAPTCHA (detecting, 0s). Wait for it to return, then take a fresh snapshot."
+                ))
+            );
+            assert_eq!(
+                reservations.status_line(42),
+                Some(format!(
+                    "CAPTCHA: solve_captcha (request cap_test) is solving {phrase} CAPTCHA on this page — detecting, 0s elapsed. Do not act on this page until it returns."
+                ))
+            );
+        }
         Ok(())
     }
 
