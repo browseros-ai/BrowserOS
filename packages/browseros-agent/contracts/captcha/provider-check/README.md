@@ -58,6 +58,6 @@ asking for traffic lights. It uses `createTask` then `getTaskResult`; the
 one-based `solution.click` indices become zero-based report tiles.
 Balances use [getBalance](https://2captcha.com/api-docs/get-balance).
 
-Live 2Captcha paths are **unverified: no key yet**; unit tests use local mock
-HTTP servers and fake keys. The owner's approved live check creates one
-CapSolver task only while the 2Captcha key file is absent.
+Both providers passed the approved live API check on 2026-10-22: one task
+each, returning tiles `[0,4,7]`. This does not verify solving on real demo pages.
+Unit tests use local mock HTTP servers and fake keys only.

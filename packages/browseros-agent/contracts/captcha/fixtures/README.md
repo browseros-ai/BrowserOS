@@ -50,4 +50,4 @@ Both 2Captcha demos were inspected in BrowserOS neo. Their `main form button[typ
 CapSolver's own-domain demo search found guides pointing to external demos, not a hosted demo. `demo.capsolver.com` did not resolve; no speculative entry was added. No third-party production site is included.
 
 Provider readiness is checked separately by `bun run captcha:provider-check`.
-Live 2Captcha paid paths are **unverified: no key yet**. These fixtures never read provider API keys.
+Both providers passed the live API check; paid solving on these demo pages remains **unverified**. These fixtures never read provider API keys.
