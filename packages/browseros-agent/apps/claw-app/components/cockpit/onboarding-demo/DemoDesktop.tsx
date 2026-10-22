@@ -6,8 +6,6 @@
 
 import { Folder } from 'lucide-react'
 import type { ReactNode } from 'react'
-import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
-import { CodexDark } from '@/components/ui/svgs/codexDark'
 import { cn } from '@/lib/utils'
 import { DemoClaudeWindow } from './DemoClaudeWindow'
 import { DemoNeoWindow } from './DemoNeoWindow'
@@ -87,8 +85,29 @@ function DockApp({
 const TILE =
   'grid size-11 place-items-center overflow-hidden rounded-[11px] border'
 
-/** Finder, Terminal, Claude, Codex, neo: the Claude and Codex tiles use the
- * marks the product already ships, so people recognise their own dock. */
+/**
+ * The apps' real default icons (round 8), shipped as small WebPs in
+ * public/onboarding/dock. Their artwork carries macOS's transparent margin,
+ * so each draws at 52 px inside the 44 px slot to match Finder and neo.
+ */
+function RealIcon({
+  name,
+}: {
+  name: 'terminal' | 'claude' | 'chatgpt' | 'codex'
+}) {
+  return (
+    <img
+      src={`/onboarding/dock/${name}.webp`}
+      alt=""
+      aria-hidden
+      draggable={false}
+      className="-m-1 size-[52px] max-w-none select-none"
+    />
+  )
+}
+
+/** Finder, Terminal, Claude, ChatGPT, Codex, neo: the apps people have, so
+ * they recognise their own dock. Finder's tile and neo's mark are ours. */
 function Dock({ frame }: { frame: DemoFrame }) {
   return (
     <div className="absolute top-[404px] left-1/2 z-6 flex h-16 -translate-x-1/2 items-start gap-2.5 rounded-[20px] border border-white/95 bg-card/60 px-[11px] pt-2 shadow-[0_24px_44px_-18px_rgb(1_18_63/0.38),0_2px_8px_rgb(1_18_63/0.08)] backdrop-blur-[10px] dark:border-white/10">
@@ -102,28 +121,20 @@ function Dock({ frame }: { frame: DemoFrame }) {
         </span>
       </DockApp>
       <DockApp>
-        <span className={cn(TILE, 'border-border bg-muted')}>
-          <span className="grid h-7 w-[34px] place-items-center rounded-[5px] bg-ink-deep font-bold font-mono text-[13px] text-white">
-            &gt;_
-          </span>
-        </span>
+        <RealIcon name="terminal" />
       </DockApp>
       <DockApp
         running={frame.dock.claudeRunning}
         bounce={frame.dock.claudeBounce}
         tip={{ label: 'Claude', on: frame.dock.tip }}
       >
-        <span className={cn(TILE, 'border-[#C9694A] bg-[#D97757]')}>
-          <ClaudeAiIcon
-            aria-hidden
-            className="size-[27px] [&_path]:fill-white"
-          />
-        </span>
+        <RealIcon name="claude" />
       </DockApp>
       <DockApp>
-        <span className={cn(TILE, 'border-[#15171C] bg-[#15171C]')}>
-          <CodexDark aria-hidden className="size-[30px]" />
-        </span>
+        <RealIcon name="chatgpt" />
+      </DockApp>
+      <DockApp>
+        <RealIcon name="codex" />
       </DockApp>
       <DockApp running>
         <DemoNeoMark className="size-11 rounded-[11px] shadow-[0_10px_18px_-8px_rgb(2_84_236/0.6)]" />
@@ -142,8 +153,9 @@ function Pointer({ pointer }: { pointer: DemoFrame['pointer'] }) {
       viewBox="0 0 18 26"
       className={cn(
         'absolute z-9 h-[26px] w-[18px] transition-[left,top,opacity,transform] duration-[1100ms,1100ms,300ms,120ms] ease-[cubic-bezier(.3,.1,.2,1)]',
+        // The tip lands on Claude, the third of the dock's six tiles.
         pointer.atDock
-          ? 'top-[428px] left-[474px]'
+          ? 'top-[428px] left-[447px]'
           : 'top-[260px] left-[640px]',
         pointer.on ? 'opacity-100' : 'opacity-0',
         pointer.pressed && 'scale-[0.88]',

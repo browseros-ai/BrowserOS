@@ -9,6 +9,7 @@ import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { usePrefersReducedMotion } from '../use-chat-reveal'
 import { ClaudeMark } from './ClaudeMark'
+import { CLAUDE_LIGHT } from './claude-light'
 import { NeoMark } from './NeoMark'
 
 /** Same rows and prices as the cockpit demo: one chore, told twice. */
@@ -185,19 +186,23 @@ export function FlightScene({ live }: FlightSceneProps) {
         </div>
       </div>
 
-      {/* The Claude app the person types into: a light, simplified window in
-          the cockpit demo's language (DemoClaudeWindow), without its sidebar
-          or composer, so the card reads as "my AI app asks, neo does it". */}
-      <div className="absolute top-[84px] left-[18px] flex w-[204px] flex-col overflow-hidden rounded-[10px] border border-border-strong bg-card shadow-[0_26px_50px_-24px_rgb(1_18_63/0.45),0_6px_16px_-10px_rgb(1_18_63/0.18)]">
-        <div className="flex h-[30px] shrink-0 items-center justify-between border-border-2 border-b bg-card-tint px-2.5">
+      {/* The Claude app the person types into, in Claude's own light colors:
+          a simplified window in the cockpit demo's language (DemoClaudeWindow),
+          without its sidebar or composer, so the card reads as "my AI app
+          asks, neo does it". */}
+      <div
+        style={CLAUDE_LIGHT}
+        className="absolute top-[84px] left-[18px] flex w-[204px] flex-col overflow-hidden rounded-[10px] border border-(--claude-border) bg-(--claude-main) shadow-[0_26px_50px_-24px_rgb(20_20_19/0.4),0_6px_16px_-10px_rgb(20_20_19/0.16)]"
+      >
+        <div className="flex h-[30px] shrink-0 items-center justify-between border-(--claude-border) border-b bg-(--claude-sidebar) px-2.5">
           <span className="flex gap-[5px]">
             <i className="size-2 rounded-full bg-[#FF5F57]" />
             <i className="size-2 rounded-full bg-[#FEBC2E]" />
             <i className="size-2 rounded-full bg-[#28C840]" />
           </span>
-          <span className="grid grid-cols-2 gap-px rounded-md bg-accent-tint p-0.5 font-medium text-[11px] leading-4">
-            <span className="rounded px-2 text-ink-3">Chat</span>
-            <span className="rounded bg-card px-2 text-ink-deep shadow-[0_1px_2px_rgb(1_18_63/0.14)]">
+          <span className="grid grid-cols-2 gap-px rounded-md bg-(--claude-toggle) p-0.5 font-medium text-[11px] leading-4">
+            <span className="rounded px-2 text-(--claude-muted)">Chat</span>
+            <span className="rounded bg-white px-2 text-(--claude-ink) shadow-[0_1px_2px_rgb(0_0_0/0.12)]">
               Code
             </span>
           </span>
@@ -205,7 +210,7 @@ export function FlightScene({ live }: FlightSceneProps) {
         <div className="flex min-h-[118px] flex-col gap-3 p-3">
           <div
             className={cn(
-              'ml-5 self-end rounded-[10px_10px_3px_10px] bg-muted px-2.5 py-2 text-[12px] text-ink-deep leading-4 transition-[opacity,transform] duration-500 ease-out',
+              'ml-5 self-end rounded-[10px_10px_3px_10px] bg-(--claude-bubble) px-2.5 py-2 text-(--claude-ink) text-[12px] leading-4 transition-[opacity,transform] duration-500 ease-out',
               frame.asked ? 'opacity-100' : 'translate-y-1.5 opacity-0',
             )}
           >
@@ -214,7 +219,7 @@ export function FlightScene({ live }: FlightSceneProps) {
           <div className="grid">
             <div
               className={cn(
-                'col-start-1 row-start-1 flex items-center gap-1.5 self-start text-[11px] text-ink-3 leading-4',
+                'col-start-1 row-start-1 flex items-center gap-1.5 self-start text-(--claude-muted) text-[11px] leading-4',
                 fade,
                 frame.status === 'working' ? 'opacity-100' : 'opacity-0',
               )}
@@ -225,12 +230,12 @@ export function FlightScene({ live }: FlightSceneProps) {
             </div>
             <div
               className={cn(
-                'col-start-1 row-start-1 flex items-start gap-1.5 self-start font-medium text-[12px] text-ink-deep leading-4',
+                'col-start-1 row-start-1 flex items-start gap-1.5 self-start font-medium text-(--claude-ink) text-[12px] leading-4',
                 fade,
                 frame.status === 'done' ? 'opacity-100' : 'opacity-0',
               )}
             >
-              <span className="mt-px grid size-3.5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
+              <span className="mt-px grid size-3.5 shrink-0 place-items-center rounded-full bg-(--claude-ink) text-white">
                 <Check aria-hidden className="size-2.5" strokeWidth={3} />
               </span>
               Cheapest is $142, nonstop, Fri 7:05 am.
