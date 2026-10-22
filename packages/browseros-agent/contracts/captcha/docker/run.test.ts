@@ -1,5 +1,13 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { keyMounts, parseArgs, runDockerE2e } from './run'
@@ -34,7 +42,7 @@ test('tests that runner flags and output paths survive argument parsing', () => 
   expect(() => parseArgs(['--keep', '--clean'])).toThrow('keep')
 })
 
-test('tests that placeholder keys are fake read-only individual mounts', async () => {
+test('tests that placeholder mode mounts only a fake CapSolver key', async () => {
   const dir = await temporary()
   const args = await keyMounts('placeholder', dir, {})
   expect(args.join(' ')).toContain('readonly')
@@ -44,6 +52,7 @@ test('tests that placeholder keys are fake read-only individual mounts', async (
   expect(await readFile(join(dir, 'capsolver-api-key'), 'utf8')).toBe(
     'captcha-e2e-placeholder\n',
   )
+  expect(await readdir(dir)).toEqual(['capsolver-api-key'])
   expect(await keyMounts('none', dir, {})).toEqual([])
 })
 
@@ -53,19 +62,38 @@ test('tests that real keys are mounted without reading or copying their contents
   await writeFile(source, 'fake-private-value')
   const env = {
     BROWSEROS_CAPSOLVER_API_KEY_FILE: source,
-    BROWSEROS_CAPMONSTER_API_KEY_FILE: source,
+    BROWSEROS_2CAPTCHA_API_KEY_FILE: join(dir, 'missing-backup'),
   }
   const args = await keyMounts('real', join(dir, 'unused'), env)
   expect(args.join(' ')).toContain(
     `src=${source},dst=/run/captcha/capsolver-api-key,readonly`,
   )
   expect(args.join(' ')).not.toContain('fake-private-value')
+  expect(args.filter((arg) => arg.startsWith('--mount'))).toHaveLength(1)
   await expect(
     keyMounts('real', dir, {
       ...env,
       BROWSEROS_CAPSOLVER_API_KEY_FILE: '/missing-key',
     }),
   ).rejects.toThrow()
+})
+
+test('tests that real mode mounts an optional 2Captcha file only when it exists', async () => {
+  const dir = await temporary()
+  const source = join(dir, 'fake-key')
+  await writeFile(source, 'fake-private-value')
+  const args = await keyMounts('real', dir, {
+    BROWSEROS_CAPSOLVER_API_KEY_FILE: source,
+    BROWSEROS_2CAPTCHA_API_KEY_FILE: source,
+  })
+  expect(args.join(' ')).toContain(
+    `src=${source},dst=/run/captcha/2captcha-api-key,readonly`,
+  )
+  expect(args.join(' ')).toContain(
+    'BROWSEROS_2CAPTCHA_API_KEY_FILE=/run/captcha/2captcha-api-key',
+  )
+  expect(args.filter((arg) => arg.startsWith('--mount'))).toHaveLength(2)
+  expect(args.join(' ')).not.toContain('fake-private-value')
 })
 
 async function harness(failure = '', extra: string[] = []) {

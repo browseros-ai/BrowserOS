@@ -78,7 +78,8 @@ export async function keyMounts(
 ) {
   if (mode === 'none') return []
   const args: string[] = []
-  for (const vendor of ['capsolver', 'capmonster']) {
+  const vendors = mode === 'real' ? ['capsolver', '2captcha'] : ['capsolver']
+  for (const vendor of vendors) {
     const name = `${vendor}-api-key`
     const variable = `BROWSEROS_${vendor.toUpperCase()}_API_KEY_FILE`
     const source =
@@ -89,6 +90,7 @@ export async function keyMounts(
         : join(dir, name)
     if (source.includes(','))
       throw new Error('Key mount paths cannot contain commas')
+    if (vendor === '2captcha' && !(await Bun.file(source).exists())) continue
     if (mode === 'placeholder') {
       await writeFile(source, 'captcha-e2e-placeholder\n', { mode: 0o444 })
     }
