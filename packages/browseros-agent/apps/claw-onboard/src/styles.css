@@ -44,7 +44,9 @@
   --color-border-2: var(--border-2);
   --color-border-strong: var(--border-strong);
 
-  /* Ink scale (typography hierarchy) */
+  /* Ink scale (typography hierarchy). ink-deep is claw-app's deep navy: neo's
+     chat text and the selected chips, so both apps read as one voice. */
+  --color-ink-deep: var(--ink-deep);
   --color-ink: var(--ink);
   --color-ink-2: var(--ink-2);
   --color-ink-3: var(--ink-3);
@@ -76,6 +78,7 @@
   --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
   --animate-fade-up: fade-up 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
   --animate-fade-in: fade-in 0.35s ease both;
+  --animate-typing: typing 1.2s ease-in-out infinite;
   --radius: 0.45rem;
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
@@ -104,6 +107,16 @@
   to {
     opacity: 1;
     transform: none;
+  }
+}
+
+@keyframes typing {
+  0%,
+  100% {
+    opacity: 0.3;
+  }
+  40% {
+    opacity: 1;
   }
 }
 
@@ -208,6 +221,7 @@ body {
   --card-tint: #fbfcff;
   --border-2: #e3e9f4;
   --border-strong: #c7d3e8;
+  --ink-deep: #01123f;
   --ink: #25242f;
   --ink-2: #4a4f5c;
   --ink-3: #717783;
@@ -256,6 +270,7 @@ body {
   --card-tint: #151d2e;
   --border-2: #253046;
   --border-strong: #34405c;
+  --ink-deep: #eef2f9;
   --ink: #eef2f9;
   --ink-2: #c4cddf;
   --ink-3: #94a0b5;

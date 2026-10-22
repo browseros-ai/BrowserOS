@@ -5,7 +5,7 @@ import type {
 } from './browseros-onboarding-api'
 import { BrowserOSOnboardingMessage } from './browseros-onboarding-api'
 import { createBrowserOSOnboardingBridge } from './browseros-onboarding-bridge'
-import { MOCK_BROWSEROS_IMPORT_SOURCES } from './onboarding-v2.helpers'
+import { MOCK_BROWSEROS_IMPORT_SOURCES } from './mock-import-sources'
 
 const originalWindow = globalThis.window
 const originalChrome = (globalThis as typeof globalThis & { chrome?: unknown })
