@@ -10,6 +10,8 @@ use serde_json::{Value, json};
 const DESCRIPTION: &str = "\
 Manage browser tabs: list open pages (with their page ids), show the active page, \
 open a new page in the background (snapshot attached), or close one. \
+A new page is handed back once it has stopped changing, not merely once it has \
+loaded, so do not pause afterwards to let it catch up. \
 Use the returned page id with snapshot/act/navigate. \
 action=\"list\" reports the tab group id of every grouped page. Record yours on \
 your first list of a task, before you need it. Ownership is per connection: every \

@@ -1086,13 +1086,6 @@ impl BrowserView {
         // page_access(PageId) here would adopt a replacement reconciled during that await.
         let creating_view = self.with_expected_created_page(&creation.original)?;
         let access = PageAccess::new(creating_view.clone(), creation.original);
-        for _ in 0..crate::timeouts::NEW_PAGE_READY_ATTEMPTS {
-            let fresh = access.fresh().await?;
-            if !fresh.is_loading || fresh.load_progress >= 1.0 {
-                break;
-            }
-            tokio::time::sleep(crate::timeouts::NEW_PAGE_READY_POLL).await;
-        }
         if let Some(group) = opts.tab_group_id {
             let fresh = access.fresh().await?;
             creating_view
@@ -1103,7 +1096,20 @@ impl BrowserView {
                 )
                 .await?;
         }
-        access.fresh().await
+        // The same question the unbound creation path asks, answered the same
+        // way: the page's content going quiet rather than load_progress
+        // reaching 1.0, and asked last for the same reason. The wait can hold
+        // for a whole ceiling, and this tab can be reconciled onto a new
+        // target while it does, so asking any earlier widens the window in
+        // which the grouping above sees a replacement and fails the creation.
+        let settled = access.fresh().await?;
+        let _ = crate::settle::wait_for_page_ready(
+            self.session.pages.as_ref(),
+            settled.page_id.clone(),
+            crate::timeouts::ARRIVAL_READY_BUDGET,
+        )
+        .await;
+        Ok(settled)
     }
     /// The default profile has no normal window yet: open one (normal and inactive, in the
     /// captured Default context) instead of failing or using another profile's window. It goes

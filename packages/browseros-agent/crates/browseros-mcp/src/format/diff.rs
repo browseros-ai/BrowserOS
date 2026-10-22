@@ -52,6 +52,13 @@ pub async fn format_diff_result(
         "added": diff.added,
         "removed": diff.removed
     });
+    // Text moving and controls moving are different claims. Saying which one
+    // this was keeps a ticking countdown from reading as a page that acted.
+    if let Some(moved) = diff.arrangement_changed
+        && let Value::Object(object) = &mut structured
+    {
+        object.insert("arrangementChanged".to_string(), Value::Bool(moved));
+    }
     if diff.url_changed
         && let Value::Object(object) = &mut structured
     {

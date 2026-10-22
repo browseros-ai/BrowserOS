@@ -5,7 +5,6 @@ use crate::{
     target::page_access::PageAccess,
     timeouts,
 };
-use serde::Deserialize;
 use serde_json::{Value, json};
 use std::sync::Arc;
 use tokio::time::{sleep, timeout};
@@ -115,16 +114,18 @@ impl Navigation {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct EvaluateResult {
-    result: RemoteObject,
-}
-
-#[derive(Debug, Deserialize)]
-struct RemoteObject {
-    value: Option<Value>,
-}
-
+/// Waits for a navigation to arrive somewhere worth acting on.
+///
+/// This used to wait for `document.readyState` to reach `complete`, which is
+/// the load event and so waits on every ad iframe, tracking pixel and lazy
+/// image the destination carries. Measured on this surface, that cost 3077ms
+/// and 3410ms on two ordinary navigations whose useful work then took under
+/// 10ms. What a caller actually needs is the content having stopped changing,
+/// and `complete` remains one of the two ways to satisfy that.
+///
+/// Everything else here is unchanged on purpose: the dialog check still runs
+/// each time round, a target error still propagates rather than being retried,
+/// and `fresh()` still admits before each shared read.
 async fn wait_for_load(
     session: &ProtocolSession,
     page_signals: &PageSignals,
@@ -132,7 +133,8 @@ async fn wait_for_load(
     access: Option<&PageAccess>,
 ) -> Result<(), CoreError> {
     sleep(timeouts::WAIT_FOR_CONNECTION_POLL).await;
-    let deadline = tokio::time::Instant::now() + timeouts::WAIT_FOR_LOAD_TIMEOUT;
+    let deadline = tokio::time::Instant::now() + timeouts::ARRIVAL_READY_BUDGET;
+    let mut previous: Option<u64> = None;
     while tokio::time::Instant::now() < deadline {
         // The sleep is an async handoff. Admit before reading the shared dialog cache, which
         // may now belong to a tab dragged out of this capture even before the next CDP send.
@@ -144,22 +146,20 @@ async fn wait_for_load(
         }
         let result = timeout(
             timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT,
-            session.send::<_, EvaluateResult>(
-                "Runtime.evaluate",
-                json!({ "expression": "document.readyState", "returnByValue": true }),
-            ),
+            crate::settle::read_readiness(session),
         )
         .await;
         if let Ok(Err(error @ CoreError::Target(_))) = result {
             return Err(error);
         }
         // Navigation can tear down the execution context; errors and timeouts mean not ready yet, so keep polling.
-        if let Ok(Ok(result)) = result
-            && result.result.value.as_ref().and_then(Value::as_str) == Some("complete")
-        {
-            return Ok(());
+        if let Ok(Ok(reading)) = result {
+            if !reading.installed && previous == Some(reading.count) && reading.settled_enough() {
+                break;
+            }
+            previous = Some(reading.count);
         }
-        sleep(timeouts::WAIT_FOR_LOAD_POLL).await;
+        sleep(timeouts::ACTION_SETTLE_DOM_QUIET).await;
     }
     if let Some(access) = access {
         access.fresh().await?;

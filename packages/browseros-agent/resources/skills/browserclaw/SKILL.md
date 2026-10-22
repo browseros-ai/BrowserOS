@@ -24,6 +24,7 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 - When an action fails, fix the cause reported by the error instead of retrying blindly.
 - Refs go stale when the page changes. Take another snapshot before reusing them.
 - If the page is still loading, wait for expected text or a selector instead of using a bare timed wait.
+- Readiness is handled for you. `tabs` action `"new"`, `navigate`, and an `evaluate` that changes the page all return once the page has stopped changing, not merely once it has loaded. Never pause afterwards to let a page catch up.
 
 ## Tool choice
 
@@ -37,6 +38,7 @@ Derive the page you work on inside the same script that uses it. When you do car
 - **One bounded chunk per call.** A run is hard-capped at 30 seconds and cannot be extended. Batching reads of loaded pages is cheap; batching fresh navigations is not, so keep to about five new pages per call.
 - **Re-derive handles, do not assume them.** A page id from an earlier turn may point at a tab that has closed or changed hands. List your own pages, or open a new one.
 - **Wait on the thing, not the clock.** Wait for the selector or text you need; it returns the moment it appears. Never loop, re-checking with a fixed pause between tries.
+- **Never pause after opening, navigating or a page-changing `evaluate`.** Each already returns settled, and `evaluate` reports `changed` so you can tell. `sleep(ms)` exists, but after any of those it only adds the time you picked. For an effect that is entirely asynchronous, pass `{ settle: true }` to `evaluate` rather than guessing a duration.
 
 ## Reading and output
 

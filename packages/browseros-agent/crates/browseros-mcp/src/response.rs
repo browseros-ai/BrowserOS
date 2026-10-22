@@ -223,6 +223,14 @@ impl ToolResponse {
                 self.text(format!("[Page {page} diff]\n{}", formatted.text));
                 if include_structured {
                     let mut structured = json!({ "changed": diff.changed });
+                    // Text changing and the page changing are different
+                    // questions on a page carrying a countdown or a carousel,
+                    // so say which one this was.
+                    if let Some(moved) = diff.arrangement_changed
+                        && let Value::Object(object) = &mut structured
+                    {
+                        object.insert("arrangementChanged".to_string(), Value::Bool(moved));
+                    }
                     if diff.url_changed
                         && let Value::Object(object) = &mut structured
                     {
