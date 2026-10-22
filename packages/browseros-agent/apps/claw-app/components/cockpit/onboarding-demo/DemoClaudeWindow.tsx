@@ -52,6 +52,8 @@ export function DemoClaudeWindow({
   spinGlyph: string
 }) {
   const typing = frame.composer.length > 0
+  const code = frame.mode === 'code'
+  const blank = code ? 'New session' : 'New chat'
   return (
     <div
       style={CLAUDE_LIGHT}
@@ -72,12 +74,29 @@ export function DemoClaudeWindow({
           <ArrowLeft aria-hidden className="size-3" />
           <ArrowRight aria-hidden className="size-3 opacity-55" />
         </div>
-        <div className="mx-2.5 mt-0.5 mb-2 grid grid-cols-2 gap-0.5 rounded-lg bg-(--claude-toggle) p-0.5">
-          <span className="flex h-[22px] items-center justify-center gap-1 rounded-md font-medium text-(--claude-muted) text-[11px]">
+        {/* Chat | Code: the white thumb slides to Code on the Switch beat. */}
+        <div className="relative mx-2.5 mt-0.5 mb-2 grid grid-cols-2 gap-0.5 rounded-lg bg-(--claude-toggle) p-0.5">
+          <i
+            className={cn(
+              'absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-3px)] rounded-md bg-white shadow-[0_1px_2px_rgb(0_0_0/0.12)] transition-transform duration-300 ease-out',
+              code && 'translate-x-[calc(100%+2px)]',
+            )}
+          />
+          <span
+            className={cn(
+              'relative flex h-[22px] items-center justify-center gap-1 rounded-md font-medium text-[11px] transition-colors duration-300',
+              code ? 'text-(--claude-muted)' : 'text-(--claude-ink)',
+            )}
+          >
             <MessageSquare aria-hidden className="size-[11px]" />
             Chat
           </span>
-          <span className="flex h-[22px] items-center justify-center gap-1 rounded-md bg-white font-medium text-(--claude-ink) text-[11px] shadow-[0_1px_2px_rgb(0_0_0/0.12)]">
+          <span
+            className={cn(
+              'relative flex h-[22px] items-center justify-center gap-1 rounded-md font-medium text-[11px] transition-colors duration-300',
+              code ? 'text-(--claude-ink)' : 'text-(--claude-muted)',
+            )}
+          >
             <Code aria-hidden className="size-[11px]" />
             Code
           </span>
@@ -91,7 +110,7 @@ export function DemoClaudeWindow({
           )}
         >
           <Plus aria-hidden className="size-2.5" strokeWidth={2.5} />
-          New session
+          {blank}
         </div>
         <div className="mx-3.5 mt-3.5 mb-1 text-(--claude-muted) text-[11px] leading-3">
           Recents
@@ -123,7 +142,7 @@ export function DemoClaudeWindow({
 
       <div className="flex min-w-0 flex-1 flex-col">
         <div className="flex h-[34px] flex-none items-center px-3.5 text-(--claude-muted) text-[11.5px]">
-          {frame.sent ? 'Cheapest flight' : 'New session'}
+          {frame.sent ? 'Cheapest flight' : blank}
         </div>
         <div className="relative flex min-h-0 flex-1 flex-col px-3.5 pt-0.5 pb-2.5">
           <ClaudeAiIcon

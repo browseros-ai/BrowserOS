@@ -4,13 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * The cockpit's first-run demo as one pure timeline: `demoFrameAt(t)` returns
- * every visual fact of the drawn desktop at `t` ms into the ~30 s loop.
+ * every visual fact of the drawn desktop at `t` ms into the ~32 s loop.
  *
- *   0–2 s    Desktop  your pointer opens the Claude app (Code mode) from the dock
- *   2–8 s    Ask      the chore types into the composer and is sent
- *   8–22 s   Watch    neo comes forward: ① navigate ② fill ③ read, "Cheapest" lands
- *   22–28 s  Done     Claude replies; "Works the same in Codex and Terminal."
- *   28–30 s  Hold, crossfade, loop
+ *   0–2 s       Desktop  your pointer opens the Claude app from the dock
+ *   2–4.5 s     Switch   it opens on Chat; a callout says "Switch to Code"; click
+ *   4.5–10 s    Ask      the chore types into the composer and is sent
+ *   10–24 s     Watch    neo comes forward: ① navigate ② fill ③ read, "Cheapest" lands
+ *   24–30 s     Done     Claude replies; "Works the same in Codex and Terminal."
+ *   30–32.5 s   Hold, crossfade, loop
  *
  * Because a frame is a function of time alone, pause, replay, the loop wrap
  * and reduced motion (which holds `DEMO_KEY_FRAMES.done`) all land on exact
@@ -18,7 +19,10 @@
  * screen names the beats; they exist for these key frames and the tests.
  */
 
-export const DEMO_LOOP_MS = 30_000
+/** Round 9 inserted the Switch beat; everything after it moved by this much. */
+const SWITCH_SHIFT = 2500
+
+export const DEMO_LOOP_MS = 30_000 + SWITCH_SHIFT
 
 export const DEMO_PROMPT = 'Find the cheapest flight to New York next Friday.'
 const DEMO_URL = 'google.com/travel/flights'
@@ -62,17 +66,26 @@ function endOf(run: TypedRun): number {
   return run.times.at(-1) ?? 0
 }
 
+// Switch (owner, round 9): Code is not obvious, so the demo shows the click.
+// Claude opens on Chat, the pointer glides from the dock to the Chat | Code
+// toggle, a callout names the step, and the click flips it to Code.
+const OPEN = 2200
+const TO_TOGGLE = 2500
+const CALLOUT = 2900
+const CLICK = 3800
+const CALLOUT_GONE = 4200
+
 // Ask: ~70 ms a character with a little jitter, so it reads as a person typing.
 const PROMPT_RUN = typed(
   DEMO_PROMPT,
-  2800,
+  2800 + SWITCH_SHIFT,
   (k, char) => 58 + ((k * 37) % 23) + (char === ' ' ? 18 : 0),
 )
-const SUBMIT = Math.max(endOf(PROMPT_RUN) + 450, 6900)
+const SUBMIT = Math.max(endOf(PROMPT_RUN) + 450, 6900 + SWITCH_SHIFT)
 
-// Watch: neo comes forward at 8 s; each numbered tool row lights the part of
-// the page it touches.
-const WATCH = 8000
+// Watch: neo comes forward; each numbered tool row lights the part of the
+// page it touches.
+const WATCH = 8000 + SWITCH_SHIFT
 const NAVIGATE = WATCH + 500
 const URL_RUN = typed(DEMO_URL, NAVIGATE + 60, () => 22)
 const FILL = WATCH + 3000
@@ -81,15 +94,19 @@ const WHEN_RUN = typed('Next Friday', endOf(TO_RUN) + 850, () => 55)
 const FILLED = endOf(WHEN_RUN)
 const READ = WATCH + 6400
 const RING_STEP = 750
-const DONE = 22_000
+const DONE = 22_000 + SWITCH_SHIFT
+const CAPTION = 27_500 + SWITCH_SHIFT
+const FADE_OUT = 29_400 + SWITCH_SHIFT
 
 export const DEMO_KEY_FRAMES = {
+  /** On Chat, the pointer on Code and the "Switch to Code" callout up. */
+  switch: CLICK - 150,
   /** The prompt fully typed in the composer, not yet sent. */
   ask: endOf(PROMPT_RUN) + 200,
   /** ③ read lit and "Cheapest" landing. */
   watch: READ + 5000,
   /** Claude's answer, with the Codex and Terminal line under the stage. */
-  done: 28_500,
+  done: 28_500 + SWITCH_SHIFT,
 } as const
 
 const between = (t: number, from: number, to = Number.POSITIVE_INFINITY) =>
@@ -98,12 +115,16 @@ const between = (t: number, from: number, to = Number.POSITIVE_INFINITY) =>
 export interface DemoFrame {
   /** The whole stage fades out at the loop end and back in at its start. */
   fading: boolean
-  pointer: { on: boolean; atDock: boolean; pressed: boolean }
+  pointer: { on: boolean; at: 'start' | 'dock' | 'toggle'; pressed: boolean }
+  /** The "Switch to Code" callout beside Claude's Chat | Code toggle. */
+  switchCallout: boolean
   dock: { tip: boolean; claudeBounce: boolean; claudeRunning: boolean }
   /** Frontmost window: it sits on top and shows coloured traffic lights. */
   front: 'neo' | 'claude'
   claude: {
     open: boolean
+    /** Claude opens on Chat; the Switch beat flips it to Code. */
+    mode: 'chat' | 'code'
     composer: string
     sent: boolean
     /** Claude's session is running: header renamed, orange dot in Recents. */
@@ -176,20 +197,22 @@ export function demoFrameAt(rawT: number): DemoFrame {
   const done = t >= DONE
   const { ring, checked } = ringAt(t)
   return {
-    fading: t < 60 || t >= 29_400,
+    fading: t < 60 || t >= FADE_OUT,
     pointer: {
       on: between(t, 250, WATCH),
-      atDock: t >= 350,
-      pressed: between(t, 1500, 1650),
+      at: t >= TO_TOGGLE ? 'toggle' : t >= 350 ? 'dock' : 'start',
+      pressed: between(t, 1500, 1650) || between(t, CLICK, CLICK + 150),
     },
+    switchCallout: between(t, CALLOUT, CALLOUT_GONE),
     dock: {
-      tip: between(t, 1250, WATCH),
+      tip: between(t, 1250, TO_TOGGLE),
       claudeBounce: between(t, 1500, 2350),
       claudeRunning: t >= 1750,
     },
-    front: between(t, 2200, WATCH) ? 'claude' : 'neo',
+    front: between(t, OPEN, WATCH) ? 'claude' : 'neo',
     claude: {
-      open: t >= 2200,
+      open: t >= OPEN,
+      mode: t >= CLICK ? 'code' : 'chat',
       composer: sent ? '' : shownAt(PROMPT_RUN, t),
       sent,
       working: sent && !done,
@@ -226,6 +249,6 @@ export function demoFrameAt(rawT: number): DemoFrame {
       tagged: t >= READ + 4700,
       agentPointer: agentPointerAt(t),
     },
-    caption: between(t, 27_500, 29_400),
+    caption: between(t, CAPTION, FADE_OUT),
   }
 }

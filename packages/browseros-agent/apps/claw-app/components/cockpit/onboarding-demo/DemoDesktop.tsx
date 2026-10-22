@@ -39,6 +39,7 @@ export function DemoDesktop({
         spinGlyph={spinGlyph}
       />
       <Dock frame={frame} />
+      <SwitchCallout on={frame.switchCallout} />
       <Pointer pointer={frame.pointer} />
       <AgentPointer at={frame.neo.agentPointer} />
     </>
@@ -145,6 +146,32 @@ function Dock({ frame }: { frame: DemoFrame }) {
 
 const ARROW_PATH = 'M1.5 1.5v19.2l4.6-4.4 3 7.1 3.2-1.4-3-6.9h6.3z'
 
+/** Where your pointer's tip rests: mid-desktop, on Claude (the third of the
+ * dock's six tiles), then on the Code half of Claude's Chat | Code toggle. */
+const POINTER_SPOTS = {
+  start: 'top-[260px] left-[640px]',
+  dock: 'top-[428px] left-[447px]',
+  toggle: 'top-[58px] left-[112px]',
+} as const
+
+/** Names the one step people miss: Claude Code lives behind the Code tab. */
+function SwitchCallout({ on }: { on: boolean }) {
+  return (
+    <span
+      aria-hidden
+      className={cn(
+        'pointer-events-none absolute top-[49px] left-[160px] z-10 flex items-center whitespace-nowrap rounded-[7px] bg-[rgb(29_31_36/0.92)] px-2.5 py-1 font-medium text-[12px] text-white leading-4 shadow-[0_8px_18px_-8px_rgb(0_0_0/0.5)] transition-[opacity,transform] duration-300 ease-out',
+        MAC_FONT,
+        on ? 'opacity-100' : '-translate-x-1 opacity-0',
+      )}
+    >
+      {/* A small tail pointing back at the toggle. */}
+      <i className="absolute top-1/2 -left-1 size-2 -translate-y-1/2 rotate-45 bg-[rgb(29_31_36/0.92)]" />
+      Switch to Code
+    </span>
+  )
+}
+
 /** Your pointer: crosses the desktop to the Claude icon and opens it. */
 function Pointer({ pointer }: { pointer: DemoFrame['pointer'] }) {
   return (
@@ -153,10 +180,7 @@ function Pointer({ pointer }: { pointer: DemoFrame['pointer'] }) {
       viewBox="0 0 18 26"
       className={cn(
         'absolute z-9 h-[26px] w-[18px] transition-[left,top,opacity,transform] duration-[1100ms,1100ms,300ms,120ms] ease-[cubic-bezier(.3,.1,.2,1)]',
-        // The tip lands on Claude, the third of the dock's six tiles.
-        pointer.atDock
-          ? 'top-[428px] left-[447px]'
-          : 'top-[260px] left-[640px]',
+        POINTER_SPOTS[pointer.at],
         pointer.on ? 'opacity-100' : 'opacity-0',
         pointer.pressed && 'scale-[0.88]',
       )}
