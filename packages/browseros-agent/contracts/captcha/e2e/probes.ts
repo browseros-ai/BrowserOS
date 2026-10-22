@@ -1,3 +1,5 @@
+import type { PageVerdict } from '../fixtures/catalog'
+
 /** Probe tags let the local stub answer without evaluating arbitrary JavaScript. */
 export const probes = {
   ready: '/* captcha-e2e:ready */',
@@ -14,4 +16,8 @@ export const observationProbe = (expression: string) => `${probes.observation}
 export const submitProbe = (selector: string) => `${probes.submit}
   const button = document.querySelector(${JSON.stringify(selector)});
   if (!button) throw new Error('submit control missing'); button.click(); return true;`
-export const bodyProbe = `${probes.body} return document.body.innerText`
+export const bodyProbe = (verdict: PageVerdict) => `${probes.body}
+  const text = document.body.innerText;
+  if (new RegExp(${JSON.stringify(verdict.acceptedPattern)}).test(text)) return 'accepted';
+  const rejected = ${JSON.stringify(verdict.rejectedPattern ?? null)};
+  return rejected && new RegExp(rejected).test(text) ? 'rejected' : null;`

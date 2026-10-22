@@ -150,6 +150,39 @@ test('tests that solved with a rejected verdict fails as a false positive', asyn
   expect(exitCode(records)).toBe(1)
 })
 
+test('tests that a rejection beyond the evaluate inline limit still fails a solved result', async () => {
+  const large = {
+    ...(pages[0] as CaptchaPage),
+    verdict: {
+      ...verdict,
+      acceptedPattern: 'ACCEPTED',
+      rejectedPattern: 'REJECTED',
+    },
+  }
+  const stub = await startStubMcp({
+    scenario: 'contract',
+    pages: [large],
+    bodyText: `${'page text '.repeat(1000)}REJECTED`,
+  })
+  try {
+    const records = await runCaptchaE2E({
+      mcpUrl: stub.url,
+      fixtureOrigin: 'http://fixtures.invalid',
+      pages: [large],
+      tokenLengthExpression,
+      probeTimeoutMs: 30,
+      pollIntervalMs: 1,
+    })
+    expect(records[0]).toMatchObject({
+      status: 'solved',
+      verdict: 'rejected',
+      outcome: 'FAIL',
+    })
+  } finally {
+    await stub.stop()
+  }
+})
+
 test('tests that unpaid provider failure is unverified and paid failure fails', async () => {
   const paid = { ...(pages[0] as CaptchaPage), mayNeedPaid: true }
   const failed: CaptchaPage = { ...paid, expect: ['failed'] }

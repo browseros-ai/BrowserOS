@@ -66,7 +66,7 @@ export function classifyOutcome(
   return { outcome: 'FAIL', note: '' }
 }
 
-function payload(text: string, parseJson = true): unknown {
+function payload(text: string): unknown {
   // The opening line contains a trust notice; readiness notes follow the end fence.
   const framed = text.match(
     /^\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\n]*\n([\s\S]*?)\n\[END_UNTRUSTED_PAGE_CONTENT[^\]]*\]/,
@@ -74,7 +74,6 @@ function payload(text: string, parseJson = true): unknown {
   const clean = (framed?.[1] ?? text)
     .replace(/Tip: this session is[\s\S]*$/, '')
     .trim()
-  if (!parseJson) return clean
   try {
     return JSON.parse(clean)
   } catch {
@@ -116,7 +115,7 @@ export async function runCaptchaE2E(
       const evaluate = async (code: string) => {
         const result = await mcp.callTool('evaluate', { page, code }, timeout)
         if (result.isError) throw new Error('page probe failed')
-        return payload(textOf(result), code !== bodyProbe)
+        return payload(textOf(result))
       }
       const poll = async (probe: () => Promise<boolean>) => {
         const deadline = Date.now() + timeout
@@ -186,15 +185,9 @@ export async function runCaptchaE2E(
           try {
             await evaluate(submitProbe(verdict.submitSelector))
             await poll(async () => {
-              const body = await evaluate(bodyProbe)
-              if (typeof body !== 'string') return false
-              if (new RegExp(verdict.acceptedPattern).test(body))
-                record.verdict = 'accepted'
-              else if (
-                verdict.rejectedPattern &&
-                new RegExp(verdict.rejectedPattern).test(body)
-              )
-                record.verdict = 'rejected'
+              const found = await evaluate(bodyProbe(verdict))
+              if (found === 'accepted' || found === 'rejected')
+                record.verdict = found
               return record.verdict !== 'error'
             })
           } catch {

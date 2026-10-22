@@ -10,6 +10,7 @@ function evaluateProbe(
   state: StubPage,
   scenario: Scenario,
   code: string,
+  bodyText?: string,
 ): unknown {
   const accepted =
     state.solved &&
@@ -29,18 +30,25 @@ function evaluateProbe(
     return true
   }
   if (code.startsWith(probes.body)) {
-    if (!state.submitted) return ''
-    if (state.entry.kind === 'demo' && state.entry.family === 'turnstile')
-      return JSON.stringify({ success: accepted })
-    return accepted
-      ? 'ACCEPTED\nVerification Success\n{"success":true}\nreCAPTCHA passed successfully!'
-      : 'REJECTED: invalid-token\n{"success":false}\nreCAPTCHA verification error'
+    if (!state.submitted || !state.entry.verdict) return null
+    const text =
+      bodyText ??
+      (accepted
+        ? 'ACCEPTED\nVerification Success\n{"success":true}\nreCAPTCHA passed successfully!'
+        : 'REJECTED: invalid-token\n{"success":false}\nreCAPTCHA verification error')
+    const verdict = state.entry.verdict
+    if (new RegExp(verdict.acceptedPattern).test(text)) return 'accepted'
+    return verdict.rejectedPattern &&
+      new RegExp(verdict.rejectedPattern).test(text)
+      ? 'rejected'
+      : null
   }
   return undefined
 }
 export async function startStubMcp(options: {
   scenario: Scenario
   pages?: readonly CaptchaPage[]
+  bodyText?: string
 }) {
   const pages: readonly CaptchaPage[] =
     options.pages ??
@@ -138,7 +146,12 @@ export async function startStubMcp(options: {
         )
       }
       if (name !== 'evaluate') return failure(-32601)
-      const value = evaluateProbe(state, options.scenario, String(args.code))
+      const value = evaluateProbe(
+        state,
+        options.scenario,
+        String(args.code),
+        options.bodyText,
+      )
       if (value === undefined) return failure(-32602)
       return response({
         content: [
