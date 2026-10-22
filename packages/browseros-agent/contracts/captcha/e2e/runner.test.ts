@@ -150,6 +150,60 @@ test('tests that solved with a rejected verdict fails as a false positive', asyn
   expect(exitCode(records)).toBe(1)
 })
 
+for (const failure of ['submit', 'timeout']) {
+  test(`tests that a ${failure} failure rejects an unconfirmed solve and retains the probe note`, async () => {
+    const stub = await startStubMcp({
+      scenario: 'contract',
+      pages: [pages[0] as CaptchaPage],
+      bodyText: 'waiting for verification',
+    })
+    const proxy = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      async fetch(request) {
+        if (request.method === 'POST' && failure === 'submit') {
+          const rpc = await request.clone().json()
+          if (
+            rpc.params?.name === 'evaluate' &&
+            String(rpc.params.arguments?.code).startsWith(probes.submit)
+          )
+            return Response.json({
+              jsonrpc: '2.0',
+              id: rpc.id,
+              result: {
+                isError: true,
+                content: [{ type: 'text', text: 'submit control missing' }],
+              },
+            })
+        }
+        return fetch(new Request(stub.url, request))
+      },
+    })
+    try {
+      const records = await runCaptchaE2E({
+        mcpUrl: `http://127.0.0.1:${proxy.port}`,
+        fixtureOrigin: 'http://fixtures.invalid',
+        pages: [pages[0] as CaptchaPage],
+        tokenLengthExpression,
+        probeTimeoutMs: 20,
+        pollIntervalMs: 1,
+      })
+      expect(records[0]).toMatchObject({
+        status: 'solved',
+        verdict: 'error',
+        outcome: 'FAIL',
+      })
+      expect(records[0]?.note).toBe(
+        `independent check failed; ${failure === 'submit' ? 'verdict check failed' : 'verdict timed out'}`,
+      )
+      expect(exitCode(records)).toBe(1)
+    } finally {
+      await proxy.stop(true)
+      await stub.stop()
+    }
+  })
+}
+
 test('tests that a rejection beyond the evaluate inline limit still fails a solved result', async () => {
   const large = {
     ...(pages[0] as CaptchaPage),
@@ -219,6 +273,10 @@ test('tests that classification follows all four outcome rules in order', () => 
     note: 'no independent check',
   })
   expect(check('solved', 'rejected').outcome).toBe('FAIL')
+  expect(check('solved', 'error')).toEqual({
+    outcome: 'FAIL',
+    note: 'independent check failed',
+  })
   expect(check('needs_human', 'rejected').outcome).toBe('UNVERIFIED')
   expect(check('cancelled', 'rejected').outcome).toBe('FAIL')
   expect(check('error', 'error').outcome).toBe('FAIL')

@@ -51,6 +51,8 @@ export function classifyOutcome(
   if (page.expect.some((expected) => expected === status)) {
     if (status === 'solved' && verdict === 'rejected')
       return { outcome: 'FAIL', note: 'false positive' }
+    if (status === 'solved' && verdict === 'error')
+      return { outcome: 'FAIL', note: 'independent check failed' }
     return {
       outcome: 'PASS',
       note:
@@ -184,12 +186,13 @@ export async function runCaptchaE2E(
           const verdict = entry.verdict
           try {
             await evaluate(submitProbe(verdict.submitSelector))
-            await poll(async () => {
+            const confirmed = await poll(async () => {
               const found = await evaluate(bodyProbe(verdict))
               if (found === 'accepted' || found === 'rejected')
                 record.verdict = found
               return record.verdict !== 'error'
             })
+            if (!confirmed) record.note ||= 'verdict timed out'
           } catch {
             record.note ||= 'verdict check failed'
           }
@@ -208,7 +211,10 @@ export async function runCaptchaE2E(
         options,
       )
       record.outcome = classification.outcome
-      if (classification.note) record.note = classification.note
+      if (classification.note)
+        record.note = [classification.note, record.note]
+          .filter(Boolean)
+          .join('; ')
       records.push(record)
     }
     return records
