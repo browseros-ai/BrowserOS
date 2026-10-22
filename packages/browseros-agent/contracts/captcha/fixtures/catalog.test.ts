@@ -23,6 +23,8 @@ test('tests that the catalog contains every required page with unique ids and ex
       'google-recaptcha-demo',
       'cloudflare-turnstile-demo',
       'hcaptcha-demo',
+      '2captcha-recaptcha-demo',
+      '2captcha-turnstile-demo',
     ]),
   )
   for (const page of FIXTURE_PAGES) {
@@ -152,3 +154,55 @@ test('tests that standalone pages mirror their lifecycle state and wait for visi
     )
   }
 })
+
+test.each([
+  {
+    id: '2captcha-recaptcha-demo',
+    family: 'recaptcha_v2',
+    path: 'recaptcha-v2',
+    sitekey: '6LfD3PIbAAAAAJs_eEHvoOl75_83eXSqpPSRFJ_u',
+    mayNeedPaid: true,
+    selector: '#g-recaptcha iframe',
+  },
+  {
+    id: '2captcha-turnstile-demo',
+    family: 'turnstile',
+    path: 'cloudflare-turnstile',
+    sitekey: '3x00000000000000000000FF',
+    mayNeedPaid: false,
+    selector: '#cf-turnstile > div',
+  },
+])(
+  'tests that $id uses the live widget and independent acceptance markup',
+  (expected) => {
+    const page = DEMO_PAGES.find(({ id }) => id === expected.id)
+    expect(page).toMatchObject({
+      kind: 'demo',
+      family: expected.family,
+      sitekey: expected.sitekey,
+      url: `https://2captcha.com/demo/${expected.path}`,
+      expect: ['solved'],
+      mayNeedPaid: expected.mayNeedPaid,
+    })
+    if (!page) throw new Error('demo missing')
+    expect(page.verdict?.submitSelector).toBe('main form button[type="submit"]')
+    const accepted = new RegExp(page.verdict?.acceptedPattern ?? '(?!)')
+    expect(
+      accepted.test('Captcha is passed successfully! {"success": true}'),
+    ).toBe(true)
+    expect(accepted.test('Check Reset')).toBe(false)
+    expect(accepted.test('{"success": false}')).toBe(false)
+    let visible = false
+    const document = {
+      querySelector: (selector: string) => {
+        expect(selector).toBe(expected.selector)
+        return visible
+          ? { getBoundingClientRect: () => ({ width: 300, height: 65 }) }
+          : null
+      },
+    }
+    expect(runInNewContext(page.ready, { document })).toBe(false)
+    visible = true
+    expect(runInNewContext(page.ready, { document })).toBe(true)
+  },
+)
