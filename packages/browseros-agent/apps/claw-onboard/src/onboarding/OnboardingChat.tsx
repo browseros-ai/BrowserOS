@@ -14,14 +14,14 @@ import {
 import { createBrowserOSOnboardingBridge } from './browseros-onboarding-bridge'
 import { ChatThread } from './components/ChatThread'
 import { ReplyDock } from './components/ReplyDock'
-import { isMacOS, startImportRequestFor } from './import-selection'
+import { detectPlatform } from './import-selection'
 import {
   buildOnboardingChat,
   type ChatAction,
   chatChoicesReducer,
+  chatImportRequest,
+  chatSource,
   initialChatChoices,
-  selectedItemsFor,
-  selectedSourceFor,
 } from './onboarding-chat'
 import { useChatReveal } from './use-chat-reveal'
 
@@ -45,9 +45,10 @@ export function OnboardingChat() {
   const [bridge] = useState(createBrowserOSOnboardingBridge)
   const [state, setState] = useState(initialOnboardingState)
   const [choices, dispatch] = useReducer(chatChoicesReducer, initialChatChoices)
-  const [isMac] = useState(isMacOS)
+  const [platform] = useState(detectPlatform)
   const didNotifyPageReady = useRef(false)
-  const chat = buildOnboardingChat({ state, choices, isMac })
+  const input = { state, choices, platform }
+  const chat = buildOnboardingChat(input)
   const reveal = useChatReveal(chat.turns)
 
   useEffect(() => {
@@ -84,12 +85,7 @@ export function OnboardingChat() {
         bridge.complete()
         return
       case 'import': {
-        const source = selectedSourceFor(state.sources, choices)
-        if (!source) return
-        const request = startImportRequestFor(
-          source,
-          selectedItemsFor(source, choices),
-        )
+        const request = chatImportRequest(input)
         if (!request) return
         dispatch({ type: 'importRequested' })
         // Keep this on the click stack: Chromium rejects an import that is not
@@ -107,7 +103,7 @@ export function OnboardingChat() {
   }
 
   function onToggleItem(item: BrowserOSImportItem) {
-    const source = selectedSourceFor(state.sources, choices)
+    const source = chatSource(input)
     if (source) dispatch({ type: 'toggleItem', source, item })
   }
 

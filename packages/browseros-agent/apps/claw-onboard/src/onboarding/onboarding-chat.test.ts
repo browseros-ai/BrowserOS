@@ -4,12 +4,14 @@ import {
   type BrowserOSImportSource,
   type BrowserOSOnboardingState,
 } from './browseros-onboarding-api'
+import type { ClientPlatform } from './import-selection'
 import { MOCK_BROWSEROS_IMPORT_SOURCES } from './mock-import-sources'
 import {
   buildOnboardingChat,
   type ChatBubble,
   type ChatChoices,
   chatChoicesReducer,
+  chatImportRequest,
   initialChatChoices,
   type OnboardingChat,
 } from './onboarding-chat'
@@ -39,9 +41,9 @@ const requested: ChatChoices = { ...onLogins, importRequested: true }
 function chat(
   state: BrowserOSOnboardingState,
   choices: ChatChoices = onLogins,
-  isMac = true,
+  platform: ClientPlatform = 'mac',
 ): OnboardingChat {
-  return buildOnboardingChat({ state, choices, isMac })
+  return buildOnboardingChat({ state, choices, platform })
 }
 
 function bubbles(result: OnboardingChat): ChatBubble[] {
@@ -212,7 +214,7 @@ describe('Import', () => {
   it('skips the heads-up off a Mac and for imports without logins', () => {
     const importing = snapshot({ status: 'importing' })
     expect(
-      bubbles(chat(importing, requested, false)).some(
+      bubbles(chat(importing, requested, 'other')).some(
         (bubble) => bubble.kind === 'keychain',
       ),
     ).toBe(false)
@@ -287,6 +289,76 @@ describe('Import', () => {
       requested,
     )
     expect(texts(result)).toContain('Done. Your history is here.')
+  })
+})
+
+describe('Windows', () => {
+  // The owner's rule wins over the data: Chromium lists cookies and passwords
+  // on Windows but skips App-Bound values, so the page never offers them.
+  const windows = (state: BrowserOSOnboardingState, choices = onLogins) =>
+    chat(state, choices, 'windows')
+
+  it('offers no login chips even when the source supports them', () => {
+    const result = windows(snapshot())
+    expect(texts(result)).toContain('Want your Chrome things here?')
+    expect(chipsOf(result).chips.map((chip) => [chip.label, chip.on])).toEqual([
+      ['Bookmarks', true],
+      ['History', true],
+      ['Autofill', true],
+      ['Extensions', false],
+      ['Search engines', false],
+    ])
+    expect(dockLabels(result).at(-1)).toBe('Bring them over')
+  })
+
+  it('never sends cookies or passwords, whatever was toggled', () => {
+    const toggled = chatChoicesReducer(onLogins, {
+      type: 'toggleItem',
+      source: WORK,
+      item: 'cookies',
+    })
+    for (const choices of [onLogins, toggled]) {
+      expect(
+        chatImportRequest({ state: snapshot(), choices, platform: 'windows' }),
+      ).toEqual({
+        sourceId: WORK.id,
+        items: ['history', 'bookmarks', 'autofill'],
+      })
+    }
+    expect(
+      chatImportRequest({
+        state: snapshot(),
+        choices: onLogins,
+        platform: 'mac',
+      })?.items,
+    ).toContain('cookies')
+  })
+
+  it('skips the Mac heads-up and ends on the round-4 line', () => {
+    const importing = windows(
+      snapshot({
+        status: 'importing',
+        progress: { completedItems: [], totalItems: 3 },
+      }),
+      requested,
+    )
+    expect(
+      bubbles(importing).some((bubble) => bubble.kind === 'keychain'),
+    ).toBe(false)
+    expect(texts(importing).at(-1)).toBe('Bringing them over… 0 of 3')
+    const done = windows(
+      snapshot({
+        status: 'succeeded',
+        progress: {
+          completedItems: ['history', 'bookmarks', 'autofill'],
+          totalItems: 3,
+        },
+      }),
+      requested,
+    )
+    expect(texts(done).at(-1)).toBe(
+      'Done. Your bookmarks and history are here.',
+    )
   })
 })
 

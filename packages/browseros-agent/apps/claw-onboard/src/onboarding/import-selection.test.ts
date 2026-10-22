@@ -8,6 +8,7 @@ import {
   importItemLabel,
   needsMacKeychainPermission,
   OPTIONAL_IMPORT_ITEMS,
+  offeredSource,
   sanitizeImportSelection,
   startImportRequestFor,
 } from './import-selection'
@@ -121,12 +122,33 @@ describe('copy helpers', () => {
     expect(importDoneLine(['bookmarks', 'history'])).toBe(
       'Done. Your bookmarks and history are here.',
     )
+    // Round 4's line whenever bookmarks and history both came over.
     expect(importDoneLine(['bookmarks', 'history', 'autofill'])).toBe(
-      'Done. Your bookmarks, history and autofill are here.',
+      'Done. Your bookmarks and history are here.',
+    )
+    expect(importDoneLine(['bookmarks', 'autofill'])).toBe(
+      'Done. Your bookmarks and autofill are here.',
     )
     expect(importDoneLine(['autofill'])).toBe('Done. Your autofill is here.')
     expect(importDoneLine(['bookmarks'])).toBe('Done. Your bookmarks are here.')
     expect(importDoneLine([])).toBe('Done.')
+  })
+})
+
+describe('offeredSource', () => {
+  it('drops logins on Windows only', () => {
+    expect(offeredSource(WORK, 'windows').supportedItems).toEqual([
+      'history',
+      'bookmarks',
+      'searchEngines',
+      'autofill',
+      'extensions',
+    ])
+    expect(offeredSource(WORK, 'windows').recommendedItems).not.toContain(
+      'passwords',
+    )
+    expect(offeredSource(WORK, 'mac')).toBe(WORK)
+    expect(offeredSource(WORK, 'other')).toBe(WORK)
   })
 })
 

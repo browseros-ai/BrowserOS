@@ -53,7 +53,7 @@ function build(
       ...overrides,
     },
     choices,
-    isMac: true,
+    platform: 'mac',
   })
 }
 
@@ -112,6 +112,13 @@ describe('ReplyDock', () => {
     expect(html).toContain('Google Chrome - Work')
     expect(html).not.toContain('aria-haspopup')
     expect(html).toContain('Bring my logins')
+  })
+
+  it('carries the full display name as a tooltip on the chip', () => {
+    const html = renderDock(
+      build({ sources: [...MOCK_BROWSEROS_IMPORT_SOURCES] }, logins),
+    )
+    expect(html).toContain('title="Google Chrome - Work"')
   })
 
   it('makes the chip a picker when there are several profiles', () => {

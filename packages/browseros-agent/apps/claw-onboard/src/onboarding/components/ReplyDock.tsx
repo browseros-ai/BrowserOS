@@ -220,7 +220,9 @@ function ProfileChip({ sources, selectedId, onPick }: ProfileChipProps) {
           id={listId}
           role="listbox"
           aria-label="Pick a profile"
-          className="absolute right-0 bottom-[calc(100%+26px)] w-[320px] animate-fade-up rounded-[18px] border border-accent-tint-2 bg-card p-2 shadow-[0_30px_60px_-28px_rgb(1_18_63/0.4)]"
+          // Sized to the longest displayName, so names read whole; only past
+          // the cap do they ellipsize, with the full name as a tooltip.
+          className="absolute right-0 bottom-[calc(100%+26px)] w-max min-w-[300px] max-w-[min(460px,calc(100vw-32px))] animate-fade-up rounded-[18px] border border-accent-tint-2 bg-card p-2 shadow-[0_30px_60px_-28px_rgb(1_18_63/0.4)]"
         >
           <div className="px-3 pt-2.5 pb-2 font-medium font-mono text-[11px] text-ink-3 uppercase leading-[14px] tracking-[0.12em]">
             Pick a profile
@@ -233,6 +235,7 @@ function ProfileChip({ sources, selectedId, onPick }: ProfileChipProps) {
                 type="button"
                 role="option"
                 aria-selected={isSelected}
+                title={source.displayName}
                 onClick={() => {
                   onPick(source.id)
                   setOpen(false)

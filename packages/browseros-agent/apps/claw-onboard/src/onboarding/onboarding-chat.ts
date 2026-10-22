@@ -23,16 +23,20 @@ import type {
   BrowserOSImportItem,
   BrowserOSImportSource,
   BrowserOSOnboardingState,
+  BrowserOSStartImportRequest,
 } from './browseros-onboarding-api'
 import {
   browserShortName,
+  type ClientPlatform,
   defaultImportItemsForSource,
   type ImportChip,
   importChipsFor,
   importDoneLine,
   includesLogins,
   needsMacKeychainPermission,
+  offeredSource,
   sanitizeImportSelection,
+  startImportRequestFor,
 } from './import-selection'
 
 /** What the person has done on this page; Chromium owns everything else. */
@@ -90,14 +94,14 @@ export function chatChoicesReducer(
   }
 }
 
-export function selectedSourceFor(
+function selectedSourceFor(
   sources: readonly BrowserOSImportSource[],
   choices: ChatChoices,
 ): BrowserOSImportSource | undefined {
   return sources.find((source) => source.id === choices.sourceId) ?? sources[0]
 }
 
-export function selectedItemsFor(
+function selectedItemsFor(
   source: BrowserOSImportSource,
   choices: ChatChoices,
 ): BrowserOSImportItem[] {
@@ -163,7 +167,27 @@ export interface OnboardingChat {
 export interface OnboardingChatInput {
   state: BrowserOSOnboardingState
   choices: ChatChoices
-  isMac: boolean
+  platform: ClientPlatform
+}
+
+/** The picked source as this platform may offer it (no logins on Windows).
+ * The transcript, chip toggles and the import request all go through here. */
+export function chatSource({
+  state,
+  choices,
+  platform,
+}: OnboardingChatInput): BrowserOSImportSource | undefined {
+  const source = selectedSourceFor(state.sources, choices)
+  return source && offeredSource(source, platform)
+}
+
+/** What the import click sends; null when nothing is selected. */
+export function chatImportRequest(
+  input: OnboardingChatInput,
+): BrowserOSStartImportRequest | null {
+  const source = chatSource(input)
+  if (!source) return null
+  return startImportRequestFor(source, selectedItemsFor(source, input.choices))
 }
 
 type ImportOutcome = 'importing' | 'succeeded' | 'failed'
@@ -234,12 +258,10 @@ function isSetupActive(state: BrowserOSOnboardingState): boolean {
 }
 
 /** neo's ask and the chips; returns the logins dock while choices are open. */
-function addLogins(
-  turns: ChatTurn[],
-  { state, choices, isMac }: OnboardingChatInput,
-): DockItem[] {
+function addLogins(turns: ChatTurn[], input: OnboardingChatInput): DockItem[] {
+  const { state, choices, platform } = input
   pushYou(turns, 'you-start', 'Set me up')
-  const source = selectedSourceFor(state.sources, choices)
+  const source = chatSource(input)
   const isDetecting = state.status === 'detecting' || state.status === 'idle'
 
   if (!source && isDetecting) {
@@ -272,8 +294,8 @@ function addLogins(
       id: 'logins-ask',
       kind: 'text',
       tone: 'display',
-      // Sources without logins (e.g. a profile with no saved sessions) get
-      // the plainer ask: there is nothing to sign the AI in with.
+      // Without logins (always on Windows, or a profile with none saved) neo
+      // asks the plainer question: there is nothing to sign the AI in with.
       text: includesLogins(source.supportedItems)
         ? 'Want your AI signed in like you?'
         : `Want your ${browser} things here?`,
@@ -295,7 +317,7 @@ function addLogins(
     : 'Bring them over'
   if (outcome) {
     pushYou(turns, 'you-import', importLabel)
-    if (needsMacKeychainPermission(isMac, source, items)) {
+    if (needsMacKeychainPermission(platform === 'mac', source, items)) {
       pushNeo(turns, { id: 'import-keychain', kind: 'keychain' })
     }
     addImportResult(turns, state, outcome, items)

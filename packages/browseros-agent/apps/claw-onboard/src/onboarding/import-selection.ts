@@ -133,9 +133,12 @@ export function importDoneLine(
   completedItems: readonly BrowserOSImportItem[],
 ): string {
   if (includesLogins(completedItems)) return 'Done. Your logins are here.'
-  const labels = [...new Set(completedItems)].map((item) =>
-    importItemLabel(item).toLowerCase(),
-  )
+  const done = new Set(completedItems)
+  // Round 4's line for every import without logins, whenever it is true.
+  if (done.has('bookmarks') && done.has('history')) {
+    return 'Done. Your bookmarks and history are here.'
+  }
+  const labels = [...done].map((item) => importItemLabel(item).toLowerCase())
   if (labels.length === 0) return 'Done.'
   if (labels.length === 1) {
     // "history" and "autofill" are mass nouns; the other labels are plural.
@@ -146,14 +149,38 @@ export function importDoneLine(
   return `Done. Your ${list} are here.`
 }
 
+export type ClientPlatform = 'mac' | 'windows' | 'other'
+
 /** The native API omits platform; use browser platform hints, never source IDs. */
-export function isMacOS(): boolean {
-  if (typeof navigator === 'undefined') return false
+export function detectPlatform(): ClientPlatform {
+  if (typeof navigator === 'undefined') return 'other'
   const client = navigator as Navigator & {
     userAgentData?: { platform?: string }
   }
   const platform = client.userAgentData?.platform || client.platform
-  return /^(macOS|MacIntel|MacPPC|Mac68K)$/i.test(platform)
+  if (/^(macOS|MacIntel|MacPPC|Mac68K)$/i.test(platform)) return 'mac'
+  if (/^Win/i.test(platform)) return 'windows'
+  return 'other'
+}
+
+/**
+ * What the chat may offer from a source on this platform. On Windows the
+ * patch lists cookies and passwords whenever Chrome's files exist, but the
+ * importer silently skips Chrome 127+ App-Bound (v20) values, so logins are
+ * never offered or sent there (owner, round 4). Dropping them natively is a
+ * follow-up Chromium change; until then this is the only guard.
+ */
+export function offeredSource(
+  source: BrowserOSImportSource,
+  platform: ClientPlatform,
+): BrowserOSImportSource {
+  if (platform !== 'windows') return source
+  const keep = (item: BrowserOSImportItem) => !LOGIN_ITEMS.includes(item)
+  return {
+    ...source,
+    supportedItems: source.supportedItems.filter(keep),
+    recommendedItems: source.recommendedItems.filter(keep),
+  }
 }
 
 /** macOS asks for the Keychain only when Chrome's encrypted data comes over. */
