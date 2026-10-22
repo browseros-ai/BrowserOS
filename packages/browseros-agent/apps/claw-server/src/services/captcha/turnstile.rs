@@ -220,10 +220,13 @@ async fn wait_token<P: CaptchaPage, B: CaptchaBackend>(
     duration: Duration,
 ) -> Result<Value, PageError> {
     let until = Instant::now() + duration;
+    let mut state = json!({"token": false});
     loop {
-        let state = tokio::time::timeout_at(until, read(ctx, challenge))
-            .await
-            .map_err(|_| PageError::Timeout)??;
+        match tokio::time::timeout_at(until, read(ctx, challenge)).await {
+            Ok(value) => state = value?,
+            Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
+            Err(_) => return Ok(state),
+        }
         if flag(&state, "token") || Instant::now() >= until {
             return Ok(state);
         }
@@ -293,16 +296,20 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
     for _ in 0..2 {
         let until = Instant::now() + VERIFY;
         let rect = loop {
-            let state = tokio::time::timeout_at(until, read(ctx, challenge))
-                .await
-                .map_err(|_| PageError::Timeout)??;
+            let state = match tokio::time::timeout_at(until, read(ctx, challenge)).await {
+                Ok(value) => value?,
+                Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
+                Err(_) => break None,
+            };
             if flag(&state, "token") {
                 return Ok(passed(result));
             }
-            if let Some(rect) = tokio::time::timeout_at(until, checkbox(ctx, challenge))
-                .await
-                .map_err(|_| PageError::Timeout)??
-            {
+            let rect = match tokio::time::timeout_at(until, checkbox(ctx, challenge)).await {
+                Ok(value) => value?,
+                Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
+                Err(_) => break None,
+            };
+            if let Some(rect) = rect {
                 break Some(rect);
             }
             if Instant::now() >= until {
@@ -531,6 +538,7 @@ mod tests {
         transition: bool,
         failed: bool,
         delay: Duration,
+        delay_once: bool,
     }
 
     impl Default for State {
@@ -548,6 +556,7 @@ mod tests {
                 transition: false,
                 failed: false,
                 delay: Duration::ZERO,
+                delay_once: false,
             }
         }
     }
@@ -563,7 +572,14 @@ mod tests {
 
     impl CaptchaPage for FakePage {
         async fn eval_main(&self, expression: &str) -> Result<Value, PageError> {
-            let delay = self.state().delay;
+            let delay = {
+                let mut state = self.state();
+                let delay = state.delay;
+                if state.delay_once {
+                    state.delay = Duration::ZERO;
+                }
+                delay
+            };
             tokio::time::sleep(delay).await;
             let mut state = self.state();
             if let Some(error) = &state.error {
@@ -974,12 +990,48 @@ mod tests {
     -> anyhow::Result<()> {
         let page = FakePage::default();
         page.state().delay = Duration::from_secs(60);
-        let backend = FakeBackend::token();
+        page.state().delay_once = true;
+        let backend = FakeBackend::error(ProviderErrorKind::NotConfigured);
         let start = Instant::now();
         let result = finish(&page, &backend).await?;
-        assert_eq!(result.status, SolveStatus::Failed);
-        assert!(start.elapsed() <= Duration::from_secs(8));
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::NeedsHuman, SolveReason::NoProvider)
+        );
+        assert!(start.elapsed() <= Duration::from_secs(14));
         assert!(backend.tasks().is_empty());
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_nonzero_page_latency_continues_after_each_free_phase() -> anyhow::Result<()>
+    {
+        for (interactive, pass_on_click) in [(false, false), (true, false), (true, true)] {
+            let page = FakePage::default();
+            {
+                let mut state = page.state();
+                state.delay = Duration::from_millis(130);
+                state.pass_on_click = pass_on_click;
+                if interactive {
+                    state.rect = Some(Rect {
+                        x: 100.0,
+                        y: 100.0,
+                        width: 24.0,
+                        height: 24.0,
+                    });
+                }
+            }
+            let result =
+                finish(&page, &FakeBackend::error(ProviderErrorKind::NotConfigured)).await?;
+            assert_eq!(
+                (result.status, result.reason),
+                if pass_on_click {
+                    (SolveStatus::Solved, SolveReason::CheckboxPassed)
+                } else {
+                    (SolveStatus::NeedsHuman, SolveReason::NoProvider)
+                }
+            );
+        }
         Ok(())
     }
 
