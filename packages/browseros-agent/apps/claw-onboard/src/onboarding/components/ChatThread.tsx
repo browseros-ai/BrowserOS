@@ -14,7 +14,7 @@ import { FlightScene } from './FlightScene'
 import { MacKeychainPreview } from './MacKeychainPreview'
 import { NeoMark } from './NeoMark'
 
-interface ChatThreadProps {
+export interface ChatThreadProps {
   turns: readonly ChatTurn[]
   reveal: ChatReveal
   onToggleItem: (item: BrowserOSImportItem) => void

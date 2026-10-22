@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils'
 import type { BrowserOSImportSource } from '../browseros-onboarding-api'
 import type { ChatAction, DockItem } from '../onboarding-chat'
 
-interface ReplyDockProps {
+export interface ReplyDockProps {
   items: readonly DockItem[]
   visible: boolean
   /** Runs inside the click handler: `import` must reach Chromium on this stack. */

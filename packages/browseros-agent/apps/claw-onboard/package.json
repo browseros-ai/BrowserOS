@@ -17,7 +17,6 @@
   "dependencies": {
     "@base-ui/react": "^1.8.0",
     "@browseros/shared": "workspace:*",
-    "@tabler/icons-react": "^3.48.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",

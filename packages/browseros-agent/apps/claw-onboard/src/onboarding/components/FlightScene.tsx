@@ -23,7 +23,7 @@ const CHEAPEST_ROW = 2
 const LOOP_MS = 9900
 const ROW_STEP_MS = 700
 
-interface SceneFrame {
+export interface SceneFrame {
   asked: boolean
   status: 'idle' | 'working' | 'done'
   seconds: number
@@ -80,7 +80,7 @@ function useLoopTime(enabled: boolean): number {
   return t
 }
 
-interface FlightSceneProps {
+export interface FlightSceneProps {
   /** Plays while Hi is the live step; history shows the finished frame. */
   live: boolean
 }
