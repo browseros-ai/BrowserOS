@@ -103,6 +103,23 @@ export interface paths {
     patch?: never
     trace?: never
   }
+  '/api/v1/features': {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    get: operations['getFeatures']
+    /** @description Local operator override, persisted before it affects new requests. Browser-page writes are refused. This temporary writer will be replaced by verified user entitlements when paid Pro launches; native compatibility is required separately. */
+    put: operations['updateFeatures']
+    post?: never
+    delete?: never
+    options?: never
+    head?: never
+    patch?: never
+    trace?: never
+  }
   '/api/v1/cockpit/stats': {
     parameters: {
       query?: never
@@ -651,6 +668,11 @@ export interface components {
     }
     UpdateTelemetryRequest: {
       consent: boolean
+    }
+    /** @description Access grants for this installation, independent of native browser compatibility. */
+    FeatureFlags: {
+      /** @description Whether Pro features are enabled. Defaults to false. */
+      pro: boolean
     }
     /** @description User settings for the tools BrowserOS neo offers to agents. */
     AgentSettings: {
@@ -1322,6 +1344,61 @@ export interface operations {
         }
         content: {
           'application/json': components['schemas']['SystemInfo']
+        }
+      }
+      500: components['responses']['InternalError']
+    }
+  }
+  getFeatures: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody?: never
+    responses: {
+      /** @description Current access grants. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['FeatureFlags']
+        }
+      }
+    }
+  }
+  updateFeatures: {
+    parameters: {
+      query?: never
+      header?: never
+      path?: never
+      cookie?: never
+    }
+    requestBody: {
+      content: {
+        'application/json': components['schemas']['FeatureFlags']
+      }
+    }
+    responses: {
+      /** @description Saved access grants. Already admitted calls keep their captured access. */
+      200: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['FeatureFlags']
+        }
+      }
+      400: components['responses']['BadRequest']
+      /** @description Browser-page feature writes are forbidden. */
+      403: {
+        headers: {
+          [name: string]: unknown
+        }
+        content: {
+          'application/json': components['schemas']['ApiError']
         }
       }
       500: components['responses']['InternalError']

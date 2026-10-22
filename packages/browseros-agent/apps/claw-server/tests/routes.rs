@@ -41,7 +41,7 @@ async fn test_app() -> anyhow::Result<TestApp> {
 
 /// The first native release with profile targeting; the default harness models it.
 fn current_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
 }
 
 async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::Result<TestApp> {
@@ -136,6 +136,44 @@ async fn request_json(
         serde_json::from_slice(&bytes)?
     };
     Ok((status, value))
+}
+
+#[tokio::test]
+async fn feature_access_changes_live_and_survives_restart() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (status, flags) = request_json(&app.router, "GET", "/api/v1/features", None).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(flags, json!({"pro": false}));
+    let (status, flags) = request_json(
+        &app.router,
+        "PUT",
+        "/api/v1/features",
+        Some(json!({"pro": true})),
+    )
+    .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(flags, json!({"pro": true}));
+    let state =
+        AppState::new_with_home(app.state.config.clone(), app._dir.path().join("home")).await?;
+    let router = build_router(state);
+    assert_eq!(
+        request_json(&router, "GET", "/api/v1/features", None)
+            .await?
+            .1,
+        flags
+    );
+    assert_eq!(
+        request_json(
+            &router,
+            "PUT",
+            "/api/v1/features",
+            Some(json!({"pro": false}))
+        )
+        .await?
+        .1,
+        json!({"pro": false})
+    );
+    Ok(())
 }
 
 async fn request_json_with_headers(
@@ -414,9 +452,8 @@ async fn mcp_hygiene_rejects_non_json_writes() -> anyhow::Result<()> {
 async fn unavailable_profile_targeting_lists_and_teaches_no_profile_surface() -> anyhow::Result<()>
 {
     for native in [
-        NativeCapabilities::from_browseros_version(Some("0.51.1.2")).with_pro_enabled(true),
+        NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
         NativeCapabilities::default(),
-        current_native().with_pro_enabled(false),
     ] {
         let app = test_app_with_native(49337, false, native).await?;
         let initialize = json!({
@@ -509,8 +546,6 @@ async fn mcp_initialize_list_guard_audit_and_delete() -> anyhow::Result<()> {
     // so the test passes on a machine that has the credential and on one that
     // does not.
     let mut expected = vec![
-        "browser_profiles",
-        "browser_target",
         "tabs",
         "tab_groups",
         "history",
@@ -2747,5 +2782,143 @@ async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
         assert!(text.contains("taskName"), "{mode:?}: {text}");
         assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn feature_writer_refuses_browser_pages_and_invalid_grants() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    for headers in [
+        vec![("origin", "https://example.com")],
+        vec![("sec-fetch-site", "same-origin")],
+        vec![("sec-fetch-site", "cross-site")],
+    ] {
+        let (status, _, _) = request_json_with_headers(
+            &app.router,
+            "PUT",
+            "/api/v1/features",
+            Some(json!({"pro": true})),
+            &headers,
+        )
+        .await?;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+    }
+    for body in [
+        json!({}),
+        json!({"pro":"true"}),
+        json!({"pro":1}),
+        json!({"pro":null}),
+    ] {
+        assert_eq!(
+            request_json(&app.router, "PUT", "/api/v1/features", Some(body))
+                .await?
+                .0,
+            StatusCode::BAD_REQUEST
+        );
+    }
+    assert_eq!(
+        request_json(&app.router, "GET", "/api/v1/features", None)
+            .await?
+            .1,
+        json!({"pro":false})
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_feature_updates_notify_an_existing_legacy_mcp_session() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let (_, headers, _) = request_json_with_headers(&app.router, "POST", "/mcp", Some(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"Codex","version":"synthetic"}}})), &[]).await?;
+    let session = headers
+        .get("mcp-session-id")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| anyhow::anyhow!("missing session"))?;
+    send_initialized(&app.router, session).await?;
+    let list = json!({"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}});
+    let (_, _, before) = request_json_with_headers(
+        &app.router,
+        "POST",
+        "/mcp",
+        Some(list.clone()),
+        &[("mcp-session-id", session)],
+    )
+    .await?;
+    let has_profiles = |result: &Value| {
+        result["result"]["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "browser_profiles"))
+    };
+    assert!(!has_profiles(&before));
+    let mut stream = McpSseStream::open(&app.router, session).await?;
+    for pro in [true, false] {
+        assert_eq!(
+            request_json(
+                &app.router,
+                "PUT",
+                "/api/v1/features",
+                Some(json!({"pro":pro}))
+            )
+            .await?
+            .0,
+            StatusCode::OK
+        );
+        tokio::time::timeout(
+            Duration::from_secs(3),
+            stream.next_method("notifications/tools/list_changed"),
+        )
+        .await??;
+        let (_, _, after) = request_json_with_headers(
+            &app.router,
+            "POST",
+            "/mcp",
+            Some(list.clone()),
+            &[("mcp-session-id", session)],
+        )
+        .await?;
+        assert_eq!(has_profiles(&after), pro);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn live_feature_updates_reach_modern_subscription_streams() -> anyhow::Result<()> {
+    let app = test_app().await?;
+    let request = Request::builder().method("POST").uri("/mcp")
+        .header(header::HOST, "localhost")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json, text/event-stream")
+        .header("mcp-protocol-version", "2026-07-28")
+        .header("mcp-method", "subscriptions/listen")
+        .body(Body::from(json!({"jsonrpc":"2.0","id":17,"method":"subscriptions/listen","params":{
+            "notifications":{"toolsListChanged":true},
+            "_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28", "io.modelcontextprotocol/clientCapabilities":{}}
+        }}).to_string()))?;
+    let response = app.router.clone().oneshot(request).await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut stream = McpSseStream {
+        body: response.into_body().into_data_stream(),
+        pending: Vec::new(),
+    };
+    tokio::time::timeout(
+        Duration::from_secs(3),
+        stream.next_method("notifications/subscriptions/acknowledged"),
+    )
+    .await??;
+    request_json(
+        &app.router,
+        "PUT",
+        "/api/v1/features",
+        Some(json!({"pro":true})),
+    )
+    .await?;
+    let notification = tokio::time::timeout(
+        Duration::from_secs(3),
+        stream.next_method("notifications/tools/list_changed"),
+    )
+    .await??;
+    assert_eq!(
+        notification["params"]["_meta"]["io.modelcontextprotocol/subscriptionId"], 17,
+        "{notification}"
+    );
     Ok(())
 }

@@ -20,6 +20,7 @@ use ulid::Ulid;
 pub(crate) mod audit;
 mod cockpit;
 mod connections;
+mod features;
 mod feedback;
 mod live;
 mod previews;
@@ -42,6 +43,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/system/diagnostics", get(system::diagnostics))
         .route("/system/shutdown", post(system::shutdown))
         .route("/api/v1/system", get(system::info))
+        .route("/api/v1/features", get(features::get).put(features::update))
         .route(
             "/api/v1/extension/update-ready",
             post(extension_update_ready),

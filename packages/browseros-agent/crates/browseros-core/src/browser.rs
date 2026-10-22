@@ -1,5 +1,6 @@
 use crate::{
-    BrowserView, CoreError, NativeCapabilities, PageId, ProtocolSession, TabId, TargetBinding,
+    BrowserView, CoreError, FeatureFlags, NativeCapabilities, PageId, ProtocolSession, TabId,
+    TargetBinding,
     connection::CdpConnection,
     pages::PageInfo,
     screenshot::ScreenshotFormat,
@@ -25,11 +26,26 @@ impl Browser {
 
     #[must_use]
     pub fn new_with_native(connection: Arc<dyn CdpConnection>, native: NativeCapabilities) -> Self {
+        Self::new_with_features(
+            connection,
+            native,
+            tokio::sync::watch::channel(FeatureFlags::default()).1,
+        )
+    }
+
+    /// Captures live host grants at each facade operation, never during its execution.
+    #[must_use]
+    pub fn new_with_features(
+        connection: Arc<dyn CdpConnection>,
+        native: NativeCapabilities,
+        features: tokio::sync::watch::Receiver<FeatureFlags>,
+    ) -> Self {
         Self {
-            core: BrowserSession::new_with_native(
+            core: BrowserSession::new_with_features(
                 connection,
                 BrowserSessionHooks::default(),
                 native,
+                features,
             ),
             binding: tokio::sync::RwLock::new(None),
         }

@@ -43,6 +43,7 @@ pub struct BrowserService {
     /// Launch-config identity of the browser on `cdp_port`, copied into every session this
     /// service creates (one per CDP epoch) so views and discovery share one gate decision.
     native: NativeCapabilities,
+    features: watch::Receiver<browseros_core::FeatureFlags>,
     ownership: Arc<PageOwnership>,
     state_tx: watch::Sender<BrowserConnectionState>,
     initial_attempt_tx: watch::Sender<bool>,
@@ -61,6 +62,7 @@ impl BrowserService {
         ownership: Arc<PageOwnership>,
         tab_registry: Arc<TabRegistry>,
         native: NativeCapabilities,
+        features: watch::Receiver<browseros_core::FeatureFlags>,
     ) -> Arc<Self> {
         let (state_tx, _) = watch::channel(BrowserConnectionState {
             connected: false,
@@ -71,6 +73,7 @@ impl BrowserService {
         Arc::new(Self {
             cdp_port,
             native,
+            features,
             ownership,
             state_tx,
             initial_attempt_tx,
@@ -184,7 +187,7 @@ impl BrowserService {
                 ownership.remove_page(&page_id).await;
             });
         });
-        let session = BrowserSession::new_with_native(
+        let session = BrowserSession::new_with_features(
             Arc::new(client),
             BrowserSessionHooks {
                 page_manager: PageManagerHooks {
@@ -193,6 +196,7 @@ impl BrowserService {
                 },
             },
             self.native,
+            self.features.clone(),
         );
         if let Err(error) = self
             .tab_registry
@@ -445,6 +449,7 @@ mod tests {
                 sessions.ownership(),
                 TabRegistry::new(session_tabs),
                 NativeCapabilities::default(),
+                watch::channel(browseros_core::FeatureFlags::default()).1,
             ),
             root,
         ))

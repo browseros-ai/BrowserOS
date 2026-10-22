@@ -1,0 +1,9 @@
+FeatureFlags:
+  type: object
+  description: Access grants for this installation, independent of native browser compatibility.
+  additionalProperties: false
+  required: [pro]
+  properties:
+    pro:
+      type: boolean
+      description: Whether Pro features are enabled. Defaults to false.

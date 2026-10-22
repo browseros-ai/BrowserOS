@@ -4,6 +4,7 @@ pub mod connection;
 pub mod content_markdown;
 pub mod credentials;
 pub mod error;
+pub mod feature_access;
 pub mod frames;
 pub mod input;
 pub mod navigation;
@@ -23,6 +24,7 @@ pub use browser::Browser;
 pub use capabilities::{BrowserOsVersion, NativeCapabilities, NativeFeature};
 pub use connection::{CdpConnection, ProtocolSession};
 pub use error::{CoreError, CoveredElementTarget, TargetError};
+pub use feature_access::{FeatureAccess, FeatureFlags};
 pub use page_signals::{ConsoleEntry, ConsoleLevel, PageDialog, PageSignals};
 pub use profiles::{
     BrowserProfileInfo, DEFAULT_PROFILE_DIRECTORY, LoadProfileOutcome, ProfileCandidate,

@@ -514,7 +514,7 @@ fn data(result: ToolResult) -> anyhow::Result<Value> {
 #[tokio::test]
 async fn target_output_schema_preserves_full_readback_through_content_gate() -> anyhow::Result<()> {
     let connection = FixtureConnection::new().with_default_profile();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -605,7 +605,7 @@ async fn target_output_schema_preserves_full_readback_through_content_gate() -> 
 #[tokio::test]
 async fn profiles_output_schema_preserves_descriptors_and_load_outcomes() -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -671,7 +671,7 @@ async fn profiles_output_schema_preserves_descriptors_and_load_outcomes() -> any
 async fn standalone_selection_load_and_window_creation_are_separate_and_persist()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -776,7 +776,7 @@ async fn standalone_selection_load_and_window_creation_are_separate_and_persist(
 async fn granular_and_script_paths_project_normal_windows_after_global_reconciliation()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -855,7 +855,7 @@ impl InnerCallHook for RebindHook {
 async fn direct_tool_and_root_page_raw_calls_share_capture_across_rebinding() -> anyhow::Result<()>
 {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -910,7 +910,7 @@ async fn direct_tool_and_root_page_raw_calls_share_capture_across_rebinding() ->
 async fn mutating_target_actions_in_run_reject_before_store_or_native_changes() -> anyhow::Result<()>
 {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -961,7 +961,7 @@ async fn mutating_target_actions_in_run_reject_before_store_or_native_changes() 
 async fn missing_ambiguous_and_invalid_selectors_preserve_binding_without_creation()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -997,7 +997,7 @@ async fn missing_ambiguous_and_invalid_selectors_preserve_binding_without_creati
 async fn management_recovers_closed_pin_and_deleted_profile_without_admitting_old_view()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1058,7 +1058,7 @@ async fn management_recovers_closed_pin_and_deleted_profile_without_admitting_ol
 async fn bound_raw_policy_and_explicit_window_group_conflicts_fail_before_dispatch()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1151,7 +1151,7 @@ async fn bound_raw_policy_and_explicit_window_group_conflicts_fail_before_dispat
 async fn bound_viewport_screenshot_measures_and_captures_only_through_guarded_page()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1245,7 +1245,7 @@ async fn bound_viewport_screenshot_measures_and_captures_only_through_guarded_pa
 async fn script_creation_default_group_does_not_restrict_explicit_working_window()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1320,7 +1320,7 @@ async fn script_creation_default_group_does_not_restrict_explicit_working_window
 #[tokio::test]
 async fn granular_creation_default_group_checks_its_actual_window() -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1409,7 +1409,7 @@ async fn granular_creation_default_group_checks_its_actual_window() -> anyhow::R
 async fn downloads_adapter_evaluates_only_captured_extension_workers_and_detaches()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1464,7 +1464,7 @@ async fn static_store_serializes_revisions_and_clear_does_not_reuse_them() -> an
 #[tokio::test]
 async fn stale_response_readback_does_not_expose_global_dialog_text() -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1527,7 +1527,7 @@ async fn stale_response_readback_does_not_expose_global_dialog_text() -> anyhow:
 async fn loading_inside_run_is_allowed_but_does_not_refresh_its_captured_context()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1593,7 +1593,7 @@ impl InnerCallHook for ClosePinHook {
 async fn closing_a_strict_pin_during_run_never_uses_another_same_profile_window()
 -> anyhow::Result<()> {
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1637,7 +1637,7 @@ async fn closing_a_strict_pin_during_run_never_uses_another_same_profile_window(
 }
 
 fn older_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.2")).with_pro_enabled(true)
+    NativeCapabilities::from_browseros_version(Some("0.51.1.2"))
 }
 
 fn profile_operations(connection: &FixtureConnection) -> Vec<String> {
@@ -1659,17 +1659,9 @@ async fn unavailable_targeting_refuses_profile_tools_and_run() -> anyhow::Result
     for (native, error_code) in [
         (older_native(), "native_feature_unavailable"),
         (NativeCapabilities::default(), "native_feature_unavailable"),
-        (
-            crate::tests::current_native().with_pro_enabled(false),
-            "pro_feature_disabled",
-        ),
     ] {
         let connection = FixtureConnection::new();
-        let session = BrowserSession::new_with_native(
-            connection.clone(),
-            BrowserSessionHooks::default(),
-            native,
-        );
+        let session = pro_session(connection.clone(), BrowserSessionHooks::default(), native);
         let store = Arc::new(StaticTargetStore::new());
         let ctx = ctx(session, store.clone()).await?;
         // Direct calls stand in for a client still holding a list from a capable browser.
@@ -1685,7 +1677,6 @@ async fn unavailable_targeting_refuses_profile_tools_and_run() -> anyhow::Result
                 "browser_target",
                 json!({ "action": "set_window", "windowId": 20 }),
             ),
-            ("browser_target", json!({ "action": "clear" })),
         ] {
             let result = call(&ctx, name, args.clone()).await?;
             assert!(result.is_error, "{native}: {name} {args}");
@@ -1723,7 +1714,7 @@ async fn unavailable_targeting_refuses_profile_tools_and_run() -> anyhow::Result
 
 #[tokio::test]
 async fn capable_native_exposes_run_profile_exports() -> anyhow::Result<()> {
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         FixtureConnection::new().with_default_profile(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -1745,18 +1736,22 @@ async fn capable_native_exposes_run_profile_exports() -> anyhow::Result<()> {
 #[test]
 fn discovery_omits_unavailable_profile_surfaces() {
     let names = |native: NativeCapabilities| {
+        let access =
+            browseros_core::FeatureAccess::new(native, browseros_core::FeatureFlags { pro: true });
         catalog()
             .into_iter()
-            .filter(|tool| tool.available(native))
+            .filter(|tool| tool.available(access))
             .map(|tool| tool.name)
             .collect::<Vec<_>>()
     };
     let description = |name: &str, native: NativeCapabilities| {
+        let access =
+            browseros_core::FeatureAccess::new(native, browseros_core::FeatureFlags { pro: true });
         catalog()
             .into_iter()
             .find(|tool| tool.name == name)
             .map(|tool| {
-                tool.to_mcp_tool(native)
+                tool.to_mcp_tool(access)
                     .description
                     .unwrap_or_default()
                     .to_string()
@@ -1769,11 +1764,7 @@ fn discovery_omits_unavailable_profile_surfaces() {
     assert!(description("run", current).contains("Profile management: browser.profiles"));
     assert!(description("tabs", current).contains("the original Default profile"));
     assert!(description("windows", current).contains("browser_target task selection"));
-    for older in [
-        older_native(),
-        NativeCapabilities::default(),
-        current.with_pro_enabled(false),
-    ] {
+    for older in [older_native(), NativeCapabilities::default()] {
         let listed = names(older);
         assert!(!listed.contains(&"browser_profiles"), "{older}");
         assert!(!listed.contains(&"browser_target"), "{older}");
@@ -1789,7 +1780,7 @@ fn discovery_omits_unavailable_profile_surfaces() {
 #[tokio::test]
 async fn hidden_tools_keep_stable_schemas_for_cached_clients() -> anyhow::Result<()> {
     use rmcp::handler::server::ServerHandler;
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         FixtureConnection::new(),
         BrowserSessionHooks::default(),
         older_native(),
@@ -1819,22 +1810,16 @@ async fn hidden_tools_keep_stable_schemas_for_cached_clients() -> anyhow::Result
 #[tokio::test]
 async fn saved_binding_when_targeting_is_unavailable_runs_unbound_with_one_outer_note()
 -> anyhow::Result<()> {
-    for (unavailable, reason) in [
-        (older_native(), "this browser reports BrowserOS 0.51.1.2"),
-        (
-            crate::tests::current_native().with_pro_enabled(false),
-            "profile targeting requires Pro",
-        ),
-    ] {
+    for (unavailable, reason) in [(older_native(), "this browser reports BrowserOS 0.51.1.2")] {
         // The same in-memory selection outlives a browser swap: a capable session saves it, the
         // provider then yields a session without targeting, then an enabled one applies it again.
         let connection = FixtureConnection::new();
-        let capable = BrowserSession::new_with_native(
+        let capable = pro_session(
             connection.clone(),
             BrowserSessionHooks::default(),
             crate::tests::current_native(),
         );
-        let unavailable_session = BrowserSession::new_with_native(
+        let unavailable_session = pro_session(
             connection.clone(),
             BrowserSessionHooks::default(),
             unavailable,
@@ -1936,7 +1921,7 @@ fn creations(connection: &FixtureConnection) -> Vec<(String, Value)> {
 #[tokio::test]
 async fn tools_and_run_share_the_default_profile_without_a_selection() -> anyhow::Result<()> {
     let connection = FixtureConnection::new().with_default_profile();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -2007,7 +1992,7 @@ async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result
         state.windows.retain(|window| window["windowId"] != 50);
         state.tabs.retain(|tab| tab["windowId"] != 50);
     });
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -2061,7 +2046,7 @@ async fn default_without_a_window_gets_one_from_tabs_and_run() -> anyhow::Result
 #[tokio::test]
 async fn explicit_selection_overrides_default_and_clear_restores_it() -> anyhow::Result<()> {
     let connection = FixtureConnection::new().with_default_profile();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -2110,7 +2095,7 @@ async fn explicit_selection_overrides_default_and_clear_restores_it() -> anyhow:
 #[tokio::test]
 async fn an_admitted_default_view_ignores_a_later_selection() -> anyhow::Result<()> {
     let connection = FixtureConnection::new().with_default_profile();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -2131,7 +2116,7 @@ async fn an_admitted_default_view_ignores_a_later_selection() -> anyhow::Result<
 async fn missing_default_refuses_work_but_selection_recovers() -> anyhow::Result<()> {
     // This fixture has no profile with directory "Default" (deleted or never created).
     let connection = FixtureConnection::new();
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -2191,7 +2176,7 @@ async fn profile_management_never_loads_an_unloaded_default() -> anyhow::Result<
             }
         }
     });
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -2234,7 +2219,7 @@ async fn one_run_without_a_default_window_opens_one_window_for_all_pages() -> an
         state.windows.retain(|window| window["windowId"] != 50);
         state.tabs.retain(|tab| tab["windowId"] != 50);
     });
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         connection.clone(),
         BrowserSessionHooks::default(),
         crate::tests::current_native(),
@@ -2260,5 +2245,142 @@ async fn one_run_without_a_default_window_opens_one_window_for_all_pages() -> an
         1,
         "{created:?}"
     );
+    Ok(())
+}
+
+// These fixtures exercise profile routing; access-policy tests supply a live receiver instead.
+fn pro_session(
+    connection: std::sync::Arc<dyn browseros_core::CdpConnection>,
+    hooks: browseros_core::BrowserSessionHooks,
+    native: browseros_core::NativeCapabilities,
+) -> std::sync::Arc<browseros_core::BrowserSession> {
+    browseros_core::BrowserSession::new_with_features(
+        connection,
+        hooks,
+        native,
+        tokio::sync::watch::channel(browseros_core::FeatureFlags { pro: true }).1,
+    )
+}
+
+#[tokio::test]
+async fn live_pro_changes_discovery_sdk_and_saved_target_admission() -> anyhow::Result<()> {
+    use rmcp::handler::server::ServerHandler;
+    let connection = FixtureConnection::new().with_default_profile();
+    let (grants, flags) = tokio::sync::watch::channel(browseros_core::FeatureFlags::default());
+    let session = BrowserSession::new_with_features(
+        connection.clone(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+        flags,
+    );
+    let service = BrowserMcpService::new(super::tests::service_options(session));
+    let call = |name: &'static str, args| {
+        service.call_tool_for_testing(name, args, CancellationToken::new())
+    };
+    let text =
+        |result: &rmcp::model::CallToolResult| serde_json::to_string(result).unwrap_or_default();
+    let profiles = catalog()
+        .into_iter()
+        .find(|tool| tool.name == "browser_profiles")
+        .ok_or_else(|| anyhow::anyhow!("missing profiles"))?;
+    assert!(!profiles.available(service.access()));
+    assert!(
+        !service
+            .get_tool("run")
+            .and_then(|tool| tool.description)
+            .unwrap_or_default()
+            .contains("Profile management: browser.profiles")
+    );
+    let free = call(
+        "run",
+        json!({"code":"return [typeof browser.profiles, typeof browser.target]"}),
+    )
+    .await?;
+    assert_eq!(
+        free.structured_content
+            .as_ref()
+            .map(|value| &value["value"]),
+        Some(&json!(["undefined", "undefined"]))
+    );
+    assert_eq!(
+        call("browser_profiles", json!({})).await?.is_error,
+        Some(true)
+    );
+    grants.send_replace(browseros_core::FeatureFlags { pro: true });
+    assert!(profiles.available(service.access()));
+    assert!(
+        service
+            .get_tool("run")
+            .and_then(|tool| tool.description)
+            .unwrap_or_default()
+            .contains("Profile management: browser.profiles")
+    );
+    assert_ne!(
+        call("browser_target", json!({"action":"set", "name":"eng"}))
+            .await?
+            .is_error,
+        Some(true)
+    );
+    grants.send_replace(browseros_core::FeatureFlags::default());
+    let before = connection.calls().len();
+    let blocked = call("tabs", json!({"action":"list"})).await?;
+    assert_eq!(blocked.is_error, Some(true), "{blocked:?}");
+    assert!(text(&blocked).contains("pro_feature_disabled"));
+    assert_eq!(connection.calls().len(), before);
+    grants.send_replace(browseros_core::FeatureFlags { pro: true });
+    let selected = call("browser_target", json!({"action":"get"})).await?;
+    assert_eq!(
+        selected
+            .structured_content
+            .as_ref()
+            .map(|value| &value["binding"]["browserProfileId"]),
+        Some(&json!("eng"))
+    );
+    grants.send_replace(browseros_core::FeatureFlags::default());
+    assert_ne!(
+        call("browser_target", json!({"action":"clear"}))
+            .await?
+            .is_error,
+        Some(true)
+    );
+    let unbound = call("tabs", json!({"action":"list"})).await?;
+    assert_ne!(unbound.is_error, Some(true), "{unbound:?}");
+    Ok(())
+}
+
+struct RevokeProHook(tokio::sync::watch::Sender<browseros_core::FeatureFlags>);
+
+impl InnerCallHook for RevokeProHook {
+    fn authorize<'a>(&'a self, _page: Option<u32>) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Ok(()) })
+    }
+    fn on_page_created<'a>(&'a self, _page: u32) -> BoxFuture<'a, ()> {
+        Box::pin(async {})
+    }
+    fn record<'a>(&'a self, _record: InnerCallRecord<'a>) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.0.send_replace(browseros_core::FeatureFlags::default());
+        })
+    }
+}
+
+#[tokio::test]
+async fn an_in_flight_run_keeps_one_access_snapshot_across_awaits() -> anyhow::Result<()> {
+    let (grants, flags) = tokio::sync::watch::channel(browseros_core::FeatureFlags { pro: true });
+    let session = BrowserSession::new_with_features(
+        FixtureConnection::new().with_default_profile(),
+        BrowserSessionHooks::default(),
+        crate::tests::current_native(),
+        flags,
+    );
+    let store = Arc::new(StaticTargetStore::new());
+    let mut captured = ctx(session.clone(), store.clone()).await?;
+    captured.inner_call_hook = Some(Arc::new(RevokeProHook(grants.clone())));
+    let result = data(call(&captured, "run", json!({"code":"const first = await browser.profiles({action:'list'}); const second = await browser.profiles({action:'list'}); return [first.profiles.length, second.profiles.length, typeof browser.target];"})).await?)?;
+    assert_eq!(result["value"], json!([6, 6, "function"]));
+    assert!(!grants.borrow().pro);
+    let next = ctx(session, store).await?;
+    let refused = call(&next, "browser_profiles", json!({})).await?;
+    assert!(refused.is_error && text(&refused).contains("pro_feature_disabled"));
     Ok(())
 }

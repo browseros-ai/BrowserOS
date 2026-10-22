@@ -25,6 +25,7 @@ fn generated_dtos_deserialize_shared_fixtures() -> anyhow::Result<()> {
     let _: SystemInfo = fixture("system-info.json")?;
     let _: TelemetryState = fixture("telemetry-state.json")?;
     let _: AgentSettings = fixture("agent-settings.json")?;
+    let _: claw_api::models::FeatureFlags = fixture("feature-flags.json")?;
     let _: SessionList = fixture("session-list.json")?;
     let _: SessionDetail = fixture("session-detail.json")?;
     let _: CancelSessionResponse = fixture("cancel-session.json")?;

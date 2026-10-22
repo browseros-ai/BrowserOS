@@ -132,6 +132,7 @@ pub(crate) fn select_fixture_tab(tabs: &[Value], params: &Value) -> Result<Value
 pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpServiceOptions {
     BrowserMcpServiceOptions {
         native: session.native(),
+        features: Some(session.feature_flags()),
         name: "browseros-mcp-test".to_string(),
         title: "BrowserOS MCP Test".to_string(),
         version: "0.0.0".to_string(),
@@ -150,7 +151,7 @@ pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpService
 
 /// The first native release with profile targeting, with Pro enabled for these fixtures.
 pub(crate) fn current_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
 }
 
 fn fake_ctx() -> ToolCtx {
@@ -735,10 +736,10 @@ fn instructions_do_not_request_manual_tab_grouping() {
 }
 
 #[test]
-fn instructions_teach_profile_targeting_only_to_capable_natives() {
+fn initialize_guidance_is_stable_across_live_access_changes() {
     let current = browser_mcp_instructions(current_native());
-    assert!(current.contains("browser_profiles list discovers"));
-    assert!(current.contains("browser_target set selects one"));
+    assert!(!current.contains("browser_profiles"));
+    assert!(!current.contains("browser_target"));
     for older in [
         NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
         NativeCapabilities::default(),

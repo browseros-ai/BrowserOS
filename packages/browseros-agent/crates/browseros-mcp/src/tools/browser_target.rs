@@ -44,13 +44,21 @@ struct TargetArgs {
     strict: Option<bool>,
 }
 
+/// Dynamic guidance follows tools/list so live access changes cannot leave initialize stale.
+const PROFILE_GUIDANCE: &str = r#"Every call works in one regular profile. With no browser_target selection that is the browser's original Default profile (directory "Default"), whatever window is focused; tabs new opens a new inactive Default window if it has none. Profile targeting persists for this task. browser_profiles list discovers existing regular profiles; browser_target set selects one without loading it or opening a window. If needed, browser_profiles load loads the selection, then windows create opens a normal window. browser_target set_window chooses placement (strict=true pins the scope); get reads the selection or the Default in use; clear_window keeps the profile; clear returns to Default.
+- A call sees only normal windows and their pages. OAuth/window.open popups return page_out_of_scope even in the selected profile; never clear or widen the binding automatically to drive them.
+- profile_not_loaded needs browser_profiles load; no_profile_window needs windows create; pinned_window_closed needs reselection or clear_window; default_profile_unavailable needs browser_target set. Management remains usable when ordinary calls fail.
+- Rebinding changes later calls. Every primitive in one run keeps its original capture; change the target between calls."#;
+
 pub fn definition() -> crate::framework::ToolDef {
-    super::def_with_output::<TargetArgs, super::target_output_schema::TargetOutput>(
+    let mut tool = super::def_with_output::<TargetArgs, super::target_output_schema::TargetOutput>(
         "browser_target",
         DESCRIPTION,
         None,
         handler,
-    )
+    );
+    tool.feature_note = super::profile_note(PROFILE_GUIDANCE);
+    tool
 }
 
 pub(super) fn target_store(ctx: &ToolCtx) -> ToolExecResult<&Arc<dyn TargetStore>> {
@@ -239,9 +247,16 @@ fn handler<'a>(
             TargetAction::Clear => {
                 store.clear().await.map_err(ToolError::message)?;
                 text_result(
-                    format!(
-                        "browser target cleared; later calls use the default profile (directory {DEFAULT_PROFILE_DIRECTORY})"
-                    ),
+                    if ctx
+                        .browser
+                        .supports(browseros_core::NativeFeature::ProfileTargeting)
+                    {
+                        format!(
+                            "browser target cleared; later calls use the default profile (directory {DEFAULT_PROFILE_DIRECTORY})"
+                        )
+                    } else {
+                        "browser target cleared; later calls use browser-wide routing".to_string()
+                    },
                     Some(json!({ "action": "clear", "bound": false })),
                 )
             }

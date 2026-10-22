@@ -657,7 +657,7 @@ fn binding(window: Option<WindowSelection>) -> TargetBinding {
 }
 async fn view(native: Arc<Native>, window: Option<WindowSelection>) -> BrowserView {
     BrowserView::capture(
-        BrowserSession::new_with_native(
+        pro_session(
             native,
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -682,7 +682,7 @@ fn code(error: CoreError, expected: &str) {
 }
 // Profile fixtures opt into Pro explicitly so older-native cases still test compatibility.
 fn native_version(raw: &str) -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some(raw)).with_pro_enabled(true)
+    NativeCapabilities::from_browseros_version(Some(raw))
 }
 /// The first native release with profile targeting; fixtures that model the #2908 bundle use it.
 fn current_native() -> NativeCapabilities {
@@ -694,7 +694,7 @@ async fn view_on(
     window: Option<WindowSelection>,
 ) -> BrowserView {
     BrowserView::capture(
-        BrowserSession::new_with_native(native, crate::BrowserSessionHooks::default(), caps),
+        pro_session(native, crate::BrowserSessionHooks::default(), caps),
         Some(binding(window)),
         None,
     )
@@ -1256,7 +1256,7 @@ async fn unloaded_capture_prioritizes_missing_identity_and_epoch_over_not_loaded
 #[tokio::test]
 async fn facade_rebind_only_changes_later_calls_and_old_view_keeps_genuine_context() -> TestResult {
     let native = Native::new();
-    let browser = Browser::new_with_native(native.clone(), current_native());
+    let browser = pro_browser(native.clone(), current_native());
     browser.set_target(Some(binding(None))).await;
     let old = browser.view().await;
     let mut next = binding(None);
@@ -1734,7 +1734,7 @@ async fn created_page_constraint_survives_group_lookup_and_guards_every_group_wr
             view(native.clone(), None).await
         } else {
             BrowserView::unbound(
-                BrowserSession::new_with_native(
+                pro_session(
                     native.clone(),
                     crate::BrowserSessionHooks::default(),
                     current_native(),
@@ -1821,7 +1821,7 @@ async fn created_page_constraint_survives_group_lookup_and_guards_every_group_wr
 async fn unbound_created_page_retains_creation_epoch_before_delayed_callback() -> TestResult {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new_with_native(
+        pro_session(
             native.clone(),
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -1869,7 +1869,7 @@ async fn created_page_constraint_allows_live_work_but_never_adopts_changed_tab_w
     ] {
         let native = Native::new();
         let base = BrowserView::unbound(
-            BrowserSession::new_with_native(
+            pro_session(
                 native.clone(),
                 crate::BrowserSessionHooks::default(),
                 current_native(),
@@ -1994,7 +1994,7 @@ async fn creation_receipt_before_handoff(bound: bool) -> TestResult {
         .await
     } else {
         BrowserView::unbound(
-            BrowserSession::new_with_native(
+            pro_session(
                 native.clone(),
                 crate::BrowserSessionHooks::default(),
                 current_native(),
@@ -2121,7 +2121,7 @@ async fn creation_origin_during_readiness(bound: bool, reconnect: bool) -> TestR
         .await
     } else {
         BrowserView::unbound(
-            BrowserSession::new_with_native(
+            pro_session(
                 native.clone(),
                 crate::BrowserSessionHooks::default(),
                 current_native(),
@@ -2233,7 +2233,7 @@ async fn unbound_creation_origin_retains_epoch_during_readiness() -> TestResult 
 async fn unbound_creation_origin_uses_creation_epoch_after_an_earlier_reconnect() -> TestResult {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new_with_native(
+        pro_session(
             native.clone(),
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -2274,7 +2274,7 @@ async fn unbound_creation_origin_uses_creation_epoch_after_an_earlier_reconnect(
 #[tokio::test]
 async fn bound_facade_close_uses_exclusive_native_target_selector() -> TestResult {
     let native = Native::new();
-    let browser = Browser::new_with_native(native.clone(), current_native());
+    let browser = pro_browser(native.clone(), current_native());
     browser.set_target(Some(binding(None))).await;
     let closing = browser
         .list_pages()
@@ -2341,7 +2341,7 @@ async fn unbound_creation_origin_preserves_best_effort_cross_window_group_reject
 {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new_with_native(
+        pro_session(
             native.clone(),
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -2408,7 +2408,7 @@ async fn bound_creation_origin_rejects_cross_window_default_group_before_create(
 async fn unbound_creation_origin_refreshes_successful_same_window_group_membership() -> TestResult {
     let native = Native::new();
     let base = BrowserView::unbound(
-        BrowserSession::new_with_native(
+        pro_session(
             native.clone(),
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -2438,10 +2438,6 @@ async fn unavailable_profile_targeting_runs_a_saved_binding_unbound() -> TestRes
     for (caps, error_code) in [
         (native_version("0.51.1.2"), "native_feature_unavailable"),
         (NativeCapabilities::default(), "native_feature_unavailable"),
-        (
-            current_native().with_pro_enabled(false),
-            "pro_feature_disabled",
-        ),
     ] {
         let native = Native::new();
         let pin = WindowSelection::Pinned {
@@ -2576,20 +2572,10 @@ async fn capable_native_retries_a_retained_binding_with_live_checks() -> TestRes
 async fn typed_tab_creation_with_a_context_needs_profile_targeting() -> TestResult {
     // The typed API reaches the same gated createTab routing as raw CDP, so it is refused the
     // same way; creation without a context keeps working when targeting is unavailable.
-    for (caps, error_code) in [
-        (native_version("0.51.1.2"), "native_feature_unavailable"),
-        (
-            current_native().with_pro_enabled(false),
-            "pro_feature_disabled",
-        ),
-    ] {
+    for (caps, error_code) in [(native_version("0.51.1.2"), "native_feature_unavailable")] {
         let native = Native::new();
         let view = BrowserView::unbound(
-            BrowserSession::new_with_native(
-                native.clone(),
-                crate::BrowserSessionHooks::default(),
-                caps,
-            ),
+            pro_session(native.clone(), crate::BrowserSessionHooks::default(), caps),
             None,
         );
         let contextual = NewPageOptions {
@@ -2632,7 +2618,7 @@ fn default_native(default_loaded: bool, default_window: bool) -> Arc<Native> {
 }
 async fn default_view(native: Arc<Native>) -> BrowserView {
     BrowserView::capture(
-        BrowserSession::new_with_native(
+        pro_session(
             native,
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -2771,7 +2757,7 @@ async fn default_without_a_window_opens_an_inactive_normal_window_there() -> Tes
     original.intent.browser_profile_id = BrowserProfileId("original".into());
     original.intent.directory = "Default".into();
     let explicit = BrowserView::capture(
-        BrowserSession::new_with_native(
+        pro_session(
             explicit_native.clone(),
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -2856,7 +2842,7 @@ async fn unusable_default_fails_admission_without_using_another_profile() -> Tes
 #[tokio::test]
 async fn explicit_target_wins_over_the_default() -> TestResult {
     let native = default_native(true, true);
-    let session = BrowserSession::new_with_native(
+    let session = pro_session(
         native.clone(),
         crate::BrowserSessionHooks::default(),
         current_native(),
@@ -2910,7 +2896,7 @@ async fn default_handles_are_fresh_after_a_native_restart() -> TestResult {
     stale.intent.browser_profile_id = BrowserProfileId("original".into());
     stale.intent.directory = "Default".into();
     let explicit = BrowserView::capture(
-        BrowserSession::new_with_native(
+        pro_session(
             restarted,
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -2957,11 +2943,7 @@ async fn natives_without_profile_targeting_keep_unbound_routing_with_no_target()
     for caps in [native_version("0.51.1.2"), NativeCapabilities::default()] {
         let native = default_native(false, true);
         let view = BrowserView::capture(
-            BrowserSession::new_with_native(
-                native.clone(),
-                crate::BrowserSessionHooks::default(),
-                caps,
-            ),
+            pro_session(native.clone(), crate::BrowserSessionHooks::default(), caps),
             None,
             None,
         )
@@ -2987,7 +2969,7 @@ async fn natives_without_profile_targeting_keep_unbound_routing_with_no_target()
 async fn management_capture_never_loads_the_default() -> TestResult {
     let native = default_native(false, false);
     let view = BrowserView::capture_for_management(
-        BrowserSession::new_with_native(
+        pro_session(
             native.clone(),
             crate::BrowserSessionHooks::default(),
             current_native(),
@@ -3016,7 +2998,7 @@ async fn facade_never_falls_back_to_global_routing_without_a_default() -> TestRe
     // No profile has directory "Default": the facade must not treat the failed default as an
     // unbound view and hand out another profile's window or session.
     let native = Native::new();
-    let browser = Browser::new_with_native(native.clone(), current_native());
+    let browser = pro_browser(native.clone(), current_native());
     code(
         browser
             .get_active_page_for_window(WindowId(20))
@@ -3184,5 +3166,99 @@ async fn credential_cancellation_reaches_original_session_after_tab_leaves_its_p
             .as_str()
             .is_some_and(|id| !id.is_empty())
     );
+    Ok(())
+}
+
+// These fixtures exercise profile routing; access-policy tests supply a live receiver instead.
+fn pro_session(
+    connection: std::sync::Arc<dyn crate::CdpConnection>,
+    hooks: crate::BrowserSessionHooks,
+    native: crate::NativeCapabilities,
+) -> std::sync::Arc<crate::BrowserSession> {
+    crate::BrowserSession::new_with_features(
+        connection,
+        hooks,
+        native,
+        tokio::sync::watch::channel(crate::FeatureFlags { pro: true }).1,
+    )
+}
+
+fn pro_browser(connection: Arc<dyn crate::CdpConnection>, native: NativeCapabilities) -> Browser {
+    Browser::new_with_features(
+        connection,
+        native,
+        tokio::sync::watch::channel(crate::FeatureFlags { pro: true }).1,
+    )
+}
+
+#[tokio::test]
+async fn live_access_is_frozen_per_view_and_revocation_retains_the_target() -> TestResult {
+    let native = Native::new();
+    let (flags, grants) = tokio::sync::watch::channel(crate::FeatureFlags::default());
+    let session = BrowserSession::new_with_features(
+        native.clone(),
+        crate::BrowserSessionHooks::default(),
+        current_native(),
+        grants,
+    );
+    let free = BrowserView::capture(session.clone(), None, None).await;
+    assert!(native.calls("Browser.getProfiles").is_empty());
+    code(
+        free.list_profiles()
+            .await
+            .err()
+            .ok_or("free listed profiles")?,
+        "pro_feature_disabled",
+    );
+    code(
+        free.new_page(
+            "https://test/",
+            NewPageOptions {
+                browser_context_id: Some(BrowserContextId("live-eng".into())),
+                ..NewPageOptions::default()
+            },
+        )
+        .await
+        .err()
+        .ok_or("free created in a profile")?,
+        "pro_feature_disabled",
+    );
+    assert!(native.calls("Browser.createTab").is_empty());
+    flags.send_replace(crate::FeatureFlags { pro: true });
+    // An admitted view cannot gain access after an await either.
+    code(
+        free.cdp("Browser.getProfiles", json!({}), None)
+            .await
+            .err()
+            .ok_or("free gained access")?,
+        "pro_feature_disabled",
+    );
+    let active = BrowserView::capture(session.clone(), Some(binding(None)), None).await;
+    assert!(active.admission_error().is_none());
+    flags.send_replace(crate::FeatureFlags { pro: false });
+    assert!(active.list_profiles().await.is_ok());
+    code(
+        free.cdp_json_for_page(PageId(999), "Browser.getProfiles", "{}")
+            .await
+            .err()
+            .ok_or("free raw JSON gained access")?,
+        "pro_feature_disabled",
+    );
+    let blocked = BrowserView::capture(session.clone(), Some(binding(None)), None).await;
+    assert_eq!(blocked.admission_error(), Some(&TargetError::ProRequired));
+    assert_eq!(blocked.binding(), Some(&binding(None)));
+    assert!(blocked.unapplied_binding().is_none());
+    let reads = native.calls("Browser.getTabs").len();
+    assert!(blocked.list_pages().await.is_err());
+    assert!(
+        blocked
+            .cdp("Browser.getTabs", json!({}), None)
+            .await
+            .is_err()
+    );
+    assert_eq!(native.calls("Browser.getTabs").len(), reads);
+    flags.send_replace(crate::FeatureFlags { pro: true });
+    let restored = BrowserView::capture(session, blocked.binding().cloned(), None).await;
+    assert!(restored.admission_error().is_none());
     Ok(())
 }

@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, NativeCapabilities, PageId, TargetId,
+    CoreError, FeatureAccess, FeatureFlags, NativeCapabilities, PageId, TargetId,
     connection::CdpConnection,
     frames::FrameRegistry,
     input::Input,
@@ -26,10 +26,9 @@ pub struct BrowserSessionHooks {
 /// task execution receives a BrowserView so capture and admission cannot be bypassed.
 pub struct BrowserSession {
     connection: Arc<dyn CdpConnection>,
-    /// Native identity of the browser behind `connection`, fixed for the session. Every view
-    /// reads it through its session, so capture, dispatch and raw CDP share one gate decision;
-    /// hosts derive discovery from the same value they pass in here.
+    /// Compatibility belongs to the connection; grants belong to the host and can change.
     native: NativeCapabilities,
+    features: tokio::sync::watch::Receiver<FeatureFlags>,
     pub pages: Arc<PageManager>,
     pub page_signals: Arc<PageSignals>,
     pub windows: Arc<WindowManager>,
@@ -50,6 +49,22 @@ impl BrowserSession {
         connection: Arc<dyn CdpConnection>,
         hooks: BrowserSessionHooks,
         native: NativeCapabilities,
+    ) -> Arc<Self> {
+        Self::new_with_features(
+            connection,
+            hooks,
+            native,
+            tokio::sync::watch::channel(FeatureFlags::default()).1,
+        )
+    }
+
+    /// The receiver survives reconnects; each execution view copies it once at admission.
+    #[must_use]
+    pub fn new_with_features(
+        connection: Arc<dyn CdpConnection>,
+        hooks: BrowserSessionHooks,
+        native: NativeCapabilities,
+        features: tokio::sync::watch::Receiver<FeatureFlags>,
     ) -> Arc<Self> {
         let frames = FrameRegistry::new(connection.clone());
         let page_signals = PageSignals::new(connection.clone());
@@ -97,6 +112,7 @@ impl BrowserSession {
         let session = Arc::new(Self {
             connection: connection.clone(),
             native,
+            features,
             pages,
             page_signals,
             windows,
@@ -110,6 +126,16 @@ impl BrowserSession {
     #[must_use]
     pub fn native(&self) -> NativeCapabilities {
         self.native
+    }
+
+    #[must_use]
+    pub fn access(&self) -> FeatureAccess {
+        FeatureAccess::new(self.native, *self.features.borrow())
+    }
+
+    #[must_use]
+    pub fn feature_flags(&self) -> tokio::sync::watch::Receiver<FeatureFlags> {
+        self.features.clone()
     }
 
     pub(crate) fn frames(&self) -> &Arc<FrameRegistry> {

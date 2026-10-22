@@ -2,7 +2,7 @@
 //! before a handler can run. Synthetic input must never reach diagnostic text.
 use super::fake_ctx;
 use crate::framework::{catalog, execute_tool};
-use browseros_core::NativeCapabilities;
+use browseros_core::{FeatureAccess, FeatureFlags, NativeCapabilities};
 use serde_json::json;
 
 #[tokio::test]
@@ -11,9 +11,15 @@ async fn credentials_are_native_gated_and_omit_scope_from_the_contract() -> anyh
         .into_iter()
         .find(|tool| tool.name == "credentials")
         .ok_or_else(|| anyhow::anyhow!("credentials tool is missing"))?;
-    assert!(!definition.available(NativeCapabilities::default()));
-    assert!(!definition.available(NativeCapabilities::from_browseros_version(Some("0.51.2.0"))));
-    assert!(definition.available(NativeCapabilities::from_browseros_version(Some("0.51.2.1"))));
+    assert!(!definition.available(FeatureAccess::default()));
+    assert!(!definition.available(FeatureAccess::new(
+        NativeCapabilities::from_browseros_version(Some("0.51.2.0")),
+        FeatureFlags::default()
+    )));
+    assert!(definition.available(FeatureAccess::new(
+        NativeCapabilities::from_browseros_version(Some("0.51.2.1")),
+        FeatureFlags::default()
+    )));
     assert!(definition.input_schema["properties"].get("scope").is_none());
     assert!(
         !definition.input_schema["required"]

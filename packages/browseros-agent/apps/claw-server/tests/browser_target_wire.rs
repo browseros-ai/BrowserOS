@@ -18,7 +18,7 @@ use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 
 /// The first native release with profile targeting, which this wire test models.
 fn current_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
 }
 
 struct NativeProfiles {
@@ -171,6 +171,10 @@ struct HttpPeer {
 
 impl HttpPeer {
     async fn start() -> anyhow::Result<Self> {
+        Self::start_with_pro(true).await
+    }
+
+    async fn start_with_pro(pro: bool) -> anyhow::Result<Self> {
         let dir = tempfile::tempdir()?;
         let config = Arc::new(Config {
             server_port: 9200,
@@ -190,13 +194,18 @@ impl HttpPeer {
             mode: Default::default(),
         });
         let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+        state
+            .features
+            .update(browseros_core::FeatureFlags { pro })
+            .await?;
         let native = NativeProfiles::new();
         state
             .browser
-            .set_session_for_testing(BrowserSession::new_with_native(
+            .set_session_for_testing(BrowserSession::new_with_features(
                 native.clone(),
                 BrowserSessionHooks::default(),
                 current_native(),
+                state.features.subscribe(),
             ))
             .await;
         let listener = TcpListener::bind("127.0.0.1:0").await?;
@@ -245,7 +254,6 @@ impl HttpPeer {
             .unwrap_or(&body);
         let value: Value = serde_json::from_str(encoded.trim())?;
         assert!(value["error"].is_null(), "{value}");
-        assert_ne!(value["result"]["isError"], true, "{value}");
         Ok(value["result"].clone())
     }
 
@@ -258,8 +266,11 @@ impl HttpPeer {
         if let Some(handle) = handle {
             arguments["session"] = json!(handle);
         }
-        self.request("tools/call", json!({"name":name, "arguments":arguments}))
-            .await
+        let result = self
+            .request("tools/call", json!({"name":name, "arguments":arguments}))
+            .await?;
+        assert_ne!(result["isError"], true, "{result}");
+        Ok(result)
     }
 }
 
@@ -432,5 +443,89 @@ async fn browser_profiles_http_roundtrip_preserves_descriptors_and_load_outcome(
         structured(&target)?["status"]["profile"],
         loaded_engineering_profile()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn feature_api_changes_live_mcp_access_and_keeps_saved_target_safe() -> anyhow::Result<()> {
+    let peer = HttpPeer::start_with_pro(false).await?;
+    let api = peer.url.replace("/mcp", "/api/v1/features");
+    assert_eq!(
+        peer.client.get(&api).send().await?.json::<Value>().await?,
+        json!({"pro":false})
+    );
+    let has_profiles = |list: &Value| {
+        list["tools"]
+            .as_array()
+            .is_some_and(|tools| tools.iter().any(|tool| tool["name"] == "browser_profiles"))
+    };
+    assert!(!has_profiles(&peer.request("tools/list", json!({})).await?));
+    let free = peer
+        .call(
+            "run",
+            json!({"code":"return [typeof browser.profiles, typeof browser.target]"}),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        free["structuredContent"]["value"],
+        json!(["undefined", "undefined"])
+    );
+    let handle = task_handle(&free)?;
+    peer.client
+        .put(&api)
+        .json(&json!({"pro":true}))
+        .send()
+        .await?
+        .error_for_status()?;
+    assert!(has_profiles(&peer.request("tools/list", json!({})).await?));
+    peer.call(
+        "browser_target",
+        json!({"action":"set","browserProfileId":"native-eng"}),
+        Some(handle),
+    )
+    .await?;
+    peer.client
+        .put(&api)
+        .json(&json!({"pro":false}))
+        .send()
+        .await?
+        .error_for_status()?;
+    for (name, arguments) in [
+        ("tabs", json!({"action":"list","session":handle})),
+        ("browser_profiles", json!({"session":handle})),
+    ] {
+        let refused = peer
+            .request("tools/call", json!({"name":name,"arguments":arguments}))
+            .await?;
+        assert_eq!(refused["isError"], true, "{refused}");
+        assert!(
+            refused.to_string().contains("pro_feature_disabled"),
+            "{refused}"
+        );
+    }
+    peer.client
+        .put(&api)
+        .json(&json!({"pro":true}))
+        .send()
+        .await?
+        .error_for_status()?;
+    let retained = peer
+        .call("browser_target", json!({"action":"get"}), Some(handle))
+        .await?;
+    assert_eq!(
+        retained["structuredContent"]["binding"]["browserProfileId"],
+        "native-eng"
+    );
+    peer.client
+        .put(&api)
+        .json(&json!({"pro":false}))
+        .send()
+        .await?
+        .error_for_status()?;
+    peer.call("browser_target", json!({"action":"clear"}), Some(handle))
+        .await?;
+    peer.call("tabs", json!({"action":"list"}), Some(handle))
+        .await?;
     Ok(())
 }

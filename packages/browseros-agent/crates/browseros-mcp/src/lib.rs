@@ -5,6 +5,7 @@
 
 pub mod constants;
 pub mod downloads_api;
+pub mod feature_notifications;
 pub mod format;
 pub mod framework;
 pub mod output_file;
