@@ -6,11 +6,16 @@ import { waitUntil } from '../../claw-mcp/tests/helpers'
 import { McpSession, textOf } from '../../claw-mcp/tests/mcp-client'
 import {
   buildRustServer,
-  RUST_BINARY,
   startRustServer,
 } from '../../claw-mcp/tests/rust-server'
 import type { CaptchaPage } from '../fixtures/catalog'
 import { launchConfiguredBrowser } from './browser-launch'
+import {
+  checkDevPreflight,
+  type Preflight,
+  renderPreflight,
+  startDevWatch,
+} from './dev-watch'
 import { configureKeys, type KeyMode } from './keys'
 import { createResources } from './lifecycle'
 import { exitCode, renderTable, runCaptchaE2E } from './runner'
@@ -32,6 +37,8 @@ export function parseOptions(argv: string[]) {
       paid: { type: 'boolean' },
       'expect-tool-missing': { type: 'boolean' },
       'mcp-url': { type: 'string' },
+      'dev-watch': { type: 'boolean' },
+      'startup-timeout': { type: 'string', default: '600000' },
       'fixture-bind': { type: 'string' },
       'fixture-host': { type: 'string' },
       'fixture-origin': { type: 'string' },
@@ -43,6 +50,20 @@ export function parseOptions(argv: string[]) {
     },
   })
   const solveTimeout = Number(values['solve-timeout'])
+  const startupTimeout = Number(values['startup-timeout'])
+  if (
+    !Number.isInteger(startupTimeout) ||
+    startupTimeout < 1 ||
+    startupTimeout > 2_147_483_647
+  )
+    throw new Error('--startup-timeout must be positive milliseconds')
+  if (
+    values['dev-watch'] &&
+    (values['mcp-url'] || values.headless || values['browser-arg']?.length)
+  )
+    throw new Error(
+      '--dev-watch uses its own headed browser; cannot combine with --mcp-url, --headless or --browser-arg',
+    )
   if (!['fixtures', 'demo', 'all'].includes(values.pages))
     throw new Error('--pages must be fixtures, demo, or all')
   if (!['placeholder', 'real', 'none'].includes(values.keys))
@@ -68,6 +89,8 @@ export function parseOptions(argv: string[]) {
     paid: values.paid,
     expectToolMissing: values['expect-tool-missing'],
     mcpUrl: values['mcp-url'],
+    devWatch: values['dev-watch'],
+    startupTimeout,
     fixtureBind: values['fixture-bind'],
     fixtureHost: values['fixture-host'],
     fixtureOrigin: values['fixture-origin'],
@@ -98,7 +121,7 @@ export function selectPages(
 
 async function main(): Promise<number> {
   const options = parseOptions(Bun.argv.slice(2))
-  if (!options.mcpUrl && !process.env.BROWSEROS_BINARY)
+  if (!options.mcpUrl && !options.devWatch && !process.env.BROWSEROS_BINARY)
     throw new Error('BROWSEROS_BINARY is required unless --mcp-url is set')
   const catalog = await import('../fixtures/catalog')
   const pages = selectPages(
@@ -107,7 +130,13 @@ async function main(): Promise<number> {
   )
   const resources = createResources()
   const interrupt = () => {
-    void resources.close().finally(() => process.exit(130))
+    void resources.close().then(
+      () => process.exit(130),
+      (error) => {
+        console.error(String(error))
+        process.exit(2)
+      },
+    )
   }
   process.once('SIGINT', interrupt)
   process.once('SIGTERM', interrupt)
@@ -116,6 +145,32 @@ async function main(): Promise<number> {
       () => configureKeys(options.keys),
       (keys) => keys.cleanup(),
     )
+    let mcpUrl = options.mcpUrl
+    let preflight: Preflight | undefined
+    if (options.devWatch) {
+      const watch = await resources.own(
+        () =>
+          startDevWatch({
+            out: options.out,
+            startupTimeout: options.startupTimeout,
+            keyEnv: keys.env,
+          }),
+        (watch) => watch.stop(),
+      )
+      mcpUrl = await watch.ready()
+      preflight = await checkDevPreflight(mcpUrl, options.expectToolMissing)
+      console.log(renderPreflight(preflight))
+      await writeFile(
+        join(options.out, 'results.json'),
+        `${JSON.stringify({ preflight, results: [] }, null, 2)}\n`,
+      )
+      await writeFile(
+        join(options.out, 'results.md'),
+        `# CAPTCHA E2E\n\n${renderPreflight(preflight)}`,
+      )
+      if (!preflight.ok)
+        throw new Error(`dev-watch preflight failed: ${preflight.error}`)
+    }
     let fixtureOrigin = options.fixtureOrigin
     if (!fixtureOrigin) {
       const { startCaptchaFixtureServer } = await import('../fixtures/server')
@@ -129,7 +184,6 @@ async function main(): Promise<number> {
       )
       fixtureOrigin = fixture.origin
     }
-    let mcpUrl = options.mcpUrl
     if (!mcpUrl) {
       if (!process.env.CLAW_SERVER_BINARY) buildRustServer()
       const browser = await resources.own(
@@ -168,7 +222,7 @@ async function main(): Promise<number> {
     const sha =
       Bun.spawnSync(['git', 'rev-parse', 'HEAD']).stdout.toString().trim() ||
       'unknown'
-    const header = `# CAPTCHA E2E\n\nTime: ${new Date().toISOString()}\n\nGit: ${sha}\n\nServer: ${options.mcpUrl ?? RUST_BINARY}\n\nKeys: ${options.keys}; browser: ${options.headed ? 'headed' : 'headless'}\n\n`
+    const header = `# CAPTCHA E2E\n\nTime: ${new Date().toISOString()}\n\nGit: ${sha}\n\nServer: ${mcpUrl}\n\nKeys: ${options.keys}; browser: ${options.headed ? 'headed' : 'headless'}\n\n${preflight ? renderPreflight(preflight) : ''}`
     const table = renderTable(records)
     const summary = ['PASS', 'FAIL', 'UNVERIFIED']
       .map(
@@ -179,7 +233,7 @@ async function main(): Promise<number> {
     await mkdir(options.out, { recursive: true })
     await writeFile(
       join(options.out, 'results.json'),
-      `${JSON.stringify(records, null, 2)}\n`,
+      `${JSON.stringify(preflight ? { preflight, results: records } : records, null, 2)}\n`,
     )
     await writeFile(
       join(options.out, 'results.md'),
