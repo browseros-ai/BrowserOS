@@ -101,7 +101,9 @@ for (const {meta, nodes, v3} of configs) {
     const w = widgets[index];
     w.frameUrl ||= node?.querySelector('iframe')?.src || null;
     for (const key of ['sitekey', 'action', 'recaptchaS', 'callback']) w[key] ||= meta[key] || null;
-    w.invisible ||= meta.size === 'invisible'; w.enterprise = enterprise || !!renderUrl?.pathname.includes('enterprise');
+    w.invisible ||= meta.size === 'invisible';
+    if (w.invisible && w.state === 'unknown') w.state = 'widget_only';
+    w.enterprise = enterprise || !!renderUrl?.pathname.includes('enterprise');
     if (v3) { w.kind = 'recaptcha_v3'; w.state = 'widget_only'; }
 }
 if (!widgets.some(w => w.kind.startsWith('recaptcha')) && (renderKey || all('.grecaptcha-badge').some(e => visible(e)))) {
