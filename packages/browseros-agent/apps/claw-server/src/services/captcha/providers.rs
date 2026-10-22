@@ -353,7 +353,10 @@ impl CapsolverClient {
                     error
                 })?;
             cost = amount(&response["cost"]).or(cost);
-            if response["status"] != "ready" && response["status"] != "processing" {
+            if !matches!(
+                response["status"].as_str(),
+                Some("idle" | "processing" | "ready")
+            ) {
                 return Err(self.error(ProviderErrorKind::BadRequest, "invalid task status", true));
             }
             delay = Duration::from_secs(2);
@@ -846,6 +849,26 @@ mod tests {
             solve(&chain, &turnstile()).await?.answer,
             SolveAnswer::Token("final".into())
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_idle_tasks_keep_polling_until_ready() -> anyhow::Result<()> {
+        let mock = vendor(vec![
+            json!({"errorId":0,"taskId":"queued","status":"idle"}).into(),
+            json!({"errorId":0,"status":"idle"}).into(),
+            json!({"errorId":0,"status":"ready","solution":{"gRecaptchaResponse":"ready-token"}})
+                .into(),
+        ])
+        .await?;
+        let chain = ProviderChain::new(&config(Some(&mock), 1)?);
+        let answer = solve(&chain, &recaptcha()).await?;
+        assert_eq!(answer.answer, SolveAnswer::Token("ready-token".into()));
+        assert_eq!(chain.paid_tasks(), 1);
+        let state = mock.state.lock().await;
+        assert_eq!(state.requests.len(), 3);
+        assert_eq!(state.requests[2].0, "/getTaskResult");
+        assert_eq!(state.requests[2].1["taskId"], "queued");
         Ok(())
     }
 
