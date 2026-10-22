@@ -28,8 +28,8 @@ Prefer `run` for multi-step work; reach for evaluate only as a fallback for a on
 Use this for page-state reads or small DOM scripts that are awkward with read/grep. \
 Provide `code` (an async body; use `return` to read a value) or `func` (a function \
 expression like `() => {...}` that gets invoked). Return a value to read it back. \
-Returns `changed` alongside the value: a script that mutated the page is settled before \
-the result comes back, so never pause afterwards to let the page catch up. For an effect \
+A script that mutated the page is settled before the result comes back, and the result \
+says so, so never pause afterwards to let the page catch up. For an effect \
 that is entirely asynchronous, such as a click whose result arrives over the network, pass \
 `settle: true` to wait for the page to go quiet regardless. \
 `timeout` is capped at 30000 ms; for page work that needs longer, start it on the page and poll with short follow-up calls rather than one long evaluate. \
@@ -189,6 +189,9 @@ fn handler<'a>(
                                 path.display()
                             ),
                         ]
+                        .into_iter()
+                        .chain(readiness_note(moved, settled).map(ToString::to_string))
+                        .collect::<Vec<_>>()
                         .join("\n\n"),
                         Some(json!({
                             "page": args.page,
@@ -210,6 +213,9 @@ fn handler<'a>(
                                 text.len()
                             ),
                         ]
+                        .into_iter()
+                        .chain(readiness_note(moved, settled).map(ToString::to_string))
+                        .collect::<Vec<_>>()
                         .join("\n\n"),
                         Some(json!({
                             "page": args.page,
@@ -228,11 +234,38 @@ fn handler<'a>(
         if let (Value::Object(object), Some(value)) = (&mut structured, value) {
             object.insert("value".to_string(), value);
         }
-        Ok(Some(text_result(
-            wrap_untrusted(&text, &origin),
-            Some(structured),
-        )))
+        let mut body = wrap_untrusted(&text, &origin);
+        if let Some(note) = readiness_note(moved, settled) {
+            body.push_str("\n\n");
+            body.push_str(note);
+        }
+        Ok(Some(text_result(body, Some(structured))))
     })
+}
+
+/// The line appended to a result whose script moved the page.
+///
+/// Structured content does not survive the browser-tool wire envelope for a
+/// tool with no output schema, and `evaluate` has none, so `changed` and
+/// `settled` reach a script running inside `run` but not a client calling
+/// `evaluate` directly. The text does survive, and readiness is only useful
+/// to whoever has to decide whether to wait, so it is stated there too.
+///
+/// Silent when the script changed nothing: the value is the whole answer, and
+/// a line on every read would cost context to say so.
+fn readiness_note(moved: bool, settled: bool) -> Option<&'static str> {
+    match (moved, settled) {
+        (false, _) => None,
+        (true, true) => Some(
+            "The script changed the page, which then went quiet before this result. \
+             Nothing further to wait for.",
+        ),
+        (true, false) => Some(
+            "The script changed the page and it was still changing when the readiness \
+             budget expired, so this result may predate the effect. Wait on the thing \
+             you expect with `wait`, rather than pausing for a fixed time.",
+        ),
+    }
 }
 
 /// Whether the evaluation changed the page, read from the mutation counter
@@ -352,6 +385,36 @@ mod tests {
             showing: true,
             complete: true,
         }
+    }
+
+    /// A read is the common case and says nothing, so the note costs context
+    /// only where it carries a decision.
+    #[test]
+    fn a_read_gets_no_readiness_note() {
+        assert!(readiness_note(false, false).is_none());
+        assert!(readiness_note(false, true).is_none());
+    }
+
+    #[test]
+    fn a_settled_change_says_there_is_nothing_left_to_wait_for() {
+        let note = readiness_note(true, true).unwrap_or_default();
+        assert!(note.contains("went quiet"), "unexpected note {note}");
+    }
+
+    /// The case the note exists for: the budget expired with the page still
+    /// moving, which is also when a caller is most tempted to pause.
+    #[test]
+    fn an_unsettled_change_names_the_signal_to_wait_on() {
+        let note = readiness_note(true, false).unwrap_or_default();
+        assert!(
+            note.contains("may predate the effect"),
+            "unexpected note {note}"
+        );
+        assert!(note.contains("`wait`"), "unexpected note {note}");
+        assert!(
+            !note.contains("sleep"),
+            "the note must not bless a pause: {note}"
+        );
     }
 
     #[test]

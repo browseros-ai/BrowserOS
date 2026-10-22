@@ -76,6 +76,13 @@ pub enum Readiness {
 /// counter frozen at zero on the new document and call a page that is still
 /// filling in "stable". Reporting `installed` lets the caller discard the
 /// reading that re-armed it rather than compare across the gap.
+/// Reads the page's mutation counter, installing the observer if it is absent.
+///
+/// Known limit: a `MutationObserver` subtree does not cross an iframe or a
+/// shadow boundary, so a change confined to embedded content leaves this
+/// counter still. Covering those roots means observing each one and tracking
+/// their lifetimes; until then a caller can be told a page is quiet while
+/// embedded content is still moving.
 const READINESS_PROBE_JS: &str = r#"
 (() => {
   const g = globalThis;
@@ -153,12 +160,24 @@ impl ReadinessReading {
 /// For callers running their own loop and their own timeout, such as the
 /// navigation wait, which has a dialog check to interleave.
 pub async fn read_readiness(session: &ProtocolSession) -> Result<ReadinessReading, CoreError> {
-    let result: ReadingResult = session
-        .send(
-            "Runtime.evaluate",
-            json!({ "expression": READINESS_PROBE_JS, "returnByValue": true }),
-        )
-        .await?;
+    let call = session.send(
+        "Runtime.evaluate",
+        json!({ "expression": READINESS_PROBE_JS, "returnByValue": true }),
+    );
+    // Bounded like every other call on the settle path. The probe is advisory,
+    // so a page whose main thread is busy must not park it for the transport's
+    // default, which is two orders of magnitude longer than the budget any
+    // caller of this function is working to.
+    let result: ReadingResult =
+        match timeout(timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT, call).await {
+            Ok(result) => result?,
+            Err(_elapsed) => {
+                return Err(CoreError::Message(format!(
+                    "the readiness probe did not answer within {}ms",
+                    timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT.as_millis()
+                )));
+            }
+        };
     result
         .result
         .value
@@ -464,6 +483,9 @@ mod tests {
         /// with a single entry.
         readiness: VecDeque<Value>,
         readiness_last: Value,
+        /// When set, the readiness probe never answers, standing in for a page
+        /// whose main thread is too busy to schedule the evaluation.
+        stall_readiness: bool,
     }
 
     struct HarnessConnection {
@@ -489,6 +511,23 @@ mod tests {
             _session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
+                // Checked and released before parking: a std MutexGuard is not
+                // Send, so it must not be alive across the await below.
+                let stalls = {
+                    let state = self.state.lock().map_err(|_err| CdpError::Protocol {
+                        code: -1,
+                        message: "poisoned test state".to_string(),
+                    })?;
+                    state.stall_readiness
+                        && method == "Runtime.evaluate"
+                        && params
+                            .get("expression")
+                            .and_then(Value::as_str)
+                            .is_some_and(|expression| expression.contains("__browseros_ready"))
+                };
+                if stalls {
+                    std::future::pending::<()>().await;
+                }
                 let mut state = self.state.lock().map_err(|_err| CdpError::Protocol {
                     code: -1,
                     message: "poisoned test state".to_string(),
@@ -590,6 +629,7 @@ mod tests {
             fail_evaluate: false,
             readiness: readiness.into(),
             readiness_last: reading(0, false, true, true),
+            stall_readiness: false,
         });
         let session = BrowserSession::new(connection, BrowserSessionHooks::default());
         let pages = session.pages.list().await?;
@@ -693,6 +733,49 @@ mod tests {
         Ok(())
     }
 
+    async fn stalled_session() -> Result<(Arc<BrowserSession>, crate::PageId), CoreError> {
+        let connection = HarnessConnection::new(HarnessState {
+            tab_loads: VecDeque::new(),
+            current_tab: TabLoad::ready(),
+            mutation_reads: VecDeque::new(),
+            current_counter: 0,
+            fail_evaluate: false,
+            readiness: VecDeque::new(),
+            readiness_last: reading(0, false, true, true),
+            stall_readiness: true,
+        });
+        let session = BrowserSession::new(connection, BrowserSessionHooks::default());
+        let pages = session.pages.list().await?;
+        let page = pages
+            .first()
+            .ok_or_else(|| CoreError::Message("missing harness page".to_string()))?;
+        Ok((session, page.page_id.clone()))
+    }
+
+    /// A probe that cannot be scheduled must give up on its own budget, not on
+    /// the transport's, which is 60s and would strand the caller.
+    #[tokio::test]
+    async fn an_unschedulable_probe_gives_up_on_the_settle_budget() -> Result<(), CoreError> {
+        let (session, page_id) = stalled_session().await?;
+        let page = session.pages.get_session(page_id).await?;
+        let start = Instant::now();
+        let Err(error) = super::read_readiness(&page.session).await else {
+            return Err(CoreError::Message(
+                "a stalled probe must not answer".to_string(),
+            ));
+        };
+        assert!(
+            error.to_string().contains("did not answer"),
+            "unexpected error {error}"
+        );
+        assert!(
+            start.elapsed() < timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT * 4,
+            "the probe should give up on its own budget, took {:?}",
+            start.elapsed()
+        );
+        Ok(())
+    }
+
     #[tokio::test]
     async fn evaluate_failure_is_advisory() -> Result<(), CoreError> {
         let connection = HarnessConnection::new(HarnessState {
@@ -703,6 +786,7 @@ mod tests {
             fail_evaluate: true,
             readiness: VecDeque::new(),
             readiness_last: reading(0, false, true, true),
+            stall_readiness: false,
         });
         let session = BrowserSession::new(connection, BrowserSessionHooks::default());
         let pages = session.pages.list().await?;
