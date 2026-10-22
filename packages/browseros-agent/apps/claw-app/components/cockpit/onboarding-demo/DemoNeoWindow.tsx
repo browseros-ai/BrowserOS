@@ -89,7 +89,7 @@ export function DemoNeoWindow({
   return (
     <div
       className={cn(
-        'absolute top-[38px] left-[456px] flex h-[352px] w-[480px] origin-top flex-col overflow-hidden rounded-xl border border-border bg-card transition-[transform,box-shadow,opacity] duration-500 ease-out',
+        'absolute top-3 left-[456px] flex h-[378px] w-[480px] origin-top flex-col overflow-hidden rounded-xl border border-border bg-card transition-[transform,box-shadow,opacity] duration-500 ease-out',
         frame.up
           ? 'z-5 shadow-[0_44px_80px_-36px_rgb(1_18_63/0.5),0_6px_18px_-6px_rgb(1_18_63/0.16)]'
           : 'z-2 translate-y-2 scale-[0.97] shadow-[0_24px_48px_-30px_rgb(1_18_63/0.32)]',

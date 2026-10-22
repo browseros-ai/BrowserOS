@@ -53,7 +53,7 @@ export function DemoClaudeWindow({
   return (
     <div
       className={cn(
-        'absolute top-[38px] left-[18px] flex h-[352px] w-[442px] overflow-hidden rounded-xl border border-border bg-card shadow-[0_34px_60px_-30px_rgb(1_18_63/0.45),0_8px_20px_-12px_rgb(1_18_63/0.2)] transition-[opacity,transform] duration-500 ease-out',
+        'absolute top-3 left-[18px] flex h-[378px] w-[442px] overflow-hidden rounded-xl border border-border bg-card shadow-[0_34px_60px_-30px_rgb(1_18_63/0.45),0_8px_20px_-12px_rgb(1_18_63/0.2)] transition-[opacity,transform] duration-500 ease-out',
         front ? 'z-6' : 'z-4',
         frame.open && !fading
           ? 'opacity-100'

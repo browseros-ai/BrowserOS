@@ -100,7 +100,7 @@ export interface DemoFrame {
   fading: boolean
   pointer: { on: boolean; atDock: boolean; pressed: boolean }
   dock: { tip: boolean; claudeBounce: boolean; claudeRunning: boolean }
-  /** Frontmost window; the menu bar follows it. */
+  /** Frontmost window: it sits on top and shows coloured traffic lights. */
   front: 'neo' | 'claude'
   claude: {
     open: boolean
@@ -114,7 +114,6 @@ export interface DemoFrame {
     litTool: number | null
     answered: boolean
   }
-  menu: { agentWorking: boolean }
   neo: {
     up: boolean
     agentTag: 'off' | 'working' | 'done'
@@ -199,7 +198,6 @@ export function demoFrameAt(rawT: number): DemoFrame {
       litTool: litToolAt(t),
       answered: done,
     },
-    menu: { agentWorking: sent && !done },
     neo: {
       up: t >= WATCH,
       agentTag: done ? 'done' : sent ? 'working' : 'off',

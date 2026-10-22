@@ -14,22 +14,15 @@ import { DemoNeoWindow } from './DemoNeoWindow'
 import { DemoNeoMark } from './demo-parts'
 import type { DemoFrame } from './timeline'
 
-/** macOS draws its own chrome in the system face, not the app's. */
+/** macOS draws the dock's hover label in the system face, not the app's. */
 const MAC_FONT =
   "font-[-apple-system,BlinkMacSystemFont,'SF_Pro_Text','Helvetica_Neue',sans-serif]"
 
-const NEO_MENUS = [
-  'File',
-  'Edit',
-  'View',
-  'Agents',
-  'Sessions',
-  'Window',
-  'Help',
-]
-const CLAUDE_MENUS = ['File', 'Edit', 'View', 'Window', 'Help']
-
-/** The 960×480 drawn desktop at one frame of the timeline. */
+/**
+ * The 960×480 drawn desktop at one frame of the timeline: the two windows on
+ * the player's plain ground, with the dock. No menu bar or wallpaper (owner):
+ * the windows take that space instead.
+ */
 export function DemoDesktop({
   frame,
   spinGlyph,
@@ -40,9 +33,6 @@ export function DemoDesktop({
   const claudeFront = frame.front === 'claude'
   return (
     <>
-      {/* The dithered neo-blue wallpaper from the website's v3-C hero. */}
-      <div className="absolute inset-0 bg-[url(/onboarding/demo-wallpaper.png)] bg-accent-tint bg-size-[1200px_680px] [image-rendering:pixelated] dark:opacity-30" />
-      <MenuBar claudeFront={claudeFront} working={frame.menu.agentWorking} />
       <DemoNeoWindow frame={frame.neo} fading={frame.fading} />
       <DemoClaudeWindow
         frame={frame.claude}
@@ -54,93 +44,6 @@ export function DemoDesktop({
       <Pointer pointer={frame.pointer} />
       <AgentPointer at={frame.neo.agentPointer} />
     </>
-  )
-}
-
-/**
- * Names the frontmost app with its menus. The first slot (Apple's, on a real
- * Mac) is neo's dog only while neo is in front, a neutral glyph otherwise; no
- * Apple logo is drawn. "1 agent working" is neo's own menu-bar item.
- */
-function MenuBar({
-  claudeFront,
-  working,
-}: {
-  claudeFront: boolean
-  working: boolean
-}) {
-  return (
-    <div
-      className={cn(
-        'absolute inset-x-0 top-0 z-8 flex h-[26px] items-center whitespace-nowrap border-cyanotype-ink/5 border-b bg-card/75 px-3.5 text-[13px] text-cyanotype-ink leading-[26px] backdrop-blur-md',
-        MAC_FONT,
-      )}
-    >
-      <span className="flex items-center gap-[18px]">
-        <span className="flex items-center gap-[7px] font-bold">
-          {claudeFront ? (
-            <i className="mx-px size-[13px] rounded-[4px] bg-ink-3" />
-          ) : (
-            <DemoNeoMark className="size-[15px] rounded-[4px]" />
-          )}
-          {claudeFront ? 'Claude' : 'BrowserOS neo'}
-        </span>
-        {(claudeFront ? CLAUDE_MENUS : NEO_MENUS).map((menu) => (
-          <span key={menu}>{menu}</span>
-        ))}
-      </span>
-      <span className="ml-auto flex items-center gap-3.5 text-[12.5px]">
-        <span
-          className={cn(
-            'flex items-center gap-1.5 transition-opacity duration-300',
-            working ? 'opacity-100' : 'opacity-0',
-          )}
-        >
-          <i className="size-[7px] animate-pulse-dot rounded-full bg-chart-3" />
-          1 agent working
-        </span>
-        <svg
-          aria-hidden
-          width="16"
-          height="12"
-          viewBox="0 0 16 12"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.5"
-          strokeLinecap="round"
-        >
-          <path d="M1.5 4.2a9.5 9.5 0 0 1 13 0M3.8 6.7a6.2 6.2 0 0 1 8.4 0M6.1 9.1a2.9 2.9 0 0 1 3.8 0" />
-        </svg>
-        <svg aria-hidden width="24" height="12" viewBox="0 0 24 12" fill="none">
-          <rect
-            x=".75"
-            y=".75"
-            width="19.5"
-            height="10.5"
-            rx="3"
-            stroke="currentColor"
-            strokeOpacity=".55"
-            strokeWidth="1.2"
-          />
-          <rect
-            x="2.5"
-            y="2.5"
-            width="13"
-            height="7"
-            rx="1.6"
-            fill="currentColor"
-          />
-          <path
-            d="M22 4.2v3.6"
-            stroke="currentColor"
-            strokeOpacity=".55"
-            strokeWidth="1.4"
-            strokeLinecap="round"
-          />
-        </svg>
-        <span>Thu Oct 22&nbsp;&nbsp;9:41 AM</span>
-      </span>
-    </div>
   )
 }
 
@@ -257,10 +160,10 @@ function Pointer({ pointer }: { pointer: DemoFrame['pointer'] }) {
 }
 
 const AGENT_SPOTS = {
-  off: 'top-[220px] left-[760px]',
-  to: 'top-[156px] left-[738px]',
-  when: 'top-[156px] left-[872px]',
-  answer: 'top-[300px] left-[784px]',
+  off: 'top-[194px] left-[760px]',
+  to: 'top-[130px] left-[738px]',
+  when: 'top-[130px] left-[872px]',
+  answer: 'top-[274px] left-[784px]',
 } as const
 
 /** The agent's pointer, tagged "claude", doing the work inside neo. */

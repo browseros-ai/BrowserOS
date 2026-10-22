@@ -14,8 +14,9 @@ import {
 } from './timeline'
 
 describe('demoFrameAt', () => {
-  it('starts on a calm desktop with neo in front', () => {
+  it('starts on a calm desktop with neo in front, with no menu bar to drive', () => {
     const frame = demoFrameAt(0)
+    expect('menu' in frame).toBe(false)
     expect(frame.fading).toBe(true)
     expect(frame.front).toBe('neo')
     expect(frame.claude.open).toBe(false)
@@ -38,7 +39,6 @@ describe('demoFrameAt', () => {
     expect(frame.claude.composer).toBe(DEMO_PROMPT)
     expect(frame.claude.sent).toBe(false)
     expect(frame.front).toBe('claude')
-    expect(frame.menu.agentWorking).toBe(false)
   })
 
   it('types the prompt one character at a time', () => {
@@ -65,7 +65,6 @@ describe('demoFrameAt', () => {
     expect(frame.neo.checked).toBe(5)
     expect(frame.claude.working).toBe(true)
     expect(frame.claude.seconds).toBe(12)
-    expect(frame.menu.agentWorking).toBe(true)
   })
 
   it('lights each tool row while it touches the page', () => {
@@ -79,7 +78,6 @@ describe('demoFrameAt', () => {
     const frame = demoFrameAt(DEMO_KEY_FRAMES.done)
     expect(frame.claude.answered).toBe(true)
     expect(frame.claude.working).toBe(false)
-    expect(frame.menu.agentWorking).toBe(false)
     expect(frame.neo.agentTag).toBe('done')
     expect(frame.neo.ringSettled).toBe(true)
     expect(frame.neo.agentPointer).toBe('off')
