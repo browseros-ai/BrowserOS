@@ -18,55 +18,62 @@ function render(connectedHarnesses: readonly Harness[] = []): string {
   )
 }
 
+const SEVEN: Harness[] = [
+  'Claude Code',
+  'Codex',
+  'Cursor',
+  'OpenCode',
+  'Antigravity',
+  'VS Code',
+  'Zed',
+]
+
 describe('CockpitOnboarding', () => {
-  it('lists the connected apps with their marks and the restart hint', () => {
+  it('leads with neo’s one line, not the cockpit headline or bubbles', () => {
     const html = render(['Claude Code', 'Codex'])
-    expect(html).toContain('Your AI apps are connected.')
-    expect(html).toContain('Claude Code')
-    expect(html).toContain('Codex')
-    expect(html.match(/aria-label="connected"/g)).toHaveLength(2)
+    expect(html).toContain('You’re all set.')
+    expect(html).toContain('>Watch me</em>')
+    expect(html).toContain('do one.')
+    // The demo's drawn new tab still says it; the page itself does not.
+    expect(html).not.toMatch(/<h1[^>]*>[^<]*What are your agents/)
+    expect(html).not.toContain('Your AI apps are connected.')
+  })
+
+  it('shows the connected apps as marks with Connected and the restart hint', () => {
+    const html = render(['Claude Code', 'Codex'])
+    expect(html).toContain('aria-label="Connected apps: Claude Code, Codex"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('>Connected</span>')
     expect(html).toContain('If one is open, restart it once.')
-    expect(html).not.toContain('I didn’t find an AI app yet.')
+    expect(html).not.toMatch(/>\+\d/)
   })
 
-  it('shows every connected app, never a +N overflow', () => {
-    const harnesses: Harness[] = [
-      'Claude Code',
-      'Codex',
-      'Cursor',
-      'OpenCode',
-      'Antigravity',
-      'VS Code',
-      'Zed',
-    ]
-    const html = render(harnesses)
-    for (const harness of harnesses) expect(html).toContain(harness)
-    expect(html).not.toContain('+3')
+  it('caps the marks at three and collapses the rest into +N', () => {
+    const html = render(SEVEN)
+    expect(html).toContain('>+4</span>')
+    expect(html).toContain(`aria-label="Connected apps: ${SEVEN.join(', ')}"`)
   })
 
-  it('with no app found, offers Get Claude and leads with Cowork', () => {
+  it('with no app found, says so and makes Get Claude the one primary action', () => {
     const html = render()
+    expect(html).toContain('Almost there.')
     expect(html).toContain('I didn’t find an AI app yet.')
     expect(html).toContain('href="https://claude.ai/download"')
-    expect(html).not.toContain('Your AI apps are connected.')
-    expect(html).toMatch(/bg-accent text-accent-foreground[^"]*">Set up Cowork/)
+    expect(html).not.toContain('Connected apps')
   })
 
-  it('keeps the Cowork step in both states', () => {
+  it('keeps the quiet Cowork link in both states', () => {
     for (const harnesses of [[], ['Claude Code']] as Harness[][]) {
       const html = render(harnesses)
-      expect(html).toContain('Using Claude Cowork? It needs one last step.')
-      expect(html).toContain('Set up Cowork')
+      expect(html).toContain('Using Claude Cowork?')
+      expect(html).toContain('Set it up')
     }
   })
 
-  it('replaces the video with the demo and two copyable prompts', () => {
+  it('shows the demo and the two copyable prompts', () => {
     const html = render(['Claude Code'])
-    expect(html).toContain('Watch me do one.')
     expect(html).not.toContain('<video')
     expect(html).toContain('aria-label="Pause the demo"')
-    expect(html).toContain('aria-label="Replay the demo"')
-    expect(html).toContain('Works the same in Codex and Terminal.')
     expect(html).toContain('Try one')
     expect(html).toContain(
       'aria-label="Copy: Find the cheapest flight to New York next Friday."',
@@ -78,7 +85,7 @@ describe('CockpitOnboarding', () => {
   })
 
   it('reads without jargon', () => {
-    const text = render(['Claude Code']).replace(/<[^>]+>/g, ' ')
+    const text = render(SEVEN).replace(/<[^>]+>/g, ' ')
     expect(text).not.toMatch(/\b(MCP|server|endpoint|config)\b/i)
   })
 })

@@ -38,12 +38,18 @@ describe('getOnboardingState', () => {
 describe('cockpit first-run copy', () => {
   // Pins the shipped copy so accidental voice drift is caught. Every string
   // change here is a copy-pass decision, not a mechanical fix.
-  it('neo continues the onboarding chat in plain words', () => {
-    expect(FIRST_RUN_COPY.connected).toBe('Your AI apps are connected.')
-    expect(FIRST_RUN_COPY.cowork).toBe(
-      'Using Claude Cowork? It needs one last step.',
-    )
-    expect(FIRST_RUN_COPY.watch).toBe('Watch me do one.')
+  it('neo speaks once, in plain words', () => {
+    expect(
+      [
+        FIRST_RUN_COPY.ready,
+        FIRST_RUN_COPY.lineAccent,
+        FIRST_RUN_COPY.lineTail,
+      ].join(' '),
+    ).toBe('You’re all set. Watch me do one.')
+    expect(FIRST_RUN_COPY.noApps).toBe('Almost there.')
+    expect(
+      `${FIRST_RUN_COPY.coworkQuestion} ${FIRST_RUN_COPY.coworkAction}`,
+    ).toBe('Using Claude Cowork? Set it up')
     expect(FIRST_RUN_COPY.tryHint).toBe(
       'Paste one into Claude Code or Codex, then watch it here.',
     )

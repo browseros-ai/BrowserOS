@@ -36,22 +36,24 @@ export function getOnboardingState({
 }
 
 /**
- * neo's first-run chat in the cockpit. The onboarding page ends after the
- * import, so this is where neo picks the conversation back up: the apps it
- * connected (the cockpit has the real list; the page did not), the Claude
- * Cowork step, then the demo. Plain words only: no MCP, server or config.
+ * neo's one line on the cockpit's first run (round 7). The onboarding page
+ * ends after the import, so this is where neo picks the conversation back up:
+ * the apps it connected (the cockpit has the real list; the page did not), the
+ * Claude Cowork step, then the demo. Plain words only: no MCP, server or config.
  */
 export const FIRST_RUN_COPY = {
-  headingLead: 'What are your agents',
-  headingAccent: 'working on',
-  headingTail: 'right now?',
-  connected: 'Your AI apps are connected.',
+  /** With apps connected; "Almost there." when none were found. */
+  ready: 'You’re all set.',
+  noApps: 'Almost there.',
+  lineAccent: 'Watch me',
+  lineTail: 'do one.',
+  connected: 'Connected',
+  connectedApps: 'Connected apps',
   restartHint: 'If one is open, restart it once.',
   noneFound: 'I didn’t find an AI app yet.',
   getClaude: 'Get Claude',
-  cowork: 'Using Claude Cowork? It needs one last step.',
-  coworkAction: 'Set up Cowork',
-  watch: 'Watch me do one.',
+  coworkQuestion: 'Using Claude Cowork?',
+  coworkAction: 'Set it up',
   tryLabel: 'Try one',
   tryHint: 'Paste one into Claude Code or Codex, then watch it here.',
 } as const
