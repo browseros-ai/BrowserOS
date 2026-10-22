@@ -30,6 +30,7 @@ const LOCATE: &str = r#"
  const fs=[...document.querySelectorAll('iframe')], anchors=fs.filter(f=>/\/recaptcha\/.*\/anchor(?:\?|$)/.test(f.src));
  const matches=anchors.filter(f=>f.src===p.anchor),a=matches.length===1?matches[0]:null;
  const visible=e=>{if(!e)return false;const r=e.getBoundingClientRect();if(!r.width||!r.height||r.right<=0||r.bottom<=0||r.left>=innerWidth||r.top>=innerHeight)return false;for(;e;e=e.parentElement){const s=getComputedStyle(e);if(s.display==='none'||s.visibility!=='visible'||Number(s.opacity)<.999||e.getAnimations().some(a=>a.playState==='running'))return false}return true};
+ const hidden=e=>{if(!e)return true;const r=e.getBoundingClientRect();if(!r.width||!r.height)return true;for(;e;e=e.parentElement){const s=getComputedStyle(e);if(s.display==='none'||s.visibility==='hidden'||s.visibility==='collapse'||Number(s.opacity)===0)return true}return false};
  let root=null;
  for(let e=a?.parentElement;e;e=e.parentElement){if(anchors.filter(f=>e.contains(f)).length>1)break;if(e.querySelector('textarea[name="g-recaptcha-response"]')){root=e;break}}
  const fields=root?[...root.querySelectorAll('textarea[name="g-recaptcha-response"]')]:[];
@@ -37,7 +38,7 @@ const LOCATE: &str = r#"
 const MAIN: &str = r#"
  let response=fields.some(e=>!!e.value.trim());
  if(!response&&a&&anchors.length===1){try{const g=window.grecaptcha;response=!!(g?.enterprise||g)?.getResponse()?.trim()}catch{}}
- return {response,present:!!a,visible:visible(a),frameReady:visible(fs.find(f=>f.src===p.bframe))};
+ return {response,present:matches.length>0,hidden:matches.length===1?hidden(a):false,frameReady:visible(fs.find(f=>f.src===p.bframe))};
 "#;
 const APPLY: &str = r#"
  if(!fields.length)return {written:false,callback:false};
@@ -66,7 +67,7 @@ struct Anchor {
 struct Main {
     response: bool,
     present: bool,
-    visible: bool,
+    hidden: bool,
     frame_ready: bool,
 }
 #[derive(Clone, Deserialize)]
@@ -710,35 +711,13 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 .set_progress(Some(CaptchaKind::RecaptchaV2), SolveStep::Verifying);
             let end = Instant::now() + WAIT;
             loop {
-                let document = self.bounded(self.ctx.page.document()).await?;
-                if document != self.ctx.document {
-                    let frames = self.bounded(self.ctx.page.frames()).await?;
-                    let clear:bool=decode(self.bounded(self.ctx.page.eval_main("/*recaptcha:clear*/document.readyState!=='loading'&&!document.querySelector('iframe[src*=\"recaptcha\"],iframe[src*=\"challenges.cloudflare.com\"],iframe[src*=\"hcaptcha\"],.g-recaptcha,.cf-turnstile,.h-captcha')")).await?)?;
-                    if clear
-                        && !frames.iter().any(|f| {
-                            f.url.contains("recaptcha")
-                                || f.url.contains("hcaptcha")
-                                || f.url.contains("challenges.cloudflare.com")
-                        })
-                        && self.bounded(self.ctx.page.document()).await? == document
-                    {
+                match self.accepted_transition(&before).await {
+                    Ok(true) => {
                         return Ok((SolveMethod::Token, SolveReason::TokenAccepted));
                     }
-                    return Err(PageError::Navigated.into());
-                }
-                let now: Main = decode(
-                    self.bounded(self.ctx.page.eval_main(&self.script(
-                        "state",
-                        MAIN,
-                        before.anchor.as_ref(),
-                        before.frame.as_ref(),
-                        None,
-                    )))
-                    .await?,
-                )?;
-                self.current().await?;
-                if !now.present || (before.main.visible && !now.visible) {
-                    return Ok((SolveMethod::Token, SolveReason::TokenAccepted));
+                    Ok(false)
+                    | Err(Stop(_, SolveReason::Navigated | SolveReason::BrowserError, _)) => {}
+                    Err(error) => return Err(error),
                 }
                 if Instant::now() >= end {
                     break;
@@ -750,6 +729,34 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
             SolveReason::AcceptanceUnconfirmed,
             "Token is in the form; page acceptance was not confirmed",
         ))
+    }
+    async fn accepted_transition(&self, before: &View) -> Result<bool, Stop> {
+        let document = self.bounded(self.ctx.page.document()).await?;
+        let accepted = if document != self.ctx.document {
+            let clear: bool = decode(self.bounded(self.ctx.page.eval_main(
+                "/*recaptcha:clear*/document.readyState==='complete'&&!document.querySelector('iframe[src*=\"recaptcha\"],iframe[src*=\"challenges.cloudflare.com\"],iframe[src*=\"hcaptcha\"],.g-recaptcha,.cf-turnstile,.h-captcha')"
+            )).await?)?;
+            let frames = self.bounded(self.ctx.page.frames()).await?;
+            clear
+                && !frames.iter().any(|f| {
+                    f.url.contains("recaptcha")
+                        || f.url.contains("hcaptcha")
+                        || f.url.contains("challenges.cloudflare.com")
+                })
+        } else {
+            let now: Main = decode(
+                self.bounded(self.ctx.page.eval_main(&self.script(
+                    "state",
+                    MAIN,
+                    before.anchor.as_ref(),
+                    before.frame.as_ref(),
+                    None,
+                )))
+                .await?,
+            )?;
+            !now.present || (!before.main.hidden && now.hidden)
+        };
+        Ok(self.bounded(self.ctx.page.document()).await? == document && accepted)
     }
     async fn run(&mut self) -> Result<(SolveMethod, SolveReason), Stop> {
         let mut v = self.read().await?;
@@ -854,6 +861,11 @@ mod tests {
         revision: u32,
         callback: bool,
         transition: bool,
+        navigation_after_apply: bool,
+        navigate_during_verification: bool,
+        loading_polls: u32,
+        transient_navigation_errors: u32,
+        dim_after_apply: bool,
         applied: bool,
         navigated: bool,
         fail: Option<PageError>,
@@ -882,6 +894,11 @@ mod tests {
                 revision: 0,
                 callback: true,
                 transition: true,
+                navigation_after_apply: false,
+                navigate_during_verification: false,
+                loading_polls: 0,
+                transient_navigation_errors: 0,
+                dim_after_apply: false,
                 applied: false,
                 navigated: false,
                 fail: None,
@@ -978,16 +995,31 @@ mod tests {
             if expression.starts_with("/*recaptcha:apply*/") {
                 self.edit(|s| {
                     s.applied = true;
+                    if s.navigation_after_apply {
+                        s.navigated = true;
+                    }
                     s.scripts.push(expression.into());
                 });
                 return Ok(self.read(|s| json!({"written": true, "callback": s.callback})));
             }
             if expression.starts_with("/*recaptcha:clear*/") {
-                return Ok(json!(true));
+                if self.read(|s| s.transient_navigation_errors > 0) {
+                    self.edit(|s| s.transient_navigation_errors -= 1);
+                    return Err(PageError::Browser("execution context changed".into()));
+                }
+                let ready = self.read(|s| s.loading_polls == 0);
+                self.edit(|s| s.loading_polls = s.loading_polls.saturating_sub(1));
+                return Ok(json!(ready));
             }
+            self.edit(|s| {
+                if s.applied && s.navigate_during_verification {
+                    s.navigated = true;
+                }
+            });
             Ok(self.read(|s| {
                 json!({"response": s.response, "present": !(s.applied && s.transition),
-                "visible": !(s.applied && s.transition), "frameReady": true})
+                "visible": !(s.applied && (s.transition || s.dim_after_apply)),
+                "hidden": s.applied && s.transition, "frameReady": true})
             }))
         }
         async fn eval_in_frame(&self, f: &FrameRef, expression: &str) -> Result<Value, PageError> {
@@ -1263,6 +1295,64 @@ mod tests {
             );
             assert!(result.message.contains("form"));
         }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_token_navigation_can_finish_loading_before_acceptance() {
+        for (during_verification, errors) in [(false, 0), (true, 0), (false, 1)] {
+            let page = FakePage::new(true);
+            page.edit(|s| {
+                s.layout = "rc-imageselect-table-42".into();
+                s.navigation_after_apply = !during_verification;
+                s.navigate_during_verification = during_verification;
+                s.loading_polls = 2;
+                s.transient_navigation_errors = errors;
+            });
+            let result = attempt(
+                &page,
+                &FakeBackend::new(vec![SolveAnswer::Token("test-token".into())]),
+            )
+            .await;
+            assert_eq!(
+                (result.status, result.reason),
+                (SolveStatus::Solved, SolveReason::TokenAccepted)
+            );
+        }
+    }
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_token_navigation_without_acceptance_times_out_unconfirmed() {
+        let page = FakePage::new(true);
+        page.edit(|s| {
+            s.layout = "rc-imageselect-table-42".into();
+            s.navigation_after_apply = true;
+            s.loading_polls = 100;
+        });
+        let result = attempt(
+            &page,
+            &FakeBackend::new(vec![SolveAnswer::Token("test-token".into())]),
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+    }
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_dimming_or_scrolling_the_widget_does_not_prove_acceptance() {
+        let page = FakePage::new(true);
+        page.edit(|s| {
+            s.layout = "rc-imageselect-table-42".into();
+            s.transition = false;
+            s.dim_after_apply = true;
+        });
+        let result = attempt(
+            &page,
+            &FakeBackend::new(vec![SolveAnswer::Token("test-token".into())]),
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_provider_failures_do_not_click_tiles() {
