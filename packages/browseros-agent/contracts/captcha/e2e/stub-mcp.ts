@@ -4,20 +4,49 @@ import { probes } from './probes'
 import { stubSolveResult } from './solve-result'
 
 type Scenario = 'contract' | 'no-tool' | 'false-positive'
+type StubPage = { entry: CaptchaPage; solved: boolean; submitted: boolean }
+
+function evaluateProbe(
+  state: StubPage,
+  scenario: Scenario,
+  code: string,
+): unknown {
+  const accepted =
+    state.solved &&
+    scenario !== 'false-positive' &&
+    ['solved', 'already_clear'].includes(state.entry.expect[0] ?? '')
+  if (code.startsWith(probes.ready)) return state.entry.ready !== 'false'
+  if (code.startsWith(probes.observation))
+    return {
+      tokenLength: accepted && state.entry.family !== 'none' ? 123 : 0,
+      callbackFired:
+        state.entry.kind === 'fixture'
+          ? accepted && state.entry.family !== 'none'
+          : null,
+    }
+  if (code.startsWith(probes.submit)) {
+    state.submitted = true
+    return true
+  }
+  if (code.startsWith(probes.body)) {
+    if (!state.submitted) return ''
+    return accepted
+      ? 'ACCEPTED\nVerification Success\n{"success":true}\nreCAPTCHA passed successfully!'
+      : 'REJECTED: invalid-token\n{"success":false}\nreCAPTCHA verification error'
+  }
+  return undefined
+}
 export async function startStubMcp(options: {
   scenario: Scenario
   pages?: readonly CaptchaPage[]
 }) {
-  const pages =
+  const pages: readonly CaptchaPage[] =
     options.pages ??
     (await import('../fixtures/catalog').then((c) => [
       ...c.FIXTURE_PAGES,
       ...c.DEMO_PAGES,
     ]))
-  const sessions = new Map<
-    string,
-    Map<number, { entry: CaptchaPage; solved: boolean; submitted: boolean }>
-  >()
+  const sessions = new Map<string, Map<number, StubPage>>()
   let nextPage = 0
   const calls: Array<{ name: string; args: Record<string, unknown> }> = []
   const server = Bun.serve({
@@ -107,25 +136,8 @@ export async function startStubMcp(options: {
         )
       }
       if (name !== 'evaluate') return failure(-32601)
-      const code = String(args.code)
-      const accepted =
-        state.solved &&
-        options.scenario !== 'false-positive' &&
-        ['solved', 'already_clear'].includes(state.entry.expect[0] ?? '')
-      let value: unknown
-      if (code.startsWith(probes.ready)) value = state.entry.ready !== 'false'
-      else if (code.startsWith(probes.observation))
-        value = { tokenLength: accepted ? 123 : 0, callbackFired: accepted }
-      else if (code.startsWith(probes.submit)) {
-        state.submitted = true
-        value = true
-      } else if (code.startsWith(probes.body))
-        value = state.submitted
-          ? accepted
-            ? 'ACCEPTED'
-            : 'REJECTED: invalid-token'
-          : ''
-      else return failure(-32602)
+      const value = evaluateProbe(state, options.scenario, String(args.code))
+      if (value === undefined) return failure(-32602)
       return response({
         content: [
           {

@@ -99,6 +99,29 @@ test('tests that contract results all pass with independent acceptance and exit 
   expect(records.every((r) => r.latencyMs >= 0)).toBe(true)
 })
 
+test('tests that contract verdicts cover demo success messages and JSON success responses', async () => {
+  const demos = [
+    'Verification Success',
+    '"success"\\s*:\\s*true',
+    'reCAPTCHA passed successfully!',
+  ].map(
+    (acceptedPattern, index): CaptchaPage => ({
+      ...(pages[0] as CaptchaPage),
+      id: `demo-${index}`,
+      kind: 'demo',
+      path: undefined,
+      url: `https://demo.invalid/${index}`,
+      verdict: { ...verdict, acceptedPattern },
+    }),
+  )
+  const records = await run('contract', { pages: demos }, demos)
+  expect(records.map((r) => r.verdict)).toEqual([
+    'accepted',
+    'accepted',
+    'accepted',
+  ])
+})
+
 test('tests that a missing tool fails unless explicitly expected', async () => {
   const records = await run('no-tool')
   expect(
