@@ -8,8 +8,6 @@ import { Check, Lock } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { usePrefersReducedMotion } from '../use-chat-reveal'
-import { ClaudeMark } from './ClaudeMark'
-import { CLAUDE_LIGHT } from './claude-light'
 import { NeoMark } from './NeoMark'
 
 /** Same rows and prices as the cockpit demo: one chore, told twice. */
@@ -98,7 +96,7 @@ export function FlightScene({ live }: FlightSceneProps) {
   return (
     <div
       role="img"
-      aria-label="In the Claude app, someone asks for the cheapest flight to New York next Friday; neo checks five results and tags $142, and Claude answers."
+      aria-label="Claude Code asks neo to find the cheapest flight to New York; neo checks five results and tags $142."
       className="relative h-[306px] w-[544px] max-w-full overflow-hidden rounded-[18px] border border-accent-tint-2 bg-secondary"
     >
       <div className="absolute top-[18px] left-[182px] flex h-[270px] w-[344px] flex-col overflow-hidden rounded-[10px] border border-border-strong bg-card shadow-[0_22px_44px_-24px_rgb(1_18_63/0.35)]">
@@ -186,31 +184,23 @@ export function FlightScene({ live }: FlightSceneProps) {
         </div>
       </div>
 
-      {/* The Claude app the person types into, in Claude's own light colors:
-          a simplified window in the cockpit demo's language (DemoClaudeWindow),
-          without its sidebar or composer, so the card reads as "my AI app
-          asks, neo does it". */}
-      <div
-        style={CLAUDE_LIGHT}
-        className="absolute top-[84px] left-[18px] flex w-[204px] flex-col overflow-hidden rounded-[10px] border border-(--claude-border) bg-(--claude-main) shadow-[0_26px_50px_-24px_rgb(20_20_19/0.4),0_6px_16px_-10px_rgb(20_20_19/0.16)]"
-      >
-        <div className="flex h-[30px] shrink-0 items-center justify-between border-(--claude-border) border-b bg-(--claude-sidebar) px-2.5">
+      {/* Claude Code in a terminal asks; neo does it (owner, round 9: the
+          terminal reads better here than a drawing of the Claude app). */}
+      <div className="absolute top-[60px] left-[18px] flex h-[200px] w-[200px] flex-col overflow-hidden rounded-[10px] bg-ink-deep shadow-[0_26px_50px_-24px_rgb(1_18_63/0.6)]">
+        <div className="relative flex h-[26px] shrink-0 items-center border-white/10 border-b px-2.5">
           <span className="flex gap-[5px]">
-            <i className="size-2 rounded-full bg-[#FF5F57]" />
-            <i className="size-2 rounded-full bg-[#FEBC2E]" />
-            <i className="size-2 rounded-full bg-[#28C840]" />
+            <i className="size-2 rounded-full bg-white/20" />
+            <i className="size-2 rounded-full bg-white/20" />
+            <i className="size-2 rounded-full bg-white/20" />
           </span>
-          <span className="grid grid-cols-2 gap-px rounded-md bg-(--claude-toggle) p-0.5 font-medium text-[11px] leading-4">
-            <span className="rounded px-2 text-(--claude-muted)">Chat</span>
-            <span className="rounded bg-white px-2 text-(--claude-ink) shadow-[0_1px_2px_rgb(0_0_0/0.12)]">
-              Code
-            </span>
+          <span className="absolute inset-x-0 top-[7px] text-center font-mono text-[11px] text-ink-4 leading-3 tracking-[0.02em]">
+            Claude Code
           </span>
         </div>
-        <div className="flex min-h-[118px] flex-col gap-3 p-3">
+        <div className="flex flex-col gap-3 p-3">
           <div
             className={cn(
-              'ml-5 self-end rounded-[10px_10px_3px_10px] bg-(--claude-bubble) px-2.5 py-2 text-(--claude-ink) text-[12px] leading-4 transition-[opacity,transform] duration-500 ease-out',
+              'ml-3.5 rounded-[10px_10px_3px_10px] bg-white/10 px-2.5 py-2 font-medium text-[12px] text-white leading-4 transition-[opacity,transform] duration-500 ease-out',
               frame.asked ? 'opacity-100' : 'translate-y-1.5 opacity-0',
             )}
           >
@@ -219,25 +209,26 @@ export function FlightScene({ live }: FlightSceneProps) {
           <div className="grid">
             <div
               className={cn(
-                'col-start-1 row-start-1 flex items-center gap-1.5 self-start text-(--claude-muted) text-[11px] leading-4',
+                'col-start-1 row-start-1 flex items-center gap-1.5 self-start font-mono text-[11px] text-ink-4 leading-4',
                 fade,
                 frame.status === 'working' ? 'opacity-100' : 'opacity-0',
               )}
             >
-              <ClaudeMark className="size-3 shrink-0" />
-              Working in neo · {frame.seconds}s
               <i className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-amber" />
+              Working in neo · {frame.seconds}s
             </div>
             <div
               className={cn(
-                'col-start-1 row-start-1 flex items-start gap-1.5 self-start font-medium text-(--claude-ink) text-[12px] leading-4',
+                'col-start-1 row-start-1 flex items-start gap-1.5 self-start font-semibold text-[12.5px] text-white leading-[17px]',
                 fade,
                 frame.status === 'done' ? 'opacity-100' : 'opacity-0',
               )}
             >
-              <span className="mt-px grid size-3.5 shrink-0 place-items-center rounded-full bg-(--claude-ink) text-white">
-                <Check aria-hidden className="size-2.5" strokeWidth={3} />
-              </span>
+              <Check
+                aria-hidden
+                className="mt-[3px] size-[11px] shrink-0 text-accent-tint-2"
+                strokeWidth={3}
+              />
               Cheapest is $142, nonstop, Fri 7:05 am.
             </div>
           </div>
