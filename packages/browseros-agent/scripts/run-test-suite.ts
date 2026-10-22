@@ -42,6 +42,10 @@ const testSuites = {
       ],
     },
     {
+      label: 'captcha test bed unit tests',
+      argv: [bun, 'test', 'contracts/captcha'],
+    },
+    {
       // Skips cleanly (exit 0) unless BROWSEROS_BINARY is set, so it keeps
       // the real-browser suite from bit-rotting without gating the tree.
       label: 'claw MCP contract smoke (gated on BROWSEROS_BINARY)',
