@@ -8,6 +8,7 @@ import { Check, Lock } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { usePrefersReducedMotion } from '../use-chat-reveal'
+import { ClaudeMark } from './ClaudeMark'
 import { NeoMark } from './NeoMark'
 
 /** Same rows and prices as the cockpit demo: one chore, told twice. */
@@ -96,7 +97,7 @@ export function FlightScene({ live }: FlightSceneProps) {
   return (
     <div
       role="img"
-      aria-label="Claude Code asks neo to find the cheapest flight to New York; neo checks five results and tags $142."
+      aria-label="In the Claude app, someone asks for the cheapest flight to New York next Friday; neo checks five results and tags $142, and Claude answers."
       className="relative h-[306px] w-[544px] max-w-full overflow-hidden rounded-[18px] border border-accent-tint-2 bg-secondary"
     >
       <div className="absolute top-[18px] left-[182px] flex h-[270px] w-[344px] flex-col overflow-hidden rounded-[10px] border border-border-strong bg-card shadow-[0_22px_44px_-24px_rgb(1_18_63/0.35)]">
@@ -104,7 +105,7 @@ export function FlightScene({ live }: FlightSceneProps) {
           <div className="flex h-6 w-[190px] items-center gap-1.5 rounded-t-md border border-border-2 border-b-0 bg-card pr-1.5 pl-2 font-medium text-[11px] text-ink-deep">
             <i className="size-3 shrink-0 rounded-[3px] bg-ink-deep" />
             <span className="flex-1">Flights</span>
-            <span className="flex h-4 items-center gap-1 rounded-lg bg-secondary px-1.5 font-mono text-[9.5px] text-primary">
+            <span className="flex h-[18px] items-center gap-1 rounded-[9px] bg-secondary px-1.5 font-mono text-[11px] text-primary">
               <i
                 className={cn(
                   'size-[5px] rounded-full transition-colors duration-400',
@@ -116,7 +117,7 @@ export function FlightScene({ live }: FlightSceneProps) {
           </div>
         </div>
         <div className="flex h-8 shrink-0 items-center gap-2 border-border-2 border-b pr-2.5 pl-[46px]">
-          <div className="flex h-[22px] flex-1 items-center gap-1.5 rounded-md bg-card-tint px-2 font-mono text-[10.5px] text-ink-deep">
+          <div className="flex h-[22px] flex-1 items-center gap-1.5 rounded-md bg-card-tint px-2 font-mono text-[11px] text-ink-deep">
             <Lock aria-hidden className="size-[9px] text-ink-3" />
             google.com/travel/flights
           </div>
@@ -133,7 +134,7 @@ export function FlightScene({ live }: FlightSceneProps) {
             <b className="font-bold text-[13px] text-ink-deep">
               To New York · Fri
             </b>
-            <span className="flex h-5 items-center gap-1 rounded-[10px] bg-secondary px-2 font-mono text-[10px] text-primary">
+            <span className="flex h-5 items-center gap-1 rounded-[10px] bg-secondary px-2 font-mono text-[11px] text-primary">
               Checked <b>{frame.checked}/5</b>
             </span>
           </div>
@@ -147,18 +148,18 @@ export function FlightScene({ live }: FlightSceneProps) {
                   frame.rows ? 'opacity-100' : 'opacity-0',
                 )}
               >
-                <span className="w-[50px] shrink-0 font-semibold text-[11.5px]">
+                <span className="w-[50px] shrink-0 font-semibold text-[12px]">
                   {time}
                 </span>
                 <span className="w-12 shrink-0 text-[11px] text-ink-3">
                   {stops}
                 </span>
                 <i className="h-1.5 flex-1 rounded-[3px] bg-bg-sunken" />
-                <span className="flex w-[58px] shrink-0 justify-end">
+                <span className="flex w-[70px] shrink-0 justify-end">
                   {index === CHEAPEST_ROW && (
                     <span
                       className={cn(
-                        'flex h-[18px] items-center rounded-[9px] bg-primary px-[7px] font-mono font-semibold text-[9px] text-primary-foreground',
+                        'flex h-[18px] items-center rounded-[9px] bg-primary px-1.5 font-mono font-semibold text-[11px] text-primary-foreground',
                         fade,
                         frame.tagged ? 'opacity-100' : 'opacity-0',
                       )}
@@ -184,21 +185,27 @@ export function FlightScene({ live }: FlightSceneProps) {
         </div>
       </div>
 
-      <div className="absolute top-[60px] left-[18px] flex h-[200px] w-[200px] flex-col overflow-hidden rounded-[10px] bg-ink-deep shadow-[0_26px_50px_-24px_rgb(1_18_63/0.6)]">
-        <div className="relative flex h-[26px] shrink-0 items-center border-white/10 border-b px-2.5">
+      {/* The Claude app the person types into: a light, simplified window in
+          the cockpit demo's language (DemoClaudeWindow), without its sidebar
+          or composer, so the card reads as "my AI app asks, neo does it". */}
+      <div className="absolute top-[84px] left-[18px] flex w-[204px] flex-col overflow-hidden rounded-[10px] border border-border-strong bg-card shadow-[0_26px_50px_-24px_rgb(1_18_63/0.45),0_6px_16px_-10px_rgb(1_18_63/0.18)]">
+        <div className="flex h-[30px] shrink-0 items-center justify-between border-border-2 border-b bg-card-tint px-2.5">
           <span className="flex gap-[5px]">
-            <i className="size-2 rounded-full bg-white/20" />
-            <i className="size-2 rounded-full bg-white/20" />
-            <i className="size-2 rounded-full bg-white/20" />
+            <i className="size-2 rounded-full bg-[#FF5F57]" />
+            <i className="size-2 rounded-full bg-[#FEBC2E]" />
+            <i className="size-2 rounded-full bg-[#28C840]" />
           </span>
-          <span className="absolute inset-x-0 top-2 text-center font-mono text-[9.5px] text-ink-4 leading-[10px] tracking-[0.04em]">
-            Claude Code
+          <span className="grid grid-cols-2 gap-px rounded-md bg-accent-tint p-0.5 font-medium text-[11px] leading-4">
+            <span className="rounded px-2 text-ink-3">Chat</span>
+            <span className="rounded bg-card px-2 text-ink-deep shadow-[0_1px_2px_rgb(1_18_63/0.14)]">
+              Code
+            </span>
           </span>
         </div>
-        <div className="flex flex-col gap-3 p-3">
+        <div className="flex min-h-[118px] flex-col gap-3 p-3">
           <div
             className={cn(
-              'ml-3.5 rounded-[10px_10px_3px_10px] bg-white/10 px-2.5 py-2 font-medium text-[12px] text-white leading-4 transition-[opacity,transform] duration-500 ease-out',
+              'ml-5 self-end rounded-[10px_10px_3px_10px] bg-muted px-2.5 py-2 text-[12px] text-ink-deep leading-4 transition-[opacity,transform] duration-500 ease-out',
               frame.asked ? 'opacity-100' : 'translate-y-1.5 opacity-0',
             )}
           >
@@ -207,26 +214,25 @@ export function FlightScene({ live }: FlightSceneProps) {
           <div className="grid">
             <div
               className={cn(
-                'col-start-1 row-start-1 flex items-center gap-1.5 self-start font-mono text-[10px] text-ink-4 leading-4',
+                'col-start-1 row-start-1 flex items-center gap-1.5 self-start text-[11px] text-ink-3 leading-4',
                 fade,
                 frame.status === 'working' ? 'opacity-100' : 'opacity-0',
               )}
             >
-              <i className="size-1.5 shrink-0 rounded-full bg-amber" />
+              <ClaudeMark className="size-3 shrink-0" />
               Working in neo · {frame.seconds}s
+              <i className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-amber" />
             </div>
             <div
               className={cn(
-                'col-start-1 row-start-1 flex items-start gap-1.5 self-start font-semibold text-[12.5px] text-white leading-[17px]',
+                'col-start-1 row-start-1 flex items-start gap-1.5 self-start font-medium text-[12px] text-ink-deep leading-4',
                 fade,
                 frame.status === 'done' ? 'opacity-100' : 'opacity-0',
               )}
             >
-              <Check
-                aria-hidden
-                className="mt-[3px] size-[11px] shrink-0 text-accent-tint-2"
-                strokeWidth={3}
-              />
+              <span className="mt-px grid size-3.5 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground">
+                <Check aria-hidden className="size-2.5" strokeWidth={3} />
+              </span>
               Cheapest is $142, nonstop, Fri 7:05 am.
             </div>
           </div>

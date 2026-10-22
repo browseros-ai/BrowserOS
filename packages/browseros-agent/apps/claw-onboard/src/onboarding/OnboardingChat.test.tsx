@@ -80,6 +80,10 @@ describe('ChatThread', () => {
     expect(html).toContain('>neo</em>')
     expect(html).toContain('I’m the browser your AI uses.')
     expect(html).toContain('google.com/travel/flights')
+    // The card shows the Claude app (Code mode), not a terminal.
+    expect(html).toContain('>Code</span>')
+    expect(html).toContain('Find the cheapest flight to New York next Friday.')
+    expect(html).not.toContain('Claude Code</span>')
   })
 
   it('renders the chips as toggle buttons from the source', () => {
