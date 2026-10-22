@@ -21,17 +21,33 @@ impl fmt::Debug for ApiKey {
     }
 }
 
+impl fmt::Display for ApiKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("<redacted>")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
     pub key: ApiKey,
     pub base_url: url::Url,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CaptchaConfig {
     pub capsolver: Option<ProviderConfig>,
     pub capmonster: Option<ProviderConfig>,
     pub paid_task_limit: u32,
+}
+
+impl Default for CaptchaConfig {
+    fn default() -> Self {
+        Self {
+            capsolver: None,
+            capmonster: None,
+            paid_task_limit: 100,
+        }
+    }
 }
 
 impl CaptchaConfig {
@@ -50,7 +66,7 @@ impl CaptchaConfig {
                 "https://api.capmonster.cloud",
             ),
             paid_task_limit: lookup(PAID_TASK_LIMIT_ENV)
-                .and_then(|value| value.parse().ok())
+                .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(100),
         }
     }
@@ -71,6 +87,10 @@ fn provider(
     default_url: &str,
 ) -> Option<ProviderConfig> {
     let path = lookup(key_env)?;
+    let path = path.trim();
+    if path.is_empty() {
+        return None;
+    }
     let contents = match std::fs::read_to_string(path) {
         Ok(contents) => contents,
         Err(_) => {
@@ -84,8 +104,21 @@ fn provider(
         return None;
     }
     let configured_url = lookup(url_env);
-    let base_url = match url::Url::parse(configured_url.as_deref().unwrap_or(default_url)) {
-        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host_str().is_some() => url,
+    let configured_url = configured_url
+        .as_deref()
+        .map(str::trim)
+        .filter(|url| !url.is_empty());
+    let base_url = match url::Url::parse(configured_url.unwrap_or(default_url)) {
+        Ok(url)
+            if matches!(url.scheme(), "http" | "https")
+                && url.host_str().is_some()
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.query().is_none()
+                && url.fragment().is_none() =>
+        {
+            url
+        }
         _ => {
             tracing::warn!(target: "captcha", variable = url_env, "CAPTCHA provider URL is invalid; provider disabled");
             return None;
@@ -142,6 +175,7 @@ mod tests {
         assert_eq!(capsolver.key.expose(), "unique-test-key");
         assert_eq!(capmonster.key.expose(), "unique-test-key");
         assert_eq!(format!("{:?}", capsolver.key), "ApiKey(<redacted>)");
+        assert_eq!(format!("{}", capsolver.key), "<redacted>");
         assert!(!format!("{config:?}").contains("unique-test-key"));
         assert_eq!(capsolver.base_url.as_str(), "https://api.capsolver.com/");
         assert_eq!(
@@ -219,6 +253,29 @@ mod tests {
             (CAPSOLVER_URL_ENV, "not a url".into()),
         ]);
         assert!(!config.has_provider());
+        Ok(())
+    }
+
+    #[test]
+    fn tests_that_blank_settings_are_unset_and_numbers_are_trimmed() -> anyhow::Result<()> {
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(file.path(), "test-key")?;
+        let config = from_vars(&[
+            (
+                CAPSOLVER_KEY_FILE_ENV,
+                format!(" {} \n", file.path().display()),
+            ),
+            (CAPSOLVER_URL_ENV, " \n".into()),
+            (CAPMONSTER_KEY_FILE_ENV, " \n".into()),
+            (PAID_TASK_LIMIT_ENV, " 7 \n".into()),
+        ]);
+        assert_eq!(config.paid_task_limit, 7);
+        assert_eq!(
+            config.capsolver.map(|p| p.base_url.to_string()),
+            Some("https://api.capsolver.com/".into())
+        );
+        assert!(config.capmonster.is_none());
+        assert_eq!(CaptchaConfig::default().paid_task_limit, 100);
         Ok(())
     }
 }

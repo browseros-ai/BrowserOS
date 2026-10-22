@@ -126,12 +126,26 @@ impl TileGrid {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct TilePuzzle {
     pub image_base64: String,
     pub question_id: Option<String>,
     pub question_text: String,
     pub grid: TileGrid,
+}
+
+impl std::fmt::Debug for TilePuzzle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TilePuzzle")
+            .field(
+                "image_base64",
+                &format_args!("<{} base64 chars>", self.image_base64.len()),
+            )
+            .field("question_id", &self.question_id)
+            .field("question_text", &self.question_text)
+            .field("grid", &self.grid)
+            .finish()
+    }
 }
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecaptchaParams {
