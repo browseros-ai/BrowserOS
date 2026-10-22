@@ -31,7 +31,7 @@ pub struct Session {
     pub ended_at: Option<i64>,
     #[serde(rename = "toolCallCount")]
     pub tool_call_count: i64,
-    /// True once nothing more will be written for this session: it has ended, its screenshots are saved, and its recording has had time to finish uploading.
+    /// True once the session has ended, its screenshots are saved, and its recording has had 10 seconds to finish uploading, so a re-read returns the same tool calls. The browser retries a failed recording upload until it succeeds, so after repeated upload failures recording events can still arrive later.
     #[serde(rename = "complete")]
     pub complete: bool,
     /// Every tool call ordered by `startedAt`, including steps inside `run` scripts, which follow the script call they ran in.

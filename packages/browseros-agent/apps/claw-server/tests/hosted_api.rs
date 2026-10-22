@@ -293,11 +293,6 @@ async fn list_filters_narrow_the_results() -> anyhow::Result<()> {
         .set_task_summary("acme-late", "Search Google News for US politics")
         .await?;
 
-    let (_, body) = get(&app.router, "/v1/sessions?client=acme-assistant").await?;
-    assert_eq!(ids(&body), ["acme-late", "acme-early"]);
-    let (_, body) = get(&app.router, "/v1/sessions?client=Other%20Bot").await?;
-    assert_eq!(ids(&body), ["other"]);
-
     let since = start + 5_000;
     let (_, body) = get(&app.router, &format!("/v1/sessions?since={since}")).await?;
     assert_eq!(ids(&body), ["other", "acme-late"]);
@@ -623,7 +618,7 @@ async fn recording_groups_rrweb_events_per_page() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn start(app: &TestApp, session_id: &str, client_name: &str) -> anyhow::Result<()> {
+async fn record_start(app: &TestApp, session_id: &str, client_name: &str) -> anyhow::Result<()> {
     let slug = claw_server::identity::slugify_client_name(client_name)
         .unwrap_or_else(|| "agent".to_string());
     app.state
@@ -644,7 +639,7 @@ async fn start(app: &TestApp, session_id: &str, client_name: &str) -> anyhow::Re
 async fn a_session_still_tearing_down_is_not_complete() -> anyhow::Result<()> {
     let app = hosted().await?;
     // Out of the live map but without an end event: teardown is still draining calls.
-    start(&app, "closing", "Acme Assistant").await?;
+    record_start(&app, "closing", "Acme Assistant").await?;
     seed(&app, Call::new("closing", now_ms() - 60_000)).await?;
     let (_, body) = get(&app.router, "/v1/sessions/closing").await?;
     assert_eq!(body["complete"], false);
@@ -654,7 +649,7 @@ async fn a_session_still_tearing_down_is_not_complete() -> anyhow::Result<()> {
         .audit_log
         .record_session_end("closing", "closed", None)
         .await?;
-    start(&app, "closing", "Acme Assistant").await?;
+    record_start(&app, "closing", "Acme Assistant").await?;
     let (_, body) = get(&app.router, "/v1/sessions/closing").await?;
     assert_eq!(body["complete"], false);
     Ok(())
@@ -668,7 +663,7 @@ async fn name_and_client_do_not_change_when_a_session_ends() -> anyhow::Result<(
     session.rename("invoice-processing".to_string()).await;
     // The client sent clientInfo { name: "acme-wire", title: "Acme Assistant" }: rows carry
     // the name's slug for ownership and the title as their display label.
-    start(&app, "named", "acme-wire").await?;
+    record_start(&app, "named", "acme-wire").await?;
     app.state
         .audit_log
         .record_tool_dispatch(RecordToolDispatchInput {
@@ -753,5 +748,49 @@ async fn concurrent_run_steps_are_ordered_by_start() -> anyhow::Result<()> {
             (json!("click"), json!(start_at + 260)),
         ]
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn client_filter_and_search_use_the_reported_client_name() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    // clientInfo { name: "acme-wire", title: "Acme Assistant" } with `agentName: finance`:
+    // ownership (the slug) follows the declared agent, the label the title, and the start
+    // event records the reported name.
+    record_start(&app, "declared", "acme-wire").await?;
+    app.state
+        .audit_log
+        .record_tool_dispatch(RecordToolDispatchInput {
+            slug: "finance".to_string(),
+            ..Call {
+                client: "Acme Assistant",
+                ..Call::new("declared", now_ms())
+            }
+            .into_input()
+        })
+        .await?;
+
+    record_start(&app, "other", "Other Bot").await?;
+    seed(
+        &app,
+        Call {
+            client: "Other Bot",
+            ..Call::new("other", now_ms())
+        },
+    )
+    .await?;
+
+    let (_, body) = get(&app.router, "/v1/sessions?client=acme-wire").await?;
+    assert_eq!(ids(&body), ["declared"]);
+    assert_eq!(body["items"][0]["client"], "acme-wire");
+    let (_, body) = get(&app.router, "/v1/sessions?client=Other%20Bot").await?;
+    assert_eq!(ids(&body), ["other"]);
+    // `client` is the exact value a session reports, not a fuzzy match.
+    for near_miss in ["finance", "Acme%20Assistant", "other-bot"] {
+        let (_, body) = get(&app.router, &format!("/v1/sessions?client={near_miss}")).await?;
+        assert_eq!(ids(&body), Vec::<String>::new(), "{near_miss}");
+    }
+    let (_, body) = get(&app.router, "/v1/sessions?q=acme-wire").await?;
+    assert_eq!(ids(&body), ["declared"]);
     Ok(())
 }

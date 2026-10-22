@@ -26,8 +26,8 @@ paths:
         - name: client
           in: query
           description: >-
-            Only sessions from this MCP client, matched on the client name's slug (lowercase,
-            runs of other characters folded to `-`), so `Acme Assistant` matches `acme-assistant`.
+            Only sessions whose `client` is exactly this value: the `clientInfo.name` the MCP
+            client sent in `initialize`.
           schema:
             type: string
         - name: since
@@ -245,8 +245,10 @@ components:
         complete:
           type: boolean
           description: >-
-            True once nothing more will be written for this session: it has ended, its
-            screenshots are saved, and its recording has had time to finish uploading.
+            True once the session has ended, its screenshots are saved, and its recording has
+            had 10 seconds to finish uploading, so a re-read returns the same tool calls. The
+            browser retries a failed recording upload until it succeeds, so after repeated
+            upload failures recording events can still arrive later.
         toolCalls:
           type: array
           description: >-

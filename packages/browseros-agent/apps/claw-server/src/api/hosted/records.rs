@@ -23,7 +23,6 @@ use crate::{
         },
     },
     error::{AppError, AppResult},
-    identity::slugify_client_name,
     ids::SessionId,
     services::{
         audit::AuditWorker,
@@ -45,7 +44,9 @@ use std::{
 /// uploads buffered rrweb events every 2.5 s and retries a failed upload after 5 s
 /// (`apps/claw-app/modules/recorder`), and the server gets no signal that the last batch is
 /// in, so 10 s covers one retry. Lowering it below the recorder's cadence would let
-/// `complete` report a recording that is still missing its tail.
+/// `complete` report a recording that is still missing its tail. The recorder retries without
+/// a limit, so a batch that keeps failing can land later still; the spec says so. Closing that
+/// gap needs the recorder to report what it has delivered, not a longer wait.
 const RECORDING_SETTLE_MS: i64 = 10_000;
 
 /// How often `wait` re-reads a session that is not complete yet.
@@ -100,11 +101,7 @@ impl SessionRecords {
         let page = self
             .audit_log
             .list_tasks(ListTasksQuery {
-                // Rows store the client's slug, so a filter matches however the client
-                // spelled its name; an unsluggable name falls back the way identity does.
-                slug: query
-                    .client
-                    .map(|client| slugify_client_name(&client).unwrap_or_else(|| "agent".into())),
+                client_name: query.client,
                 since: query.since,
                 until: query.until,
                 search: query.search,
