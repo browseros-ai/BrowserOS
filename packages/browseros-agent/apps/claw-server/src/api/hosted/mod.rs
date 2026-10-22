@@ -1,5 +1,5 @@
 //! The hosted API: `/v1`, a read-only record of agent sessions for the backend that runs a
-//! hosted BrowserOS neo (`BROWSERCLAW_MODE=hosted`, the Docker image).
+//! hosted BrowserOS neo (`BROWSERCLAW_HOSTED_MODE=1`, the Docker image).
 //!
 //! `contracts/hosted-api/openapi.yaml` is the published contract, and every response body is
 //! a `hosted_api` model generated from it, so the served JSON cannot drift from the spec.

@@ -96,7 +96,7 @@ package settings first.
 - **The sandbox is off by default** (`NEO_SANDBOX=false`): Docker's default seccomp
   profile blocks the user namespaces it needs. With the sandbox off, a managed policy
   hides Chromium's `--no-sandbox` warning bar.
-- **claw-server runs in hosted mode** (`BROWSERCLAW_MODE=hosted`): agents get the browser
+- **claw-server runs in hosted mode** (`BROWSERCLAW_HOSTED_MODE=1`): agents get the browser
   tools without skills, human help or `name_session`, and name tasks with a `taskName`
   argument. The entrypoint also turns human help off through `/api/v1/settings/agent` on
   every start, before the container reports healthy, for claw-servers that predate the mode.

@@ -20,8 +20,8 @@ const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 /// Developer assertion of the native BrowserOS version for builds whose launch config does
 /// not carry a usable one (dev/dogfood sidecars, stale local stamps). Logged at startup.
 pub const NATIVE_VERSION_ENV: &str = "CLAW_NATIVE_BROWSEROS_VERSION";
-/// Selects the [`ServerMode`]. Unset or blank means desktop.
-pub const MODE_ENV: &str = "BROWSERCLAW_MODE";
+/// Selects the [`ServerMode`]: `1` enables hosted; `0`, unset or empty means desktop.
+pub const HOSTED_MODE_ENV: &str = "BROWSERCLAW_HOSTED_MODE";
 /// Runtime opt-in for Pro features. Read once at startup; unset or blank means disabled.
 pub const FEATURE_PRO_ENV: &str = "FEATURE_PRO";
 const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
@@ -76,11 +76,11 @@ pub struct Config {
     /// Native identity and Pro policy, read once per process. Discovery and execution use
     /// this one value, which `BrowserService` copies into each browser session.
     pub native: NativeIdentity,
-    /// Read once per process from [`MODE_ENV`]; the MCP surface follows it.
+    /// Read once per process from [`HOSTED_MODE_ENV`]; the MCP surface follows it.
     pub mode: ServerMode,
 }
 
-/// How this server is deployed, fixed for the process by [`MODE_ENV`].
+/// How this server is deployed, fixed for the process by [`HOSTED_MODE_ENV`].
 ///
 /// Desktop is the BrowserOS app on a person's own machine, with their agent harnesses
 /// installed beside it. Hosted is BrowserOS neo run as infrastructure (the Docker image) and
@@ -321,16 +321,13 @@ fn resolve_pro_enabled(env: &ConfigEnv) -> anyhow::Result<bool> {
     }
 }
 
-/// Unlike a missing credential, an unrecognized mode fails startup: only an operator sets this
-/// variable, and quietly serving desktop tools to a hosted agent would hide their typo.
+/// Match Chromium's exact `1` opt-in. Invalid values fail startup so a typo cannot silently
+/// put the MCP surface and browser reporting into different deployment modes.
 fn resolve_mode(env: &ConfigEnv) -> anyhow::Result<ServerMode> {
-    let Some(raw) = env.get(MODE_ENV).and_then(clean_string) else {
-        return Ok(ServerMode::Desktop);
-    };
-    match raw.to_ascii_lowercase().as_str() {
-        "desktop" => Ok(ServerMode::Desktop),
-        "hosted" => Ok(ServerMode::Hosted),
-        _ => anyhow::bail!("{MODE_ENV} must be \"desktop\" or \"hosted\", got {raw:?}"),
+    match env.get(HOSTED_MODE_ENV).unwrap_or_default() {
+        "" | "0" => Ok(ServerMode::Desktop),
+        "1" => Ok(ServerMode::Hosted),
+        raw => anyhow::bail!("{HOSTED_MODE_ENV} must be \"0\" or \"1\", got {raw:?}"),
     }
 }
 
@@ -395,7 +392,9 @@ mod tests {
         assert!(!super::PursueOffering::Absent.is_offered());
     }
 
-    use super::{Cli, CliAction, Config, ConfigEnv, MODE_ENV, NATIVE_VERSION_ENV, ServerMode};
+    use super::{
+        Cli, CliAction, Config, ConfigEnv, HOSTED_MODE_ENV, NATIVE_VERSION_ENV, ServerMode,
+    };
     use browseros_core::{BrowserOsVersion, NativeFeature};
     use clap::{Parser, error::ErrorKind};
     use std::{collections::BTreeMap, fs, path::PathBuf, time::Duration};
@@ -778,32 +777,30 @@ mod tests {
     #[test]
     fn mode_defaults_to_desktop_and_reads_hosted_from_the_environment() -> anyhow::Result<()> {
         assert_eq!(load_native("{}", &[])?.mode, ServerMode::Desktop);
-        assert_eq!(
-            load_native("{}", &[(MODE_ENV, "  ")])?.mode,
-            ServerMode::Desktop
-        );
-        assert_eq!(
-            load_native("{}", &[(MODE_ENV, "desktop")])?.mode,
-            ServerMode::Desktop
-        );
-        for hosted in ["hosted", " Hosted ", "HOSTED"] {
+        for disabled in ["", "0"] {
             assert_eq!(
-                load_native("{}", &[(MODE_ENV, hosted)])?.mode,
-                ServerMode::Hosted,
-                "{hosted:?}"
+                load_native("{}", &[(HOSTED_MODE_ENV, disabled)])?.mode,
+                ServerMode::Desktop,
+                "{disabled:?}"
             );
         }
+        assert_eq!(
+            load_native("{}", &[(HOSTED_MODE_ENV, "1")])?.mode,
+            ServerMode::Hosted
+        );
         Ok(())
     }
 
     #[test]
     fn an_unrecognized_mode_fails_startup_and_names_the_variable() {
-        let error = load_native("{}", &[(MODE_ENV, "hostd")])
-            .err()
-            .map(|error| error.to_string())
-            .unwrap_or_default();
-        assert!(error.contains(MODE_ENV), "{error}");
-        assert!(error.contains("\"hostd\""), "{error}");
+        for invalid in ["hosted", "desktop", "true", "false", "2", " 1 ", "  "] {
+            let error = load_native("{}", &[(HOSTED_MODE_ENV, invalid)])
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default();
+            assert!(error.contains(HOSTED_MODE_ENV), "{invalid:?}: {error}");
+            assert!(error.contains(&format!("{invalid:?}")), "{error}");
+        }
     }
 }
 
