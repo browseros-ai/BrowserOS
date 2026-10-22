@@ -952,47 +952,74 @@ impl BrowserView {
             self.clone(),
             self.page(page.clone()).await?,
         ));
-        let mut session = access.session().await?.session;
-        let tree = session.send_value("Page.getFrameTree", json!({})).await?;
-        fn path(tree: &Value, id: &str) -> Option<Vec<crate::FrameId>> {
-            let current = crate::FrameId(tree["frame"]["id"].as_str()?.to_owned());
-            if current.as_str() == id {
-                return Some(vec![current]);
+        let root = access.session().await?.session;
+        let tree = root.send_value("Page.getFrameTree", json!({})).await?;
+        if tree["frameTree"]["frame"]["id"] == frame.as_str() {
+            return Ok(root);
+        }
+        fn children(node: &Value, frames: &mut Vec<crate::FrameId>) {
+            if let Some(id) = node["frameId"].as_str() {
+                frames.push(crate::FrameId(id.to_owned()));
             }
-            for child in tree["childFrames"].as_array().into_iter().flatten() {
-                if let Some(mut descendants) = path(child, id) {
-                    descendants.insert(0, current);
-                    return Some(descendants);
+            for key in ["children", "shadowRoots"] {
+                for child in node[key].as_array().into_iter().flatten() {
+                    children(child, frames);
                 }
             }
-            None
+            if let Some(document) = node.get("contentDocument") {
+                children(document, frames);
+            }
         }
-        let chain = path(&tree["frameTree"], frame.as_str())
-            .ok_or_else(|| TargetError::PageTargetChanged(page.clone()))?;
-        for child in chain.into_iter().skip(1) {
-            let owner = session
-                .send_value("DOM.getFrameOwner", json!({"frameId":child.as_str()}))
+        let mut pending = vec![root];
+        let mut visited = BTreeSet::new();
+        while let Some(parent) = pending.pop() {
+            if !visited.insert(parent.session_id().cloned()) {
+                continue;
+            }
+            // Page.getFrameTree omits remote children. Piercing DOM includes their owners,
+            // including those under closed shadow roots, without granting a foreign target.
+            let document = parent
+                .send_value("DOM.getDocument", json!({"depth":-1,"pierce":true}))
                 .await?;
-            let node = session
-                .send_value(
-                    "DOM.describeNode",
-                    json!({"backendNodeId":owner["backendNodeId"],"depth":1}),
-                )
-                .await?;
-            let target = self
-                .session
-                .frames()
-                .resolve_frame_target_with_epoch(
-                    page.clone(),
-                    Some(child.clone()),
-                    Some(&session),
-                    node["node"].get("contentDocument").is_none(),
-                    access.epoch_guard()?,
-                )
-                .await?;
-            session = access.frame_capability(target.session, child).await?;
+            let mut frames = Vec::new();
+            children(&document["root"], &mut frames);
+            for child in frames {
+                let owner = parent
+                    .send_value("DOM.getFrameOwner", json!({"frameId":child.as_str()}))
+                    .await?;
+                let backend = owner["backendNodeId"]
+                    .as_i64()
+                    .ok_or_else(|| CoreError::Message("Frame owner has no backend node".into()))?;
+                let described = parent
+                    .send_value(
+                        "DOM.describeNode",
+                        json!({"backendNodeId":backend,"depth":1}),
+                    )
+                    .await?;
+                let cross_process = described["node"].get("contentDocument").is_none();
+                let target = self
+                    .session
+                    .frames()
+                    .resolve_frame_target_with_epoch(
+                        page.clone(),
+                        Some(child.clone()),
+                        Some(&parent),
+                        cross_process,
+                        access.epoch_guard()?,
+                    )
+                    .await?;
+                let session = access
+                    .frame_capability(target.session, child.clone(), parent.clone(), backend)
+                    .await?;
+                if child == frame {
+                    return Ok(session);
+                }
+                if cross_process && !session.same_session(&parent) {
+                    pending.push(session);
+                }
+            }
         }
-        Ok(session)
+        Err(TargetError::PageTargetChanged(page).into())
     }
     pub async fn observe(&self, page: PageId) -> Result<Arc<Observer>, CoreError> {
         let access = self.page_access(page.clone()).await?;

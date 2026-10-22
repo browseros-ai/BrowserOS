@@ -88,18 +88,58 @@ impl PageAccess {
         self: &Arc<Self>,
         session: ProtocolSession,
         frame: FrameId,
+        parent: ProtocolSession,
+        backend: i64,
     ) -> Result<ProtocolSession, CoreError> {
-        let session = self.frame_session(session, Some(frame.clone())).await?;
         let endpoint = session
             .session_id()
             .cloned()
             .ok_or_else(|| cdp_policy::unsupported("frame_session"))?;
-        let root = self.session().await?;
-        Ok(session.with_admission(Arc::new(PageProtocol {
-            access: self.clone(),
-            root_session: root.session_id,
-            frame: Some((frame, endpoint)),
-        })))
+        Ok(session
+            .with_epoch_guard(self.epoch_guard()?)
+            .with_admission(Arc::new(FrameProtocol {
+                access: self.clone(),
+                parent,
+                frame,
+                endpoint,
+                backend,
+            })))
+    }
+}
+struct FrameProtocol {
+    access: Arc<PageAccess>,
+    parent: ProtocolSession,
+    frame: FrameId,
+    endpoint: SessionId,
+    backend: i64,
+}
+impl ProtocolAdmission for FrameProtocol {
+    fn check<'a>(
+        &'a self,
+        method: &'a str,
+        params: &'a Value,
+    ) -> BoxFuture<'a, Result<(), CoreError>> {
+        Box::pin(async move {
+            self.access.fresh().await?;
+            cdp_policy::page_method(method, params)?;
+            let owner = self
+                .parent
+                .send_value("DOM.getFrameOwner", json!({"frameId":self.frame.as_str()}))
+                .await?;
+            if owner["backendNodeId"].as_i64() != Some(self.backend)
+                || !self
+                    .access
+                    .view
+                    .session
+                    .frames()
+                    .frame_session_matches(&self.frame, &self.endpoint)
+                    .await
+            {
+                return Err(TargetError::PageTargetChanged(self.access.page.clone()).into());
+            }
+            self.access.fresh().await?;
+            Ok(())
+        })
     }
 }
 struct Admission<'a> {
@@ -188,6 +228,7 @@ mod frame_tests {
 
     struct Native {
         tree: Mutex<Value>,
+        split_tree: std::sync::atomic::AtomicBool,
         tab: Mutex<Value>,
         calls: Mutex<Vec<(String, Option<SessionId>)>>,
         epoch: AtomicU64,
@@ -200,6 +241,7 @@ mod frame_tests {
                 tree: Mutex::new(json!({"frame":{"id":"root"},"childFrames":[{
                     "frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]
                 }]})),
+                split_tree: std::sync::atomic::AtomicBool::new(false),
                 tab: Mutex::new(json!({"tabId":1,"targetId":"page","windowId":11,
                     "url":"https://local.test","title":"test","isActive":true,"isLoading":false,
                     "loadProgress":1.0,"isPinned":false,"isHidden":false,
@@ -244,9 +286,33 @@ mod frame_tests {
                     json!({"sessionId":format!("session-{}", params["targetId"].as_str().unwrap_or_default())})
                 }
                 "Page.getFrameTree" => {
-                    json!({"frameTree":self.tree.lock().map_err(|_| CdpError::SessionGone)?.clone()})
+                    if self.split_tree.load(Ordering::SeqCst) {
+                        if session.is_some_and(|id| id.as_str() == "session-cross") {
+                            json!({"frameTree":{"frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]}})
+                        } else {
+                            json!({"frameTree":{"frame":{"id":"root"}}})
+                        }
+                    } else {
+                        json!({"frameTree":self.tree.lock().map_err(|_| CdpError::SessionGone)?.clone()})
+                    }
+                }
+                "DOM.getDocument" => {
+                    if session.is_some_and(|id| id.as_str() == "session-cross") {
+                        json!({"root":{"nodeType":9,"children":[{"nodeName":"IFRAME","frameId":"same","backendNodeId":2,"contentDocument":{"nodeType":9}}]}})
+                    } else if self.tree.lock().map_err(|_| CdpError::SessionGone)?["childFrames"]
+                        .is_array()
+                    {
+                        json!({"root":{"nodeType":9,"children":[{"nodeName":"DIV","shadowRoots":[{"shadowRootType":"closed","children":[{"nodeName":"IFRAME","frameId":"cross","backendNodeId":1}]}]}]}})
+                    } else {
+                        json!({"root":{"nodeType":9}})
+                    }
                 }
                 "DOM.getFrameOwner" => {
+                    if !self.tree.lock().map_err(|_| CdpError::SessionGone)?["childFrames"]
+                        .is_array()
+                    {
+                        return Err(CdpError::SessionGone);
+                    }
                     json!({"backendNodeId":if params["frameId"] == "same" { 2 } else { 1 }})
                 }
                 "DOM.describeNode" if params["backendNodeId"] == 2 => {
@@ -352,7 +418,7 @@ mod frame_tests {
     }
 
     #[tokio::test]
-    async fn tests_that_unknown_frames_are_refused_before_attachment() -> TestResult {
+    async fn tests_that_unknown_frames_are_refused() -> TestResult {
         let (native, view, page) = fixture().await?;
         assert!(
             view.frame_session(page, FrameId("foreign".into()))
@@ -365,11 +431,23 @@ mod frame_tests {
                 .lock()
                 .map_err(|_| "poisoned")?
                 .iter()
-                .any(|(method, session)| method == "DOM.getFrameOwner"
-                    || session
-                        .as_ref()
-                        .is_some_and(|id| id.as_str() == "session-foreign"))
+                .any(|(_, session)| session
+                    .as_ref()
+                    .is_some_and(|id| id.as_str() == "session-foreign"))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_closed_shadow_oopifs_omitted_from_the_page_tree_are_resolved() -> TestResult
+    {
+        let (native, view, page) = fixture().await?;
+        native.split_tree.store(true, Ordering::SeqCst);
+        let session = view.frame_session(page, FrameId("same".into())).await?;
+        let result = session
+            .send_value("Runtime.evaluate", json!({"expression":"location.href"}))
+            .await?;
+        assert_eq!(result["result"]["value"], "session-cross");
         Ok(())
     }
 
