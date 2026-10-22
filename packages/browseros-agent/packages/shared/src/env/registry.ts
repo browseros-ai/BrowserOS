@@ -179,6 +179,18 @@ export const ENV_REGISTRY: readonly EnvKeySpec[] = [
     modes: { development: { value: '~/.browserclaw-dev', commented: true } },
   },
   {
+    key: 'FEATURE_PRO',
+    section: 'claw',
+    description:
+      'Runtime opt-in for Pro multi-profile support; defaults off and still requires BrowserOS 0.51.1.3 or newer. Export for the server process and restart it after changes.',
+    secret: false,
+    schema: stringSchema,
+    modes: {
+      development: { value: 'false', commented: true },
+      production: { value: 'false', commented: true },
+    },
+  },
+  {
     key: 'CLAW_POSTHOG_KEY',
     section: 'claw',
     description:

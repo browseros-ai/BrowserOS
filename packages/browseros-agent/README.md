@@ -25,6 +25,8 @@ Their tracked templates, `.env.development.example` and `.env.production.example
 
 Existing checkouts that still have old per-app env files can run `bun run env:migrate` to merge those values into the root files.
 
+Claw multi-profile support is opt-in at runtime: export `FEATURE_PRO=true` in the server's launch environment and restart it. Unset, blank, `false`, or `0` leaves Pro disabled; `true` or `1` enables it (case-insensitive, surrounding whitespace ignored). Other values fail startup. Pro still requires BrowserOS `0.51.1.3` or newer; the native version alone does not enable it, and development mode does not opt in. Profile tools and script exports are hidden while disabled, and direct profile operations are refused before reaching the browser. Saved profile selections are retained for a later Pro-enabled restart; calls use browser-wide routing with a notice while a saved selection cannot be applied.
+
 ### Sections
 
 | Section | File | Purpose |

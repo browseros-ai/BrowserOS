@@ -41,7 +41,7 @@ async fn test_app() -> anyhow::Result<TestApp> {
 
 /// The first native release with profile targeting; the default harness models it.
 fn current_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
 }
 
 async fn test_app_with_cdp_port(cdp_port: u16, start_browser: bool) -> anyhow::Result<TestApp> {
@@ -408,13 +408,15 @@ async fn mcp_hygiene_rejects_non_json_writes() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The launch config names an older native: discovery and instructions offer no profile
-/// surface from the very first list, because the identity is known before any MCP session.
+/// Native identity and Pro policy are known before any MCP session, so unavailable
+/// profile targeting is hidden from the first list and initialize instructions.
 #[tokio::test]
-async fn older_native_lists_and_teaches_no_profile_surface() -> anyhow::Result<()> {
+async fn unavailable_profile_targeting_lists_and_teaches_no_profile_surface() -> anyhow::Result<()>
+{
     for native in [
-        NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+        NativeCapabilities::from_browseros_version(Some("0.51.1.2")).with_pro_enabled(true),
         NativeCapabilities::default(),
+        current_native().with_pro_enabled(false),
     ] {
         let app = test_app_with_native(49337, false, native).await?;
         let initialize = json!({
