@@ -258,6 +258,7 @@ pub struct NamedToolObserver {
 // the user's tabs and on other agents' tabs; it is simply told whose they are, by
 // `effects::page_ownership_notice`. See that module for why.
 const GUARDS: &[ToolGuard] = &[
+    guards::captcha_busy::guard,
     guards::navigate_scheme::guard,
     guards::browser_connected::guard,
 ];
@@ -288,6 +289,10 @@ const EFFECTS: &[NamedToolEffect] = &[
         // never changes it beyond appending a note. Informational only.
         name: "page-ownership-notice",
         run: effects::page_ownership_notice::apply,
+    },
+    NamedToolEffect {
+        name: "captcha-status",
+        run: effects::captcha_status::apply,
     },
     NamedToolEffect {
         // Also an appended label: a saved profile target the native could not apply.
@@ -2149,6 +2154,7 @@ mod tests {
                 "tab-groups",
                 "session-naming",
                 "page-ownership-notice",
+                "captcha-status",
                 "scope-notice",
                 "helper-discovery",
             ]
@@ -2159,7 +2165,7 @@ mod tests {
         // cannot be reintroduced without someone deleting this line on purpose.
         assert_eq!(
             GUARDS.len(),
-            2,
+            3,
             "a guard was added. Ownership must not be one of them: it informs, it never blocks"
         );
         assert_eq!(
