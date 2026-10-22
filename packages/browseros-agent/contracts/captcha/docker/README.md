@@ -76,19 +76,23 @@ downloads. Both produced matching running-binary hashes and responsive MCP.
 The overlay reports 2.26 GB in `docker image ls`, sharing base layers, with a
 28.2 MB server binary.
 
-Early pre-merge smoke measurements (final rerun follows the runner's merge):
+Final missing-tool proof after the runner merged (2026-10-22, keys `none`):
 
 | Step | Time |
 | --- | ---: |
-| Cached base lookup | 0.06 s |
-| Warm server build | 1.04 s |
-| Overlay image | 0.42 s |
-| Container healthy | 5.35 s |
+| Cached base lookup | 0.03 s |
+| Server rebuild from updated main | 133.76 s |
+| Overlay image | 1.54 s |
+| Container healthy | 5.34 s |
 | Running binary proof | 0.08 s |
-| Ten page checks, external runner | about 30.5 s |
+| Eleven page checks | 72.74 s |
 
-Every early page returned `tool_not_found` / PASS. Each run records fresh
-measurements in `proof.json`. Docker image usage increased about 5.9 GB while
-testing both builders. Cargo/registry caches used 1.4 GB on the external disk.
+All eleven pages returned `tool_not_found` / PASS, with 19 tools listed over
+MCP and matching executable hashes before and after testing. This checks tool
+absence; rejected submissions and external verdict timeouts do not prove a solve.
+Each run records fresh measurements in `proof.json`. Docker's reported image
+total changed from 17.61 to 17.68 GB during the final run. Earlier testing of both
+builders peaked about 5.9 GB above the initial image total. Cargo/registry caches
+used 1.4 GB on the external disk.
 Temporary profiles and redundant development image tags are cleaned afterward;
 the base and useful overlay images stay cached unless `--clean` is requested.
