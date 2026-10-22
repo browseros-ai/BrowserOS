@@ -15,18 +15,21 @@ mod records;
 use crate::{AppState, error::AppError, error::RequestId};
 use axum::{
     Extension, Json, Router,
-    extract::{Query, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response},
     routing::get,
 };
-use records::{ListQuery, SessionRecords};
-use std::collections::HashMap;
+use records::{GetOptions, ListQuery, SessionRecords};
+use std::{collections::HashMap, time::Duration};
 
 /// The `/v1` routes. `app::build_router` mounts them only in hosted mode, so a desktop
 /// server answers `/v1/*` with the router's plain 404.
 pub fn router() -> Router<AppState> {
-    Router::new().route("/v1/sessions", get(list))
+    Router::new()
+        .route("/v1/sessions", get(list))
+        .route("/v1/sessions/{session_id}", get(session))
+        .route("/v1/sessions/{session_id}/recording", get(recording))
 }
 
 async fn list(
@@ -47,6 +50,65 @@ async fn list(
         .await
         .map(Json)
         .map_err(|source| HostedError::internal(&request_id, source))
+}
+
+async fn session(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+    Query(raw): Query<HashMap<String, String>>,
+) -> Result<Json<hosted_api::Session>, HostedError> {
+    let options = GetOptions {
+        screenshots: includes_screenshots(&request_id, &raw)?,
+        wait: Duration::from_secs(
+            integer(&request_id, &raw, "wait", 0, 60)?
+                .and_then(|seconds| u64::try_from(seconds).ok())
+                .unwrap_or(0),
+        ),
+    };
+    SessionRecords::new(&state)
+        .get(&session_id, options)
+        .await
+        .map_err(|source| HostedError::internal(&request_id, source))?
+        .map(Json)
+        .ok_or_else(|| HostedError::not_found(&request_id))
+}
+
+async fn recording(
+    Extension(request_id): Extension<RequestId>,
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<hosted_api::Recording>, HostedError> {
+    SessionRecords::new(&state)
+        .recording(&session_id)
+        .await
+        .map_err(|source| HostedError::internal(&request_id, source))?
+        .map(Json)
+        .ok_or_else(|| HostedError::not_found(&request_id))
+}
+
+/// `include` is a comma-separated list. Unknown values are rejected rather than ignored, so
+/// a typo does not silently return a response without the data the caller asked for.
+fn includes_screenshots(
+    request_id: &RequestId,
+    raw: &HashMap<String, String>,
+) -> Result<bool, HostedError> {
+    let Some(include) = raw.get("include") else {
+        return Ok(false);
+    };
+    let mut screenshots = false;
+    for value in include.split(',').map(str::trim) {
+        match value {
+            "screenshots" => screenshots = true,
+            _ => {
+                return Err(HostedError::invalid(
+                    request_id,
+                    &format!("unknown `include` value {value:?}"),
+                ));
+            }
+        }
+    }
+    Ok(screenshots)
 }
 
 /// Cursors are opaque to clients; today one is the last item's `tasks.cursor_id`.
@@ -73,9 +135,9 @@ fn integer(
     let Some(value) = raw.get(key) else {
         return Ok(None);
     };
-    let value = value.parse::<i64>().map_err(|_| {
-        HostedError::invalid(request_id, &format!("`{key}` must be an integer"))
-    })?;
+    let value = value
+        .parse::<i64>()
+        .map_err(|_| HostedError::invalid(request_id, &format!("`{key}` must be an integer")))?;
     if !(minimum..=maximum).contains(&value) {
         return Err(HostedError::invalid(
             request_id,
@@ -104,6 +166,15 @@ impl HostedError {
             StatusCode::BAD_REQUEST,
             "invalid_request",
             message,
+        )
+    }
+
+    fn not_found(request_id: &RequestId) -> Self {
+        Self::new(
+            request_id,
+            StatusCode::NOT_FOUND,
+            "session_not_found",
+            "session not found",
         )
     }
 

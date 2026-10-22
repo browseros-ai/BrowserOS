@@ -7,6 +7,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, header},
 };
+use base64::Engine as _;
 use claw_server::{
     AppState, build_router,
     config::{Config, ServerMode},
@@ -52,6 +53,37 @@ async fn app(mode: ServerMode) -> anyhow::Result<TestApp> {
 
 async fn hosted() -> anyhow::Result<TestApp> {
     app(ServerMode::Hosted).await
+}
+
+/// Uploads rrweb events the way claw-app's recorder does, for one document in one tab.
+async fn upload_recording(
+    app: &TestApp,
+    tab_id: i64,
+    document_id: &str,
+    events: &[Value],
+) -> anyhow::Result<()> {
+    let body = events
+        .iter()
+        .map(|event| format!("{event}\n"))
+        .collect::<String>();
+    let tab = tab_id.to_string();
+    let batch = format!("batch-{document_id}");
+    let request = Request::builder()
+        .method("POST")
+        .uri("/api/v1/recordings/events")
+        .header(header::HOST, "localhost")
+        .header(header::CONTENT_TYPE, "application/x-ndjson")
+        .header("x-recording-tab-id", tab.as_str())
+        .header("x-recording-document-id", document_id)
+        .header("x-recording-batch-id", batch.as_str())
+        .body(Body::from(body))?;
+    let response = app.router.clone().oneshot(request).await?;
+    anyhow::ensure!(
+        response.status() == StatusCode::OK,
+        "recording upload failed: {}",
+        response.status()
+    );
+    Ok(())
 }
 
 async fn get(router: &Router, uri: &str) -> anyhow::Result<(StatusCode, Value)> {
@@ -167,7 +199,11 @@ async fn v1_is_not_served_outside_hosted_mode() -> anyhow::Result<()> {
     let app = app(ServerMode::Desktop).await?;
     seed(&app, Call::new("s1", now_ms())).await?;
 
-    for uri in ["/v1/sessions", "/v1/sessions/s1", "/v1/sessions/s1/recording"] {
+    for uri in [
+        "/v1/sessions",
+        "/v1/sessions/s1",
+        "/v1/sessions/s1/recording",
+    ] {
         let (status, _) = get(&app.router, uri).await?;
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
     }
@@ -295,5 +331,274 @@ async fn list_rejects_invalid_parameters() -> anyhow::Result<()> {
         assert!(body["message"].is_string());
         assert!(body["requestId"].is_string());
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_returns_tool_calls_in_call_order() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    let start = now_ms() - 60_000;
+    let script = DispatchId::new();
+    let script_id = script.to_string();
+    seed(&app, Call::new("s1", start)).await?;
+    seed(
+        &app,
+        Call {
+            tool: "run",
+            args: json!({ "script": "await browser.click('#more')" }),
+            dispatch_id: script,
+            ..Call::new("s1", start + 1_000)
+        },
+    )
+    .await?;
+    seed(
+        &app,
+        Call {
+            tool: "click",
+            args: json!([7, "#more"]),
+            parent: Some(&script_id),
+            ..Call::new("s1", start + 1_100)
+        },
+    )
+    .await?;
+    seed(
+        &app,
+        Call {
+            tool: "snapshot",
+            is_error: true,
+            ..Call::new("s1", start + 2_000)
+        },
+    )
+    .await?;
+    seed(
+        &app,
+        Call {
+            tool: "wait",
+            cancelled: true,
+            ..Call::new("s1", start + 3_000)
+        },
+    )
+    .await?;
+
+    let (status, body) = get(&app.router, "/v1/sessions/s1").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["id"], "s1");
+    assert_eq!(body["status"], "done");
+    assert_eq!(body["toolCallCount"], 5);
+    let calls = body["toolCalls"].as_array().cloned().unwrap_or_default();
+    let tools = calls
+        .iter()
+        .map(|call| call["tool"].clone())
+        .collect::<Vec<_>>();
+    assert_eq!(tools, ["navigate", "run", "click", "snapshot", "wait"]);
+
+    let navigate = &calls[0];
+    assert!(navigate["id"].as_str().is_some_and(|id| !id.is_empty()));
+    assert_eq!(
+        navigate["args"],
+        json!({ "url": "https://news.ycombinator.com/" })
+    );
+    assert_eq!(navigate["outcome"], "ok");
+    assert_eq!(navigate["startedAt"], start);
+    assert_eq!(navigate["durationMs"], 40);
+    assert_eq!(
+        navigate["page"],
+        json!({ "tabId": 101, "url": "https://news.ycombinator.com/", "title": "Hacker News" })
+    );
+    assert_eq!(navigate["hasScreenshot"], false);
+    assert!(navigate.get("screenshot").is_none());
+    assert!(navigate.get("parentId").is_none());
+
+    assert_eq!(calls[1]["id"], script_id.as_str());
+    assert_eq!(calls[2]["parentId"], script_id.as_str());
+    assert_eq!(calls[2]["args"], json!([7, "#more"]));
+    assert_eq!(calls[3]["outcome"], "error");
+    assert_eq!(calls[4]["outcome"], "cancelled");
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_flags_arguments_too_large_to_keep() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    seed(
+        &app,
+        Call {
+            args: json!({ "script": "x".repeat(10_000) }),
+            ..Call::new("big", now_ms())
+        },
+    )
+    .await?;
+
+    let (_, body) = get(&app.router, "/v1/sessions/big").await?;
+    let call = &body["toolCalls"][0];
+    assert!(call.get("args").is_none());
+    assert_eq!(call["argsTruncated"], true);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_inlines_screenshots_only_when_asked() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    let row = seed(&app, Call::new("shot", now_ms() - 60_000)).await?;
+    let jpeg = b"\xFF\xD8\xFFfixture-jpeg";
+    app.state.screenshots.write("shot", row, jpeg).await?;
+    app.state.audit_log.mark_screenshot(row).await?;
+
+    let (_, body) = get(&app.router, "/v1/sessions/shot").await?;
+    assert_eq!(body["toolCalls"][0]["hasScreenshot"], true);
+    assert!(body["toolCalls"][0].get("screenshot").is_none());
+
+    let (status, body) = get(&app.router, "/v1/sessions/shot?include=screenshots").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["toolCalls"][0]["screenshot"],
+        json!({
+            "contentType": "image/jpeg",
+            "data": base64::engine::general_purpose::STANDARD.encode(jpeg),
+        })
+    );
+
+    let (status, body) = get(&app.router, "/v1/sessions/shot?include=video").await?;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["code"], "invalid_request");
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_unknown_session_is_not_found() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    for uri in ["/v1/sessions/missing", "/v1/sessions/missing/recording"] {
+        let (status, body) = get(&app.router, uri).await?;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
+        assert_eq!(body["code"], "session_not_found", "{uri}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_reports_completion() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    // Ended long ago: no end event, last activity a minute back, like a session the
+    // server closed on restart.
+    seed(&app, Call::new("old", now_ms() - 60_000)).await?;
+    let (_, body) = get(&app.router, "/v1/sessions/old").await?;
+    assert_eq!(body["complete"], true);
+    assert!(body["endedAt"].is_number());
+
+    app.state
+        .sessions
+        .insert_for_testing(live_session("open"))
+        .await;
+    seed(&app, Call::new("open", now_ms())).await?;
+    let (_, body) = get(&app.router, "/v1/sessions/open").await?;
+    assert_eq!(body["status"], "live");
+    assert_eq!(body["complete"], false);
+    assert!(body.get("endedAt").is_none());
+
+    // Just ended: the recorder may still be uploading, so not complete yet.
+    seed(&app, Call::new("ending", now_ms())).await?;
+    app.state
+        .audit_log
+        .record_session_end("ending", "closed", None)
+        .await?;
+    let (_, body) = get(&app.router, "/v1/sessions/ending").await?;
+    assert_eq!(body["status"], "done");
+    assert_eq!(body["complete"], false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn get_wait_holds_an_incomplete_session_until_the_timeout() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    seed(&app, Call::new("ending", now_ms())).await?;
+    app.state
+        .audit_log
+        .record_session_end("ending", "closed", None)
+        .await?;
+    seed(&app, Call::new("old", now_ms() - 60_000)).await?;
+
+    let started = std::time::Instant::now();
+    let (status, body) = get(&app.router, "/v1/sessions/ending?wait=1").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["complete"], false);
+    assert!(started.elapsed() >= Duration::from_millis(900));
+
+    let started = std::time::Instant::now();
+    let (_, body) = get(&app.router, "/v1/sessions/old?wait=30").await?;
+    assert_eq!(body["complete"], true);
+    assert!(started.elapsed() < Duration::from_secs(5));
+
+    for query in ["wait=61", "wait=-1", "wait=soon"] {
+        let (status, _) = get(&app.router, &format!("/v1/sessions/old?{query}")).await?;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{query}");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn recording_groups_rrweb_events_per_page() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    let session = live_session("rec");
+    app.state.sessions.insert_for_testing(session.clone()).await;
+    seed(&app, Call::new("rec", now_ms())).await?;
+    for (tab_id, target_id) in [(101, "target-7"), (102, "target-8")] {
+        app.state.session_tabs.enqueue_claim_tab_for_session(
+            tab_id,
+            Some(target_id.to_string()),
+            "rec".to_string(),
+            session.convo_id().as_str().to_string(),
+            0,
+        );
+    }
+    app.state.session_tabs.drain_writes().await;
+
+    let (status, body) = get(&app.router, "/v1/sessions/rec/recording").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, json!({ "pages": [] }));
+
+    let first = "33D25F3CF060E81B14070BC356FF1871";
+    let second = "8395FF2EF4A1D8579F1917B3B54ADECE";
+    upload_recording(
+        &app,
+        101,
+        first,
+        &[
+            json!({ "ts": 100, "type": 4, "data": { "href": "https://news.ycombinator.com/" } }),
+            json!({ "ts": 300, "type": 3, "data": { "source": 0 } }),
+            // Not replayable without a numeric rrweb type, so it is left out.
+            json!({ "ts": 350, "data": { "orphan": true } }),
+        ],
+    )
+    .await?;
+    upload_recording(
+        &app,
+        102,
+        second,
+        &[json!({ "ts": 200, "type": 2, "data": { "node": {} } })],
+    )
+    .await?;
+
+    let (status, body) = get(&app.router, "/v1/sessions/rec/recording").await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body,
+        json!({
+            "pages": [
+                {
+                    "tabId": 101,
+                    "documentId": first,
+                    "events": [
+                        { "type": 4, "data": { "href": "https://news.ycombinator.com/" }, "timestamp": 100 },
+                        { "type": 3, "data": { "source": 0 }, "timestamp": 300 },
+                    ],
+                },
+                {
+                    "tabId": 102,
+                    "documentId": second,
+                    "events": [{ "type": 2, "data": { "node": {} }, "timestamp": 200 }],
+                },
+            ],
+        })
+    );
     Ok(())
 }

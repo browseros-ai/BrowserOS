@@ -150,7 +150,9 @@ components:
           schema:
             $ref: '#/components/schemas/Error'
     NotFound:
-      description: No session has this id (`session_not_found`).
+      description: >-
+        No session with at least one tool call has this id (`session_not_found`). A session
+        is also gone once audit retention (7 days by default) deletes it.
       content:
         application/json:
           schema:
@@ -269,7 +271,7 @@ components:
         startedAt:
           type: integer
           format: int64
-          description: Unix epoch ms.
+          description: When the call started, Unix epoch ms.
         durationMs:
           type: integer
           format: int64

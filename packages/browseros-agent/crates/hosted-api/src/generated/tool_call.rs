@@ -32,7 +32,7 @@ pub struct ToolCall {
     pub args_truncated: Option<bool>,
     #[serde(rename = "outcome")]
     pub outcome: String,
-    /// Unix epoch ms.
+    /// When the call started, Unix epoch ms.
     #[serde(rename = "startedAt")]
     pub started_at: i64,
     #[serde(rename = "durationMs", skip_serializing_if = "Option::is_none")]
