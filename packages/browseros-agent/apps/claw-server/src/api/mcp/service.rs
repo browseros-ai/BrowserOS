@@ -313,6 +313,9 @@ impl ClawMcpService {
         if pursue.is_offered() {
             local.push(self.pursue_tool.clone());
         }
+        if self.state.captcha.is_some() {
+            local.push(super::captcha::solve_captcha_tool());
+        }
         if self.human_help() == HumanHelp::On {
             local.push(self.request_help_tool.clone());
             local.push(self.await_help_tool.clone());
@@ -1409,6 +1412,9 @@ impl ServerHandler for ClawMcpService {
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
+        if name == "solve_captcha" && self.state.captcha.is_some() {
+            return Some(with_session_arg(super::captcha::solve_captcha_tool()));
+        }
         if name == NAME_SESSION_TOOL_NAME {
             return Some(with_session_arg(self.name_session_tool.clone()));
         }
@@ -1450,6 +1456,7 @@ impl ServerHandler for ClawMcpService {
         let is_request_help = request.name == REQUEST_HELP_TOOL_NAME;
         let is_await_help = request.name == AWAIT_HELP_TOOL_NAME;
         let is_pursue = request.name == PURSUE_TOOL_NAME && self.pursue_offering().is_offered();
+        let is_solve_captcha = request.name == "solve_captcha" && self.state.captcha.is_some();
         let tool_index = self.find_tool_index(&request.name);
         if !is_name_session
             && !is_save_skill
@@ -1457,6 +1464,7 @@ impl ServerHandler for ClawMcpService {
             && !is_request_help
             && !is_await_help
             && !is_pursue
+            && !is_solve_captcha
             && tool_index.is_none()
         {
             return Err(McpError::method_not_found::<CallToolRequestMethod>());
@@ -1555,6 +1563,16 @@ impl ServerHandler for ClawMcpService {
             Ok(self
                 .call_await_human_help(&started, context.ct.clone())
                 .await)
+        } else if is_solve_captcha {
+            Ok(super::captcha::call_solve_captcha(
+                &self.state,
+                &started.session,
+                &started.agent_label,
+                &raw_args,
+                context.ct.clone(),
+                self.human_help() == HumanHelp::On,
+            )
+            .await)
         } else if is_pursue {
             Ok(self
                 .call_pursue(&started, &raw_args, context.ct.clone())
@@ -2491,6 +2509,116 @@ mod tests {
     use crate::identity::ConversationIdentity;
     use rmcp::handler::server::ServerHandler;
     use serde_json::json;
+
+    async fn captcha_test_service(
+        enabled: bool,
+        mode: ServerMode,
+    ) -> anyhow::Result<ClawMcpService> {
+        use crate::services::captcha::{CaptchaService, config};
+        let mut call =
+            crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), mode).await?;
+        call.state.captcha = if enabled {
+            let key = tempfile::NamedTempFile::new()?;
+            std::fs::write(key.path(), "dummy-test-key")?;
+            CaptchaService::from_config(config::CaptchaConfig::from_lookup(|name| {
+                (name == config::CAPSOLVER_KEY_FILE_ENV)
+                    .then(|| key.path().to_string_lossy().into_owned())
+            }))
+        } else {
+            None
+        };
+        Ok(ClawMcpService::new(call.state))
+    }
+
+    #[tokio::test]
+    async fn tests_that_solve_captcha_is_listed_and_decorated_in_both_modes() -> anyhow::Result<()>
+    {
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            let service = captcha_test_service(true, mode).await?;
+            let tool = service
+                .listed_tools(true)
+                .into_iter()
+                .find(|tool| tool.name == "solve_captcha")
+                .ok_or_else(|| anyhow::anyhow!("solve_captcha missing"))?;
+            let properties = &tool.input_schema["properties"];
+            assert!(properties.get("session").is_some());
+            assert!(properties.get("agentName").is_some());
+            assert_eq!(properties.get("taskName").is_some(), mode.is_hosted());
+            assert!(tool.output_schema.is_some());
+            assert!(service.get_tool("solve_captcha").is_some());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_disabled_solve_captcha_is_absent_and_method_not_found() -> anyhow::Result<()>
+    {
+        let service = captcha_test_service(false, ServerMode::Desktop).await?;
+        assert!(
+            !service
+                .listed_tools(true)
+                .iter()
+                .any(|tool| tool.name == "solve_captcha")
+        );
+        assert!(service.get_tool("solve_captcha").is_none());
+        let (_client, transport) = tokio::io::duplex(4096);
+        let running = rmcp::service::serve_directly(service, transport, None);
+        let context =
+            RequestContext::new(rmcp::model::RequestId::Number(1), running.peer().clone());
+        let result = running
+            .service()
+            .call_tool(
+                CallToolRequestParams::new("solve_captcha")
+                    .with_arguments(serde_json::from_value(json!({"page": 1}))?),
+                context,
+            )
+            .await;
+        assert!(matches!(result, Err(error) if error.code.0 == -32601));
+        running.cancel().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_solve_captcha_rejects_bad_pages_and_reports_no_browser()
+    -> anyhow::Result<()> {
+        let service = captcha_test_service(true, ServerMode::Desktop).await?;
+        let (_client, transport) = tokio::io::duplex(4096);
+        let running = rmcp::service::serve_directly(service, transport, None);
+        for args in [
+            json!({}),
+            json!({"page": 0}),
+            json!({"page": -1}),
+            json!({"page": 1.5}),
+            json!({"page": "1"}),
+            json!({"page": 4294967296u64}),
+            json!({"page": 1}),
+        ] {
+            let context =
+                RequestContext::new(rmcp::model::RequestId::Number(1), running.peer().clone());
+            let response = running
+                .service()
+                .call_tool(
+                    CallToolRequestParams::new("solve_captcha")
+                        .with_arguments(serde_json::from_value(args.clone())?),
+                    context,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            let CallToolResponse::Complete(response) = response else {
+                anyhow::bail!("unexpected task response")
+            };
+            let value = serde_json::to_value(response)?;
+            assert_eq!(value["isError"], true, "{value}");
+            let text = value["content"][0]["text"].as_str().unwrap_or_default();
+            if args == json!({"page": 1}) {
+                assert!(text.starts_with("no link to the browser"), "{text}");
+            } else {
+                assert!(text.starts_with("solve_captcha: "), "{text}");
+            }
+        }
+        running.cancel().await?;
+        Ok(())
+    }
 
     #[tokio::test]
     async fn targeted_successors_and_old_aliases_keep_latest_intent_after_restart()
