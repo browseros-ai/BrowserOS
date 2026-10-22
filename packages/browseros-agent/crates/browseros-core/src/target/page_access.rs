@@ -135,7 +135,11 @@ impl ProtocolAdmission for FrameProtocol {
                     .frame_session_matches(&self.frame, &self.endpoint)
                     .await
             {
-                return Err(TargetError::PageTargetChanged(self.access.page.clone()).into());
+                return Err(CoreError::Message(format!(
+                    "Frame {} is no longer part of page {:?}",
+                    self.frame.as_str(),
+                    self.access.page
+                )));
             }
             self.access.fresh().await?;
             Ok(())
@@ -229,6 +233,7 @@ mod frame_tests {
     struct Native {
         tree: Mutex<Value>,
         split_tree: std::sync::atomic::AtomicBool,
+        owner_changed: std::sync::atomic::AtomicBool,
         tab: Mutex<Value>,
         calls: Mutex<Vec<(String, Option<SessionId>)>>,
         epoch: AtomicU64,
@@ -242,6 +247,7 @@ mod frame_tests {
                     "frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]
                 }]})),
                 split_tree: std::sync::atomic::AtomicBool::new(false),
+                owner_changed: std::sync::atomic::AtomicBool::new(false),
                 tab: Mutex::new(json!({"tabId":1,"targetId":"page","windowId":11,
                     "url":"https://local.test","title":"test","isActive":true,"isLoading":false,
                     "loadProgress":1.0,"isPinned":false,"isHidden":false,
@@ -313,7 +319,7 @@ mod frame_tests {
                     {
                         return Err(CdpError::SessionGone);
                     }
-                    json!({"backendNodeId":if params["frameId"] == "same" { 2 } else { 1 }})
+                    json!({"backendNodeId":if self.owner_changed.load(Ordering::SeqCst) { 99 } else if params["frameId"] == "same" { 2 } else { 1 }})
                 }
                 "DOM.describeNode" if params["backendNodeId"] == 2 => {
                     json!({"node":{"contentDocument":{"frameId":"same"}}})
@@ -420,11 +426,10 @@ mod frame_tests {
     #[tokio::test]
     async fn tests_that_unknown_frames_are_refused() -> TestResult {
         let (native, view, page) = fixture().await?;
-        assert!(
-            view.frame_session(page, FrameId("foreign".into()))
-                .await
-                .is_err()
-        );
+        assert!(matches!(
+            view.frame_session(page, FrameId("foreign".into())).await,
+            Err(CoreError::Message(_))
+        ));
         assert!(
             !native
                 .calls
@@ -454,10 +459,11 @@ mod frame_tests {
     #[tokio::test]
     async fn tests_that_retained_frames_recheck_membership_scope_and_epoch() -> TestResult {
         for frame in ["same", "cross"] {
-            for change in ["tree", "scope", "epoch", "target"] {
+            for change in ["tree", "scope", "epoch", "target", "owner"] {
                 let (native, view, page) = fixture().await?;
                 let session = view.frame_session(page, FrameId(frame.into())).await?;
                 match change {
+                    "owner" => native.owner_changed.store(true, Ordering::SeqCst),
                     "tree" => {
                         *native.tree.lock().map_err(|_| "poisoned")? =
                             json!({"frame":{"id":"root"}})
@@ -477,6 +483,12 @@ mod frame_tests {
                     .send_value("Runtime.evaluate", json!({"expression":"1"}))
                     .await;
                 assert!(result.is_err(), "{frame}/{change}: {result:?}");
+                if change == "owner" {
+                    assert!(
+                        matches!(result, Err(CoreError::Message(_))),
+                        "{frame}: {result:?}"
+                    );
+                }
                 assert!(
                     !native
                         .calls

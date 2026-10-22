@@ -63,6 +63,19 @@ impl LivePage {
             .await?
             .session)
     }
+    async fn frame_operation<T>(
+        &self,
+        future: impl Future<Output = Result<T, PageError>>,
+    ) -> Result<T, PageError> {
+        match future.await {
+            Err(PageError::Closed) => {
+                browser(self.view.page(self.page.clone())).await?;
+                send(&self.top().await?, "Page.getFrameTree", json!({})).await?;
+                Err(bad("Frame is no longer available"))
+            }
+            result => result,
+        }
+    }
     async fn frame(&self, id: &str) -> Result<ProtocolSession, PageError> {
         browser(
             self.view
@@ -77,87 +90,94 @@ impl CaptchaPage for LivePage {
         evaluate(&self.top().await?, expression, None).await
     }
     async fn frames(&self) -> Result<Vec<FrameRef>, PageError> {
-        let top = self.top().await?;
-        let tree = send(&top, "Page.getFrameTree", json!({})).await?;
-        let main = &tree["frameTree"]["frame"];
-        let viewport = self
-            .eval_main("({width:innerWidth,height:innerHeight})")
-            .await?;
-        let origin = Rect {
-            x: 0.0,
-            y: 0.0,
-            width: number(&viewport, "width")?,
-            height: number(&viewport, "height")?,
-        };
-        let mut result = vec![FrameRef {
-            frame_id: text(main, "id")?,
-            url: text(main, "url")?,
-            rect: Some(origin),
-        }];
-        let mut seen_frames = HashSet::from([result[0].frame_id.clone()]);
-        let mut seen_sessions = HashSet::new();
-        let mut pending = vec![(top, Some(origin))];
-        while let Some((parent, origin)) = pending.pop() {
-            if !seen_sessions.insert(parent.session_id().cloned()) {
-                continue;
-            }
-            let dom = send(
-                &parent,
-                "DOM.getDocument",
-                json!({"depth":-1,"pierce":true}),
-            )
-            .await?;
-            let mut owners = Vec::new();
-            collect_owners(&dom["root"], &mut owners);
-            for id in owners {
-                if !seen_frames.insert(id.clone()) {
+        self.frame_operation(async {
+            let top = self.top().await?;
+            let tree = send(&top, "Page.getFrameTree", json!({})).await?;
+            let main = &tree["frameTree"]["frame"];
+            let viewport = self
+                .eval_main("({width:innerWidth,height:innerHeight})")
+                .await?;
+            let origin = Rect {
+                x: 0.0,
+                y: 0.0,
+                width: number(&viewport, "width")?,
+                height: number(&viewport, "height")?,
+            };
+            let mut result = vec![FrameRef {
+                frame_id: text(main, "id")?,
+                url: text(main, "url")?,
+                rect: Some(origin),
+            }];
+            let mut seen_frames = HashSet::from([result[0].frame_id.clone()]);
+            let mut seen_sessions = HashSet::new();
+            let mut pending = vec![(top, Some(origin))];
+            while let Some((parent, origin)) = pending.pop() {
+                if !seen_sessions.insert(parent.session_id().cloned()) {
                     continue;
                 }
-                let session = self.frame(&id).await?;
-                let tree = send(&session, "Page.getFrameTree", json!({})).await?;
-                let frame = find_frame(&tree["frameTree"], &id)
-                    .ok_or_else(|| bad("Frame missing from its session tree"))?;
-                let measured = async {
-                    let owner = send(&parent, "DOM.getFrameOwner", json!({"frameId":id})).await?;
-                    let model = send(
-                        &parent,
-                        "DOM.getBoxModel",
-                        json!({"backendNodeId":owner["backendNodeId"]}),
-                    )
-                    .await?;
-                    quad_rect(&model["model"]["content"])
-                }
-                .await;
-                let rect = match measured {
-                    // CDP quads are relative to the session root, including same-process nesting.
-                    Ok(local) => origin.map(|origin| translate(local, origin)),
-                    Err(PageError::Browser(_)) => None,
-                    Err(error) => return Err(error),
-                };
-                result.push(FrameRef {
-                    frame_id: id,
-                    url: text(frame, "url")?,
-                    rect,
-                });
-                if !session.same_session(&parent) {
-                    pending.push((session, rect));
+                let dom = send(
+                    &parent,
+                    "DOM.getDocument",
+                    json!({"depth":-1,"pierce":true}),
+                )
+                .await?;
+                let mut owners = Vec::new();
+                collect_owners(&dom["root"], &mut owners);
+                for id in owners {
+                    if !seen_frames.insert(id.clone()) {
+                        continue;
+                    }
+                    let session = self.frame(&id).await?;
+                    let tree = send(&session, "Page.getFrameTree", json!({})).await?;
+                    let frame = find_frame(&tree["frameTree"], &id)
+                        .ok_or_else(|| bad("Frame missing from its session tree"))?;
+                    let measured = async {
+                        let owner =
+                            send(&parent, "DOM.getFrameOwner", json!({"frameId":id})).await?;
+                        let model = send(
+                            &parent,
+                            "DOM.getBoxModel",
+                            json!({"backendNodeId":owner["backendNodeId"]}),
+                        )
+                        .await?;
+                        quad_rect(&model["model"]["content"])
+                    }
+                    .await;
+                    let rect = match measured {
+                        // CDP quads are relative to the session root, including same-process nesting.
+                        Ok(local) => origin.map(|origin| translate(local, origin)),
+                        Err(PageError::Browser(_)) => None,
+                        Err(error) => return Err(error),
+                    };
+                    result.push(FrameRef {
+                        frame_id: id,
+                        url: text(frame, "url")?,
+                        rect,
+                    });
+                    if !session.same_session(&parent) {
+                        pending.push((session, rect));
+                    }
                 }
             }
-        }
-        Ok(result)
+            Ok(result)
+        })
+        .await
     }
     async fn eval_in_frame(&self, frame: &FrameRef, expression: &str) -> Result<Value, PageError> {
-        let session = self.frame(&frame.frame_id).await?;
-        let world = send(
-            &session,
-            "Page.createIsolatedWorld",
-            json!({"frameId":frame.frame_id,"worldName":"browseros-captcha-read"}),
-        )
-        .await?;
-        let context = world["executionContextId"]
-            .as_i64()
-            .ok_or_else(|| bad("Missing frame execution context"))?;
-        evaluate(&session, expression, Some(context)).await
+        self.frame_operation(async {
+            let session = self.frame(&frame.frame_id).await?;
+            let world = send(
+                &session,
+                "Page.createIsolatedWorld",
+                json!({"frameId":frame.frame_id,"worldName":"browseros-captcha-read"}),
+            )
+            .await?;
+            let context = world["executionContextId"]
+                .as_i64()
+                .ok_or_else(|| bad("Missing frame execution context"))?;
+            evaluate(&session, expression, Some(context)).await
+        })
+        .await
     }
     async fn click_at(&self, x: f64, y: f64) -> Result<(), PageError> {
         if !x.is_finite() || !y.is_finite() || x < 0.0 || y < 0.0 {
@@ -223,53 +243,56 @@ impl CaptchaPage for LivePage {
         frame: &FrameRef,
         selector: &str,
     ) -> Result<Option<Rect>, PageError> {
-        let origin = frame
-            .rect
-            .ok_or_else(|| bad("Frame viewport origin is unavailable"))?;
-        if !valid_rect(origin) {
-            return Ok(None);
-        }
-        let session = self.frame(&frame.frame_id).await?;
-        let tree = send(&session, "Page.getFrameTree", json!({})).await?;
-        let dom = send(
-            &session,
-            "DOM.getDocument",
-            json!({"depth":-1,"pierce":true}),
-        )
-        .await?;
-        let document = if tree["frameTree"]["frame"]["id"] == frame.frame_id {
-            Some(&dom["root"])
-        } else {
-            find_document(&dom["root"], &frame.frame_id)
-        }
-        .ok_or_else(|| bad("Frame document is unavailable"))?;
-        let mut roots = vec![document];
-        collect_shadow_roots(document, &mut roots);
-        for root in roots {
-            let resolved = send(
+        self.frame_operation(async {
+            let origin = frame
+                .rect
+                .ok_or_else(|| bad("Frame viewport origin is unavailable"))?;
+            if !valid_rect(origin) {
+                return Ok(None);
+            }
+            let session = self.frame(&frame.frame_id).await?;
+            let tree = send(&session, "Page.getFrameTree", json!({})).await?;
+            let dom = send(
                 &session,
-                "DOM.resolveNode",
-                json!({"backendNodeId":root["backendNodeId"]}),
+                "DOM.getDocument",
+                json!({"depth":-1,"pierce":true}),
             )
             .await?;
-            let object = text(&resolved["object"], "objectId")?;
-            let response = send(&session,"Runtime.callFunctionOn",json!({"objectId":object,"functionDeclaration":VISIBLE_RECT,"arguments":[{"value":selector}],"returnByValue":true,"awaitPromise":true})).await;
-            let _ = send(
-                &session,
-                "Runtime.releaseObject",
-                json!({"objectId":object}),
-            )
-            .await;
-            let value = evaluation_value(response?)?;
-            if !value.is_null() {
-                let rect: Rect =
-                    serde_json::from_value(value).map_err(|error| bad(&error.to_string()))?;
-                if valid_rect(rect) {
-                    return Ok(Some(translate(rect, origin)));
+            let document = if tree["frameTree"]["frame"]["id"] == frame.frame_id {
+                Some(&dom["root"])
+            } else {
+                find_document(&dom["root"], &frame.frame_id)
+            }
+            .ok_or_else(|| bad("Frame document is unavailable"))?;
+            let mut roots = vec![document];
+            collect_shadow_roots(document, &mut roots);
+            for root in roots {
+                let resolved = send(
+                    &session,
+                    "DOM.resolveNode",
+                    json!({"backendNodeId":root["backendNodeId"]}),
+                )
+                .await?;
+                let object = text(&resolved["object"], "objectId")?;
+                let response = send(&session,"Runtime.callFunctionOn",json!({"objectId":object,"functionDeclaration":VISIBLE_RECT,"arguments":[{"value":selector}],"returnByValue":true,"awaitPromise":true})).await;
+                let _ = send(
+                    &session,
+                    "Runtime.releaseObject",
+                    json!({"objectId":object}),
+                )
+                .await;
+                let value = evaluation_value(response?)?;
+                if !value.is_null() {
+                    let rect: Rect =
+                        serde_json::from_value(value).map_err(|error| bad(&error.to_string()))?;
+                    if valid_rect(rect) {
+                        return Ok(Some(translate(rect, origin)));
+                    }
                 }
             }
-        }
-        Ok(None)
+            Ok(None)
+        })
+        .await
     }
 }
 
@@ -477,7 +500,10 @@ mod tests {
     use serde_json::json;
     use std::{
         collections::VecDeque,
-        sync::{Arc, Mutex},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, Ordering},
+        },
     };
     use tokio::sync::broadcast;
 
@@ -486,6 +512,8 @@ mod tests {
     struct Native {
         calls: Mutex<Vec<Call>>,
         evaluations: Mutex<VecDeque<Result<Value, CdpError>>>,
+        child_failure: Mutex<Option<(&'static str, bool, CdpError)>>,
+        page_open: AtomicBool,
         events: broadcast::Sender<CdpEvent>,
     }
     impl Native {
@@ -493,6 +521,8 @@ mod tests {
             Arc::new(Self {
                 calls: Mutex::new(Vec::new()),
                 evaluations: Mutex::new(VecDeque::new()),
+                child_failure: Mutex::new(None),
+                page_open: AtomicBool::new(true),
                 events: broadcast::channel(32).0,
             })
         }
@@ -508,10 +538,33 @@ mod tests {
                 session.cloned(),
             ));
             let child = session.is_some_and(|id| id.as_str() == "s-widget");
+            if child {
+                let mut failure = self
+                    .child_failure
+                    .lock()
+                    .map_err(|_| CdpError::SessionGone)?;
+                if failure
+                    .as_ref()
+                    .is_some_and(|(expected, _, _)| *expected == method)
+                    && let Some((_, close_page, error)) = failure.take()
+                {
+                    if close_page {
+                        self.page_open.store(false, Ordering::SeqCst);
+                    }
+                    return Err(error);
+                }
+            }
             let tab = json!({"tabId":1,"targetId":"page","url":"http://fixture.test","title":"fixture","isActive":true,"isLoading":false,"loadProgress":1.0,"isPinned":false,"isHidden":false,"windowId":1});
             Ok(match method {
-                "Browser.getTabs" => json!({"tabs":[tab]}),
-                "Browser.getTabInfo" => json!({"tab":tab}),
+                "Browser.getTabs" => {
+                    json!({"tabs":if self.page_open.load(Ordering::SeqCst) {vec![tab]} else {vec![]}})
+                }
+                "Browser.getTabInfo" => {
+                    if !self.page_open.load(Ordering::SeqCst) {
+                        return Err(CdpError::SessionGone);
+                    }
+                    json!({"tab":tab})
+                }
                 "Target.attachToTarget" => {
                     json!({"sessionId":format!("s-{}",params["targetId"].as_str().unwrap_or_default())})
                 }
@@ -708,6 +761,58 @@ mod tests {
         }
         Ok(())
     }
+    #[tokio::test]
+    async fn tests_that_removed_frames_are_browser_errors_while_the_page_remains_open() -> TestResult
+    {
+        let (_, page) = fixture();
+        let mut frame = widget();
+        frame.frame_id = "removed".into();
+        assert!(matches!(
+            page.eval_in_frame(&frame, "1").await,
+            Err(PageError::Browser(_))
+        ));
+        assert!(matches!(
+            page.query_rect_in_frame(&frame, "input").await,
+            Err(PageError::Browser(_))
+        ));
+        assert!(page.document().await.is_ok());
+        Ok(())
+    }
+    #[tokio::test]
+    async fn tests_that_detached_children_are_distinguished_from_closed_pages() -> TestResult {
+        for method in [
+            "Page.getFrameTree",
+            "Page.createIsolatedWorld",
+            "Runtime.evaluate",
+            "DOM.getDocument",
+            "Runtime.callFunctionOn",
+        ] {
+            for close_page in [false, true] {
+                let (native, page) = fixture();
+                *native.child_failure.lock().map_err(|_| "poisoned")? =
+                    Some((method, close_page, CdpError::SessionGone));
+                let result = match method {
+                    "Page.getFrameTree" => page.frames().await.map(|_| ()),
+                    "DOM.getDocument" | "Runtime.callFunctionOn" => page
+                        .query_rect_in_frame(&widget(), "input[type=checkbox]")
+                        .await
+                        .map(|_| ()),
+                    _ => page.eval_in_frame(&widget(), "1").await.map(|_| ()),
+                };
+                if close_page {
+                    assert_eq!(result, Err(PageError::Closed), "{method}");
+                } else {
+                    assert!(
+                        matches!(result, Err(PageError::Browser(_))),
+                        "{method}: {result:?}"
+                    );
+                    assert!(page.document().await.is_ok());
+                }
+            }
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn tests_that_frames_include_closed_shadow_owners_and_document_identity() -> TestResult {
         let (_, page) = fixture();

@@ -1023,7 +1023,10 @@ impl BrowserView {
                 }
             }
         }
-        Err(TargetError::PageTargetChanged(page).into())
+        Err(CoreError::Message(format!(
+            "Frame {} is no longer part of page {page:?}",
+            frame.as_str()
+        )))
     }
     pub async fn observe(&self, page: PageId) -> Result<Arc<Observer>, CoreError> {
         let access = self.page_access(page.clone()).await?;
