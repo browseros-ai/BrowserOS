@@ -12,7 +12,7 @@ async function main(): Promise<number> {
     const unknown = args.find(
       (arg) => !['--balance-only', '--json'].includes(arg),
     )
-    if (unknown) {
+    if (unknown !== undefined) {
       output(
         `Unknown argument: ${unknown}\nUsage: bun run captcha:provider-check [--balance-only] [--json]`,
         true,

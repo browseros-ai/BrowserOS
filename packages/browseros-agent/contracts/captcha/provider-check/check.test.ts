@@ -375,6 +375,13 @@ test('tests that unknown flags exit two without calling vendors', async () => {
   expect(calls).toHaveLength(0)
 })
 
+test('tests that an empty argument followed by a bad flag exits two without vendor calls', async () => {
+  const result = await cli(['', '--bogus'])
+  expect(result.exitCode).toBe(2)
+  expect(result.stderr).toContain('Usage:')
+  expect(calls).toHaveLength(0)
+})
+
 test.each([{ args: [] }, { args: ['--json'] }])(
   'tests that vendor echo redaction protects every CLI stream: %j',
   async ({ args }) => {
