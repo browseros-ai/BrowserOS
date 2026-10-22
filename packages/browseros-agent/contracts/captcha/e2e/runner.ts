@@ -49,14 +49,16 @@ export function classifyOutcome(
       note: '',
     }
   if (page.expect.some((expected) => expected === status)) {
-    if (status === 'solved' && verdict === 'rejected')
+    const needsVerdict =
+      status === 'solved' ||
+      (status === 'already_clear' && page.family !== 'none')
+    if (needsVerdict && verdict === 'rejected')
       return { outcome: 'FAIL', note: 'false positive' }
-    if (status === 'solved' && verdict === 'error')
+    if (needsVerdict && verdict === 'error')
       return { outcome: 'FAIL', note: 'independent check failed' }
     return {
       outcome: 'PASS',
-      note:
-        status === 'solved' && verdict === 'n/a' ? 'no independent check' : '',
+      note: needsVerdict && verdict === 'n/a' ? 'no independent check' : '',
     }
   }
   if (

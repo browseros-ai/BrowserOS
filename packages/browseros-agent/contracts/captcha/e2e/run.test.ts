@@ -39,6 +39,25 @@ test('tests that invalid CLI options are usage errors', () => {
   expect(() => selectPages([], parseOptions(['--only', 'missing']))).toThrow()
 })
 
+test('tests that dev watch accepts a startup budget and rejects conflicting launch flags', () => {
+  expect(parseOptions(['--dev-watch'])).toMatchObject({
+    devWatch: true,
+    startupTimeout: 600_000,
+  })
+  expect(
+    parseOptions(['--dev-watch', '--startup-timeout', '120000']),
+  ).toMatchObject({ startupTimeout: 120_000 })
+  for (const flags of [
+    ['--mcp-url', 'http://127.0.0.1:9402/mcp'],
+    ['--headless'],
+    ['--browser-arg=--anything'],
+    ['--startup-timeout', '0'],
+    ['--startup-timeout', 'NaN'],
+    ['--startup-timeout', '2147483648'],
+  ])
+    expect(() => parseOptions(['--dev-watch', ...flags])).toThrow()
+})
+
 test('tests that browser flags with spaces arrive as one argument and environment is restored', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'captcha-launch-test-'))
   const binary = join(directory, "fake browser's binary")

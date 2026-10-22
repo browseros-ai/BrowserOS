@@ -7,6 +7,15 @@ import {
   tokenLengthExpression,
 } from './catalog'
 
+test('tests that always-pass Turnstile pages also accept a widget that already passed', () => {
+  const pages = [...FIXTURE_PAGES, ...DEMO_PAGES]
+  for (const id of ['turnstile-pass', 'cloudflare-turnstile-demo'])
+    expect(pages.find((page) => page.id === id)?.expect).toEqual([
+      'solved',
+      'already_clear',
+    ])
+})
+
 test('tests that the catalog contains every required page with unique ids and existing paths', async () => {
   expect(FIXTURE_PAGES.map((page) => page.id)).toEqual([
     'recaptcha-v2-test',

@@ -27,7 +27,16 @@ export function createResources() {
       interrupted = true
       closing ??= (async () => {
         await Promise.allSettled(pending)
-        for (const stop of cleanup.toReversed()) await stop().catch(() => {})
+        const errors: unknown[] = []
+        for (const stop of cleanup.toReversed())
+          await stop().catch((error) => {
+            errors.push(error)
+          })
+        if (errors.length)
+          throw new AggregateError(
+            errors,
+            `cleanup failed: ${errors.map(String).join('; ')}`,
+          )
       })()
       return closing
     },

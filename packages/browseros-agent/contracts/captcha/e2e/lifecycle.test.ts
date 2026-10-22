@@ -44,6 +44,6 @@ test('tests that teardown is reversed and continues after a cleanup failure', as
       throw new Error('cleanup failure')
     },
   )
-  await resources.close()
+  await expect(resources.close()).rejects.toThrow('cleanup failed')
   expect(released).toEqual([2, 1])
 })
