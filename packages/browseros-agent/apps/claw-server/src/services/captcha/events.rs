@@ -27,11 +27,13 @@ impl CaptchaEventBus {
     }
 }
 
-pub struct EventLog;
+pub struct EventLog {
+    _private: (),
+}
 
 impl EventLog {
     pub fn new(_bus: CaptchaEventBus, _request_id: String, _page: u32) -> Self {
-        Self
+        Self { _private: () }
     }
     pub fn emit(&self, _event: CaptchaEventName, _data: serde_json::Value) {}
     pub fn events(&self) -> Vec<CaptchaEvent> {

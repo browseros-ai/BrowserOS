@@ -12,7 +12,9 @@ pub struct ActiveSolve {
 }
 
 #[derive(Default)]
-pub struct TabReservations;
+pub struct TabReservations {
+    _private: (),
+}
 
 impl TabReservations {
     pub fn try_reserve(

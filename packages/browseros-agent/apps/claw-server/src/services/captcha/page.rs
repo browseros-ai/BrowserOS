@@ -17,6 +17,14 @@ pub trait CaptchaPage: Send + Sync {
     fn screenshot_clip(&self, rect: Rect)
     -> impl Future<Output = Result<String, PageError>> + Send;
     fn document(&self) -> impl Future<Output = Result<DocumentId, PageError>> + Send;
+    /// Viewport rect (top-level CSS px) of the first visible element matching a CSS selector
+    /// inside `frame`, searching through closed shadow roots (CDP DOM.getDocument pierce).
+    /// None when nothing visible matches.
+    fn query_rect_in_frame(
+        &self,
+        frame: &FrameRef,
+        selector: &str,
+    ) -> impl Future<Output = Result<Option<Rect>, PageError>> + Send;
 }
 
 pub struct LivePage {
@@ -53,8 +61,76 @@ impl CaptchaPage for LivePage {
     async fn document(&self) -> Result<DocumentId, PageError> {
         Err(not_implemented())
     }
+    async fn query_rect_in_frame(
+        &self,
+        _frame: &FrameRef,
+        _selector: &str,
+    ) -> Result<Option<Rect>, PageError> {
+        Err(not_implemented())
+    }
 }
 
 fn not_implemented() -> PageError {
     PageError::Browser("not implemented".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_core::{BrowserSession, CdpConnection, SessionId};
+    use futures_util::future::BoxFuture;
+    use std::sync::Arc;
+    use tokio::sync::broadcast;
+
+    struct Disconnected;
+
+    impl CdpConnection for Disconnected {
+        fn send<'a>(
+            &'a self,
+            _method: &'a str,
+            _params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async { Err(CdpError::NotConnected) })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            _method: &'a str,
+            _params_json: &'a str,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async { Err(CdpError::NotConnected) })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            broadcast::channel(1).1
+        }
+
+        fn is_connected(&self) -> bool {
+            false
+        }
+
+        fn connection_epoch(&self) -> u64 {
+            0
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_shadow_root_query_returns_the_stub_error() {
+        let session = BrowserSession::new(Arc::new(Disconnected), Default::default());
+        let view = BrowserView::unbound(session, None);
+        let page = LivePage::new(view, PageId(42));
+        let frame = FrameRef {
+            frame_id: "widget".into(),
+            url: "https://example.test/widget".into(),
+            rect: None,
+        };
+        assert_eq!(
+            page.query_rect_in_frame(&frame, "input[type=checkbox]")
+                .await,
+            Err(PageError::Browser("not implemented".into()))
+        );
+    }
 }

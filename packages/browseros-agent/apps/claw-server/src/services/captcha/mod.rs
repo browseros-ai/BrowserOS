@@ -53,7 +53,7 @@ impl CaptchaService {
         }
         Some(Arc::new(Self {
             providers: ProviderChain::new(&config),
-            reservations: Arc::new(TabReservations),
+            reservations: Arc::default(),
             events: CaptchaEventBus::new(),
         }))
     }
@@ -95,6 +95,19 @@ impl CaptchaService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tests_that_coordination_stubs_use_stable_constructors() -> anyhow::Result<()> {
+        let reservations = Arc::<TabReservations>::default();
+        let lease = reservations
+            .try_reserve(42, "cap_test")
+            .map_err(|_| anyhow::anyhow!("unexpected busy page"))?;
+        let log = EventLog::new(CaptchaEventBus::new(), "cap_test".into(), 42);
+        assert_eq!(lease.page(), 42);
+        assert_eq!(lease.request_id(), "cap_test");
+        assert!(log.events().is_empty());
+        Ok(())
+    }
 
     #[test]
     fn tests_that_service_is_disabled_without_a_provider() {
