@@ -39,6 +39,7 @@ for (const e of all('.g-recaptcha[data-sitekey], .cf-turnstile, .h-captcha')) {
 }
 for (const [selector, kind] of [['textarea[name="g-recaptcha-response"]', 'recaptcha_v2'], ['input[name="cf-turnstile-response"]', 'turnstile']]) {
     for (const e of all(selector)) {
+        if (kind === 'recaptcha_v2' && e.parentElement?.querySelector('textarea[name="h-captcha-response"]')) continue;
         if (!e.closest('.g-recaptcha, .cf-turnstile, .h-captcha')) add(e, kind, 'unknown');
     }
 }
@@ -59,6 +60,7 @@ const renderUrl = all('script[src]').map(e => { try { return new URL(e.src); } c
 const renderKey = renderUrl?.searchParams.get('render') || null;
 const clients = window.___grecaptcha_cfg?.clients || {};
 const configured = new Set();
+const configs = [];
 for (const client of Object.values(clients)) {
     const meta = {}, nodes = [], seen = new WeakSet(), queue = [[client, 0]];
     let count = 0;
@@ -81,15 +83,23 @@ for (const client of Object.values(clients)) {
     }
     if (queue.length) complete = false;
     const v3 = !!renderKey && (!meta.sitekey || meta.sitekey === renderKey);
+    configs.push({meta, nodes, v3});
+}
+configs.sort((a, b) => Number(!a.nodes.length) - Number(!b.nodes.length));
+for (const {meta, nodes, v3} of configs) {
+    const node = nodes.find(n => visible(n));
+    if (!node && nodes.length && meta.size !== 'invisible' && !v3) continue;
     let index = widgets.findIndex((w, i) => !configured.has(i) && w.kind.startsWith('recaptcha') &&
-        (nodes.some(n => roots[i] && (n === roots[i] || roots[i].contains(n))) || (meta.sitekey && w.sitekey === meta.sitekey)));
+        nodes.some(n => roots[i] && (n === roots[i] || roots[i].contains(n) || n.contains(roots[i]))));
+    if (index < 0 && !nodes.length) index = widgets.findIndex((w, i) => !configured.has(i) &&
+        w.kind.startsWith('recaptcha') && meta.sitekey && w.sitekey === meta.sitekey);
     if (index < 0) {
-        const node = nodes.find(n => visible(n));
-        if (!node && nodes.length && meta.size !== 'invisible' && !v3) continue;
-        add(node || null, v3 ? 'recaptcha_v3' : 'recaptcha_v2', 'widget_only'); index = widgets.length - 1;
+        add(node || nodes[0] || null, v3 ? 'recaptcha_v3' : 'recaptcha_v2',
+            (v3 || meta.size === 'invisible') ? 'widget_only' : 'unknown'); index = widgets.length - 1;
     }
     configured.add(index);
     const w = widgets[index];
+    w.frameUrl ||= node?.querySelector('iframe')?.src || null;
     for (const key of ['sitekey', 'action', 'recaptchaS', 'callback']) w[key] ||= meta[key] || null;
     w.invisible ||= meta.size === 'invisible'; w.enterprise = enterprise || !!renderUrl?.pathname.includes('enterprise');
     if (v3) { w.kind = 'recaptcha_v3'; w.state = 'widget_only'; }
@@ -243,6 +253,15 @@ async fn scan(
     let frames =
         partial(bounded(deadline, page.frames()).await, &mut complete)?.unwrap_or_default();
     let mut probes = Vec::with_capacity(frames.len());
+    for widget in &mut widgets {
+        let w = &mut widget.challenge;
+        if w.kind == CaptchaKind::RecaptchaV2
+            && !w.invisible
+            && w.state == ChallengeState::WidgetOnly
+        {
+            w.state = ChallengeState::Unknown;
+        }
+    }
     for frame in &frames {
         if Instant::now() >= deadline {
             complete = false;
@@ -964,6 +983,21 @@ mod tests {
         assert_eq!(result.challenges.len(), 1);
         assert_eq!(result.challenges[0].state, ChallengeState::Active);
         assert!(result.challenges[0].challenge_frame.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_an_unreadable_normal_config_widget_is_not_widget_only()
+    -> Result<(), PageError> {
+        let mut page = FakePage::recaptcha(false);
+        page.main = Mutex::new(VecDeque::from([probe(json!([widget(
+            "recaptcha_v2",
+            "widget_only"
+        )]))]));
+        page.frame_result = Err(PageError::Browser("anchor unavailable".into()));
+        let result = scan(&page).await?;
+        assert!(!result.complete);
+        assert_eq!(result.challenges[0].state, ChallengeState::Unknown);
         Ok(())
     }
 
