@@ -112,13 +112,14 @@ fn profile_note(text: &'static str) -> Option<FeatureNote> {
 
 fn metadata_for_tool(name: &str) -> ToolMetadata {
     ToolMetadata {
-        // Both profile tools are hidden together on older natives: a saved selection cannot
-        // block ordinary work there (capture runs it unbound), so get/clear are not needed.
+        // Discovery hides profile management without access; a cached cleanup call remains
+        // available so revoking Pro cannot trap a task behind its saved selection.
         requires: match name {
             "browser_target" | "browser_profiles" => Some(NativeFeature::ProfileTargeting),
             "credentials" => Some(NativeFeature::Credentials),
             _ => None,
         },
+        access_cleanup_action: (name == "browser_target").then_some("clear"),
         manages_target: matches!(name, "browser_target" | "browser_profiles"),
         accepts_page_arg: matches!(
             name,

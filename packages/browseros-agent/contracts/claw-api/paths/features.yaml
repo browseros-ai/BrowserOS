@@ -1,0 +1,39 @@
+features:
+  get:
+    operationId: getFeatures
+    responses:
+      '200':
+        description: Current access grants.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/features.yaml#/FeatureFlags
+  put:
+    operationId: updateFeatures
+    description: >-
+      Local operator override, persisted before it affects new requests. Browser-page writes
+      are refused. This temporary writer will be replaced by verified user entitlements when
+      paid Pro launches; native compatibility is required separately.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/features.yaml#/FeatureFlags
+    responses:
+      '200':
+        description: Saved access grants. Already admitted calls keep their captured access.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/features.yaml#/FeatureFlags
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '403':
+        description: Browser-page feature writes are forbidden.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/common.yaml#/ApiError
+      '500':
+        $ref: ../responses.yaml#/InternalError

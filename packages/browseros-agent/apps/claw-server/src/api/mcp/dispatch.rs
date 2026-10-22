@@ -1361,10 +1361,11 @@ mod tests {
     {
         use crate::api::mcp::test_support::{ProfileConnection, tool_call};
         let transport = ProfileConnection::new();
-        let older = BrowserSession::new_with_native(
+        let older = BrowserSession::new_with_features(
             transport.clone(),
             browseros_core::BrowserSessionHooks::default(),
             browseros_core::NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+            tokio::sync::watch::channel(browseros_core::FeatureFlags { pro: true }).1,
         );
         older.pages.list().await?;
         let mut call = tool_call("tabs", json!({"action":"list"})).await?;

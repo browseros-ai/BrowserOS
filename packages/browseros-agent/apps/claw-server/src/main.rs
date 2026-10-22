@@ -127,11 +127,6 @@ fn log_native_identity(config: &claw_server::config::Config) {
         env = claw_server::config::MODE_ENV,
         "server mode"
     );
-    info!(
-        enabled = native.pro_enabled(),
-        env = claw_server::config::FEATURE_PRO_ENV,
-        "Pro feature policy"
-    );
 }
 
 async fn run(

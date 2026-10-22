@@ -8,6 +8,8 @@ pub mod connections;
 pub use self::connections::*;
 pub mod dispatches;
 pub use self::dispatches::*;
+pub mod features;
+pub use self::features::*;
 pub mod feedback;
 pub use self::feedback::*;
 pub mod recordings;

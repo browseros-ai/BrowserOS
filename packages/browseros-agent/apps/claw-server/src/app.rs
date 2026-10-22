@@ -13,6 +13,7 @@ use crate::{
         audit::AuditWorker,
         browser::{BrowserService, TabRegistry},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
+        feature_access::FeatureAccessStore,
         harness::HarnessService,
         harness_skills::load_browserclaw_skill,
         profiles::ProfileService,
@@ -36,6 +37,7 @@ pub struct AppState {
     pub audit_worker: Arc<AuditWorker>,
     pub audit_settings: Arc<crate::services::audit_settings::AuditSettingsStore>,
     pub agent_settings: Arc<AgentSettingsStore>,
+    pub features: Arc<FeatureAccessStore>,
     pub session_tabs: Arc<SessionTabLedger>,
     pub recordings: Arc<RecordingStore>,
     pub recording_ingest: Arc<RecordingIngestService>,
@@ -88,6 +90,7 @@ impl AppState {
             crate::services::audit_settings::AuditSettingsStore::new(&config.browserclaw_dir).await,
         );
         let agent_settings = Arc::new(AgentSettingsStore::load(store.clone()).await);
+        let features = Arc::new(FeatureAccessStore::load(store.clone()).await);
         let session_tabs = Arc::new(SessionTabLedger::new(database.clone()));
         let recording_index = Arc::new(RecordingIndex::new(database.clone()));
         session_tabs.release_all_open().await?;
@@ -168,6 +171,7 @@ impl AppState {
             sessions.ownership(),
             tab_registry.clone(),
             config.native.capabilities,
+            features.subscribe(),
         );
         let live_recordings = LiveRecordingBus::new();
         let recording_ingest = RecordingIngestService::new(
@@ -212,6 +216,7 @@ impl AppState {
             audit_worker,
             audit_settings,
             agent_settings,
+            features,
             session_tabs,
             recordings,
             recording_ingest,

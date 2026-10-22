@@ -14,17 +14,17 @@ use tokio_util::sync::CancellationToken;
 /// test is about an older or unknown one.
 pub(crate) fn current_native() -> browseros_core::NativeCapabilities {
     browseros_core::NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
-        .with_pro_enabled(true)
 }
 
 /// A browser session on `connection` that models the current native (profile targeting on).
 pub(crate) fn current_session(
     connection: Arc<dyn browseros_core::CdpConnection>,
 ) -> Arc<browseros_core::BrowserSession> {
-    browseros_core::BrowserSession::new_with_native(
+    browseros_core::BrowserSession::new_with_features(
         connection,
         browseros_core::BrowserSessionHooks::default(),
         current_native(),
+        tokio::sync::watch::channel(browseros_core::FeatureFlags { pro: true }).1,
     )
 }
 
@@ -59,6 +59,10 @@ pub async fn tool_call_in_mode(
         mode,
     });
     let state = AppState::new_with_home(config, home).await?;
+    state
+        .features
+        .update(browseros_core::FeatureFlags { pro: true })
+        .await?;
     let session = Session::new(
         SessionId::new("s1"),
         ClientIdentity::Ephemeral {

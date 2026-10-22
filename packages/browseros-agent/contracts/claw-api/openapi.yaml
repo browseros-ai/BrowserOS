@@ -18,6 +18,8 @@ paths:
     $ref: ./paths/system.yaml#/extensionUpdateReady
   /api/v1/system:
     $ref: ./paths/system.yaml#/info
+  /api/v1/features:
+    $ref: ./paths/features.yaml#/features
   /api/v1/cockpit/stats:
     $ref: ./paths/cockpit.yaml#/stats
   /api/v1/feedback/invitation:
@@ -132,6 +134,8 @@ components:
       $ref: ./schemas/settings.yaml#/TelemetryState
     UpdateTelemetryRequest:
       $ref: ./schemas/settings.yaml#/UpdateTelemetryRequest
+    FeatureFlags:
+      $ref: ./schemas/features.yaml#/FeatureFlags
     AgentSettings:
       $ref: ./schemas/settings.yaml#/AgentSettings
     JevTokenSource:

@@ -1,8 +1,8 @@
 //! Immutable execution views over a shared browser runtime. Task hosts own logical binding;
 //! views capture it once and keep management callable even when normal admission fails.
 use crate::{
-    BrowserContextId, BrowserProfileId, BrowserSession, CoreError, NativeCapabilities,
-    NativeFeature, PageId, SessionId, TabId, TargetError, WindowId,
+    BrowserContextId, BrowserProfileId, BrowserSession, CoreError, FeatureAccess,
+    NativeCapabilities, NativeFeature, PageId, SessionId, TabId, TargetError, WindowId,
 };
 use crate::{
     input::Input,
@@ -90,6 +90,8 @@ pub trait PageAdmission: Send + Sync {
 #[derive(Clone)]
 pub struct BrowserView {
     session: Arc<BrowserSession>,
+    // Frozen before the first await; every derived capability and SDK primitive inherits it.
+    access: FeatureAccess,
     binding: Option<TargetBinding>,
     /// A saved binding this view did not apply because the native browser lacks profile
     /// targeting. Routing is unbound; hosts only disclose it, and it stays persisted so a
@@ -277,9 +279,16 @@ impl BrowserView {
         load_default: bool,
     ) -> Self {
         let mut view = Self::unbound(session, unbound_default_window);
-        // Unavailable targeting (old native or Pro disabled) keeps the unbound path and
-        // sends no getProfiles. Retain any saved binding so re-enabling support can retry
-        // it on a later capture; the host discloses why it was not applied to this call.
+        // Revocation must not widen a saved selection into browser-wide routing. Retain the
+        // intent and fail admission; management can still clear it without native access.
+        if !view.access.flags().pro && binding.is_some() {
+            view.binding = binding;
+            view.source = Some(TargetSource::Explicit);
+            view.capture = Err(TargetError::ProRequired);
+            return view;
+        }
+        // Older natives keep legacy routing when Pro is granted. Preserve the saved intent
+        // for a later native upgrade and disclose that it was not applied.
         if !view.supports(NativeFeature::ProfileTargeting) {
             view.unapplied = binding;
             return view;
@@ -333,6 +342,7 @@ impl BrowserView {
     }
     pub fn unbound(session: Arc<BrowserSession>, unbound_default_window: Option<WindowId>) -> Self {
         Self {
+            access: session.access(),
             initial_epoch: session.connection().connection_epoch(),
             expected_created_page: None,
             expected_creation_epoch: None,
@@ -375,11 +385,15 @@ impl BrowserView {
         self.session.native()
     }
     #[must_use]
+    pub fn access(&self) -> FeatureAccess {
+        self.access
+    }
+    #[must_use]
     pub fn supports(&self, feature: NativeFeature) -> bool {
-        self.session.native().supports(feature)
+        self.access.supports(feature)
     }
     pub fn require(&self, feature: NativeFeature) -> Result<(), CoreError> {
-        self.session.native().require(feature)
+        self.access.require(feature)
     }
 
     /// Derive before spawning creation follow-up work, then carry this same view through every
@@ -1240,9 +1254,9 @@ impl BrowserView {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CoreError> {
-        // Raw CDP passes the native gate before any routing. Only methods and (method,
-        // parameter) pairs a FEATURES row lists can be refused; internal calls never send them.
-        self.native().check_raw(method, &params)?;
+        // Raw CDP enforces this call's access before any routing. Ownership comes from the
+        // shared compatibility catalog, so raw parameters cannot bypass a typed feature gate.
+        self.access.check_raw(method, &params)?;
         if self.scope()?.is_none() {
             if self.expected_created_page.is_some() {
                 // An unbound creation callback remains global in routing, but it cannot
@@ -1275,7 +1289,7 @@ impl BrowserView {
         method: &str,
         params_json: &str,
     ) -> Result<String, CoreError> {
-        self.native().check_raw_json(method, params_json)?;
+        self.access.check_raw_json(method, params_json)?;
         if self.epoch_guard()?.is_none() {
             return self
                 .session

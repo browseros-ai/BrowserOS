@@ -363,7 +363,7 @@ mod tests {
         use crate::api::mcp::test_support::ProfileConnection;
         use browseros_core::{PageId, WindowId, pages::NewPageOptions, target::BrowserView};
         let native = ProfileConnection::new();
-        let browser = BrowserSession::new(native.clone(), BrowserSessionHooks::default());
+        let browser = crate::api::mcp::test_support::current_session(native.clone());
         browser.pages.list().await?;
         let mut call = tool_call("run", json!({"code":"return 1"})).await?;
         call.browser_session = Some(browser.clone());

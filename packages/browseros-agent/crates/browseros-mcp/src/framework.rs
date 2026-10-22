@@ -2,7 +2,7 @@
 
 use crate::{response::ToolResponse, tools};
 use browseros_core::{
-    BrowserView, CoreError, NativeCapabilities, NativeFeature, PageId, TargetBinding, TargetIntent,
+    BrowserView, CoreError, FeatureAccess, NativeFeature, PageId, TargetBinding, TargetIntent,
     WindowId,
 };
 use futures_util::future::BoxFuture;
@@ -277,20 +277,20 @@ pub struct FeatureNote {
 }
 
 impl ToolDef {
-    /// Whether discovery should offer this tool for the connected native. Hidden tools stay
+    /// Whether discovery should offer this tool for the captured effective access. Hidden tools stay
     /// in the catalog (stable `get_tool` schemas for cached clients); `execute_tool` refuses
     /// them, so a list is a hint and the refusal is the authority.
     #[must_use]
-    pub fn available(&self, native: NativeCapabilities) -> bool {
+    pub fn available(&self, access: FeatureAccess) -> bool {
         self.metadata
             .requires
-            .is_none_or(|feature| native.supports(feature))
+            .is_none_or(|feature| access.supports(feature))
     }
 
     #[must_use]
-    pub fn description_for(&self, native: NativeCapabilities) -> String {
+    pub fn description_for(&self, access: FeatureAccess) -> String {
         match self.feature_note {
-            Some(note) if native.supports(note.feature) => {
+            Some(note) if access.supports(note.feature) => {
                 format!("{}\n\n{}", self.description, note.text)
             }
             _ => self.description.to_string(),
@@ -298,10 +298,10 @@ impl ToolDef {
     }
 
     #[must_use]
-    pub fn to_mcp_tool(&self, native: NativeCapabilities) -> Tool {
+    pub fn to_mcp_tool(&self, access: FeatureAccess) -> Tool {
         let mut tool = Tool::new(
             self.name,
-            self.description_for(native),
+            self.description_for(access),
             self.input_schema.clone(),
         );
         if let Some(output_schema) = &self.output_schema {
@@ -322,9 +322,12 @@ pub struct ToolMetadata {
     pub accepts_page_arg: bool,
     /// Management can recover a stale binding and therefore bypasses view admission.
     pub manages_target: bool,
-    /// Native feature the whole tool needs. Unsupported natives do not list the tool, and
+    /// Feature the whole tool needs. Missing native support or grants hide the tool, and
     /// `execute_tool` refuses it before admission or its handler can send anything.
     pub requires: Option<NativeFeature>,
+    /// A host-store cleanup action can release saved intent after access is revoked. Only
+    /// this exact action bypasses the feature gate; the handler still validates its schema.
+    pub access_cleanup_action: Option<&'static str>,
 }
 
 /// Internal, host-only hints a tool emits so the claw-server audit layer can keep
@@ -470,7 +473,12 @@ async fn execute_tool_inner(
     ctx.throw_if_cancelled()?;
     // First, before admission or the handler: this is the authority for a hidden tool that a
     // client still calls from a cached list, by name, or as run's `tool:*` primitive.
-    if let Some(feature) = def.metadata.requires
+    let is_cleanup = def
+        .metadata
+        .access_cleanup_action
+        .is_some_and(|action| raw_args["action"].as_str() == Some(action));
+    if !is_cleanup
+        && let Some(feature) = def.metadata.requires
         && let Err(err) = ctx.browser.require(feature)
     {
         return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));

@@ -93,6 +93,11 @@ pub enum CoreError {
 pub enum TargetError {
     #[error("target_scope_unsupported_native: native profile targeting is unavailable")]
     UnsupportedNative,
+    /// A retained target is never silently broadened when product access is revoked.
+    #[error(
+        "pro_feature_disabled: the saved profile target requires Pro; enable Pro or clear the target with browser_target action=clear"
+    )]
+    ProRequired,
     #[error("profile_not_found: {0}")]
     ProfileNotFound(String),
     #[error("profile_ambiguous: {name}; select a browserProfileId from {candidates:?}")]

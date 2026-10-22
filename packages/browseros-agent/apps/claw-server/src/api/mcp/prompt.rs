@@ -1,7 +1,7 @@
 use crate::api::mcp::pursue::PursueOffering;
 use crate::config::ServerMode;
 use crate::services::agent_settings::HumanHelp;
-use browseros_core::{NativeCapabilities, NativeFeature};
+use browseros_core::NativeCapabilities;
 
 const BROWSER_GUIDANCE: &str = r#"BrowserOS neo — the browser for agents. A real browser dedicated to agent work:
 the user doesn't browse here — they set this browser up for agents and signed
@@ -19,28 +19,6 @@ JavaScript script against the `browser` SDK: it composes the whole loop below
 call, and it is the only place saved helpers work. Use a single granular tool
 (tabs, navigate, snapshot, act, evaluate, read, grep) directly only for a one-off
 step, step-by-step debugging, or when a run script genuinely cannot express it."#;
-
-/// Taught only when the native browser implements profile targeting; older natives hide
-/// the profile tools, so instructions must not send agents to them.
-const PROFILE_GUIDANCE: &str = r#"Every call works in one regular profile. With no browser_target selection it is
-the browser's original Default profile (directory "Default"), whatever window is
-focused; tabs new opens a new inactive Default window when it has none. Choose
-another profile once for the task when needed:
-- browser_profiles action="list" discovers saved regular profiles; action="load"
-  loads an existing profile. Loading neither binds the task nor opens a window.
-- browser_target action="set" with an exact name or browserProfileId binds the
-  task; action="set_window" chooses a working window (strict=true pins it).
-  action="get" reports the saved binding and live status even when it is stale,
-  or the Default profile in use. action="clear_window" keeps the profile;
-  action="clear" returns the task to Default.
-- Window CRUD stays in windows. If the selected profile has no normal window,
-  load it with browser_profiles, then use windows action="create" before opening
-  a tab. Binding itself never loads, creates or closes profiles/windows.
-The binding persists through task handles and known reconnects. All browser
-operations, including a whole run, capture it once; rebind between calls, never
-inside run. A stale profile or closed strict pin requires explicit recovery and
-never redirects to the focused profile; default_profile_unavailable needs
-browser_target set."#;
 
 const SHARED_BROWSER_GUIDANCE: &str = r#"Shared with other agents:
 - Open your own tab with tabs action="new". You may also work in the user's tabs
@@ -195,16 +173,14 @@ const HOSTED_SUBSTITUTIONS: [(&str, &str); 3] = [
     (SAVE_SKILL_GUIDANCE, ""),
 ];
 
-/// The server instructions, with the blocked-by-a-person paragraph chosen by the setting and
-/// the profile paragraph only for natives that implement profile targeting. Instructions go out
-/// once at initialize, so they use the process-fixed native identity. A hosted server never
-/// names a tool it does not offer, so callers pass the effective help setting (off there).
+/// Initialize carries stable operating guidance. Access-dependent profile instructions live
+/// in dynamic tool descriptions so a live grant or revocation cannot leave stale routing.
 #[must_use]
 pub fn mcp_instructions(
     mode: ServerMode,
     human_help: HumanHelp,
     pursue: PursueOffering,
-    native: NativeCapabilities,
+    _native: NativeCapabilities,
 ) -> String {
     let help = match human_help {
         HumanHelp::On => HUMAN_HELP_GUIDANCE,
@@ -231,9 +207,6 @@ pub fn mcp_instructions(
         }
     }
     let mut paragraphs = vec![browser.as_str()];
-    if native.supports(NativeFeature::ProfileTargeting) {
-        paragraphs.push(PROFILE_GUIDANCE);
-    }
     paragraphs.extend([shared.as_str(), help, PAGE_CONTENT_GUARD]);
     paragraphs.join("\n\n")
 }
@@ -248,7 +221,7 @@ mod tests {
     use browseros_core::NativeCapabilities;
 
     fn current() -> NativeCapabilities {
-        NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
+        NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
     }
 
     /// The substitution is a string replace, so a reword of the guidance that
@@ -439,34 +412,17 @@ mod tests {
     }
 
     #[test]
-    fn profile_guidance_is_offered_only_to_capable_natives() {
-        let capable = mcp_instructions(
-            ServerMode::Desktop,
-            HumanHelp::On,
-            PursueOffering::Absent,
-            current(),
-        );
-        assert!(capable.contains("Choose\nanother profile once for the task"));
-        // The default rule is what agents rely on when they never select a profile.
-        assert!(capable.contains("original Default profile (directory \"Default\")"));
-        assert!(capable.contains("action=\"clear\" returns the task to Default"));
-        for older in [
-            NativeCapabilities::from_browseros_version(Some("0.51.1.2")).with_pro_enabled(true),
-            NativeCapabilities::default(),
-            current().with_pro_enabled(false),
-        ] {
+    fn initialize_does_not_freeze_access_dependent_profile_guidance() {
+        for native in [current(), NativeCapabilities::default()] {
             let instructions = mcp_instructions(
                 ServerMode::Desktop,
                 HumanHelp::On,
                 PursueOffering::Absent,
-                older,
+                native,
             );
-            assert!(!instructions.contains("browser_profiles"), "{older}");
-            assert!(!instructions.contains("browser_target"), "{older}");
-            assert!(!instructions.contains("Default profile"), "{older}");
+            assert!(!instructions.contains("browser_profiles"));
+            assert!(!instructions.contains("browser_target"));
             assert!(instructions.contains("Reach for run first"));
-            assert!(instructions.contains("Shared with other agents:"));
-            assert!(instructions.ends_with(PAGE_CONTENT_LINE));
         }
     }
 

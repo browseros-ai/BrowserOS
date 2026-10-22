@@ -179,6 +179,10 @@ pub struct ClawMcpService {
     lifecycle: Arc<Mutex<ServiceLifecycle>>,
     fallback_session_id: SessionId,
     closed: AtomicBool,
+    // Subscribe at service creation, before rmcp acknowledges subscriptions/listen. Cloning
+    // this reader later preserves changes in the acknowledgment-to-handler handoff.
+    feature_flags: tokio::sync::watch::Receiver<browseros_core::FeatureFlags>,
+    feature_notifications: browseros_mcp::feature_notifications::FeatureNotifications,
 }
 
 #[derive(Default)]
@@ -230,6 +234,7 @@ impl SessionClient {
 impl ClawMcpService {
     #[must_use]
     pub fn new(state: AppState) -> Self {
+        let feature_flags = state.features.subscribe();
         Self {
             state,
             catalog: Arc::new(catalog()),
@@ -243,11 +248,18 @@ impl ClawMcpService {
             lifecycle: Arc::new(Mutex::new(ServiceLifecycle::default())),
             fallback_session_id: SessionId::new(format!("stdio-{}", Ulid::new())),
             closed: AtomicBool::new(false),
+            feature_flags,
+            feature_notifications:
+                browseros_mcp::feature_notifications::FeatureNotifications::default(),
         }
     }
 
     fn native(&self) -> browseros_core::NativeCapabilities {
         self.state.config.native.capabilities
+    }
+
+    fn access(&self) -> browseros_core::FeatureAccess {
+        browseros_core::FeatureAccess::new(self.native(), self.state.features.snapshot())
     }
 
     fn mode(&self) -> ServerMode {
@@ -293,14 +305,13 @@ impl ClawMcpService {
             }
             tool
         };
-        // Tools whose native feature the connected browser lacks are not offered. The list is
-        // fixed for the process (the identity is), and execute_tool refuses cached callers.
-        let native = self.native();
+        // One snapshot governs both visibility and descriptions for the entire list.
+        let access = self.access();
         let mut tools = self
             .catalog
             .iter()
-            .filter(|tool| tool.available(native))
-            .map(|tool| tool.to_mcp_tool(native))
+            .filter(|tool| tool.available(access))
+            .map(|tool| tool.to_mcp_tool(access))
             .map(&decorate)
             .collect::<Vec<_>>();
         let mut local = vec![
@@ -1371,6 +1382,8 @@ impl ServerHandler for ClawMcpService {
     }
 
     async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        self.feature_notifications
+            .start(self.feature_flags.clone(), context.peer.clone());
         self.learn_session_from_notification(&context).await;
     }
 
@@ -1389,6 +1402,10 @@ impl ServerHandler for ClawMcpService {
         let is_modern_revision = context
             .protocol_version()
             .is_some_and(|version| version >= ProtocolVersion::V_2026_07_28);
+        if !is_modern_revision {
+            self.feature_notifications
+                .start(self.feature_flags.clone(), context.peer.clone());
+        }
         let mut result = ListToolsResult::with_all_items(self.listed_tools(is_modern_revision));
         if is_modern_revision {
             result = result.with_ttl_ms(0).with_cache_scope(CacheScope::Public);
@@ -1400,12 +1417,16 @@ impl ServerHandler for ClawMcpService {
     // method-not-found. rmcp's default `accepted_subscription_filter` returns None,
     // which becomes JSON-RPC -32601 and an HTTP 404 that kills the transport before
     // tools/list can run. Returning the capability-supported subset opens the stream;
-    // the default `listen` holds it until the client cancels or the server shuts down.
+    // `listen` forwards grant changes until this subscription is cancelled or closed.
     fn accepted_subscription_filter(
         &self,
         requested: &SubscriptionFilter,
     ) -> Option<SubscriptionFilter> {
         Some(requested.supported_by(&self.get_info().capabilities))
+    }
+
+    async fn listen(&self, context: rmcp::service::SubscriptionContext) -> Result<(), McpError> {
+        browseros_mcp::feature_notifications::listen(self.feature_flags.clone(), context).await
     }
 
     fn get_tool(&self, name: &str) -> Option<Tool> {
@@ -1424,10 +1445,10 @@ impl ServerHandler for ClawMcpService {
         // Catalog-wide even for hidden tools: rmcp caches these input schemas by name, and a
         // cached caller should reach execute_tool's explanation, not method-not-found.
         let pursue = self.pursue_offering();
-        let native = self.native();
+        let access = self.access();
         self.find_tool_index(name).map(|index| {
             with_session_arg(with_pursue_fallback_note(
-                self.catalog[index].to_mcp_tool(native),
+                self.catalog[index].to_mcp_tool(access),
                 pursue,
             ))
         })
@@ -3396,7 +3417,7 @@ mod tests {
         let mut expected = service
             .catalog
             .iter()
-            .filter(|tool| tool.available(service.native()))
+            .filter(|tool| tool.available(service.access()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expect_pursue_if_credentialled(&service, &mut expected);
@@ -3462,7 +3483,7 @@ mod tests {
         let mut expected = service
             .catalog
             .iter()
-            .filter(|tool| tool.available(service.native()))
+            .filter(|tool| tool.available(service.access()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
@@ -3493,7 +3514,7 @@ mod tests {
             .catalog
             .iter()
             .find(|tool| tool.name == RUN_TOOL_NAME)
-            .map(|tool| tool.to_mcp_tool(service.native()))
+            .map(|tool| tool.to_mcp_tool(service.access()))
             .ok_or_else(|| anyhow::anyhow!("run is missing from the catalogue"))?;
         let description = run
             .description
@@ -3524,8 +3545,8 @@ mod tests {
     async fn a_granular_tool_is_left_alone_by_the_recast() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call("tabs", json!({})).await?;
         let service = ClawMcpService::new(call.state);
-        let native = service.native();
-        for tool in service.catalog.iter().map(|tool| tool.to_mcp_tool(native)) {
+        let access = service.access();
+        for tool in service.catalog.iter().map(|tool| tool.to_mcp_tool(access)) {
             if tool.name == RUN_TOOL_NAME {
                 continue;
             }
@@ -3690,7 +3711,7 @@ mod tests {
         let mut expected = service
             .catalog
             .iter()
-            .filter(|tool| tool.available(service.native()))
+            .filter(|tool| tool.available(service.access()))
             .map(|tool| tool.name.to_string())
             .collect::<Vec<_>>();
         expected.push(NAME_SESSION_TOOL_NAME.to_string());
