@@ -137,6 +137,29 @@ function useDemoPlayback(): Playback {
   }
 }
 
+/**
+ * Freezes every CSS transition and animation running in the stage, mid-move
+ * (the pointer's 1.1 s glide, a fade, the badge halo), or resumes the ones it
+ * froze. Stopping the clock alone would let in-flight transitions finish, and
+ * killing transitions would snap them to their end instead of holding them.
+ */
+export function setStageMotionPaused(
+  stage: Pick<Element, 'getAnimations'> | null,
+  paused: boolean,
+) {
+  for (const animation of stage?.getAnimations({ subtree: true }) ?? []) {
+    if (paused) {
+      // pause() only takes hold on the next frame; pinning currentTime holds
+      // the animation exactly where it was when Pause was pressed.
+      const heldAt = animation.currentTime
+      animation.pause()
+      animation.currentTime = heldAt
+    }
+    // Only resume what Pause froze: play() would replay a finished animation.
+    else if (animation.playState === 'paused') animation.play()
+  }
+}
+
 /** Lays the stage out at 960×480 and scales it to the player's width. */
 function useStageScale() {
   const boxRef = useRef<HTMLDivElement>(null)
@@ -158,7 +181,13 @@ function useStageScale() {
 export function OnboardingDemo() {
   const playback = useDemoPlayback()
   const { boxRef, scale } = useStageScale()
+  const stageRef = useRef<HTMLDivElement>(null)
   const [instant, setInstant] = useState(true)
+  const { playing } = playback
+
+  useLayoutEffect(() => {
+    setStageMotionPaused(stageRef.current, !playing)
+  }, [playing])
 
   // A jump (loop wrap, Replay) paints its frame with transitions off, then
   // turns them back on a frame later, so nothing animates backwards. The
@@ -178,6 +207,7 @@ export function OnboardingDemo() {
         className="relative aspect-[2/1] w-full overflow-hidden rounded-[14px] border border-accent-tint-2 bg-accent-tint"
       >
         <div
+          ref={stageRef}
           role="img"
           aria-label="On a Mac, you open the Claude app in Code mode and ask it to find the cheapest flight to New York next Friday. neo opens the flight search, fills it in, reads five flights and tags the cheapest, $142 at 7:05 am, and Claude replies with it."
           data-instant={instant || undefined}

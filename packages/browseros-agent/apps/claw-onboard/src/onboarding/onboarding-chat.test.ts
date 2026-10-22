@@ -187,6 +187,25 @@ describe('Logins', () => {
 })
 
 describe('Import', () => {
+  it('shows the heads-up as soon as the import is requested, before native answers', () => {
+    // The click commits this render before it sends the request.
+    const result = chat(snapshot(), requested)
+    expect(
+      bubbles(result)
+        .map((bubble) => bubble.kind)
+        .slice(-2),
+    ).toEqual(['keychain', 'progress'])
+    expect(texts(result).at(-1)).toBe('Bringing your logins… 0 of 5')
+    expect(chipsOf(result).editable).toBe(false)
+    expect(result.dock).toEqual([])
+  })
+
+  it('claims nothing specific when a success snapshot carries no progress', () => {
+    const result = chat(snapshot({ status: 'succeeded' }), requested)
+    expect(texts(result).at(-1)).toBe('Done.')
+    expect(texts(result)).not.toContain('Done. Your logins are here.')
+  })
+
   const items = ['history', 'bookmarks', 'cookies', 'passwords', 'autofill']
 
   it('shows the Mac heads-up and real progress counts while importing', () => {

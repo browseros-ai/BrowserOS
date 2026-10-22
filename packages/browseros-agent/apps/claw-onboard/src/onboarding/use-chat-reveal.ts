@@ -34,52 +34,71 @@ export interface ChatReveal {
   settled: boolean
 }
 
+export interface RevealPlan {
+  /** Bubbles on screen in this render. */
+  shown: ReadonlySet<string>
+  /** The first bubble still to be typed, if any. */
+  next: { id: string; turnId: string } | null
+}
+
+/**
+ * Which bubbles are on screen, given those already typed. Replies and the
+ * Keychain heads-up are instant: they show in the same render that adds them
+ * (as long as nothing before them is still being typed), with no effect in
+ * between. The import click relies on that: it commits this render with
+ * flushSync, then sends the request, so the heads-up precedes macOS's prompt.
+ */
+export function revealPlan(
+  turns: readonly ChatTurn[],
+  typed: ReadonlySet<string>,
+  reducedMotion: boolean,
+): RevealPlan {
+  const shown = new Set<string>()
+  let next: RevealPlan['next'] = null
+  for (const turn of turns) {
+    for (const bubble of turn.bubbles) {
+      const instant =
+        reducedMotion || turn.from === 'you' || bubble.kind === 'keychain'
+      if (typed.has(bubble.id) || (instant && !next)) {
+        shown.add(bubble.id)
+        continue
+      }
+      next ??= { id: bubble.id, turnId: turn.id }
+    }
+  }
+  return { shown, next }
+}
+
 /**
  * Paces the transcript like someone typing: each new neo bubble waits a beat,
  * shows typing dots, then lands. The transcript itself is derived fresh from
  * every Chromium snapshot; only this pacing is stateful, keyed by bubble id, so
  * a bubble whose text changes in place (import progress) never re-types.
- * Replies and the Keychain heads-up land at once: the heads-up has to be read
- * before macOS raises its own prompt. Reduced motion lands everything at once.
  */
 export function useChatReveal(turns: readonly ChatTurn[]): ChatReveal {
   const reducedMotion = usePrefersReducedMotion()
-  const [revealed, setRevealed] = useState<ReadonlySet<string>>(() => new Set())
+  const [typed, setTyped] = useState<ReadonlySet<string>>(() => new Set())
   const [typing, setTyping] = useState(false)
-
-  const queue = turns.flatMap((turn) =>
-    turn.bubbles.map((bubble) => ({
-      id: bubble.id,
-      turnId: turn.id,
-      instant: turn.from === 'you' || bubble.kind === 'keychain',
-    })),
-  )
-  const next = queue.find((entry) => !revealed.has(entry.id))
+  const { shown, next } = revealPlan(turns, typed, reducedMotion)
   const nextId = next?.id
-  const nextInstant = next?.instant ?? false
 
   useEffect(() => {
     if (!nextId) return
-    const reveal = () => setRevealed((prev) => new Set(prev).add(nextId))
-    if (reducedMotion || nextInstant) {
-      reveal()
-      return
-    }
     const typingTimer = window.setTimeout(() => setTyping(true), BEAT_MS)
     const revealTimer = window.setTimeout(() => {
       setTyping(false)
-      reveal()
+      setTyped((prev) => new Set(prev).add(nextId))
     }, BEAT_MS + TYPING_MS)
     return () => {
       window.clearTimeout(typingTimer)
       window.clearTimeout(revealTimer)
       setTyping(false)
     }
-  }, [nextId, nextInstant, reducedMotion])
+  }, [nextId])
 
   const pendingTurn = turns.at(-1)?.pending ? turns.at(-1) : undefined
   return {
-    revealed,
+    revealed: shown,
     typingTurnId:
       typing && next ? next.turnId : !next ? (pendingTurn?.id ?? null) : null,
     settled: !next && !pendingTurn,

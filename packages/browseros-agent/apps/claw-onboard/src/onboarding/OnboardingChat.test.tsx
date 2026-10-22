@@ -9,13 +9,14 @@ import { ChatThread } from './components/ChatThread'
 import { flightSceneFrameAt } from './components/FlightScene'
 import { ReplyDock } from './components/ReplyDock'
 import { MOCK_BROWSEROS_IMPORT_SOURCES } from './mock-import-sources'
-import { OnboardingChat } from './OnboardingChat'
+import { OnboardingChat, startImportFromClick } from './OnboardingChat'
 import {
   buildOnboardingChat,
   type OnboardingChat as Chat,
   type ChatChoices,
   initialChatChoices,
 } from './onboarding-chat'
+import { revealPlan } from './use-chat-reveal'
 
 function renderThread(chat: Chat): string {
   const revealed = new Set(
@@ -160,5 +161,55 @@ describe('flightSceneFrameAt', () => {
       ring: -1,
       checked: 5,
     })
+  })
+})
+
+describe('the import click', () => {
+  it('commits the reply and heads-up, then sends startImport on the same stack', () => {
+    const calls: string[] = []
+    const request = { sourceId: 'chrome-work', items: ['cookies' as const] }
+    startImportFromClick(
+      request,
+      { startImport: (sent) => calls.push(`startImport:${sent.sourceId}`) },
+      () => calls.push('commit'),
+    )
+    // Synchronous: no await or timer between the click and the request.
+    expect(calls).toEqual(['commit', 'startImport:chrome-work'])
+  })
+})
+
+describe('revealPlan', () => {
+  const requested = {
+    ...initialChatChoices,
+    step: 'logins' as const,
+    importRequested: true,
+  }
+  const turns = build({}, requested).turns
+  const typedBeforeClick = new Set(
+    turns
+      .flatMap((turn) => turn.bubbles.map((bubble) => bubble.id))
+      .filter(
+        (id) => !id.startsWith('you-import') && !id.startsWith('import-'),
+      ),
+  )
+
+  it('shows the reply and the heads-up in the render that adds them', () => {
+    const { shown, next } = revealPlan(turns, typedBeforeClick, false)
+    expect(shown.has('you-import')).toBe(true)
+    expect(shown.has('import-keychain')).toBe(true)
+    expect(next?.id).toBe('import-progress')
+  })
+
+  it('holds instant bubbles behind one still being typed', () => {
+    const { shown, next } = revealPlan(turns, new Set(['hi-hero']), false)
+    expect(next?.id).toBe('hi-line')
+    expect(shown.has('you-start')).toBe(false)
+    expect(shown.has('import-keychain')).toBe(false)
+  })
+
+  it('shows everything at once with reduced motion', () => {
+    const { shown, next } = revealPlan(turns, new Set(), true)
+    expect(next).toBeNull()
+    expect(shown.size).toBe(turns.flatMap((turn) => turn.bubbles).length)
   })
 })

@@ -192,21 +192,25 @@ export function chatImportRequest(
 
 type ImportOutcome = 'importing' | 'succeeded' | 'failed'
 
-/** Native can report a failure under any status (`SendFailure("ready", …)`),
- * and `completed` after setup keeps the import result only in `results`. */
+/**
+ * Native can report a failure under any status (`SendFailure("ready", …)`),
+ * and `completed` after setup keeps the import result only in `results`. A
+ * requested import that native has not answered yet counts as importing: the
+ * click commits that render (with the Mac heads-up) before it sends the
+ * request, so the heads-up is on screen before macOS can prompt.
+ */
 function importOutcomeFor(
   state: BrowserOSOnboardingState,
   choices: ChatChoices,
 ): ImportOutcome | null {
   if (!choices.importRequested) return null
-  if (state.status === 'importing') return 'importing'
   if (state.status === 'succeeded') return 'succeeded'
   if (state.status === 'failed' || state.error) return 'failed'
   if (state.status === 'completed') {
     const result = state.results?.[0]?.status
     if (result === 'succeeded' || result === 'failed') return result
   }
-  return null
+  return 'importing'
 }
 
 const HI_BUBBLES = (live: boolean): ChatBubble[] => [
@@ -363,7 +367,8 @@ function addImportResult(
     kind: 'progress',
     ...(outcome === 'succeeded'
       ? {
-          text: importDoneLine(state.progress?.completedItems ?? items),
+          // Only what Chromium reported done; without progress, claim nothing.
+          text: importDoneLine(state.progress?.completedItems ?? []),
           value: 1,
         }
       : progressText(state, items)),

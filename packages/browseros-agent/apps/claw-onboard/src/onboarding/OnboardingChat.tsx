@@ -5,13 +5,18 @@
  */
 
 import { useEffect, useReducer, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { cn } from '@/lib/utils'
 import {
   BROWSEROS_ONBOARDING_API_VERSION,
   type BrowserOSImportItem,
   type BrowserOSOnboardingState,
+  type BrowserOSStartImportRequest,
 } from './browseros-onboarding-api'
-import { createBrowserOSOnboardingBridge } from './browseros-onboarding-bridge'
+import {
+  type BrowserOSOnboardingBridge,
+  createBrowserOSOnboardingBridge,
+} from './browseros-onboarding-bridge'
 import { ChatThread } from './components/ChatThread'
 import { ReplyDock } from './components/ReplyDock'
 import { detectPlatform } from './import-selection'
@@ -29,6 +34,21 @@ const initialOnboardingState: BrowserOSOnboardingState = {
   apiVersion: BROWSEROS_ONBOARDING_API_VERSION,
   status: 'idle',
   sources: [],
+}
+
+/**
+ * The import click. The person's reply and the Mac heads-up are committed to
+ * the DOM first (flushSync), so the heads-up is on screen before macOS can
+ * raise the Keychain prompt; then the request goes out on the same click
+ * stack, because Chromium rejects an import that is not a recent interaction.
+ */
+export function startImportFromClick(
+  request: BrowserOSStartImportRequest,
+  bridge: Pick<BrowserOSOnboardingBridge, 'startImport'>,
+  commitReply: () => void,
+) {
+  flushSync(commitReply)
+  bridge.startImport(request)
 }
 
 /** Long enough to read neo's "Done." line before the chat hands off. */
@@ -86,11 +106,11 @@ export function OnboardingChat() {
         return
       case 'import': {
         const request = chatImportRequest(input)
-        if (!request) return
-        dispatch({ type: 'importRequested' })
-        // Keep this on the click stack: Chromium rejects an import that is not
-        // a recent interaction, because macOS may raise the Keychain prompt.
-        bridge.startImport(request)
+        if (request) {
+          startImportFromClick(request, bridge, () =>
+            dispatch({ type: 'importRequested' }),
+          )
+        }
         return
       }
       case 'refresh':

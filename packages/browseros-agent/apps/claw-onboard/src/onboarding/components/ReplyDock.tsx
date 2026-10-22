@@ -216,57 +216,61 @@ function ProfileChip({ sources, selectedId, onPick }: ProfileChipProps) {
         />
       </button>
       {open && (
-        <div
-          id={listId}
-          role="listbox"
-          aria-label="Pick a profile"
-          // Sized to the longest displayName, so names read whole; only past
-          // the cap do they ellipsize, with the full name as a tooltip.
-          className="absolute right-0 bottom-[calc(100%+26px)] w-max min-w-[300px] max-w-[min(460px,calc(100vw-32px))] animate-fade-up rounded-[18px] border border-accent-tint-2 bg-card p-2 shadow-[0_30px_60px_-28px_rgb(1_18_63/0.4)]"
-        >
-          <div className="px-3 pt-2.5 pb-2 font-medium font-mono text-[11px] text-ink-3 uppercase leading-[14px] tracking-[0.12em]">
+        // Sized to the longest displayName, so names read whole; only past
+        // the cap do they ellipsize, with the full name as a tooltip. The
+        // height is capped too: the menu opens upward inside an overflow-
+        // hidden page, so a long profile list scrolls rather than leaving it.
+        <div className="absolute right-0 bottom-[calc(100%+26px)] flex max-h-[min(60vh,360px)] w-max min-w-[300px] max-w-[min(460px,calc(100vw-32px))] animate-fade-up flex-col rounded-[18px] border border-accent-tint-2 bg-card p-2 shadow-[0_30px_60px_-28px_rgb(1_18_63/0.4)]">
+          <div className="shrink-0 px-3 pt-2.5 pb-2 font-medium font-mono text-[11px] text-ink-3 uppercase leading-[14px] tracking-[0.12em]">
             Pick a profile
           </div>
-          {sources.map((source, index) => {
-            const isSelected = source.id === selected.id
-            return (
-              <button
-                key={source.id}
-                type="button"
-                role="option"
-                aria-selected={isSelected}
-                title={source.displayName}
-                onClick={() => {
-                  onPick(source.id)
-                  setOpen(false)
-                }}
-                className={cn(
-                  'flex h-14 w-full cursor-pointer items-center gap-3 rounded-xl px-3 text-left text-[17px] text-ink-deep leading-[22px] outline-none hover:bg-card-tint focus-visible:ring-2 focus-visible:ring-primary/40',
-                  isSelected ? 'bg-secondary font-semibold' : 'font-medium',
-                )}
-              >
-                <SourceAvatar
-                  source={source}
-                  index={index}
-                  className="size-8 text-[15px]"
-                />
-                <span className="min-w-0 flex-1 truncate">
-                  {source.displayName}
-                </span>
-                <span
-                  aria-hidden
+          <div
+            id={listId}
+            role="listbox"
+            aria-label="Pick a profile"
+            className="min-h-0 overflow-y-auto"
+          >
+            {sources.map((source, index) => {
+              const isSelected = source.id === selected.id
+              return (
+                <button
+                  key={source.id}
+                  type="button"
+                  role="option"
+                  aria-selected={isSelected}
+                  title={source.displayName}
+                  onClick={() => {
+                    onPick(source.id)
+                    setOpen(false)
+                  }}
                   className={cn(
-                    'flex size-5 shrink-0 items-center justify-center rounded-full border-2',
-                    isSelected ? 'border-primary' : 'border-border-strong',
+                    'flex h-14 w-full cursor-pointer items-center gap-3 rounded-xl px-3 text-left text-[17px] text-ink-deep leading-[22px] outline-none hover:bg-card-tint focus-visible:ring-2 focus-visible:ring-primary/40',
+                    isSelected ? 'bg-secondary font-semibold' : 'font-medium',
                   )}
                 >
-                  {isSelected && (
-                    <span className="size-2.5 rounded-full bg-primary" />
-                  )}
-                </span>
-              </button>
-            )
-          })}
+                  <SourceAvatar
+                    source={source}
+                    index={index}
+                    className="size-8 text-[15px]"
+                  />
+                  <span className="min-w-0 flex-1 truncate">
+                    {source.displayName}
+                  </span>
+                  <span
+                    aria-hidden
+                    className={cn(
+                      'flex size-5 shrink-0 items-center justify-center rounded-full border-2',
+                      isSelected ? 'border-primary' : 'border-border-strong',
+                    )}
+                  >
+                    {isSelected && (
+                      <span className="size-2.5 rounded-full bg-primary" />
+                    )}
+                  </span>
+                </button>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
