@@ -167,14 +167,18 @@ export class McpSession {
     })
   }
 
-  async request(method: string, params: unknown): Promise<unknown> {
+  async request(
+    method: string,
+    params: unknown,
+    timeoutMs = REQUEST_TIMEOUT_MS,
+  ): Promise<unknown> {
     const id = this.#nextId
     this.#nextId += 1
     const response = await fetch(`${this.baseUrl}/mcp`, {
       method: 'POST',
       headers: this.#headers(),
       body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     })
     if (!response.ok) {
       throw new Error(
@@ -202,8 +206,13 @@ export class McpSession {
   async callTool(
     name: string,
     args: Record<string, unknown> = {},
+    timeoutMs = REQUEST_TIMEOUT_MS,
   ): Promise<McpToolResult> {
-    const result = await this.request('tools/call', { name, arguments: args })
+    const result = await this.request(
+      'tools/call',
+      { name, arguments: args },
+      timeoutMs,
+    )
     return result as McpToolResult
   }
 
