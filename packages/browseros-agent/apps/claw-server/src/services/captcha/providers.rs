@@ -31,7 +31,6 @@ pub trait CaptchaBackend: Send + Sync {
 
 pub struct ProviderChain {
     capsolver: Option<CapsolverClient>,
-    capmonster: Option<CapmonsterClient>,
     paid: AtomicU32,
     limit: u32,
 }
@@ -45,19 +44,9 @@ impl ProviderChain {
             .build()
             .ok();
         Self {
-            capsolver: config.capsolver.as_ref().map(|config| {
-                CapsolverClient(ProviderClient {
-                    name: ProviderName::Capsolver,
-                    config: config.clone(),
-                    http: http.clone(),
-                })
-            }),
-            capmonster: config.capmonster.as_ref().map(|config| {
-                CapmonsterClient(ProviderClient {
-                    name: ProviderName::Capmonster,
-                    config: config.clone(),
-                    http: http.clone(),
-                })
+            capsolver: config.capsolver.as_ref().map(|config| CapsolverClient {
+                config: config.clone(),
+                http,
             }),
             paid: AtomicU32::new(0),
             limit: config.paid_task_limit,
@@ -70,7 +59,7 @@ impl ProviderChain {
 
 impl CaptchaBackend for ProviderChain {
     fn is_configured(&self) -> bool {
-        self.capsolver.is_some() || self.capmonster.is_some()
+        self.capsolver.is_some()
     }
 
     async fn solve(
@@ -79,67 +68,38 @@ impl CaptchaBackend for ProviderChain {
         deadline: Instant,
         cancel: &CancellationToken,
     ) -> Result<ProviderAnswer, ProviderError> {
-        let mut errors = Vec::new();
-        let mut charged = false;
-        let mut prior_cost = 0.0;
-        for client in [
-            self.capsolver.as_ref().map(|c| &c.0),
-            self.capmonster.as_ref().map(|c| &c.0),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if client.name == ProviderName::Capsolver
-                && matches!(task, SolveTask::RecaptchaTiles(puzzle)
-                if !puzzle.question_id.as_deref().is_some_and(|id| id.starts_with("/m/") && id.len() > 3))
-            {
-                continue;
-            }
-            let result = async {
-                client.check_budget(deadline, cancel)?;
-                let payload = client.task_payload(task)?;
-                let mut slot = PaidSlot::reserve(&self.paid, self.limit)
-                    .ok_or_else(|| client.error(ProviderErrorKind::SpendLimit, "paid-task limit reached", false))?;
-                let started = Instant::now();
-                tracing::debug!(target: "captcha", provider = ?client.name, task_type = task.label(), "provider task started");
-                // Keep the reservation if the caller drops this future after submission.
-                slot.charged = true;
-                let result = client.solve(task, payload, deadline.min(started + ATTEMPT_TIMEOUT), cancel).await;
-                if let Err(error) = &result { slot.charged = error.charged; }
-                tracing::debug!(target: "captcha", provider = ?client.name, task_type = task.label(), latency_ms = started.elapsed().as_millis() as u64, success = result.is_ok(), "provider task finished");
-                result
-            }.await;
-            match result {
-                Ok(mut answer) => {
-                    answer.cost_usd = Some(prior_cost + answer.cost_usd.unwrap_or(0.0));
-                    return Ok(answer);
-                }
-                Err(mut error) => {
-                    charged |= error.charged;
-                    if error.charged {
-                        prior_cost += estimate(client.name, task);
-                    }
-                    errors.push(format!(
-                        "{:?} {:?}: {}",
-                        client.name, error.kind, error.message
-                    ));
-                    if !error.kind.may_fallback()
-                        || client.name == ProviderName::Capmonster
-                        || self.capmonster.is_none()
-                    {
-                        error.message = errors.join("; ");
-                        error.charged = charged;
-                        return Err(error);
-                    }
-                }
-            }
-        }
-        Err(ProviderError {
+        let client = self.capsolver.as_ref().ok_or_else(|| ProviderError {
             provider: None,
             kind: ProviderErrorKind::NotConfigured,
             message: "no CAPTCHA provider configured".into(),
             charged: false,
-        })
+        })?;
+        client.check_budget(deadline, cancel)?;
+        let payload = client.task_payload(task)?;
+        let mut slot = PaidSlot::reserve(&self.paid, self.limit).ok_or_else(|| {
+            client.error(
+                ProviderErrorKind::SpendLimit,
+                "paid-task limit reached",
+                false,
+            )
+        })?;
+        let started = Instant::now();
+        tracing::debug!(target: "captcha", provider = ?ProviderName::Capsolver, task_type = task.label(), "provider task started");
+        // Keep the reservation if the caller drops this future after submission.
+        slot.charged = true;
+        let result = client
+            .solve(
+                task,
+                payload,
+                deadline.min(started + ATTEMPT_TIMEOUT),
+                cancel,
+            )
+            .await;
+        if let Err(error) = &result {
+            slot.charged = error.charged;
+        }
+        tracing::debug!(target: "captcha", provider = ?ProviderName::Capsolver, task_type = task.label(), latency_ms = started.elapsed().as_millis() as u64, success = result.is_ok(), "provider task finished");
+        result
     }
 }
 
@@ -169,42 +129,19 @@ impl Drop for PaidSlot<'_> {
     }
 }
 
-pub struct CapsolverClient(ProviderClient);
-pub struct CapmonsterClient(ProviderClient);
-
-impl CapsolverClient {
-    pub fn new(config: &ProviderConfig, http: Client) -> Self {
-        Self(ProviderClient {
-            name: ProviderName::Capsolver,
-            config: config.clone(),
-            http: Some(http),
-        })
-    }
-    pub async fn get_balance(&self) -> Result<f64, ProviderError> {
-        self.0.get_balance().await
-    }
-}
-
-impl CapmonsterClient {
-    pub fn new(config: &ProviderConfig, http: Client) -> Self {
-        Self(ProviderClient {
-            name: ProviderName::Capmonster,
-            config: config.clone(),
-            http: Some(http),
-        })
-    }
-    pub async fn get_balance(&self) -> Result<f64, ProviderError> {
-        self.0.get_balance().await
-    }
-}
-
-struct ProviderClient {
-    name: ProviderName,
+pub struct CapsolverClient {
     config: ProviderConfig,
     http: Option<Client>,
 }
 
-impl ProviderClient {
+impl CapsolverClient {
+    pub fn new(config: &ProviderConfig, http: Client) -> Self {
+        Self {
+            config: config.clone(),
+            http: Some(http),
+        }
+    }
+
     fn error(
         &self,
         kind: ProviderErrorKind,
@@ -212,7 +149,7 @@ impl ProviderClient {
         charged: bool,
     ) -> ProviderError {
         ProviderError {
-            provider: Some(self.name),
+            provider: Some(ProviderName::Capsolver),
             kind,
             message: message.into(),
             charged,
@@ -238,14 +175,6 @@ impl ProviderClient {
     }
 
     fn task_payload(&self, task: &SolveTask) -> Result<Value, ProviderError> {
-        let primary = self.name == ProviderName::Capsolver;
-        let unsupported = || {
-            self.error(
-                ProviderErrorKind::Unsupported,
-                "task options are not supported by this provider",
-                false,
-            )
-        };
         let bad = || {
             self.error(
                 ProviderErrorKind::BadRequest,
@@ -253,53 +182,35 @@ impl ProviderClient {
                 false,
             )
         };
-        let payload = match task {
+        Ok(match task {
             SolveTask::RecaptchaTiles(puzzle) => {
                 if puzzle.image_base64.trim().is_empty() || puzzle.image_base64.starts_with("data:")
                 {
                     return Err(bad());
                 }
+                // https://docs.capsolver.com/en/guide/recognition/ReCaptchaClassification/
                 let id = puzzle
                     .question_id
                     .as_deref()
-                    .filter(|id| id.starts_with("/m/") && id.len() > 3);
-                if primary {
-                    // https://docs.capsolver.com/en/guide/recognition/ReCaptchaClassification/
-                    json!({"type":"ReCaptchaV2Classification","image":puzzle.image_base64,"question":id.ok_or_else(unsupported)?})
-                } else {
-                    // https://docs.capmonster.cloud/docs/captchas/recaptcha-click/
-                    let mut metadata = json!({"Grid":puzzle.grid.as_str()});
-                    if let Some(id) = id {
-                        metadata["TaskDefinition"] = json!(id);
-                    } else if !puzzle.question_text.trim().is_empty() {
-                        metadata["Task"] = json!(puzzle.question_text);
-                    } else {
-                        return Err(bad());
-                    }
-                    json!({"type":"ComplexImageTask","class":"recaptcha","imagesBase64":[puzzle.image_base64],"metadata":metadata})
-                }
+                    .filter(|id| id.starts_with("/m/") && id.len() > 3)
+                    .ok_or_else(|| {
+                        self.error(
+                            ProviderErrorKind::NotConfigured,
+                            "image classification requires a question ID",
+                            false,
+                        )
+                    })?;
+                json!({"type":"ReCaptchaV2Classification","image":puzzle.image_base64,"question":id})
             }
             SolveTask::RecaptchaToken(params) => {
                 validate_site(&params.website_url, &params.website_key).map_err(|()| bad())?;
-                if !primary
-                    && ((params.enterprise && params.invisible)
-                        || (!params.enterprise && params.page_action.is_some()))
-                {
-                    return Err(unsupported());
-                }
                 // https://docs.capsolver.com/en/guide/captcha/ReCaptchaV2/
-                // https://docs.capmonster.cloud/docs/captchas/no-captcha-task/
-                // https://docs.capmonster.cloud/docs/captchas/recaptcha-v2-enterprise-task/
-                let kind = match (primary, params.enterprise) {
-                    (true, false) => "ReCaptchaV2TaskProxyLess",
-                    (true, true) => "ReCaptchaV2EnterpriseTaskProxyLess",
-                    (false, false) => "RecaptchaV2Task",
-                    (false, true) => "RecaptchaV2EnterpriseTask",
+                let kind = if params.enterprise {
+                    "ReCaptchaV2EnterpriseTaskProxyLess"
+                } else {
+                    "ReCaptchaV2TaskProxyLess"
                 };
-                let mut payload = json!({"type":kind,"websiteURL":params.website_url,"websiteKey":params.website_key});
-                if primary || !params.enterprise {
-                    payload["isInvisible"] = json!(params.invisible);
-                }
+                let mut payload = json!({"type":kind,"websiteURL":params.website_url,"websiteKey":params.website_key,"isInvisible":params.invisible});
                 if params.enterprise {
                     if let Some(s) = &params.enterprise_s {
                         payload["enterprisePayload"] = json!({"s":s});
@@ -308,29 +219,17 @@ impl ProviderClient {
                     optional(&mut payload, "recaptchaDataSValue", &params.enterprise_s);
                 }
                 optional(&mut payload, "pageAction", &params.page_action);
-                if !primary {
-                    optional(&mut payload, "userAgent", &params.user_agent);
-                }
                 payload
             }
             SolveTask::TurnstileToken(params) => {
                 validate_site(&params.website_url, &params.website_key).map_err(|()| bad())?;
                 // https://docs.capsolver.com/en/guide/captcha/cloudflare_turnstile/
-                // https://docs.capmonster.cloud/docs/captchas/turnstile-task/
-                let mut payload = json!({"type":if primary {"AntiTurnstileTaskProxyLess"} else {"TurnstileTask"},"websiteURL":params.website_url,"websiteKey":params.website_key});
-                if primary {
-                    let mut metadata = json!({});
-                    optional(&mut metadata, "action", &params.action);
-                    optional(&mut metadata, "cdata", &params.cdata);
-                    payload["metadata"] = metadata;
-                } else {
-                    optional(&mut payload, "pageAction", &params.action);
-                    optional(&mut payload, "data", &params.cdata);
-                }
-                payload
+                let mut metadata = json!({});
+                optional(&mut metadata, "action", &params.action);
+                optional(&mut metadata, "cdata", &params.cdata);
+                json!({"type":"AntiTurnstileTaskProxyLess","websiteURL":params.website_url,"websiteKey":params.website_key,"metadata":metadata})
             }
-        };
-        Ok(payload)
+        })
     }
 
     async fn solve(
@@ -363,7 +262,7 @@ impl ProviderClient {
                 || (response["status"].is_null()
                     && response.get("solution").is_some_and(Value::is_object))
             {
-                let answer = normalize(self.name, task, &response["solution"]).map_err(|()| {
+                let answer = normalize(task, &response["solution"]).map_err(|()| {
                     self.error(
                         ProviderErrorKind::BadRequest,
                         "malformed CAPTCHA solution",
@@ -372,7 +271,7 @@ impl ProviderClient {
                 })?;
                 return Ok(ProviderAnswer {
                     answer,
-                    provider: self.name,
+                    provider: ProviderName::Capsolver,
                     task_id: task_id.as_ref().map(|id| {
                         self.redact(
                             id.as_str()
@@ -381,7 +280,7 @@ impl ProviderClient {
                             Some(task),
                         )
                     }),
-                    cost_usd: Some(cost.unwrap_or_else(|| estimate(self.name, task))),
+                    cost_usd: Some(cost.unwrap_or_else(|| estimate(task))),
                 });
             }
             let id = task_id.as_ref().ok_or_else(|| {
@@ -418,7 +317,7 @@ impl ProviderClient {
         }
     }
 
-    async fn get_balance(&self) -> Result<f64, ProviderError> {
+    pub async fn get_balance(&self) -> Result<f64, ProviderError> {
         let response = self
             .request(
                 "getBalance",
@@ -552,7 +451,6 @@ impl ProviderClient {
         text
     }
 }
-
 fn validate_site(url: &str, key: &str) -> Result<(), ()> {
     let url = url::Url::parse(url).map_err(|_| ())?;
     if !matches!(url.scheme(), "http" | "https")
@@ -581,15 +479,9 @@ fn amount(value: &Value) -> Option<f64> {
         .filter(|amount| amount.is_finite() && *amount >= 0.0)
 }
 
-fn normalize(
-    provider: ProviderName,
-    task: &SolveTask,
-    solution: &Value,
-) -> Result<SolveAnswer, ()> {
+fn normalize(task: &SolveTask, solution: &Value) -> Result<SolveAnswer, ()> {
     if let SolveTask::RecaptchaTiles(puzzle) = task {
-        if provider == ProviderName::Capsolver
-            && let Some(size) = solution.get("size")
-        {
+        if let Some(size) = solution.get("size") {
             let expected = match puzzle.grid {
                 TileGrid::Single => 1,
                 TileGrid::ThreeByThree => 3,
@@ -599,37 +491,24 @@ fn normalize(
                 return Err(());
             }
         }
-        let mut indexes = if provider == ProviderName::Capmonster {
-            let answer = solution["answer"].as_array().ok_or(())?;
-            if answer.len() != puzzle.grid.tiles() {
-                return Err(());
-            }
-            answer
-                .iter()
-                .enumerate()
-                .filter_map(|(index, value)| match value.as_bool() {
-                    Some(true) => Some(Ok(index)),
-                    Some(false) => None,
-                    None => Some(Err(())),
-                })
-                .collect::<Result<Vec<_>, _>>()?
-        } else if puzzle.grid == TileGrid::Single && solution.get("hasObject").is_some() {
+        let mut indexes = if puzzle.grid == TileGrid::Single && solution.get("hasObject").is_some()
+        {
             if solution["hasObject"].as_bool().ok_or(())? {
                 vec![0]
             } else {
                 vec![]
             }
         } else {
-            solution["objects"]
-                .as_array()
-                .ok_or(())?
+            let objects = solution["objects"].as_array().ok_or(())?;
+            if objects.len() > puzzle.grid.tiles() {
+                return Err(());
+            }
+            objects
                 .iter()
                 .map(|value| usize::try_from(value.as_u64().ok_or(())?).map_err(|_| ()))
                 .collect::<Result<Vec<_>, _>>()?
         };
-        if indexes.len() > puzzle.grid.tiles()
-            || indexes.iter().any(|&index| index >= puzzle.grid.tiles())
-        {
+        if indexes.iter().any(|&index| index >= puzzle.grid.tiles()) {
             return Err(());
         }
         indexes.sort_unstable();
@@ -683,16 +562,12 @@ fn classify(status: StatusCode, code: &str) -> ProviderErrorKind {
     }
 }
 
-fn estimate(provider: ProviderName, task: &SolveTask) -> f64 {
-    // USD/task estimates, not billing facts. ComplexImage uses the generic published rate:
-    // https://capmonster.cloud/en/complex-image/ (reCAPTCHA grid pricing may differ).
-    match (provider, task) {
-        (ProviderName::Capsolver, SolveTask::RecaptchaTiles(_)) => 0.0004,
-        (ProviderName::Capsolver, SolveTask::RecaptchaToken(_)) => 0.0008,
-        (ProviderName::Capsolver, SolveTask::TurnstileToken(_)) => 0.0012,
-        (ProviderName::Capmonster, SolveTask::RecaptchaTiles(_)) => 0.0003,
-        (ProviderName::Capmonster, SolveTask::RecaptchaToken(_)) => 0.0006,
-        (ProviderName::Capmonster, SolveTask::TurnstileToken(_)) => 0.0013,
+fn estimate(task: &SolveTask) -> f64 {
+    // Static USD/task estimates; a vendor-reported cost takes precedence.
+    match task {
+        SolveTask::RecaptchaTiles(_) => 0.0004,
+        SolveTask::RecaptchaToken(_) => 0.0008,
+        SolveTask::TurnstileToken(_) => 0.0012,
     }
 }
 
@@ -711,10 +586,7 @@ mod tests {
 
     use super::*;
     use crate::services::captcha::{
-        config::{
-            CAPMONSTER_KEY_FILE_ENV, CAPMONSTER_URL_ENV, CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV,
-            PAID_TASK_LIMIT_ENV,
-        },
+        config::{CAPSOLVER_KEY_FILE_ENV, CAPSOLVER_URL_ENV, PAID_TASK_LIMIT_ENV},
         types::{
             ProviderName, RecaptchaParams, SolveAnswer, TileGrid, TilePuzzle, TurnstileParams,
         },
@@ -792,22 +664,12 @@ mod tests {
         Ok(MockVendor { url, state, server })
     }
 
-    fn config(
-        primary: Option<&MockVendor>,
-        backup: Option<&MockVendor>,
-        limit: u32,
-    ) -> anyhow::Result<CaptchaConfig> {
+    fn config(mock: Option<&MockVendor>, limit: u32) -> anyhow::Result<CaptchaConfig> {
         let file = tempfile::NamedTempFile::new()?;
         std::fs::write(file.path(), KEY)?;
         Ok(CaptchaConfig::from_lookup(|name| match name {
-            CAPSOLVER_KEY_FILE_ENV if primary.is_some() => {
-                Some(file.path().to_string_lossy().into())
-            }
-            CAPMONSTER_KEY_FILE_ENV if backup.is_some() => {
-                Some(file.path().to_string_lossy().into())
-            }
-            CAPSOLVER_URL_ENV => primary.map(|mock| mock.url.clone()),
-            CAPMONSTER_URL_ENV => backup.map(|mock| mock.url.clone()),
+            CAPSOLVER_KEY_FILE_ENV if mock.is_some() => Some(file.path().to_string_lossy().into()),
+            CAPSOLVER_URL_ENV => mock.map(|mock| mock.url.clone()),
             PAID_TASK_LIMIT_ENV => Some(limit.to_string()),
             _ => None,
         }))
@@ -863,7 +725,7 @@ mod tests {
                 .into(),
         ])
         .await?;
-        let chain = ProviderChain::new(&config(Some(&mock), None, 100)?);
+        let chain = ProviderChain::new(&config(Some(&mock), 100)?);
         let answer = solve(&chain, &tiles(TileGrid::ThreeByThree)).await?;
         assert_eq!(answer.answer, SolveAnswer::Tiles(vec![0, 4, 8]));
         assert_eq!(answer.provider, ProviderName::Capsolver);
@@ -879,39 +741,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_capmonster_tiles_keep_numeric_task_ids_and_validate_the_grid()
-    -> anyhow::Result<()> {
-        let mut answers = vec![false; 16];
-        for index in [0, 5, 15] {
-            answers[index] = true;
-        }
-        let mock = vendor(vec![
-            json!({"errorId":0,"taskId":42}).into(),
-            json!({"errorId":0,"status":"ready","solution":{"answer":answers}}).into(),
-        ])
-        .await?;
-        let chain = ProviderChain::new(&config(None, Some(&mock), 100)?);
-        let answer = solve(&chain, &tiles(TileGrid::FourByFour)).await?;
-        assert_eq!(answer.answer, SolveAnswer::Tiles(vec![0, 5, 15]));
-        assert_eq!(answer.task_id.as_deref(), Some("42"));
-        assert!(answer.cost_usd.is_some_and(|cost| cost > 0.0));
-        let state = mock.state.lock().await;
-        assert_eq!(
-            state.requests[0].1["task"],
-            json!({"type":"ComplexImageTask","class":"recaptcha","imagesBase64":[IMAGE],"metadata":{"Grid":"4x4","TaskDefinition":"/m/015qff"}})
-        );
-        assert_eq!(state.requests[1].1["taskId"], 42);
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn tests_that_single_tile_has_object_is_a_valid_boolean_answer() -> anyhow::Result<()> {
         for (has_object, expected) in [(true, vec![0]), (false, vec![])] {
             let mock = vendor(vec![
                 json!({"errorId":0,"status":"ready","solution":{"hasObject":has_object}}).into(),
             ])
             .await?;
-            let chain = ProviderChain::new(&config(Some(&mock), None, 100)?);
+            let chain = ProviderChain::new(&config(Some(&mock), 100)?);
             assert_eq!(
                 solve(&chain, &tiles(TileGrid::Single)).await?.answer,
                 SolveAnswer::Tiles(expected)
@@ -921,38 +757,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_missing_question_id_skips_capsolver_and_uses_capmonster_text()
-    -> anyhow::Result<()> {
-        let primary = vendor(vec![]).await?;
-        let backup = vendor(vec![
-            json!({"errorId":0,"status":"ready","solution":{"answer":[true]}}).into(),
-        ])
-        .await?;
-        let chain = ProviderChain::new(&config(Some(&primary), Some(&backup), 1)?);
-        let SolveTask::RecaptchaTiles(mut puzzle) = tiles(TileGrid::Single) else {
-            anyhow::bail!("wrong test task")
-        };
-        puzzle.question_id = None;
-        assert_eq!(
-            solve(&chain, &SolveTask::RecaptchaTiles(puzzle))
-                .await?
-                .answer,
-            SolveAnswer::Tiles(vec![0])
-        );
-        assert!(primary.state.lock().await.requests.is_empty());
-        assert_eq!(
-            backup.state.lock().await.requests[0].1["task"]["metadata"],
-            json!({"Grid":"1x1","Task":"Click on traffic lights"})
-        );
-        assert_eq!(chain.paid_tasks(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn tests_that_capsolver_alone_is_not_configured_for_text_only_tiles() -> anyhow::Result<()>
     {
         let mock = vendor(vec![]).await?;
-        let chain = ProviderChain::new(&config(Some(&mock), None, 1)?);
+        let chain = ProviderChain::new(&config(Some(&mock), 1)?);
         let SolveTask::RecaptchaTiles(mut puzzle) = tiles(TileGrid::Single) else {
             anyhow::bail!("wrong test task")
         };
@@ -969,154 +777,11 @@ mod tests {
     #[tokio::test]
     async fn tests_that_processing_solutions_are_not_returned_before_ready() -> anyhow::Result<()> {
         let mock = vendor(vec![json!({"errorId":0,"taskId":"job","status":"processing","solution":{"token":"partial"}}).into(), json!({"errorId":0,"status":"ready","solution":{"token":"final"}}).into()]).await?;
-        let chain = ProviderChain::new(&config(Some(&mock), None, 1)?);
+        let chain = ProviderChain::new(&config(Some(&mock), 1)?);
         assert_eq!(
             solve(&chain, &turnstile()).await?.answer,
             SolveAnswer::Token("final".into())
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_tokens_poll_processing_until_ready_for_both_vendors() -> anyhow::Result<()>
-    {
-        for primary in [true, false] {
-            for task in [recaptcha(), turnstile()] {
-                let mock = vendor(vec![json!({"errorId":0,"taskId":if primary {json!("task-1")} else {json!(73)}}).into(), json!({"errorId":0,"status":"processing"}).into(), json!({"errorId":0,"status":"ready","solution":{"gRecaptchaResponse":"solved-token","token":"solved-token"}}).into()]).await?;
-                let chain = ProviderChain::new(&config(
-                    primary.then_some(&mock),
-                    (!primary).then_some(&mock),
-                    100,
-                )?);
-                let result = solve(&chain, &task).await?;
-                assert_eq!(result.answer, SolveAnswer::Token("solved-token".into()));
-                assert!(!format!("{result:?}").contains("solved-token"));
-                let state = mock.state.lock().await;
-                assert_eq!(state.requests.len(), 3);
-                assert!(
-                    state.requests[1].2.duration_since(state.requests[0].2)
-                        >= Duration::from_millis(900)
-                );
-                assert!(
-                    state.requests[2].2.duration_since(state.requests[1].2)
-                        >= Duration::from_millis(1900)
-                );
-                let sent = &state.requests[0].1["task"];
-                assert_eq!(sent["websiteKey"], "site-key");
-                assert_eq!(sent["websiteURL"], "https://example.test/captcha");
-                match &task {
-                    SolveTask::RecaptchaToken(_) => {
-                        assert_eq!(
-                            sent["type"],
-                            if primary {
-                                "ReCaptchaV2TaskProxyLess"
-                            } else {
-                                "RecaptchaV2Task"
-                            }
-                        );
-                        assert_eq!(sent["isInvisible"], true);
-                        assert_eq!(sent["recaptchaDataSValue"], "data-s");
-                    }
-                    _ => {
-                        assert_eq!(
-                            sent["type"],
-                            if primary {
-                                "AntiTurnstileTaskProxyLess"
-                            } else {
-                                "TurnstileTask"
-                            }
-                        );
-                        if primary {
-                            assert_eq!(
-                                sent["metadata"],
-                                json!({"action":"login","cdata":"context"})
-                            );
-                        } else {
-                            assert_eq!(sent["pageAction"], "login");
-                            assert_eq!(sent["data"], "context");
-                        }
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_auth_falls_back_and_reports_both_vendor_errors_without_secrets()
-    -> anyhow::Result<()> {
-        let primary = vendor(vec![json!({"errorId":1,"errorCode":"ERROR_KEY_DENIED_ACCESS","errorDescription":format!("denied {KEY} {IMAGE}")}).into()]).await?;
-        let backup = vendor(vec![
-            json!({"errorId":10,"errorCode":"ERROR_ZERO_BALANCE","errorDescription":"no funds"})
-                .into(),
-        ])
-        .await?;
-        let chain = ProviderChain::new(&config(Some(&primary), Some(&backup), 1)?);
-        let Err(error) = solve(&chain, &tiles(TileGrid::ThreeByThree)).await else {
-            anyhow::bail!("vendors must reject this task")
-        };
-        assert_eq!(error.kind, ProviderErrorKind::NoBalance);
-        assert!(!error.charged);
-        assert!(error.message.contains("ERROR_KEY_DENIED_ACCESS"));
-        assert!(error.message.contains("ERROR_ZERO_BALANCE"));
-        assert!(!format!("{error:?} {error}").contains(KEY));
-        assert!(!format!("{error:?} {error}").contains(IMAGE));
-        assert_eq!(chain.paid_tasks(), 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_malformed_answers_never_escape_as_clicks_or_tokens() -> anyhow::Result<()> {
-        for (primary, task, solution) in [
-            (true, tiles(TileGrid::ThreeByThree), json!({"objects":[9]})),
-            (true, tiles(TileGrid::ThreeByThree), json!({"objects":[-1]})),
-            (
-                true,
-                tiles(TileGrid::ThreeByThree),
-                json!({"objects":[1.5]}),
-            ),
-            (
-                true,
-                tiles(TileGrid::ThreeByThree),
-                json!({"hasObject":true}),
-            ),
-            (
-                true,
-                tiles(TileGrid::ThreeByThree),
-                json!({"objects":[0,0]}),
-            ),
-            (
-                true,
-                tiles(TileGrid::ThreeByThree),
-                json!({"objects":[0],"size":4}),
-            ),
-            (
-                false,
-                tiles(TileGrid::ThreeByThree),
-                json!({"answer":[true]}),
-            ),
-            (false, tiles(TileGrid::Single), json!({"answer":[1]})),
-            (true, recaptcha(), json!({"gRecaptchaResponse":" \n"})),
-            (false, turnstile(), json!({"token":null})),
-        ] {
-            let mock = vendor(vec![
-                json!({"errorId":0,"status":"ready","solution":solution}).into(),
-            ])
-            .await?;
-            let chain = ProviderChain::new(&config(
-                primary.then_some(&mock),
-                (!primary).then_some(&mock),
-                1,
-            )?);
-            let Err(error) = solve(&chain, &task).await else {
-                anyhow::bail!("malformed answer was accepted")
-            };
-            assert!(matches!(
-                error.kind,
-                ProviderErrorKind::BadRequest | ProviderErrorKind::Unsolvable
-            ));
-            assert!(error.charged);
-        }
         Ok(())
     }
 
@@ -1129,8 +794,7 @@ mod tests {
             delay: Duration::from_secs(2),
         }])
         .await?;
-        let backup = vendor(vec![]).await?;
-        let chain = ProviderChain::new(&config(Some(&primary), Some(&backup), 100)?);
+        let chain = ProviderChain::new(&config(Some(&primary), 100)?);
         let result = chain
             .solve(
                 &recaptcha(),
@@ -1145,15 +809,13 @@ mod tests {
         assert!(error.charged);
         assert_eq!(chain.paid_tasks(), 1);
         assert_eq!(primary.state.lock().await.requests.len(), 1);
-        assert!(backup.state.lock().await.requests.is_empty());
         Ok(())
     }
 
     #[tokio::test]
-    async fn tests_that_cancellation_mid_poll_does_not_fall_back() -> anyhow::Result<()> {
+    async fn tests_that_cancellation_mid_poll_keeps_the_paid_count() -> anyhow::Result<()> {
         let primary = vendor(vec![json!({"errorId":0,"taskId":"accepted"}).into()]).await?;
-        let backup = vendor(vec![]).await?;
-        let chain = ProviderChain::new(&config(Some(&primary), Some(&backup), 100)?);
+        let chain = ProviderChain::new(&config(Some(&primary), 100)?);
         let cancel = CancellationToken::new();
         let stopped = cancel.clone();
         let interrupt = async move {
@@ -1171,7 +833,6 @@ mod tests {
         assert_eq!(error.kind, ProviderErrorKind::Cancelled);
         assert!(error.charged);
         assert_eq!(chain.paid_tasks(), 1);
-        assert!(backup.state.lock().await.requests.is_empty());
         Ok(())
     }
 
@@ -1181,7 +842,7 @@ mod tests {
             json!({"errorId":0,"status":"ready","solution":{"hasObject":true}}).into(),
         ])
         .await?;
-        let chain = ProviderChain::new(&config(Some(&mock), None, 1)?);
+        let chain = ProviderChain::new(&config(Some(&mock), 1)?);
         let task = tiles(TileGrid::Single);
         let (a, b) = tokio::join!(solve(&chain, &task), solve(&chain, &task));
         assert_eq!(usize::from(a.is_ok()) + usize::from(b.is_ok()), 1);
@@ -1199,7 +860,7 @@ mod tests {
     async fn tests_that_deadlines_stop_polling_and_expired_calls_do_not_submit()
     -> anyhow::Result<()> {
         let mock = vendor(vec![json!({"errorId":0,"taskId":"accepted"}).into()]).await?;
-        let chain = ProviderChain::new(&config(Some(&mock), None, 100)?);
+        let chain = ProviderChain::new(&config(Some(&mock), 100)?);
         for elapsed in [true, false] {
             let deadline = Instant::now()
                 + if elapsed {
@@ -1263,7 +924,7 @@ mod tests {
                 delay: Duration::ZERO,
             }])
             .await?;
-            let chain = ProviderChain::new(&config(Some(&mock), None, 100)?);
+            let chain = ProviderChain::new(&config(Some(&mock), 100)?);
             let Err(error) = solve(&chain, &recaptcha()).await else {
                 anyhow::bail!("rejected task succeeded")
             };
@@ -1277,119 +938,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tests_that_enterprise_payload_uses_the_documented_task_variant() -> anyhow::Result<()>
-    {
-        for primary in [true, false] {
-            let mock = vendor(vec![json!({"errorId":0,"status":"ready","solution":{"gRecaptchaResponse":"enterprise-token"}}).into()]).await?;
-            let chain = ProviderChain::new(&config(
-                primary.then_some(&mock),
-                (!primary).then_some(&mock),
-                100,
-            )?);
-            let SolveTask::RecaptchaToken(mut params) = recaptcha() else {
-                anyhow::bail!("wrong test task")
-            };
-            params.enterprise = true;
-            params.invisible = false;
-            params.page_action = Some("verify".into());
-            assert!(
-                solve(&chain, &SolveTask::RecaptchaToken(params))
-                    .await
-                    .is_ok()
-            );
-            let state = mock.state.lock().await;
-            let sent = &state.requests[0].1["task"];
-            assert_eq!(
-                sent["type"],
-                if primary {
-                    "ReCaptchaV2EnterpriseTaskProxyLess"
-                } else {
-                    "RecaptchaV2EnterpriseTask"
-                }
-            );
-            assert_eq!(sent["enterprisePayload"], json!({"s":"data-s"}));
-            assert_eq!(sent["pageAction"], "verify");
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_unsupported_options_and_empty_inputs_never_spend() -> anyhow::Result<()> {
-        let mock = vendor(vec![]).await?;
-        let chain = ProviderChain::new(&config(None, Some(&mock), 0)?);
-        let SolveTask::RecaptchaToken(mut params) = recaptcha() else {
-            anyhow::bail!("wrong test task")
-        };
-        params.enterprise = true;
-        let Err(error) = solve(&chain, &SolveTask::RecaptchaToken(params)).await else {
-            anyhow::bail!("unsupported task succeeded")
-        };
-        assert_eq!(error.kind, ProviderErrorKind::Unsupported);
-        let SolveTask::TurnstileToken(mut params) = turnstile() else {
-            anyhow::bail!("wrong test task")
-        };
-        params.website_key.clear();
-        let Err(error) = solve(&chain, &SolveTask::TurnstileToken(params)).await else {
-            anyhow::bail!("empty sitekey succeeded")
-        };
-        assert_eq!(error.kind, ProviderErrorKind::BadRequest);
-        assert!(mock.state.lock().await.requests.is_empty());
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_balances_are_read_without_creating_or_charging_tasks() -> anyhow::Result<()>
-    {
-        let primary = vendor(vec![json!({"errorId":0,"balance":3.25}).into()]).await?;
-        let backup = vendor(vec![json!({"errorId":0,"balance":0}).into()]).await?;
-        let chain = ProviderChain::new(&config(Some(&primary), Some(&backup), 100)?);
-        assert_eq!(
-            chain
-                .capsolver
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("missing primary"))?
-                .get_balance()
-                .await?,
-            3.25
-        );
-        assert_eq!(
-            chain
-                .capmonster
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("missing backup"))?
-                .get_balance()
-                .await?,
-            0.0
-        );
-        assert_eq!(chain.paid_tasks(), 0);
-        for mock in [&primary, &backup] {
-            let state = mock.state.lock().await;
-            assert_eq!(state.requests.len(), 1);
-            assert_eq!(state.requests[0].0, "/getBalance");
-            assert_eq!(state.requests[0].1, json!({"clientKey":KEY}));
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn tests_that_connection_failure_refunds_the_slot_before_fallback() -> anyhow::Result<()>
-    {
-        let mut primary = vendor(vec![]).await?;
-        let backup = vendor(vec![
-            json!({"errorId":0,"status":"ready","solution":{"token":"backup-token"}}).into(),
-        ])
-        .await?;
-        primary.server.abort();
-        let _ = (&mut primary.server).await;
-        let chain = ProviderChain::new(&config(Some(&primary), Some(&backup), 1)?);
-        let answer = solve(&chain, &turnstile()).await?;
-        assert_eq!(answer.provider, ProviderName::Capmonster);
-        assert_eq!(answer.answer, SolveAnswer::Token("backup-token".into()));
-        assert_eq!(chain.paid_tasks(), 1);
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn tests_that_dropping_a_submitted_future_keeps_the_paid_reservation()
     -> anyhow::Result<()> {
         let mock = vendor(vec![Reply {
@@ -1398,7 +946,7 @@ mod tests {
             delay: Duration::from_secs(5),
         }])
         .await?;
-        let chain = ProviderChain::new(&config(Some(&mock), None, 1)?);
+        let chain = ProviderChain::new(&config(Some(&mock), 1)?);
         assert!(
             tokio::time::timeout(Duration::from_millis(100), solve(&chain, &recaptcha()))
                 .await
@@ -1410,42 +958,6 @@ mod tests {
             anyhow::bail!("cap was bypassed")
         };
         assert_eq!(error.kind, ProviderErrorKind::SpendLimit);
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "balance-only live check; requires explicit key-file env vars"]
-    async fn tests_that_live_balances_are_classified_without_paid_tasks() -> anyhow::Result<()> {
-        use std::io::Write;
-        let config = CaptchaConfig::from_env();
-        let chain = ProviderChain::new(&config);
-        let primary = chain
-            .capsolver
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("CapSolver key file required"))?;
-        let backup = chain
-            .capmonster
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("CapMonster key file required"))?;
-        match primary.get_balance().await {
-            Ok(balance) => writeln!(std::io::stdout(), "CapSolver: balance {balance}")?,
-            Err(error) => writeln!(
-                std::io::stdout(),
-                "CapSolver: {:?}: {}",
-                error.kind,
-                error.message
-            )?,
-        }
-        match backup.get_balance().await {
-            Ok(balance) => writeln!(std::io::stdout(), "CapMonster: balance {balance}")?,
-            Err(error) => writeln!(
-                std::io::stdout(),
-                "CapMonster: {:?}: {}",
-                error.kind,
-                error.message
-            )?,
-        }
-        assert_eq!(chain.paid_tasks(), 0);
         Ok(())
     }
 }

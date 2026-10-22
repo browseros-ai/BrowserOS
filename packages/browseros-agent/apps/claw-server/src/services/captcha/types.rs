@@ -199,7 +199,6 @@ impl std::fmt::Debug for SolveAnswer {
 #[serde(rename_all = "snake_case")]
 pub enum ProviderName {
     Capsolver,
-    Capmonster,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -512,7 +511,7 @@ mod tests {
         assert_eq!(to_value(SolveMethod::AutoPass)?, "auto_pass");
         assert_eq!(to_value(ChallengeState::WidgetOnly)?, "widget_only");
         assert_eq!(to_value(ScanOutcome::Unknown)?, "unknown");
-        assert_eq!(to_value(ProviderName::Capmonster)?, "capmonster");
+        assert_eq!(to_value(ProviderName::Capsolver)?, "capsolver");
         assert_eq!(to_value(SolveStep::AutoPass)?, "auto_pass");
         Ok(())
     }

@@ -1,9 +1,7 @@
 use std::fmt;
 
 pub const CAPSOLVER_KEY_FILE_ENV: &str = "BROWSEROS_CAPSOLVER_API_KEY_FILE";
-pub const CAPMONSTER_KEY_FILE_ENV: &str = "BROWSEROS_CAPMONSTER_API_KEY_FILE";
 pub const CAPSOLVER_URL_ENV: &str = "BROWSEROS_CAPSOLVER_API_URL";
-pub const CAPMONSTER_URL_ENV: &str = "BROWSEROS_CAPMONSTER_API_URL";
 pub const PAID_TASK_LIMIT_ENV: &str = "BROWSEROS_CAPTCHA_PAID_TASK_LIMIT";
 
 #[derive(Clone)]
@@ -36,7 +34,6 @@ pub struct ProviderConfig {
 #[derive(Debug, Clone)]
 pub struct CaptchaConfig {
     pub capsolver: Option<ProviderConfig>,
-    pub capmonster: Option<ProviderConfig>,
     pub paid_task_limit: u32,
 }
 
@@ -44,7 +41,6 @@ impl Default for CaptchaConfig {
     fn default() -> Self {
         Self {
             capsolver: None,
-            capmonster: None,
             paid_task_limit: 100,
         }
     }
@@ -59,12 +55,6 @@ impl CaptchaConfig {
                 CAPSOLVER_URL_ENV,
                 "https://api.capsolver.com",
             ),
-            capmonster: provider(
-                &lookup,
-                CAPMONSTER_KEY_FILE_ENV,
-                CAPMONSTER_URL_ENV,
-                "https://api.capmonster.cloud",
-            ),
             paid_task_limit: lookup(PAID_TASK_LIMIT_ENV)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(100),
@@ -76,7 +66,7 @@ impl CaptchaConfig {
     }
 
     pub fn has_provider(&self) -> bool {
-        self.capsolver.is_some() || self.capmonster.is_some()
+        self.capsolver.is_some()
     }
 }
 
@@ -133,7 +123,6 @@ fn provider(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     fn from_vars(vars: &[(&str, String)]) -> CaptchaConfig {
         CaptchaConfig::from_lookup(|name| {
             vars.iter()
@@ -141,69 +130,66 @@ mod tests {
                 .map(|(_, value)| value.clone())
         })
     }
-
     #[test]
-    fn tests_that_unset_keys_disable_providers_and_default_the_limit() {
+    fn tests_that_unset_keys_disable_the_provider_and_default_the_limit() {
         let config = from_vars(&[]);
         assert!(!config.has_provider());
         assert_eq!(config.paid_task_limit, 100);
+        assert_eq!(CaptchaConfig::default().paid_task_limit, 100);
     }
-
     #[test]
-    fn tests_that_key_files_are_trimmed_and_debug_is_redacted() -> anyhow::Result<()> {
+    fn tests_that_key_files_are_trimmed_and_formats_are_redacted() -> anyhow::Result<()> {
         let file = tempfile::NamedTempFile::new()?;
         std::fs::write(file.path(), " \n unique-test-key \t\n")?;
-        let config = from_vars(&[
-            (
-                CAPSOLVER_KEY_FILE_ENV,
-                file.path().to_string_lossy().into_owned(),
-            ),
-            (
-                CAPMONSTER_KEY_FILE_ENV,
-                file.path().to_string_lossy().into_owned(),
-            ),
-        ]);
+        let config = from_vars(&[(
+            CAPSOLVER_KEY_FILE_ENV,
+            file.path().to_string_lossy().into_owned(),
+        )]);
         assert!(config.has_provider());
-        let capsolver = config
+        let provider = config
             .capsolver
             .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing CapSolver"))?;
-        let capmonster = config
-            .capmonster
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("missing CapMonster"))?;
-        assert_eq!(capsolver.key.expose(), "unique-test-key");
-        assert_eq!(capmonster.key.expose(), "unique-test-key");
-        assert_eq!(format!("{:?}", capsolver.key), "ApiKey(<redacted>)");
-        assert_eq!(format!("{}", capsolver.key), "<redacted>");
+            .ok_or_else(|| anyhow::anyhow!("missing provider"))?;
+        assert_eq!(provider.key.expose(), "unique-test-key");
+        assert_eq!(format!("{:?}", provider.key), "ApiKey(<redacted>)");
+        assert_eq!(format!("{}", provider.key), "<redacted>");
         assert!(!format!("{config:?}").contains("unique-test-key"));
-        assert_eq!(capsolver.base_url.as_str(), "https://api.capsolver.com/");
-        assert_eq!(
-            capmonster.base_url.as_str(),
-            "https://api.capmonster.cloud/"
-        );
+        assert_eq!(provider.base_url.as_str(), "https://api.capsolver.com/");
         Ok(())
     }
-
     #[test]
-    fn tests_that_empty_and_missing_files_disable_providers() -> anyhow::Result<()> {
+    fn tests_that_empty_and_missing_files_disable_the_provider() -> anyhow::Result<()> {
         let file = tempfile::NamedTempFile::new()?;
         std::fs::write(file.path(), " \n\t")?;
         let dir = tempfile::tempdir()?;
+        for path in [file.path(), dir.path()] {
+            assert!(
+                !from_vars(&[(CAPSOLVER_KEY_FILE_ENV, path.to_string_lossy().into_owned())])
+                    .has_provider()
+            );
+        }
+        Ok(())
+    }
+    #[test]
+    fn tests_that_blank_settings_are_unset_and_numbers_are_trimmed() -> anyhow::Result<()> {
+        let file = tempfile::NamedTempFile::new()?;
+        std::fs::write(file.path(), "test-key")?;
         let config = from_vars(&[
             (
                 CAPSOLVER_KEY_FILE_ENV,
-                file.path().to_string_lossy().into_owned(),
+                format!(" {} \n", file.path().display()),
             ),
-            (
-                CAPMONSTER_KEY_FILE_ENV,
-                dir.path().join("missing").to_string_lossy().into_owned(),
-            ),
+            (CAPSOLVER_URL_ENV, " \n".into()),
+            (PAID_TASK_LIMIT_ENV, " 7 \n".into()),
         ]);
-        assert!(!config.has_provider());
+        assert_eq!(config.paid_task_limit, 7);
+        assert_eq!(
+            config.capsolver.map(|p| p.base_url.to_string()),
+            Some("https://api.capsolver.com/".into())
+        );
+        assert!(!from_vars(&[(CAPSOLVER_KEY_FILE_ENV, " \n".into())]).has_provider());
         Ok(())
     }
-
     #[test]
     fn tests_that_url_and_limit_overrides_are_parsed() -> anyhow::Result<()> {
         let file = tempfile::NamedTempFile::new()?;
@@ -213,21 +199,12 @@ mod tests {
                 CAPSOLVER_KEY_FILE_ENV,
                 file.path().to_string_lossy().into_owned(),
             ),
-            (CAPSOLVER_URL_ENV, "http://127.0.0.1:9876/mock/".into()),
-            (
-                CAPMONSTER_KEY_FILE_ENV,
-                file.path().to_string_lossy().into_owned(),
-            ),
-            (CAPMONSTER_URL_ENV, "http://127.0.0.1:9877/".into()),
+            (CAPSOLVER_URL_ENV, " http://127.0.0.1:9876/mock/ ".into()),
             (PAID_TASK_LIMIT_ENV, "7".into()),
         ]);
         assert_eq!(
             config.capsolver.map(|p| p.base_url.to_string()),
             Some("http://127.0.0.1:9876/mock/".into())
-        );
-        assert_eq!(
-            config.capmonster.map(|p| p.base_url.to_string()),
-            Some("http://127.0.0.1:9877/".into())
         );
         assert_eq!(config.paid_task_limit, 7);
         assert_eq!(
@@ -240,42 +217,26 @@ mod tests {
         );
         Ok(())
     }
-
     #[test]
     fn tests_that_invalid_url_overrides_disable_the_provider() -> anyhow::Result<()> {
         let file = tempfile::NamedTempFile::new()?;
         std::fs::write(file.path(), "test-key")?;
-        let config = from_vars(&[
-            (
-                CAPSOLVER_KEY_FILE_ENV,
-                file.path().to_string_lossy().into_owned(),
-            ),
-            (CAPSOLVER_URL_ENV, "not a url".into()),
-        ]);
-        assert!(!config.has_provider());
-        Ok(())
-    }
-
-    #[test]
-    fn tests_that_blank_settings_are_unset_and_numbers_are_trimmed() -> anyhow::Result<()> {
-        let file = tempfile::NamedTempFile::new()?;
-        std::fs::write(file.path(), "test-key")?;
-        let config = from_vars(&[
-            (
-                CAPSOLVER_KEY_FILE_ENV,
-                format!(" {} \n", file.path().display()),
-            ),
-            (CAPSOLVER_URL_ENV, " \n".into()),
-            (CAPMONSTER_KEY_FILE_ENV, " \n".into()),
-            (PAID_TASK_LIMIT_ENV, " 7 \n".into()),
-        ]);
-        assert_eq!(config.paid_task_limit, 7);
-        assert_eq!(
-            config.capsolver.map(|p| p.base_url.to_string()),
-            Some("https://api.capsolver.com/".into())
-        );
-        assert!(config.capmonster.is_none());
-        assert_eq!(CaptchaConfig::default().paid_task_limit, 100);
+        for url in [
+            "not a url",
+            "https://user:secret@example.test/",
+            "https://example.test/?key=secret",
+        ] {
+            assert!(
+                !from_vars(&[
+                    (
+                        CAPSOLVER_KEY_FILE_ENV,
+                        file.path().to_string_lossy().into_owned()
+                    ),
+                    (CAPSOLVER_URL_ENV, url.into())
+                ])
+                .has_provider()
+            );
+        }
         Ok(())
     }
 }
