@@ -5,7 +5,10 @@ From `packages/browseros-agent`:
 ```sh
 bun run test:captcha-docker-e2e -- --keys none --expect-tool-missing
 bun run test:captcha-docker-e2e -- --keys placeholder --keep
-bun run test:captcha-docker-e2e -- --keys real --paid --out ../../.llm/captcha-paid
+
+# Paid run: central operator only
+BROWSEROS_2CAPTCHA_API_KEY_FILE="$HOME/.config/browseros/captcha/2captcha-api-key" \
+  bun run test:captcha-docker-e2e -- --keys real --paid --out ../../.llm/captcha-paid
 ```
 
 Requires Bun 1.4.2, Docker Desktop with Linux arm64 support, and the merged
