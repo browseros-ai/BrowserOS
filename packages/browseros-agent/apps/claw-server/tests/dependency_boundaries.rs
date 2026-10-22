@@ -22,6 +22,8 @@ const DELETED_ROOT_MODULES: &[&str] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Layer {
     ApiHttp,
+    /// The partner-facing hosted API (`/v1`), kept apart from the cockpit's `api/http`.
+    ApiHosted,
     ApiMcp,
     Service(String),
     Db,
@@ -33,6 +35,7 @@ enum Layer {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Target {
     ApiHttp,
+    ApiHosted,
     ApiMcp,
     AppState,
     Service(String),
@@ -196,6 +199,56 @@ fn api_http_cannot_define_manual_serialized_response_dtos() {
 }
 
 #[test]
+fn hosted_api_and_cockpit_contract_stay_apart() {
+    let errors = violations(
+        "api/hosted/example.rs",
+        "use claw_api::models::SessionSummary;",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("must not use the cockpit contract"))
+    );
+    for relative in ["api/http/example.rs", "services/cockpit/example.rs"] {
+        let errors = violations(relative, "use hosted_api::Session;");
+        assert!(
+            errors
+                .iter()
+                .any(|error| error.contains("hosted_api is only for api/hosted")),
+            "{relative}"
+        );
+    }
+    let errors = violations("api/hosted/example.rs", "use crate::api::http::router;");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("api/hosted -> api/http"))
+    );
+    let errors = violations("api/http/example.rs", "use crate::api::hosted::router;");
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("api/http -> api/hosted"))
+    );
+    let errors = violations(
+        "api/hosted/example.rs",
+        "#[derive(serde::Serialize)] struct ManualResponse { value: bool }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("use hosted_api models"))
+    );
+    assert!(
+        violations(
+            "api/hosted/example.rs",
+            "use hosted_api::Session; use crate::{AppState, services::replay::ReplayService};"
+        )
+        .is_empty()
+    );
+}
+
+#[test]
 fn analytics_catalog_and_sdk_have_single_source_boundaries()
 -> Result<(), Box<dyn std::error::Error>> {
     let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
@@ -289,6 +342,13 @@ fn check_source(relative: &Path, source: &str) -> Result<(), Vec<String>> {
             ));
         }
     }
+    if layer == Layer::ApiHosted {
+        for name in &visitor.serialized_structs {
+            failures.push(format!(
+                "{display}: manual serialized response DTO `{name}` is forbidden; use hosted_api models"
+            ));
+        }
+    }
     if display == "api/http/cockpit.rs"
         && !visitor.paths.contains(&vec![
             "claw_api".to_string(),
@@ -302,6 +362,22 @@ fn check_source(relative: &Path, source: &str) -> Result<(), Vec<String>> {
     }
 
     for path in visitor.paths {
+        // The hosted API's contract changes only additively and the cockpit's freely, so
+        // neither side may build on the other's generated types.
+        if path.first().is_some_and(|root| root == "claw_api") && layer == Layer::ApiHosted {
+            failures.push(format!(
+                "{display}: `{}`: api/hosted must not use the cockpit contract (claw_api)",
+                path.join("::")
+            ));
+            continue;
+        }
+        if path.first().is_some_and(|root| root == "hosted_api") && layer != Layer::ApiHosted {
+            failures.push(format!(
+                "{display}: `{}`: hosted_api is only for api/hosted",
+                path.join("::")
+            ));
+            continue;
+        }
         if path
             .first()
             .is_some_and(|root| root == "sea_orm" || root == "sea_orm_migration")
@@ -339,6 +415,7 @@ fn classify(relative: &Path) -> Result<Layer, String> {
         .collect::<Vec<_>>();
     match parts.as_slice() {
         [api, surface, ..] if api == "api" && surface == "http" => Ok(Layer::ApiHttp),
+        [api, surface, ..] if api == "api" && surface == "hosted" => Ok(Layer::ApiHosted),
         [api, surface, ..] if api == "api" && surface == "mcp" => Ok(Layer::ApiMcp),
         [services, name, ..] if services == "services" => Ok(Layer::Service(
             name.strip_suffix(".rs").unwrap_or(name).to_string(),
@@ -377,6 +454,7 @@ fn crate_target(path: &[String], failures: &mut Vec<String>, display: &str) -> O
     match root {
         "api" => match path.get(2).map(String::as_str) {
             Some("http") => Some(Target::ApiHttp),
+            Some("hosted") => Some(Target::ApiHosted),
             Some("mcp") => Some(Target::ApiMcp),
             _ => Some(Target::Support),
         },
@@ -409,6 +487,15 @@ fn edge_allowed(source: &Layer, target: &Target) -> bool {
                 | Target::Identity
                 | Target::Support
         ),
+        Layer::ApiHosted => matches!(
+            target,
+            Target::ApiHosted
+                | Target::AppState
+                | Target::Service(_)
+                | Target::Db
+                | Target::Identity
+                | Target::Support
+        ),
         Layer::ApiMcp => matches!(
             target,
             Target::ApiMcp
@@ -422,7 +509,11 @@ fn edge_allowed(source: &Layer, target: &Target) -> bool {
             Target::Service(target) if source == target => true,
             Target::Service(target) => allowed_service_edge(source, target),
             Target::Db | Target::Identity | Target::Support => true,
-            Target::ApiHttp | Target::ApiMcp | Target::AppState | Target::Composition => false,
+            Target::ApiHttp
+            | Target::ApiHosted
+            | Target::ApiMcp
+            | Target::AppState
+            | Target::Composition => false,
         },
         Layer::Db => matches!(target, Target::Db | Target::Support),
         Layer::Identity | Layer::Support => matches!(target, Target::Identity | Target::Support),
@@ -444,6 +535,7 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
 fn layer_name(layer: &Layer) -> String {
     match layer {
         Layer::ApiHttp => "api/http".to_string(),
+        Layer::ApiHosted => "api/hosted".to_string(),
         Layer::ApiMcp => "api/mcp".to_string(),
         Layer::Service(name) => format!("services/{name}"),
         Layer::Db => "db".to_string(),
@@ -456,6 +548,7 @@ fn layer_name(layer: &Layer) -> String {
 fn target_name(target: &Target) -> String {
     match target {
         Target::ApiHttp => "api/http".to_string(),
+        Target::ApiHosted => "api/hosted".to_string(),
         Target::ApiMcp => "api/mcp".to_string(),
         Target::AppState => "AppState".to_string(),
         Target::Service(name) => format!("services/{name}"),

@@ -79,7 +79,9 @@ pub async fn record_local_tool_dispatch(
             args_json: redacted_args_json(dispatch.raw_args, dispatch.result.audit_hints.as_ref()),
             result_meta: tool_result_meta(dispatch.result, false),
             duration_ms: dispatch.duration_ms,
-            created_at: None,
+            // Recorded right after the tool returns, so back-date by its duration: every
+            // top-level row is stamped with its start, which readers order calls by.
+            created_at: Some(crate::clock::now_epoch_ms().saturating_sub(dispatch.duration_ms)),
             dispatch_id: dispatch.dispatch_id,
             parent_dispatch_id: None,
             tool_input_token_estimate: estimate_tool_input_tokens(
@@ -398,6 +400,56 @@ mod tests {
             estimate_tool_input_tokens("name_session", &raw_args)
         );
         assert_eq!(row.tool_output_token_estimate, 7);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_tool_rows_are_stamped_with_their_start() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let session = &call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .session;
+        let result = ToolResult {
+            content: vec![ContentBlock::text("done")],
+            is_error: false,
+            structured_content: None,
+            audit_hints: None,
+        };
+        let finished_at = crate::clock::now_epoch_ms();
+
+        record_local_tool_dispatch(
+            &call.state,
+            LocalToolDispatch {
+                session,
+                agent_label: "Codex",
+                tool_name: "pursue",
+                raw_args: &json!({}),
+                result: &result,
+                duration_ms: 5_000,
+                dispatch_id: DispatchId::new(),
+            },
+        )
+        .await?;
+        call.state
+            .audit_worker
+            .flush_session(call.session_id.as_str())
+            .await?;
+
+        let row = call
+            .state
+            .audit_log
+            .list_dispatches(ListDispatchesQuery::default())
+            .await?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        // Recorded right after it finished, so its start is about five seconds back.
+        assert!(row.created_at <= finished_at - 4_000, "{}", row.created_at);
+        assert!(row.created_at >= finished_at - 6_000, "{}", row.created_at);
         Ok(())
     }
 

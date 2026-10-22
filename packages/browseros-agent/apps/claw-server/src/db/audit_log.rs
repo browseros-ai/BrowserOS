@@ -16,12 +16,13 @@ use browseros_mcp::token_estimate::estimate_tool_output_tokens;
 use rmcp::model::ContentBlock;
 use sea_orm::{
     ActiveValue::{NotSet, Set},
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, Statement, TransactionTrait,
-    sea_query::{Condition, Expr, ExprTrait, Func, OnConflict},
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Statement, TransactionTrait,
+    sea_query::{Condition, Expr, ExprTrait, Func, OnConflict, Query, SelectStatement},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use url::Url;
 
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
@@ -236,14 +237,31 @@ pub struct ListTasksResult {
     pub next_cursor: Option<i64>,
 }
 
+/// How many times a session id was opened and closed. A session can still gain rows while any
+/// start lacks its end: teardown writes the end only after the session's in-flight calls have
+/// drained and been recorded, and a reused id (legacy transport) opens a second life after the
+/// first one ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionLifecycle {
+    pub starts: u64,
+    pub ends: u64,
+    /// When the latest end was recorded.
+    pub last_end_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ListTasksQuery {
     pub agent_id: Option<String>,
     pub slug: Option<String>,
+    /// Exact `clientInfo.name` a session's start recorded. Unlike `slug`, which follows a
+    /// declared `agentName` when there is one, this is what the client reported itself as.
+    pub client_name: Option<String>,
     pub status: Option<TaskStatus>,
     pub site: Option<String>,
     pub search: Option<String>,
     pub since: Option<i64>,
+    /// Inclusive upper bound on `started_at`, the mirror of `since`.
+    pub until: Option<i64>,
     pub cursor: Option<i64>,
     pub limit: Option<i64>,
 }
@@ -461,12 +479,12 @@ impl AuditLog {
         // row. An existence check would see the first end and skip the second start, so the
         // reused session would stay `live` forever, which is the exact state being repaired.
         //
-        // The end is stamped at `created_at + duration_ms`, not `created_at`. A dispatch row
-        // records when its tool *started*, so a session killed part way through a ninety
-        // second `run` would otherwise have its end backdated to before that run began.
-        // Local-tool rows stamp write time instead, where adding the duration overshoots by
-        // a few milliseconds; an upper bound on the last evidence of life is the right
-        // direction to err.
+        // The end is stamped at `created_at + duration_ms`, not `created_at`. A top-level
+        // dispatch row records when its tool *started*, so a session killed part way through
+        // a ninety second `run` would otherwise have its end backdated to before that run
+        // began. Steps inside a script stamp write time instead, where adding the duration
+        // overshoots by a few milliseconds; an upper bound on the last evidence of life is
+        // the right direction to err.
         let statement = Statement::from_sql_and_values(
             DbBackend::Sqlite,
             r"
@@ -582,17 +600,26 @@ impl AuditLog {
                         Expr::col(tasks::Column::Site).into(),
                         Expr::value(""),
                     ]))
-                    .like(pattern),
+                    .like(pattern.clone()),
                 );
             if !summary_matches.is_empty() {
                 any = any.add(tasks::Column::SessionId.is_in(summary_matches));
             }
-            any
+            // The label above prefers `clientInfo.title`, so the reported name is matched
+            // through the session's start rows.
+            any.add(tasks::Column::SessionId.in_subquery(sessions_started_by(
+                Func::lower(Expr::col(agent_session_starts::Column::ClientName)).like(pattern),
+            )))
         });
         let condition = Condition::all()
             .add(tasks::Column::DispatchCount.gt(0))
             .add_option(query.agent_id.map(|value| tasks::Column::AgentId.eq(value)))
             .add_option(query.slug.map(|value| tasks::Column::Slug.eq(value)))
+            .add_option(query.client_name.map(|value| {
+                tasks::Column::SessionId.in_subquery(sessions_started_by(
+                    agent_session_starts::Column::ClientName.eq(value),
+                ))
+            }))
             .add_option(
                 query
                     .status
@@ -600,6 +627,7 @@ impl AuditLog {
             )
             .add_option(query.site.map(|value| tasks::Column::Site.eq(value)))
             .add_option(query.since.map(|value| tasks::Column::StartedAt.gte(value)))
+            .add_option(query.until.map(|value| tasks::Column::StartedAt.lte(value)))
             .add_option(search_condition)
             .add_option(query.cursor.map(|value| tasks::Column::CursorId.lt(value)));
         let mut tasks = Tasks::find()
@@ -619,6 +647,48 @@ impl AuditLog {
             None
         };
         Ok(ListTasksResult { tasks, next_cursor })
+    }
+
+    pub async fn session_lifecycle(&self, session_id: &str) -> AppResult<SessionLifecycle> {
+        let conn = self.db.connection();
+        let starts = AgentSessionStarts::find()
+            .filter(agent_session_starts::Column::SessionId.eq(session_id))
+            .count(conn)
+            .await?;
+        let ends = AgentSessionEnds::find()
+            .filter(agent_session_ends::Column::SessionId.eq(session_id))
+            .count(conn)
+            .await?;
+        let last_end_at = AgentSessionEnds::find()
+            .filter(agent_session_ends::Column::SessionId.eq(session_id))
+            .order_by_desc(agent_session_ends::Column::CreatedAt)
+            .one(conn)
+            .await?
+            .map(|end| end.created_at);
+        Ok(SessionLifecycle {
+            starts,
+            ends,
+            last_end_at,
+        })
+    }
+
+    /// The `clientInfo.name` each session's first start recorded, keyed by session id.
+    /// Dispatch rows carry a display label instead, which prefers `clientInfo.title`; sessions
+    /// with no start row are missing from the map.
+    pub async fn client_names(&self, session_ids: &[String]) -> AppResult<HashMap<String, String>> {
+        let mut names = HashMap::with_capacity(session_ids.len());
+        if session_ids.is_empty() {
+            return Ok(names);
+        }
+        let starts = AgentSessionStarts::find()
+            .filter(agent_session_starts::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .order_by_asc(agent_session_starts::Column::Id)
+            .all(self.db.connection())
+            .await?;
+        for start in starts {
+            names.entry(start.session_id).or_insert(start.client_name);
+        }
+        Ok(names)
     }
 
     /// Returns the audit summary for one session without loading its dispatch history.
@@ -879,6 +949,16 @@ async fn query_dispatches_for_session<C: ConnectionTrait>(
         .order_by_asc(tool_dispatches::Column::Id)
         .all(conn)
         .await?)
+}
+
+/// `SELECT session_id FROM agent_session_starts WHERE <condition>`, for filtering tasks by
+/// what their start rows recorded.
+fn sessions_started_by(condition: impl sea_orm::sea_query::IntoCondition) -> SelectStatement {
+    Query::select()
+        .column(agent_session_starts::Column::SessionId)
+        .from(AgentSessionStarts)
+        .cond_where(condition)
+        .to_owned()
 }
 
 async fn query_start<C: ConnectionTrait>(

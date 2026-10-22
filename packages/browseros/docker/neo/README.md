@@ -68,6 +68,26 @@ your agent's own harness keeps its workflows and asks you for help itself. Inste
 The viewer's screen follows the browser tab's size once it connects, so `NEO_SCREEN`
 only matters until then.
 
+## Read what your agent did
+
+In `hosted` mode, port 9010 also serves `/v1`, a read-only API for your backend. Its
+OpenAPI spec is
+[`contracts/hosted-api/openapi.yaml`](../../../browseros-agent/contracts/hosted-api/openapi.yaml).
+Within `/v1`, fields are only ever added, never renamed or removed.
+
+| Request | Returns |
+|---|---|
+| `GET /v1/sessions?client=&since=&until=&q=&cursor=&limit=` | Sessions, most recently active first |
+| `GET /v1/sessions/{id}?include=screenshots&wait=60` | One session and every tool call, with each screenshot inlined |
+| `GET /v1/sessions/{id}/recording` | The page recording as rrweb events, one entry per page |
+
+- **The session id** is the `Mcp-Session-Id` header your MCP client got from `initialize`, or
+  `_meta["com.browseros.neo/session"]` on a tool result.
+- **Fetch once the session is `complete`.** Screenshots and the recording land a few seconds
+  after the calls. A session ends when your client closes it (`DELETE /mcp`) or after 30
+  idle minutes. `wait=60` holds the request until it is complete.
+- **Records are kept for 7 days.**
+
 ## Your data
 
 Everything Neo keeps lives under `/data`:

@@ -21,6 +21,7 @@ browseros-core.workspace = true
 browseros-decide.workspace = true
 browseros-mcp.workspace = true
 claw-api.workspace = true
+hosted-api.workspace = true
 
 anyhow.workspace = true
 axum.workspace = true

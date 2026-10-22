@@ -1,6 +1,6 @@
 use crate::{
     analytics::{AnalyticsService, AnalyticsSink},
-    api::http,
+    api::{hosted, http},
     config::Config,
     db::{
         AuditLog, DATABASE_FILENAME, Database, MigrationOutcome, RecordingIndex, SessionTabLedger,
@@ -260,7 +260,13 @@ fn resolve_user_home_with(mut lookup: impl FnMut(&str) -> Option<OsString>) -> A
 }
 
 pub fn build_router(state: AppState) -> Router {
-    http::router(state.clone())
+    let mut router = http::router(state.clone());
+    // `/v1` is the hosted API: published to the backend that runs a hosted neo, and absent on
+    // desktop, where a person is at the browser and the cockpit is the way in.
+    if state.config.mode.is_hosted() {
+        router = router.merge(hosted::router());
+    }
+    router
         .with_state(state)
         .layer(middleware::from_fn(http::request_context))
 }

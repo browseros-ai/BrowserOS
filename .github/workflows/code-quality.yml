@@ -113,6 +113,31 @@ jobs:
       - name: Check Claw API generated code
         run: bun run codegen:claw-api:check
 
+      - name: Check hosted API generated code
+        run: bun run codegen:hosted-api:check
+
+  hosted-api-breaking:
+    name: runner / Hosted API breaking changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          # The check compares against the merge-base, which needs history.
+          fetch-depth: 0
+
+      - name: Check hosted API spec against the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash contracts/hosted-api/check-breaking.sh "origin/$BASE_REF"
+
   claw-api-contract:
     name: runner / Claw API conformance
     runs-on: ubuntu-latest

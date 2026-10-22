@@ -313,6 +313,10 @@
       "name": "@browseros/harness-integrations-rust",
       "version": "0.0.0",
     },
+    "crates/hosted-api": {
+      "name": "@browseros/hosted-api-rust",
+      "version": "0.0.0",
+    },
     "packages/acpx-ai-provider": {
       "name": "@browseros/acpx-ai-provider",
       "version": "1.0.0",
@@ -653,6 +657,8 @@
     "@browseros/diagnostics": ["@browseros/diagnostics@workspace:packages/diagnostics"],
 
     "@browseros/harness-integrations-rust": ["@browseros/harness-integrations-rust@workspace:crates/harness-integrations"],
+
+    "@browseros/hosted-api-rust": ["@browseros/hosted-api-rust@workspace:crates/hosted-api"],
 
     "@browseros/onboarding-video": ["@browseros/onboarding-video@workspace:packages/onboarding-video"],
 

@@ -1,0 +1,15 @@
+[package]
+name = "hosted-api"
+version = "1.0.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+serde_with.workspace = true
+
+[lints]
+workspace = true
