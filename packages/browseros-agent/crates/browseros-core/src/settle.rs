@@ -168,16 +168,16 @@ pub async fn read_readiness(session: &ProtocolSession) -> Result<ReadinessReadin
     // so a page whose main thread is busy must not park it for the transport's
     // default, which is two orders of magnitude longer than the budget any
     // caller of this function is working to.
-    let result: ReadingResult =
-        match timeout(timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT, call).await {
-            Ok(result) => result?,
-            Err(_elapsed) => {
-                return Err(CoreError::Message(format!(
-                    "the readiness probe did not answer within {}ms",
-                    timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT.as_millis()
-                )));
-            }
-        };
+    let result: ReadingResult = match timeout(timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT, call).await
+    {
+        Ok(result) => result?,
+        Err(_elapsed) => {
+            return Err(CoreError::Message(format!(
+                "the readiness probe did not answer within {}ms",
+                timeouts::ACTION_SETTLE_CDP_CALL_TIMEOUT.as_millis()
+            )));
+        }
+    };
     result
         .result
         .value
