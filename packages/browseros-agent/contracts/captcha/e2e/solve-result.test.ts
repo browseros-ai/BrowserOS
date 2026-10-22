@@ -1,5 +1,27 @@
 import { expect, test } from 'bun:test'
-import { parseSolveResult } from './solve-result'
+import { parseSolveResult, stubSolveResult } from './solve-result'
+
+test('tests that stub terminal reasons match the v1.1 contract', () => {
+  for (const [status, reason] of [
+    ['solved', 'auto_passed'],
+    ['already_clear', 'no_captcha'],
+    ['unsupported', 'unsupported_type'],
+    ['failed', 'browser_error'],
+    ['cancelled', 'caller_cancelled'],
+    ['needs_human', 'provider_error'],
+  ] as const) {
+    expect(
+      parseSolveResult(stubSolveResult(status, 'turnstile')),
+    ).toMatchObject({
+      status,
+      reason,
+      method: status === 'solved' ? 'auto_pass' : 'none',
+    })
+  }
+  expect(parseSolveResult(stubSolveResult('already_clear', 'none')).type).toBe(
+    'n/a',
+  )
+})
 
 test('tests that camelCase results preserve only report fields and event names', () => {
   expect(

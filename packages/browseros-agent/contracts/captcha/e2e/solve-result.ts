@@ -48,11 +48,19 @@ export function parseSolveResult(result: McpToolResult) {
 
 /** Keep stub terminal payloads beside the parser so contract changes stay here. */
 export function stubSolveResult(status: string, type: string): McpToolResult {
+  const reasons: Record<string, string> = {
+    solved: 'auto_passed',
+    already_clear: 'no_captcha',
+    unsupported: 'unsupported_type',
+    failed: 'browser_error',
+    cancelled: 'caller_cancelled',
+    needs_human: 'provider_error',
+  }
   const value = {
     status,
-    type,
-    method: 'auto_pass',
-    reason: 'provider_error',
+    type: type === 'none' ? null : type,
+    method: status === 'solved' ? 'auto_pass' : 'none',
+    reason: reasons[status],
     durationMs: 1,
     paidTasks: 0,
     costUsd: 0,

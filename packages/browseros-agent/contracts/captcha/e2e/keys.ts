@@ -3,7 +3,7 @@ import { homedir, tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
 export type KeyMode = 'placeholder' | 'real' | 'none'
-const providers = ['CAPSOLVER', 'CAPMONSTER'] as const
+const providers = ['CAPSOLVER', '2CAPTCHA'] as const
 
 export async function configureKeys(mode: KeyMode, source = process.env) {
   const env: Record<string, string | undefined> = {}
@@ -17,7 +17,7 @@ export async function configureKeys(mode: KeyMode, source = process.env) {
   try {
     for (const provider of providers) {
       const name = `BROWSEROS_${provider}_API_KEY_FILE`
-      if (directory) {
+      if (directory && provider === 'CAPSOLVER') {
         env[name] = join(directory, provider.toLowerCase())
         await writeFile(env[name], `captcha-e2e-placeholder-${provider}\n`, {
           mode: 0o600,
@@ -30,9 +30,13 @@ export async function configureKeys(mode: KeyMode, source = process.env) {
             '.config/browseros/captcha',
             `${provider.toLowerCase()}-api-key`,
           )
-        env[name] = resolve(
+        const expanded = resolve(
           path.startsWith('~/') ? join(homedir(), path.slice(2)) : path,
         )
+        env[name] =
+          provider === 'CAPSOLVER' || (await Bun.file(expanded).exists())
+            ? expanded
+            : undefined
       } else env[name] = undefined
     }
     return { env, cleanup }

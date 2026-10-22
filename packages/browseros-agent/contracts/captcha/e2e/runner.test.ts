@@ -185,9 +185,12 @@ test('tests that a rejection beyond the evaluate inline limit still fails a solv
 
 test('tests that unpaid provider failure is unverified and paid failure fails', async () => {
   const paid = { ...(pages[0] as CaptchaPage), mayNeedPaid: true }
-  const failed: CaptchaPage = { ...paid, expect: ['failed'] }
+  const failed: CaptchaPage = { ...paid, expect: ['needs_human'] }
   const records = await run('contract', { pages: [paid] }, [failed])
-  expect(records[0]).toMatchObject({ outcome: 'UNVERIFIED', status: 'failed' })
+  expect(records[0]).toMatchObject({
+    outcome: 'UNVERIFIED',
+    status: 'needs_human',
+  })
   expect(records[0]?.note).toContain('paid path unverified: provider_error')
   expect(exitCode(records)).toBe(0)
   expect(
