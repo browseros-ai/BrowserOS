@@ -57,6 +57,7 @@ pub struct AppState {
     pub targets: Arc<TargetBindings>,
     pub session_efficiency: Arc<SessionEfficiencyService>,
     pub browser: Arc<BrowserService>,
+    pub captcha: Option<Arc<crate::services::captcha::CaptchaService>>,
     pub visuals: Arc<SessionVisualService>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
@@ -232,6 +233,7 @@ impl AppState {
             targets,
             session_efficiency,
             browser,
+            captcha: crate::services::captcha::CaptchaService::from_env(),
             visuals,
             cockpit,
             help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
@@ -322,7 +324,8 @@ mod tests {
             mode: Default::default(),
         });
 
-        let _state = AppState::new_with_home(config, dir.path().join("home")).await?;
+        let state = AppState::new_with_home(config, dir.path().join("home")).await?;
+        assert!(state.captcha.is_none());
 
         assert_eq!(DATABASE_FILENAME, "browserclaw.sqlite");
         assert!(browserclaw_dir.join(DATABASE_FILENAME).is_file());
