@@ -16,12 +16,13 @@ use browseros_mcp::token_estimate::estimate_tool_output_tokens;
 use rmcp::model::ContentBlock;
 use sea_orm::{
     ActiveValue::{NotSet, Set},
-    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, QueryFilter, QueryOrder,
-    QuerySelect, Statement, TransactionTrait,
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Statement, TransactionTrait,
     sea_query::{Condition, Expr, ExprTrait, Func, OnConflict},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::HashMap;
 use url::Url;
 
 pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
@@ -234,6 +235,18 @@ impl From<agent_session_ends::Model> for SessionEndEvent {
 pub struct ListTasksResult {
     pub tasks: Vec<TaskSummary>,
     pub next_cursor: Option<i64>,
+}
+
+/// How many times a session id was opened and closed. A session can still gain rows while any
+/// start lacks its end: teardown writes the end only after the session's in-flight calls have
+/// drained and been recorded, and a reused id (legacy transport) opens a second life after the
+/// first one ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionLifecycle {
+    pub starts: u64,
+    pub ends: u64,
+    /// When the latest end was recorded.
+    pub last_end_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -622,6 +635,48 @@ impl AuditLog {
             None
         };
         Ok(ListTasksResult { tasks, next_cursor })
+    }
+
+    pub async fn session_lifecycle(&self, session_id: &str) -> AppResult<SessionLifecycle> {
+        let conn = self.db.connection();
+        let starts = AgentSessionStarts::find()
+            .filter(agent_session_starts::Column::SessionId.eq(session_id))
+            .count(conn)
+            .await?;
+        let ends = AgentSessionEnds::find()
+            .filter(agent_session_ends::Column::SessionId.eq(session_id))
+            .count(conn)
+            .await?;
+        let last_end_at = AgentSessionEnds::find()
+            .filter(agent_session_ends::Column::SessionId.eq(session_id))
+            .order_by_desc(agent_session_ends::Column::CreatedAt)
+            .one(conn)
+            .await?
+            .map(|end| end.created_at);
+        Ok(SessionLifecycle {
+            starts,
+            ends,
+            last_end_at,
+        })
+    }
+
+    /// The `clientInfo.name` each session's first start recorded, keyed by session id.
+    /// Dispatch rows carry a display label instead, which prefers `clientInfo.title`; sessions
+    /// with no start row are missing from the map.
+    pub async fn client_names(&self, session_ids: &[String]) -> AppResult<HashMap<String, String>> {
+        let mut names = HashMap::with_capacity(session_ids.len());
+        if session_ids.is_empty() {
+            return Ok(names);
+        }
+        let starts = AgentSessionStarts::find()
+            .filter(agent_session_starts::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .order_by_asc(agent_session_starts::Column::Id)
+            .all(self.db.connection())
+            .await?;
+        for start in starts {
+            names.entry(start.session_id).or_insert(start.client_name);
+        }
+        Ok(names)
     }
 
     /// Returns the audit summary for one session without loading its dispatch history.

@@ -46,7 +46,9 @@ paths:
             minimum: 0
         - name: q
           in: query
-          description: Text search over session name, client, site and task summary.
+          description: >-
+            Text search over the session name, the client's name or title, the site and the task
+            summary.
           schema:
             type: string
         - name: cursor
@@ -183,10 +185,14 @@ components:
           type: string
         name:
           type: string
-          description: The session's name, set by the agent or generated from its first task.
+          description: >-
+            A short title generated from what the session worked on, such as `Browsed
+            news.ycombinator.com`. It does not change when the session ends.
         client:
           type: string
-          description: The MCP client's name, from `clientInfo.name`.
+          description: >-
+            The MCP client's `clientInfo.name` from `initialize`. Pass it as `client` to list
+            that client's sessions.
         status:
           type: string
           x-extensible-enum: [live, done, failed, cancelled]
@@ -243,7 +249,9 @@ components:
             screenshots are saved, and its recording has had time to finish uploading.
         toolCalls:
           type: array
-          description: Every tool call in call order, including steps inside `run` scripts.
+          description: >-
+            Every tool call ordered by `startedAt`, including steps inside `run` scripts, which
+            follow the script call they ran in.
           items:
             $ref: '#/components/schemas/ToolCall'
     ToolCall:

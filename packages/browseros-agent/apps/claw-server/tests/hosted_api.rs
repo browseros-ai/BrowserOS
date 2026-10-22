@@ -142,33 +142,53 @@ impl<'a> Call<'a> {
     }
 }
 
-async fn seed(app: &TestApp, call: Call<'_>) -> anyhow::Result<i64> {
-    let slug = claw_server::identity::slugify_client_name(call.client)
-        .unwrap_or_else(|| "agent".to_string());
-    Ok(app
-        .state
-        .audit_log
-        .record_tool_dispatch(RecordToolDispatchInput {
+fn dispatch_input(
+    session: &str,
+    tool: &str,
+    at: i64,
+    parent: Option<&str>,
+) -> RecordToolDispatchInput {
+    Call {
+        tool,
+        parent,
+        ..Call::new(session, at)
+    }
+    .into_input()
+}
+
+impl Call<'_> {
+    fn into_input(self) -> RecordToolDispatchInput {
+        let slug = claw_server::identity::slugify_client_name(self.client)
+            .unwrap_or_else(|| "agent".to_string());
+        RecordToolDispatchInput {
             agent_id: format!("{slug}-task"),
             slug,
-            agent_label: call.client.to_string(),
-            session_id: call.session.to_string(),
-            tool_name: call.tool.to_string(),
+            agent_label: self.client.to_string(),
+            session_id: self.session.to_string(),
+            tool_name: self.tool.to_string(),
             page_id: Some(7),
             tab_id: Some(101),
             target_id: Some("target-7".to_string()),
             url: Some("https://news.ycombinator.com/".to_string()),
             title: Some("Hacker News".to_string()),
-            args_json: bounded_args_json(&call.args),
-            result_meta: result_meta(call.is_error, call.cancelled, &json!({}), 1),
+            args_json: bounded_args_json(&self.args),
+            result_meta: result_meta(self.is_error, self.cancelled, &json!({}), 1),
             duration_ms: 40,
-            dispatch_id: call.dispatch_id,
-            created_at: Some(call.at),
-            parent_dispatch_id: call.parent.map(DispatchId::from),
+            dispatch_id: self.dispatch_id,
+            created_at: Some(self.at),
+            parent_dispatch_id: self.parent.map(DispatchId::from),
             tool_input_token_estimate: 1,
             tool_output_token_estimate: 1,
             token_estimator_version: 1,
-        })
+        }
+    }
+}
+
+async fn seed(app: &TestApp, call: Call<'_>) -> anyhow::Result<i64> {
+    Ok(app
+        .state
+        .audit_log
+        .record_tool_dispatch(call.into_input())
         .await?)
 }
 
@@ -599,6 +619,139 @@ async fn recording_groups_rrweb_events_per_page() -> anyhow::Result<()> {
                 },
             ],
         })
+    );
+    Ok(())
+}
+
+async fn start(app: &TestApp, session_id: &str, client_name: &str) -> anyhow::Result<()> {
+    let slug = claw_server::identity::slugify_client_name(client_name)
+        .unwrap_or_else(|| "agent".to_string());
+    app.state
+        .audit_log
+        .record_session_start(
+            session_id,
+            &format!("{slug}-task"),
+            &slug,
+            client_name,
+            client_name,
+            "1.0.0",
+        )
+        .await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_session_still_tearing_down_is_not_complete() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    // Out of the live map but without an end event: teardown is still draining calls.
+    start(&app, "closing", "Acme Assistant").await?;
+    seed(&app, Call::new("closing", now_ms() - 60_000)).await?;
+    let (_, body) = get(&app.router, "/v1/sessions/closing").await?;
+    assert_eq!(body["complete"], false);
+
+    // A reused id: the first life's end must not finish the second life.
+    app.state
+        .audit_log
+        .record_session_end("closing", "closed", None)
+        .await?;
+    start(&app, "closing", "Acme Assistant").await?;
+    let (_, body) = get(&app.router, "/v1/sessions/closing").await?;
+    assert_eq!(body["complete"], false);
+    Ok(())
+}
+
+#[tokio::test]
+async fn name_and_client_do_not_change_when_a_session_ends() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    let session = live_session("named");
+    app.state.sessions.insert_for_testing(session.clone()).await;
+    session.rename("invoice-processing".to_string()).await;
+    // The client sent clientInfo { name: "acme-wire", title: "Acme Assistant" }: rows carry
+    // the name's slug for ownership and the title as their display label.
+    start(&app, "named", "acme-wire").await?;
+    app.state
+        .audit_log
+        .record_tool_dispatch(RecordToolDispatchInput {
+            slug: "acme-wire".to_string(),
+            ..Call {
+                client: "Acme Assistant",
+                ..Call::new("named", now_ms())
+            }
+            .into_input()
+        })
+        .await?;
+
+    let (_, live) = get(&app.router, "/v1/sessions/named").await?;
+    app.state
+        .sessions
+        .remove(session.id(), "closed", None)
+        .await?;
+    let (_, ended) = get(&app.router, "/v1/sessions/named").await?;
+    assert_eq!(live["name"], "Browsed news.ycombinator.com");
+    assert_eq!(ended["name"], live["name"]);
+    assert_eq!(live["client"], "acme-wire");
+    assert_eq!(ended["client"], "acme-wire");
+
+    let (_, body) = get(&app.router, "/v1/sessions?client=acme-wire").await?;
+    assert_eq!(ids(&body), ["named"]);
+    assert_eq!(body["items"][0]["client"], "acme-wire");
+    let (_, body) = get(&app.router, "/v1/sessions?q=Browsed%20news").await?;
+    assert_eq!(ids(&body), ["named"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_run_steps_are_ordered_by_start() -> anyhow::Result<()> {
+    let app = hosted().await?;
+    let start_at = now_ms() - 60_000;
+    let script = DispatchId::new();
+    let script_id = script.to_string();
+    seed(
+        &app,
+        Call {
+            tool: "run",
+            dispatch_id: script,
+            ..Call::new("parallel", start_at)
+        },
+    )
+    .await?;
+    // Steps are recorded when they finish; `seed` stamps 40 ms durations, so the slow step
+    // that started first is recorded last.
+    for (tool, finished_at) in [("read", start_at + 280), ("click", start_at + 300)] {
+        seed(
+            &app,
+            Call {
+                tool,
+                parent: Some(&script_id),
+                ..Call::new("parallel", finished_at)
+            },
+        )
+        .await?;
+    }
+    let slow = app
+        .state
+        .audit_log
+        .record_tool_dispatch(RecordToolDispatchInput {
+            duration_ms: 250,
+            ..dispatch_input("parallel", "screenshot", start_at + 310, Some(&script_id))
+        })
+        .await?;
+    assert!(slow > 0);
+
+    let (_, body) = get(&app.router, "/v1/sessions/parallel").await?;
+    let calls = body["toolCalls"].as_array().cloned().unwrap_or_default();
+    let order = calls
+        .iter()
+        .map(|call| (call["tool"].clone(), call["startedAt"].clone()))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        [
+            (json!("run"), json!(start_at)),
+            (json!("screenshot"), json!(start_at + 60)),
+            (json!("read"), json!(start_at + 240)),
+            (json!("click"), json!(start_at + 260)),
+        ]
     );
     Ok(())
 }

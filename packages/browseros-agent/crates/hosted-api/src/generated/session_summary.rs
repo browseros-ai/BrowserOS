@@ -15,10 +15,10 @@ use serde::{Deserialize, Serialize};
 pub struct SessionSummary {
     #[serde(rename = "id")]
     pub id: String,
-    /// The session's name, set by the agent or generated from its first task.
+    /// A short title generated from what the session worked on, such as `Browsed news.ycombinator.com`. It does not change when the session ends.
     #[serde(rename = "name")]
     pub name: String,
-    /// The MCP client's name, from `clientInfo.name`.
+    /// The MCP client's `clientInfo.name` from `initialize`. Pass it as `client` to list that client's sessions.
     #[serde(rename = "client")]
     pub client: String,
     /// `live` while the MCP session is open; `failed` when the session ended on repeated tool errors; `cancelled` when an operator stopped it.

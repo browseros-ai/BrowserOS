@@ -34,7 +34,7 @@ pub struct Session {
     /// True once nothing more will be written for this session: it has ended, its screenshots are saved, and its recording has had time to finish uploading.
     #[serde(rename = "complete")]
     pub complete: bool,
-    /// Every tool call in call order, including steps inside `run` scripts.
+    /// Every tool call ordered by `startedAt`, including steps inside `run` scripts, which follow the script call they ran in.
     #[serde(rename = "toolCalls")]
     pub tool_calls: Vec<models::ToolCall>,
 }
