@@ -248,7 +248,7 @@ mod tests {
     use browseros_core::NativeCapabilities;
 
     fn current() -> NativeCapabilities {
-        NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
+        NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
     }
 
     /// The substitution is a string replace, so a reword of the guidance that
@@ -451,9 +451,8 @@ mod tests {
         assert!(capable.contains("original Default profile (directory \"Default\")"));
         assert!(capable.contains("action=\"clear\" returns the task to Default"));
         for older in [
-            NativeCapabilities::from_browseros_version(Some("0.51.1.2")).with_pro_enabled(true),
+            NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
             NativeCapabilities::default(),
-            current().with_pro_enabled(false),
         ] {
             let instructions = mcp_instructions(
                 ServerMode::Desktop,

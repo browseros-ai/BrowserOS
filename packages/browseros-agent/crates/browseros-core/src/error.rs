@@ -74,11 +74,6 @@ pub enum CoreError {
         required: BrowserOsVersion,
         reported: Option<BrowserOsVersion>,
     },
-    /// Native support exists, but the host has not opted into Pro for this process.
-    #[error(
-        "pro_feature_disabled: {feature} requires Pro; Pro features are disabled for this server. The operation was not sent to the browser."
-    )]
-    ProFeatureDisabled { feature: NativeFeature },
     #[error(transparent)]
     Cdp(#[from] CdpError),
     #[error(transparent)]

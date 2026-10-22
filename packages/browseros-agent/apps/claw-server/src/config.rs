@@ -22,8 +22,6 @@ const BROWSERCLAW_DIR_NAME: &str = ".browserclaw";
 pub const NATIVE_VERSION_ENV: &str = "CLAW_NATIVE_BROWSEROS_VERSION";
 /// Selects the [`ServerMode`]: `1` enables hosted; `0`, unset or empty means desktop.
 pub const HOSTED_MODE_ENV: &str = "BROWSERCLAW_HOSTED_MODE";
-/// Runtime opt-in for Pro features. Read once at startup; unset or blank means disabled.
-pub const FEATURE_PRO_ENV: &str = "FEATURE_PRO";
 const DEV_BROWSERCLAW_DIR_NAME: &str = ".browserclaw-dev";
 
 #[derive(Debug, Parser)]
@@ -73,7 +71,7 @@ pub struct Config {
     pub session_sweep_interval: Duration,
     pub replay_retention_days: u64,
     pub dev_mode: bool,
-    /// Native identity and Pro policy, read once per process. Discovery and execution use
+    /// Read once per process. Every discovery and execution path gates native features on
     /// this one value, which `BrowserService` copies into each browser session.
     pub native: NativeIdentity,
     /// Read once per process from [`HOSTED_MODE_ENV`]; the MCP surface follows it.
@@ -230,8 +228,7 @@ impl Config {
             .unwrap_or_else(|| cwd.join("resources"));
         let dev_mode = sidecar.flags.dev_mode.unwrap_or(default_dev_mode);
         let browserclaw_dir = resolve_browserclaw_dir(env, dev_mode, &cwd);
-        let native =
-            resolve_native_identity(env, sidecar.instance.as_ref(), resolve_pro_enabled(env)?);
+        let native = resolve_native_identity(env, sidecar.instance.as_ref());
         let mode = resolve_mode(env)?;
 
         Ok(Self {
@@ -292,32 +289,24 @@ fn dev_mode_fallback() -> bool {
     cfg!(debug_assertions)
 }
 
-/// Dev mode never implies native support or Pro. Combine the host's explicit policy with
-/// a reported/asserted version once, so discovery and every later session share the gate.
+/// Dev mode never implies native support: only a reported or explicitly asserted version
+/// counts.
 fn resolve_native_identity(
     env: &ConfigEnv,
     instance: Option<&serde_json::Value>,
-    pro_enabled: bool,
 ) -> NativeIdentity {
-    let asserted = env.get(NATIVE_VERSION_ENV).and_then(clean_string);
+    if let Some(asserted) = env.get(NATIVE_VERSION_ENV).and_then(clean_string) {
+        return NativeIdentity {
+            capabilities: NativeCapabilities::from_browseros_version(Some(&asserted)),
+            asserted: true,
+        };
+    }
     let reported = instance
         .and_then(|instance| instance.get("browseros_version"))
         .and_then(serde_json::Value::as_str);
     NativeIdentity {
-        capabilities: NativeCapabilities::from_browseros_version(asserted.as_deref().or(reported))
-            .with_pro_enabled(pro_enabled),
-        asserted: asserted.is_some(),
-    }
-}
-
-/// Pro is a process-wide operator choice, not a client argument. Reject typos rather than
-/// silently changing the tool surface; compatibility remains a separate native check.
-fn resolve_pro_enabled(env: &ConfigEnv) -> anyhow::Result<bool> {
-    let raw = env.get(FEATURE_PRO_ENV).unwrap_or_default().trim();
-    match raw.to_ascii_lowercase().as_str() {
-        "" | "false" | "0" => Ok(false),
-        "true" | "1" => Ok(true),
-        _ => anyhow::bail!("{FEATURE_PRO_ENV} must be true/false or 1/0, got {raw:?}"),
+        capabilities: NativeCapabilities::from_browseros_version(reported),
+        asserted: false,
     }
 }
 
@@ -658,7 +647,7 @@ mod tests {
         let cfg = load_native(
             r#"{"ports":{"cdp":9000,"server":9100,"proxy":9100},"flags":{"allow_remote_in_mcp":false},
                 "instance":{"install_id":"i","browseros_version":"0.51.1.3","chromium_version":"155.0.8311.26"}}"#,
-            &[("FEATURE_PRO", "true")],
+            &[],
         )?;
         assert_eq!(
             cfg.native.capabilities.browseros_version(),
@@ -705,7 +694,7 @@ mod tests {
     fn developer_assertion_overrides_and_is_marked() -> anyhow::Result<()> {
         let cfg = load_native(
             r#"{"instance":{"browseros_version":""}}"#,
-            &[(NATIVE_VERSION_ENV, "0.51.1.3"), ("FEATURE_PRO", "true")],
+            &[(NATIVE_VERSION_ENV, "0.51.1.3")],
         )?;
         assert!(
             cfg.native
@@ -722,55 +711,6 @@ mod tests {
             blank.native.capabilities.browseros_version(),
             Some(BrowserOsVersion::new(0, 51, 1, 2))
         );
-        Ok(())
-    }
-
-    #[test]
-    fn profile_targeting_requires_pro_opt_in_at_startup() -> anyhow::Result<()> {
-        let sidecar = r#"{"instance":{"browseros_version":"0.51.2.1"}}"#;
-        for vars in [
-            vec![],
-            vec![("FEATURE_PRO", "")],
-            vec![("FEATURE_PRO", "false")],
-            vec![("FEATURE_PRO", "0")],
-        ] {
-            let cfg = load_native(sidecar, &vars)?;
-            assert!(
-                !cfg.native
-                    .capabilities
-                    .supports(NativeFeature::ProfileTargeting),
-                "{vars:?}"
-            );
-            assert!(cfg.native.capabilities.supports(NativeFeature::Credentials));
-        }
-        for value in ["true", "1", " TRUE "] {
-            let cfg = load_native(sidecar, &[("FEATURE_PRO", value)])?;
-            assert!(
-                cfg.native
-                    .capabilities
-                    .supports(NativeFeature::ProfileTargeting),
-                "{value:?}"
-            );
-        }
-        for sidecar in [r#"{}"#, r#"{"instance":{"browseros_version":"0.51.1.2"}}"#] {
-            let cfg = load_native(sidecar, &[("FEATURE_PRO", "true")])?;
-            assert!(
-                !cfg.native
-                    .capabilities
-                    .supports(NativeFeature::ProfileTargeting)
-            );
-        }
-        let asserted = load_native("{}", &[(NATIVE_VERSION_ENV, "0.51.2.1")])?;
-        assert!(
-            !asserted
-                .native
-                .capabilities
-                .supports(NativeFeature::ProfileTargeting)
-        );
-        let error = load_native(sidecar, &[("FEATURE_PRO", "yes")])
-            .err()
-            .ok_or_else(|| anyhow::anyhow!("invalid Pro flag accepted"))?;
-        assert!(error.to_string().contains("FEATURE_PRO"));
         Ok(())
     }
 

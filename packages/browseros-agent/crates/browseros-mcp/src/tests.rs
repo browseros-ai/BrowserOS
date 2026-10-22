@@ -148,9 +148,9 @@ pub(crate) fn service_options(session: Arc<BrowserSession>) -> BrowserMcpService
     }
 }
 
-/// The first native release with profile targeting, with Pro enabled for these fixtures.
+/// The first native release with profile targeting; profile fixtures model that bundle.
 pub(crate) fn current_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
 }
 
 fn fake_ctx() -> ToolCtx {
