@@ -1,0 +1,4 @@
+ARG BASE_IMAGE=neo-captcha-e2e-base:0.51.1.4
+FROM ${BASE_IMAGE}
+ARG SERVER_PATH
+COPY --chmod=0755 browseros-claw-server-rs ${SERVER_PATH}
