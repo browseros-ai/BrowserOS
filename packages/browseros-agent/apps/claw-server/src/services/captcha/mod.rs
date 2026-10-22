@@ -12,6 +12,7 @@ pub mod types;
 use std::{future::Future, sync::Arc, time::Duration};
 
 use browseros_core::{BrowserView, PageId};
+use futures_util::FutureExt;
 use serde_json::json;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
@@ -100,6 +101,7 @@ impl CaptchaService {
             deadline,
             &LiveDriver,
         )
+        .boxed()
         .await
     }
 
