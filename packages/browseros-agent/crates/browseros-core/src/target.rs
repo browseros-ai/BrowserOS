@@ -958,7 +958,11 @@ impl BrowserView {
             return Ok(root);
         }
         fn children(node: &Value, frames: &mut Vec<crate::FrameId>) {
-            if let Some(id) = node["frameId"].as_str() {
+            if matches!(
+                node["nodeName"].as_str(),
+                Some("IFRAME" | "FRAME" | "OBJECT" | "EMBED" | "FENCEDFRAME")
+            ) && let Some(id) = node["frameId"].as_str()
+            {
                 frames.push(crate::FrameId(id.to_owned()));
             }
             for key in ["children", "shadowRoots"] {

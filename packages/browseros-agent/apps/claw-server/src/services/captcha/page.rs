@@ -11,10 +11,11 @@ use tokio::sync::Mutex;
 use super::types::{DocumentId, FrameRef, PageError, Rect};
 
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(3);
+// Turnstile overlays a transparent input on its visible checkbox.
 const VISIBLE_RECT: &str = r"function(selector) {
     for (const element of this.querySelectorAll(selector)) {
         const r = element.getBoundingClientRect();
-        if (r.width > 0 && r.height > 0 && element.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))
+        if (r.width > 0 && r.height > 0 && element.checkVisibility({checkVisibilityCSS:true}))
             return {x:r.x,y:r.y,width:r.width,height:r.height};
     }
     return null;
@@ -128,6 +129,7 @@ impl CaptchaPage for LivePage {
                 }
                 .await;
                 let rect = match measured {
+                    // CDP quads are relative to the session root, including same-process nesting.
                     Ok(local) => origin.map(|origin| translate(local, origin)),
                     Err(PageError::Browser(_)) => None,
                     Err(error) => return Err(error),
@@ -308,7 +310,12 @@ fn page_error(error: CoreError) -> PageError {
     match error {
         CoreError::UnknownPage(_)
         | CoreError::UnknownPageShort(_)
-        | CoreError::Target(TargetError::PageTargetChanged(_))
+        | CoreError::Target(
+            TargetError::PageTargetChanged(_)
+            | TargetError::ProfileGone(_)
+            | TargetError::DefaultProfileUnavailable(_)
+            | TargetError::PinnedWindowClosed(_),
+        )
         | CoreError::Cdp(
             CdpError::SessionGone
             | CdpError::NotConnected
@@ -318,6 +325,19 @@ fn page_error(error: CoreError) -> PageError {
         CoreError::DocumentChanged => PageError::Navigated,
         CoreError::Cdp(CdpError::Timeout { .. }) => PageError::Timeout,
         CoreError::Cdp(CdpError::Protocol { code: -32800, .. }) => PageError::Cancelled,
+        CoreError::Cdp(CdpError::Protocol { ref message, .. })
+            if message.to_ascii_lowercase().contains("target closed")
+                || message
+                    .to_ascii_lowercase()
+                    .contains("no target with given id") =>
+        {
+            PageError::Closed
+        }
+        CoreError::Cdp(CdpError::Protocol { ref message, .. })
+            if message.to_ascii_lowercase().contains("timed out") =>
+        {
+            PageError::Timeout
+        }
         CoreError::Cdp(CdpError::Protocol { ref message, .. })
             if message.to_ascii_lowercase().contains("cancelled")
                 || message.to_ascii_lowercase().contains("canceled") =>
@@ -399,7 +419,11 @@ fn quad_rect(quad: &Value) -> Result<Rect, PageError> {
     })
 }
 fn collect_owners(node: &Value, frames: &mut Vec<String>) {
-    if let Some(id) = node["frameId"].as_str() {
+    if matches!(
+        node["nodeName"].as_str(),
+        Some("IFRAME" | "FRAME" | "OBJECT" | "EMBED" | "FENCEDFRAME")
+    ) && let Some(id) = node["frameId"].as_str()
+    {
         frames.push(id.to_owned());
     }
     for key in ["children", "shadowRoots"] {
@@ -501,7 +525,13 @@ mod tests {
                     json!({"root":{"nodeType":9,"backendNodeId":40,"children":[{"nodeName":"BODY","nodeType":1,"backendNodeId":41,"shadowRoots":[{"shadowRootType":"closed","nodeType":11,"backendNodeId":42,"children":[{"nodeName":"INPUT","nodeType":1,"backendNodeId":43}]}]}]}})
                 }
                 "DOM.getDocument" => {
-                    json!({"root":{"nodeType":9,"backendNodeId":1,"children":[{"shadowRoots":[{"shadowRootType":"closed","children":[{"nodeName":"IFRAME","frameId":"widget","backendNodeId":5}]}]}]}})
+                    json!({"root":{"nodeType":9,"backendNodeId":1,"children":[{"nodeName":"HTML","frameId":"root"},{"shadowRoots":[{"shadowRootType":"closed","children":[{"nodeName":"IFRAME","frameId":"widget","backendNodeId":5}]}]}]}})
+                }
+                "DOM.getFrameOwner" if params["frameId"] == "root" => {
+                    return Err(CdpError::Protocol {
+                        code: -32000,
+                        message: "Frame with the given id does not belong to the target.".into(),
+                    });
                 }
                 "DOM.getFrameOwner" => json!({"backendNodeId":5}),
                 "DOM.describeNode" => json!({"node":{"frameId":"widget"}}),
@@ -649,6 +679,20 @@ mod tests {
             (
                 Err(CdpError::Protocol {
                     code: -32000,
+                    message: "Target closed".into(),
+                }),
+                PageError::Closed,
+            ),
+            (
+                Err(CdpError::Protocol {
+                    code: -32000,
+                    message: "Request timed out".into(),
+                }),
+                PageError::Timeout,
+            ),
+            (
+                Err(CdpError::Protocol {
+                    code: -32000,
                     message: "other".into(),
                 }),
                 PageError::Browser("CDP error: other".into()),
@@ -678,6 +722,17 @@ mod tests {
             }
         );
         Ok(())
+    }
+
+    #[test]
+    fn tests_that_expired_profile_capabilities_are_closed() {
+        for error in [
+            TargetError::ProfileGone(browseros_core::BrowserProfileId("gone".into())),
+            TargetError::DefaultProfileUnavailable("connection changed".into()),
+            TargetError::PinnedWindowClosed(browseros_core::WindowId(1)),
+        ] {
+            assert_eq!(page_error(error.into()), PageError::Closed);
+        }
     }
     #[tokio::test]
     async fn tests_that_closed_shadow_rects_are_translated_and_missing_selectors_return_none()
@@ -748,6 +803,230 @@ mod tests {
                 .iter()
                 .all(|c| c.2.as_ref().map(SessionId::as_str) == Some("s-page"))
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires the isolated dev browser on 9662 and local fixtures on 9663"]
+    async fn tests_that_live_page_clicks_test_widgets_and_captures_pngs() -> TestResult {
+        use base64::Engine;
+        use browseros_cdp::{CdpClient, ConnectOptions};
+        use browseros_core::{Browser, pages::NewPageOptions};
+        let output = std::path::PathBuf::from(std::env::var("CAPTCHA_LIVE_OUTPUT_DIR")?);
+        std::fs::create_dir_all(&output)?;
+        let mut options = ConnectOptions::new(9662);
+        options.request_timeout = REQUEST_TIMEOUT;
+        let connection = Arc::new(CdpClient::connect(options).await?);
+        let browser = Browser::new(connection.clone());
+        let mut results = Vec::new();
+        for (route, url_part, selector, response_name) in [
+            (
+                "recaptcha-corrected",
+                "/api2/anchor",
+                "#recaptcha-anchor",
+                "g-recaptcha-response",
+            ),
+            (
+                "turnstile-force",
+                "challenges.cloudflare.com",
+                "input[type=checkbox]",
+                "cf-turnstile-response",
+            ),
+        ] {
+            let id = browser
+                .new_page(
+                    &format!("http://127.0.0.1:9663/{route}"),
+                    NewPageOptions::default(),
+                )
+                .await?;
+            let page = LivePage::new(browser.view().await, id.clone());
+            send(&page.top().await?, "Page.bringToFront", json!({})).await?;
+            std::fs::write(output.join("live-phase.txt"), format!("{route}: discover"))?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+            let (frame, rect) = loop {
+                let frames_result = page.frames().await;
+                if let Ok(frames) = frames_result {
+                    std::fs::write(
+                        output.join("live-discovery.json"),
+                        serde_json::to_vec_pretty(&frames)?,
+                    )?;
+                    if let Some(frame) = frames
+                        .into_iter()
+                        .find(|frame| frame.url.contains(url_part))
+                    {
+                        let ready = page
+                            .eval_in_frame(&frame, "document.readyState === 'complete'")
+                            .await
+                            .ok()
+                            == Some(json!(true));
+                        match if ready {
+                            page.query_rect_in_frame(&frame, selector).await
+                        } else {
+                            Ok(None)
+                        } {
+                            Ok(Some(rect)) => break (frame, rect),
+                            result => {
+                                std::fs::write(
+                                    output.join("live-discovery-error.txt"),
+                                    format!("query: {result:?}"),
+                                )?;
+                            }
+                        }
+                    }
+                } else if let Err(error) = frames_result {
+                    std::fs::write(
+                        output.join("live-discovery-error.txt"),
+                        format!("frames: {error:?}"),
+                    )?;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(format!("{route}: widget did not become inspectable").into());
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            };
+            let aria = "document.querySelector('#recaptcha-anchor')?.getAttribute('aria-checked')";
+            std::fs::write(output.join("live-phase.txt"), format!("{route}: before"))?;
+            let before = if route == "recaptcha-corrected" {
+                page.eval_in_frame(&frame, aria).await?
+            } else {
+                Value::Null
+            };
+            let response =
+                format!("document.querySelector('[name=\"{response_name}\"]')?.value.length ?? 0");
+            assert_eq!(page.eval_main(&response).await?, json!(0));
+            let (x, y) = rect.center();
+            std::fs::write(output.join("live-phase.txt"), format!("{route}: click"))?;
+            page.click_at(x, y).await?;
+            std::fs::write(output.join("live-phase.txt"), format!("{route}: token"))?;
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(20);
+            let token_length = loop {
+                let length = page
+                    .eval_main(&response)
+                    .await?
+                    .as_u64()
+                    .ok_or("invalid token length")?;
+                if length > 0 {
+                    break length;
+                }
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(format!("{route}: click was not accepted").into());
+                }
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            };
+            let after = if route == "recaptcha-corrected" {
+                std::fs::write(output.join("live-phase.txt"), format!("{route}: checkmark"))?;
+                loop {
+                    let checked = page.eval_in_frame(&frame, aria).await?;
+                    if checked == json!("true") {
+                        break checked;
+                    }
+                    if tokio::time::Instant::now() >= deadline {
+                        return Err("reCAPTCHA checkmark did not appear".into());
+                    }
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            } else {
+                Value::Null
+            };
+            if route == "recaptcha-corrected" {
+                assert_eq!(before, json!("false"));
+                assert_eq!(after, json!("true"));
+            }
+            std::fs::write(output.join("live-phase.txt"), format!("{route}: animation"))?;
+            page.eval_main(
+                "new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)))",
+            )
+            .await?;
+            std::fs::write(
+                output.join("live-phase.txt"),
+                format!("{route}: screenshot"),
+            )?;
+            let clip = frame.rect.ok_or("missing widget viewport")?;
+            let png = base64::engine::general_purpose::STANDARD
+                .decode(page.screenshot_clip(clip).await?)?;
+            assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+            std::fs::write(output.join(format!("live-{route}.png")), &png)?;
+            results.push(json!({"fixture":route,"frames":page.frames().await?,"document":page.document().await?,"before":before,"after":after,"tokenLength":token_length,"click":[x,y],"pngBytes":png.len(),"dpr":page.eval_main("devicePixelRatio").await?}));
+            std::fs::write(
+                output.join("live-results.json"),
+                serde_json::to_vec_pretty(&results)?,
+            )?;
+            browser.close_page(id).await?;
+        }
+        let id = browser
+            .new_page("http://127.0.0.1:9663/nested", NewPageOptions::default())
+            .await?;
+        let page = LivePage::new(browser.view().await, id.clone());
+        send(&page.top().await?, "Page.bringToFront", json!({})).await?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
+        let frame = loop {
+            if let Ok(frames) = page.frames().await
+                && let Some(frame) = frames
+                    .into_iter()
+                    .find(|frame| frame.url.ends_with("/nested-inner"))
+            {
+                break frame;
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return Err("nested frame was not discovered".into());
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        };
+        assert_eq!(
+            page.eval_in_frame(&frame, "location.href").await?,
+            json!("http://localhost:9663/nested-inner")
+        );
+        let rect = page
+            .query_rect_in_frame(&frame, "#inside")
+            .await?
+            .ok_or("missing nested checkbox")?;
+        assert_eq!(
+            rect,
+            Rect {
+                x: 148.0,
+                y: 213.0,
+                width: 20.0,
+                height: 20.0
+            }
+        );
+        let (x, y) = rect.center();
+        page.click_at(x, y).await?;
+        assert_eq!(
+            page.eval_in_frame(&frame, "document.querySelector('#inside').checked")
+                .await?,
+            json!(true)
+        );
+        assert_eq!(page.eval_main("document.body.style.height='2000px';scrollTo(0,100);new Promise(resolve=>requestAnimationFrame(()=>resolve(scrollY)))").await?,json!(100));
+        let scrolled_frames = page.frames().await?;
+        let scrolled_frame = scrolled_frames
+            .iter()
+            .find(|candidate| candidate.frame_id == frame.frame_id)
+            .ok_or("nested frame disappeared")?;
+        let scrolled_rect = page
+            .query_rect_in_frame(scrolled_frame, "#inside")
+            .await?
+            .ok_or("missing scrolled checkbox")?;
+        assert_eq!(
+            scrolled_rect,
+            Rect {
+                x: 148.0,
+                y: 113.0,
+                width: 20.0,
+                height: 20.0
+            }
+        );
+        let png = base64::engine::general_purpose::STANDARD.decode(
+            page.screenshot_clip(scrolled_frame.rect.ok_or("missing scrolled viewport")?)
+                .await?,
+        )?;
+        std::fs::write(output.join("live-nested-scrolled.png"), &png)?;
+        results.push(json!({"fixture":"nested-oopif-same-process","frames":scrolled_frames,"checkbox":rect,"scrolledCheckbox":scrolled_rect,"scrollY":100,"checked":true}));
+        std::fs::write(
+            output.join("live-results.json"),
+            serde_json::to_vec_pretty(&results)?,
+        )?;
+        browser.close_page(id).await?;
+        connection.disconnect().await;
         Ok(())
     }
 }
