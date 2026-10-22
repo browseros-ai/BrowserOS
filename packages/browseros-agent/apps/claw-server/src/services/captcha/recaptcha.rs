@@ -553,7 +553,18 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 }
                 for id in ids {
                     let id = index.unwrap_or(id);
-                    let fresh = self.read().await?;
+                    let fresh = self
+                        .wait(|v| {
+                            v.passed()
+                                || v.frame
+                                    .as_ref()
+                                    .is_none_or(|f| f.frame_id != frame.frame_id)
+                                || v.grid.as_ref().is_some_and(|g| {
+                                    g.ready
+                                        || !grid.same(g, if grid.dynamic { &clicked } else { &[] })
+                                })
+                        })
+                        .await?;
                     if fresh.passed() {
                         return Ok(true);
                     }
@@ -857,6 +868,9 @@ mod tests {
         replace_whole_grid: bool,
         replacement_reads: u32,
         replacements: u32,
+        tile_replacements: [u32; 9],
+        replacement_load_reads: u32,
+        loading_tile_reads: u32,
         rejected: u32,
         revision: u32,
         callback: bool,
@@ -890,6 +904,9 @@ mod tests {
                 replace_whole_grid: false,
                 replacement_reads: 0,
                 replacements: 0,
+                tile_replacements: [0; 9],
+                replacement_load_reads: 0,
+                loading_tile_reads: 0,
                 rejected: 0,
                 revision: 0,
                 callback: true,
@@ -1053,13 +1070,15 @@ mod tests {
                     }
                 }
             });
+            let ready = self.read(|s| s.loading_tile_reads == 0);
+            self.edit(|s| s.loading_tile_reads = s.loading_tile_reads.saturating_sub(1));
             Ok(self.read(|s| {
                 if !s.tiles || s.clicks.is_empty() || (s.applied && s.transition) { return Value::Null; }
                 let tiles: Vec<Value> = (0..9).map(|i| json!({
                     "rect": {"x": 5. + f64::from(i % 3) * 130., "y": 125. + f64::from(i / 3) * 130., "width": 130., "height": 130.},
-                    "src": format!("https://www.google.com/payload/{}/{}", s.revision, if s.dynamic && i == 0 { s.replacements } else { 0 }),
+                    "src": format!("https://www.google.com/payload/{}/{}", s.revision, if s.dynamic { s.tile_replacements[i as usize] } else { 0 }),
                 })).collect();
-                json!({"label": s.label, "className": s.layout, "dynamic": s.dynamic, "ready": true,
+                json!({"label": s.label, "className": s.layout, "dynamic": s.dynamic, "ready": ready,
                     "retry": s.rejected > 0, "rect": {"x": 5., "y": 125., "width": 390., "height": 390.},
                     "verify": {"x": 280., "y": 520., "width": 100., "height": 40.}, "tiles": tiles})
             }))
@@ -1080,6 +1099,9 @@ mod tests {
                     }
                 } else if s.dynamic && y > 200. {
                     s.replacements += 1;
+                    let index = ((y - 325.) / 130.) as usize * 3 + ((x - 105.) / 130.) as usize;
+                    s.tile_replacements[index] += 1;
+                    s.loading_tile_reads = s.replacement_load_reads;
                 }
             });
             Ok(())
@@ -1524,6 +1546,32 @@ mod tests {
         let clicks = page.read(|s| s.clicks.clone());
         assert_eq!(clicks.len(), 4);
         assert!((clicks[1].0 - clicks[2].0).abs() < 3. && (clicks[1].1 - clicks[2].1).abs() < 3.);
+    }
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_loading_replacements_preserve_remaining_tile_clicks() {
+        for loading_reads in [3, 8] {
+            let page = FakePage::new(true);
+            page.edit(|s| {
+                s.dynamic = true;
+                s.replacement_load_reads = loading_reads;
+            });
+            let backend = FakeBackend::new(vec![
+                SolveAnswer::Tiles(vec![0, 1]),
+                SolveAnswer::Tiles(vec![]),
+                SolveAnswer::Tiles(vec![]),
+            ]);
+            let result = attempt(&page, &backend).await;
+            assert_eq!(
+                (result.status, result.reason),
+                (SolveStatus::Solved, SolveReason::TilesAccepted)
+            );
+            assert_eq!(result.attempts.tile_rounds, 2);
+            assert_eq!(result.attempts.token, 0);
+            let clicks = page.read(|s| s.clicks.clone());
+            assert_eq!(clicks.len(), 4);
+            assert!((clicks[1].0 - 170.).abs() < 3. && (clicks[1].1 - 390.).abs() < 3.);
+            assert!((clicks[2].0 - 300.).abs() < 3. && (clicks[2].1 - 390.).abs() < 3.);
+        }
     }
     #[tokio::test(start_paused = true)]
     async fn tests_that_a_new_dynamic_grid_is_classified_as_a_whole_grid() {
