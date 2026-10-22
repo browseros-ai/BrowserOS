@@ -277,9 +277,9 @@ impl BrowserView {
         load_default: bool,
     ) -> Self {
         let mut view = Self::unbound(session, unbound_default_window);
-        // Older natives cannot honor regular-profile routing (they ignore the context params),
-        // so they keep the unbound path, send no getProfiles, and only disclose an explicit
-        // binding saved on a newer browser. A capable browser retries it on a later capture.
+        // Unavailable targeting (old native or Pro disabled) keeps the unbound path and
+        // sends no getProfiles. Retain any saved binding so re-enabling support can retry
+        // it on a later capture; the host discloses why it was not applied to this call.
         if !view.supports(NativeFeature::ProfileTargeting) {
             view.unapplied = binding;
             return view;

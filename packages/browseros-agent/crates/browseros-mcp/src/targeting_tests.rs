@@ -1637,7 +1637,7 @@ async fn closing_a_strict_pin_during_run_never_uses_another_same_profile_window(
 }
 
 fn older_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.2"))
+    NativeCapabilities::from_browseros_version(Some("0.51.1.2")).with_pro_enabled(true)
 }
 
 fn profile_operations(connection: &FixtureConnection) -> Vec<String> {
@@ -1655,9 +1655,15 @@ fn profile_operations(connection: &FixtureConnection) -> Vec<String> {
 }
 
 #[tokio::test]
-async fn older_native_refuses_profile_tools_and_run_primitives_before_sending() -> anyhow::Result<()>
-{
-    for native in [older_native(), NativeCapabilities::default()] {
+async fn unavailable_targeting_refuses_profile_tools_and_run() -> anyhow::Result<()> {
+    for (native, error_code) in [
+        (older_native(), "native_feature_unavailable"),
+        (NativeCapabilities::default(), "native_feature_unavailable"),
+        (
+            crate::tests::current_native().with_pro_enabled(false),
+            "pro_feature_disabled",
+        ),
+    ] {
         let connection = FixtureConnection::new();
         let session = BrowserSession::new_with_native(
             connection.clone(),
@@ -1684,9 +1690,7 @@ async fn older_native_refuses_profile_tools_and_run_primitives_before_sending() 
             let result = call(&ctx, name, args.clone()).await?;
             assert!(result.is_error, "{native}: {name} {args}");
             assert!(
-                text(&result).contains(
-                    "native_feature_unavailable: profile targeting needs BrowserOS 0.51.1.3"
-                ),
+                text(&result).contains(&format!("{error_code}: profile targeting")),
                 "{native}: {}",
                 text(&result)
             );
@@ -1707,7 +1711,7 @@ async fn older_native_refuses_profile_tools_and_run_primitives_before_sending() 
         assert!(
             run["value"]["refused"]
                 .as_str()
-                .is_some_and(|message| message.contains("native_feature_unavailable")),
+                .is_some_and(|message| message.contains(error_code)),
             "{run}"
         );
         // Ordinary unbound browsing still sees every tab.
@@ -1739,7 +1743,7 @@ async fn capable_native_exposes_run_profile_exports() -> anyhow::Result<()> {
 }
 
 #[test]
-fn discovery_omits_profile_surfaces_for_older_natives() {
+fn discovery_omits_unavailable_profile_surfaces() {
     let names = |native: NativeCapabilities| {
         catalog()
             .into_iter()
@@ -1765,7 +1769,11 @@ fn discovery_omits_profile_surfaces_for_older_natives() {
     assert!(description("run", current).contains("Profile management: browser.profiles"));
     assert!(description("tabs", current).contains("the original Default profile"));
     assert!(description("windows", current).contains("browser_target task selection"));
-    for older in [older_native(), NativeCapabilities::default()] {
+    for older in [
+        older_native(),
+        NativeCapabilities::default(),
+        current.with_pro_enabled(false),
+    ] {
         let listed = names(older);
         assert!(!listed.contains(&"browser_profiles"), "{older}");
         assert!(!listed.contains(&"browser_target"), "{older}");
@@ -1809,94 +1817,103 @@ async fn hidden_tools_keep_stable_schemas_for_cached_clients() -> anyhow::Result
 }
 
 #[tokio::test]
-async fn saved_binding_on_an_older_native_runs_unbound_with_one_outer_note() -> anyhow::Result<()> {
-    // The same in-memory selection outlives a browser swap: a capable session saves it, the
-    // provider then yields an older native, and a capable native later applies it again.
-    let connection = FixtureConnection::new();
-    let capable = BrowserSession::new_with_native(
-        connection.clone(),
-        BrowserSessionHooks::default(),
-        crate::tests::current_native(),
-    );
-    let older = BrowserSession::new_with_native(
-        connection.clone(),
-        BrowserSessionHooks::default(),
-        older_native(),
-    );
-    let use_older = Arc::new(AtomicBool::new(false));
-    let mut options = super::tests::service_options(capable.clone());
-    options.browser_session = None;
-    options.browser_session_provider = Some({
-        let use_older = use_older.clone();
-        Arc::new(move || {
-            let session = if use_older.load(Ordering::SeqCst) {
-                older.clone()
-            } else {
-                capable.clone()
-            };
-            Box::pin(async move { Some(session) })
-        })
-    });
-    let service = BrowserMcpService::new(options);
-    let call = |name: &'static str, args: Value| {
-        service.call_tool_for_testing(name, args, CancellationToken::new())
-    };
-    let selected = call("browser_target", json!({ "action": "set", "name": "eng" })).await?;
-    assert_eq!(selected.is_error, Some(false));
+async fn saved_binding_when_targeting_is_unavailable_runs_unbound_with_one_outer_note()
+-> anyhow::Result<()> {
+    for (unavailable, reason) in [
+        (older_native(), "this browser reports BrowserOS 0.51.1.2"),
+        (
+            crate::tests::current_native().with_pro_enabled(false),
+            "profile targeting requires Pro",
+        ),
+    ] {
+        // The same in-memory selection outlives a browser swap: a capable session saves it, the
+        // provider then yields a session without targeting, then an enabled one applies it again.
+        let connection = FixtureConnection::new();
+        let capable = BrowserSession::new_with_native(
+            connection.clone(),
+            BrowserSessionHooks::default(),
+            crate::tests::current_native(),
+        );
+        let unavailable_session = BrowserSession::new_with_native(
+            connection.clone(),
+            BrowserSessionHooks::default(),
+            unavailable,
+        );
+        let use_unavailable = Arc::new(AtomicBool::new(false));
+        let mut options = super::tests::service_options(capable.clone());
+        options.browser_session = None;
+        options.browser_session_provider = Some({
+            let use_unavailable = use_unavailable.clone();
+            Arc::new(move || {
+                let session = if use_unavailable.load(Ordering::SeqCst) {
+                    unavailable_session.clone()
+                } else {
+                    capable.clone()
+                };
+                Box::pin(async move { Some(session) })
+            })
+        });
+        let service = BrowserMcpService::new(options);
+        let call = |name: &'static str, args: Value| {
+            service.call_tool_for_testing(name, args, CancellationToken::new())
+        };
+        let selected = call("browser_target", json!({ "action": "set", "name": "eng" })).await?;
+        assert_eq!(selected.is_error, Some(false));
 
-    use_older.store(true, Ordering::SeqCst);
-    let profile_reads = profile_operations(&connection).len();
-    let note = |result: &rmcp::model::CallToolResult| {
-        result
-            .content
-            .iter()
-            .filter_map(|content| content.as_text())
-            .filter(|content| content.text.contains("was not applied"))
-            .map(|content| content.text.clone())
-            .collect::<Vec<_>>()
-    };
-    let listed = call("tabs", json!({ "action": "list" })).await?;
-    assert_eq!(listed.is_error, Some(false));
-    let notes = note(&listed);
-    assert_eq!(notes.len(), 1, "{notes:?}");
-    assert!(notes[0].contains("saved profile target \"eng\" (eng)"));
-    assert!(notes[0].contains("BrowserOS 0.51.1.3 or newer"));
-    assert!(notes[0].contains("this browser reports BrowserOS 0.51.1.2"));
-    // Unbound routing: the other profile's tab is visible too.
-    assert!(
-        listed
-            .structured_content
-            .as_ref()
-            .and_then(|data| data["pages"].as_array())
-            .is_some_and(|pages| pages.len() == 4)
-    );
-    let script = call(
+        use_unavailable.store(true, Ordering::SeqCst);
+        let profile_reads = profile_operations(&connection).len();
+        let note = |result: &rmcp::model::CallToolResult| {
+            result
+                .content
+                .iter()
+                .filter_map(|content| content.as_text())
+                .filter(|content| content.text.contains("was not applied"))
+                .map(|content| content.text.clone())
+                .collect::<Vec<_>>()
+        };
+        let listed = call("tabs", json!({ "action": "list" })).await?;
+        assert_eq!(listed.is_error, Some(false));
+        let notes = note(&listed);
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("saved profile target \"eng\" (eng)"));
+        assert!(notes[0].contains(reason), "{}", notes[0]);
+        assert!(!notes[0].contains("operation was not sent"), "{}", notes[0]);
+        // Unbound routing: the other profile's tab is visible too.
+        assert!(
+            listed
+                .structured_content
+                .as_ref()
+                .and_then(|data| data["pages"].as_array())
+                .is_some_and(|pages| pages.len() == 4)
+        );
+        let script = call(
         "run",
         json!({ "code": "const text = JSON.stringify(await browser.pages.list()); return text.includes('was not applied');" }),
     )
     .await?;
-    assert_eq!(note(&script).len(), 1);
-    assert_eq!(
-        script
-            .structured_content
-            .as_ref()
-            .map(|data| &data["value"]),
-        Some(&json!(false))
-    );
-    assert_eq!(profile_operations(&connection).len(), profile_reads);
+        assert_eq!(note(&script).len(), 1);
+        assert_eq!(
+            script
+                .structured_content
+                .as_ref()
+                .map(|data| &data["value"]),
+            Some(&json!(false))
+        );
+        assert_eq!(profile_operations(&connection).len(), profile_reads);
 
-    // A capable native retries the retained selection with live identity checks.
-    use_older.store(false, Ordering::SeqCst);
-    let bound = call("tabs", json!({ "action": "list" })).await?;
-    assert!(note(&bound).is_empty());
-    assert!(
-        bound
-            .structured_content
-            .as_ref()
-            .and_then(|data| data["pages"].as_array())
-            .is_some_and(|pages| pages.len() == 2)
-    );
-    assert!(profile_operations(&connection).len() > profile_reads);
+        // A capable native retries the retained selection with live identity checks.
+        use_unavailable.store(false, Ordering::SeqCst);
+        let bound = call("tabs", json!({ "action": "list" })).await?;
+        assert!(note(&bound).is_empty());
+        assert!(
+            bound
+                .structured_content
+                .as_ref()
+                .and_then(|data| data["pages"].as_array())
+                .is_some_and(|pages| pages.len() == 2)
+        );
+        assert!(profile_operations(&connection).len() > profile_reads);
+    }
     Ok(())
 }
 

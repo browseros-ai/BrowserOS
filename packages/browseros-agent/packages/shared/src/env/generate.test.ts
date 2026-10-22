@@ -27,6 +27,7 @@ describe('ENV_REGISTRY', () => {
       'BROWSEROS_USER_DATA_DIR',
       'BROWSEROS_CLAW_CDP_PORT',
       'BROWSERCLAW_DIR',
+      'FEATURE_PRO',
       'CLAW_POSTHOG_KEY',
       'CLAW_POSTHOG_HOST',
       'CLAW_SENTRY_DSN',

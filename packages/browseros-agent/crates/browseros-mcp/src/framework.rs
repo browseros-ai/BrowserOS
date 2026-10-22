@@ -544,16 +544,29 @@ pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> 
 #[must_use]
 pub fn unapplied_target_note(view: &BrowserView) -> Option<String> {
     let binding = view.unapplied_binding()?;
-    let feature = NativeFeature::ProfileTargeting;
-    let reported = match view.native().browseros_version() {
-        Some(version) => format!("this browser reports BrowserOS {version}"),
-        None => "this browser's BrowserOS version is unknown".to_string(),
+    // The gate owns the decision; this adapter renders its structured reason as a routing
+    // explanation. The full refusal says an operation was not sent, but this call may have
+    // succeeded unbound, so that execution claim must not appear in its fallback notice.
+    let reason = match view.require(NativeFeature::ProfileTargeting).err()? {
+        CoreError::ProFeatureDisabled { feature } => {
+            format!("{feature} requires Pro, which is disabled for this server.")
+        }
+        CoreError::NativeFeatureUnavailable {
+            feature,
+            required,
+            reported,
+        } => {
+            let reported = match reported {
+                Some(version) => format!("this browser reports BrowserOS {version}"),
+                None => "this browser's BrowserOS version is unknown".to_string(),
+            };
+            format!("{feature} needs BrowserOS {required} or newer; {reported}.")
+        }
+        error => error.to_string(),
     };
     Some(format!(
-        "Note: saved profile target \"{}\" ({}) was not applied: {feature} needs BrowserOS {} or newer and {reported}. This call used browser-wide routing.",
-        binding.intent.name,
-        binding.intent.browser_profile_id,
-        feature.min_browseros(),
+        "Note: saved profile target \"{}\" ({}) was not applied: {reason} This call used browser-wide routing.",
+        binding.intent.name, binding.intent.browser_profile_id,
     ))
 }
 
