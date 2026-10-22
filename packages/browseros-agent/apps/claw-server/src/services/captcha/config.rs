@@ -1,6 +1,8 @@
 use std::fmt;
 
 pub const CAPSOLVER_KEY_FILE_ENV: &str = "BROWSEROS_CAPSOLVER_API_KEY_FILE";
+pub const TWOCAPTCHA_KEY_FILE_ENV: &str = "BROWSEROS_2CAPTCHA_API_KEY_FILE";
+pub const TWOCAPTCHA_URL_ENV: &str = "BROWSEROS_2CAPTCHA_API_URL";
 pub const CAPSOLVER_URL_ENV: &str = "BROWSEROS_CAPSOLVER_API_URL";
 pub const PAID_TASK_LIMIT_ENV: &str = "BROWSEROS_CAPTCHA_PAID_TASK_LIMIT";
 
@@ -34,6 +36,7 @@ pub struct ProviderConfig {
 #[derive(Debug, Clone)]
 pub struct CaptchaConfig {
     pub capsolver: Option<ProviderConfig>,
+    pub twocaptcha: Option<ProviderConfig>,
     pub paid_task_limit: u32,
 }
 
@@ -41,6 +44,7 @@ impl Default for CaptchaConfig {
     fn default() -> Self {
         Self {
             capsolver: None,
+            twocaptcha: None,
             paid_task_limit: 100,
         }
     }
@@ -55,6 +59,12 @@ impl CaptchaConfig {
                 CAPSOLVER_URL_ENV,
                 "https://api.capsolver.com",
             ),
+            twocaptcha: provider(
+                &lookup,
+                TWOCAPTCHA_KEY_FILE_ENV,
+                TWOCAPTCHA_URL_ENV,
+                "https://api.2captcha.com",
+            ),
             paid_task_limit: lookup(PAID_TASK_LIMIT_ENV)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(100),
@@ -66,7 +76,7 @@ impl CaptchaConfig {
     }
 
     pub fn has_provider(&self) -> bool {
-        self.capsolver.is_some()
+        self.capsolver.is_some() || self.twocaptcha.is_some()
     }
 }
 

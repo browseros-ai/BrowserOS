@@ -62,6 +62,14 @@ impl ProviderChain {
                 http,
             }));
         }
+        if let Some(config) = &config.twocaptcha {
+            match super::twocaptcha::TwoCaptchaClient::new(config) {
+                Ok(client) => clients.push(Box::new(client)),
+                Err(error) => {
+                    tracing::warn!(target: "captcha", kind = ?error.kind, "2Captcha client unavailable")
+                }
+            }
+        }
         Self::with_clients(clients, config.paid_task_limit)
     }
     pub fn with_clients(clients: Vec<Box<dyn VendorClient>>, limit: u32) -> Self {
@@ -104,7 +112,8 @@ impl CaptchaBackend for ProviderChain {
                 tracing::debug!(target: "captcha", provider = ?provider, task_type = task.label(), "provider task started");
                 // Keep the reservation if the caller drops this future after submission.
                 slot.charged = true;
-                let result = client.solve(task, deadline.min(started + ATTEMPT_TIMEOUT), cancel).await;
+                let attempt_timeout = if matches!(task, SolveTask::RecaptchaTiles(_)) { ATTEMPT_TIMEOUT } else { Duration::from_secs(60) };
+                let result = client.solve(task, deadline.min(started + attempt_timeout), cancel).await;
                 if let Err(error) = &result { slot.charged = error.charged; }
                 tracing::debug!(target: "captcha", provider = ?provider, task_type = task.label(), latency_ms = started.elapsed().as_millis() as u64, success = result.is_ok(), "provider task finished");
                 result
@@ -1294,6 +1303,72 @@ mod tests {
             anyhow::bail!("cap was bypassed")
         };
         assert_eq!(error.kind, ProviderErrorKind::SpendLimit);
+        Ok(())
+    }
+    struct SlowVendor(Duration);
+
+    impl VendorClient for SlowVendor {
+        fn name(&self) -> ProviderName {
+            ProviderName::Capsolver
+        }
+        fn supports(&self, _task: &SolveTask) -> bool {
+            true
+        }
+        fn solve<'a>(
+            &'a self,
+            task: &'a SolveTask,
+            deadline: Instant,
+            cancel: &'a CancellationToken,
+        ) -> BoxFuture<'a, Result<ProviderAnswer, ProviderError>> {
+            Box::pin(async move {
+                tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => Err(ProviderError { provider: Some(self.name()), kind: ProviderErrorKind::Cancelled, message: "cancelled".into(), charged: true }),
+                    _ = tokio::time::sleep_until(deadline) => Err(ProviderError { provider: Some(self.name()), kind: ProviderErrorKind::Timeout, message: "deadline".into(), charged: true }),
+                    _ = tokio::time::sleep(self.0) => Ok(ProviderAnswer {
+                        provider: self.name(),
+                        answer: if matches!(task,SolveTask::RecaptchaTiles(_)) { SolveAnswer::Tiles(vec![0]) } else { SolveAnswer::Token("delayed-token".into()) },
+                        task_id: Some("slow".into()), cost_usd: Some(0.001),
+                    }),
+                }
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_attempt_budgets_depend_on_task_and_respect_the_overall_deadline()
+    -> anyhow::Result<()> {
+        for (task, delay, overall, elapsed, succeeds) in [
+            (tiles(TileGrid::ThreeByThree), 35, 120, 30, false),
+            (recaptcha(), 35, 120, 35, true),
+            (turnstile(), 35, 120, 35, true),
+            (recaptcha(), 65, 120, 60, false),
+            (turnstile(), 35, 20, 20, false),
+        ] {
+            let chain = ProviderChain::with_clients(
+                vec![Box::new(SlowVendor(Duration::from_secs(delay)))],
+                1,
+            );
+            let start = Instant::now();
+            let result = chain
+                .solve(
+                    &task,
+                    start + Duration::from_secs(overall),
+                    &CancellationToken::new(),
+                )
+                .await;
+            assert_eq!(result.is_ok(), succeeds, "{}", task.label());
+            if !succeeds {
+                assert_eq!(
+                    result
+                        .err()
+                        .ok_or_else(|| anyhow::anyhow!("expected timeout"))?
+                        .kind,
+                    ProviderErrorKind::Timeout
+                );
+            }
+            assert_eq!(start.elapsed(), Duration::from_secs(elapsed));
+        }
         Ok(())
     }
 }
