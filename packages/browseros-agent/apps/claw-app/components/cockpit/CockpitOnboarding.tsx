@@ -36,7 +36,7 @@ export function CockpitOnboarding({
 
   return (
     <section className="flex flex-col gap-3" aria-label="Getting started">
-      <h1 className="font-extrabold text-[40px] text-cyanotype-ink leading-[1.13] tracking-[-0.035em]">
+      <h1 className="font-extrabold text-[36px] text-cyanotype-ink leading-[1.13] tracking-[-0.035em]">
         {FIRST_RUN_COPY.headingLead}{' '}
         <em className="font-medium font-serif text-[1.087em] tracking-[-0.015em]">
           {FIRST_RUN_COPY.headingAccent}
@@ -61,7 +61,7 @@ export function CockpitOnboarding({
                 {connectedHarnesses.map((harness) => (
                   <span
                     key={harness}
-                    className="inline-flex h-[34px] items-center gap-2 rounded-full border border-border-2 bg-card pr-3 pl-2.5 font-semibold text-[14px] text-cyanotype-ink"
+                    className="inline-flex h-8 items-center gap-2 rounded-full border border-border-2 bg-card pr-3 pl-2.5 font-semibold text-[14px] text-cyanotype-ink"
                   >
                     <HarnessIcon harness={harness} className="size-4" />
                     {harness}
@@ -101,7 +101,7 @@ export function CockpitOnboarding({
                 setCoworkGuideOpen(true)
               }}
               className={cn(
-                'h-[38px] cursor-pointer rounded-full px-4 font-semibold text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25',
+                'h-9 cursor-pointer rounded-full px-4 font-semibold text-[14px] transition-colors focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25',
                 // With no app found, Cowork is the main way in.
                 found
                   ? 'border border-border bg-card text-cyanotype-ink hover:bg-bg-canvas'
@@ -164,7 +164,7 @@ function Bubble({ lead, children }: { lead?: boolean; children: ReactNode }) {
   return (
     <span
       className={cn(
-        'rounded-[20px] bg-accent-tint px-4 py-2.5 font-medium text-[17px] text-cyanotype-ink leading-[22px]',
+        'rounded-[20px] bg-accent-tint px-4 py-2 font-medium text-[17px] text-cyanotype-ink leading-[22px]',
         lead && 'rounded-tl-[6px]',
       )}
     >

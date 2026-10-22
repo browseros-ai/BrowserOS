@@ -81,7 +81,7 @@ export function Cockpit() {
     state !== 'ready' ? (
       // Tighter top than the ready cockpit: the demo and Try one should sit
       // above an 800 px fold at 1280 wide.
-      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-8 pb-16">
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6 px-8 pt-6 pb-16">
         <UltrafastBanner />
         <ProductHuntBanner />
         <FeedbackInviteCard />

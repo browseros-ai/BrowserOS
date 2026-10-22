@@ -181,12 +181,13 @@ export function OnboardingDemo() {
           role="img"
           aria-label="On a Mac, you open the Claude app in Code mode and ask it to find the cheapest flight to New York next Friday. neo opens the flight search, fills it in, reads five flights and tags the cheapest, $142 at 7:05 am, and Claude replies with it."
           data-instant={instant || undefined}
+          data-paused={!playback.playing || undefined}
           style={{
             width: STAGE_WIDTH,
             height: STAGE_HEIGHT,
             transform: `scale(${scale})`,
           }}
-          className="absolute top-0 left-0 origin-top-left font-sans text-cyanotype-ink data-instant:[&_*]:animate-none! data-instant:[&_*]:transition-none! motion-reduce:[&_*]:animate-none! motion-reduce:[&_*]:transition-none!"
+          className="absolute top-0 left-0 origin-top-left font-sans text-cyanotype-ink data-instant:[&_*]:animate-none! data-instant:[&_*]:transition-none! motion-reduce:[&_*]:animate-none! motion-reduce:[&_*]:transition-none! data-paused:[&_*]:[animation-play-state:paused]"
         >
           <DemoDesktop frame={playback.frame} spinGlyph={playback.spinGlyph} />
         </div>

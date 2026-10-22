@@ -130,7 +130,7 @@ export function DemoClaudeWindow({
           />
           <div
             className={cn(
-              'max-w-[88%] self-end rounded-[12px_12px_4px_12px] bg-accent-tint px-[11px] py-[7px] text-[12px] text-cyanotype-ink leading-4 transition-[opacity,transform] duration-300 ease-out',
+              'max-w-[88%] self-end rounded-[12px_12px_4px_12px] bg-accent-tint px-[11px] py-[7px] text-[13px] text-cyanotype-ink leading-[17px] transition-[opacity,transform] duration-300 ease-out',
               frame.sent ? 'opacity-100' : 'translate-y-1.5 opacity-0',
             )}
           >
@@ -202,7 +202,7 @@ export function DemoClaudeWindow({
               Cheapest is $142, nonstop, Fri 7:05 am.
             </div>
           </div>
-          <div className="mt-auto flex items-start gap-2 rounded-xl border border-border bg-card p-2.5 text-[12px] leading-4 shadow-[0_2px_8px_-4px_rgb(1_18_63/0.14)]">
+          <div className="mt-auto flex items-start gap-2 rounded-xl border border-border bg-card p-2.5 text-[13px] leading-[17px] shadow-[0_2px_8px_-4px_rgb(1_18_63/0.14)]">
             <Plus aria-hidden className="mt-0.5 size-3 flex-none text-ink-3" />
             <span className="min-w-0 flex-1">
               {typing ? (
