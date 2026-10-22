@@ -77,9 +77,9 @@ export type DemoApp = 'terminal' | 'claude' | 'chatgpt'
 export const DEMO_APPS: readonly DemoApp[] = ['terminal', 'claude', 'chatgpt']
 export const DEFAULT_DEMO_APP: DemoApp = 'claude'
 
-// Switch: the step people miss in each app. Claude and ChatGPT open on Chat;
-// the pointer glides to the toggle, a callout names the step, and the click
-// flips it (rounds 9 and 10). In Terminal you start Claude Code instead.
+// Switch: the step people miss in each app, named by a callout. Claude and
+// ChatGPT open on Chat; the pointer glides to the toggle and the click flips
+// it (rounds 9 and 10). In Terminal you type `claude` and press return.
 const OPEN = 2200
 const TO_TOGGLE = 2500
 const CALLOUT = 2900
@@ -95,8 +95,9 @@ const SWITCHES: Record<
 > = {
   claude: { callout: 'Switch to Code', switchedAt: CLICK, toToggle: true },
   chatgpt: { callout: 'Switch to Work', switchedAt: CLICK, toToggle: true },
+  // Terminal has no toggle; the callout sits beside the command instead.
   terminal: {
-    callout: null,
+    callout: 'Type claude, then press ⏎',
     switchedAt: CLAUDE_CODE_STARTED,
     toToggle: false,
   },

@@ -198,13 +198,16 @@ const TOGGLE_SPOTS: Record<DemoApp, { pointer: string; callout: string }> = {
     pointer: 'top-[31px] left-[333px]',
     callout: 'top-[22px] left-[380px]',
   },
+  // No toggle: the pointer stays on the dock and the callout sits just
+  // after `~ % claude` on the terminal's first line.
   terminal: {
     pointer: 'top-[428px] left-[420px]',
-    callout: 'top-[22px] left-[380px]',
+    callout: 'top-[51px] left-[116px]',
   },
 }
 
-/** Names the step people miss: Code in Claude, Work in ChatGPT. */
+/** Names the step people miss: Code in Claude, Work in ChatGPT, typing
+ * `claude` in Terminal. */
 function SwitchCallout({ app, text }: { app: DemoApp; text: string | null }) {
   return (
     <span

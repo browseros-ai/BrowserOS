@@ -80,7 +80,7 @@ describe('CockpitOnboarding', () => {
     )
     expect(html).toContain('aria-label="Copy: Read me today’s top news."')
     expect(html).toContain(
-      'Paste one into Claude Code or Codex, then watch it here.',
+      'Paste one into Claude or ChatGPT, then watch it here.',
     )
   })
 

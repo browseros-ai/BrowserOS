@@ -55,7 +55,7 @@ export const FIRST_RUN_COPY = {
   coworkQuestion: 'Using Claude Cowork?',
   coworkAction: 'Set it up',
   tryLabel: 'Try one',
-  tryHint: 'Paste one into Claude Code or Codex, then watch it here.',
+  tryHint: 'Paste one into Claude or ChatGPT, then watch it here.',
 } as const
 
 export const GET_CLAUDE_URL = 'https://claude.ai/download'

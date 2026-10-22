@@ -137,13 +137,15 @@ describe('per-app flows', () => {
     expect(typing.agent.command.length).toBeGreaterThan(0)
     expect('claude'.startsWith(typing.agent.command)).toBe(true)
     expect(typing.agent.switched).toBe(false)
-    expect(typing.callout).toBeNull()
+    expect(typing.callout).toBe('Type claude, then press ⏎')
     const started = demoFrameAt(3800, 'terminal')
     expect(started.agent.command).toBe('claude')
     expect(started.agent.switched).toBe(true)
     // No toggle to click: the pointer stays on Terminal in the dock.
     expect(started.pointer.at).toBe('dock')
     expect(started.dock.tip).toBe(true)
+    // Timed like the other two callouts: gone shortly after the switch.
+    expect(demoFrameAt(4300, 'terminal').callout).toBeNull()
   })
 
   it('ChatGPT: opens on Chat, a callout says Switch to Work, the click flips it', () => {

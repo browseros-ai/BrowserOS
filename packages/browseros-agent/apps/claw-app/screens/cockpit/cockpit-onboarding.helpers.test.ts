@@ -51,7 +51,7 @@ describe('cockpit first-run copy', () => {
       `${FIRST_RUN_COPY.coworkQuestion} ${FIRST_RUN_COPY.coworkAction}`,
     ).toBe('Using Claude Cowork? Set it up')
     expect(FIRST_RUN_COPY.tryHint).toBe(
-      'Paste one into Claude Code or Codex, then watch it here.',
+      'Paste one into Claude or ChatGPT, then watch it here.',
     )
     const copy = [...Object.values(FIRST_RUN_COPY), ...TRY_PROMPTS].join(' ')
     expect(copy).not.toMatch(/\b(MCP|server|endpoint|terminal|config)\b/i)
