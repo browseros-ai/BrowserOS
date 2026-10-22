@@ -108,6 +108,7 @@ test('tests that contract verdicts cover demo success messages and JSON success 
     (acceptedPattern, index): CaptchaPage => ({
       ...(pages[0] as CaptchaPage),
       id: `demo-${index}`,
+      family: index === 1 ? 'turnstile' : 'recaptcha_v2',
       kind: 'demo',
       path: undefined,
       url: `https://demo.invalid/${index}`,

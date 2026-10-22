@@ -66,7 +66,7 @@ export function classifyOutcome(
   return { outcome: 'FAIL', note: '' }
 }
 
-function payload(text: string): unknown {
+function payload(text: string, parseJson = true): unknown {
   // The opening line contains a trust notice; readiness notes follow the end fence.
   const framed = text.match(
     /^\[UNTRUSTED_PAGE_CONTENT[^\]]*\][^\n]*\n([\s\S]*?)\n\[END_UNTRUSTED_PAGE_CONTENT[^\]]*\]/,
@@ -74,6 +74,7 @@ function payload(text: string): unknown {
   const clean = (framed?.[1] ?? text)
     .replace(/Tip: this session is[\s\S]*$/, '')
     .trim()
+  if (!parseJson) return clean
   try {
     return JSON.parse(clean)
   } catch {
@@ -115,7 +116,7 @@ export async function runCaptchaE2E(
       const evaluate = async (code: string) => {
         const result = await mcp.callTool('evaluate', { page, code }, timeout)
         if (result.isError) throw new Error('page probe failed')
-        return payload(textOf(result))
+        return payload(textOf(result), code !== bodyProbe)
       }
       const poll = async (probe: () => Promise<boolean>) => {
         const deadline = Date.now() + timeout
