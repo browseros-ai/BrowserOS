@@ -287,6 +287,21 @@ fn format_line(
         line.push_str(" [cursor=pointer]");
     }
 
+    if role == "link"
+        && let Some(url) = node
+            .properties
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .find(|property| property.name == "url")
+            .and_then(|property| str_val(Some(&property.value)))
+            .filter(|url| !url.is_empty())
+    {
+        line.push_str(" [url=");
+        line.push_str(&json_quote(&url));
+        line.push(']');
+    }
+
     if is_value_role(role)
         && let Some(value) = str_val(node.value.as_ref())
         && !value.is_empty()
@@ -456,6 +471,48 @@ mod tests {
             ]
             .join("\n")
         );
+    }
+
+    #[test]
+    fn tests_that_links_keep_urls() -> Result<(), serde_json::Error> {
+        let nodes: Vec<AxNode> = serde_json::from_value(json!([
+            {
+                "nodeId": "1",
+                "role": {"type": "role", "value": "RootWebArea"},
+                "childIds": ["2", "3", "4"]
+            },
+            {
+                "nodeId": "2", "backendDOMNodeId": 101,
+                "role": {"type": "role", "value": "link"},
+                "name": {"type": "computedString", "value": "Read more"},
+                "properties": [{"name": "url", "value": {
+                    "type": "string", "value": "https://first.example/story"
+                }}]
+            },
+            {
+                "nodeId": "3", "backendDOMNodeId": 102,
+                "role": {"type": "role", "value": "link"},
+                "name": {"type": "computedString", "value": "Read more"},
+                "properties": [{"name": "url", "value": {
+                    "type": "string", "value": "https://second.example/[story]?q=\"hello\""
+                }}]
+            },
+            {
+                "nodeId": "4", "backendDOMNodeId": 103,
+                "role": {"type": "role", "value": "button"},
+                "name": {"type": "computedString", "value": "Next"}
+            }
+        ]))?;
+
+        assert_eq!(
+            render(&nodes, &mut RefMap::new()),
+            concat!(
+                "- link \"Read more\" [ref=e1] [url=\"https://first.example/story\"]\n",
+                "- link \"Read more\" [ref=e2] [url=\"https://second.example/[story]?q=\\\"hello\\\"\"]\n",
+                "- button \"Next\" [ref=e3]"
+            )
+        );
+        Ok(())
     }
 
     #[test]

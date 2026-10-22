@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/lifetime/application_lifetime.cc b/chrome/browser/lifetime/application_lifetime.cc
-index 120cee0391d43..29ee1da2a6b2c 100644
+index 120cee0391d43f84215726f0711409d23964514c..fe5561c0f2bdecb2f0cddae2fbe73e1139d58346 100644
 --- a/chrome/browser/lifetime/application_lifetime.cc
 +++ b/chrome/browser/lifetime/application_lifetime.cc
 @@ -13,6 +13,7 @@
@@ -24,12 +24,16 @@ index 120cee0391d43..29ee1da2a6b2c 100644
  namespace chrome {
  
  namespace {
-@@ -65,6 +73,12 @@ void AttemptUserExit() {
+@@ -65,6 +73,16 @@ void AttemptUserExit() {
  }
  
  void AttemptRelaunch() {
 +#if BUILDFLAG(ENABLE_SPARKLE)
 +  if (sparkle_glue::IsUpdateReady()) {
++    // Sparkle quits and reopens the app itself, bypassing AttemptRestart().
++    // Mark the quit as a restart, as AttemptRestart() would, so the relaunched
++    // browser restores the session even when startup is set to a new tab.
++    g_browser_process->local_state()->SetBoolean(prefs::kWasRestarted, true);
 +    sparkle_glue::InstallAndRelaunch();
 +    return;
 +  }

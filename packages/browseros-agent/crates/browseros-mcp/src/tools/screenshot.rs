@@ -12,7 +12,8 @@ use serde_json::{Value, json};
 const DEFAULT_SCREENSHOT_QUALITY: i64 = 80;
 const DESCRIPTION: &str = "\
 Capture a screenshot of the page, returned inline. \
-Defaults to JPEG quality 80 around 1024x768; prefer snapshot for structure/actions.";
+Defaults to JPEG quality 80 at the current CSS viewport, with native device pixel density; \
+prefer snapshot for structure/actions.";
 
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(rename_all = "lowercase")]
@@ -23,24 +24,14 @@ enum ScreenshotFormat {
     Webp,
 }
 
+/// Optional CSS viewport bounds; only supplied axes constrain the capture scale.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 struct ScreenshotSize {
-    #[serde(default = "default_width")]
     #[schemars(range(min = 1, max = 4096))]
-    width: i64,
-    #[serde(default = "default_height")]
+    width: Option<i64>,
     #[schemars(range(min = 1, max = 4096))]
-    height: i64,
-}
-
-impl Default for ScreenshotSize {
-    fn default() -> Self {
-        Self {
-            width: default_width(),
-            height: default_height(),
-        }
-    }
+    height: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
@@ -51,7 +42,8 @@ struct ScreenshotArgs {
     format: ScreenshotFormat,
     #[schemars(range(min = 0, max = 100))]
     quality: Option<i64>,
-    /// Max viewport capture size. Defaults to 1024x768.
+    /// Max viewport size in CSS pixels, preserving aspect ratio without upscaling.
+    /// No cap by default; omitted width or height is unconstrained. Ignored for fullPage.
     size: Option<ScreenshotSize>,
     /// Capture beyond the viewport.
     #[serde(rename = "fullPage")]
@@ -107,11 +99,12 @@ fn handler<'a>(
             clip: None,
         };
         if !full_page {
-            let page = ctx.session.pages.get_session(PageId(args.page)).await?;
-            options.clip =
-                Some(build_screenshot_clip(&page.session, &args.size.unwrap_or_default()).await?);
+            // A bound view's page session brackets Page.getLayoutMetrics with scope and
+            // target-incarnation checks; the raw registry session would bypass the profile.
+            let page = ctx.browser.page_session(PageId(args.page)).await?;
+            options.clip = Some(build_screenshot_clip(&page.session, args.size.as_ref()).await?);
         }
-        let result = ctx.session.screenshot(PageId(args.page), options).await?;
+        let result = ctx.browser.screenshot(PageId(args.page), options).await?;
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&result.data)
             .map(|bytes| bytes.len())
@@ -163,19 +156,27 @@ fn handler<'a>(
 
 async fn build_screenshot_clip(
     session: &browseros_core::ProtocolSession,
-    target: &ScreenshotSize,
+    target: Option<&ScreenshotSize>,
 ) -> ToolExecResult<Viewport> {
     let metrics: LayoutMetrics = session.send("Page.getLayoutMetrics", json!({})).await?;
     let viewport = metrics
         .css_layout_viewport
         .unwrap_or(metrics.layout_viewport);
-    let scale = if viewport.client_width > 0.0 && viewport.client_height > 0.0 {
-        1.0_f64
-            .min(target.width as f64 / viewport.client_width)
-            .min(target.height as f64 / viewport.client_height)
-    } else {
-        1.0
-    };
+    // The clip covers the user's CSS viewport without resizing the page. There
+    // is no default cap: scale 1 preserves native device density (2x on Retina).
+    let mut scale = 1.0_f64;
+    if let Some(target) = target {
+        if let Some(width) = target.width
+            && viewport.client_width > 0.0
+        {
+            scale = scale.min(width as f64 / viewport.client_width);
+        }
+        if let Some(height) = target.height
+            && viewport.client_height > 0.0
+        {
+            scale = scale.min(height as f64 / viewport.client_height);
+        }
+    }
     Ok(Viewport {
         x: viewport.page_x,
         y: viewport.page_y,
@@ -198,12 +199,15 @@ fn validate_args(args: &ScreenshotArgs) -> ToolExecResult<()> {
         ]));
     }
     if let Some(size) = &args.size
-        && (!(1..=4096).contains(&size.width) || !(1..=4096).contains(&size.height))
+        && [size.width, size.height]
+            .into_iter()
+            .flatten()
+            .any(|dimension| !(1..=4096).contains(&dimension))
     {
         return Err(crate::framework::ToolError::InvalidArguments(vec![
             crate::framework::ArgIssue {
                 path: "size".to_string(),
-                message: "width and height must be between 1 and 4096".to_string(),
+                message: "supplied width and height must be between 1 and 4096".to_string(),
             },
         ]));
     }
@@ -232,12 +236,4 @@ fn format_name(format: &ScreenshotFormat) -> &'static str {
         ScreenshotFormat::Png => "png",
         ScreenshotFormat::Webp => "webp",
     }
-}
-
-fn default_width() -> i64 {
-    1024
-}
-
-fn default_height() -> i64 {
-    768
 }

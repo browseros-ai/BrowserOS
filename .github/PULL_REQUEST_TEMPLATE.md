@@ -9,7 +9,7 @@
 ## How to check it
 
 <!-- The steps a reviewer takes to see this working. Include the path you
-     worked in: BrowserOS neo, BrowserOS, CLI, or the browser itself. -->
+     worked in: BrowserOS neo, BrowserOS, or the browser itself. -->
 
 ## Before you request review
 

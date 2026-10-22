@@ -1,6 +1,6 @@
 diff --git a/chrome/browser/browseros/server/server_updater.h b/chrome/browser/browseros/server/server_updater.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..ce435712133908e4bc75a2ea282c221559bb1767
+index 0000000000000000000000000000000000000000..085dfcf3ffeaebc2d8c160a7edf301647c19e005
 --- /dev/null
 +++ b/chrome/browser/browseros/server/server_updater.h
 @@ -0,0 +1,46 @@
@@ -43,7 +43,7 @@ index 0000000000000000000000000000000000000000..ce435712133908e4bc75a2ea282c2215
 +  virtual base::FilePath GetBestServerResourcesPath() = 0;
 +
 +  // Requests rejection of a failed downloaded server through the manager,
-+  // which stops that process before deleting its resources.
++  // which falls back to the bundled server and keeps the rejected files.
 +  virtual void InvalidateDownloadedVersion() = 0;
 +};
 +

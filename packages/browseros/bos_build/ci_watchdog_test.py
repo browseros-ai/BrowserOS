@@ -2,7 +2,9 @@
 """Regression tests for the WarpBuild release queue-watchdogs."""
 
 import json
+import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -130,6 +132,68 @@ class WatchdogFilterTest(unittest.TestCase):
             jobs,
         )
 
+    def test_serial_linux_watchdog_requires_first_pickup_not_every_matrix_entry(self):
+        step = self.load_watchdog_step("release-linux.yml")
+        for statuses, succeeds, cancels in (
+            (("in_progress", "queued"), True, False),
+            (("completed", "queued"), True, False),
+            (("queued",), False, True),
+            ((), False, False),
+        ):
+            with self.subTest(statuses=statuses), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                response = root / "jobs.json"
+                response.write_text(
+                    json.dumps(
+                        {
+                            "jobs": [
+                                {
+                                    "name": f"linux-{i}",
+                                    "status": status,
+                                    "labels": [step["env"]["RUNNER_LABEL"]],
+                                }
+                                for i, status in enumerate(statuses)
+                            ]
+                        }
+                    )
+                )
+                # Advance immediately to the deadline; these process adapters
+                # exercise the shipped shell without a real API call or wait.
+                prefix = """
+                gh() {
+                  if [[ "$*" == *"POST"* ]]; then
+                    echo cancel >> "$CANCEL_LOG"
+                  else
+                    cat "$JOBS_FILE"
+                  fi
+                }
+                date() {
+                  if [ -f "$CLOCK_READ" ]; then echo 2000;
+                  else touch "$CLOCK_READ"; echo 0; fi
+                }
+                sleep() { return 99; }
+                """
+                result = subprocess.run(
+                    ["bash", "-c", prefix + step["run"]],
+                    env={
+                        **os.environ,
+                        **step["env"],
+                        "GITHUB_REPOSITORY": "browseros-ai/BrowserOS",
+                        "GITHUB_RUN_ID": "123",
+                        "JOBS_FILE": str(response),
+                        "CLOCK_READ": str(root / "clock"),
+                        "CANCEL_LOG": str(root / "cancel"),
+                    },
+                    capture_output=True,
+                    text=True,
+                )
+                self.assertEqual(
+                    result.returncode,
+                    0 if succeeds else 1,
+                    result.stdout + result.stderr,
+                )
+                self.assertEqual((root / "cancel").exists(), cancels)
+
     def test_api_and_filter_failures_share_the_retry_guard(self):
         for workflow_name in self.WORKFLOWS:
             with self.subTest(workflow=workflow_name):
@@ -171,15 +235,13 @@ class WarpBuildRunbookTest(unittest.TestCase):
         )
         cls.runbook = runbook_path.read_text(encoding="utf-8")
         paragraphs = [
-            " ".join(paragraph.split())
-            for paragraph in cls.runbook.split("\n\n")
+            " ".join(paragraph.split()) for paragraph in cls.runbook.split("\n\n")
         ]
         cls.windows_generation_guidance = next(
             paragraph
             for paragraph in paragraphs
             if paragraph.startswith(
-                "WarpBuild's Windows Server 2025 image is "
-                "Hypervisor Generation 1"
+                "WarpBuild's Windows Server 2025 image is Hypervisor Generation 1"
             )
         )
         troubleshooting = cls.runbook.split(

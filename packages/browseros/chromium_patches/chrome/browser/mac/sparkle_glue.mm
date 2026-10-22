@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/mac/sparkle_glue.mm b/chrome/browser/mac/sparkle_glue.mm
 new file mode 100644
-index 0000000000000..7a5da195279c1
+index 0000000000000000000000000000000000000000..b0a5361e2d18f6d52c0b75d2a0f8ad641f9a6443
 --- /dev/null
 +++ b/chrome/browser/mac/sparkle_glue.mm
-@@ -0,0 +1,673 @@
+@@ -0,0 +1,714 @@
 +// Copyright 2024 BrowserOS Authors. All rights reserved.
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -312,6 +312,10 @@ index 0000000000000..7a5da195279c1
 +@property(nonatomic, strong) NSHashTable<id<SparkleObserver>>* observers;
 +@property(nonatomic, readwrite) SparkleStatus status;
 +@property(nonatomic, readwrite, copy, nullable) NSString* lastErrorMessage;
++// Set when Sparkle's automatic driver hands us a silently staged update via
++// updater:willInstallUpdateOnQuit:immediateInstallationBlock:. Invoking it
++// installs the staged update and relaunches without any Sparkle UI.
++@property(nonatomic, copy, nullable) void (^immediateInstallBlock)(void);
 +
 +#if !defined(OFFICIAL_BUILD)
 +@property(nonatomic) BOOL dryRunMode;
@@ -327,6 +331,7 @@ index 0000000000000..7a5da195279c1
 +@synthesize observers = _observers;
 +@synthesize status = _status;
 +@synthesize lastErrorMessage = _lastErrorMessage;
++@synthesize immediateInstallBlock = _immediateInstallBlock;
 +
 +#if !defined(OFFICIAL_BUILD)
 +@synthesize dryRunMode = _dryRunMode;
@@ -472,7 +477,13 @@ index 0000000000000..7a5da195279c1
 +  }
 +
 +  VLOG(1) << "Sparkle: Installing and relaunching";
-+  [_userDriver triggerInstall];
++  // A user-driven check (About page) leaves a reply block on the user driver;
++  // a background download only leaves Sparkle's immediate-install handler.
++  if (_userDriver.installReplyBlock || !_immediateInstallBlock) {
++    [_userDriver triggerInstall];
++    return;
++  }
++  _immediateInstallBlock();
 +}
 +
 +- (void)addObserver:(id<SparkleObserver>)observer {
@@ -570,6 +581,24 @@ index 0000000000000..7a5da195279c1
 +  // Already handled by user driver's showUpdateNotFoundWithError.
 +}
 +
++// Background downloads (SUAutomaticallyUpdate) run on Sparkle's
++// SPUAutomaticUpdateDriver, which never calls BrowserOSUserDriver: it stages
++// the update for install-on-quit and, if we return NO here, only re-surfaces it
++// after SUImpatientUpdateCheckInterval (7 days). This is the one callback that
++// fires as soon as the download is staged, so it is where the app-menu badge
++// must be raised. Returning YES keeps the immediate-install handler valid for
++// "Relaunch to update"; a normal quit still installs the staged update.
++- (BOOL)updater:(SPUUpdater*)updater
++    willInstallUpdateOnQuit:(SUAppcastItem*)item
++    immediateInstallationBlock:(void (^)(void))immediateInstallHandler {
++  VLOG(1) << "Sparkle: Update staged for install on quit - "
++          << base::SysNSStringToUTF8(item.displayVersionString);
++  _userDriver.updateVersion = item.displayVersionString;
++  _immediateInstallBlock = [immediateInstallHandler copy];
++  [self setInternalStatus:SparkleStatusReadyToInstall];
++  return YES;
++}
++
 +- (void)updater:(SPUUpdater*)updater
 +    didAbortWithError:(NSError*)error {
 +  if (error.code == SUNoUpdateError) {
@@ -579,6 +608,18 @@ index 0000000000000..7a5da195279c1
 +
 +  LOG(ERROR) << "Sparkle: Aborted with error: "
 +             << base::SysNSStringToUTF8(error.localizedDescription);
++
++  // While we hold the immediate-install handler, Sparkle keeps that automatic
++  // session open, so an abort here can only mean it died (e.g. the installer
++  // connection failed). The handler only weakly references the released
++  // driver and would now do nothing, so drop it and leave ReadyToInstall:
++  // "Relaunch to update" then falls back to a plain Chromium restart, and the
++  // next scheduled check downloads the update again.
++  if (_immediateInstallBlock) {
++    _immediateInstallBlock = nil;
++    [self setInternalStatus:SparkleStatusError
++               errorMessage:error.localizedDescription];
++  }
 +}
 +
 +#if !defined(OFFICIAL_BUILD)

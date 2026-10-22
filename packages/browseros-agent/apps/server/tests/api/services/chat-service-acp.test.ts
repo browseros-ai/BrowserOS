@@ -36,6 +36,12 @@ function deps(
 ) {
   const calls: AcpAgentStreamInput[] = []
   const close = mock(async () => true)
+  const leases: Array<{
+    token: string
+    readOnly: boolean
+    revoked: boolean
+    contextUpdates: unknown[]
+  }> = []
   let streamAttempt = 0
   const acpRuntime = {
     async stream(input: AcpAgentStreamInput) {
@@ -88,11 +94,24 @@ function deps(
       resolveTabIds: mock(async () => new Map<number, number>()),
     } as never,
     browserMcp: {
-      createLease: mock(() => ({
-        token: 'acp-test-lease',
-        updateBrowserContext: mock(() => {}),
-        revoke: mock(() => {}),
-      })),
+      createLease: mock((input: { readOnly?: boolean }) => {
+        const lease = {
+          token: `acp-test-lease-${leases.length + 1}`,
+          readOnly: input.readOnly ?? false,
+          revoked: false,
+          contextUpdates: [] as unknown[],
+        }
+        leases.push(lease)
+        return {
+          token: lease.token,
+          updateBrowserContext: mock((browserContext: unknown) => {
+            lease.contextUpdates.push(browserContext)
+          }),
+          revoke: mock(() => {
+            lease.revoked = true
+          }),
+        }
+      }),
     } as never,
     serverPort: 9100,
     acpAgentStore: {
@@ -103,7 +122,7 @@ function deps(
     acpRuntime: acpRuntime as never,
     conversationStore: conversationStore as never,
   })
-  return { calls, close, service, conversationStore }
+  return { calls, close, leases, service, conversationStore }
 }
 
 describe('ChatService ACP dispatch', () => {
@@ -315,6 +334,84 @@ describe('ChatService ACP dispatch', () => {
       type: 'text',
       text: '<USER_QUERY>\nretry turn\n</USER_QUERY>',
     })
+  })
+
+  it('reuses one browser tool lease when only the browser context changes', async () => {
+    const fixture = deps()
+    const conversationId = crypto.randomUUID()
+    const request = {
+      target: { type: 'claude' as const, agentId: AGENT_ID },
+      conversationId,
+      isScheduledTask: false,
+      mode: 'agent' as const,
+      origin: 'sidepanel' as const,
+    }
+
+    const first = await fixture.service.processMessage(
+      {
+        ...request,
+        message: 'first message',
+        browserContext: {
+          windowId: 1,
+          activeTab: { id: 10, url: 'https://first.test/', title: 'First' },
+        },
+      },
+      new AbortController().signal,
+    )
+    expect(await first.text()).toContain('"delta":"done"')
+
+    const second = await fixture.service.processMessage(
+      {
+        ...request,
+        message: 'second message',
+        browserContext: {
+          windowId: 2,
+          activeTab: { id: 20, url: 'https://second.test/', title: 'Second' },
+        },
+      },
+      new AbortController().signal,
+    )
+    expect(await second.text()).toContain('"delta":"done"')
+
+    expect(fixture.leases).toHaveLength(1)
+    expect(fixture.leases[0]?.revoked).toBe(false)
+    expect(fixture.leases[0]?.contextUpdates).toHaveLength(1)
+    expect(fixture.leases[0]?.contextUpdates[0]).toMatchObject({
+      windowId: 2,
+      activeTab: { id: 20, url: 'https://second.test/', title: 'Second' },
+    })
+    expect(fixture.calls).toHaveLength(2)
+    expect(fixture.calls[0]?.browserToolLeaseToken).toBe(
+      fixture.calls[1]?.browserToolLeaseToken,
+    )
+  })
+
+  it('re-mints the browser tool lease when read-only mode changes', async () => {
+    const fixture = deps()
+    const conversationId = crypto.randomUUID()
+    const request = {
+      target: { type: 'claude' as const, agentId: AGENT_ID },
+      conversationId,
+      isScheduledTask: false,
+      origin: 'sidepanel' as const,
+    }
+
+    const first = await fixture.service.processMessage(
+      { ...request, message: 'agent turn', mode: 'agent' },
+      new AbortController().signal,
+    )
+    expect(await first.text()).toContain('"delta":"done"')
+
+    const second = await fixture.service.processMessage(
+      { ...request, message: 'chat turn', mode: 'chat' },
+      new AbortController().signal,
+    )
+    expect(await second.text()).toContain('"delta":"done"')
+
+    expect(fixture.leases).toHaveLength(2)
+    expect(fixture.leases[0]?.revoked).toBe(true)
+    expect(fixture.leases[1]?.readOnly).toBe(true)
+    expect(fixture.calls[1]?.readOnly).toBe(true)
   })
 })
 

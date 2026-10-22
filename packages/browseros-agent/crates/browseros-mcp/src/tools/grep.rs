@@ -78,15 +78,15 @@ fn handler<'a>(
         }
         let haystack = match args.over {
             GrepOver::Ax => {
-                ctx.session
+                ctx.browser
                     .observe(PageId(args.page))
-                    .await
+                    .await?
                     .snapshot()
                     .await?
                     .text
             }
             GrepOver::Content => {
-                let page = ctx.session.pages.get_session(PageId(args.page)).await?;
+                let page = ctx.browser.page_session(PageId(args.page)).await?;
                 let result: EvaluateResult = page
                     .session
                     .send(
@@ -119,10 +119,9 @@ fn handler<'a>(
             )));
         }
         let origin = ctx
-            .session
-            .pages
-            .get_info(PageId(args.page))
-            .await
+            .browser
+            .refresh_page(PageId(args.page))
+            .await?
             .map(|info| info.url)
             .unwrap_or_else(|| "unknown".to_string());
         let rendered_matches = matches

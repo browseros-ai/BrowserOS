@@ -8,7 +8,7 @@ use crate::{
         diff::{DiffDetail, format_diff_result},
         snapshot::format_snapshot_result,
     },
-    framework::{ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
+    framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
 };
 use browseros_core::{ConsoleEntry, PageId, settle::SettleOutcome};
 use rmcp::model::ContentBlock;
@@ -43,6 +43,7 @@ pub struct ToolResponse {
     structured_content: Option<Value>,
     post_actions: Vec<PostAction>,
     console_summaries: Vec<ConsoleSummary>,
+    audit_hints: Option<AuditHints>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +52,7 @@ pub struct BuiltToolResponse {
     pub is_error: bool,
     pub structured_content: Option<Value>,
     pub metadata_tab_id: Option<i64>,
+    pub audit_hints: Option<AuditHints>,
 }
 
 impl ToolResponse {
@@ -76,6 +78,12 @@ impl ToolResponse {
         merge_structured(&mut self.structured_content, value);
     }
 
+    /// Record host-only audit hints (secret redaction, screenshot suppression) for
+    /// this dispatch. Carried to the claw-server audit layer, never to the client.
+    pub fn set_audit_hints(&mut self, hints: AuditHints) {
+        self.audit_hints = Some(hints);
+    }
+
     pub fn append_result(&mut self, result: ToolResult) {
         self.content.extend(result.content);
         if result.is_error {
@@ -83,6 +91,9 @@ impl ToolResponse {
         }
         if let Some(structured) = result.structured_content {
             self.data(structured);
+        }
+        if result.audit_hints.is_some() {
+            self.audit_hints = result.audit_hints;
         }
     }
 
@@ -150,15 +161,18 @@ impl ToolResponse {
         }
 
         for summary in self.console_summaries.clone() {
-            self.append_console_summary(ctx, summary);
+            if ctx.browser.page(PageId(summary.page)).await.is_ok() {
+                self.append_console_summary(ctx, summary);
+            }
         }
-        self.prepend_page_signal_lines(ctx, primary_page);
+        self.prepend_page_signal_lines(ctx, primary_page).await;
 
         Ok(BuiltToolResponse {
             content: self.content.clone(),
             is_error: self.has_error,
             structured_content: self.structured_content.clone(),
             metadata_tab_id: None,
+            audit_hints: self.audit_hints.clone(),
         })
     }
 
@@ -167,10 +181,17 @@ impl ToolResponse {
         action: PostAction,
         ctx: &ToolCtx,
     ) -> ToolExecResult<()> {
+        // Settling is advisory and can stop on an admission error. Re-admit
+        // before reading global dialog signals or starting the actual readback.
+        if ctx.browser.binding().is_some()
+            && let Some(page) = action.page()
+        {
+            ctx.browser.page(PageId(page)).await?;
+        }
         match action {
             PostAction::Snapshot { page } => {
                 self.throw_if_dialog_open(ctx, page)?;
-                let observer = ctx.session.observe(browseros_core::PageId(page)).await;
+                let observer = ctx.browser.observe(browseros_core::PageId(page)).await?;
                 let snapshot = observer.snapshot().await?;
                 let formatted = format_snapshot_result(&snapshot.text, &snapshot.url, ctx).await;
                 self.text(format!("[Page {page} snapshot]\n{}", formatted.text));
@@ -183,19 +204,18 @@ impl ToolResponse {
             } => {
                 self.throw_if_dialog_open(ctx, page)?;
                 let diff = ctx
-                    .session
+                    .browser
                     .observe(browseros_core::PageId(page))
-                    .await
+                    .await?
                     .diff()
                     .await?;
                 let origin = diff.after_url.as_deref().map(ToString::to_string);
                 let origin = match origin {
                     Some(origin) => origin,
                     None => ctx
-                        .session
-                        .pages
-                        .get_info(browseros_core::PageId(page))
-                        .await
+                        .browser
+                        .refresh_page(browseros_core::PageId(page))
+                        .await?
                         .map(|info| info.url)
                         .unwrap_or_else(|| "unknown".to_string()),
                 };
@@ -203,6 +223,14 @@ impl ToolResponse {
                 self.text(format!("[Page {page} diff]\n{}", formatted.text));
                 if include_structured {
                     let mut structured = json!({ "changed": diff.changed });
+                    // Text changing and the page changing are different
+                    // questions on a page carrying a countdown or a carousel,
+                    // so say which one this was.
+                    if let Some(moved) = diff.arrangement_changed
+                        && let Value::Object(object) = &mut structured
+                    {
+                        object.insert("arrangementChanged".to_string(), Value::Bool(moved));
+                    }
                     if diff.url_changed
                         && let Value::Object(object) = &mut structured
                     {
@@ -221,7 +249,7 @@ impl ToolResponse {
                 Ok(())
             }
             PostAction::Pages => {
-                let pages = ctx.session.pages.list().await?;
+                let pages = ctx.browser.list_pages().await?.pages;
                 if pages.is_empty() {
                     self.text("[Open pages] None");
                     return Ok(());
@@ -247,9 +275,8 @@ impl ToolResponse {
             }
             PostAction::Screenshot { page } => {
                 let page_session = ctx
-                    .session
-                    .pages
-                    .get_session(browseros_core::PageId(page))
+                    .browser
+                    .page_session(browseros_core::PageId(page))
                     .await?;
                 #[derive(serde::Deserialize)]
                 struct CaptureScreenshotResult {
@@ -278,8 +305,8 @@ impl ToolResponse {
             return Ok(());
         };
         if ctx
-            .session
-            .page_signals
+            .browser
+            .signals()
             .pending_dialog_line(&PageId(page))
             .is_some()
         {
@@ -288,8 +315,8 @@ impl ToolResponse {
         }
         let outcome = tokio::select! {
             () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
-            outcome = browseros_core::settle::wait_for_action_settle(
-                ctx.session.pages.as_ref(),
+            outcome = crate::settle::wait_for_action_settle(
+                &ctx.browser,
                 PageId(page),
                 browseros_core::timeouts::ACTION_SETTLE_DEFAULT_TIMEOUT,
             ) => outcome,
@@ -308,8 +335,8 @@ impl ToolResponse {
 
     fn append_console_summary(&mut self, ctx: &ToolCtx, summary: ConsoleSummary) {
         let entries = ctx
-            .session
-            .page_signals
+            .browser
+            .signals()
             .console_entries_since(&PageId(summary.page), summary.since);
         let Some(line) = console_summary_line(summary.page, &entries) else {
             return;
@@ -317,7 +344,7 @@ impl ToolResponse {
         self.text(line);
     }
 
-    fn prepend_page_signal_lines(&mut self, ctx: &ToolCtx, primary_page: Option<PageId>) {
+    async fn prepend_page_signal_lines(&mut self, ctx: &ToolCtx, primary_page: Option<PageId>) {
         let mut pages = Vec::new();
         if let Some(page) = primary_page {
             push_page_once(&mut pages, page);
@@ -333,8 +360,13 @@ impl ToolResponse {
 
         let mut lines = Vec::new();
         for page in pages {
-            lines.extend(ctx.session.page_signals.take_alert_note_lines(&page));
-            if let Some(line) = ctx.session.page_signals.pending_dialog_line(&page) {
+            // A page may have moved while the action/readback awaited. Signals
+            // come from the global registry, so admit again before exposing them.
+            if ctx.browser.page(page.clone()).await.is_err() {
+                continue;
+            }
+            lines.extend(ctx.browser.signals().take_alert_note_lines(&page));
+            if let Some(line) = ctx.browser.signals().pending_dialog_line(&page) {
                 lines.push(line);
             }
         }
@@ -372,7 +404,7 @@ impl ToolResponse {
     }
 
     fn throw_if_dialog_open(&self, ctx: &ToolCtx, page: u32) -> ToolExecResult<()> {
-        match ctx.session.page_signals.pending_dialog_line(&PageId(page)) {
+        match ctx.browser.signals().pending_dialog_line(&PageId(page)) {
             Some(message) => Err(ToolError::message(message)),
             None => Ok(()),
         }
@@ -387,6 +419,7 @@ impl BuiltToolResponse {
             content: self.content,
             is_error: self.is_error,
             structured_content: self.structured_content,
+            audit_hints: self.audit_hints,
         }
     }
 }

@@ -9,7 +9,11 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
-from bos_build.release.components import AllocationRecord, increment_component_version
+from bos_build.release.components import (
+    COMPONENTS,
+    AllocationRecord,
+    increment_component_version,
+)
 from bos_build.release.suite import (
     BrowserAllocation,
     GitHubSuiteBackend,
@@ -718,7 +722,7 @@ class GitHubSuiteBackendTest(unittest.TestCase):
             "packages/browseros/bos_build/config/BROWSEROS_BUILD_OFFSET",
             "packages/browseros-agent/apps/server/package.json",
             "packages/browseros-agent/apps/app/package.json",
-            "packages/browseros-agent/apps/claw-server-rust/Cargo.toml",
+            "packages/browseros-agent/apps/claw-server/Cargo.toml",
             "packages/browseros-agent/apps/claw-app/package.json",
             "packages/browseros-agent/apps/app-onboard/package.json",
             "packages/browseros-agent/apps/claw-onboard/package.json",
@@ -734,6 +738,115 @@ class GitHubSuiteBackendTest(unittest.TestCase):
         self._git(repo, "commit", "-m", "source")
         self._git(repo, "push", "-u", "origin", "main")
         return repo, remote, self._git(repo, "rev-parse", "HEAD")
+
+    def test_discover_reservations_after_claw_source_rename(self) -> None:
+        self._check_claw_reservation_after_rename("")
+
+    def test_reconcile_product_reserved_before_claw_source_rename(self) -> None:
+        self._check_claw_reservation_after_rename("browserclaw")
+
+    def _check_claw_reservation_after_rename(self, product: str) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            repo, _, _ = self._repository(Path(temp_dir))
+            current = COMPONENTS["claw-server-rust"]
+            legacy = replace(
+                current,
+                manifest_path=Path(
+                    "packages/browseros-agent/apps/claw-server-rust/Cargo.toml"
+                ),
+                package_name="claw-server-rust",
+            )
+            self._git(
+                repo,
+                "mv",
+                str(current.manifest_path.parent),
+                str(legacy.manifest_path.parent),
+            )
+            for relative in (legacy.manifest_path, legacy.lockfile_path):
+                path = repo / relative
+                path.write_text(
+                    path.read_text().replace('"claw-server"', '"claw-server-rust"')
+                )
+            self._git(repo, "add", ".")
+            self._git(repo, "commit", "-m", "legacy source layout")
+            self._git(repo, "push", "origin", "main")
+            source_sha = self._git(repo, "rev-parse", "HEAD")
+            backend = GitHubSuiteBackend(repo, "owner/repo", "main")
+
+            # Build the historical fixture with the descriptor shipped before
+            # the rename. Discovery below runs today's code and descriptor.
+            with mock.patch.dict(COMPONENTS, {legacy.id: legacy}):
+                committed = backend.read_committed_versions(product)
+                versions = {
+                    component: (
+                        increment_component_version(component, version)
+                        if component in SUITE_RELEASE_COMPONENTS
+                        else version
+                    )
+                    for component, version in committed.items()
+                }
+                major, minor, build = backend.read_browser_version().split(".")[:3]
+                with (
+                    mock.patch(
+                        "bos_build.release.suite.create_pull_request",
+                        side_effect=RuntimeError("stopped before PR creation"),
+                    ),
+                    self.assertRaisesRegex(RuntimeError, "before PR creation"),
+                ):
+                    backend.create_transaction(
+                        SuiteRequest("nightly", source_sha, "main", "main", product),
+                        transaction_branch("nightly", source_sha, product),
+                        versions,
+                        f"{major}.{minor}.{int(build) + 1}",
+                        backend.read_build_offset() + 1,
+                    )
+
+            self._git(
+                repo,
+                "mv",
+                str(legacy.manifest_path.parent),
+                str(current.manifest_path.parent),
+            )
+            for relative in (current.manifest_path, current.lockfile_path):
+                path = repo / relative
+                path.write_text(
+                    path.read_text().replace('"claw-server-rust"', '"claw-server"')
+                )
+            self._git(repo, "add", ".")
+            self._git(repo, "commit", "-m", "rename Claw source")
+            self._git(repo, "push", "origin", "main")
+
+            records = backend.discover_branch_reservations()
+
+            self.assertEqual(len(records), 1)
+            self.assertEqual(records[0].source_sha, source_sha)
+            self.assertEqual(records[0].component_versions, versions)
+
+            if product:
+                snapshots = Path(temp_dir) / "snapshots"
+                for relative in records[0].state_paths:
+                    path = snapshots / relative
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes((repo / relative).read_bytes())
+                latest = self._git(repo, "rev-parse", "HEAD")
+                with self.assertRaisesRegex(ValueError, "baseline changed"):
+                    backend.reconcile_product_state(records[0], snapshots, source_sha)
+                state = backend.reconcile_product_state(records[0], snapshots, latest)
+                self.assertEqual(state.source_sha, source_sha)
+                self.assertIn(
+                    f'version = "{versions[current.id]}"',
+                    self._git(repo, "show", f"{state.state_sha}:{current.manifest_path}"),
+                )
+                # Discovery validates the recomposed state's whole tree too.
+                self.assertEqual(
+                    backend.discover_branch_reservations()[0].state_sha, state.state_sha
+                )
+                self.assertFalse(backend.default_branch_contains_transaction(state))
+                self._git(repo, "read-tree", "--reset", "-u", state.state_sha)
+                self._git(repo, "commit", "-m", "merge product state")
+                self._git(repo, "push", "origin", "main")
+                merged = self._git(repo, "rev-parse", "HEAD")
+                self.assertTrue(backend.merge_commit_matches_transaction(state, merged))
 
     def test_branch_push_before_pr_creation_burns_every_reserved_version(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

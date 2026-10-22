@@ -26,6 +26,7 @@ from . import (
     release_browser,
     release_candidate,
     release_component,
+    release_docker,
     release_feeds,
     release_resources,
     release_suite,
@@ -46,6 +47,7 @@ github_app = typer.Typer(
 app.add_typer(github_app, name="github")
 
 release_feeds.register(app)
+release_docker.register(app)
 app.add_typer(release_candidate.app, name="candidate")
 app.add_typer(release_browser.app, name="browser")
 app.add_typer(release_component.app, name="component")
@@ -210,6 +212,9 @@ def publish(
         "--workflow-run-attempt",
         help="Require release metadata from this Actions run attempt",
     ),
+    linux_arch: Optional[str] = typer.Option(
+        None, "--linux-arch", help="Expected Linux artifact set: x64, arm64, or all"
+    ),
 ):
     """Publish versioned artifacts to download/ paths (make live)."""
     release_ctx = create_release_context(version, product=product)
@@ -219,6 +224,7 @@ def publish(
         PublishModule(
             platforms=platforms,
             macos_arch=macos_arch,
+            linux_arch=linux_arch,
             source_sha=source_sha,
             workflow_run_id=workflow_run_id,
             workflow_run_attempt=workflow_run_attempt,
@@ -309,6 +315,9 @@ def github_create(
         "--target",
         help="Commit SHA or branch for the release tag",
     ),
+    linux_arch: Optional[str] = typer.Option(
+        None, "--linux-arch", help="Expected Linux artifact set: x64, arm64, or all"
+    ),
 ):
     """Create GitHub release from R2 artifacts
 
@@ -327,6 +336,7 @@ def github_create(
         title=title,
         platforms=platforms,
         macos_arch=macos_arch,
+        linux_arch=linux_arch,
         source_sha=source_sha,
         workflow_run_id=workflow_run_id,
         workflow_run_attempt=workflow_run_attempt,
@@ -344,6 +354,7 @@ def github_create(
             PublishModule(
                 platforms=publish_platforms,
                 macos_arch=macos_arch,
+                linux_arch=linux_arch,
                 source_sha=source_sha,
                 workflow_run_id=workflow_run_id,
                 workflow_run_attempt=workflow_run_attempt,

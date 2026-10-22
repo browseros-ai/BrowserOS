@@ -12,6 +12,7 @@ from .candidate import GitHubCandidateBackend, candidate_record_from_pull_reques
 from .components import (
     AllocationRecord,
     component_by_id,
+    component_for_source,
     component_version_from_package,
     normalize_component_version,
     resolve_standalone_version,
@@ -259,7 +260,7 @@ class GitComponentReleaseOperations:
         raise ValueError(f"Could not resolve release ref: {ref}")
 
     def read_version(self, component: str, ref: str) -> str:
-        spec = component_by_id(component)
+        spec = component_for_source(self.repo_root, component, ref=ref)
         content = self._git("show", f"{ref}:{spec.manifest_path.as_posix()}")
         if spec.manifest_path.suffix == ".json":
             document = json.loads(content)

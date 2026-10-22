@@ -88,6 +88,9 @@ import type {
   SetTouchEmulationEnabledParams,
   SetWebLifecycleStateParams,
   StartScreencastParams,
+  StartScreenRecordingParams,
+  StartScreenRecordingResult,
+  StopScreenRecordingResult,
   WindowOpenEvent,
 } from '../domains/page'
 
@@ -170,6 +173,10 @@ export interface PageApi {
     params: SetTouchEmulationEnabledParams,
   ): Promise<void>
   startScreencast(params?: StartScreencastParams): Promise<void>
+  startScreenRecording(
+    params?: StartScreenRecordingParams,
+  ): Promise<StartScreenRecordingResult>
+  stopScreenRecording(): Promise<StopScreenRecordingResult>
   stopLoading(): Promise<void>
   crash(): Promise<void>
   close(): Promise<void>

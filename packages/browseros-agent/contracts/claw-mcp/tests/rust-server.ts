@@ -170,15 +170,13 @@ export const RUST_BINARY = resolve(
  */
 export function buildRustServer(): void {
   const build = Bun.spawnSync({
-    cmd: ['cargo', 'build', '--locked', '-p', 'claw-server-rust'],
+    cmd: ['cargo', 'build', '--locked', '-p', 'claw-server'],
     cwd: MONOREPO_ROOT,
     stdout: 'inherit',
     stderr: 'inherit',
   })
   if (build.exitCode !== 0) {
-    throw new Error(
-      `cargo build -p claw-server-rust failed (${build.exitCode})`,
-    )
+    throw new Error(`cargo build -p claw-server failed (${build.exitCode})`)
   }
 }
 

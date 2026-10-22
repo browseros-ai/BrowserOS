@@ -409,7 +409,7 @@ jobs:
               if metadata.get(field) != value:
                   raise SystemExit(f"Immutable R2 object binding mismatch for {key}: {field}")
 
-          path = Path("packages/browseros-agent/dist/prod/claw-server-rust") / name
+          path = Path("packages/browseros-agent/dist/prod/claw-server") / name
           path.parent.mkdir(parents=True, exist_ok=True)
           path.write_bytes(data)
           with output.open("a") as handle:
@@ -453,8 +453,11 @@ jobs:
           if [ -z "${CLAW_SENTRY_DSN:-}" ]; then
             echo "::warning::CLAW_SENTRY_DSN is not set; run failures will not reach Sentry"
           fi
+          # The requested source ref can predate the source package rename.
+          # Resolve its package identity from that checkout's release descriptor.
+          server_package="$(uv run --directory ../browseros python -c 'from bos_build.release.components import component_by_id; print(component_by_id("claw-server-rust").package_name)')"
           cargo build --release --locked --target "$RUST_TARGET" \
-            -p claw-server-rust \
+            -p "$server_package" \
             --bin browseros-claw-server-rs
           python <<'PY'
           import os
@@ -510,7 +513,7 @@ jobs:
           if not source_skill.is_file():
               raise SystemExit(f"Missing BrowserOS skill: {source_skill}")
 
-          dist_root = agent / "dist/prod/claw-server-rust"
+          dist_root = agent / "dist/prod/claw-server"
           stage_root = dist_root / target
           if stage_root.exists():
               shutil.rmtree(stage_root)
@@ -597,7 +600,7 @@ jobs:
       - name: Upload target zip artifact
         uses: actions/upload-artifact@v7
         with:
-          name: claw-server-rust-${{ matrix.target }}
+          name: claw-server-${{ matrix.target }}
           path: ${{ steps.package.outputs.zip_path || steps.recover.outputs.zip_path }}
           if-no-files-found: error
 
@@ -620,8 +623,8 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with:
-          pattern: claw-server-rust-*
-          path: dist/claw-server-rust
+          pattern: claw-server-*
+          path: dist/claw-server
           merge-multiple: true
 
       - uses: actions/setup-python@v6
@@ -693,7 +696,7 @@ jobs:
               return data
 
           for target in targets:
-              path = Path(f"dist/claw-server-rust/browseros-claw-server-rust-resources-{target}.zip")
+              path = Path(f"dist/claw-server/browseros-claw-server-rust-resources-{target}.zip")
               if not path.is_file():
                   raise SystemExit(f"Missing BrowserClaw server resource zip: {path}")
               data = path.read_bytes()
@@ -734,11 +737,13 @@ jobs:
 
       - name: Attach zips to private draft
         env:
+          DEFER_FINALIZE: ${{ inputs.defer_finalize }}
           GH_REPO: ${{ github.repository }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESERVATION: ${{ needs.prepare.outputs.reservation }}
         run: |
           set -euo pipefail
-          mapfile -t assets < <(find dist/claw-server-rust -maxdepth 1 -name 'browseros-claw-server-rust-resources-*.zip' | sort)
+          mapfile -t assets < <(find dist/claw-server -maxdepth 1 -name 'browseros-claw-server-rust-resources-*.zip' | sort)
           if [ "${#assets[@]}" -ne 5 ]; then
             echo "::error::Expected 5 BrowserClaw server resource zips, found ${#assets[@]}"
             exit 1
@@ -749,6 +754,47 @@ jobs:
               --target "$RELEASE_SHA" \
               --generate-notes \
               --title "BrowserClaw Server - v$VERSION"
+          fi
+          # A deferred build never finalizes, so it may write only to a private
+          # draft bound to this source. The resolver can reuse a same-source tag
+          # whose release is already public (an earlier run finalized it); that
+          # release is read-only here and must already hold these exact bytes.
+          # The metadata read is a plain assignment so any gh failure aborts
+          # under set -e instead of skipping the guard before --clobber.
+          # Without deferral, finalize verifies and publishes as before.
+          if [ "$DEFER_FINALIZE" = "true" ]; then
+            release="$(gh release view "$RELEASE_TAG" --json isDraft,targetCommitish,assets)"
+            is_draft="$(jq -r '.isDraft' <<< "$release")"
+            case "$is_draft" in
+              true|false) ;;
+              *)
+                echo "::error::Could not read the draft state of $RELEASE_TAG"
+                exit 1
+                ;;
+            esac
+            if [ "$is_draft" = "false" ]; then
+              published_dir="$(mktemp -d)"
+              for asset in "${assets[@]}"; do
+                name="$(basename "$asset")"
+                if ! jq -e --arg name "$name" 'any(.assets[]; .name == $name)' <<< "$release" >/dev/null; then
+                  echo "::error::Published $RELEASE_TAG lacks $name; a deferred build cannot add it"
+                  exit 1
+                fi
+                gh release download "$RELEASE_TAG" --pattern "$name" --dir "$published_dir"
+                if ! cmp --silent "$asset" "$published_dir/$name"; then
+                  echo "::error::Published $RELEASE_TAG/$name differs from the canonical R2 object"
+                  exit 1
+                fi
+              done
+              echo "Reused published $RELEASE_TAG assets read-only"
+              exit 0
+            fi
+            # A tag reservation was already verified as annotated at RELEASE_SHA.
+            if [ "$(jq -r '.targetCommitish' <<< "$release")" != "$RELEASE_SHA" ] && \
+              [ "$RESERVATION" != "tag" ]; then
+              echo "::error::$RELEASE_TAG is not a private draft for $RELEASE_SHA"
+              exit 1
+            fi
           fi
           gh release upload "$RELEASE_TAG" "${assets[@]}" --clobber
 
@@ -992,9 +1038,9 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -euo pipefail
-          cargo_toml="packages/browseros-agent/apps/claw-server-rust/Cargo.toml"
+          cargo_toml="packages/browseros-agent/apps/claw-server/Cargo.toml"
           lock="packages/browseros-agent/Cargo.lock"
-          branch="chore-bump-claw-server-rust-v${VERSION}"
+          branch="chore-bump-claw-server-v${VERSION}"
 
           git fetch origin "$DEFAULT_BRANCH" --no-tags
           git checkout -B "$DEFAULT_BRANCH" "origin/$DEFAULT_BRANCH"

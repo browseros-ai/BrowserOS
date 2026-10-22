@@ -6,6 +6,9 @@ pub enum CdpError {
     Timeout { method: String },
     #[error("CDP connection lost")]
     ConnectionLost,
+    /// Bound dispatch was rejected before writing to a different socket incarnation.
+    #[error("CDP connection epoch changed: expected {expected}, actual {actual}")]
+    ConnectionEpochChanged { expected: u64, actual: u64 },
     #[error("CDP not connected")]
     NotConnected,
     #[error("no session with given id")]

@@ -216,6 +216,31 @@ const PROVIDER_FACTORIES: Record<string, ProviderFactory> = {
   [LLM_PROVIDERS.QWEN_CODE]: createQwenCodeFactory,
 }
 
+// Providers whose assistant messages are serialized by @ai-sdk/openai-compatible,
+// which re-emits a reasoning part as the non-standard `reasoning_content` request
+// field. Keep this in sync with the factories above that call
+// createOpenAICompatible. OpenRouter is deliberately excluded: it uses its own
+// provider, and the native Anthropic/OpenAI/Google/Azure/Bedrock providers carry
+// signed or encrypted reasoning that must be replayed, not stripped.
+const OPENAI_COMPATIBLE_SERIALIZER_PROVIDERS: ReadonlySet<string> = new Set([
+  LLM_PROVIDERS.OPENAI_COMPATIBLE,
+  LLM_PROVIDERS.LMSTUDIO,
+  LLM_PROVIDERS.OLLAMA,
+  LLM_PROVIDERS.MOONSHOT,
+  LLM_PROVIDERS.QWEN_CODE,
+  LLM_PROVIDERS.GITHUB_COPILOT,
+])
+
+/**
+ * Whether this provider serializes assistant reasoning as a top-level
+ * `reasoning_content` request field. Strict OpenAI-compatible gateways reject a
+ * replayed `reasoning_content`, so the agent loop strips reasoning from replayed
+ * history for these providers.
+ */
+export function serializesReasoningContent(provider: string): boolean {
+  return OPENAI_COMPATIBLE_SERIALIZER_PROVIDERS.has(provider)
+}
+
 export interface LanguageModelWithCleanup {
   model: LanguageModel
 }

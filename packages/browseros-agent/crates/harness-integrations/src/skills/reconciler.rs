@@ -1,7 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
-    io::ErrorKind,
+    io::{ErrorKind, Write},
     path::{Path, PathBuf},
 };
 
@@ -21,10 +21,12 @@ use super::{
     types::{SkillEnvironment, SkillReconcileOutcome, SkillSpec, SkillWarning, TargetPlatform},
 };
 
-/// Reconciles product-supplied skills into catalog-defined global harness roots.
+/// Reconciles product-supplied skills into provisioned and connected-harness roots.
 #[derive(Debug, Clone)]
 pub struct SkillReconciler {
     workspace_dir: PathBuf,
+    provisioned_roots: Vec<PathBuf>,
+    owned_name: Option<String>,
 }
 
 impl SkillReconciler {
@@ -32,7 +34,27 @@ impl SkillReconciler {
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {
             workspace_dir: workspace_dir.into(),
+            provisioned_roots: Vec::new(),
+            owned_name: None,
         }
+    }
+
+    /// Configures skill roots to provision before any consuming application is installed.
+    /// These share the normal ownership, repair and cleanup plan with connected consumers;
+    /// an empty consumer list therefore cannot delete a proactively provisioned skill.
+    #[must_use]
+    pub fn with_provisioned_roots(mut self, roots: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.provisioned_roots = roots.into_iter().collect();
+        self
+    }
+
+    /// Claims one product-owned skill name, including older installs without a
+    /// marker. Its packaged content is authoritative; all other skill names still
+    /// require ownership evidence before replacement or cleanup.
+    #[must_use]
+    pub fn with_owned_name(mut self, name: impl Into<String>) -> Self {
+        self.owned_name = Some(name.into());
+        self
     }
 
     /// Converges every desired physical target and removes stale controlled targets.
@@ -42,7 +64,23 @@ impl SkillReconciler {
         consumers: &BTreeSet<AgentId>,
         environment: &SkillEnvironment,
     ) -> Result<SkillReconcileOutcome, Error> {
-        self.reconcile_with(spec, consumers, environment, replace_managed_directory)
+        self.reconcile_with(
+            spec,
+            Some(consumers),
+            environment,
+            replace_managed_directory,
+        )
+    }
+
+    /// Repairs baseline targets when connection discovery is unavailable. Unknown
+    /// consumers are different from an empty set: preserve their records and
+    /// directories until a successful discovery can authorize cleanup again.
+    pub fn repair_provisioned(
+        &self,
+        spec: &SkillSpec,
+        environment: &SkillEnvironment,
+    ) -> Result<SkillReconcileOutcome, Error> {
+        self.reconcile_with(spec, None, environment, replace_managed_directory)
     }
 
     /// One-time, idempotent migration for a renamed managed skill: removes the
@@ -106,7 +144,7 @@ impl SkillReconciler {
     fn reconcile_with(
         &self,
         spec: &SkillSpec,
-        consumers: &BTreeSet<AgentId>,
+        consumers: Option<&BTreeSet<AgentId>>,
         environment: &SkillEnvironment,
         mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
     ) -> Result<SkillReconcileOutcome, Error> {
@@ -122,13 +160,21 @@ impl SkillReconciler {
     fn reconcile_with_identity(
         &self,
         spec: &SkillSpec,
-        consumers: &BTreeSet<AgentId>,
+        consumers: Option<&BTreeSet<AgentId>>,
         environment: &SkillEnvironment,
         mut identity: impl FnMut(&Path) -> Result<PathBuf, Error>,
         mut replace: impl FnMut(&Path, &SkillSpec, &str) -> std::io::Result<()>,
     ) -> Result<SkillReconcileOutcome, Error> {
+        let owns_name = self.owned_name.as_deref() == Some(spec.name.as_str());
         let original = read_manifest(&self.workspace_dir)?;
-        let plan = plan_reconciliation(&original, spec, consumers, environment, &mut identity)?;
+        let plan = plan_reconciliation(
+            &original,
+            spec,
+            consumers,
+            environment,
+            &self.provisioned_roots,
+            &mut identity,
+        )?;
         let mut records = plan.records;
         let desired_hash = content_hash(spec.content.as_bytes());
         let mut outcome = SkillReconcileOutcome::default();
@@ -154,6 +200,7 @@ impl SkillReconciler {
             let marker = if metadata.as_ref().is_some_and(|value| value.is_dir()) {
                 match read_marker(target) {
                     Ok(marker) => marker,
+                    Err(_) if owns_name => None,
                     Err(error) => {
                         preserve_original_records.insert(target.clone());
                         outcome.warnings.push(SkillWarning {
@@ -169,7 +216,7 @@ impl SkillReconciler {
             let marker_controls = marker
                 .as_ref()
                 .is_some_and(|marker| marker.controls(&spec.name));
-            if metadata.is_some() && !record_controls && !marker_controls {
+            if metadata.is_some() && !owns_name && !record_controls && !marker_controls {
                 preserve_original_records.insert(target.clone());
                 outcome.warnings.push(SkillWarning {
                     target: target.clone(),
@@ -211,7 +258,15 @@ impl SkillReconciler {
                 || !marker_matches;
 
             if needs_replace {
-                match replace(target, spec, &desired_hash) {
+                // Ownership covers the instructions, not arbitrary sibling assets.
+                // File-level replacement also preserves matching SKILL.md timestamps
+                // when only a missing/outdated ownership marker needs repair.
+                let result = if owns_name {
+                    replace_owned_instructions(target, spec, &desired_hash, actual_hash.as_deref())
+                } else {
+                    replace(target, spec, &desired_hash)
+                };
+                match result {
                     Ok(()) => {
                         if metadata.is_some() {
                             outcome.updated += 1;
@@ -263,7 +318,7 @@ impl SkillReconciler {
                 records.remove(&target);
                 continue;
             }
-            let marker_controls = if record_controls {
+            let marker_controls = if record_controls || owns_name {
                 false
             } else if metadata.as_ref().is_some_and(|value| value.is_dir()) {
                 match read_marker(&target) {
@@ -282,13 +337,17 @@ impl SkillReconciler {
             } else {
                 false
             };
-            if !record_controls && !marker_controls {
+            if !owns_name && !record_controls && !marker_controls {
                 continue;
             }
             match metadata {
-                Some(_) => match remove_path(&target) {
-                    Ok(()) => {
-                        outcome.removed += 1;
+                Some(_) => match if owns_name {
+                    remove_owned_instructions(&target)
+                } else {
+                    remove_path(&target).map(|()| true)
+                } {
+                    Ok(removed) => {
+                        outcome.removed += usize::from(removed);
                         records.remove(&target);
                     }
                     Err(error) => {
@@ -343,11 +402,22 @@ struct ReconciliationPlan {
 fn plan_reconciliation(
     original: &SkillManifest,
     spec: &SkillSpec,
-    consumers: &BTreeSet<AgentId>,
+    consumers: Option<&BTreeSet<AgentId>>,
     environment: &SkillEnvironment,
+    provisioned_roots: &[PathBuf],
     identity: &mut impl FnMut(&Path) -> Result<PathBuf, Error>,
 ) -> Result<ReconciliationPlan, Error> {
-    let desired = desired_targets(consumers, &spec.name, environment, identity)?;
+    let mut desired = consumers
+        .map(|consumers| desired_targets(consumers, &spec.name, environment, identity))
+        .transpose()?
+        .unwrap_or_default();
+    for root in provisioned_roots {
+        // Provisioning records deliberately have no fictional MCP consumers. The
+        // desired physical destination, not connection presence, keeps them alive.
+        desired
+            .entry(identity(&root.join(&spec.name))?)
+            .or_default();
+    }
     let mut records = BTreeMap::<PathBuf, SkillManifestEntry>::new();
     let mut original_records = BTreeMap::<PathBuf, Vec<SkillManifestEntry>>::new();
     let mut manifest_controlled_targets = BTreeSet::new();
@@ -403,11 +473,22 @@ fn plan_reconciliation(
         }
     }
 
-    let mut cleanup_targets = records.keys().cloned().collect::<BTreeSet<_>>();
-    for agent in AgentId::ALL {
-        if resolve_harness_definition(agent).skill.is_some() {
-            let target = resolve_agent_skill_target(agent, &spec.name, environment)?;
-            cleanup_targets.insert(identity(&target)?);
+    let mut cleanup_targets = BTreeSet::new();
+    if consumers.is_some() {
+        cleanup_targets.extend(records.keys().cloned());
+        for agent in AgentId::ALL {
+            if resolve_harness_definition(agent).skill.is_some() {
+                let target = resolve_agent_skill_target(agent, &spec.name, environment)?;
+                cleanup_targets.insert(identity(&target)?);
+            }
+        }
+    } else {
+        // Repair may update content at a common destination, but must not erase
+        // its last known consumers merely because MCP state could not be read.
+        for (target, consumers) in &mut desired {
+            if let Some(record) = records.get(target) {
+                consumers.extend(&record.consumers);
+            }
         }
     }
     Ok(ReconciliationPlan {
@@ -541,6 +622,64 @@ fn expand_root(candidate: &str, environment: &SkillEnvironment) -> Option<PathBu
         root.push(component);
     }
     Some(root)
+}
+
+/// Named product instructions may predate our ledger. Update only their owned
+/// files, never swap/delete the directory containing another installer's assets.
+fn replace_owned_instructions(
+    target: &Path,
+    spec: &SkillSpec,
+    desired_hash: &str,
+    actual_hash: Option<&str>,
+) -> std::io::Result<()> {
+    ensure_owned_directory(target)?;
+    if actual_hash != Some(desired_hash) {
+        write_owned_file(&target.join("SKILL.md"), &spec.content)?;
+    }
+    let marker = marker_content(&OwnershipMarker::new(&spec.name, desired_hash))
+        .map_err(std::io::Error::other)?;
+    write_owned_file(&target.join(MARKER_FILE), &marker)
+}
+
+fn ensure_owned_directory(target: &Path) -> std::io::Result<()> {
+    match fs::symlink_metadata(target) {
+        Ok(metadata) if !metadata.is_dir() => Err(std::io::Error::other(
+            "skill directory is not a regular directory; refusing to follow or replace it",
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == ErrorKind::NotFound => fs::create_dir_all(target),
+        Err(error) => Err(error),
+    }
+}
+
+fn write_owned_file(path: &Path, content: &str) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("missing skill parent"))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(content.as_bytes())?;
+    temporary
+        .persist(path)
+        .map(|_| ())
+        .map_err(|error| error.error)
+}
+
+fn remove_owned_instructions(target: &Path) -> std::io::Result<bool> {
+    ensure_owned_directory(target)?;
+    let mut removed = false;
+    for name in ["SKILL.md", MARKER_FILE] {
+        match fs::remove_file(target.join(name)) {
+            Ok(()) => removed = true,
+            Err(error) if error.kind() == ErrorKind::NotFound => {}
+            Err(error) => return Err(error),
+        }
+    }
+    match fs::remove_dir(target) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::DirectoryNotEmpty => {}
+        Err(error) => return Err(error),
+    }
+    Ok(removed)
 }
 
 fn replace_managed_directory(
@@ -704,7 +843,7 @@ mod tests {
 
         let installed = reconciler.reconcile_with_identity(
             &spec,
-            &BTreeSet::from([AgentId::ClaudeCode]),
+            Some(&BTreeSet::from([AgentId::ClaudeCode])),
             &environment,
             identity,
             replace_managed_directory,
@@ -715,7 +854,7 @@ mod tests {
 
         let shared = reconciler.reconcile_with_identity(
             &spec,
-            &BTreeSet::from([AgentId::ClaudeCode, AgentId::Codex]),
+            Some(&BTreeSet::from([AgentId::ClaudeCode, AgentId::Codex])),
             &environment,
             |target| {
                 Ok(if target == claude || target == agents {
@@ -734,7 +873,7 @@ mod tests {
 
         let removed = reconciler.reconcile_with_identity(
             &spec,
-            &BTreeSet::new(),
+            Some(&BTreeSet::new()),
             &environment,
             |target| {
                 Ok(if target == claude || target == agents {
@@ -763,7 +902,7 @@ mod tests {
         let error = reconciler
             .reconcile_with_identity(
                 &spec,
-                &BTreeSet::from([AgentId::Cursor]),
+                Some(&BTreeSet::from([AgentId::Cursor])),
                 &environment,
                 |target| {
                     identity_calls += 1;
@@ -910,7 +1049,7 @@ mod tests {
         let replacement = SkillSpec::new("browserclaw", "new")?;
         let outcome = reconciler.reconcile_with(
             &replacement,
-            &consumers,
+            Some(&consumers),
             &environment,
             |target, spec, hash| {
                 let mut calls = 0;

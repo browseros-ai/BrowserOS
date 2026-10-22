@@ -8,10 +8,12 @@ import type { RemoteObject, StackTrace } from './runtime'
 
 export interface Annotation {
   readOnly?: boolean
+  untrustedContent?: boolean
+  consequential?: boolean
   autosubmit?: boolean
 }
 
-export type InvocationStatus = 'Success' | 'Canceled' | 'Error'
+export type InvocationStatus = 'Completed' | 'Canceled' | 'Error'
 
 export interface Tool {
   name: string
@@ -23,7 +25,26 @@ export interface Tool {
   stackTrace?: StackTrace
 }
 
+export interface RemovedTool {
+  name: string
+  frameId: FrameId
+}
+
 // ══ Commands ══
+
+export interface InvokeToolParams {
+  frameId: FrameId
+  toolName: string
+  input: Record<string, unknown>
+}
+
+export interface InvokeToolResult {
+  invocationId: string
+}
+
+export interface CancelInvocationParams {
+  invocationId: string
+}
 
 // ══ Events ══
 
@@ -32,7 +53,7 @@ export interface ToolsAddedEvent {
 }
 
 export interface ToolsRemovedEvent {
-  tools: Tool[]
+  tools: RemovedTool[]
 }
 
 export interface ToolInvokedEvent {

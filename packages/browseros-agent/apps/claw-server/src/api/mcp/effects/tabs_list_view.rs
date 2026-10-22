@@ -1,0 +1,437 @@
+use crate::api::mcp::dispatch::{ToolEffect, ToolEffectContext};
+use browseros_core::PageId;
+use browseros_mcp::ToolResult;
+use futures_util::future::BoxFuture;
+use rmcp::model::ContentBlock;
+use serde_json::{Value, json};
+use std::collections::HashMap;
+
+/// Replaces successful tabs-list results with the caller's ownership view.
+pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
+    Box::pin(async move {
+        if context.result.is_error || !context.call.flags.list_tabs {
+            return Ok(None);
+        }
+        let Some(identity) = &context.call.identity else {
+            return Ok(None);
+        };
+        let Some(Value::Object(structured)) = context.result.structured_content.as_ref() else {
+            return Ok(None);
+        };
+        let Some(pages) = structured.get("pages").and_then(Value::as_array) else {
+            return Ok(None);
+        };
+        let annotated = annotate_pages_with_ownership(
+            &context.call.state,
+            &identity.ownership_key,
+            pages,
+            "page",
+        )
+        .await;
+        Ok(Some(ToolResult {
+            content: vec![ContentBlock::text(render_tabs(&annotated))],
+            structured_content: Some(json!({ "pages": annotated })),
+            is_error: false,
+            audit_hints: None,
+        }))
+    })
+}
+
+/// Tags each page with its ownership bucket ("mine" / "user" / "other-agent"),
+/// the owner's agent id, and the owner's label. Shared by the `tabs list`
+/// effect (`id_field = "page"`) and code-mode `browser.pages.list()`
+/// (`id_field = "pageId"`), so both surfaces classify identically. Prunes
+/// ownership claims for pages no longer live before annotating.
+pub(crate) async fn annotate_pages_with_ownership(
+    state: &crate::AppState,
+    caller: &crate::ids::ConvoId,
+    pages: &[Value],
+    id_field: &str,
+) -> Vec<Value> {
+    let ownership = state.sessions.ownership();
+    if let Some(browser) = state.browser.session().await {
+        reconcile_ownership(&browser, &ownership).await;
+    }
+    let labels = state
+        .sessions
+        .snapshot()
+        .await
+        .into_iter()
+        .map(|session| {
+            (
+                session.convo_id().clone(),
+                session.agent().label().to_string(),
+            )
+        })
+        .collect::<HashMap<_, _>>();
+    let mut annotated = Vec::with_capacity(pages.len());
+    for page in pages {
+        let owner = match page_id(page, id_field) {
+            Some(page_id) => ownership.owner_of_page(&PageId(page_id)).await,
+            None => None,
+        };
+        annotated.push(annotate_page(page, owner.as_ref(), caller, &labels));
+    }
+    annotated
+}
+
+/// A projected response is never proof that hidden pages disappeared. Perform a
+/// fresh global reconcile for this annotation and prune only its complete inventory;
+/// a disconnected browser or failed refresh leaves last-known ownership intact.
+async fn reconcile_ownership(
+    browser: &browseros_core::BrowserSession,
+    ownership: &crate::services::sessions::PageOwnership,
+) {
+    if browser.pages.list().await.is_ok() {
+        ownership
+            .prune_missing_pages(&browser.pages.known_page_ids().await)
+            .await;
+    }
+}
+
+fn page_id(page: &Value, id_field: &str) -> Option<u32> {
+    page.get(id_field)
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok())
+}
+
+fn annotate_page(
+    page: &Value,
+    owner: Option<&crate::ids::ConvoId>,
+    caller: &crate::ids::ConvoId,
+    labels: &HashMap<crate::ids::ConvoId, String>,
+) -> Value {
+    let mut annotated = page.clone();
+    let Value::Object(fields) = &mut annotated else {
+        return annotated;
+    };
+    let (ownership, owner_agent_id, owner_label) = match owner {
+        None => ("user", Value::Null, Value::Null),
+        Some(owner) if owner == caller => (
+            "mine",
+            Value::String(owner.as_str().to_string()),
+            Value::Null,
+        ),
+        Some(owner) => (
+            "other-agent",
+            Value::String(owner.as_str().to_string()),
+            labels
+                .get(owner)
+                .cloned()
+                .map(Value::String)
+                .unwrap_or(Value::Null),
+        ),
+    };
+    fields.insert(
+        "ownership".to_string(),
+        Value::String(ownership.to_string()),
+    );
+    fields.insert("ownerAgentId".to_string(), owner_agent_id);
+    fields.insert("ownerLabel".to_string(), owner_label);
+    annotated
+}
+
+fn render_tabs(pages: &[Value]) -> String {
+    if pages.is_empty() {
+        return "(no open pages)".to_string();
+    }
+    let mut sections = Vec::new();
+    for (header, ownership) in [
+        ("Your tabs:", "mine"),
+        ("User's tabs:", "user"),
+        ("Other agents' tabs:", "other-agent"),
+    ] {
+        let lines = pages
+            .iter()
+            .filter(|page| page.get("ownership").and_then(Value::as_str) == Some(ownership))
+            .filter_map(format_tab_line)
+            .collect::<Vec<_>>();
+        if !lines.is_empty() {
+            sections.push(format!("{header}\n{}", lines.join("\n")));
+        }
+    }
+    sections.join("\n\n")
+}
+
+fn format_tab_line(page: &Value) -> Option<String> {
+    let page_id = page.get("page").and_then(Value::as_u64)?;
+    let url = page.get("url").and_then(Value::as_str).unwrap_or_default();
+    let title = page
+        .get("title")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    let title = if title.is_empty() {
+        String::new()
+    } else {
+        format!(" ({title})")
+    };
+    let owner = if page.get("ownership").and_then(Value::as_str) == Some("other-agent") {
+        page.get("ownerLabel")
+            .and_then(Value::as_str)
+            .map(|label| format!(", owned by {label}"))
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
+    // Shown for every tab, not only the caller's own, and in the text rather
+    // than only the structured content because the text is what the model
+    // reads. Restricting it to the caller's own tabs made it unavailable in the
+    // one situation it exists for: after a reconnect the agent's tabs are
+    // listed as another agent's, which is exactly when it needs the id to ask
+    // to rejoin. Withholding it was never a boundary either, since
+    // `tab_groups action="list"` already enumerates every group id.
+    let group = page
+        .get("groupId")
+        .and_then(Value::as_str)
+        .map(|group| format!(" [group {group}]"))
+        .unwrap_or_default();
+    Some(format!("[{page_id}] {url}{title}{owner}{group}"))
+}
+
+const _: ToolEffect = apply;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The group id has to reach the rendered text, because the text is what the
+    /// model reads. Without it an agent cannot name the group it is working in,
+    /// so it cannot ask to rejoin that group after a reconnect. The list result
+    /// carried only page, url and title until this was wired through.
+    #[tokio::test]
+    async fn the_group_id_reaches_the_rendered_text_for_the_callers_own_tabs() -> anyhow::Result<()>
+    {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(identity.ownership_key.clone(), PageId(9))
+            .await;
+        let result = ToolResult::text(
+            "all tabs",
+            Some(json!({
+                "pages": [
+                    { "page": 9, "url": "https://mine.test", "groupId": "G1" },
+                    { "page": 4, "url": "https://user.test", "groupId": "G9" }
+                ]
+            })),
+        );
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+        .unwrap_or(result);
+        let rendered = annotated
+            .content
+            .first()
+            .and_then(|block| block.as_text())
+            .map(|text| text.text.clone())
+            .unwrap_or_default();
+        assert!(rendered.contains("[group G1]"), "{rendered}");
+        // Every section, not only the caller's own tabs. After a reconnect an
+        // agent's tabs read as another agent's, and that is precisely when it
+        // needs the id in order to ask to rejoin the group.
+        assert!(rendered.contains("[group G9]"), "{rendered}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn annotates_all_tabs_in_three_ownership_buckets_and_prunes_stale_claims()
+    -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let transport = crate::api::mcp::test_support::ProfileConnection::new();
+        // Include a fourth global page; the result below projects a different order.
+        let fourth = transport.tabs.lock().unwrap_or_else(|p| p.into_inner())[0].clone();
+        let mut fourth = fourth;
+        fourth["tabId"] = json!(104);
+        fourth["targetId"] = json!("T104");
+        transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(fourth);
+        let browser = browseros_core::BrowserSession::new(
+            transport,
+            browseros_core::BrowserSessionHooks::default(),
+        );
+        call.state.browser.set_session_for_testing(browser).await;
+        let identity = call.identity.as_ref().unwrap_or_else(|| unreachable!());
+        let other_session = crate::services::sessions::Session::new(
+            crate::ids::SessionId::new("s2"),
+            crate::identity::ClientIdentity::Ephemeral {
+                slug: "other".to_string(),
+                label: "Cowork".to_string(),
+            },
+            crate::identity::ConversationIdentity::new("other", "bright-beaver".to_string()),
+            "Codex".to_string(),
+            tokio::time::Instant::now(),
+        );
+        call.state
+            .sessions
+            .insert_for_testing(other_session.clone())
+            .await;
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(identity.ownership_key.clone(), PageId(2))
+            .await;
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(other_session.convo_id().clone(), PageId(3))
+            .await;
+        call.state
+            .sessions
+            .ownership()
+            .claim_page(other_session.convo_id().clone(), PageId(9))
+            .await;
+        let result = ToolResult::text(
+            "all tabs",
+            Some(json!({
+                "pages": [
+                    { "page": 2, "url": "https://owned.test", "title": "Owned" },
+                    { "page": 4, "url": "https://user.test", "title": "User" },
+                    { "page": 3, "url": "https://other.test", "title": "Other" }
+                ]
+            })),
+        );
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await
+        .unwrap_or_else(|error| panic!("effect failed: {error}"))
+        .unwrap_or(result);
+        assert_eq!(
+            annotated.structured_content,
+            Some(json!({
+                "pages": [
+                    {
+                        "page": 2,
+                        "url": "https://owned.test",
+                        "title": "Owned",
+                        "ownership": "mine",
+                        "ownerAgentId": "codex-agile-alpaca",
+                        "ownerLabel": null
+                    },
+                    {
+                        "page": 4,
+                        "url": "https://user.test",
+                        "title": "User",
+                        "ownership": "user",
+                        "ownerAgentId": null,
+                        "ownerLabel": null
+                    },
+                    {
+                        "page": 3,
+                        "url": "https://other.test",
+                        "title": "Other",
+                        "ownership": "other-agent",
+                        "ownerAgentId": "other-bright-beaver",
+                        "ownerLabel": "Cowork"
+                    }
+                ]
+            }))
+        );
+        assert_eq!(
+            annotated.content,
+            vec![ContentBlock::text(
+                "Your tabs:\n[2] https://owned.test (Owned)\n\nUser's tabs:\n[4] https://user.test (User)\n\nOther agents' tabs:\n[3] https://other.test (Other), owned by Cowork"
+            )]
+        );
+        assert_eq!(
+            call.state
+                .sessions
+                .ownership()
+                .owner_of_page(&PageId(9))
+                .await,
+            None
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn projected_listing_prunes_only_after_fresh_global_inventory() -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{ProfileConnection, tool_call};
+        use std::sync::atomic::Ordering;
+        let call = tool_call("tabs", json!({"action":"list"})).await?;
+        let transport = ProfileConnection::new();
+        let browser = browseros_core::BrowserSession::new(
+            transport.clone(),
+            browseros_core::BrowserSessionHooks::default(),
+        );
+        browser.pages.list().await?;
+        call.state.browser.set_session_for_testing(browser).await;
+        let caller = call
+            .identity
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("identity missing"))?
+            .ownership_key
+            .clone();
+        let ownership = call.state.sessions.ownership();
+        ownership.claim_page(caller.clone(), PageId(1)).await;
+        ownership.claim_page(caller.clone(), PageId(2)).await;
+        ownership.claim_page(caller.clone(), PageId(99)).await;
+        let projected = vec![json!({"pageId":1})];
+        let annotated =
+            annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        assert_eq!(annotated[0]["ownership"], "mine");
+        assert_eq!(
+            ownership.owner_of_page(&PageId(2)).await,
+            Some(caller.clone()),
+            "a hidden live page keeps its claim"
+        );
+        assert_eq!(ownership.owner_of_page(&PageId(99)).await, None);
+        transport
+            .tabs
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .retain(|tab| tab["tabId"] != 102);
+        transport.fail_inventory.store(true, Ordering::SeqCst);
+        annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        assert_eq!(
+            ownership.owner_of_page(&PageId(2)).await,
+            Some(caller.clone()),
+            "failed refresh is not proof of disappearance"
+        );
+        transport.fail_inventory.store(false, Ordering::SeqCst);
+        annotate_pages_with_ownership(&call.state, &caller, &projected, "pageId").await;
+        assert_eq!(
+            ownership.owner_of_page(&PageId(2)).await,
+            None,
+            "fresh global reconcile removes the closed hidden page"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn empty_tabs_list_keeps_the_ts_empty_state() -> anyhow::Result<()> {
+        let call =
+            crate::api::mcp::test_support::tool_call("tabs", json!({ "action": "list" })).await?;
+        let result = ToolResult::text("all tabs", Some(json!({ "pages": [] })));
+        let annotated = apply(ToolEffectContext {
+            call: &call,
+            result: &result,
+            cancelled: false,
+            duration_ms: 1,
+        })
+        .await?
+        .unwrap_or(result);
+        assert_eq!(
+            annotated.content,
+            vec![ContentBlock::text("(no open pages)")]
+        );
+        assert_eq!(annotated.structured_content, Some(json!({ "pages": [] })));
+        Ok(())
+    }
+}

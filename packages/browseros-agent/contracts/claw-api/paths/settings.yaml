@@ -29,3 +29,74 @@ telemetry:
         $ref: ../responses.yaml#/BadRequest
       '500':
         $ref: ../responses.yaml#/InternalError
+agent:
+  get:
+    operationId: getAgentSettings
+    responses:
+      '200':
+        description: Current agent settings.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/AgentSettings
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  put:
+    operationId: updateAgentSettings
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/settings.yaml#/UpdateAgentSettingsRequest
+    responses:
+      '200':
+        description: Updated agent settings.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/AgentSettings
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
+jevToken:
+  put:
+    operationId: saveJevToken
+    summary: Save the decision model credential.
+    description: >-
+      Stores the token and offers the pursue tool. Takes precedence over JEV_TOKEN in the
+      server's environment. Agents see the tool on their next tools/list; an already installed
+      skill follows after a server restart.
+    requestBody:
+      required: true
+      content:
+        application/json:
+          schema:
+            $ref: ../schemas/settings.yaml#/SaveJevTokenRequest
+    responses:
+      '200':
+        description: Updated agent settings. The token is not included.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/AgentSettings
+      '400':
+        $ref: ../responses.yaml#/BadRequest
+      '500':
+        $ref: ../responses.yaml#/InternalError
+  delete:
+    operationId: removeJevToken
+    summary: Remove the saved decision model credential.
+    description: >-
+      Forgets the stored token. If JEV_TOKEN is set in the server's environment, that becomes
+      the credential again; otherwise the pursue tool stops being offered.
+    responses:
+      '200':
+        description: Updated agent settings.
+        content:
+          application/json:
+            schema:
+              $ref: ../schemas/settings.yaml#/AgentSettings
+      '500':
+        $ref: ../responses.yaml#/InternalError

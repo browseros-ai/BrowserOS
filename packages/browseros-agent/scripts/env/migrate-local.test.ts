@@ -112,8 +112,8 @@ describe('migrateLocalEnv', () => {
       R2_UPLOAD_PREFIX: 'custom/server',
       R2_DOWNLOAD_PREFIX: 'custom/vendor',
     })
-    await writeFixture(rootDir, 'apps/cli/.env.production', {
-      R2_UPLOAD_PREFIX: 'cli',
+    await writeFixture(rootDir, 'apps/claw-onboard/.env.production', {
+      R2_UPLOAD_PREFIX: 'claw-onboard/prod-resources',
     })
 
     const plan = buildLocalEnvMigration(rootDir)
@@ -134,7 +134,7 @@ describe('migrateLocalEnv', () => {
         }),
         expect.objectContaining({
           key: 'R2_UPLOAD_PREFIX',
-          sourceFile: join(rootDir, 'apps/cli/.env.production'),
+          sourceFile: join(rootDir, 'apps/claw-onboard/.env.production'),
           warning: undefined,
         }),
       ]),

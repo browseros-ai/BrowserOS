@@ -14,7 +14,8 @@ use crate::{catalog::AgentId, error::Error};
 
 use super::{
     paths::{
-        ensure_system_scope, has_install_fingerprint, path_exists, resolve_agent_mcp_config_path,
+        ensure_system_scope, has_install_fingerprint, is_config_path_installed, path_exists,
+        resolve_agent_mcp_config_path,
     },
     types::{AgentScope, ServerManifest},
 };
@@ -135,6 +136,10 @@ fn snapshot_state(
         let (raw_content, exists) = read_file_with_existence(&path.config_path)?;
         let parent_exists = if exists {
             true
+        } else if path.source == ConfigPathSource::Catalog {
+            // Discovery and write eligibility must agree: a proactively planted
+            // skills directory is not evidence that this app is installed.
+            is_config_path_installed(&path.config_path)?
         } else {
             match path.config_path.parent() {
                 Some(parent) => path_exists(parent)?,

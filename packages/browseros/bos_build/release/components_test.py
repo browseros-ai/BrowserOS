@@ -345,17 +345,17 @@ class ComponentStampingTest(unittest.TestCase):
     def test_cargo_component_updates_only_matching_package_entries(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            cargo = root / "packages/browseros-agent/apps/claw-server-rust/Cargo.toml"
+            cargo = root / "packages/browseros-agent/apps/claw-server/Cargo.toml"
             lock = root / "packages/browseros-agent/Cargo.lock"
             cargo.parent.mkdir(parents=True)
             cargo.write_text(
-                '[package]\nname = "claw-server-rust"\nversion = "0.0.17"\n\n'
+                '[package]\nname = "claw-server"\nversion = "0.0.17"\n\n'
                 '[dependencies]\nserde = "1"\n'
             )
             lock.parent.mkdir(parents=True, exist_ok=True)
             lock.write_text(
                 '[[package]]\nname = "claw-api"\nversion = "1.0.0"\n\n'
-                '[[package]]\nname = "claw-server-rust"\nversion = "0.0.17"\n'
+                '[[package]]\nname = "claw-server"\nversion = "0.0.17"\n'
             )
 
             changed = stamp_component(root, "claw-server-rust", "0.0.18")
@@ -364,7 +364,7 @@ class ComponentStampingTest(unittest.TestCase):
             self.assertIn('version = "0.0.18"', cargo.read_text())
             self.assertIn('name = "claw-api"\nversion = "1.0.0"', lock.read_text())
             self.assertIn(
-                'name = "claw-server-rust"\nversion = "0.0.18"',
+                'name = "claw-server"\nversion = "0.0.18"',
                 lock.read_text(),
             )
 

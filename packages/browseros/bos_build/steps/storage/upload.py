@@ -29,6 +29,7 @@ from ...release.prepared_resources import (
     PreparedResourcesManifest,
     load_prepared_resources,
 )
+from ...release.components import normalize_component_version
 from ...products.resource_sources import source_resources_for_product
 from ..package.linux_packaging import require_linux_artifacts
 
@@ -194,15 +195,52 @@ def generate_release_json(
             if key not in ("filename", "release_key"):
                 artifact_data[key] = value
 
+        # Linux architectures publish serially into one receipt. Record each
+        # writer's attempt so retrying arm64 cannot relabel an earlier x64 build.
+        if platform == "linux" and release_data.get("workflow_run_attempt"):
+            artifact_data["workflow_run_attempt"] = release_data["workflow_run_attempt"]
+
         release_data["artifacts"][artifact_key] = artifact_data
 
     return release_data
 
 
+def _has_pinned_linux_identity(release: Dict) -> bool:
+    """A named run alone cannot freeze mutable latest resource downloads."""
+    if not release.get("workflow_run_id") or not release.get("source_sha"):
+        return False
+    versions = release.get("component_versions")
+    if not isinstance(versions, dict):
+        return False
+    try:
+        source = source_resources_for_product(release.get("product", ""))
+        for name in (
+            source.server_component,
+            source.extension_component,
+            source.onboarding_component,
+        ):
+            version = versions.get(name)
+            if not isinstance(version, str):
+                return False
+            # Nonempty aliases such as `latest` still select mutable objects.
+            # Use each resource's existing release-version rules, not truthiness.
+            normalize_component_version(name, version)
+    except ValueError:
+        return False
+    return True
+
+
 def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
+    """Merge serialized architecture uploads only within one release identity.
+
+    Linux may retain a successful sibling across workflow attempts. Its artifact
+    attempts stay explicit; a mixed receipt cannot claim a single platform attempt.
+    The caller owns serialization of the remote read/merge/write operation.
+    """
     if not existing:
         return new
 
+    linux = existing.get("platform") == new.get("platform") == "linux"
     provenance_fields = (
         "source_sha",
         "reservation_sha",
@@ -210,18 +248,49 @@ def merge_release_metadata(existing: Optional[Dict], new: Dict) -> Dict:
         "component_versions",
         "common_manifest_digest",
         "workflow_run_id",
-        "workflow_run_attempt",
     )
+    if linux:
+        provenance_fields += (
+            "product",
+            "version",
+            "platform",
+            "chromium_version",
+            "browseros_chromium_version",
+        )
+    # Unpinned standalone builds may resolve different latest resources on a
+    # retry. Retain another attempt only with complete resource identities; the
+    # equality check below still requires those pins and the source/run to match.
+    if not linux or not _has_pinned_linux_identity(new):
+        provenance_fields += ("workflow_run_attempt",)
     if any(existing.get(field) != new.get(field) for field in provenance_fields):
         return new
 
     merged = dict(existing)
     merged.update({key: value for key, value in new.items() if key != "artifacts"})
 
-    artifacts = dict(existing.get("artifacts", {}))
-    for key, artifact in new.get("artifacts", {}).items():
-        artifacts[key] = {**artifacts.get(key, {}), **artifact}
+    artifacts = {}
+    for document in (existing, new):
+        for key, artifact in document.get("artifacts", {}).items():
+            fields = {**artifacts.get(key, {}), **artifact}
+            if linux:
+                # Older receipts recorded the attempt only at platform level.
+                attempt = artifact.get(
+                    "workflow_run_attempt", document.get("workflow_run_attempt")
+                )
+                if attempt:
+                    fields["workflow_run_attempt"] = attempt
+                else:
+                    fields.pop("workflow_run_attempt", None)
+            artifacts[key] = fields
     merged["artifacts"] = artifacts
+    if linux:
+        attempts = {
+            artifact.get("workflow_run_attempt") for artifact in artifacts.values()
+        }
+        if len(attempts) == 1 and (attempt := next(iter(attempts))):
+            merged["workflow_run_attempt"] = attempt
+        else:
+            merged.pop("workflow_run_attempt", None)
     return merged
 
 

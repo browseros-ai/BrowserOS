@@ -25,6 +25,14 @@ pub struct McpManager {
 }
 
 impl McpManager {
+    /// Installs missing entries or changes only a matching endpoint's port.
+    pub fn reconcile(
+        &self,
+        input: super::types::ReconcileInput,
+    ) -> Result<super::types::ReconcileSummary, Error> {
+        super::reconciliation::reconcile(&self.workspace_dir, input)
+    }
+
     /// Binds manager operations to one manifest workspace directory.
     pub fn new(workspace_dir: impl Into<PathBuf>) -> Self {
         Self {
@@ -44,6 +52,22 @@ impl McpManager {
         let planned = plan_link(&state, &input, &now)?;
         apply_plan(&planned.plan)?;
         Ok(planned.summary)
+    }
+
+    /// Reports name presence without requiring our emitted shape. This lets a
+    /// policy upgrade distinguish a customized connection from a missing entry.
+    pub fn entry_exists(&self, input: InspectEntryInput) -> Result<bool, Error> {
+        let overrides = input
+            .config_path
+            .clone()
+            .map(|path| BTreeMap::from([(input.agent, path)]))
+            .unwrap_or_default();
+        let state = read_state(&self.workspace_dir, &[input.agent], input.scope, &overrides)?;
+        let surface = resolve_agent_surface(input.agent, input.scope)?;
+        let key = super::emitter::transform_key(&input.server_name, surface.stdio);
+        Ok(Emitter::new(surface)
+            .read(&state.agents[0].raw_content)?
+            .contains(&key))
     }
 
     /// Inspects one entry only when it exactly matches an emitted MCP shape.
@@ -197,6 +221,9 @@ impl McpManager {
             .and_then(|server| server.links.get(&input.agent))
             .map(|link| link.config_path.clone());
         let Some(config_path) = recorded_path else {
+            if input.unmanaged_endpoint.is_some() {
+                return super::reconciliation::disconnect_unrecorded(&self.workspace_dir, input);
+            }
             let planned = plan_disconnect(&initial, &input)?;
             apply_plan(&planned.plan)?;
             return Ok(planned.summary);

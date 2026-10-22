@@ -24,6 +24,7 @@ from ..scripts.bump_version import bump_version
 from .components import (
     AllocationRecord,
     component_by_id,
+    component_for_source,
     component_version_from_package,
     normalize_component_version,
     read_component_version,
@@ -1277,9 +1278,12 @@ class GitHubSuiteBackend:
             *(
                 path.as_posix()
                 for component in record.release_components
+                for spec in (
+                    component_for_source(self.repo_root, component, ref=record.source_sha),
+                )
                 for path in (
-                    component_by_id(component).manifest_path,
-                    component_by_id(component).lockfile_path,
+                    spec.manifest_path,
+                    spec.lockfile_path,
                 )
             ),
         }
@@ -1414,8 +1418,12 @@ class GitHubSuiteBackend:
                 + ", ".join(sorted(unexpected))
             )
 
-    def _product_state_paths(self, record: SuiteRecord) -> tuple[str, ...]:
-        """The only files a product overlay may change relative to current main."""
+    def _product_state_paths(self, record: SuiteRecord, ref: str) -> tuple[str, ...]:
+        """Resolve allowed overlay paths in the tree being staged or compared.
+
+        Main can rename a package after reservation, so final state owns the
+        base tree's layout while the immutable reservation keeps its source layout.
+        """
         return tuple(
             sorted(
                 {
@@ -1425,9 +1433,14 @@ class GitHubSuiteBackend:
                     *(
                         path.as_posix()
                         for component in record.release_components
+                        for spec in (
+                            component_for_source(
+                                self.repo_root, component, ref=ref
+                            ),
+                        )
                         for path in (
-                            component_by_id(component).manifest_path,
-                            component_by_id(component).lockfile_path,
+                            spec.manifest_path,
+                            spec.lockfile_path,
                         )
                     ),
                 }
@@ -1542,7 +1555,9 @@ class GitHubSuiteBackend:
             self._git("worktree", "add", "--detach", str(worktree), base)
             try:
                 self._stage_product_state(worktree, record, snapshots)
-                self._git("add", "--", *self._product_state_paths(record), cwd=worktree)
+                self._git(
+                    "add", "--", *self._product_state_paths(record, base), cwd=worktree
+                )
                 expected = self._git("write-tree", cwd=worktree)
             finally:
                 self._git("worktree", "remove", "--force", str(worktree))
@@ -1575,8 +1590,8 @@ class GitHubSuiteBackend:
         latest = self._git("rev-parse", f"{self.remote}/{record.default_branch}")
         # Code-only main advances are fine; changed owned files mean the caller's
         # baseline is stale and must be re-rendered before any durable write.
-        paths = self._product_state_paths(record)
-        if any(
+        paths = self._product_state_paths(record, latest)
+        if paths != self._product_state_paths(record, state_base_sha) or any(
             self._git_bytes("show", f"{latest}:{path}")
             != self._git_bytes("show", f"{state_base_sha}:{path}")
             for path in paths
@@ -1748,7 +1763,7 @@ class GitHubSuiteBackend:
         mark_pull_request_ready(self.repo, number)
 
     def _component_version_at_ref(self, component: str, ref: str) -> str:
-        spec = component_by_id(component)
+        spec = component_for_source(self.repo_root, component, ref=ref)
         content = self._git("show", f"{ref}:{spec.manifest_path.as_posix()}")
         if spec.manifest_path.suffix == ".json":
             value = json.loads(content).get("version")
@@ -1789,10 +1804,11 @@ class GitHubSuiteBackend:
             base = self._product_state_base(record)
             if not base:
                 return True
-            return any(
+            paths = self._product_state_paths(record, base)
+            return paths != self._product_state_paths(record, default_ref) or any(
                 self._git_bytes("show", f"{default_ref}:{path}")
                 != self._git_bytes("show", f"{base}:{path}")
-                for path in self._product_state_paths(record)
+                for path in paths
             )
         if self._browser_version_at_ref(default_ref) != self._browser_version_at_ref(
             record.source_sha
@@ -1858,10 +1874,11 @@ class GitHubSuiteBackend:
             return False
         if record.product:
             self._validate_product_state(record, record.state_sha)
-            return all(
+            paths = self._product_state_paths(record, record.state_sha)
+            return paths == self._product_state_paths(record, merge_sha) and all(
                 self._git_bytes("show", f"{merge_sha}:{path}")
                 == self._git_bytes("show", f"{record.state_sha}:{path}")
-                for path in self._product_state_paths(record)
+                for path in paths
             )
         return (
             self._browser_version_at_ref(merge_sha) == record.browser_version

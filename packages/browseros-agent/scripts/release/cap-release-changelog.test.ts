@@ -96,12 +96,12 @@ describe('buildCompareUrl', () => {
   it('encodes slash-containing release tags', () => {
     expect(
       buildCompareUrl({
-        previousTag: 'cli/v0.4.0',
-        releaseTag: 'cli/v0.4.1',
+        previousTag: 'claw-server/v0.4.0',
+        releaseTag: 'claw-server/v0.4.1',
         repositoryUrl: 'https://github.com/browseros-ai/BrowserOS.git',
       }),
     ).toBe(
-      'https://github.com/browseros-ai/BrowserOS/compare/cli%2Fv0.4.0...cli%2Fv0.4.1',
+      'https://github.com/browseros-ai/BrowserOS/compare/claw-server%2Fv0.4.0...claw-server%2Fv0.4.1',
     )
   })
 

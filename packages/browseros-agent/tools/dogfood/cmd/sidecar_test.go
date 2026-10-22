@@ -20,7 +20,7 @@ func TestWriteDogfoodSidecarConfigUsesExplicitResourceDirectory(t *testing.T) {
 		},
 		{
 			name:         "BrowserClaw",
-			resourcesDir: "/repo/packages/browseros-agent/apps/claw-server-rust/resources",
+			resourcesDir: "/repo/packages/browseros-agent/apps/claw-server/resources",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

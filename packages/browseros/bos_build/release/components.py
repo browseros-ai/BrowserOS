@@ -3,7 +3,8 @@
 
 import json
 import re
-from dataclasses import dataclass
+import subprocess
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, Mapping, Sequence
 
@@ -75,13 +76,14 @@ COMPONENTS: Mapping[str, ComponentSpec] = {
         workspace_path="apps/app",
         tag_prefix="ext-agent/v",
     ),
+    # Release records persist this ID; only the source package and path were renamed.
     "claw-server-rust": ComponentSpec(
         id="claw-server-rust",
         display_name="BrowserOS neo server",
         version_scheme="semver",
-        manifest_path=Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml"),
+        manifest_path=Path("packages/browseros-agent/apps/claw-server/Cargo.toml"),
         lockfile_path=Path("packages/browseros-agent/Cargo.lock"),
-        package_name="claw-server-rust",
+        package_name="claw-server",
         tag_prefix="claw-server/v",
     ),
     "browserclaw": ComponentSpec(
@@ -129,6 +131,50 @@ def component_by_id(component_id: str) -> ComponentSpec:
     except KeyError as exc:
         valid = ", ".join(sorted(COMPONENTS))
         raise ValueError(f"Unknown component '{component_id}'. Valid: {valid}") from exc
+
+
+def component_for_source(
+    repo_root: Path, component_id: str, *, ref: str | None = None
+) -> ComponentSpec:
+    """Resolve source paths and package identity in a checkout or immutable ref.
+
+    Release IDs outlive source renames. Reservation recovery must read and
+    replay the old manifest and lockfile together to retain exact-tree proofs.
+    """
+    spec = component_by_id(component_id)
+    if component_id != "claw-server-rust":
+        return spec
+    legacy = replace(
+        spec,
+        manifest_path=Path("packages/browseros-agent/apps/claw-server-rust/Cargo.toml"),
+        package_name="claw-server-rust",
+    )
+    sources = (spec, legacy)
+    if ref is None:
+        available = {
+            source.manifest_path.as_posix()
+            for source in sources
+            if (repo_root / source.manifest_path).is_file()
+        }
+    else:
+        available = set(
+            subprocess.run(
+                [
+                    "git", "ls-tree", "--name-only", ref, "--",
+                    *(source.manifest_path.as_posix() for source in sources),
+                ],
+                cwd=repo_root,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.splitlines()
+        )
+    # Prefer the current layout when both exist; a malformed current manifest
+    # must fail at the caller. If neither exists, preserve the missing-file error.
+    return next(
+        (source for source in sources if source.manifest_path.as_posix() in available),
+        spec,
+    )
 
 
 def components_for_candidate(product_id: str) -> tuple[ComponentSpec, ...]:
@@ -381,7 +427,7 @@ def resolve_standalone_version(
 
 def read_component_version(repo_root: Path, component_id: str) -> str:
     """Read a component version from its source manifest."""
-    spec = component_by_id(component_id)
+    spec = component_for_source(repo_root, component_id)
     path = repo_root / spec.manifest_path
     if path.suffix == ".json":
         document = json.loads(path.read_text(encoding="utf-8"))
@@ -470,7 +516,7 @@ def stamp_component(
     repo_root: Path, component_id: str, version: str
 ) -> tuple[Path, Path]:
     """Stamp a component manifest and its matching lockfile entry."""
-    spec = component_by_id(component_id)
+    spec = component_for_source(repo_root, component_id)
     normalized = normalize_component_version(component_id, version)
     manifest = repo_root / spec.manifest_path
     lockfile = repo_root / spec.lockfile_path

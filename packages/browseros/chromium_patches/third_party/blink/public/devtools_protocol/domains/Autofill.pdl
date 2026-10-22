@@ -1,0 +1,81 @@
+diff --git a/third_party/blink/public/devtools_protocol/domains/Autofill.pdl b/third_party/blink/public/devtools_protocol/domains/Autofill.pdl
+index 4dd9d9ec283413c1c19b6188ad509eddd46f7757..6fd2a052b22610646c9b971a2d9128c52d25f57d 100644
+--- a/third_party/blink/public/devtools_protocol/domains/Autofill.pdl
++++ b/third_party/blink/public/devtools_protocol/domains/Autofill.pdl
+@@ -108,3 +108,76 @@ experimental domain Autofill
+ 
+   # Enables autofill domain notifications.
+   command enable
++
++  # BrowserOS saved password metadata. Passwords are never returned.
++  type CredentialInfo extends object
++    properties
++      string credentialId
++      string username
++      string site
++      array of string stores
++
++  type CredentialContext extends object
++    properties
++      Browser.BrowserProfileID browserProfileId
++      string origin
++      # Opaque current-document identity; required by page credential operations.
++      string documentId
++
++  type CredentialResult extends object
++    properties
++      Browser.BrowserProfileID browserProfileId
++      optional string origin
++      optional string status
++      optional array of CredentialInfo credentials
++      optional CredentialInfo credential
++      optional integer total
++      optional string nextCursor
++      optional array of string filledFields
++
++  # Captures the main-frame document before a credential operation is queued.
++  command getCredentialContext
++    returns
++      CredentialContext context
++
++  # Page target: native site matches, documentId required. Browser target: an
++  # explicit live regular browserContextId is required, even without open tabs.
++  command listCredentials
++    parameters
++      string operationId
++      optional string documentId
++      optional Browser.BrowserContextID browserContextId
++      optional string query
++      optional integer limit
++      optional string cursor
++    returns
++      CredentialResult result
++
++  # Explicitly adds to the profile/device store. No pending form is required.
++  command addCredential
++    parameters
++      string operationId
++      string documentId
++      string username
++      string password
++    returns
++      CredentialResult result
++
++  # Exactly one source: credentialId or username AND password. Does not submit
++  # or save. Only acknowledged fields in a recognized main-frame login form
++  # are reported. Native filling policy and reauthentication remain in force.
++  command fillCredential
++    parameters
++      string operationId
++      string documentId
++      optional string credentialId
++      optional string username
++      optional string password
++    returns
++      CredentialResult result
++
++  # Cancels outstanding store reads / renderer work before its next handoff.
++  # Already dispatched writes or field mutations cannot be undone.
++  command cancelCredentialOperation
++    parameters
++      string operationId

@@ -99,6 +99,8 @@ struct Inner {
     opts: ConnectOptions,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, PendingSender>>,
+    /// Serializes socket publication with dispatch. An epoch-bound request must
+    /// validate under this guard so reused browser IDs cannot reach a replacement.
     sink: Mutex<Option<WsSink>>,
     events_tx: broadcast::Sender<CdpEvent>,
     targeted: std::sync::Mutex<HashMap<String, mpsc::UnboundedSender<CdpEvent>>>,
@@ -201,6 +203,30 @@ impl CdpClient {
         params: Value,
         session: Option<&SessionId>,
     ) -> Result<Value, CdpError> {
+        self.send_with_epoch(None, method, params, session).await
+    }
+
+    /// Sends only on the socket incarnation used to resolve the caller's IDs.
+    /// Validation happens at dispatch, after lock waits; an epoch change rejects
+    /// the request before writing and never retries it on the replacement socket.
+    pub async fn send_at_epoch(
+        &self,
+        expected_epoch: u64,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CdpError> {
+        self.send_with_epoch(Some(expected_epoch), method, params, session)
+            .await
+    }
+
+    async fn send_with_epoch(
+        &self,
+        expected_epoch: Option<u64>,
+        method: &str,
+        params: Value,
+        session: Option<&SessionId>,
+    ) -> Result<Value, CdpError> {
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let mut frame = serde_json::Map::new();
         frame.insert("id".to_string(), Value::from(id));
@@ -213,6 +239,7 @@ impl CdpClient {
             );
         }
         self.send_frame(
+            expected_epoch,
             id,
             method,
             Message::Text(Value::Object(frame).to_string().into()),
@@ -241,6 +268,31 @@ impl CdpClient {
         params_json: &str,
         session: Option<&SessionId>,
     ) -> Result<String, CdpError> {
+        self.send_raw_json_with_epoch(None, method, params_json, session)
+            .await
+    }
+
+    /// Like [`Self::send_at_epoch`], retaining the caller's serialized parameters
+    /// in the outgoing frame. Stale root and session requests are both rejected
+    /// before any bytes are written to a replacement socket.
+    pub async fn send_raw_json_at_epoch(
+        &self,
+        expected_epoch: u64,
+        method: &str,
+        params_json: &str,
+        session: Option<&SessionId>,
+    ) -> Result<String, CdpError> {
+        self.send_raw_json_with_epoch(Some(expected_epoch), method, params_json, session)
+            .await
+    }
+
+    async fn send_raw_json_with_epoch(
+        &self,
+        expected_epoch: Option<u64>,
+        method: &str,
+        params_json: &str,
+        session: Option<&SessionId>,
+    ) -> Result<String, CdpError> {
         let _validated: Value = serde_json::from_str(params_json)?;
         let id = self.inner.next_id.fetch_add(1, Ordering::SeqCst);
         let method_json = serde_json::to_string(method)?;
@@ -252,7 +304,7 @@ impl CdpClient {
         }
         frame.push('}');
         let response = self
-            .send_frame(id, method, Message::Text(frame.into()))
+            .send_frame(expected_epoch, id, method, Message::Text(frame.into()))
             .await?;
         serde_json::to_string(&response).map_err(CdpError::from)
     }
@@ -281,22 +333,38 @@ impl CdpClient {
         rx
     }
 
-    async fn send_frame(&self, id: u64, method: &str, message: Message) -> Result<Value, CdpError> {
-        if !self.is_connected() {
-            return Err(CdpError::NotConnected);
-        }
-
+    async fn send_frame(
+        &self,
+        expected_epoch: Option<u64>,
+        id: u64,
+        method: &str,
+        message: Message,
+    ) -> Result<Value, CdpError> {
         let (tx, rx) = oneshot::channel();
         self.inner.pending.lock().await.insert(id, tx);
 
         let send_result = {
             let mut guard = self.inner.sink.lock().await;
-            match guard.as_mut() {
-                Some(sink) => sink
-                    .send(message)
-                    .await
-                    .map_err(|err| CdpError::Transport(err.to_string())),
-                None => Err(CdpError::NotConnected),
+            // Admission before either lock wait cannot bind a request to a socket.
+            // Publication takes this same guard, which stays held through the write.
+            let actual_epoch = self.epoch();
+            if let Some(expected) = expected_epoch
+                && expected != actual_epoch
+            {
+                Err(CdpError::ConnectionEpochChanged {
+                    expected,
+                    actual: actual_epoch,
+                })
+            } else if !self.is_connected() {
+                Err(CdpError::NotConnected)
+            } else {
+                match guard.as_mut() {
+                    Some(sink) => sink
+                        .send(message)
+                        .await
+                        .map_err(|err| CdpError::Transport(err.to_string())),
+                    None => Err(CdpError::NotConnected),
+                }
             }
         };
 
@@ -330,9 +398,16 @@ fn open_socket(inner: Arc<Inner>) -> BoxFuture<'static, Result<(), CdpError>> {
         }
 
         let (sink, reader) = ws.split();
-        *inner.sink.lock().await = Some(sink);
-        inner.connected.store(true, Ordering::SeqCst);
-        let epoch = inner.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+        let epoch = {
+            let mut guard = inner.sink.lock().await;
+            // Publishing the sink separately would let a stale request validate the
+            // old epoch and write to the new socket. Dispatch observes all three
+            // values under this guard, even if it queued before the reconnect.
+            *guard = Some(sink);
+            let epoch = inner.epoch.fetch_add(1, Ordering::SeqCst) + 1;
+            inner.connected.store(true, Ordering::SeqCst);
+            epoch
+        };
         // Logged at info, and with the outage, because "did it come back" is the
         // only question a disconnect report actually asks.
         let outage = inner
@@ -627,3 +702,7 @@ async fn reject_all_pending(inner: &Arc<Inner>, error: CdpError) {
         let _ = sender.send(Err(error.clone()));
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

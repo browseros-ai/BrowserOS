@@ -1,5 +1,5 @@
 use crate::{
-    CoreError, PageId, ProtocolSession, TabId,
+    BrowserView, CoreError, NativeCapabilities, PageId, ProtocolSession, TabId, TargetBinding,
     connection::CdpConnection,
     pages::PageInfo,
     screenshot::ScreenshotFormat,
@@ -9,18 +9,42 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{collections::HashMap, sync::Arc};
 
+/// Rust facade with host-local binding. Each operation captures one view; reusable protocol
+/// handles returned from it retain that capture rather than reading a later facade binding.
 pub struct Browser {
     core: Arc<BrowserSession>,
+    binding: tokio::sync::RwLock<Option<TargetBinding>>,
 }
 
 impl Browser {
+    /// A facade whose native identity is unknown; gated native features stay unused.
     #[must_use]
     pub fn new(connection: Arc<dyn CdpConnection>) -> Self {
+        Self::new_with_native(connection, NativeCapabilities::default())
+    }
+
+    #[must_use]
+    pub fn new_with_native(connection: Arc<dyn CdpConnection>, native: NativeCapabilities) -> Self {
         Self {
-            core: BrowserSession::new(connection, BrowserSessionHooks::default()),
+            core: BrowserSession::new_with_native(
+                connection,
+                BrowserSessionHooks::default(),
+                native,
+            ),
+            binding: tokio::sync::RwLock::new(None),
         }
     }
 
+    pub async fn set_target(&self, binding: Option<TargetBinding>) {
+        *self.binding.write().await = binding;
+    }
+
+    pub async fn view(&self) -> BrowserView {
+        let binding = self.binding.read().await.clone();
+        BrowserView::capture(self.core.clone(), binding, None).await
+    }
+
+    /// Infrastructure only: tools and task execution must use view() to capture targeting.
     #[must_use]
     pub fn session(&self) -> Arc<BrowserSession> {
         self.core.clone()
@@ -35,21 +59,45 @@ impl Browser {
         &self,
         window_id: crate::WindowId,
     ) -> Result<crate::pages::PageSession, CoreError> {
-        self.core
+        let view = self.view().await;
+        // Only a genuinely unbound view (older native) takes the global path; a failed
+        // default capture must surface its error, never widen to another profile's window.
+        if view.scope()?.is_none() {
+            return self
+                .core
+                .pages
+                .get_active_session_for_window(window_id)
+                .await;
+        }
+        let result = view
+            .cdp(
+                "Browser.getActiveTab",
+                json!({ "windowId": window_id.0 }),
+                None,
+            )
+            .await?;
+        let target_id = result["tab"]["targetId"]
+            .as_str()
+            .ok_or_else(|| CoreError::Message(format!("No active tab in window {window_id}")))?;
+        let page = view
+            .list_pages()
+            .await?
             .pages
-            .get_active_session_for_window(window_id)
-            .await
+            .into_iter()
+            .find(|page| page.target_id.as_str() == target_id)
+            .ok_or_else(|| CoreError::Message(format!("No active tab in window {window_id}")))?;
+        view.page_session(page.page_id).await
     }
 
     pub async fn get_page_session(
         &self,
         page_id: PageId,
     ) -> Result<crate::pages::PageSession, CoreError> {
-        self.core.pages.get_session(page_id).await
+        self.view().await.page_session(page_id).await
     }
 
     pub async fn list_pages(&self) -> Result<Vec<PageInfo>, CoreError> {
-        self.core.pages.list().await
+        Ok(self.view().await.list_pages().await?.pages)
     }
 
     pub async fn new_page(
@@ -57,22 +105,23 @@ impl Browser {
         url: &str,
         opts: crate::pages::NewPageOptions,
     ) -> Result<PageId, CoreError> {
+        let view = self.view().await;
         let mut opts = opts;
-        if opts.window_id.is_none() {
-            opts.window_id = self.resolve_visible_window_id().await?;
+        if view.scope()?.is_none() && opts.window_id.is_none() {
+            opts.window_id = Self::resolve_visible_window_id(&view).await?;
         }
-        self.core.pages.new_page(url, opts).await
+        Ok(view.new_page(url, opts).await?.page_id)
     }
 
     pub async fn close_page(&self, page_id: PageId) -> Result<(), CoreError> {
-        self.core.pages.close(page_id).await
+        self.view().await.close_page(page_id).await
     }
 
     pub async fn resolve_tab_ids(
         &self,
         tab_ids: &[TabId],
     ) -> Result<HashMap<TabId, PageId>, CoreError> {
-        self.core.pages.resolve_tab_ids(tab_ids).await
+        self.view().await.resolve_tab_ids(tab_ids).await
     }
 
     pub async fn screenshot(
@@ -95,15 +144,21 @@ impl Browser {
         let screenshot = session
             .send::<_, CaptureScreenshotResult>("Page.captureScreenshot", Value::Object(params))
             .await?;
-        let dpr = session
+        let dpr_result = session
             .send::<_, EvaluateResult>(
                 "Runtime.evaluate",
-                json!({ "expression": "window.devicePixelRatio", "returnByValue": true }),
+                json!({"expression":"window.devicePixelRatio","returnByValue":true}),
             )
-            .await
-            .ok()
-            .and_then(|result| result.result.value.and_then(|value| value.as_f64()))
-            .unwrap_or(1.0);
+            .await;
+        // DPR is advisory for an unbound transport failure, but a target admission error must
+        // invalidate the whole capture instead of publishing bytes from an expired capability.
+        let dpr = match dpr_result {
+            Err(error @ CoreError::Target(_)) => return Err(error),
+            result => result
+                .ok()
+                .and_then(|result| result.result.value.and_then(|value| value.as_f64()))
+                .unwrap_or(1.0),
+        };
         Ok(BrowserScreenshot {
             data: screenshot.data,
             mime_type: format!("image/{}", format.as_str()),
@@ -143,11 +198,13 @@ impl Browser {
     }
 
     async fn resolve_session(&self, page_id: PageId) -> Result<ProtocolSession, CoreError> {
-        Ok(self.core.pages.get_session(page_id).await?.session)
+        Ok(self.view().await.page_session(page_id).await?.session)
     }
 
-    async fn resolve_visible_window_id(&self) -> Result<Option<crate::WindowId>, CoreError> {
-        let windows = self.core.windows.list().await?;
+    async fn resolve_visible_window_id(
+        view: &BrowserView,
+    ) -> Result<Option<crate::WindowId>, CoreError> {
+        let windows = view.list_windows().await?;
         let active = windows
             .iter()
             .find(|window| window.is_visible && window.is_active)
@@ -155,7 +212,7 @@ impl Browser {
         if let Some(active) = active {
             return Ok(Some(crate::WindowId(active.window_id)));
         }
-        let created = self.core.windows.create().await?;
+        let created = view.create_window().await?;
         Ok(Some(crate::WindowId(created.window_id)))
     }
 }

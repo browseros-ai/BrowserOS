@@ -29,9 +29,12 @@ jobs:
         with:
           bun-version-file: packages/browseros-agent/package.json
 
-      # Run Biome through the repo's own lint script (bunx @biomejs/biome) so CI
-      # uses the exact same Biome as local `bun run lint`, instead of a version
-      # pinned separately in a setup action that drifts from package.json.
+      # A fresh checkout has no local Biome binary. Install the locked dependencies
+      # first so bunx uses the repository version rather than downloading latest.
+      - name: Install dependencies
+        run: bun ci
+
+      # Keep the lint command shared with local development.
       - name: Run Biome
         run: bun run lint
 
@@ -109,6 +112,31 @@ jobs:
 
       - name: Check Claw API generated code
         run: bun run codegen:claw-api:check
+
+      - name: Check hosted API generated code
+        run: bun run codegen:hosted-api:check
+
+  hosted-api-breaking:
+    name: runner / Hosted API breaking changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: packages/browseros-agent
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          # The check compares against the merge-base, which needs history.
+          fetch-depth: 0
+
+      - name: Check hosted API spec against the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash contracts/hosted-api/check-breaking.sh "origin/$BASE_REF"
 
   claw-api-contract:
     name: runner / Claw API conformance

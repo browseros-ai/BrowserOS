@@ -367,7 +367,7 @@ func startClawEnvironment(parent context.Context, cfg config.Config, agentRoot s
 	}
 
 	sidecarPath := dogfoodSidecarConfigPath(cfg)
-	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "apps/claw-server-rust/resources")); err != nil {
+	if err := writeDogfoodSidecarConfig(sidecarPath, cfg, filepath.Join(agentRoot, "apps/claw-server/resources")); err != nil {
 		e.Stop()
 		e.Wait()
 		return nil, fmt.Errorf("write Claw server config: %w", err)
@@ -421,7 +421,7 @@ func clawAppCommand() []string {
 }
 
 func clawServerCommand(configPath string) []string {
-	return []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", configPath}
+	return []string{"cargo", "run", "-p", "claw-server", "--", "--config", configPath}
 }
 
 func serverRuntimeEnv(base []string, cfg config.Config) []string {

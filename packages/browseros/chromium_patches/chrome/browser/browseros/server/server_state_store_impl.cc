@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/server_state_store_impl.cc b/chrome/browser/browseros/server/server_state_store_impl.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..0ae286fc4ab223d375bc8ce267e901b2a47e158d
+index 0000000000000000000000000000000000000000..daec0858421976c7817879e11ad3efbce57850c5
 --- /dev/null
 +++ b/chrome/browser/browseros/server/server_state_store_impl.cc
-@@ -0,0 +1,323 @@
+@@ -0,0 +1,330 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -222,8 +222,13 @@ index 0000000000000000000000000000000000000000..0ae286fc4ab223d375bc8ce267e901b2
 +            }
 +            ServerInstallation ready =
 +                DownloadedInstallation(execution_dir, binary_name, version);
++            // Only a missing binary or a wrong version condemns it. A probe
++            // that times out or fails is common on a cold start, and deleting
++            // over it can strand the sidecar on a bundled server too old for
++            // the user's data. The launch's own strikes decide instead.
 +            const base::Version actual = ProbeServerVersion(ready.executable);
-+            if (!actual.IsValid() || actual != version) {
++            if (!base::PathExists(ready.executable) ||
++                (actual.IsValid() && actual != version)) {
 +              LOG(WARNING) << "browseros: Rejecting invalid ready server "
 +                           << version.GetString();
 +              RemoveRejectedVersion(execution_dir, version);
@@ -248,7 +253,9 @@ index 0000000000000000000000000000000000000000..0ae286fc4ab223d375bc8ce267e901b2
 +
 +const ServerInstallation& ServerVersionStore::GetBestAvailable() const {
 +  CHECK(initialized_);
-+  if (ready_ &&
++  const bool ready_rejected =
++      ready_ && rejected_.IsValid() && ready_->version == rejected_;
++  if (ready_ && !ready_rejected &&
 +      (!bundled_.version.IsValid() || ready_->version > bundled_.version)) {
 +    return *ready_;
 +  }
@@ -296,7 +303,7 @@ index 0000000000000000000000000000000000000000..0ae286fc4ab223d375bc8ce267e901b2
 +          weak_factory_.GetWeakPtr(), installation, std::move(callback)));
 +}
 +
-+void ServerVersionStore::RejectVersion(const base::Version& version) {
++void ServerVersionStore::RemoveInvalidVersion(const base::Version& version) {
 +  if (!version.IsValid()) {
 +    return;
 +  }

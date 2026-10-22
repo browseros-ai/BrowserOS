@@ -1,6 +1,9 @@
 // ── AUTO-GENERATED from CDP protocol. DO NOT EDIT. ──
 
 import type {
+  CancelInvocationParams,
+  InvokeToolParams,
+  InvokeToolResult,
   ToolInvokedEvent,
   ToolRespondedEvent,
   ToolsAddedEvent,
@@ -12,6 +15,8 @@ export interface WebMCPApi {
 
   enable(): Promise<void>
   disable(): Promise<void>
+  invokeTool(params: InvokeToolParams): Promise<InvokeToolResult>
+  cancelInvocation(params: CancelInvocationParams): Promise<void>
 
   // ── Events ──
 

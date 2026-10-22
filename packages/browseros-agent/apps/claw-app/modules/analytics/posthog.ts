@@ -27,13 +27,8 @@
 
 import posthog, { type PostHog, type PostHogConfig } from 'posthog-js'
 import 'posthog-js/dist/posthog-recorder'
+import { POSTHOG_HOST as HOST, POSTHOG_KEY as KEY } from './posthog-config'
 
-const KEY = import.meta.env.VITE_CLAW_POSTHOG_KEY as string | undefined
-// Optional release secrets arrive as empty strings. Passing one to PostHog
-// overrides its default host and resolves requests against chrome-extension://.
-const HOST =
-  (import.meta.env.VITE_CLAW_POSTHOG_HOST as string | undefined)?.trim() ||
-  'https://us.i.posthog.com'
 const REDACTED_REPLAY_URL = 'browserclaw://redacted'
 
 /** Auto-added properties that could carry a url/referrer; always removed. */
@@ -51,7 +46,20 @@ const STRIPPED_PROPS = [
 
 let initialised = false
 const captureStateListeners = new Set<() => void>()
+const flagListeners = new Set<() => void>()
+
+/**
+ * The flags PostHog reported for the bootstrapped identity.
+ *
+ * Replaced rather than mutated on every evaluation, so a flag turned off
+ * upstream disappears instead of lingering for the life of the tab.
+ */
+let enabledFlags: ReadonlySet<string> = new Set()
 let lastCaptureState = false
+
+function notifyFlagListeners(): void {
+  for (const listener of flagListeners) listener()
+}
 
 function notifyCaptureStateListeners(): void {
   const nextCaptureState = isCapturing()
@@ -95,9 +103,10 @@ export function createPostHogConfig(
     // Reconciled explicitly after effective consent is known.
     disable_session_recording: true,
     disable_surveys: true,
-    // Session replay needs PostHog's remote config, but BrowserClaw does not use
-    // feature flags. Fetch config once, without evaluating or polling flags.
-    advanced_disable_feature_flags_on_first_load: true,
+    // Flags gate a settings surface or two. Evaluated once when this tab
+    // initialises the client, and never polled: a control that vanishes while
+    // somebody is typing into it is a bug report, not a rollout.
+    advanced_disable_feature_flags_on_first_load: false,
     remote_config_refresh_interval_ms: 0,
     // Do not persist browser location metadata outside the event sanitizer.
     save_campaign_params: false,
@@ -153,6 +162,35 @@ export function reconcileSessionRecording(
 function init(distinctId: string): void {
   initialised = true
   posthog.init(KEY as string, createPostHogConfig(distinctId))
+  // A component cannot read a flag during render and expect to hear about the
+  // answer: isFeatureEnabled returns whatever is cached and re-renders nothing.
+  // The callback is what turns the arrival into a render.
+  posthog.onFeatureFlags((flags) => {
+    applyFlags(flags)
+  })
+}
+
+/** Records the evaluated flags and tells React. Exported for tests. */
+export function applyFlags(flags: readonly string[]): void {
+  enabledFlags = new Set(flags)
+  notifyFlagListeners()
+}
+
+/**
+ * Whether one flag is on for this install.
+ *
+ * Off until PostHog says otherwise, which is also the answer for a flag that
+ * does not exist and for an install whose analytics are turned off and so
+ * never evaluates anything. One answer for every kind of "we do not know".
+ */
+export function isFlagEnabled(key: string): boolean {
+  return enabledFlags.has(key)
+}
+
+/** Subscribes React consumers to flag evaluations. */
+export function subscribeToFlags(listener: () => void): () => void {
+  flagListeners.add(listener)
+  return () => flagListeners.delete(listener)
 }
 
 /**

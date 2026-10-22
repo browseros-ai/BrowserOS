@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.h b/chrome/browser/browseros/server/browseros_server_updater.h
 new file mode 100644
-index 0000000000000000000000000000000000000000..72411a77f7ef7345280a8c8f5b53d2348978862f
+index 0000000000000000000000000000000000000000..efbe96d08b82dc4ed6a6b31c25a9c207d365017d
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.h
-@@ -0,0 +1,140 @@
+@@ -0,0 +1,145 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -13,6 +13,7 @@ index 0000000000000000000000000000000000000000..72411a77f7ef7345280a8c8f5b53d234
 +
 +#include <memory>
 +#include <optional>
++#include <set>
 +#include <string>
 +
 +#include "base/files/file_path.h"
@@ -137,6 +138,10 @@ index 0000000000000000000000000000000000000000..72411a77f7ef7345280a8c8f5b53d234
 +  // Pending update info
 +  AppcastItem pending_item_;
 +  std::string pending_signature_;
++
++  // Rejected versions already reported as skipped, so the alert event fires
++  // once per version per session rather than every poll.
++  std::set<base::Version> reported_skipped_versions_;
 +
 +  base::WeakPtrFactory<BrowserOSServerUpdater> weak_factory_{this};
 +};

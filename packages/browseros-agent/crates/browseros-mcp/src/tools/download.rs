@@ -50,15 +50,15 @@ fn handler<'a>(
         // browser's own target determination, which is the part that renames
         // around a collision rather than replacing. Letting the browser decide is
         // what keeps an existing file safe and its downloads list correct.
-        let before = read_recent_downloads(&ctx.session)
+        let before = read_recent_downloads(&ctx.browser)
             .await?
             .into_iter()
             .map(|record| record.id)
             .collect::<Vec<_>>();
-        let page_session = ctx.session.pages.get_session(page_id.clone()).await?;
+        let page_session = ctx.browser.page_session(page_id.clone()).await?;
         let suggested =
             capture_download(ctx, page_id, page_session.session_id.clone(), &args.r#ref).await?;
-        let after = read_recent_downloads(&ctx.session).await?;
+        let after = read_recent_downloads(&ctx.browser).await?;
         let record = newly_added(&before, &after, &suggested)?;
         let path = PathBuf::from(&record.filename);
         let filename = path
@@ -90,8 +90,8 @@ async fn capture_download(
     ref_id: &str,
 ) -> ToolExecResult<String> {
     // Subscribe before clicking so synchronous download events cannot outrun the receiver.
-    let mut events = ctx.session.cdp_events();
-    let input = ctx.session.input(page_id).await;
+    let mut events = ctx.browser.cdp_events();
+    let input = ctx.browser.input(page_id).await?;
     input
         .click(&Ref(ref_id.to_string()), Default::default())
         .await?;

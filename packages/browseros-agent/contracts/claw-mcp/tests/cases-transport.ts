@@ -5,8 +5,11 @@
  */
 
 import type { ContractCase } from './cases'
-import { apiGet, waitUntil } from './helpers'
+import { apiGet, expectError, waitUntil } from './helpers'
 
+// The harness sidecar carries no instance.browseros_version, so claw-server treats the
+// browser as an unknown native and does not offer tools gated on a BrowserOS release
+// (browser_profiles and browser_target need profile targeting, BrowserOS 0.51.1.3+).
 const EXPECTED_TOOLS = [
   'act',
   'await_human_help',
@@ -34,13 +37,26 @@ const EXPECTED_TOOLS = [
 
 export const transportCases: ContractCase[] = [
   {
-    name: 'transport: tools/list exposes the full catalog including run',
+    name: 'transport: tools/list exposes the catalog for an unknown native, including run',
     smoke: true,
     async run(ctx) {
       const tools = await ctx.mcp.listTools()
       const names = tools.map((tool) => tool.name).sort()
       if (!Bun.deepEquals(names, EXPECTED_TOOLS)) {
         throw new Error(`unexpected tool catalog: ${names.join(', ')}`)
+      }
+    },
+  },
+  {
+    name: 'transport: a cached call to a hidden native-gated tool is refused',
+    smoke: true,
+    async run(ctx) {
+      const text = expectError(
+        await ctx.mcp.callTool('browser_profiles', {}),
+        'browser_profiles on an unknown native',
+      )
+      if (!text.includes('native_feature_unavailable: profile targeting')) {
+        throw new Error(`unexpected refusal: ${text.slice(0, 300)}`)
       }
     },
   },

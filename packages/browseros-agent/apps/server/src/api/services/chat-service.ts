@@ -693,9 +693,16 @@ export class ChatService {
     browserContext: BrowserContext | undefined,
   ): BrowserToolLease {
     const readOnly = request.mode === 'chat'
-    const fingerprint = JSON.stringify({ agentId, readOnly, browserContext })
+    // Only the agent identity and the read-only flag require a new capability.
+    // The browser context is refreshed in place instead: re-minting the token
+    // on every context change restarts the ACP agent process, and a custom
+    // agent re-opens its workspace window on each fresh connection.
+    const fingerprint = JSON.stringify({ agentId, readOnly })
     const existing = this.acpToolLeases.get(request.conversationId)
-    if (existing?.fingerprint === fingerprint) return existing.lease
+    if (existing?.fingerprint === fingerprint) {
+      existing.lease.updateBrowserContext(browserContext)
+      return existing.lease
+    }
 
     existing?.lease.revoke()
     const outputFileAccess =

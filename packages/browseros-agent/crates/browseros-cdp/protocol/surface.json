@@ -6,6 +6,17 @@
       "commands": ["enable", "getFullAXTree"]
     },
     {
+      "domain": "Autofill",
+      "types": ["CredentialInfo", "CredentialContext", "CredentialResult"],
+      "commands": [
+        "getCredentialContext",
+        "listCredentials",
+        "addCredential",
+        "fillCredential",
+        "cancelCredentialOperation"
+      ]
+    },
+    {
       "domain": "Bookmarks",
       "types": ["BookmarkNode"],
       "commands": ["getBookmarks"]
@@ -15,6 +26,8 @@
       "types": [
         "Bounds",
         "BrowserContextID",
+        "BrowserProfileID",
+        "BrowserProfileInfo",
         "TabGroupInfo",
         "TabID",
         "TabInfo",
@@ -34,11 +47,13 @@
         "createWindow",
         "getActiveTab",
         "getActiveWindow",
+        "getProfiles",
         "getTabGroups",
         "getTabInfo",
         "getTabs",
         "getVersion",
         "getWindows",
+        "loadProfile",
         "moveTab",
         "removeTabsFromGroup",
         "setWindowVisibility",
@@ -65,7 +80,7 @@
     {
       "domain": "History",
       "types": ["HistoryEntry"],
-      "commands": ["search"]
+      "commands": ["deleteRange", "deleteUrl", "getRecent", "search"]
     },
     {
       "domain": "Input",

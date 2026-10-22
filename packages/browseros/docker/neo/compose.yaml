@@ -1,0 +1,27 @@
+# BrowserOS neo in Docker. Settings come from the environment or a .env file
+# next to this file; README.md lists them.
+#
+#   docker compose up -d --wait
+#
+# Both ports are bound to 127.0.0.1 on purpose: neither one asks for a
+# password, and Docker's published ports bypass host firewalls such as ufw.
+services:
+  neo:
+    image: ${NEO_IMAGE:-ghcr.io/browseros-ai/neo}:${NEO_VERSION:-latest}
+    init: false # the image runs tini itself
+    shm_size: 1g
+    hostname: neo
+    stop_grace_period: 20s
+    ports:
+      - "127.0.0.1:${NEO_VNC_PORT:-6080}:6080"
+      - "127.0.0.1:${NEO_MCP_PORT:-9010}:9010"
+    volumes:
+      - "${NEO_DATA:-./neo-data}:/data"
+    environment:
+      PUID: ${PUID:-1000}
+      PGID: ${PGID:-1000}
+      NEO_SCREEN: ${NEO_SCREEN:-1600x1000}
+      BROWSERCLAW_MODE: ${BROWSERCLAW_MODE:-hosted}
+      NEO_SANDBOX: ${NEO_SANDBOX:-false}
+      NEO_ARGS: ${NEO_ARGS:-}
+    restart: unless-stopped

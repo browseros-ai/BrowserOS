@@ -39,15 +39,14 @@ fn handler<'a>(
         if let Some(result) = pending_dialog_result(ctx, PageId(args.page)) {
             return Ok(Some(result));
         }
-        let diff = ctx.session.observe(PageId(args.page)).await.diff().await?;
+        let diff = ctx.browser.observe(PageId(args.page)).await?.diff().await?;
         let origin = diff.after_url.as_deref().map(ToString::to_string);
         let origin = match origin {
             Some(origin) => origin,
             None => ctx
-                .session
-                .pages
-                .get_info(PageId(args.page))
-                .await
+                .browser
+                .refresh_page(PageId(args.page))
+                .await?
                 .map(|info| info.url)
                 .unwrap_or_else(|| "unknown".to_string()),
         };

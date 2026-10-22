@@ -237,7 +237,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 		return nil
 	})
 
-	wantCmd := []string{"cargo", "run", "-p", "claw-server-rust", "--", "--config", sidecarPath}
+	wantCmd := []string{"cargo", "run", "-p", "claw-server", "--", "--config", sidecarPath}
 	if !reflect.DeepEqual(cfg.Cmd, wantCmd) {
 		t.Fatalf("expected rust server command %#v, got %#v", wantCmd, cfg.Cmd)
 	}
@@ -286,7 +286,7 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 	if sidecar.Ports.Server != ports.Server || sidecar.Ports.CDP != ports.CDP || sidecar.Ports.Proxy != ports.Server {
 		t.Fatalf("expected sidecar ports server=%d cdp=%d proxy=%d, got %+v", ports.Server, ports.CDP, ports.Server, sidecar.Ports)
 	}
-	if sidecar.Directories.Resources != filepath.Join(root, "apps/claw-server-rust/resources") || sidecar.Directories.Execution != userDataDir {
+	if sidecar.Directories.Resources != filepath.Join(root, "apps/claw-server/resources") || sidecar.Directories.Execution != userDataDir {
 		t.Fatalf("unexpected sidecar directories: %+v", sidecar.Directories)
 	}
 }
@@ -294,8 +294,8 @@ func TestClawRustServerProcConfigPassesSidecarAndDevEnv(t *testing.T) {
 func TestRustClawWatchInputsUseSourceAndManifestInputs(t *testing.T) {
 	root := t.TempDir()
 	for _, dir := range []string{
-		"apps/claw-server-rust/tests/fixtures/legacy-drizzle",
-		"apps/claw-server-rust/src",
+		"apps/claw-server/tests/fixtures/legacy-drizzle",
+		"apps/claw-server/src",
 		"crates/browseros-core/src",
 		"crates/browseros-cdp/src",
 		"crates/browseros-cdp/protocol",
@@ -306,7 +306,7 @@ func TestRustClawWatchInputsUseSourceAndManifestInputs(t *testing.T) {
 		}
 	}
 	for _, file := range []string{
-		"apps/claw-server-rust/Cargo.toml",
+		"apps/claw-server/Cargo.toml",
 		"crates/browseros-core/Cargo.toml",
 		"crates/browseros-cdp/Cargo.toml",
 		"crates/browseros-cdp/build.rs",
@@ -318,9 +318,9 @@ func TestRustClawWatchInputsUseSourceAndManifestInputs(t *testing.T) {
 
 	inputs := rustClawWatchInputs(root)
 	for _, want := range []string{
-		filepath.Join(root, "apps/claw-server-rust/src"),
-		filepath.Join(root, "apps/claw-server-rust/Cargo.toml"),
-		filepath.Join(root, "apps/claw-server-rust/tests/fixtures/legacy-drizzle"),
+		filepath.Join(root, "apps/claw-server/src"),
+		filepath.Join(root, "apps/claw-server/Cargo.toml"),
+		filepath.Join(root, "apps/claw-server/tests/fixtures/legacy-drizzle"),
 		filepath.Join(root, "crates/browseros-cdp/src"),
 		filepath.Join(root, "crates/browseros-cdp/Cargo.toml"),
 		filepath.Join(root, "crates/browseros-cdp/build.rs"),
@@ -343,7 +343,7 @@ func TestRustClawWatchInputsUseSourceAndManifestInputs(t *testing.T) {
 
 func TestRustWatchSnapshotDetectsSourceChangesAndSkipsTargetDirs(t *testing.T) {
 	root := t.TempDir()
-	srcDir := filepath.Join(root, "apps/claw-server-rust/src")
+	srcDir := filepath.Join(root, "apps/claw-server/src")
 	targetDir := filepath.Join(srcDir, "target")
 	if err := os.MkdirAll(targetDir, 0o755); err != nil {
 		t.Fatal(err)

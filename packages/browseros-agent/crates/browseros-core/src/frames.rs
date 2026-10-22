@@ -48,8 +48,20 @@ impl FrameRegistry {
         session_id: SessionId,
     ) -> Result<(), CoreError> {
         self.clear_sessions_from_prior_connection().await;
-        self.page_sessions.lock().await.insert(page_id, session_id);
-        let _ = page_session
+        {
+            // Serialize guarded registration with epoch-driven cache clearing. Otherwise an
+            // old attachment hook could await here, then repopulate the new epoch's cache.
+            let cached_epoch = self.connection_epoch.lock().await;
+            let mut sessions = self.page_sessions.lock().await;
+            if let Some(guard) = page_session.epoch_guard() {
+                guard.check(self.cdp.as_ref())?;
+                if *cached_epoch != guard.expected {
+                    return Err(guard.invalidated.clone().into());
+                }
+            }
+            sessions.insert(page_id, session_id);
+        }
+        let setup = page_session
             .send::<_, Value>(
                 "Target.setAutoAttach",
                 json!({
@@ -59,6 +71,9 @@ impl FrameRegistry {
                 }),
             )
             .await;
+        if let Err(error @ CoreError::Target(_)) = setup {
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -69,6 +84,29 @@ impl FrameRegistry {
         same_process_parent: Option<&ProtocolSession>,
         cross_process: bool,
     ) -> Result<FrameTarget, CoreError> {
+        self.resolve_frame_target_with_epoch(
+            page_id,
+            frame_id,
+            same_process_parent,
+            cross_process,
+            None,
+        )
+        .await
+    }
+
+    /// On-demand child attachment is part of the caller's dispatch, not a new unbound task.
+    /// Keep its epoch through native attachment and domain setup before exposing the endpoint.
+    pub(crate) async fn resolve_frame_target_with_epoch(
+        &self,
+        page_id: PageId,
+        frame_id: Option<FrameId>,
+        same_process_parent: Option<&ProtocolSession>,
+        cross_process: bool,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<FrameTarget, CoreError> {
+        if let Some(guard) = &guard {
+            guard.check(self.cdp.as_ref())?;
+        }
         self.clear_sessions_from_prior_connection().await;
         let page_session_id = self
             .page_sessions
@@ -79,14 +117,16 @@ impl FrameRegistry {
             .ok_or_else(|| CoreError::Message(format!("Page {page_id} has no attached session")))?;
         let Some(frame_id) = frame_id else {
             return Ok(FrameTarget {
-                session: ProtocolSession::for_session(self.cdp.clone(), page_session_id),
+                session: ProtocolSession::for_session(self.cdp.clone(), page_session_id)
+                    .with_epoch_guard(guard),
                 ax_params: json!({}),
                 cursor_uses_session_default: true,
             });
         };
         if let Some(oopif) = self.oopif_sessions.lock().await.get(&frame_id).cloned() {
             return Ok(FrameTarget {
-                session: ProtocolSession::for_session(self.cdp.clone(), oopif),
+                session: ProtocolSession::for_session(self.cdp.clone(), oopif)
+                    .with_epoch_guard(guard),
                 ax_params: json!({}),
                 cursor_uses_session_default: true,
             });
@@ -98,16 +138,21 @@ impl FrameRegistry {
         // this, so it keeps inheriting its parent session. A concurrent event may register it in
         // the meantime, so re-check the cache after attaching.
         if cross_process {
-            if let Some(session_id) = self.attach_oopif_on_demand(&frame_id).await {
+            if let Some(session_id) = self
+                .attach_oopif_on_demand(&frame_id, guard.clone())
+                .await?
+            {
                 return Ok(FrameTarget {
-                    session: ProtocolSession::for_session(self.cdp.clone(), session_id),
+                    session: ProtocolSession::for_session(self.cdp.clone(), session_id)
+                        .with_epoch_guard(guard),
                     ax_params: json!({}),
                     cursor_uses_session_default: true,
                 });
             }
             if let Some(oopif) = self.oopif_sessions.lock().await.get(&frame_id).cloned() {
                 return Ok(FrameTarget {
-                    session: ProtocolSession::for_session(self.cdp.clone(), oopif),
+                    session: ProtocolSession::for_session(self.cdp.clone(), oopif)
+                        .with_epoch_guard(guard),
                     ax_params: json!({}),
                     cursor_uses_session_default: true,
                 });
@@ -134,10 +179,28 @@ impl FrameRegistry {
                 .unwrap_or(page_session_id)
         };
         Ok(FrameTarget {
-            session: ProtocolSession::for_session(self.cdp.clone(), session_id),
+            session: ProtocolSession::for_session(self.cdp.clone(), session_id)
+                .with_epoch_guard(guard),
             ax_params: json!({ "frameId": frame_id.0 }),
             cursor_uses_session_default: false,
         })
+    }
+
+    /// Scoped observer sessions verify both page-tree ownership and this live endpoint mapping.
+    /// Frame IDs alone survive navigations and cannot authorize a retained OOPIF session.
+    pub(crate) async fn frame_session_matches(&self, frame: &FrameId, session: &SessionId) -> bool {
+        self.clear_sessions_from_prior_connection().await;
+        self.oopif_sessions
+            .lock()
+            .await
+            .get(frame)
+            .is_some_and(|id| id == session)
+            || self
+                .same_process_sessions
+                .lock()
+                .await
+                .get(frame)
+                .is_some_and(|id| id == session)
     }
 
     async fn clear_sessions_from_prior_connection(&self) {
@@ -216,11 +279,31 @@ impl FrameRegistry {
         session_id: SessionId,
         waiting_for_debugger: bool,
     ) {
-        self.oopif_sessions
-            .lock()
-            .await
-            .insert(frame_id, session_id.clone());
-        let session = ProtocolSession::for_session(self.cdp.clone(), session_id);
+        let _ = self
+            .register_oopif_session_with_epoch(frame_id, session_id, waiting_for_debugger, None)
+            .await;
+    }
+
+    async fn register_oopif_session_with_epoch(
+        &self,
+        frame_id: FrameId,
+        session_id: SessionId,
+        waiting_for_debugger: bool,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<(), CoreError> {
+        {
+            let cached_epoch = self.connection_epoch.lock().await;
+            let mut sessions = self.oopif_sessions.lock().await;
+            if let Some(guard) = &guard {
+                guard.check(self.cdp.as_ref())?;
+                if *cached_epoch != guard.expected {
+                    return Err(guard.invalidated.clone().into());
+                }
+            }
+            sessions.insert(frame_id, session_id.clone());
+        }
+        let session = ProtocolSession::for_session(self.cdp.clone(), session_id)
+            .with_epoch_guard(guard.clone());
         if waiting_for_debugger {
             let _ = session
                 .send::<_, Value>("Runtime.runIfWaitingForDebugger", json!({}))
@@ -240,6 +323,10 @@ impl FrameRegistry {
                 }),
             )
             .await;
+        if let Some(guard) = &guard {
+            guard.check(self.cdp.as_ref())?;
+        }
+        Ok(())
     }
 
     /// A frame missing from `oopif_sessions` may still be an OOPIF whose `attachedToTarget` event
@@ -249,19 +336,27 @@ impl FrameRegistry {
     /// has no such target and the attach fails, so the caller falls back to the parent session.
     /// Without this a not-yet-attached OOPIF is queried on its parent's session, which cannot
     /// resolve a cross-process frame id and returns an empty subtree.
-    async fn attach_oopif_on_demand(&self, frame_id: &FrameId) -> Option<SessionId> {
-        let root = ProtocolSession::root(self.cdp.clone());
+    async fn attach_oopif_on_demand(
+        &self,
+        frame_id: &FrameId,
+        guard: Option<crate::connection::EpochGuard>,
+    ) -> Result<Option<SessionId>, CoreError> {
+        let root = ProtocolSession::root(self.cdp.clone()).with_epoch_guard(guard.clone());
         let attached = root
             .send::<_, target::AttachToTargetResult>(
                 "Target.attachToTarget",
                 json!({ "targetId": frame_id.0, "flatten": true }),
             )
-            .await
-            .ok()?;
-        let session_id = SessionId::from(attached.session_id);
-        self.register_oopif_session(frame_id.clone(), session_id.clone(), false)
             .await;
-        Some(session_id)
+        let attached = match attached {
+            Ok(attached) => attached,
+            Err(error @ CoreError::Target(_)) => return Err(error),
+            Err(_) => return Ok(None),
+        };
+        let session_id = SessionId::from(attached.session_id);
+        self.register_oopif_session_with_epoch(frame_id.clone(), session_id.clone(), false, guard)
+            .await?;
+        Ok(Some(session_id))
     }
 
     async fn on_detached(&self, session_id: &SessionId) {

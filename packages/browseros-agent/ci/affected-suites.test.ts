@@ -54,13 +54,13 @@ describe('computeAffectedSuites', () => {
       suiteNames([
         pkg('@browseros/browseros-core-rust', 'crates/browseros-core'),
       ]),
-    ).toEqual(['claw-server-rust', 'claw-server-rust-quality', 'claw-mcp'])
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
   it('treats the Rust server app path as a Rust package', () => {
     expect(
-      suiteNames([pkg('@browseros/claw-server-rust', 'apps/claw-server-rust')]),
-    ).toEqual(['claw-server-rust', 'claw-server-rust-quality', 'claw-mcp'])
+      suiteNames([pkg('@browseros/claw-server', 'apps/claw-server')]),
+    ).toEqual(['claw-server', 'claw-server-quality', 'claw-mcp'])
   })
 
   it('adds the build suite when scripts change', () => {
@@ -139,8 +139,8 @@ describe('computeAffectedSuites', () => {
     expect(result).toEqual([
       'agent',
       'claw-app',
-      'claw-server-rust',
-      'claw-server-rust-quality',
+      'claw-server',
+      'claw-server-quality',
       'claw-mcp',
     ])
   })
@@ -155,7 +155,7 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/claw-onboard', 'apps/claw-onboard'),
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
-      pkg('@browseros/claw-server-rust', 'apps/claw-server-rust'),
+      pkg('@browseros/claw-server', 'apps/claw-server'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(Object.keys(SUITES).filter((suite) => suite !== 'release')),

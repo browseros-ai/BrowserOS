@@ -55,7 +55,7 @@ fn handler<'a>(
         let args: HistoryArgs = parse_args(raw)?;
         validate_args(&args)?;
         let HistoryResult { entries } = serde_json::from_value(
-            ctx.session
+            ctx.browser
                 .cdp(
                     "History.getRecent",
                     json!({ "maxResults": args.max_results }),

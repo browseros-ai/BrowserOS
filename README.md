@@ -148,7 +148,7 @@ BrowserOS neo and BrowserOS run on macOS, Windows, and Linux. Neo's Linux builds
 
 ## For developers
 
-Both browsers ship from this monorepo. Two main subsystems: the **browser** (Chromium fork, C++ and Python) and the **agent platform** (TypeScript, Rust and Go).
+Both browsers ship from this monorepo. Two main subsystems: the **browser** (Chromium fork, C++ and Python) and the **agent platform** (TypeScript and Rust).
 
 ### Architecture
 
@@ -159,15 +159,14 @@ BrowserOS/
 │   ├── build/                       # Build CLI and modules
 │   └── resources/                   # Icons, entitlements, signing
 │
-└── packages/browseros-agent/        # Agent platform (TypeScript / Rust / Go)
+└── packages/browseros-agent/        # Agent platform (TypeScript / Rust)
     ├── apps/
-    │   ├── claw-server-rust/        # BrowserOS neo backend: MCP endpoint + JSON API (Rust)
+    │   ├── claw-server/             # BrowserOS neo backend: MCP endpoint + JSON API (Rust)
     │   ├── claw-app/                # BrowserOS neo dashboard extension (WXT + React)
     │   ├── claw-onboard/            # BrowserOS neo onboarding flow (Vite)
     │   ├── server/                  # BrowserOS MCP server + AI agent loop (Bun)
     │   ├── app/                     # BrowserOS extension UI (WXT + React)
-    │   ├── app-onboard/             # BrowserOS onboarding flow (Vite)
-    │   └── cli/                     # CLI tool (Go)
+    │   └── app-onboard/             # BrowserOS onboarding flow (Vite)
     │
     ├── packages/                    # Shared TypeScript packages
     │   ├── acpx-ai-provider/        # AI SDK provider over the acpx ACP runtime
@@ -192,13 +191,12 @@ BrowserOS/
 | Package | What it does |
 |---------|-------------|
 | [`packages/browseros`](packages/browseros/) | Chromium fork: patches, build system, signing |
-| [`apps/claw-server-rust`](packages/browseros-agent/apps/claw-server-rust/) | BrowserOS neo backend: MCP endpoint agents connect to, plus the API behind the dashboard |
+| [`apps/claw-server`](packages/browseros-agent/apps/claw-server/) | BrowserOS neo backend: MCP endpoint agents connect to, plus the API behind the dashboard |
 | [`apps/claw-app`](packages/browseros-agent/apps/claw-app/) | BrowserOS neo new-tab dashboard: watch, replay, and manage agent sessions |
 | [`apps/claw-onboard`](packages/browseros-agent/apps/claw-onboard/) | BrowserOS neo first-run onboarding |
 | [`apps/server`](packages/browseros-agent/apps/server/) | Bun server exposing the browser MCP tools and running the BrowserOS AI agent loop |
 | [`apps/app`](packages/browseros-agent/apps/app/) | BrowserOS extension: new tab, side panel chat, onboarding, settings |
 | [`apps/app-onboard`](packages/browseros-agent/apps/app-onboard/) | BrowserOS first-run onboarding |
-| [`apps/cli`](packages/browseros-agent/apps/cli/) | Go CLI: control BrowserOS from the terminal or AI coding agents |
 
 ### Contributing
 

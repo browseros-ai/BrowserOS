@@ -565,12 +565,14 @@ class GithubModule(Step):
         workflow_run_id: str = "",
         workflow_run_attempt: str = "",
         target: str = "",
+        linux_arch: Optional[str] = None,
     ):
         self.draft = draft
         self.skip_upload = skip_upload
         self.title = title
         self.release_platforms = platforms
         self.macos_arch = macos_arch
+        self.linux_arch = linux_arch
         self.source_sha = source_sha
         self.workflow_run_id = workflow_run_id
         self.workflow_run_attempt = workflow_run_attempt
@@ -611,13 +613,14 @@ class GithubModule(Step):
         if not metadata:
             raise RuntimeError(f"No release metadata found for version {version}")
         expected_assets: Optional[set[str]] = None
-        if self.release_platforms is not None:
+        if self.release_platforms is not None or self.linux_arch is not None:
             metadata = validate_release_metadata(
                 metadata,
                 version=version,
                 product_id=ctx.product.id,
-                platforms=self.release_platforms,
+                platforms=self.release_platforms or "all",
                 macos_arch=self.macos_arch,
+                linux_arch=self.linux_arch or "x64",
                 source_sha=self.source_sha,
                 workflow_run_id=self.workflow_run_id,
                 workflow_run_attempt=self.workflow_run_attempt,

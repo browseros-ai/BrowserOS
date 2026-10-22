@@ -1,7 +1,10 @@
 //! Tool registry and execution framework for BrowserOS MCP tools.
 
 use crate::{response::ToolResponse, tools};
-use browseros_core::{BrowserSession, CoreError, PageId, WindowId};
+use browseros_core::{
+    BrowserView, CoreError, NativeCapabilities, NativeFeature, PageId, TargetBinding, TargetIntent,
+    WindowId,
+};
 use futures_util::future::BoxFuture;
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool, ToolAnnotations};
 use schemars::{JsonSchema, generate::SchemaSettings};
@@ -32,23 +35,93 @@ pub struct HelperSource {
     pub source: String,
 }
 
+/// Host-owned logical binding for one task. The host persists intent; tools only
+/// resolve native identities and request changes. Existing views never read this
+/// store again, so rebinding affects only subsequently admitted requests.
+pub trait TargetStore: Send + Sync {
+    fn get(&self) -> BoxFuture<'_, Result<Option<TargetBinding>, String>>;
+    /// Saves intent before returning and assigns a monotonically increasing revision.
+    fn set(&self, intent: TargetIntent) -> BoxFuture<'_, Result<TargetBinding, String>>;
+    /// Releases intent without closing windows, unloading profiles, or resetting revisions.
+    fn clear(&self) -> BoxFuture<'_, Result<(), String>>;
+}
+
+/// In-memory task binding for one standalone MCP service. Keeping the revision
+/// beside the optional binding prevents clear/reselect from reusing an old generation.
+#[derive(Default)]
+pub struct StaticTargetStore {
+    state: Mutex<StaticTargetState>,
+}
+
+#[derive(Default)]
+struct StaticTargetState {
+    binding: Option<TargetBinding>,
+    revision: u64,
+}
+
+impl StaticTargetStore {
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+impl TargetStore for StaticTargetStore {
+    fn get(&self) -> BoxFuture<'_, Result<Option<TargetBinding>, String>> {
+        Box::pin(async move { Ok(self.state.lock().await.binding.clone()) })
+    }
+
+    fn set(&self, intent: TargetIntent) -> BoxFuture<'_, Result<TargetBinding, String>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            let revision = state
+                .revision
+                .checked_add(1)
+                .ok_or("target revision exhausted")?;
+            let binding = TargetBinding { intent, revision };
+            state.revision = revision;
+            state.binding = Some(binding.clone());
+            Ok(binding)
+        })
+    }
+
+    fn clear(&self) -> BoxFuture<'_, Result<(), String>> {
+        Box::pin(async move {
+            let mut state = self.state.lock().await;
+            let revision = state
+                .revision
+                .checked_add(1)
+                .ok_or("target revision exhausted")?;
+            state.revision = revision;
+            state.binding = None;
+            Ok(())
+        })
+    }
+}
+
+/// Browser execution dependencies for one admitted request. Hosts capture the
+/// view before constructing this value; nested tools must reuse it unchanged.
 #[derive(Clone)]
 pub struct BrowserToolOptions {
-    pub session: Arc<BrowserSession>,
+    pub browser: BrowserView,
+    pub target: Option<Arc<dyn TargetStore>>,
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
-    /// Host hook a script tool invokes around each primitive; `None` outside
-    /// the host (unit tests, non-host callers), which disables the hook.
+    /// Host capabilities for script primitive hooks and central tool-operation
+    /// ordering; `None` disables these additions for non-host callers.
     pub inner_call_hook: Option<Arc<dyn InnerCallHook>>,
     /// Helpers the host loads into the script runtime before the agent's code
     /// runs, exposed as `helpers.<name>`. Empty outside the host.
     pub preloaded_helpers: Vec<HelperSource>,
 }
 
+/// One request's execution view plus host capabilities. Cloning it preserves
+/// capture through scripts, nested tool dispatch, and delayed response work.
 #[derive(Clone)]
 pub struct ToolCtx {
-    pub session: Arc<BrowserSession>,
+    pub browser: BrowserView,
+    pub target: Option<Arc<dyn TargetStore>>,
     pub defaults: BrowserToolDefaults,
     pub cancel: CancellationToken,
     pub output_files: OutputFileAccess,
@@ -62,7 +135,8 @@ impl ToolCtx {
     #[must_use]
     pub fn new(options: BrowserToolOptions) -> Self {
         Self {
-            session: options.session,
+            browser: options.browser,
+            target: options.target,
             defaults: options.defaults,
             cancel: options.cancel,
             output_files: options.output_files,
@@ -80,12 +154,15 @@ impl ToolCtx {
     }
 }
 
-/// Host-injected hook a script tool (`run`/`execute`) calls around each browser
-/// primitive so the host can enforce per-primitive ownership and record the
-/// primitive as a child audit row. `browseros-mcp` cannot reach the host's
-/// guards or audit store, so the host implements this and passes it in via
-/// [`ToolCtx::inner_call_hook`].
+/// Host capabilities for script ownership/audit and optional tool-operation ordering.
+/// The script bridge records each primitive; the central executor retains a host guard
+/// only for operations the host selects. `browseros-mcp` cannot reach the host's guards
+/// or audit store, so the host supplies this through [`ToolCtx::inner_call_hook`].
 pub trait InnerCallHook: Send + Sync {
+    /// Marks password-bearing script input before authorization or dispatch can
+    /// fail. Hosts suppress parent source/audit previews even after cancellation.
+    fn mark_credential_input(&self) {}
+
     /// Authorize a primitive about to run against the caller's ownership.
     /// `page` is the primitive's target page id, when it addresses one.
     /// `Err(reason)` rejects the primitive and the reason is surfaced to the
@@ -94,6 +171,20 @@ pub trait InnerCallHook: Send + Sync {
 
     /// Record a completed inner primitive as a child audit row.
     fn record<'a>(&'a self, record: InnerCallRecord<'a>) -> BoxFuture<'a, ()>;
+
+    /// Optionally order a tool operation with other host work. `execute_tool`
+    /// passes the plain catalog name and raw arguments, then retains the owned
+    /// guard through handler/readback work and releases it before bridge audit.
+    /// Acquisition may be dropped on cancellation or a caller's timeout; it
+    /// must not detach queued work. The captured BrowserView still governs access.
+    fn acquire_tool_guard<'a>(
+        &'a self,
+        tool_name: &'a str,
+        args: &'a Value,
+    ) -> BoxFuture<'a, Result<Option<Box<dyn Send>>, String>> {
+        let _ = (tool_name, args);
+        Box::pin(async { Ok(None) })
+    }
 
     /// Signal that the script just created a page. The host claims and groups
     /// it exactly as a `tabs new` would, so a script's tabs get the agent's
@@ -172,13 +263,47 @@ pub struct ToolDef {
     pub output_schema: Option<Arc<JsonObject>>,
     pub annotations: Option<ToolAnnotations>,
     pub metadata: ToolMetadata,
+    /// Documentation that only applies when the native browser has a feature. It is appended
+    /// to `description` for capable browsers and omitted otherwise, so an older browser's
+    /// tool list never teaches a surface it cannot use.
+    pub feature_note: Option<FeatureNote>,
     pub handler: ToolHandler,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct FeatureNote {
+    pub feature: NativeFeature,
+    pub text: &'static str,
+}
+
 impl ToolDef {
+    /// Whether discovery should offer this tool for the connected native. Hidden tools stay
+    /// in the catalog (stable `get_tool` schemas for cached clients); `execute_tool` refuses
+    /// them, so a list is a hint and the refusal is the authority.
     #[must_use]
-    pub fn to_mcp_tool(&self) -> Tool {
-        let mut tool = Tool::new(self.name, self.description, self.input_schema.clone());
+    pub fn available(&self, native: NativeCapabilities) -> bool {
+        self.metadata
+            .requires
+            .is_none_or(|feature| native.supports(feature))
+    }
+
+    #[must_use]
+    pub fn description_for(&self, native: NativeCapabilities) -> String {
+        match self.feature_note {
+            Some(note) if native.supports(note.feature) => {
+                format!("{}\n\n{}", self.description, note.text)
+            }
+            _ => self.description.to_string(),
+        }
+    }
+
+    #[must_use]
+    pub fn to_mcp_tool(&self, native: NativeCapabilities) -> Tool {
+        let mut tool = Tool::new(
+            self.name,
+            self.description_for(native),
+            self.input_schema.clone(),
+        );
         if let Some(output_schema) = &self.output_schema {
             tool = tool.with_raw_output_schema(output_schema.clone());
         }
@@ -195,6 +320,34 @@ pub struct ToolMetadata {
     /// uses it for page signals; the claw-server host uses it for pre-dispatch snapshots,
     /// ownership guards, audit records, and tab-activity effects.
     pub accepts_page_arg: bool,
+    /// Management can recover a stale binding and therefore bypasses view admission.
+    pub manages_target: bool,
+    /// Native feature the whole tool needs. Unsupported natives do not list the tool, and
+    /// `execute_tool` refuses it before admission or its handler can send anything.
+    pub requires: Option<NativeFeature>,
+}
+
+/// Internal, host-only hints a tool emits so the claw-server audit layer can keep
+/// secrets out of the ledger. Never serialized to the client: `into_call_tool_result`
+/// does not copy it, so it rides only on the in-process `ToolResult`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct AuditHints {
+    /// Refs whose value must be redacted from `args_json` (matches the top-level
+    /// `ref` or a `fields[]` entry's `ref`).
+    pub sensitive_refs: Vec<String>,
+    /// Redact every `value`/`text`/`fields[].value` regardless of ref, and script
+    /// `code` at the host audit boundary. Explicit passwords are always redacted.
+    /// Set when the target has no ref or the source itself may contain secrets.
+    pub redact_all_values: bool,
+    /// Skip the audit screenshot for this dispatch.
+    pub skip_screenshot: bool,
+}
+
+impl AuditHints {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.sensitive_refs.is_empty() && !self.redact_all_values && !self.skip_screenshot
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -202,6 +355,8 @@ pub struct ToolResult {
     pub content: Vec<ContentBlock>,
     pub is_error: bool,
     pub structured_content: Option<Value>,
+    /// Host-only audit hints. Not sent to the client (see `AuditHints`).
+    pub audit_hints: Option<AuditHints>,
 }
 
 impl ToolResult {
@@ -211,6 +366,7 @@ impl ToolResult {
             content: vec![ContentBlock::text(text)],
             is_error: false,
             structured_content,
+            audit_hints: None,
         }
     }
 
@@ -220,6 +376,7 @@ impl ToolResult {
             content: vec![ContentBlock::image(data, mime_type)],
             is_error: false,
             structured_content: Some(structured),
+            audit_hints: None,
         }
     }
 
@@ -229,6 +386,7 @@ impl ToolResult {
             content: vec![ContentBlock::text(message)],
             is_error: true,
             structured_content: None,
+            audit_hints: None,
         }
     }
 
@@ -293,8 +451,58 @@ pub async fn execute_tool(
     raw_args: Value,
     ctx: &ToolCtx,
 ) -> ToolExecResult<ToolResult> {
+    let mut result = execute_tool_inner(def, raw_args, ctx).await?;
+    if def.name == "credentials" {
+        result.audit_hints = Some(AuditHints {
+            redact_all_values: true,
+            skip_screenshot: true,
+            ..result.audit_hints.unwrap_or_default()
+        });
+    }
+    Ok(result)
+}
+
+async fn execute_tool_inner(
+    def: &ToolDef,
+    raw_args: Value,
+    ctx: &ToolCtx,
+) -> ToolExecResult<ToolResult> {
     ctx.throw_if_cancelled()?;
+    // First, before admission or the handler: this is the authority for a hidden tool that a
+    // client still calls from a cached list, by name, or as run's `tool:*` primitive.
+    if let Some(feature) = def.metadata.requires
+        && let Err(err) = ctx.browser.require(feature)
+    {
+        return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));
+    }
     let primary_page = extract_page_id(def.metadata.accepts_page_arg, &raw_args).map(PageId);
+    // Reject before invoking a handler or exposing page signals. Management is
+    // intentionally admitted even when the captured profile or strict pin is gone.
+    if !def.metadata.manages_target {
+        if let Some(err) = ctx.browser.admission_error() {
+            return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));
+        }
+        if let Some(page) = &primary_page
+            && let Err(err) = ctx.browser.page(page.clone()).await
+        {
+            return Ok(ToolResult::error(format!("{} failed: {err}", def.name)));
+        }
+    }
+    ctx.throw_if_cancelled()?;
+    // Acquisition stays inside the caller's execution future: queued cancellation
+    // and the run's existing deadline drop it without publishing handler work. Keep
+    // the owned guard through all response readbacks; BrowserView remains the scope
+    // authority and each handler's native operations re-admit after this wait.
+    let tool_guard = if let Some(hook) = &ctx.inner_call_hook {
+        tokio::select! {
+            biased;
+            () = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+            guard = hook.acquire_tool_guard(def.name, &raw_args) => guard.map_err(ToolError::message)?,
+        }
+    } else {
+        None
+    };
+    ctx.throw_if_cancelled()?;
     let mut response = ToolResponse::new();
     match (def.handler)(raw_args, ctx, &mut response).await {
         Ok(Some(result)) => response.append_result(result),
@@ -312,19 +520,41 @@ pub async fn execute_tool(
     ctx.throw_if_cancelled()?;
 
     if let Some(page_id) = structured_page_id(result.structured_content.as_ref())
-        && let Some(tab_id) = ctx.session.pages.get_tab_id(PageId(page_id)).await
+        && let Some(tab_id) = ctx.browser.tab_id_of(PageId(page_id)).await
     {
         result.metadata_tab_id = Some(tab_id.0);
     }
-    Ok(result.into_tool_result())
+    let result = result.into_tool_result();
+    // The script bridge records its child audit only after execute_tool returns.
+    // Releasing here prevents host audit work from retaining an operation lock.
+    drop(tool_guard);
+    Ok(result)
 }
 
 #[must_use]
 pub fn pending_dialog_result(ctx: &ToolCtx, page: PageId) -> Option<ToolResult> {
-    ctx.session
-        .page_signals
+    ctx.browser
+        .signals()
         .pending_dialog_line(&page)
         .map(ToolResult::error)
+}
+
+/// One line a host appends to an outer tool result while a saved profile target is not
+/// applied (see `BrowserView::capture`). It reports routing only; it never gates anything.
+#[must_use]
+pub fn unapplied_target_note(view: &BrowserView) -> Option<String> {
+    let binding = view.unapplied_binding()?;
+    let feature = NativeFeature::ProfileTargeting;
+    let reported = match view.native().browseros_version() {
+        Some(version) => format!("this browser reports BrowserOS {version}"),
+        None => "this browser's BrowserOS version is unknown".to_string(),
+    };
+    Some(format!(
+        "Note: saved profile target \"{}\" ({}) was not applied: {feature} needs BrowserOS {} or newer and {reported}. This call used browser-wide routing.",
+        binding.intent.name,
+        binding.intent.browser_profile_id,
+        feature.min_browseros(),
+    ))
 }
 
 #[must_use]
@@ -657,6 +887,9 @@ pub fn page_json(page: &browseros_core::pages::PageInfo) -> Value {
         }
         if let Some(group_id) = &page.group_id {
             object.insert("groupId".to_string(), json!(group_id));
+        }
+        if let Some(profile_id) = &page.browser_profile_id {
+            object.insert("browserProfileId".to_string(), json!(profile_id));
         }
     }
     value

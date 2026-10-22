@@ -1,0 +1,367 @@
+openapi: 3.0.3
+info:
+  title: BrowserOS Neo Hosted API
+  version: 1.0.0
+  description: |
+    Read-only record of what agents did in a hosted BrowserOS neo: sessions, their tool calls
+    with screenshots, and the page recording. Served only when claw-server runs with
+    `BROWSERCLAW_MODE=hosted` (the Docker image's default).
+
+    Compatibility: changes within `/v1` are additive. New response fields and new values of an
+    extensible enum (`x-extensible-enum`) can appear at any time, so clients must ignore fields
+    and values they do not know. Fields are never removed or renamed within `/v1`.
+servers:
+  - url: http://localhost:9010
+paths:
+  /v1/sessions:
+    get:
+      operationId: listSessions
+      summary: List sessions, most recently active first.
+      description: |
+        Sessions are ordered by their latest tool call. Sessions with no tool calls are not
+        listed. Every filter is applied before pagination, so each page is full unless it is
+        the last. A session that makes a new tool call while you page moves to the front, so
+        start again without a cursor to pick it up.
+      parameters:
+        - name: client
+          in: query
+          description: >-
+            Only sessions whose `client` is exactly this value: the `clientInfo.name` the MCP
+            client sent in `initialize`.
+          schema:
+            type: string
+        - name: since
+          in: query
+          description: Only sessions that started at or after this time (Unix epoch ms).
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: until
+          in: query
+          description: Only sessions that started at or before this time (Unix epoch ms).
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+        - name: q
+          in: query
+          description: >-
+            Text search over the session name, the client's name or title, the site and the task
+            summary.
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          description: Opaque `nextCursor` from the previous page.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          description: Page size.
+          schema:
+            type: integer
+            format: int32
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        '200':
+          description: One page of sessions.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionList'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/sessions/{sessionId}:
+    get:
+      operationId: getSession
+      summary: One session with its tool calls in call order.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - name: include
+          in: query
+          description: '`screenshots` inlines each tool call''s screenshot as base64 JPEG.'
+          schema:
+            type: string
+            x-extensible-enum: [screenshots]
+        - name: wait
+          in: query
+          description: >-
+            Seconds to hold the request until the session is `complete`. The response is 200
+            either way; check `complete` to tell whether it finished in time.
+          schema:
+            type: integer
+            format: int32
+            minimum: 0
+            maximum: 60
+            default: 0
+      responses:
+        '200':
+          description: The session.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Session'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/sessions/{sessionId}/recording:
+    get:
+      operationId: getSessionRecording
+      summary: The session's page recording as rrweb events.
+      description: |
+        Each page is one document in one tab and plays in its own rrweb `Replayer`. Events can
+        still arrive for a few seconds after the session ends; fetch this once the session is
+        `complete`.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: The recording; `pages` is empty when nothing was recorded.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Recording'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  parameters:
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      description: >-
+        The session id: the `Mcp-Session-Id` header on the classic MCP transport, or
+        `_meta["com.browseros.neo/session"]` on a tool result.
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: A query parameter is invalid or out of range (`invalid_request`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: >-
+        No session with at least one tool call has this id (`session_not_found`). A session
+        is also gone once audit retention (7 days by default) deletes it.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: The server failed to read its records (`internal_error`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    SessionList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/SessionSummary'
+        nextCursor:
+          type: string
+          description: Pass as `cursor` for the next page; absent on the last page.
+    SessionSummary:
+      type: object
+      required: [id, name, client, status, startedAt, toolCallCount]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+          description: >-
+            A short title generated from what the session worked on, such as `Browsed
+            news.ycombinator.com`. It does not change when the session ends.
+        client:
+          type: string
+          description: >-
+            The MCP client's `clientInfo.name` from `initialize`. Pass it as `client` to list
+            that client's sessions.
+        status:
+          type: string
+          x-extensible-enum: [live, done, failed, cancelled]
+          description: >-
+            `live` while the MCP session is open; `failed` when the session ended on repeated
+            tool errors; `cancelled` when an operator stopped it.
+        summary:
+          type: string
+          description: The task summary the agent declared, with personal data scrubbed.
+        site:
+          type: string
+          description: The site the session mostly worked on.
+        startedAt:
+          type: integer
+          format: int64
+          description: Unix epoch ms.
+        endedAt:
+          type: integer
+          format: int64
+          description: Unix epoch ms; absent while the session is live.
+        toolCallCount:
+          type: integer
+          format: int64
+    Session:
+      type: object
+      required: [id, name, client, status, startedAt, toolCallCount, complete, toolCalls]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        client:
+          type: string
+        status:
+          type: string
+          x-extensible-enum: [live, done, failed, cancelled]
+        summary:
+          type: string
+        site:
+          type: string
+        startedAt:
+          type: integer
+          format: int64
+        endedAt:
+          type: integer
+          format: int64
+        toolCallCount:
+          type: integer
+          format: int64
+        complete:
+          type: boolean
+          description: >-
+            True once the session has ended, its screenshots are saved, and its recording has
+            had 10 seconds to finish uploading, so a re-read returns the same tool calls. The
+            browser retries a failed recording upload until it succeeds, so after repeated
+            upload failures recording events can still arrive later.
+        toolCalls:
+          type: array
+          description: >-
+            Every tool call ordered by `startedAt`, including steps inside `run` scripts, which
+            follow the script call they ran in.
+          items:
+            $ref: '#/components/schemas/ToolCall'
+    ToolCall:
+      type: object
+      required: [id, tool, outcome, startedAt, hasScreenshot]
+      properties:
+        id:
+          type: string
+        parentId:
+          type: string
+          description: The `id` of the `run` script call this step ran inside.
+        tool:
+          type: string
+        args:
+          nullable: false
+          description: >-
+            The call's arguments, with secrets replaced by `[redacted]`: an object for a tool
+            call, an array of positional arguments for a step inside a `run` script. Absent
+            when the arguments were larger than the audit keeps; `argsTruncated` is then true.
+        argsTruncated:
+          type: boolean
+        outcome:
+          type: string
+          x-extensible-enum: [ok, error, cancelled]
+        startedAt:
+          type: integer
+          format: int64
+          description: When the call started, Unix epoch ms.
+        durationMs:
+          type: integer
+          format: int64
+        page:
+          $ref: '#/components/schemas/ToolCallPage'
+        hasScreenshot:
+          type: boolean
+          description: Whether a screenshot was taken after this call.
+        screenshot:
+          $ref: '#/components/schemas/Screenshot'
+    ToolCallPage:
+      type: object
+      description: The tab the call acted on, as it was after the call.
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        url:
+          type: string
+        title:
+          type: string
+    Screenshot:
+      type: object
+      description: The viewport after the call. Present only with `include=screenshots`.
+      required: [contentType, data]
+      properties:
+        contentType:
+          type: string
+          x-extensible-enum: [image/jpeg]
+        data:
+          type: string
+          description: The image bytes, base64 with the standard alphabet and padding.
+    Recording:
+      type: object
+      required: [pages]
+      properties:
+        pages:
+          type: array
+          description: Ordered by the page's first event.
+          items:
+            $ref: '#/components/schemas/RecordingPage'
+    RecordingPage:
+      type: object
+      required: [tabId, documentId, events]
+      properties:
+        tabId:
+          type: integer
+          format: int64
+        documentId:
+          type: string
+        events:
+          type: array
+          description: rrweb events in time order, ready for `new Replayer(events)`.
+          items:
+            $ref: '#/components/schemas/RecordingEvent'
+    RecordingEvent:
+      type: object
+      description: One rrweb `eventWithTime`.
+      required: [type, timestamp]
+      properties:
+        type:
+          type: integer
+          format: int32
+          description: rrweb `EventType`.
+        data:
+          type: object
+          description: The rrweb event payload.
+        timestamp:
+          type: integer
+          format: int64
+          description: Unix epoch ms.
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          x-extensible-enum: [invalid_request, session_not_found, internal_error]
+        message:
+          type: string
+        requestId:
+          type: string
+          description: Also sent as the `x-request-id` response header.

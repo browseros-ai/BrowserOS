@@ -1,6 +1,6 @@
 use crate::{FrameId, Ref};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
 };
 
@@ -253,6 +253,99 @@ mod tests {
         assert_eq!(refs.get(&second).map(|entry| entry.nth), Some(0));
         assert_eq!(refs.get(&first).map(|entry| entry.nth), Some(1));
     }
+
+    /// A page whose only change is a ticking countdown is the same page.
+    ///
+    /// This is the case that makes a name or byte hash the wrong instrument:
+    /// the control is in the same place with the same role, and only the text
+    /// inside its label moved on by one second.
+    #[test]
+    fn a_countdown_ticking_inside_a_name_is_not_a_change_of_page() {
+        let mut refs = RefMap::new();
+        refs.mint(MintRef {
+            document_id: Some("main:loader-1"),
+            backend_node_id: 1,
+            role: "link",
+            name: "Deal of the Day, Ends in 08:54:33",
+            frame_id: None,
+        });
+        let before = refs.arrangement();
+
+        refs.begin_snapshot();
+        refs.mint(MintRef {
+            document_id: Some("main:loader-1"),
+            backend_node_id: 1,
+            role: "link",
+            name: "Deal of the Day, Ends in 08:54:32",
+            frame_id: None,
+        });
+
+        assert_eq!(
+            before,
+            refs.arrangement(),
+            "a name change alone must not read as a different page"
+        );
+    }
+
+    #[test]
+    fn a_control_appearing_is_a_change_of_page() {
+        let mut refs = RefMap::new();
+        refs.mint(MintRef {
+            document_id: Some("main:loader-1"),
+            backend_node_id: 1,
+            role: "link",
+            name: "Deals",
+            frame_id: None,
+        });
+        let before = refs.arrangement();
+
+        refs.begin_snapshot();
+        refs.mint(MintRef {
+            document_id: Some("main:loader-1"),
+            backend_node_id: 1,
+            role: "link",
+            name: "Deals",
+            frame_id: None,
+        });
+        refs.mint(MintRef {
+            document_id: Some("main:loader-1"),
+            backend_node_id: 2,
+            role: "button",
+            name: "Add to cart",
+            frame_id: None,
+        });
+
+        assert_ne!(before, refs.arrangement());
+    }
+
+    #[test]
+    fn a_control_changing_role_in_place_is_a_change_of_page() {
+        let mut refs = RefMap::new();
+        refs.mint(MintRef {
+            document_id: Some("main:loader-1"),
+            backend_node_id: 1,
+            role: "button",
+            name: "Add to cart",
+            frame_id: None,
+        });
+        let before = refs.arrangement();
+
+        refs.begin_snapshot();
+        refs.mint(MintRef {
+            document_id: Some("main:loader-1"),
+            backend_node_id: 1,
+            role: "link",
+            name: "Add to cart",
+            frame_id: None,
+        });
+
+        assert_ne!(before, refs.arrangement());
+    }
+
+    #[test]
+    fn an_empty_arrangement_is_stable() {
+        assert_eq!(RefMap::new().arrangement(), RefMap::new().arrangement());
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -410,6 +503,28 @@ impl RefMap {
             .iter()
             .filter_map(|ref_id| self.by_ref.get(ref_id))
             .collect()
+    }
+
+    /// What makes this page the same page as a moment ago.
+    ///
+    /// The shape of its controls, not the text of its snapshot. Hashing names
+    /// or whole bytes looks right and is not: a commercial page carries deal
+    /// countdowns, ad carousels and relative timestamps, so two captures a
+    /// second apart differ by `Ends in 08:54:33` becoming `08:54:32` while
+    /// being the same page in every sense a caller cares about. Measured on a
+    /// retail homepage, a byte hash changed on almost every step, which
+    /// discards whatever was known about the page before it can be used.
+    ///
+    /// Reference, role and frame are what change when the page really changes.
+    #[must_use]
+    pub fn arrangement(&self) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        for entry in self.entries_in_order() {
+            entry.ref_id.hash(&mut hasher);
+            entry.role.hash(&mut hasher);
+            entry.frame_id.hash(&mut hasher);
+        }
+        hasher.finish()
     }
 
     fn ref_for_stable_node(&mut self, key: StableNodeKey) -> Ref {

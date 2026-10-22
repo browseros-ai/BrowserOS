@@ -115,18 +115,18 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
-  'claw-server-rust': {
-    suite: 'claw-server-rust',
+  'claw-server': {
+    suite: 'claw-server',
     command: 'bun run ./scripts/run-cargo-test.ts test --workspace --locked',
-    junit_path: 'test-results/claw-server-rust.xml',
+    junit_path: 'test-results/claw-server.xml',
     needs_browser: false,
     needs_rust: true,
   },
-  'claw-server-rust-quality': {
-    suite: 'claw-server-rust-quality',
+  'claw-server-quality': {
+    suite: 'claw-server-quality',
     command:
       'cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings',
-    junit_path: 'test-results/claw-server-rust-quality.xml',
+    junit_path: 'test-results/claw-server-quality.xml',
     needs_browser: false,
     needs_rust: true,
   },
@@ -163,7 +163,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
  * The Rust CI suites run workspace-wide cargo, so any affected Rust crate
  * triggers all of them.
  */
-const RUST_SUITES = ['claw-server-rust', 'claw-server-rust-quality', 'claw-mcp']
+const RUST_SUITES = ['claw-server', 'claw-server-quality', 'claw-mcp']
 
 export interface AffectedPackage {
   name: string
@@ -171,7 +171,7 @@ export interface AffectedPackage {
 }
 
 function isRustPackage(path: string): boolean {
-  return path.startsWith('crates/') || path === 'apps/claw-server-rust'
+  return path.startsWith('crates/') || path === 'apps/claw-server'
 }
 
 const AGENT = 'packages/browseros-agent/'

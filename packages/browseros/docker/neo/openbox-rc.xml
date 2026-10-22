@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Openbox only keeps Neo full-screen and places dialogs; there is no desktop.
+  - Every normal window is maximized without a title bar (Neo draws its own
+    tab strip), and openbox re-fits it when noVNC resizes the screen.
+  - Dialogs and pop-ups keep their size and open centered.
+  - One desktop and no key bindings, so no shortcut can switch the view away
+    from Neo or close it.
+-->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+  </focus>
+  <placement>
+    <policy>Smart</policy>
+    <center>yes</center>
+  </placement>
+  <desktops>
+    <number>1</number>
+  </desktops>
+  <keyboard/>
+  <mouse>
+    <context name="Client">
+      <mousebind button="Left" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Middle" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+      <mousebind button="Right" action="Press">
+        <action name="Focus"/>
+        <action name="Raise"/>
+      </mousebind>
+    </context>
+  </mouse>
+  <applications>
+    <application type="normal">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+    </application>
+  </applications>
+</openbox_config>

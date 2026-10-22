@@ -1,5 +1,7 @@
 // ── AUTO-GENERATED from CDP protocol. DO NOT EDIT. ──
 
+import type { BrowserContextID } from './browser'
+
 // ══ Types ══
 
 export type HistoryEntryID = string
@@ -20,6 +22,7 @@ export interface SearchParams {
   maxResults?: number
   startTime?: number
   endTime?: number
+  browserContextId?: BrowserContextID
 }
 
 export interface SearchResult {
@@ -28,6 +31,7 @@ export interface SearchResult {
 
 export interface GetRecentParams {
   maxResults?: number
+  browserContextId?: BrowserContextID
 }
 
 export interface GetRecentResult {
@@ -36,9 +40,11 @@ export interface GetRecentResult {
 
 export interface DeleteUrlParams {
   url: string
+  browserContextId?: BrowserContextID
 }
 
 export interface DeleteRangeParams {
   startTime: number
   endTime: number
+  browserContextId?: BrowserContextID
 }

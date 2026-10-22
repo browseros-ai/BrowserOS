@@ -3,6 +3,7 @@ mod io;
 mod manager;
 mod paths;
 mod planner;
+mod reconciliation;
 mod types;
 
 pub use manager::McpManager;
@@ -13,5 +14,6 @@ pub use types::{
     AgentInfo, AgentScope, AgentSurface, DisconnectInput, DisconnectSummary, InspectEntryInput,
     InspectedEntry, LinkInput, LinkSummary, ListLinksFilter, ListedLink, ManifestLinkEntry,
     ManifestServerEntry, McpServer, McpServerSpec, MigrateServerInput, MigrateServerSummary,
-    RescanEntry, RescanReport, ServerManifest, UnlinkInput, UnlinkSummary,
+    ReconcileInput, ReconcileSummary, RescanEntry, RescanReport, ServerManifest, UnlinkInput,
+    UnlinkSummary,
 };

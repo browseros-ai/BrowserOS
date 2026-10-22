@@ -1,12 +1,13 @@
 use crate::{
     CoreError, FrameId, PageId, ProtocolSession, Ref,
     frames::FrameRegistry,
-    pages::PageManager,
+    pages::{PageManager, PageSession},
     snapshot::{
         AxNode, DiffOptions, DocumentId, RefEntry, RefMap, RenderOptions, SnapshotDiff,
         SnapshotObservation, SnapshotOptions, apply_snapshot_options, diff_snapshot_observations,
         render_snapshot,
     },
+    target::page_access::PageAccess,
 };
 use futures_util::future::BoxFuture;
 use serde::Deserialize;
@@ -66,15 +67,21 @@ struct CaptureContext {
 #[derive(Debug, Default)]
 struct ObserverState {
     baseline: Option<SnapshotObservation>,
+    /// The arrangement committed alongside `baseline`, so a later diff can say
+    /// whether any control actually moved rather than whether any text did.
+    baseline_arrangement: Option<u64>,
     refs: RefMap,
     ref_scope: Option<RefScope>,
 }
 
+/// Shared ref/diff state for one reusable page, with an optional captured acquisition capability.
+/// Bound wrappers share the cache while keeping per-call scope and incarnation admission private.
 pub struct Observer {
     pages: Arc<PageManager>,
     frames: Arc<FrameRegistry>,
     page_id: PageId,
-    state: Mutex<ObserverState>,
+    state: Arc<Mutex<ObserverState>>,
+    access: Option<Arc<PageAccess>>,
 }
 
 impl Observer {
@@ -84,7 +91,25 @@ impl Observer {
             pages,
             frames,
             page_id,
-            state: Mutex::new(ObserverState::default()),
+            state: Arc::new(Mutex::new(ObserverState::default())),
+            access: None,
+        }
+    }
+
+    pub(crate) fn with_access(&self, access: Arc<PageAccess>) -> Self {
+        Self {
+            pages: self.pages.clone(),
+            frames: self.frames.clone(),
+            page_id: self.page_id.clone(),
+            state: self.state.clone(),
+            access: Some(access),
+        }
+    }
+
+    async fn page_session(&self) -> Result<PageSession, CoreError> {
+        match &self.access {
+            Some(access) => access.session().await,
+            None => self.pages.get_session(self.page_id.clone()).await,
         }
     }
 
@@ -109,21 +134,40 @@ impl Observer {
     }
 
     pub async fn diff(&self) -> Result<SnapshotDiff, CoreError> {
-        let before = self.state.lock().await.baseline.clone();
+        let (before, before_arrangement) = {
+            let state = self.state.lock().await;
+            (state.baseline.clone(), state.baseline_arrangement)
+        };
         let result = self.capture().await?;
+        let after_arrangement = result.refs.arrangement();
         self.commit(result.clone()).await;
-        Ok(diff_snapshot_observations(
+        let mut diff = diff_snapshot_observations(
             before.as_ref(),
             &SnapshotObservation {
                 text: result.text,
                 url: Some(result.url),
             },
             DiffOptions::default(),
-        ))
+        );
+        // A url change already decided it, and that rule wins: an SPA can swap
+        // the whole page behind an identical set of controls.
+        if diff.arrangement_changed.is_none() {
+            diff.arrangement_changed = before_arrangement.map(|before| before != after_arrangement);
+        }
+        Ok(diff)
     }
 
     pub async fn last_refs(&self) -> RefMap {
         self.state.lock().await.refs.clone()
+    }
+
+    /// The structural fingerprint of the last capture.
+    ///
+    /// Cheap, and the right pre-check before asking for a diff: an unchanged
+    /// arrangement means no control moved, appeared or went away, whatever the
+    /// page's countdowns and carousels did meanwhile.
+    pub async fn arrangement(&self) -> u64 {
+        self.state.lock().await.refs.arrangement()
     }
 
     pub async fn resolve_ref(&self, ref_id: &Ref) -> Result<ResolvedElement, CoreError> {
@@ -135,11 +179,26 @@ impl Observer {
             .get(ref_id)
             .cloned()
             .ok_or_else(|| CoreError::UnknownRef(ref_id.clone()))?;
-        let _page_session = self.pages.get_session(self.page_id.clone()).await?;
-        let target = self
+        let _page_session = self.page_session().await?;
+        let mut target = self
             .frames
-            .resolve_frame_target(self.page_id.clone(), entry.frame_id.clone(), None, false)
+            .resolve_frame_target_with_epoch(
+                self.page_id.clone(),
+                entry.frame_id.clone(),
+                None,
+                false,
+                self.access
+                    .as_ref()
+                    .map(|access| access.epoch_guard())
+                    .transpose()?
+                    .flatten(),
+            )
             .await?;
+        if let Some(access) = &self.access {
+            target.session = access
+                .frame_session(target.session, entry.frame_id.clone())
+                .await?;
+        }
         let mut entry_for_resolution = entry.clone();
         let resolved =
             resolve_ref_entry(&target.session, &mut entry_for_resolution, target.ax_params).await?;
@@ -148,13 +207,16 @@ impl Observer {
         {
             stored.backend_node_id = entry_for_resolution.backend_node_id;
         }
+        if let Some(access) = &self.access {
+            access.fresh().await?;
+        }
         Ok(resolved)
     }
 
     async fn capture(&self) -> Result<CaptureResult, CoreError> {
         let capture_started = Instant::now();
         let initial_trace = CaptureTrace::new(self.page_id.clone(), 1);
-        let page_session = match self.pages.get_session(self.page_id.clone()).await {
+        let page_session = match self.page_session().await {
             Ok(page_session) => page_session,
             Err(error) => {
                 trace_stage(
@@ -206,6 +268,9 @@ impl Observer {
                     capture_started,
                     "success",
                 );
+                if let Some(access) = &self.access {
+                    access.fresh().await?;
+                }
                 return Ok(CaptureResult {
                     text,
                     refs,
@@ -363,6 +428,7 @@ impl Observer {
             text: result.text,
             url: Some(result.url),
         });
+        state.baseline_arrangement = Some(result.refs.arrangement());
         state.refs = result.refs;
         state.ref_scope = result.scope;
     }

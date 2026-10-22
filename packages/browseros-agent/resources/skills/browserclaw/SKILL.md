@@ -9,10 +9,11 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 
 ## Shared browser etiquette
 
+- If a tool offers `agentName`, it is an optional fallback for your client application: `claude`, `codex`, `cursor`, `opencode`, `antigravity`, `vscode`, or `zed`. For another application, use its short product name. Put the task name in `name_session`; BrowserOS prefers recognized MCP client metadata for the visible prefix.
 - Call `name_session` early with a 2-3 word task label, the best-fit `category`, and a short PII-free `summary` you can search for later; tabs group as `<client>/<name>` in the cockpit.
 - Open your own tab with `tabs` action `"new"` for work of your own. You may also use the user's tabs and other agents' tabs: ownership is a label telling you whose a tab is, never a barrier.
 - A tab that is not yours is still someone's. Leave it as you found it unless the user asked you to change it, and prefer your own tab for anything exploratory.
-- Preserve useful pages that the user may want to inspect instead of closing them when the task ends.
+- Preserve useful pages when the task ends, unless a tool reply asks you to close your task's tab group.
 - Give independent subtasks their own tabs, at most 5 at a time unless the user asks for more.
 
 ## Core loop: snapshot -> act -> verify
@@ -23,6 +24,7 @@ When a task needs a browser or a website (open it, read it, act on it, fill a fo
 - When an action fails, fix the cause reported by the error instead of retrying blindly.
 - Refs go stale when the page changes. Take another snapshot before reusing them.
 - If the page is still loading, wait for expected text or a selector instead of using a bare timed wait.
+- Readiness is handled for you. `tabs` action `"new"`, `navigate`, and an `evaluate` that changes the page all return once the page has stopped changing, not merely once it has loaded. Never pause afterwards to let a page catch up.
 
 ## Tool choice
 
@@ -36,6 +38,7 @@ Derive the page you work on inside the same script that uses it. When you do car
 - **One bounded chunk per call.** A run is hard-capped at 30 seconds and cannot be extended. Batching reads of loaded pages is cheap; batching fresh navigations is not, so keep to about five new pages per call.
 - **Re-derive handles, do not assume them.** A page id from an earlier turn may point at a tab that has closed or changed hands. List your own pages, or open a new one.
 - **Wait on the thing, not the clock.** Wait for the selector or text you need; it returns the moment it appears. Never loop, re-checking with a fixed pause between tries.
+- **Never pause after opening, navigating or a page-changing `evaluate`.** Each already returns settled, and `evaluate` reports `changed` so you can tell. `sleep(ms)` exists, but after any of those it only adds the time you picked. For an effect that is entirely asynchronous, pass `{ settle: true }` to `evaluate` rather than guessing a duration.
 
 ## Reading and output
 
@@ -44,6 +47,8 @@ Derive the page you work on inside the same script that uses it. When you do car
 - Use screenshots for visual checks, PDFs for page archives, downloads for linked files, and uploads for local files.
 
 ## Failure
+
+This skill may be installed before your agent is connected. If BrowserOS neo's MCP tools are unavailable, open its MCP connections page and connect your agent, or copy the endpoint from Manual Setup into your agent's MCP settings. Then refresh its MCP connections or start a new session. The skill alone does not provide browser tools.
 
 If a call reports `browser session not connected`, tell the user to start BrowserOS neo and check the cockpit. Do not silently fall back to another browser tool.
 

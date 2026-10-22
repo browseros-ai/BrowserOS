@@ -41,7 +41,7 @@ export function ReadyStep({ onDone }: ReadyStepProps) {
       </p>
       <Button type="button" size="lg" onClick={onDone}>
         <PlugZap className="size-4" />
-        Open the MCP page
+        Open
       </Button>
     </StepWrap>
   )

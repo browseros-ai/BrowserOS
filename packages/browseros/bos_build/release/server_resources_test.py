@@ -99,10 +99,10 @@ class ServerResourceBuilderTest(unittest.TestCase):
         server_manifest = self.agent / "apps/server/package.json"
         server_manifest.parent.mkdir(parents=True)
         server_manifest.write_text('{"version":"0.0.128"}\n')
-        claw_manifest = self.agent / "apps/claw-server-rust/Cargo.toml"
+        claw_manifest = self.agent / "apps/claw-server/Cargo.toml"
         claw_manifest.parent.mkdir(parents=True)
         claw_manifest.write_text(
-            '[package]\nname = "claw-server-rust"\nversion = "0.0.18"\n'
+            '[package]\nname = "claw-server"\nversion = "0.0.18"\n'
         )
         skill = self.agent / "resources/skills/browserclaw/SKILL.md"
         skill.parent.mkdir(parents=True)

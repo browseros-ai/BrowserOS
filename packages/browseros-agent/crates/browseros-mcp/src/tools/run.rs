@@ -3,7 +3,7 @@ use crate::framework::{
     execute_tool, page_json, parse_args, text_result,
 };
 use browseros_core::{
-    PageId, Ref, SessionId, WindowId,
+    NativeFeature, PageId, Ref, SessionId, WindowId,
     input::ScrollDirection,
     pages::NewPageOptions,
     snapshot::{SnapshotMode, SnapshotOptions},
@@ -35,7 +35,9 @@ const MAX_RETURN_VALUE_BYTES: usize = 2_000_000;
 
 const DESCRIPTION: &str = r#"The primary way to drive the browser - prefer run for any task; the granular tools are the fallback. Do multi-step flows, pagination, bulk extraction, and repeated act/read loops - in ONE call: async JavaScript against the `browser` SDK in the server runtime. console.log is captured; return a value to read it back; exceptions come back as a result, not thrown. Every call is `await`-able. Each run is bounded to 30000 ms of wall time and cannot exceed it (larger `timeout` values are clamped): keep a single call under 30s. For longer or open-ended page-driven loops, do one bounded chunk per call, or start the work on the page and poll its result with short follow-up calls.
 
-Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `sleep(ms)`, `setTimeout`/`clearTimeout`, and nothing else. There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through page.evaluate, which runs inside the page.
+Runtime: a bare engine, not Node and not a page. You get `browser`, `console`, `setTimeout`/`clearTimeout`, and nothing else. (`sleep(ms)` exists for a deliberate pause and is almost never the right tool: opening, navigating and page-changing evaluates all return settled, so pausing after them only adds the time you picked.) There is no fetch, require, process, window, document or localStorage. To touch the DOM or call a site's API, go through page.evaluate, which runs inside the page.
+
+Readiness is handled for you, so do not pause to let a page catch up. `browser.open`, `page.goto`/`back`/`forward`/`reload` return once the page has stopped changing, not merely once it has loaded. `page.evaluate` detects a script that changed the page and settles before returning, reporting `changed`. If you find yourself writing `await sleep(...)` after any of these, the wait has already happened. `page.click`/`fill`/`hover`/`selectOption` go straight to the input bridge and return once the input is delivered, so after one of those, wait on the thing you expect with `page.waitForSelector`/`waitForText`, never a fixed pause.
 
 One rule: anything that needs a page hangs off a page handle, anything that does not hangs off `browser`. Get a handle with `browser.open(url)`, or `browser.page(id)` for an id you already have. Page actions address a snapshot ref like "e12", never a CSS selector.
 
@@ -44,7 +46,7 @@ The return shapes below are stable. Do NOT probe them at runtime (no typeof / Ob
 browser (nothing here takes a page):
   browser.open(url)   -> a Page handle. Always opens in the background; it never switches the user's tab.
   browser.page(id)    -> a Page handle for an id you already have. Safe to call on a handle too.
-  browser.pages.list()-> [{ pageId, url, title, ownership, ownerLabel, ... }] for EVERY open tab, including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act only on your own ("mine") tabs. Leave the others alone unless the user explicitly asks.
+  browser.pages.list()-> [{ pageId, url, title, ownership, ownerLabel, ... }] for open tabs admitted by this task's target (every tab when unbound), including the user's and other agents'. `ownership` is "mine" | "user" | "other-agent"; "other-agent" tabs also carry ownerLabel. Act only on your own ("mine") tabs. Leave the others alone unless the user explicitly asks.
   browser.history({ maxResults }) / tabGroups(opts) / windows(opts)
   A handle stays valid only while that tab is open and still yours. Reuse one across steps and across calls while that holds. If a call fails instantly on a handle from an earlier turn, the tab is gone or was taken over - do not retry it. Re-derive from browser.pages.list() filtered to ownership === "mine", or open a fresh page. Carrying the URL between calls is safer than carrying the id.
 Page handle (refs eN come from a snapshot's text/refs):
@@ -60,27 +62,32 @@ Page handle (refs eN come from a snapshot's text/refs):
   page.type(text) / press(key) / insertText(text)   - these act on whatever has focus, so they take no ref
   page.scroll(dir,amount,ref?) / clickAt(x,y) / typeAt(x,y,text) / hoverAt(x,y) / dragAt(x1,y1,x2,y2)
   page.dialogAccept() / dialogDismiss() - accept or dismiss an open JavaScript dialog (confirm/prompt/beforeunload). An action that opens one gets back { dialogOpen: true, kind, message } instead of its usual result, and the page stays blocked until you accept or dismiss, so do that before anything else on the page.
-  page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. Use waitForTime only for a plain fixed pause; `await sleep(ms)` also works. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
-  page.evaluate(fn, arg?)            - runs INSIDE the page. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
+  page.waitForSelector(sel) / waitForText(text) / waitForTime(ms) - resolve when ready. For content that loads in, wait on the thing itself with waitForSelector (or waitForText); it resolves the moment it appears, polling up to 10s by default (pass { timeout } to change it, max 30s) and returning { matched }. On timeout matched is false and it does NOT throw, so check matched instead of assuming the wait succeeded. waitForTime is a plain fixed pause and a last resort: wait on the thing itself instead. Never poll in a loop (re-checking a count with a fixed wait between tries) - wait on the selector once instead.
+  page.evaluate(fn, arg?, opts?)     - runs INSIDE the page. Returns { changed } alongside the value: a script that mutated the page is settled before you get it back, so never pause afterwards. For an effect that is entirely asynchronous (a click whose result arrives over the network) pass { settle: true } to wait for quiet regardless. Pass a real function; a second argument is JSON-serialized and handed to it, e.g. page.evaluate((sel) => document.querySelectorAll(sel).length, '.row'). It does not close over script variables. A code string with a `return` also works: page.evaluate("return document.title").
   page.screenshot(opts?) / pdf(opts?)
+    screenshot has no default cap; size caps CSS pixels, with omitted axes unconstrained
   page.download(ref) / upload(ref, files)
   page.close() / info()
 Reusable helpers (self-healing): saved helpers for a host, hot-loaded as helpers.<name>(browser, page) where page is the id NUMBER.
   page.saveHelper(name, source) - source is a function, or the same thing as a string: async (browser, page) => { ... }
   page.listHelpers() -> { host, helpers: [{ name, ageDays, candidate }] }; page.readHelper(name) -> source string
-Raw escape hatch: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson).
+Raw CDP: browser.cdp(method, params?, sessionId?) / page.cdp(method, paramsJson). Methods or parameters that need a newer BrowserOS return native_feature_unavailable without being sent.
 
 Do the whole task in as few run calls as possible: loop over all the items in one call rather than one run per item. Parallelize independent work with Promise.all so N pages cost one wait cycle, not N. Keep steps on the same page sequential. The 30s cap binds this: batching reads of already-loaded pages is cheap, batching navigations is not, so keep it to about 5 fresh pages per call and split the rest into more calls. Efficient pattern:
   const pages = await Promise.all(urls.map(u => browser.open(u)));
   await Promise.all(pages.map(p => p.waitForSelector('.result')));
   return await Promise.all(pages.map(p => p.read()));"#;
 
+/// Appended to the description only for browsers with profile targeting; the matching SDK
+/// exports are installed under the same condition (see `install_globals`).
+const PROFILE_NOTE: &str = "Profile management: browser.profiles({ action: 'list'|'load', name?, browserProfileId? }) and browser.target({ action: 'get' }) (read status). Change selection between run calls with browser_target; mutating browser.target inside run returns target_change_in_run. All direct/tool/raw primitives in this run keep one captured view. Raw CDP methods follow the same captured profile/window scope; unsupported methods return target_scope_unsupported. With no browser_target selection, every primitive uses the browser's original Default profile (directory \"Default\"), not the focused window; browser.open opens a new inactive Default window when it has none. Only regular profiles' normal windows and pages are admitted: OAuth/window.open popups return page_out_of_scope even in the selected profile; browser_target clear returns to Default and does not widen scope.";
+
 const BOOTSTRAP_JS: &str = r#"
 (() => {
   const AsyncFunction = Object.getPrototypeOf(async function() {}).constructor;
 
   // Timers: the runtime is a bare engine, so bridge setTimeout/sleep to a real
-  // async sleep. For content that loads in, prefer browser.wait({ for: 'selector' }).
+  // async sleep. For content that loads in, prefer page.waitForSelector(sel).
   globalThis.sleep = (ms) => __browserosSleep(Number(ms) || 0);
   globalThis.setTimeout = (fn, ms) => {
     __browserosSleep(Number(ms) || 0).then(() => { if (typeof fn === 'function') fn(); });
@@ -303,6 +310,9 @@ const BOOTSTRAP_JS: &str = r#"
       waitForTime: (ms) => tool('wait', { value: ms }),
       wait: (opts) => tool('wait', opts),
 
+      ...(__browserosFeatures.credentials
+        ? { credentials: (opts) => tool('credentials', opts) }
+        : {}),
       screenshot: (opts) => tool('screenshot', opts),
       pdf: (opts) => tool('pdf', opts),
       // A real function is serialized here, before the JSON boundary drops it.
@@ -334,6 +344,17 @@ const BOOTSTRAP_JS: &str = r#"
     page: (pageId) => pageHandle(pageId),
     open: async (url, opts) => pageHandle(await call('pages.newPage', [url, opts])),
     history: (opts) => call('tool:history', [opts]),
+    ...(__browserosFeatures.credentials
+      ? { credentials: (opts) => call('tool:credentials', [opts]) }
+      : {}),
+    // Discovery only: Rust refuses tool:browser_profiles/browser_target on older natives
+    // whether or not a script finds a way to call them.
+    ...(__browserosFeatures.profileTargeting
+      ? {
+          profiles: (opts) => call('tool:browser_profiles', [opts]),
+          target: (opts) => call('tool:browser_target', [opts]),
+        }
+      : {}),
     pages: {
       list: () => call('pages.list', []),
       newPage: (url, opts) => call('pages.newPage', [url, opts]),
@@ -434,12 +455,15 @@ struct RunOutput {
 }
 
 pub fn definition() -> crate::framework::ToolDef {
-    super::def_with_output::<RunArgs, RunOutput>(
-        "run",
-        DESCRIPTION,
-        Some(super::open_world_annotations()),
-        handler,
-    )
+    crate::framework::ToolDef {
+        feature_note: super::profile_note(PROFILE_NOTE),
+        ..super::def_with_output::<RunArgs, RunOutput>(
+            "run",
+            DESCRIPTION,
+            Some(super::open_world_annotations()),
+            handler,
+        )
+    }
 }
 
 fn handler<'a>(
@@ -495,9 +519,9 @@ impl RunControl {
 
 #[derive(Clone)]
 struct BrowserBridge {
-    /// The full tool context: session-direct primitives use `ctx.session`,
-    /// tool-backed primitives dispatch through `execute_tool` with this ctx,
-    /// and the inner-call hook lives at `ctx.inner_call_hook`.
+    /// One immutable view for the whole run. Direct, tool-backed, and raw CDP
+    /// primitives reuse this context; no primitive recaptures a host binding.
+    /// Hooks retain the same view for delayed ownership/grouping work.
     ctx: ToolCtx,
     control: RunControl,
 }
@@ -749,6 +773,17 @@ fn install_globals<'js>(
     logs: SharedLogs,
     control: RunControl,
 ) -> Result<(), RunError> {
+    // The JS/Rust boundary for native features: the SDK reads one flag per feature to decide
+    // which exports to define. The flags only shape discovery; refusals stay in Rust.
+    let features = NativeFeature::ALL
+        .iter()
+        .map(|feature| {
+            (
+                feature.key().to_string(),
+                Value::Bool(tool_ctx.browser.supports(*feature)),
+            )
+        })
+        .collect::<serde_json::Map<_, _>>();
     let bridge = BrowserBridge {
         ctx: tool_ctx,
         control,
@@ -778,6 +813,15 @@ fn install_globals<'js>(
     };
     let globals = ctx.globals();
     globals
+        .set(
+            "__browserosFeatures",
+            json_to_js(ctx, Value::Object(features))
+                .catch(ctx)
+                .map_err(|err| RunError::Engine(js_error_message(ctx, err)))?,
+        )
+        .catch(ctx)
+        .map_err(|err| RunError::Engine(js_error_message(ctx, err)))?;
+    globals
         .set("__browserosCall", Func::from(Async(call_bridge)))
         .catch(ctx)
         .map_err(|err| RunError::Engine(js_error_message(ctx, err)))?;
@@ -801,6 +845,12 @@ impl BrowserBridge {
     ) -> Result<BrowserCallValue, String> {
         let args = parse_bridge_args(args_json)?;
         let page = target_page(method, &args);
+        // Mark before host authorization/native gating: even a rejected call may
+        // have a password literal in its parent script or serialized CDP input.
+        let credential_input = crate::tools::credentials::is_credential_primitive(method, &args);
+        if credential_input && let Some(hook) = &self.ctx.inner_call_hook {
+            hook.mark_credential_input();
+        }
         // Kept for the audit record and the self-healing distiller; dispatch
         // consumes the owned args below.
         let recorded_args = Value::Array(args.clone());
@@ -848,7 +898,7 @@ impl BrowserBridge {
     where
         F: Future<Output = Result<T, browseros_core::CoreError>>,
     {
-        let signals = self.ctx.session.page_signals.clone();
+        let signals = self.ctx.browser.signals().clone();
         let page = page_id.clone();
         let dialog = async move {
             while signals.pending_dialog(&page).is_none() {
@@ -858,7 +908,14 @@ impl BrowserBridge {
         tokio::select! {
             biased;
             result = self.control.race(future) => result.map(Some),
-            () = dialog => Ok(None),
+            () = dialog => {
+                // The dialog race cancels the action future before its guarded
+                // handle returns. Re-admit before exposing global page signals.
+                if self.ctx.browser.binding().is_some() {
+                    self.control.race(self.ctx.browser.page(page_id.clone())).await?;
+                }
+                Ok(None)
+            },
         }
     }
 
@@ -866,7 +923,7 @@ impl BrowserBridge {
     /// marker plus the dialog's kind and message, so the script can see that the
     /// action did not complete and must accept or dismiss the dialog next (#2780).
     fn dialog_open_value(&self, page_id: &PageId) -> BrowserCallValue {
-        match self.ctx.session.page_signals.pending_dialog(page_id) {
+        match self.ctx.browser.signals().pending_dialog(page_id) {
             Some(dialog) => BrowserCallValue::Json(json!({
                 "dialogOpen": true,
                 "kind": dialog.kind,
@@ -879,8 +936,8 @@ impl BrowserBridge {
     async fn dispatch(&self, method: &str, args: Vec<Value>) -> Result<BrowserCallValue, String> {
         match method {
             "pages.list" => {
-                let pages = self.control.race(self.ctx.session.pages.list()).await?;
-                let mut values: Vec<Value> = pages.iter().map(page_json).collect();
+                let listing = self.control.race(self.ctx.browser.list_pages()).await?;
+                let mut values: Vec<Value> = listing.pages.iter().map(page_json).collect();
                 if let Some(hook) = &self.ctx.inner_call_hook {
                     values = hook.annotate_pages(&values).await;
                 }
@@ -892,14 +949,18 @@ impl BrowserBridge {
                 if opts.is_some_and(|options| options.contains_key("hidden")) {
                     return Err("pages.newPage: hidden is no longer supported".to_string());
                 }
-                let window_id = optional_i64_field(opts, "windowId")?
-                    .map(WindowId)
-                    .or_else(|| self.ctx.defaults.default_window_id.clone());
-                let tab_group_id = optional_string_field(opts, "tabGroupId")?
-                    .or_else(|| self.ctx.defaults.default_tab_group_id.clone());
+                let window_id = optional_i64_field(opts, "windowId")?.map(WindowId);
+                let tab_group_id = self
+                    .control
+                    .race(super::page_creation::tab_group_for_creation(
+                        &self.ctx,
+                        optional_string_field(opts, "tabGroupId")?,
+                        window_id,
+                    ))
+                    .await?;
                 let page_id = self
                     .control
-                    .race(self.ctx.session.pages.new_page(
+                    .race(self.ctx.browser.new_page(
                         &url,
                         NewPageOptions {
                             // Always a background tab: an agent must never switch
@@ -908,15 +969,16 @@ impl BrowserBridge {
                             background: Some(true),
                             window_id,
                             tab_group_id,
+                            browser_context_id: None,
                         },
                     ))
                     .await?;
-                Ok(BrowserCallValue::Json(json!(page_id.0)))
+                Ok(BrowserCallValue::Json(json!(page_id.page_id.0)))
             }
             "pages.close" => {
                 let page_id = page_arg(&args, 0)?;
                 self.control
-                    .race(self.ctx.session.pages.close(page_id))
+                    .race(self.ctx.browser.close_page(page_id))
                     .await?;
                 Ok(BrowserCallValue::Undefined)
             }
@@ -924,7 +986,7 @@ impl BrowserBridge {
                 let page_id = page_arg(&args, 0)?;
                 let info = self
                     .control
-                    .race(self.ctx.session.pages.refresh(page_id))
+                    .race(self.ctx.browser.refresh_page(page_id))
                     .await?;
                 Ok(BrowserCallValue::Json(
                     info.map(|page| page_json(&page)).unwrap_or(Value::Null),
@@ -934,7 +996,7 @@ impl BrowserBridge {
                 let page_id = page_arg(&args, 0)?;
                 let opts = optional_object_arg(&args, 1)?;
                 let options = snapshot_options(opts)?;
-                let observer = self.ctx.session.observe(page_id).await;
+                let observer = self.control.race(self.ctx.browser.observe(page_id)).await?;
                 let snapshot = self
                     .control
                     .race(observer.snapshot_with_options(options))
@@ -947,14 +1009,14 @@ impl BrowserBridge {
             }
             "observe.diff" => {
                 let page_id = page_arg(&args, 0)?;
-                let observer = self.ctx.session.observe(page_id).await;
+                let observer = self.control.race(self.ctx.browser.observe(page_id)).await?;
                 let diff = self.control.race(observer.diff()).await?;
                 Ok(BrowserCallValue::Json(diff_json(&diff)))
             }
             "observe.resolveRef" => {
                 let page_id = page_arg(&args, 0)?;
                 let ref_id = string_arg(&args, 1, "ref")?;
-                let observer = self.ctx.session.observe(page_id).await;
+                let observer = self.control.race(self.ctx.browser.observe(page_id)).await?;
                 let resolved = self
                     .control
                     .race(observer.resolve_ref(&Ref(ref_id)))
@@ -966,7 +1028,10 @@ impl BrowserBridge {
             }
             "input.click" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
-                let input = self.ctx.session.input(page_id.clone()).await;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
                 match self
                     .race_input(&page_id, input.click(&Ref(ref_id), Default::default()))
                     .await?
@@ -978,7 +1043,10 @@ impl BrowserBridge {
             "input.fill" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
-                let input = self.ctx.session.input(page_id.clone()).await;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
                 match self
                     .race_input(&page_id, input.fill(&Ref(ref_id), &value, true))
                     .await?
@@ -990,7 +1058,10 @@ impl BrowserBridge {
             "input.type" => {
                 let page_id = page_arg(&args, 0)?;
                 let text = string_arg(&args, 1, "text")?;
-                let input = self.ctx.session.input(page_id.clone()).await;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
                 match self.race_input(&page_id, input.type_text(&text)).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
                     None => Ok(self.dialog_open_value(&page_id)),
@@ -999,7 +1070,10 @@ impl BrowserBridge {
             "input.press" => {
                 let page_id = page_arg(&args, 0)?;
                 let key = string_arg(&args, 1, "key")?;
-                let input = self.ctx.session.input(page_id.clone()).await;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
                 match self.race_input(&page_id, input.press(&key)).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
                     None => Ok(self.dialog_open_value(&page_id)),
@@ -1007,7 +1081,10 @@ impl BrowserBridge {
             }
             "input.hover" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
-                let input = self.ctx.session.input(page_id.clone()).await;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
                 match self.race_input(&page_id, input.hover(&Ref(ref_id))).await? {
                     Some(_) => Ok(BrowserCallValue::Undefined),
                     None => Ok(self.dialog_open_value(&page_id)),
@@ -1016,7 +1093,10 @@ impl BrowserBridge {
             "input.selectOption" => {
                 let (page_id, ref_id) = page_ref_args(&args)?;
                 let value = string_arg(&args, 2, "value")?;
-                let input = self.ctx.session.input(page_id.clone()).await;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
                 match self
                     .race_input(&page_id, input.select_option(&Ref(ref_id), &value))
                     .await?
@@ -1030,7 +1110,10 @@ impl BrowserBridge {
                 let direction = scroll_direction(&string_arg(&args, 1, "dir")?)?;
                 let amount = optional_f64_arg(&args, 2).unwrap_or(3.0).round() as i64;
                 let ref_id = optional_string_arg(&args, 3)?.map(Ref);
-                let input = self.ctx.session.input(page_id.clone()).await;
+                let input = self
+                    .control
+                    .race(self.ctx.browser.input(page_id.clone()))
+                    .await?;
                 match self
                     .race_input(&page_id, input.scroll(direction, amount, ref_id.as_ref()))
                     .await?
@@ -1042,25 +1125,25 @@ impl BrowserBridge {
             "nav.goto" => {
                 let page_id = page_arg(&args, 0)?;
                 let url = string_arg(&args, 1, "url")?;
-                let nav = self.ctx.session.nav(page_id);
+                let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
                 self.control.race(nav.goto(&url)).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "nav.back" => {
                 let page_id = page_arg(&args, 0)?;
-                let nav = self.ctx.session.nav(page_id);
+                let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
                 self.control.race(nav.back()).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "nav.forward" => {
                 let page_id = page_arg(&args, 0)?;
-                let nav = self.ctx.session.nav(page_id);
+                let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
                 self.control.race(nav.forward()).await?;
                 Ok(BrowserCallValue::Undefined)
             }
             "nav.reload" => {
                 let page_id = page_arg(&args, 0)?;
-                let nav = self.ctx.session.nav(page_id);
+                let nav = self.control.race(self.ctx.browser.nav(page_id)).await?;
                 self.control.race(nav.reload()).await?;
                 Ok(BrowserCallValue::Undefined)
             }
@@ -1070,7 +1153,7 @@ impl BrowserBridge {
                 let session_id = optional_string_arg(&args, 2)?.map(SessionId::from);
                 let value = self
                     .control
-                    .race(self.ctx.session.cdp(&method, params, session_id.as_ref()))
+                    .race(self.ctx.browser.cdp(&method, params, session_id.as_ref()))
                     .await?;
                 Ok(BrowserCallValue::Json(value))
             }
@@ -1082,7 +1165,7 @@ impl BrowserBridge {
                     .control
                     .race(
                         self.ctx
-                            .session
+                            .browser
                             .cdp_json_for_page(page_id, &method, &params_json),
                     )
                     .await?;
@@ -1146,6 +1229,9 @@ impl BrowserBridge {
         }
         if let Some(page) = optional_i64_field(opts, "page")? {
             let page = u32::try_from(page).map_err(|_| "page id is out of range".to_string())?;
+            self.control
+                .race(self.ctx.browser.page(PageId(page)))
+                .await?;
             if let Some(host) = self.helper_hook()?.resolve_host(page).await {
                 return Ok(host);
             }
@@ -1161,6 +1247,12 @@ impl BrowserBridge {
     /// hook already wrapped this via `call`, so `execute_tool` runs the handler
     /// with the same ctx.
     async fn run_tool(&self, tool_name: &str, args: Value) -> Result<BrowserCallValue, String> {
+        // Reading status can recover a stale selection, but a nested mutation
+        // would make script intent disagree with its immutable execution view.
+        if tool_name == "browser_target" && args.get("action").is_some_and(|action| action != "get")
+        {
+            return Err(browseros_core::TargetError::ChangeInRun.to_string());
+        }
         let def = tool_def(tool_name).ok_or_else(|| format!("Unknown tool {tool_name}"))?;
         let result = execute_tool(&def, args, &self.ctx)
             .await
@@ -1209,6 +1301,9 @@ fn tool_def(name: &str) -> Option<ToolDef> {
         // variants and the dialog pair, so the SDK reaches every act kind.
         "act" => tools::act::definition(),
         "history" => tools::history::definition(),
+        "credentials" => tools::credentials::definition(),
+        "browser_profiles" => tools::browser_profiles::definition(),
+        "browser_target" => tools::browser_target::definition(),
         _ => return None,
     })
 }
@@ -1273,6 +1368,13 @@ fn parse_bridge_args(args_json: &str) -> Result<Vec<Value>, String> {
 /// variants) carry the page id as their first argument; the rest address no
 /// specific page.
 fn target_page(method: &str, args: &[Value]) -> Option<u32> {
+    if method == "tool:credentials" && args.first().is_some_and(Value::is_object) {
+        return args
+            .first()?
+            .get("page")?
+            .as_u64()
+            .and_then(|page| u32::try_from(page).ok());
+    }
     let page_first = method.starts_with("observe.")
         || method.starts_with("input.")
         || method.starts_with("nav.")
@@ -1571,14 +1673,18 @@ mod tests {
     use crate::{
         framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx, execute_tool},
         output_file::create_browser_output_file_access,
+        tests::{check_fixed_fixture_epoch, select_fixture_tab},
     };
     use browseros_cdp::{CdpError, CdpEvent};
-    use browseros_core::{BrowserSession, BrowserSessionHooks, CdpConnection, WindowId};
+    use browseros_core::{
+        BrowserSession, BrowserSessionHooks, BrowserView, CdpConnection, WindowId,
+    };
     use futures_util::future::BoxFuture;
     use serde_json::json;
     use tokio::sync::broadcast;
     use tokio_util::sync::CancellationToken;
 
+    /// Script fixture with an immutable transport epoch, including guarded creation readbacks.
     struct RunFakeConnection {
         sender: broadcast::Sender<CdpEvent>,
         state: Arc<Mutex<RunFakeState>>,
@@ -1588,6 +1694,7 @@ mod tests {
     struct RunFakeState {
         create_tab_params: Vec<Value>,
         add_group_params: Vec<Value>,
+        created_tab: Option<Value>,
     }
 
     impl RunFakeConnection {
@@ -1613,6 +1720,27 @@ mod tests {
                 .unwrap_or_default()
         }
 
+        fn tabs(&self) -> Vec<Value> {
+            let mut tabs = vec![fake_tab_json(
+                7,
+                "target-7",
+                "https://example.com",
+                "Example",
+                1,
+                0,
+            )];
+            if let Some(tab) = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .created_tab
+                .clone()
+            {
+                tabs.push(tab);
+            }
+            tabs
+        }
+
         fn emit(&self, method: &str, params: Value, session_id: Option<&str>) {
             let _ = self.sender.send(CdpEvent {
                 method: method.to_string(),
@@ -1632,37 +1760,40 @@ mod tests {
             let state = self.state.clone();
             Box::pin(async move {
                 match method {
-                    "Browser.getTabs" => Ok(json!({
-                        "tabs": [fake_tab_json(7, "target-7", "https://example.com", "Example", 1, 0)]
-                    })),
+                    "Browser.getTabs" => Ok(json!({ "tabs": self.tabs() })),
                     "Browser.getWindows" => Ok(json!({ "windows": [] })),
                     "Browser.hang" => {
                         futures_util::future::pending::<Result<Value, CdpError>>().await
                     }
                     "Browser.createTab" => {
-                        if let Ok(mut state) = state.lock() {
-                            state.create_tab_params.push(params.clone());
-                        }
-                        Ok(json!({
-                            "tab": fake_tab_json(
-                                9,
-                                "target-9",
-                                params.get("url").and_then(Value::as_str).unwrap_or("about:blank"),
-                                "Created",
-                                params.get("windowId").and_then(Value::as_i64).unwrap_or(1),
-                                1
-                            )
-                        }))
-                    }
-                    "Browser.getTabInfo" => {
-                        let tab_id = params.get("tabId").and_then(Value::as_i64).unwrap_or(7);
-                        let tab = if tab_id == 9 {
-                            fake_tab_json(9, "target-9", "https://new.example", "Created", 42, 1)
-                        } else {
-                            fake_tab_json(7, "target-7", "https://example.com", "Example", 1, 0)
-                        };
+                        let mut tab = fake_tab_json(
+                            9,
+                            "target-9",
+                            params
+                                .get("url")
+                                .and_then(Value::as_str)
+                                .unwrap_or("about:blank"),
+                            "Created",
+                            params.get("windowId").and_then(Value::as_i64).unwrap_or(1),
+                            1,
+                        );
+                        tab["isActive"] = json!(
+                            !params
+                                .get("background")
+                                .and_then(Value::as_bool)
+                                .unwrap_or(false)
+                        );
+                        let mut state = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state.create_tab_params.push(params);
+                        // Origin/readiness reads and inventory use this exact create reply.
+                        state.created_tab = Some(tab.clone());
                         Ok(json!({ "tab": tab }))
                     }
+                    "Browser.getTabInfo" => Ok(json!({
+                        "tab": select_fixture_tab(&self.tabs(), &params)?
+                    })),
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-target-7" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -1672,23 +1803,38 @@ mod tests {
                     | "Target.setAutoAttach"
                     | "Page.reload" => Ok(json!({})),
                     "Browser.addTabsToGroup" => {
-                        if let Ok(mut state) = state.lock() {
-                            state.add_group_params.push(params.clone());
-                        }
+                        let group_id = params
+                            .get("groupId")
+                            .and_then(Value::as_str)
+                            .unwrap_or("group-1");
+                        let tab_ids = params.get("tabIds").cloned().unwrap_or_else(|| json!([]));
+                        let mut state = state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state.add_group_params.push(params.clone());
+                        let tab = state
+                            .created_tab
+                            .as_mut()
+                            .filter(|tab| {
+                                tab_ids
+                                    .as_array()
+                                    .is_some_and(|ids| ids.contains(&tab["tabId"]))
+                            })
+                            .ok_or_else(|| CdpError::Protocol {
+                                code: -1,
+                                message: format!("Unknown created fixture tab: {tab_ids}"),
+                            })?;
+                        // These placement cases use groups in the created tab's actual window.
+                        // Successful grouping changes membership without moving its identity.
+                        tab["groupId"] = json!(group_id);
                         Ok(json!({
                             "group": {
-                                "groupId": params
-                                    .get("groupId")
-                                    .and_then(Value::as_str)
-                                    .unwrap_or("group-1"),
-                                "windowId": 42,
+                                "groupId": group_id,
+                                "windowId": tab["windowId"],
                                 "title": "group",
                                 "color": "blue",
                                 "collapsed": false,
-                                "tabIds": params
-                                    .get("tabIds")
-                                    .cloned()
-                                    .unwrap_or_else(|| json!([]))
+                                "tabIds": tab_ids
                             }
                         }))
                     }
@@ -1703,17 +1849,48 @@ mod tests {
         fn send_raw_json<'a>(
             &'a self,
             method: &'a str,
-            _params_json: &'a str,
-            _session: Option<&'a SessionId>,
+            params_json: &'a str,
+            session: Option<&'a SessionId>,
         ) -> BoxFuture<'a, Result<String, CdpError>> {
             Box::pin(async move {
                 match method {
                     "Runtime.evaluate" => Ok(json!({ "result": { "value": 3 } }).to_string()),
-                    _ => Err(CdpError::Protocol {
-                        code: -1,
-                        message: format!("unexpected fake CDP raw call: {method}"),
-                    }),
+                    _ => {
+                        let params = serde_json::from_str(params_json).map_err(|err| {
+                            CdpError::Protocol {
+                                code: -32602,
+                                message: err.to_string(),
+                            }
+                        })?;
+                        Ok(self.send(method, params, session).await?.to_string())
+                    }
                 }
+            })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+                self.send(method, params, session).await
+            })
+        }
+
+        fn send_raw_json_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params_json: &'a str,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async move {
+                check_fixed_fixture_epoch(expected_epoch, self.connection_epoch())?;
+                self.send_raw_json(method, params_json, session).await
             })
         }
 
@@ -1739,7 +1916,11 @@ mod tests {
 
     fn test_ctx_for(connection: Arc<RunFakeConnection>, defaults: BrowserToolDefaults) -> ToolCtx {
         ToolCtx::new(BrowserToolOptions {
-            session: BrowserSession::new(connection, BrowserSessionHooks::default()),
+            browser: BrowserView::unbound(
+                BrowserSession::new(connection, BrowserSessionHooks::default()),
+                defaults.default_window_id,
+            ),
+            target: None,
             defaults,
             cancel: CancellationToken::new(),
             output_files: create_browser_output_file_access(),
@@ -1760,6 +1941,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn legacy_fixture_epoch_dispatch_preserves_created_identity() -> anyhow::Result<()> {
+        let connection = RunFakeConnection::new();
+        let epoch = connection.connection_epoch();
+        let params = json!({
+            "url": "https://fixture-created.example/",
+            "windowId": 88,
+            "background": true
+        });
+        let raw_params = params.to_string();
+        let decoded =
+            connection.send_at_epoch(epoch + 1, "Browser.createTab", params.clone(), None);
+        let raw =
+            connection.send_raw_json_at_epoch(epoch + 1, "Browser.createTab", &raw_params, None);
+        for result in [decoded.await.map(|_| ()), raw.await.map(|_| ())] {
+            assert!(matches!(
+                result,
+                Err(CdpError::ConnectionEpochChanged {
+                    expected: 2,
+                    actual: 1
+                })
+            ));
+        }
+        assert!(connection.create_tab_params().is_empty());
+        assert_eq!(
+            connection.send("Browser.getTabs", json!({}), None).await?["tabs"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+
+        let created = connection
+            .send_at_epoch(epoch, "Browser.createTab", params, None)
+            .await?["tab"]
+            .clone();
+        assert_eq!(created["url"], json!("https://fixture-created.example/"));
+        assert_eq!(created["windowId"], json!(88));
+        assert_eq!(created["isActive"], json!(false));
+        let group = connection
+            .send_at_epoch(
+                epoch,
+                "Browser.addTabsToGroup",
+                json!({ "groupId": "fixture-group", "tabIds": [created["tabId"]] }),
+                None,
+            )
+            .await?;
+        assert_eq!(group["group"]["windowId"], json!(88));
+        let selector = json!({ "targetId": created["targetId"] });
+        let readback = connection
+            .send_raw_json_at_epoch(epoch, "Browser.getTabInfo", &selector.to_string(), None)
+            .await?;
+        let mut grouped = created;
+        grouped["groupId"] = json!("fixture-group");
+        assert_eq!(serde_json::from_str::<Value>(&readback)?["tab"], grouped);
+        let inventory = connection
+            .send_at_epoch(epoch, "Browser.getTabs", json!({}), None)
+            .await?;
+        assert!(
+            inventory["tabs"]
+                .as_array()
+                .is_some_and(|tabs| tabs.contains(&grouped))
+        );
+        assert!(matches!(
+            connection
+                .send_at_epoch(
+                    epoch,
+                    "Browser.getTabInfo",
+                    json!({ "tabId": grouped["tabId"], "targetId": grouped["targetId"] }),
+                    None,
+                )
+                .await,
+            Err(CdpError::Protocol { code: -32602, .. })
+        ));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn race_input_returns_the_value_when_no_dialog_opens() -> anyhow::Result<()> {
         let bridge = test_bridge(test_ctx());
         let outcome = bridge
@@ -1776,8 +2033,8 @@ mod tests {
     async fn race_input_yields_when_a_dialog_blocks_the_action() -> anyhow::Result<()> {
         let connection = Arc::new(RunFakeConnection::new());
         let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .attach_page(PageId(1), SessionId::from("session-1"));
         connection.emit(
             "Page.javascriptDialogOpening",
@@ -1785,22 +2042,12 @@ mod tests {
             Some("session-1"),
         );
         for _ in 0..100 {
-            if ctx
-                .session
-                .page_signals
-                .pending_dialog(&PageId(1))
-                .is_some()
-            {
+            if ctx.browser.signals().pending_dialog(&PageId(1)).is_some() {
                 break;
             }
             sleep(Duration::from_millis(5)).await;
         }
-        assert!(
-            ctx.session
-                .page_signals
-                .pending_dialog(&PageId(1))
-                .is_some()
-        );
+        assert!(ctx.browser.signals().pending_dialog(&PageId(1)).is_some());
 
         // The action future never resolves, standing in for a click whose CDP ack
         // never returns while the renderer is frozen by the dialog.
@@ -1820,8 +2067,8 @@ mod tests {
     async fn dialog_open_value_describes_the_pending_dialog() -> anyhow::Result<()> {
         let connection = Arc::new(RunFakeConnection::new());
         let ctx = test_ctx_for(connection.clone(), BrowserToolDefaults::default());
-        ctx.session
-            .page_signals
+        ctx.browser
+            .signals()
             .attach_page(PageId(1), SessionId::from("session-1"));
         connection.emit(
             "Page.javascriptDialogOpening",
@@ -1829,12 +2076,7 @@ mod tests {
             Some("session-1"),
         );
         for _ in 0..100 {
-            if ctx
-                .session
-                .page_signals
-                .pending_dialog(&PageId(1))
-                .is_some()
-            {
+            if ctx.browser.signals().pending_dialog(&PageId(1)).is_some() {
                 break;
             }
             sleep(Duration::from_millis(5)).await;

@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/devtools/protocol/history_handler.h b/chrome/browser/devtools/protocol/history_handler.h
 new file mode 100644
-index 0000000000000..7cde94b91e242
+index 0000000000000000000000000000000000000000..c1789ee05aff4d365c7ec6bbf44bfae96cdc8e84
 --- /dev/null
 +++ b/chrome/browser/devtools/protocol/history_handler.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,70 @@
 +// Copyright 2026 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -40,18 +40,24 @@ index 0000000000000..7cde94b91e242
 +              std::optional<int> max_results,
 +              std::optional<double> start_time,
 +              std::optional<double> end_time,
++              std::optional<std::string> browser_context_id,
 +              std::unique_ptr<SearchCallback> callback) override;
 +  void GetRecent(std::optional<int> max_results,
++                 std::optional<std::string> browser_context_id,
 +                 std::unique_ptr<GetRecentCallback> callback) override;
 +  void DeleteUrl(const std::string& url,
++                 std::optional<std::string> browser_context_id,
 +                 std::unique_ptr<DeleteUrlCallback> callback) override;
 +  void DeleteRange(double start_time,
 +                   double end_time,
++                   std::optional<std::string> browser_context_id,
 +                   std::unique_ptr<DeleteRangeCallback> callback) override;
 +
 + private:
 +  Profile* GetProfile() const;
-+  history::HistoryService* GetHistoryService() const;
++  protocol::Response GetHistoryService(
++      const std::optional<std::string>& browser_context_id,
++      history::HistoryService** out_service) const;
 +
 +  void OnSearchComplete(
 +      std::unique_ptr<SearchCallback> callback,

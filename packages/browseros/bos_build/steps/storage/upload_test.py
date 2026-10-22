@@ -174,6 +174,9 @@ class UploadMetadataTest(unittest.TestCase):
         self.assertEqual(release["source_sha"], "a" * 40)
         self.assertEqual(release["workflow_run_id"], "30418029456")
         self.assertEqual(release["workflow_run_attempt"], "2")
+        self.assertEqual(
+            release["artifacts"]["x64_appimage"]["workflow_run_attempt"], "2"
+        )
 
     def test_release_json_uses_explicit_build_source_sha(self) -> None:
         with (
@@ -574,6 +577,90 @@ class UploadMetadataTest(unittest.TestCase):
         merged = merge_release_metadata(existing, new)
 
         self.assertEqual(merged, new)
+
+    def test_linux_architecture_retry_preserves_successful_sibling_provenance(
+        self,
+    ) -> None:
+        identity = {
+            "product": "browserclaw",
+            "platform": "linux",
+            "version": "1.2.3",
+            "source_sha": "a" * 40,
+            "workflow_run_id": "123",
+            "component_versions": {
+                "claw-server-rust": "0.0.68", "browserclaw": "0.2.30", "claw-onboard": "0.1.0",
+            },
+        }
+        x64 = {
+            **identity,
+            "workflow_run_attempt": "1",
+            "artifacts": {
+                "x64_appimage": {"filename": "neo_x64.AppImage"},
+                "x64_deb": {"filename": "neo_amd64.deb"},
+            },
+        }
+        arm64 = {
+            **identity,
+            "workflow_run_attempt": "2",
+            "artifacts": {
+                "arm64_appimage": {"filename": "neo_arm64.AppImage"},
+                "arm64_deb": {"filename": "neo_arm64.deb"},
+            },
+        }
+
+        mixed = merge_release_metadata(x64, arm64)
+        self.assertEqual(
+            set(mixed["artifacts"]),
+            {
+                "x64_appimage",
+                "x64_deb",
+                "arm64_appimage",
+                "arm64_deb",
+            },
+        )
+        self.assertNotIn("workflow_run_attempt", mixed)
+        self.assertEqual(mixed["artifacts"]["x64_deb"]["workflow_run_attempt"], "1")
+        self.assertEqual(mixed["artifacts"]["arm64_deb"]["workflow_run_attempt"], "2")
+
+        # Rebuilding both architectures in one new attempt restores a truthful
+        # platform-level attempt; a mixed receipt must not invent one.
+        arm64["workflow_run_attempt"] = "3"
+        x64["workflow_run_attempt"] = "3"
+        mixed = merge_release_metadata(mixed, arm64)
+        self.assertNotIn("workflow_run_attempt", mixed)
+        current = merge_release_metadata(mixed, x64)
+        self.assertEqual(current["workflow_run_attempt"], "3")
+        self.assertEqual(
+            {
+                artifact["workflow_run_attempt"]
+                for artifact in current["artifacts"].values()
+            },
+            {"3"},
+        )
+
+        # Architecture retries may cross attempts, never release identities.
+        for field, changed in (
+            ("source_sha", "b" * 40),
+            ("workflow_run_id", "456"),
+            ("component_versions", {"claw-server-rust": "0.0.69"}),
+        ):
+            with self.subTest(field=field):
+                foreign = {**arm64, field: changed}
+                self.assertEqual(merge_release_metadata(x64, foreign), foreign)
+
+        for versions in (None, {}, {"claw-server-rust": "0.0.68"}):
+            with self.subTest(unpinned_versions=versions):
+                before = {**x64, "workflow_run_attempt": "1", "component_versions": versions}
+                after = {**arm64, "workflow_run_attempt": "2", "component_versions": versions}
+                self.assertEqual(merge_release_metadata(before, after), after)
+
+        for name in identity["component_versions"]:
+            for alias in ("latest", "alpha", "../latest"):
+                with self.subTest(name=name, alias=alias):
+                    versions = {**identity["component_versions"], name: alias}
+                    before = {**x64, "workflow_run_attempt": "1", "component_versions": versions}
+                    after = {**arm64, "workflow_run_attempt": "2", "component_versions": versions}
+                    self.assertEqual(merge_release_metadata(before, after), after)
 
 
 if __name__ == "__main__":

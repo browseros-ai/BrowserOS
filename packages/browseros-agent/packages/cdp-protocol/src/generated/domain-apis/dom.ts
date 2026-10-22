@@ -20,6 +20,7 @@ import type {
   DistributedNodesUpdatedEvent,
   EnableParams,
   FocusParams,
+  ForceShowInterestParams,
   ForceShowPopoverParams,
   ForceShowPopoverResult,
   GetAnchorElementParams,
@@ -43,6 +44,8 @@ import type {
   GetFlattenedDocumentResult,
   GetFrameOwnerParams,
   GetFrameOwnerResult,
+  GetImplicitAnchorCandidatesParams,
+  GetImplicitAnchorCandidatesResult,
   GetNodeForLocationParams,
   GetNodeForLocationResult,
   GetNodeStackTracesParams,
@@ -92,6 +95,7 @@ import type {
   SetNodeStackTracesEnabledParams,
   SetNodeValueParams,
   SetOuterHTMLParams,
+  SetTextMarkerParams,
   ShadowRootPoppedEvent,
   ShadowRootPushedEvent,
 } from '../domains/dom'
@@ -186,6 +190,12 @@ export interface DOMApi {
   forceShowPopover(
     params: ForceShowPopoverParams,
   ): Promise<ForceShowPopoverResult>
+  getImplicitAnchorCandidates(
+    params: GetImplicitAnchorCandidatesParams,
+  ): Promise<GetImplicitAnchorCandidatesResult>
+  forceShowInterest(params: ForceShowInterestParams): Promise<void>
+  setTextMarker(params: SetTextMarkerParams): Promise<void>
+  clearTextMarkers(): Promise<void>
 
   // ── Events ──
 

@@ -60,10 +60,10 @@ describe('ReadyStep', () => {
     expect(html).not.toContain('Claude Code')
   })
 
-  it('renders the MCP page CTA without claiming to connect anything', () => {
+  it('renders the Open CTA without claiming to connect anything', () => {
     const html = render()
 
-    expect(html).toContain('Open the MCP page')
+    expect(html).toContain('>Open</button>')
     expect(html).not.toContain('Connect your AI')
   })
 

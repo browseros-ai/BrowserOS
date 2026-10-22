@@ -14,9 +14,9 @@
 //! of its own or any extension code.
 
 use crate::framework::{ToolError, ToolExecResult};
-use browseros_core::{BrowserSession, ProtocolSession, SessionId};
+use browseros_core::BrowserView;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
 /// How many recent downloads to read. A download that just completed is the most
 /// recent by start time, so a small window is enough and keeps a long history
@@ -62,7 +62,6 @@ const READ_RECENT_DOWNLOADS: &str = r"
 
 #[derive(Deserialize)]
 struct ReadResult {
-    #[serde(default)]
     records: Vec<DownloadRecord>,
     #[serde(default)]
     error: Option<String>,
@@ -74,29 +73,28 @@ struct ReadResult {
 /// `downloads` permission, so each is asked in turn rather than assuming which
 /// one is which. Identifying it by extension id instead would hard code a value
 /// that differs per build.
-pub async fn read_recent_downloads(
-    session: &BrowserSession,
-) -> ToolExecResult<Vec<DownloadRecord>> {
+pub async fn read_recent_downloads(browser: &BrowserView) -> ToolExecResult<Vec<DownloadRecord>> {
     let expression = READ_RECENT_DOWNLOADS.replace("LIMIT", &RECENT_DOWNLOAD_LIMIT.to_string());
-    let root = ProtocolSession::root(session.connection());
-    let targets = extension_worker_targets(&root).await?;
-    if targets.is_empty() {
-        return Err(no_extension_error());
-    }
-    let mut last_failure: Option<ToolError> = None;
-    for target_id in targets {
-        match evaluate_in_worker(session, &root, &target_id, &expression).await {
-            Ok(value) => match serde_json::from_value::<ReadResult>(value) {
-                // This extension cannot see downloads; another one may.
-                Ok(result) if result.error.is_some() => continue,
-                Ok(result) => return Ok(result.records),
-                Err(err) => {
-                    last_failure = Some(ToolError::message(format!(
-                        "Could not read the browser's downloads: {err}"
-                    )));
-                }
-            },
-            Err(err) => last_failure = Some(err),
+    // Core owns the privileged extension adapter: context filtering and the
+    // attach/evaluate/detach lifecycle must follow this same captured view.
+    let candidates = browser.evaluate_extension_workers(&expression).await?;
+    downloads_from_candidates(candidates)
+}
+
+fn downloads_from_candidates(candidates: Vec<Value>) -> ToolExecResult<Vec<DownloadRecord>> {
+    let mut last_failure = None;
+    for value in candidates {
+        if value.get("error").is_some_and(|error| !error.is_null()) {
+            continue;
+        }
+        match serde_json::from_value::<ReadResult>(value) {
+            Ok(result) if result.error.is_none() => return Ok(result.records),
+            Ok(_) => {}
+            Err(err) => {
+                last_failure = Some(ToolError::message(format!(
+                    "Could not read the browser's downloads: {err}"
+                )))
+            }
         }
     }
     Err(last_failure.unwrap_or_else(no_extension_error))
@@ -106,87 +104,6 @@ fn no_extension_error() -> ToolError {
     ToolError::message(
         "No browser extension that can report downloads is running, so where the file was saved cannot be read.",
     )
-}
-
-/// Evaluates in one extension service worker.
-///
-/// Attaching wakes a sleeping worker, and the session is released afterwards so
-/// a download does not leave one attached.
-async fn evaluate_in_worker(
-    session: &BrowserSession,
-    root: &ProtocolSession,
-    target_id: &str,
-    expression: &str,
-) -> ToolExecResult<Value> {
-    let attached: Value = root
-        .send(
-            "Target.attachToTarget",
-            json!({ "targetId": target_id, "flatten": true }),
-        )
-        .await?;
-    let session_id = attached
-        .get("sessionId")
-        .and_then(Value::as_str)
-        .ok_or_else(|| {
-            ToolError::message("Could not attach to the browser's extension to read downloads")
-        })?
-        .to_string();
-    let worker =
-        ProtocolSession::for_session(session.connection(), SessionId::from(session_id.clone()));
-    let evaluated: Result<Value, _> = worker
-        .send(
-            "Runtime.evaluate",
-            json!({
-                "expression": expression,
-                "awaitPromise": true,
-                "returnByValue": true,
-            }),
-        )
-        .await;
-    // Released before the result is unwrapped, so a failed evaluate does not
-    // leave a session attached to the worker.
-    let _: Result<Value, _> = root
-        .send(
-            "Target.detachFromTarget",
-            json!({ "sessionId": session_id }),
-        )
-        .await;
-    let evaluated = evaluated?;
-    if let Some(details) = evaluated.get("exceptionDetails") {
-        return Err(ToolError::message(format!(
-            "Reading the browser's downloads failed: {details}"
-        )));
-    }
-    evaluated
-        .get("result")
-        .and_then(|result| result.get("value"))
-        .cloned()
-        .ok_or_else(|| ToolError::message("Reading the browser's downloads returned no value"))
-}
-
-/// Every extension service worker currently running.
-async fn extension_worker_targets(root: &ProtocolSession) -> ToolExecResult<Vec<String>> {
-    let targets: Value = root.send("Target.getTargets", json!({})).await?;
-    Ok(targets
-        .get("targetInfos")
-        .and_then(Value::as_array)
-        .map(|infos| {
-            infos
-                .iter()
-                .filter(|info| is_extension_worker(info))
-                .filter_map(|info| info.get("targetId").and_then(Value::as_str))
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
-fn is_extension_worker(info: &Value) -> bool {
-    info.get("type").and_then(Value::as_str) == Some("service_worker")
-        && info
-            .get("url")
-            .and_then(Value::as_str)
-            .is_some_and(|url| url.starts_with("chrome-extension://"))
 }
 
 /// The one record a download added, by id.
@@ -300,18 +217,19 @@ mod tests {
     }
 
     #[test]
-    fn recognises_only_an_extension_service_worker() {
-        assert!(is_extension_worker(&json!({
-            "type": "service_worker",
-            "url": "chrome-extension://abc/background.js"
-        })));
-        assert!(!is_extension_worker(&json!({
-            "type": "page",
-            "url": "chrome-extension://abc/newtab.html"
-        })));
-        assert!(!is_extension_worker(&json!({
-            "type": "service_worker",
-            "url": "https://example.com/sw.js"
-        })));
+    fn selects_the_first_download_response_and_skips_other_extensions() -> anyhow::Result<()> {
+        let records = downloads_from_candidates(vec![
+            serde_json::json!({ "error": "downloads permission unavailable" }),
+            serde_json::json!({ "unrelated": true }),
+            serde_json::json!({ "records": [{ "id": 3, "filename": "/tmp/report.pdf", "state": "complete", "bytes": 10 }] }),
+            serde_json::json!({ "records": [{ "id": 4, "filename": "/tmp/other.pdf", "state": "complete", "bytes": 11 }] }),
+        ])?;
+        assert_eq!(records, vec![record(3, "/tmp/report.pdf", "complete")]);
+        assert!(downloads_from_candidates(vec![serde_json::json!({})]).is_err());
+        assert_eq!(
+            downloads_from_candidates(vec![serde_json::json!({ "records": [] })])?,
+            Vec::new()
+        );
+        Ok(())
     }
 }

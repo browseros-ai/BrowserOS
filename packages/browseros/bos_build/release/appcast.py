@@ -36,12 +36,14 @@ class AppcastModule(Step):
         workflow_run_attempt: str = "",
         publisher=None,
         fetch_metadata=None,
+        linux_arch: str | None = None,
     ):
         self.product_id = product_id
         self.publish = publish
         self.allow_downgrade = allow_downgrade
         self.platforms = platforms
         self.macos_arch = macos_arch
+        self.linux_arch = linux_arch
         self.source_sha = source_sha
         self.workflow_run_id = workflow_run_id
         self.workflow_run_attempt = workflow_run_attempt
@@ -81,13 +83,14 @@ class AppcastModule(Step):
                 f"No release metadata found for version {version} "
                 f"(product {self.product_id})"
             )
-        if self.platforms is not None:
+        if self.platforms is not None or self.linux_arch is not None:
             metadata = validate_release_metadata(
                 metadata,
                 version=version,
                 product_id=self.product_id,
-                platforms=self.platforms,
+                platforms=self.platforms or "all",
                 macos_arch=self.macos_arch,
+                linux_arch=self.linux_arch or "x64",
                 source_sha=self.source_sha,
                 workflow_run_id=self.workflow_run_id,
                 workflow_run_attempt=self.workflow_run_attempt,

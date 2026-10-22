@@ -280,7 +280,7 @@ export class AcpAgentRuntime {
   private async acquireSession(
     policy: AcpAgentPolicy,
   ): Promise<{ session: ActiveAcpSession; created: boolean }> {
-    const fingerprint = JSON.stringify(policy)
+    const fingerprint = policyFingerprint(policy)
     const existing = this.sessions.get(policy.sessionKey)
     if (existing?.policyFingerprint === fingerprint) {
       clearIdleTimer(existing)
@@ -384,6 +384,21 @@ function isAcpUserMessage(
   message: AcpSessionRecord['messages'][number],
 ): boolean {
   return typeof message !== 'string' && 'User' in message
+}
+
+/**
+ * Fingerprint of everything in a policy that genuinely requires a new agent
+ * process. The MCP lease header is excluded on purpose: it changes whenever
+ * the browser context does, and restarting the agent for a fresh capability
+ * token makes a custom agent re-open its workspace window on every message.
+ */
+function policyFingerprint(policy: AcpAgentPolicy): string {
+  return JSON.stringify({
+    ...policy,
+    mcpServers: policy.mcpServers.map((server) =>
+      'headers' in server ? { ...server, headers: undefined } : server,
+    ),
+  })
 }
 
 /**

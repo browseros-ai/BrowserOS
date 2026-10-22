@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Regression tests for the reusable Chromium build workflow."""
 
+import json
 import os
+import re
 import subprocess
 import tempfile
 import unittest
@@ -46,6 +48,23 @@ def git_bash_path() -> str:
     if not git_bash.is_file():
         raise AssertionError(f"Git Bash not found at {git_bash}")
     return str(git_bash)
+
+
+# Neo's browser draft gate, whitespace-normalized. Kept literal so the
+# behavioral test below evaluates exactly what the workflow ships.
+NEO_FINALIZE_CONDITION = (
+    "${{ !cancelled() "
+    "&& needs.preflight.result == 'success' "
+    "&& needs.server.result == 'success' "
+    "&& needs.extension.result == 'success' "
+    "&& needs.components.result == 'success' "
+    "&& needs.linux.result == (needs.preflight.outputs.build_linux == 'true' "
+    "&& 'success' || 'skipped') "
+    "&& needs.windows.result == (needs.preflight.outputs.build_windows == 'true' "
+    "&& 'success' || 'skipped') "
+    "&& needs.macos.result == (needs.preflight.outputs.build_macos == 'true' "
+    "&& 'success' || 'skipped') }}"
+)
 
 
 class ChromiumBuildWorkflowTest(unittest.TestCase):
@@ -186,7 +205,12 @@ class ChromiumBuildWorkflowTest(unittest.TestCase):
                     build_with["onboarding-version"],
                     "${{ inputs.onboarding_version || '' }}",
                 )
-                self.assertEqual(build_with["arch"], "x64")
+                self.assertEqual(
+                    build_with["arch"],
+                    "${{ matrix.arch }}"
+                    if workflow_name == "release-linux.yml"
+                    else "x64",
+                )
 
     def test_persistent_macos_lane_uses_one_source_build(self):
         workflow = self.load_workflow("release-macos.yml")
@@ -894,6 +918,18 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
         },
     }
 
+    # Neo's narrower dispatch surface; each default reproduces the full
+    # release, and x64-only macOS is absent because release-macos.yml cannot
+    # build it.
+    NEO_DISPATCH_INPUTS = {
+        "platforms": ("choice", ["all", "macos", "linux", "windows"], "all"),
+        "macos_arch": ("choice", ["universal", "arm64"], "universal"),
+        "linux_arch": ("choice", ["all", "x64", "arm64"], "all"),
+        "publication": ("choice", ["alpha", "draft-only"], "alpha"),
+    }
+    NEO_ALPHA = "${{ needs.preflight.outputs.publication == 'alpha' }}"
+    NEO_DRAFT_ONLY = "${{ needs.preflight.outputs.publication == 'draft-only' }}"
+
     def load_workflow(self, workflow_name: str) -> dict[str, object]:
         path = WORKFLOW_DIR / workflow_name
         return yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -910,12 +946,22 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             if step.get("name") == step_name
         )
 
-    def test_full_releases_have_no_optional_dispatch_surface(self):
+    def test_full_release_dispatch_surfaces_default_to_the_full_release(self):
         for workflow_name in self.RELEASES:
             with self.subTest(workflow=workflow_name):
                 workflow = self.load_workflow(workflow_name)
                 triggers = workflow.get("on", workflow.get(True))
-                self.assertIsNone(triggers["workflow_dispatch"])
+                if workflow_name == "release-browseros.yml":
+                    self.assertIsNone(triggers["workflow_dispatch"])
+                else:
+                    inputs = triggers["workflow_dispatch"]["inputs"]
+                    self.assertEqual(
+                        {
+                            name: (spec["type"], spec["options"], spec["default"])
+                            for name, spec in inputs.items()
+                        },
+                        self.NEO_DISPATCH_INPUTS,
+                    )
                 self.assertFalse(workflow["concurrency"]["cancel-in-progress"])
                 self.assertEqual(workflow["concurrency"]["queue"], "max")
                 self.assertEqual(workflow["permissions"], {})
@@ -965,7 +1011,18 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     server["with"]["ref"],
                     "${{ needs.preflight.outputs.source_sha }}",
                 )
-                self.assertIs(server["with"]["publish_ota"], True)
+                if workflow_name == "release-browseros.yml":
+                    self.assertIs(server["with"]["publish_ota"], True)
+                    self.assertNotIn("defer_finalize", server["with"])
+                else:
+                    # draft-only defers finalize, which is what suppresses the
+                    # tag, latest alias, public release, OTA and reflection.
+                    self.assertEqual(server["with"]["publish_ota"], self.NEO_ALPHA)
+                    self.assertEqual(
+                        server["with"]["defer_finalize"], self.NEO_DRAFT_ONLY
+                    )
+                for pinned in ("version", "mode", "state_owner"):
+                    self.assertNotIn(pinned, server["with"])
                 self.assertEqual(server["secrets"], "inherit")
 
                 self.assertEqual(set(extension["needs"]), {"preflight", "server"})
@@ -978,10 +1035,21 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     extension["with"]["branch"],
                     "${{ needs.preflight.outputs.source_sha }}",
                 )
-                self.assertIs(extension["with"]["publish_alpha_feed"], True)
+                if workflow_name == "release-browseros.yml":
+                    self.assertIs(extension["with"]["publish_alpha_feed"], True)
+                    self.assertNotIn("defer_finalize", extension["with"])
+                else:
+                    self.assertEqual(
+                        extension["with"]["publish_alpha_feed"], self.NEO_ALPHA
+                    )
+                    self.assertEqual(
+                        extension["with"]["defer_finalize"], self.NEO_DRAFT_ONLY
+                    )
+                for pinned in ("version", "mode", "state_owner"):
+                    self.assertNotIn(pinned, extension["with"])
                 self.assertEqual(extension["secrets"], "inherit")
 
-    def test_full_release_matrix_is_fixed_and_uses_published_resources(self):
+    def test_native_lanes_are_selected_and_use_published_resources(self):
         lanes = {
             "linux": ("release-linux.yml", None),
             "windows": ("release-windows.yml", None),
@@ -993,7 +1061,15 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
             for job_name, (called_workflow, arch) in lanes.items():
                 with self.subTest(workflow=workflow_name, lane=job_name):
                     job = jobs[job_name]
-                    self.assertNotIn("if", job)
+                    if workflow_name == "release-browseros.yml":
+                        self.assertNotIn("if", job)
+                    else:
+                        # No status function: the implicit success() still
+                        # requires preflight and both exact components.
+                        self.assertEqual(
+                            job["if"],
+                            f"needs.preflight.outputs.build_{job_name} == 'true'",
+                        )
                     self.assertEqual(
                         set(job["needs"]),
                         {"preflight", "server", "extension", "components"},
@@ -1024,8 +1100,15 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                     self.assertNotIn("prepared_resources_artifact", job["with"])
                     if job_name == "windows":
                         self.assertIs(job["with"]["sign"], True)
-                    if arch is not None:
+                    if arch is not None and workflow_name == "release-browseros.yml":
                         self.assertEqual(job["with"]["arch"], arch)
+                        self.assertNotIn("notify", job["with"])
+                    elif arch is not None:
+                        self.assertEqual(
+                            job["with"]["arch"],
+                            "${{ needs.preflight.outputs.macos_arch }}",
+                        )
+                        self.assertEqual(job["with"]["notify"], self.NEO_ALPHA)
                     self.assertEqual(job["secrets"], "inherit")
 
     def test_browser_draft_waits_for_every_publication_and_native_lane(self):
@@ -1049,13 +1132,34 @@ class ReleaseIntegrityWorkflowTest(unittest.TestCase):
                 finalize = self.named_step(
                     workflow, "finalize", "Create or refresh browser draft"
                 )
+                if workflow_name == "release-browseros.yml":
+                    self.assertNotIn("if", jobs["finalize"])
+                    selection = ("--platforms all", "--macos-arch universal")
+                else:
+                    self.assertEqual(
+                        " ".join(jobs["finalize"]["if"].split()),
+                        NEO_FINALIZE_CONDITION,
+                    )
+                    selection = (
+                        '--platforms "$PLATFORMS"',
+                        '--macos-arch "$MACOS_ARCH"',
+                    )
+                    self.assertEqual(
+                        finalize["env"]["PLATFORMS"],
+                        "${{ needs.preflight.outputs.platforms }}",
+                    )
+                    self.assertEqual(
+                        finalize["env"]["MACOS_ARCH"],
+                        "${{ needs.preflight.outputs.macos_arch }}",
+                    )
+                    self.assertNotIn("inputs.", finalize["run"])
                 for token in (
                     "release github create",
                     f"--product {config['product']}",
-                    "--platforms all",
-                    "--source-sha",
-                    "--workflow-run-id",
-                    "--target",
+                    *selection,
+                    '--source-sha "$SOURCE_SHA"',
+                    '--workflow-run-id "$GITHUB_RUN_ID"',
+                    '--target "$SOURCE_SHA"',
                 ):
                     self.assertIn(token, finalize["run"])
                 self.assertNotIn("--workflow-run-attempt", finalize["run"])
@@ -1395,9 +1499,17 @@ print(json.dumps({
                     "prepared_resources_artifact",
                     "candidate_sha",
                     "resource_mode: source",
-                    "defer_finalize",
                 ):
                     self.assertNotIn(token, text)
+                deferrals = text.count("defer_finalize")
+                if workflow_name == "release-browseros.yml":
+                    self.assertEqual(deferrals, 0)
+                else:
+                    self.assertEqual(
+                        text.count(f"defer_finalize: {self.NEO_DRAFT_ONLY}"),
+                        deferrals,
+                    )
+                    self.assertEqual(deferrals, 2)
 
     def test_macos_product_artifact_globs_do_not_overlap(self):
         workflow = self.load_workflow("release-macos.yml")
@@ -1422,6 +1534,7 @@ print(json.dumps({
             "release-browserclaw.yml",
             "release-server.yml",
             "release-claw-server.yml",
+            "release-docker.yml",
             "release-extensions.yml",
             "release-macos.yml",
         ):
@@ -1494,6 +1607,717 @@ print(json.dumps({
         self.assertIn("macos-chromium-workspace.sh", workspace_cleanup["run"])
         self.assertIn(" cleanup", workspace_cleanup["run"])
         self.assertEqual(keychain_cleanup["if"], "always()")
+
+
+class LinuxReleaseSelectionTest(unittest.TestCase):
+    """Execute the shipped planner before any expensive Chromium runner starts."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = yaml.safe_load(
+            (WORKFLOW_DIR / "release-linux.yml").read_text(encoding="utf-8")
+        )
+
+    def run_plan(
+        self, products: str, arch: str, mode: str = "published", *, pinned: bool = False,
+        resource_versions: dict[str, str] | None = None,
+    ):
+        step = self.workflow["jobs"]["plan"]["steps"][0]
+        self.assertNotIn("${{", step["run"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "output"
+            output.touch()
+            result = subprocess.run(
+                [git_bash_path(), "-c", step["run"]],
+                env={
+                    **os.environ,
+                    "GITHUB_OUTPUT": str(output),
+                    "PRODUCTS": products,
+                    "ARCH": arch,
+                    "RESOURCE_MODE": mode,
+                    "SERVER_VERSION": "0.0.68" if pinned else "",
+                    "EXTENSION_VERSION": "0.2.30" if pinned else "",
+                    "ONBOARDING_VERSION": "0.1.0" if pinned else "",
+                    **(resource_versions or {}),
+                },
+                capture_output=True,
+                text=True,
+            )
+            outputs = dict(
+                line.split("=", 1)
+                for line in output.read_text(encoding="utf-8").splitlines()
+            )
+        return result, outputs
+
+    def test_planner_expands_only_selected_products_and_architectures(self):
+        cases = (
+            ("browserclaw", "x64", [{"product": "browserclaw", "arch": "x64"}]),
+            ("browserclaw", "arm64", [{"product": "browserclaw", "arch": "arm64"}]),
+            ("browserclaw", "all", [
+                {"product": "browserclaw", "arch": "x64"},
+                {"product": "browserclaw", "arch": "arm64"},
+            ]),
+            ("all", "arm64", [
+                {"product": "browseros", "arch": "arm64"},
+                {"product": "browserclaw", "arch": "arm64"},
+            ]),
+        )
+        for products, arch, expected in cases:
+            with self.subTest(products=products, arch=arch):
+                result, outputs = self.run_plan(products, arch, pinned=arch == "all")
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual(json.loads(outputs["matrix"]), expected)
+
+    def test_unsupported_selections_fail_before_emitting_a_matrix(self):
+        for products, arch, mode in (
+            ("browserclaw", "arm64;true", "published"),
+            ("browserclaw", "", "published"),
+            ("browserclaw;true", "arm64", "published"),
+            ("browserclaw", "arm64", "source"),
+            ("browserclaw", "all", "source"),
+            ("all", "x64", "source"),
+            ("browserclaw", "x64", "typo"),
+            ("browserclaw", "all", "published"),
+        ):
+            with self.subTest(products=products, arch=arch, mode=mode):
+                result, outputs = self.run_plan(products, arch, mode)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("::error::", result.stdout)
+                self.assertEqual(outputs, {})
+
+        result, outputs = self.run_plan("browserclaw", "x64", "source")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(json.loads(outputs["matrix"]), [
+            {"product": "browserclaw", "arch": "x64"},
+        ])
+
+        result, outputs = self.run_plan("all", "all", pinned=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(outputs, {})
+
+    def test_dual_architectures_reject_mutable_resource_selectors(self):
+        for name in ("SERVER_VERSION", "EXTENSION_VERSION", "ONBOARDING_VERSION"):
+            for alias in ("latest", "alpha", "../latest"):
+                with self.subTest(name=name, alias=alias):
+                    result, outputs = self.run_plan(
+                        "browserclaw", "all", pinned=True,
+                        resource_versions={name: alias},
+                    )
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("::error::", result.stdout)
+                    self.assertEqual(outputs, {})
+
+    def test_architecture_selection_and_metadata_ownership_are_explicit(self):
+        triggers = self.workflow.get("on", self.workflow.get(True))
+        dispatch = triggers["workflow_dispatch"]["inputs"]["arch"]
+        self.assertEqual(dispatch["options"], ["x64", "arm64", "all"])
+        self.assertEqual(dispatch["default"], "x64")
+        self.assertEqual(triggers["workflow_call"]["inputs"]["arch"]["default"], "x64")
+        build = self.workflow["jobs"]["build"]
+        self.assertEqual(build["strategy"]["max-parallel"], 1)
+        self.assertEqual(build["with"]["arch"], "${{ matrix.arch }}")
+
+
+class NeoReleaseSelectionTest(unittest.TestCase):
+    """Behavior of Neo's lane selection, draft gate and quiet test builds."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.neo = yaml.safe_load(
+            (WORKFLOW_DIR / "release-browserclaw.yml").read_text(encoding="utf-8")
+        )
+        cls.macos = yaml.safe_load(
+            (WORKFLOW_DIR / "release-macos.yml").read_text(encoding="utf-8")
+        )
+
+    def step(self, workflow, job_name: str, step_name: str) -> dict[str, object]:
+        return next(
+            step
+            for step in workflow["jobs"][job_name]["steps"]
+            if step.get("name") == step_name
+        )
+
+    def run_selection(
+        self,
+        platforms: str,
+        macos_arch: str,
+        publication: str,
+        linux_arch: str | None = None,
+    ):
+        if linux_arch is None:
+            triggers = self.neo.get("on", self.neo.get(True))
+            linux_arch = str(
+                triggers["workflow_dispatch"]["inputs"]["linux_arch"]["default"]
+            )
+        step = self.step(self.neo, "preflight", "Validate release selection")
+        self.assertEqual(
+            step["env"],
+            {
+                "MACOS_ARCH": "${{ inputs.macos_arch }}",
+                "LINUX_ARCH": "${{ inputs.linux_arch }}",
+                "PLATFORMS": "${{ inputs.platforms }}",
+                "PUBLICATION": "${{ inputs.publication }}",
+            },
+        )
+        self.assertNotIn("${{", step["run"])
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "output"
+            output.touch()
+            result = subprocess.run(
+                [git_bash_path(), "-c", step["run"]],
+                env={
+                    **os.environ,
+                    "GITHUB_OUTPUT": str(output),
+                    "MACOS_ARCH": macos_arch,
+                    "LINUX_ARCH": linux_arch,
+                    "PLATFORMS": platforms,
+                    "PUBLICATION": publication,
+                },
+                capture_output=True,
+                text=True,
+            )
+            outputs = dict(
+                line.split("=", 1)
+                for line in output.read_text(encoding="utf-8").splitlines()
+            )
+        return result, outputs
+
+    def test_preflight_emits_full_release_selection_by_default(self):
+        result, outputs = self.run_selection("all", "universal", "alpha")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            outputs,
+            {
+                "build_linux": "true",
+                "build_macos": "true",
+                "build_windows": "true",
+                "macos_arch": "universal",
+                "linux_arch": "all",
+                "platforms": "all",
+                "publication": "alpha",
+            },
+        )
+
+    def test_preflight_selects_only_the_macos_arm64_lane(self):
+        result, outputs = self.run_selection("macos", "arm64", "draft-only")
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(
+            outputs,
+            {
+                "build_linux": "false",
+                "build_macos": "true",
+                "build_windows": "false",
+                "macos_arch": "arm64",
+                "linux_arch": "all",
+                "platforms": "macos",
+                "publication": "draft-only",
+            },
+        )
+
+    def test_preflight_selects_linux_arm64_and_forwards_the_same_contract(self):
+        for arch in ("arm64", "all"):
+            result, outputs = self.run_selection(
+                "linux", "universal", "draft-only", arch
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(outputs["linux_arch"], arch)
+            self.assertEqual(outputs["build_linux"], "true")
+            self.assertEqual(outputs["build_macos"], "false")
+            self.assertEqual(outputs["build_windows"], "false")
+
+        linux = self.neo["jobs"]["linux"]
+        self.assertEqual(
+            linux["with"]["arch"], "${{ needs.preflight.outputs.linux_arch }}"
+        )
+        finalize = self.step(self.neo, "finalize", "Create or refresh browser draft")
+        self.assertEqual(
+            finalize["env"]["LINUX_ARCH"], "${{ needs.preflight.outputs.linux_arch }}"
+        )
+        self.assertIn('--linux-arch "$LINUX_ARCH"', finalize["run"])
+
+    def test_preflight_rejects_unused_or_invalid_linux_architecture(self):
+        for platforms, arch in (
+            ("macos", "arm64"),
+            ("windows", "arm64"),
+            ("linux", "bad;true"),
+        ):
+            result, outputs = self.run_selection(platforms, "universal", "alpha", arch)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("::error::", result.stdout)
+            self.assertEqual(outputs, {})
+
+    def test_preflight_rejects_unsupported_or_meaningless_requests(self):
+        cases = (
+            ("macos", "x64", "alpha"),
+            ("linux", "arm64", "alpha"),
+            ("macos;true", "arm64", "alpha"),
+            ("all", "universal", "prod"),
+            ("", "universal", "alpha"),
+        )
+        for platforms, macos_arch, publication in cases:
+            with self.subTest(platforms=platforms, macos_arch=macos_arch):
+                result, outputs = self.run_selection(
+                    platforms, macos_arch, publication
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("::error::", result.stdout)
+                self.assertEqual(outputs, {})
+
+    def finalize_runs(
+        self,
+        selected: set[str],
+        lanes: dict[str, str],
+        *,
+        cancelled: bool = False,
+        components: str = "success",
+    ) -> bool:
+        """Evaluate the shipped finalize `if` for one simulated run.
+
+        The expression only uses !cancelled(), &&, ||, ==, string literals,
+        parentheses and needs lookups, whose GitHub semantics match Python's
+        not/and/or/==. The whitelist below fails if that grammar ever grows.
+        """
+        expression = " ".join(self.neo["jobs"]["finalize"]["if"].split())
+        self.assertEqual(expression, NEO_FINALIZE_CONDITION)
+        self.assertTrue(expression.startswith("${{ ") and expression.endswith(" }}"))
+        body = expression[4:-3]
+        body = body.replace("!cancelled()", "(not cancelled)")
+        body = body.replace("&&", " and ").replace("||", " or ")
+        body = re.sub(
+            r"needs\.([a-z_]+)\.outputs\.([a-z_]+)",
+            r"needs['\1']['outputs']['\2']",
+            body,
+        )
+        body = re.sub(r"needs\.([a-z_]+)\.result", r"needs['\1']['result']", body)
+        leftover = re.sub(r"'[^']*'|\b(?:not|and|or|cancelled|needs)\b", "", body)
+        self.assertRegex(leftover, r"^[\s()\[\]=]*$")
+
+        needs = {
+            "preflight": {
+                "result": "success",
+                "outputs": {
+                    f"build_{lane}": "true" if lane in selected else "false"
+                    for lane in ("linux", "windows", "macos")
+                },
+            },
+            "server": {"result": "success"},
+            "extension": {"result": "success"},
+            "components": {"result": components},
+            **{lane: {"result": result} for lane, result in lanes.items()},
+        }
+        return eval(  # noqa: S307 - repository-owned expression, whitelisted above
+            body, {"__builtins__": {}}, {"cancelled": cancelled, "needs": needs}
+        )
+
+    def test_finalize_requires_every_lane_of_the_default_full_release(self):
+        full = {"linux", "windows", "macos"}
+        succeeded = {"linux": "success", "windows": "success", "macos": "success"}
+        self.assertTrue(self.finalize_runs(full, succeeded))
+        for lane, result in (
+            ("windows", "failure"),
+            ("linux", "cancelled"),
+            ("macos", "skipped"),
+        ):
+            with self.subTest(lane=lane, result=result):
+                self.assertFalse(
+                    self.finalize_runs(full, {**succeeded, lane: result})
+                )
+
+    def test_finalize_accepts_skipped_unselected_lanes_for_macos_arm64(self):
+        lanes = {"linux": "skipped", "windows": "skipped", "macos": "success"}
+        self.assertTrue(self.finalize_runs({"macos"}, lanes))
+
+    def test_finalize_rejects_failed_selected_or_unexpected_lanes(self):
+        base = {"linux": "skipped", "windows": "skipped", "macos": "success"}
+        cases = (
+            ({"macos": "failure"}, {}),
+            ({"macos": "cancelled"}, {}),
+            ({"macos": "skipped"}, {}),
+            ({"linux": "success"}, {}),
+            ({"windows": "failure"}, {}),
+            ({}, {"components": "failure"}),
+            ({}, {"cancelled": True}),
+        )
+        for lane_overrides, run_overrides in cases:
+            with self.subTest(lanes=lane_overrides, run=run_overrides):
+                self.assertFalse(
+                    self.finalize_runs(
+                        {"macos"}, {**base, **lane_overrides}, **run_overrides
+                    )
+                )
+
+    def test_macos_notify_defaults_on_for_dispatch_and_call(self):
+        triggers = self.macos.get("on", self.macos.get(True))
+        for trigger in ("workflow_dispatch", "workflow_call"):
+            with self.subTest(trigger=trigger):
+                notify = triggers[trigger]["inputs"]["notify"]
+                self.assertEqual(notify["type"], "boolean")
+                self.assertIs(notify["default"], True)
+
+        ping = self.step(self.macos, "build", "Slack failure ping")
+        self.assertEqual(ping["if"], "failure() && inputs.notify")
+
+    def test_quiet_macos_build_blanks_the_webhook_before_bos_build_runs(self):
+        build = self.step(self.macos, "build", "Build selected products")
+        script = build["run"]
+        self.assertEqual(build["env"]["SLACK_NOTIFY"], "${{ inputs.notify }}")
+        self.assertNotIn("SLACK_WEBHOOK_URL", build["env"])
+        guard = 'if [ "$SLACK_NOTIFY" = "false" ]; then'
+        self.assertIn(guard, script)
+        self.assertIn('export SLACK_WEBHOOK_URL=""', script)
+        self.assertLess(script.index(guard), script.index("uv run browseros"))
+
+    def test_blank_webhook_wins_over_persistent_checkout_dotenv(self):
+        from bos_build.lib import env as env_module
+        from bos_build.lib.notify import Notifier
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            package_root = Path(temp_dir) / "packages" / "browseros"
+            package_root.mkdir(parents=True)
+            (package_root / ".env").write_text(
+                "SLACK_WEBHOOK_URL=https://hooks.slack.invalid/T000\n",
+                encoding="utf-8",
+            )
+            with mock.patch(
+                "bos_build.lib.paths.get_package_root", return_value=package_root
+            ):
+                with mock.patch.dict(os.environ, {"SLACK_WEBHOOK_URL": ""}):
+                    env_module._load_dotenv_file()
+                    self.assertFalse(Notifier().enabled)
+                # Control: without the blank override the dotenv webhook loads.
+                with mock.patch.dict(os.environ, {}, clear=False):
+                    os.environ.pop("SLACK_WEBHOOK_URL", None)
+                    env_module._load_dotenv_file()
+                    self.assertTrue(Notifier().enabled)
+
+
+FAKE_GH = r"""#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+state_path = Path(os.environ["FAKE_GH_STATE"])
+state = json.loads(state_path.read_text())
+args = sys.argv[1:]
+
+
+def option(name, default=None):
+    return args[args.index(name) + 1] if name in args else default
+
+
+def record(entry):
+    with open(os.environ["FAKE_GH_WRITES"], "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(entry) + "\n")
+
+
+if args[:1] != ["release"]:
+    raise SystemExit(f"unexpected fake gh call: {args}")
+command, tag = args[1], args[2]
+release = state["releases"].get(tag)
+
+if command == "view":
+    if release is None:
+        print("release not found", file=sys.stderr)
+        raise SystemExit(1)
+    if "--json" not in args:
+        print(f"title:\t{tag}")
+        raise SystemExit(0)
+    if release.get("jsonFails"):
+        print("HTTP 502: transient metadata failure", file=sys.stderr)
+        raise SystemExit(1)
+    document = {
+        "isDraft": release["isDraft"],
+        "targetCommitish": release["targetCommitish"],
+        "assets": [{"name": name} for name in sorted(release["assets"])],
+    }
+    query = option("--jq")
+    if query is None:
+        print(json.dumps(document))
+    else:
+        result = subprocess.run(
+            ["jq", "-r", query], input=json.dumps(document),
+            capture_output=True, text=True, check=True,
+        )
+        sys.stdout.write(result.stdout)
+elif command == "download":
+    name = option("--pattern")
+    if release is None or name not in release["assets"]:
+        raise SystemExit(1)
+    target = Path(option("--dir"))
+    target.mkdir(parents=True, exist_ok=True)
+    (target / name).write_text(release["assets"][name], encoding="utf-8")
+else:
+    # Every other release subcommand mutates GitHub state.
+    record({"command": command, "tag": tag, "args": args[3:],
+            "draft": None if release is None else release["isDraft"]})
+    if command == "create":
+        state["releases"][tag] = {
+            "isDraft": "--draft" in args,
+            "targetCommitish": option("--target", ""),
+            "assets": {},
+        }
+    elif command == "upload":
+        if release is None:
+            raise SystemExit(1)
+        for path in (value for value in args[3:] if not value.startswith("--")):
+            release["assets"][Path(path).name] = Path(path).read_text(encoding="utf-8")
+    state_path.write_text(json.dumps(state))
+"""
+
+
+@unittest.skipIf(os.name == "nt", "component release scripts run on Linux runners")
+class DeferredComponentAttachmentTest(unittest.TestCase):
+    """Deferred component builds may write only to source-bound private drafts.
+
+    These run the shipped attachment scripts against a fake `gh` that keeps
+    release state and records every mutating call, so "zero public writes" is
+    observed rather than inferred from the script text.
+    """
+
+    SOURCE = "1" * 40
+    OTHER = "2" * 40
+    SERVER_TAG = "claw-server/v1.2.3"
+    SERVER_TARGETS = ("darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64", "windows-x64")
+    EXTENSION_TAG = "ext-browserclaw/v1.2.3.0"
+    CRX = "browserclaw-1.2.3.0.crx"
+
+    @classmethod
+    def setUpClass(cls):
+        probe = subprocess.run(
+            [git_bash_path(), "-c", "mapfile -t probe < /dev/null"],
+            capture_output=True,
+        )
+        if probe.returncode != 0:
+            raise unittest.SkipTest("needs bash >= 4 (mapfile), as on Linux runners")
+
+    def script(self, workflow_name: str, job: str, step_name: str) -> dict:
+        workflow = yaml.safe_load((WORKFLOW_DIR / workflow_name).read_text(encoding="utf-8"))
+        return next(
+            step for step in workflow["jobs"][job]["steps"] if step.get("name") == step_name
+        )
+
+    def run_attachment(self, step, *, files, releases, env):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            gh = fake_bin / "gh"
+            gh.write_text(FAKE_GH, encoding="utf-8")
+            gh.chmod(0o755)
+            work = root / "work"
+            for relative, content in files.items():
+                path = work / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(content, encoding="utf-8")
+            state = root / "state.json"
+            state.write_text(json.dumps({"releases": releases}), encoding="utf-8")
+            writes = root / "writes.jsonl"
+            writes.touch()
+            result = subprocess.run(
+                [git_bash_path(), "-c", step["run"]],
+                cwd=work,
+                env={
+                    **os.environ,
+                    "PATH": f"{fake_bin}{os.pathsep}{os.environ['PATH']}",
+                    "FAKE_GH_STATE": str(state),
+                    "FAKE_GH_WRITES": str(writes),
+                    "GH_TOKEN": "fake",
+                    "RUNNER_TEMP": str(root / "runner-temp"),
+                    "GIT_CEILING_DIRECTORIES": str(root),
+                    **env,
+                },
+                capture_output=True,
+                text=True,
+            )
+            calls = [
+                json.loads(line)
+                for line in writes.read_text(encoding="utf-8").splitlines()
+            ]
+        return result, calls
+
+    def server_zip(self, target: str) -> str:
+        return f"browseros-claw-server-rust-resources-{target}.zip"
+
+    def run_server(
+        self,
+        release,
+        *,
+        defer="true",
+        reservation="create",
+        drop=None,
+        alter=None,
+        json_fails=False,
+    ):
+        step = self.script(
+            "release-claw-server.yml", "publish-versioned", "Attach zips to private draft"
+        )
+        self.assertEqual(step["env"]["DEFER_FINALIZE"], "${{ inputs.defer_finalize }}")
+        self.assertEqual(
+            step["env"]["RESERVATION"], "${{ needs.prepare.outputs.reservation }}"
+        )
+        files = {
+            f"dist/claw-server/{self.server_zip(target)}": f"canonical {target}"
+            for target in self.SERVER_TARGETS
+        }
+        releases = {}
+        if release is not None:
+            draft, target = release
+            assets = {Path(path).name: content for path, content in files.items()}
+            if drop:
+                del assets[self.server_zip(drop)]
+            if alter:
+                assets[self.server_zip(alter)] = "different bytes"
+            releases[self.SERVER_TAG] = {
+                "isDraft": draft,
+                "targetCommitish": target,
+                "assets": assets,
+                "jsonFails": json_fails,
+            }
+        return self.run_attachment(
+            step,
+            files=files,
+            releases=releases,
+            env={
+                "DEFER_FINALIZE": defer,
+                "RELEASE_SHA": self.SOURCE,
+                "RELEASE_TAG": self.SERVER_TAG,
+                "RESERVATION": reservation,
+                "VERSION": "1.2.3",
+            },
+        )
+
+    def test_deferred_server_reuses_matching_public_assets_read_only(self):
+        result, calls = self.run_server((False, self.SOURCE), reservation="tag")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("read-only", result.stdout)
+        self.assertEqual(calls, [])
+
+    def test_deferred_server_rejects_missing_or_conflicting_public_assets(self):
+        for change in ({"drop": "linux-x64"}, {"alter": "darwin-arm64"}):
+            with self.subTest(**change):
+                result, calls = self.run_server(
+                    (False, self.SOURCE), reservation="tag", **change
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("::error::Published", result.stdout)
+                self.assertEqual(calls, [])
+
+    def test_deferred_server_rejects_a_foreign_draft(self):
+        result, calls = self.run_server((True, self.OTHER), reservation="reuse")
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not a private draft", result.stdout)
+        self.assertEqual(calls, [])
+
+    def test_deferred_server_writes_only_to_its_private_draft(self):
+        cases = (
+            ("source-bound draft", (True, self.SOURCE), "reuse", ["upload"]),
+            ("tag-verified draft", (True, self.OTHER), "tag", ["upload"]),
+            ("new draft", None, "create", ["create", "upload"]),
+        )
+        for label, release, reservation, commands in cases:
+            with self.subTest(label):
+                result, calls = self.run_server(release, reservation=reservation)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertEqual([call["command"] for call in calls], commands)
+                upload = calls[-1]
+                self.assertIn("--clobber", upload["args"])
+                self.assertIn(upload["draft"], (True, None))
+                if release is None:
+                    self.assertIn("--draft", calls[0]["args"])
+
+    def test_deferred_server_fails_closed_when_metadata_is_unreadable(self):
+        # Plain existence succeeds in every case, so only the strict deferred
+        # metadata read stands between these releases and `upload --clobber`.
+        cases = (
+            ("public, JSON read fails", (False, self.SOURCE), True),
+            ("private draft, JSON read fails", (True, self.SOURCE), True),
+            ("draft state missing", (None, self.SOURCE), False),
+        )
+        for label, release, json_fails in cases:
+            with self.subTest(label):
+                result, calls = self.run_server(
+                    release, reservation="tag", json_fails=json_fails
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+
+    def test_alpha_server_attachment_is_unchanged(self):
+        result, calls = self.run_server(
+            (False, self.SOURCE), defer="", reservation="tag", alter="linux-x64"
+        )
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call["command"] for call in calls], ["upload"])
+
+    def run_extension(self, release, *, defer="true", asset=None, json_fails=False):
+        step = self.script("release-extensions.yml", "build", "Attach CRX assets")
+        self.assertEqual(step["env"]["DEFER_FINALIZE"], "${{ inputs.defer_finalize }}")
+        built = f"packages/browseros/build/extensions/dist/{self.CRX}"
+        releases = {}
+        if release is not None:
+            draft, target = release
+            releases[self.EXTENSION_TAG] = {
+                "isDraft": draft,
+                "targetCommitish": target,
+                "assets": {} if asset is None else {self.CRX: asset},
+                "jsonFails": json_fails,
+            }
+        return self.run_attachment(
+            step,
+            files={built: "canonical crx"},
+            releases=releases,
+            env={
+                "DEFER_FINALIZE": defer,
+                "NAMES": "browserclaw",
+                "RELEASE_SHA": self.SOURCE,
+                "VERSION": "1.2.3.0",
+            },
+        )
+
+    def test_deferred_extension_never_writes_to_a_public_release(self):
+        cases = (
+            ("matching", "canonical crx", 0),
+            ("missing", None, 1),
+            ("conflicting", "different bytes", 1),
+        )
+        for label, asset, failed in cases:
+            with self.subTest(label):
+                result, calls = self.run_extension((False, self.SOURCE), asset=asset)
+                self.assertEqual(result.returncode != 0, bool(failed), result.stdout)
+                self.assertEqual(calls, [])
+
+    def test_deferred_extension_adds_assets_only_to_its_private_draft(self):
+        result, calls = self.run_extension((True, self.OTHER))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("is not a private draft", result.stdout)
+        self.assertEqual(calls, [])
+
+        result, calls = self.run_extension((True, self.SOURCE))
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(
+            [(call["command"], call["draft"]) for call in calls], [("upload", True)]
+        )
+
+    def test_deferred_extension_fails_closed_when_metadata_is_unreadable(self):
+        for draft in (False, True):
+            with self.subTest(draft=draft):
+                result, calls = self.run_extension(
+                    (draft, self.SOURCE), json_fails=True
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(calls, [])
+
+    def test_alpha_extension_attachment_is_unchanged(self):
+        result, calls = self.run_extension((False, self.SOURCE), defer="")
+
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual([call["command"] for call in calls], ["upload"])
 
 
 class ProductNightlyWorkflowTest(unittest.TestCase):
@@ -3011,6 +3835,32 @@ class RepairUpdateFeedWorkflowTest(unittest.TestCase):
         self.assertIn("args+=(--publish)", publish)
         self.assertIn('release feeds publish-local "${args[@]}"', publish)
         self.assertNotIn("--allow-downgrade", publish)
+
+
+
+class DockerImageWorkflowTest(unittest.TestCase):
+    PUSH_STEP = "Push amd64 and arm64"
+
+    def setUp(self):
+        self.workflow = yaml.safe_load(
+            (WORKFLOW_DIR / "release-docker.yml").read_text(encoding="utf-8")
+        )
+        self.job = self.workflow["jobs"]["image"]
+        self.steps = {step.get("name"): step for step in self.job["steps"]}
+
+    def test_only_the_image_job_can_write_packages(self):
+        self.assertEqual(self.workflow["permissions"], {})
+        self.assertEqual(self.job["permissions"], {"contents": "read", "packages": "write"})
+
+    def test_smoke_test_gates_the_push(self):
+        names = [step.get("name") for step in self.job["steps"]]
+        self.assertLess(names.index("Smoke test"), names.index(self.PUSH_STEP))
+        self.assertNotIn("--push", self.steps["Build amd64 for the smoke test"]["run"])
+        self.assertIn("--push", self.steps[self.PUSH_STEP]["run"])
+
+    def test_inputs_reach_shell_only_through_environment(self):
+        for step in self.job["steps"]:
+            self.assertNotIn("${{ inputs.", step.get("run", ""))
 
 
 if __name__ == "__main__":

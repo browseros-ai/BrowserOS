@@ -1,0 +1,2297 @@
+use crate::{
+    clock::now_epoch_ms,
+    db::{
+        Database,
+        entities::{
+            agent_session_ends, agent_session_starts,
+            prelude::{AgentSessionEnds, AgentSessionStarts, Tasks, ToolDispatches},
+            tasks, tool_dispatches,
+        },
+        session_efficiency_stats::ELIGIBLE_TOKEN_ESTIMATOR_VERSION,
+    },
+    error::AppResult,
+    ids::DispatchId,
+};
+use browseros_mcp::token_estimate::estimate_tool_output_tokens;
+use rmcp::model::ContentBlock;
+use sea_orm::{
+    ActiveValue::{NotSet, Set},
+    ColumnTrait, ConnectionTrait, DbBackend, EntityTrait, FromQueryResult, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect, Statement, TransactionTrait,
+    sea_query::{Condition, Expr, ExprTrait, Func, OnConflict, Query, SelectStatement},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use std::collections::HashMap;
+use url::Url;
+
+pub use crate::db::entities::tool_dispatches::Model as ToolDispatchRow;
+
+const ARGS_JSON_MAX: usize = 4096;
+const RESULT_META_MAX: usize = 4096;
+const RESULT_STRUCTURED_KEY_MAX: usize = 128;
+const RESULT_STRUCTURED_KEYS_MAX: usize = 16;
+const RESULT_JSON_STRING_MAX: usize = 192;
+const SUSTAINED_ERROR_TAIL: usize = 3;
+const OPERATOR_CANCELLATION_REASON: &str = "Operation cancelled by the User";
+
+#[derive(Clone)]
+pub struct AuditLog {
+    db: Database,
+}
+
+#[derive(Debug, Clone)]
+pub struct RecordToolDispatchInput {
+    pub agent_id: String,
+    pub slug: String,
+    pub agent_label: String,
+    pub session_id: String,
+    pub tool_name: String,
+    pub page_id: Option<i64>,
+    pub tab_id: Option<i64>,
+    pub target_id: Option<String>,
+    pub url: Option<String>,
+    pub title: Option<String>,
+    pub args_json: String,
+    pub result_meta: String,
+    pub duration_ms: i64,
+    /// When the dispatch started, so a long-running script tool sorts before the
+    /// child primitives it recorded while executing. `None` falls back to the
+    /// write time (fine for fast granular tools and child rows).
+    pub created_at: Option<i64>,
+    pub dispatch_id: DispatchId,
+    /// Parent script dispatch when this row is a primitive executed inside a
+    /// `run`/`execute` script; `None` for ordinary top-level tool dispatches.
+    pub parent_dispatch_id: Option<DispatchId>,
+    /// Approximate semantic traffic into BrowserClaw: tool name plus compact arguments.
+    pub tool_input_token_estimate: i64,
+    /// Approximate semantic content returned by BrowserClaw after result effects.
+    pub tool_output_token_estimate: i64,
+    /// Formula identity; version 0 is reserved for legacy or otherwise unmeasured rows.
+    pub token_estimator_version: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListDispatchesResult {
+    pub rows: Vec<ToolDispatchRow>,
+    pub next_cursor: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListDispatchesQuery {
+    pub agent_id: Option<String>,
+    pub session_id: Option<String>,
+    pub cursor: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionScreenshotRow {
+    pub screenshot_id: i64,
+    pub captured_at: i64,
+    pub tool_name: String,
+}
+
+/// Status derived from persisted dispatches and the session end event. Active and cancelled
+/// sessions keep lifecycle precedence; completed browser work fails only after three consecutive
+/// final tool errors. Sessions without browser work retain their explicit end status.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TaskStatus {
+    Live,
+    Done,
+    Failed,
+    Cancelled,
+}
+
+impl TaskStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Live => "live",
+            Self::Done => "done",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    fn from_db(value: String) -> Self {
+        match value.as_str() {
+            "done" => Self::Done,
+            "failed" => Self::Failed,
+            "cancelled" => Self::Cancelled,
+            _ => Self::Live,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSummary {
+    pub session_id: String,
+    pub agent_id: String,
+    pub slug: String,
+    pub agent_label: String,
+    pub title: String,
+    pub site: Option<String>,
+    pub started_at: i64,
+    pub ended_at: Option<i64>,
+    pub duration_ms: i64,
+    pub dispatch_count: i64,
+    pub tool_sequence: Vec<String>,
+    pub status: TaskStatus,
+    pub error_count: i64,
+    pub last_screenshot_dispatch_id: Option<i64>,
+    pub cursor_id: i64,
+    pub has_screenshots: bool,
+    /// Session totals of the per-dispatch semantic token estimates, trustworthy only when
+    /// `tokens_measured`. `tokens_measured` is true iff the session has dispatches and every one
+    /// carries token-estimator v1; legacy/unmeasured sessions leave it false and the sums at 0.
+    pub tool_input_token_estimate: i64,
+    pub tool_output_token_estimate: i64,
+    pub tokens_measured: bool,
+    /// Agent-declared, PII-scrubbed summary of the task; None when never declared.
+    pub task_summary: Option<String>,
+}
+
+impl From<tasks::Model> for TaskSummary {
+    fn from(model: tasks::Model) -> Self {
+        let tool_sequence =
+            serde_json::from_str::<Vec<String>>(&model.tool_sequence_json).unwrap_or_default();
+        Self {
+            session_id: model.session_id,
+            agent_id: model.agent_id,
+            slug: model.slug,
+            agent_label: model.agent_label,
+            title: model.title,
+            site: model.site,
+            started_at: model.started_at,
+            ended_at: model.ended_at,
+            duration_ms: model.duration_ms,
+            dispatch_count: model.dispatch_count,
+            tool_sequence,
+            status: TaskStatus::from_db(model.status),
+            error_count: model.error_count,
+            last_screenshot_dispatch_id: model.last_screenshot_dispatch_id,
+            cursor_id: model.cursor_id,
+            has_screenshots: model.has_screenshots,
+            tool_input_token_estimate: model.tool_input_token_estimate,
+            tool_output_token_estimate: model.tool_output_token_estimate,
+            tokens_measured: model.tokens_measured,
+            task_summary: model.task_summary,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskDetail {
+    #[serde(flatten)]
+    pub summary: TaskSummary,
+    pub dispatches: Vec<ToolDispatchRow>,
+    pub screenshot_dispatch_ids: Vec<i64>,
+    pub start_event: Option<SessionStartEvent>,
+    pub end_event: Option<SessionEndEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionStartEvent {
+    pub created_at: i64,
+    pub client_name: String,
+    pub client_version: String,
+}
+
+impl From<agent_session_starts::Model> for SessionStartEvent {
+    fn from(model: agent_session_starts::Model) -> Self {
+        Self {
+            created_at: model.created_at,
+            client_name: model.client_name,
+            client_version: model.client_version,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionEndEvent {
+    pub created_at: i64,
+    pub kind: String,
+    pub reason: Option<String>,
+}
+
+impl From<agent_session_ends::Model> for SessionEndEvent {
+    fn from(model: agent_session_ends::Model) -> Self {
+        Self {
+            created_at: model.created_at,
+            kind: model.kind,
+            reason: model.reason,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ListTasksResult {
+    pub tasks: Vec<TaskSummary>,
+    pub next_cursor: Option<i64>,
+}
+
+/// How many times a session id was opened and closed. A session can still gain rows while any
+/// start lacks its end: teardown writes the end only after the session's in-flight calls have
+/// drained and been recorded, and a reused id (legacy transport) opens a second life after the
+/// first one ended.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SessionLifecycle {
+    pub starts: u64,
+    pub ends: u64,
+    /// When the latest end was recorded.
+    pub last_end_at: Option<i64>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ListTasksQuery {
+    pub agent_id: Option<String>,
+    pub slug: Option<String>,
+    /// Exact `clientInfo.name` a session's start recorded. Unlike `slug`, which follows a
+    /// declared `agentName` when there is one, this is what the client reported itself as.
+    pub client_name: Option<String>,
+    pub status: Option<TaskStatus>,
+    pub site: Option<String>,
+    pub search: Option<String>,
+    pub since: Option<i64>,
+    /// Inclusive upper bound on `started_at`, the mirror of `since`.
+    pub until: Option<i64>,
+    pub cursor: Option<i64>,
+    pub limit: Option<i64>,
+}
+
+impl AuditLog {
+    pub fn new(db: Database) -> Self {
+        Self { db }
+    }
+
+    /// Convenience path for callers that need an immediately refreshed task projection.
+    pub async fn record_tool_dispatch(&self, input: RecordToolDispatchInput) -> AppResult<i64> {
+        let session_id = input.session_id.clone();
+        let row_id = self.append_tool_dispatch(input).await?;
+        self.refresh_task(&session_id).await?;
+        Ok(row_id)
+    }
+
+    /// Appends one persistence-ready dispatch without recomputing its session projection.
+    pub async fn append_tool_dispatch(&self, input: RecordToolDispatchInput) -> AppResult<i64> {
+        let result = ToolDispatches::insert(tool_dispatches::ActiveModel {
+            id: NotSet,
+            created_at: Set(input.created_at.unwrap_or_else(now_epoch_ms)),
+            agent_id: Set(input.agent_id),
+            slug: Set(input.slug),
+            agent_label: Set(input.agent_label),
+            session_id: Set(input.session_id),
+            tool_name: Set(input.tool_name),
+            page_id: Set(input.page_id),
+            tab_id: Set(input.tab_id),
+            target_id: Set(input.target_id),
+            url: Set(input.url),
+            title: Set(input.title),
+            args_json: Set(Some(input.args_json)),
+            result_meta: Set(Some(input.result_meta)),
+            duration_ms: Set(Some(input.duration_ms)),
+            tool_input_token_estimate: Set(input.tool_input_token_estimate.max(0)),
+            tool_output_token_estimate: Set(input.tool_output_token_estimate.max(0)),
+            token_estimator_version: Set(input.token_estimator_version.max(0)),
+            dispatch_id: Set(Some(input.dispatch_id.into_inner())),
+            parent_dispatch_id: Set(input.parent_dispatch_id.map(DispatchId::into_inner)),
+            has_screenshot: Set(false),
+        })
+        .exec(self.db.connection())
+        .await?;
+        Ok(result.last_insert_id)
+    }
+
+    pub async fn refresh_task(&self, session_id: &str) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        recompute_task(&txn, session_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Reconciles the recorded outcome when Stop wins after the audit effect ran.
+    pub async fn mark_dispatch_operator_cancelled(
+        &self,
+        dispatch_id: &DispatchId,
+    ) -> AppResult<bool> {
+        let txn = self.db.connection().begin().await?;
+        let Some(dispatch) = ToolDispatches::find()
+            .filter(tool_dispatches::Column::DispatchId.eq(dispatch_id.as_str()))
+            .one(&txn)
+            .await?
+        else {
+            txn.commit().await?;
+            return Ok(false);
+        };
+        let structured_content = json!({
+            "cancellationReason": OPERATOR_CANCELLATION_REASON,
+            "cancellationKind": "cockpit.operator-cancelled",
+        });
+        let output_token_estimate =
+            estimate_tool_output_tokens(&[ContentBlock::text(OPERATOR_CANCELLATION_REASON)]);
+        ToolDispatches::update_many()
+            .col_expr(
+                tool_dispatches::Column::ResultMeta,
+                Expr::value(Some(result_meta(true, true, &structured_content, 1))),
+            )
+            .col_expr(
+                tool_dispatches::Column::ToolOutputTokenEstimate,
+                Expr::value(output_token_estimate),
+            )
+            .filter(tool_dispatches::Column::Id.eq(dispatch.id))
+            .exec(&txn)
+            .await?;
+        recompute_task(&txn, &dispatch.session_id).await?;
+        txn.commit().await?;
+        Ok(true)
+    }
+
+    /// Marks a dispatch screenshot and refreshes its task summary when present.
+    pub async fn mark_screenshot(&self, dispatch_id: i64) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        if let Some(dispatch) = ToolDispatches::find_by_id(dispatch_id).one(&txn).await? {
+            mark_screenshot(&txn, dispatch_id).await?;
+            recompute_task(&txn, &dispatch.session_id).await?;
+        }
+        txn.commit().await?;
+        Ok(())
+    }
+
+    pub async fn mark_screenshot_without_projection(&self, dispatch_id: i64) -> AppResult<()> {
+        mark_screenshot(self.db.connection(), dispatch_id).await
+    }
+
+    /// Reads the child primitives recorded inside a script dispatch, in run
+    /// order, so the self-healing distiller can replay the sequence.
+    pub async fn dispatches_with_parent(
+        &self,
+        parent_dispatch_id: &str,
+    ) -> AppResult<Vec<ToolDispatchRow>> {
+        Ok(ToolDispatches::find()
+            .filter(tool_dispatches::Column::ParentDispatchId.eq(parent_dispatch_id))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(self.db.connection())
+            .await?)
+    }
+
+    /// Records a session start and refreshes its task summary atomically.
+    pub async fn record_session_start(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        slug: &str,
+        agent_label: &str,
+        client_name: &str,
+        client_version: &str,
+    ) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        AgentSessionStarts::insert(agent_session_starts::ActiveModel {
+            id: NotSet,
+            created_at: Set(now_epoch_ms()),
+            session_id: Set(session_id.to_owned()),
+            agent_id: Set(agent_id.to_owned()),
+            slug: Set(slug.to_owned()),
+            agent_label: Set(agent_label.to_owned()),
+            client_name: Set(client_name.to_owned()),
+            client_version: Set(client_version.to_owned()),
+        })
+        .exec(&txn)
+        .await?;
+        recompute_task(&txn, session_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Stores the agent-declared, already-scrubbed task summary and refreshes the
+    /// FTS5 search index for the session. Last write wins.
+    pub async fn set_task_summary(&self, session_id: &str, summary: &str) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "UPDATE tasks SET task_summary = ? WHERE session_id = ?",
+            [summary.to_owned().into(), session_id.to_owned().into()],
+        ))
+        .await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "DELETE FROM task_search WHERE session_id = ?",
+            [session_id.to_owned().into()],
+        ))
+        .await?;
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "INSERT INTO task_search(session_id, summary) VALUES (?, ?)",
+            [session_id.to_owned().into(), summary.to_owned().into()],
+        ))
+        .await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Records a session end and refreshes its task summary atomically.
+    pub async fn record_session_end(
+        &self,
+        session_id: &str,
+        kind: &str,
+        reason: Option<&str>,
+    ) -> AppResult<()> {
+        let txn = self.db.connection().begin().await?;
+        AgentSessionEnds::insert(agent_session_ends::ActiveModel {
+            id: NotSet,
+            created_at: Set(now_epoch_ms()),
+            session_id: Set(session_id.to_owned()),
+            kind: Set(kind.to_owned()),
+            reason: Set(reason.map(str::to_owned)),
+        })
+        .exec(&txn)
+        .await?;
+        recompute_task(&txn, session_id).await?;
+        txn.commit().await?;
+        Ok(())
+    }
+
+    /// Closes sessions left open by a process that is no longer running.
+    ///
+    /// A start row with no end row is indistinguishable from an ongoing session, and the
+    /// idle sweeper only walks the in-memory map, so a session whose process died is
+    /// unreachable by every closing path the server has and reads as `live` forever. Twelve
+    /// had accumulated that way before this existed, four of them days old.
+    ///
+    /// **Call this at boot and nowhere else.** The query it runs matches a live session
+    /// just as readily as a dead one; it is only unambiguous before anything can mint a
+    /// session, when the live map is empty by construction. Called later it would close
+    /// sessions that are actively working.
+    ///
+    /// Returns how many were closed. `SessionTabLedger::release_all_open` does the same job
+    /// for tab claims and runs beside this one.
+    pub async fn close_sessions_open_from_previous_run(&self) -> AppResult<usize> {
+        // Counting rather than asking "has this id ever ended". A session id can be
+        // presented again after its session ended, on the legacy transport where the id
+        // comes from the client's `mcp-session-id` header, and that writes a second start
+        // row. An existence check would see the first end and skip the second start, so the
+        // reused session would stay `live` forever, which is the exact state being repaired.
+        //
+        // The end is stamped at `created_at + duration_ms`, not `created_at`. A top-level
+        // dispatch row records when its tool *started*, so a session killed part way through
+        // a ninety second `run` would otherwise have its end backdated to before that run
+        // began. Steps inside a script stamp write time instead, where adding the duration
+        // overshoots by a few milliseconds; an upper bound on the last evidence of life is
+        // the right direction to err.
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            r"
+            SELECT s.session_id AS session_id,
+                   COUNT(*) - (
+                       SELECT COUNT(*) FROM agent_session_ends e
+                       WHERE e.session_id = s.session_id
+                   ) AS unclosed,
+                   MAX(s.created_at) AS latest_start,
+                   COALESCE(
+                       (
+                           SELECT MAX(d.created_at + d.duration_ms) FROM tool_dispatches d
+                           WHERE d.session_id = s.session_id
+                       ),
+                       0
+                   ) AS latest_dispatch
+            FROM agent_session_starts s
+            GROUP BY s.session_id
+            HAVING unclosed > 0
+            ",
+            [],
+        );
+        let txn = self.db.connection().begin().await?;
+        let stranded = StrandedSessionRow::find_by_statement(statement)
+            .all(&txn)
+            .await?;
+        let mut closed = 0;
+        for session in stranded {
+            // The later of the two, never just the dispatch. Dispatches are looked up by
+            // session id, so for a reused id they span every life that id has had. A second
+            // life that exited before dispatching anything would otherwise be stamped with
+            // the first life's last dispatch, putting its end before its own start and
+            // corrupting the chronology permanently.
+            let last_activity = session.latest_start.max(session.latest_dispatch);
+            // One end per unmatched start, so the counts balance in a single pass and a
+            // second boot finds nothing left to do.
+            for _ in 0..session.unclosed.max(0) {
+                AgentSessionEnds::insert(agent_session_ends::ActiveModel {
+                    id: NotSet,
+                    created_at: Set(last_activity),
+                    session_id: Set(session.session_id.clone()),
+                    kind: Set("closed".to_owned()),
+                    // The only thing actually known. Whether the process was killed, crashed
+                    // or restarted by a watcher is recorded nowhere, and naming a cause we
+                    // did not observe would put a guess in the audit trail.
+                    reason: Set(Some("server exited".to_owned())),
+                })
+                .exec(&txn)
+                .await?;
+                closed += 1;
+            }
+            recompute_task(&txn, &session.session_id).await?;
+        }
+        txn.commit().await?;
+        Ok(closed)
+    }
+
+    /// Lists dispatches using stable descending-id cursor pagination.
+    pub async fn list_dispatches(
+        &self,
+        query: ListDispatchesQuery,
+    ) -> AppResult<ListDispatchesResult> {
+        let limit = query.limit.unwrap_or(100).clamp(1, 500);
+        let page_size = usize::try_from(limit).unwrap_or(500);
+        let condition = Condition::all()
+            .add_option(
+                query
+                    .agent_id
+                    .map(|value| tool_dispatches::Column::AgentId.eq(value)),
+            )
+            .add_option(
+                query
+                    .session_id
+                    .map(|value| tool_dispatches::Column::SessionId.eq(value)),
+            )
+            .add_option(
+                query
+                    .cursor
+                    .map(|value| tool_dispatches::Column::Id.lt(value)),
+            );
+        let mut rows = ToolDispatches::find()
+            .filter(condition)
+            .order_by_desc(tool_dispatches::Column::Id)
+            .limit(u64::try_from(limit + 1).unwrap_or(501))
+            .all(self.db.connection())
+            .await?;
+        let next_cursor = if rows.len() > page_size {
+            rows.truncate(page_size);
+            rows.last().map(|row| row.id)
+        } else {
+            None
+        };
+        Ok(ListDispatchesResult { rows, next_cursor })
+    }
+
+    /// Lists task summaries using composable filters and cursor pagination.
+    pub async fn list_tasks(&self, query: ListTasksQuery) -> AppResult<ListTasksResult> {
+        let limit = query.limit.unwrap_or(25).clamp(1, 100);
+        let page_size = usize::try_from(limit).unwrap_or(100);
+        // Full-text hits over the task summary, resolved to the session_ids the FTS5
+        // index matched, so the summary participates in the same OR filter as the fields.
+        let summary_matches = match query.search.as_deref() {
+            Some(search) => fts_search_session_ids(self.db.connection(), search).await?,
+            None => Vec::new(),
+        };
+        let search_condition = query.search.map(|search| {
+            let pattern = format!("%{}%", search.to_ascii_lowercase());
+            let mut any = Condition::any()
+                .add(Func::lower(Expr::col(tasks::Column::Title)).like(pattern.clone()))
+                .add(Func::lower(Expr::col(tasks::Column::AgentLabel)).like(pattern.clone()))
+                .add(
+                    Func::lower(Func::coalesce([
+                        Expr::col(tasks::Column::Site).into(),
+                        Expr::value(""),
+                    ]))
+                    .like(pattern.clone()),
+                );
+            if !summary_matches.is_empty() {
+                any = any.add(tasks::Column::SessionId.is_in(summary_matches));
+            }
+            // The label above prefers `clientInfo.title`, so the reported name is matched
+            // through the session's start rows.
+            any.add(tasks::Column::SessionId.in_subquery(sessions_started_by(
+                Func::lower(Expr::col(agent_session_starts::Column::ClientName)).like(pattern),
+            )))
+        });
+        let condition = Condition::all()
+            .add(tasks::Column::DispatchCount.gt(0))
+            .add_option(query.agent_id.map(|value| tasks::Column::AgentId.eq(value)))
+            .add_option(query.slug.map(|value| tasks::Column::Slug.eq(value)))
+            .add_option(query.client_name.map(|value| {
+                tasks::Column::SessionId.in_subquery(sessions_started_by(
+                    agent_session_starts::Column::ClientName.eq(value),
+                ))
+            }))
+            .add_option(
+                query
+                    .status
+                    .map(|value| tasks::Column::Status.eq(value.as_str())),
+            )
+            .add_option(query.site.map(|value| tasks::Column::Site.eq(value)))
+            .add_option(query.since.map(|value| tasks::Column::StartedAt.gte(value)))
+            .add_option(query.until.map(|value| tasks::Column::StartedAt.lte(value)))
+            .add_option(search_condition)
+            .add_option(query.cursor.map(|value| tasks::Column::CursorId.lt(value)));
+        let mut tasks = Tasks::find()
+            .filter(condition)
+            .order_by_desc(tasks::Column::CursorId)
+            .order_by_desc(tasks::Column::StartedAt)
+            .limit(u64::try_from(limit + 1).unwrap_or(101))
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(TaskSummary::from)
+            .collect::<Vec<_>>();
+        let next_cursor = if tasks.len() > page_size {
+            tasks.truncate(page_size);
+            tasks.last().map(|task| task.cursor_id)
+        } else {
+            None
+        };
+        Ok(ListTasksResult { tasks, next_cursor })
+    }
+
+    pub async fn session_lifecycle(&self, session_id: &str) -> AppResult<SessionLifecycle> {
+        let conn = self.db.connection();
+        let starts = AgentSessionStarts::find()
+            .filter(agent_session_starts::Column::SessionId.eq(session_id))
+            .count(conn)
+            .await?;
+        let ends = AgentSessionEnds::find()
+            .filter(agent_session_ends::Column::SessionId.eq(session_id))
+            .count(conn)
+            .await?;
+        let last_end_at = AgentSessionEnds::find()
+            .filter(agent_session_ends::Column::SessionId.eq(session_id))
+            .order_by_desc(agent_session_ends::Column::CreatedAt)
+            .one(conn)
+            .await?
+            .map(|end| end.created_at);
+        Ok(SessionLifecycle {
+            starts,
+            ends,
+            last_end_at,
+        })
+    }
+
+    /// The `clientInfo.name` each session's first start recorded, keyed by session id.
+    /// Dispatch rows carry a display label instead, which prefers `clientInfo.title`; sessions
+    /// with no start row are missing from the map.
+    pub async fn client_names(&self, session_ids: &[String]) -> AppResult<HashMap<String, String>> {
+        let mut names = HashMap::with_capacity(session_ids.len());
+        if session_ids.is_empty() {
+            return Ok(names);
+        }
+        let starts = AgentSessionStarts::find()
+            .filter(agent_session_starts::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .order_by_asc(agent_session_starts::Column::Id)
+            .all(self.db.connection())
+            .await?;
+        for start in starts {
+            names.entry(start.session_id).or_insert(start.client_name);
+        }
+        Ok(names)
+    }
+
+    /// Returns the audit summary for one session without loading its dispatch history.
+    pub async fn get_task_summary(&self, session_id: &str) -> AppResult<Option<TaskSummary>> {
+        Ok(Tasks::find_by_id(session_id.to_owned())
+            .one(self.db.connection())
+            .await?
+            .map(TaskSummary::from))
+    }
+
+    /// Returns a task summary with its ordered events and dispatches.
+    pub async fn get_task(&self, session_id: &str) -> AppResult<Option<TaskDetail>> {
+        let Some(summary) = Tasks::find_by_id(session_id.to_owned())
+            .filter(tasks::Column::DispatchCount.gt(0))
+            .one(self.db.connection())
+            .await?
+            .map(TaskSummary::from)
+        else {
+            return Ok(None);
+        };
+        let dispatches = query_dispatches_for_session(self.db.connection(), session_id).await?;
+        let screenshot_dispatch_ids = dispatches
+            .iter()
+            .filter(|row| row.has_screenshot)
+            .map(|row| row.id)
+            .collect();
+        let start_event = query_start(self.db.connection(), session_id)
+            .await?
+            .map(SessionStartEvent::from);
+        let end_event = query_end(self.db.connection(), session_id)
+            .await?
+            .map(SessionEndEvent::from);
+        Ok(Some(TaskDetail {
+            summary,
+            dispatches,
+            screenshot_dispatch_ids,
+            start_event,
+            end_event,
+        }))
+    }
+
+    pub async fn list_session_screenshots(
+        &self,
+        session_id: &str,
+    ) -> AppResult<Option<Vec<SessionScreenshotRow>>> {
+        if Tasks::find_by_id(session_id.to_owned())
+            .one(self.db.connection())
+            .await?
+            .is_none()
+        {
+            return Ok(None);
+        }
+        let rows = ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.eq(session_id))
+            .filter(tool_dispatches::Column::HasScreenshot.eq(true))
+            .order_by_asc(tool_dispatches::Column::CreatedAt)
+            .order_by_asc(tool_dispatches::Column::Id)
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(|row| SessionScreenshotRow {
+                screenshot_id: row.id,
+                captured_at: row.created_at,
+                tool_name: row.tool_name,
+            })
+            .collect();
+        Ok(Some(rows))
+    }
+
+    pub async fn session_owns_screenshot(
+        &self,
+        session_id: &str,
+        screenshot_id: i64,
+    ) -> AppResult<bool> {
+        Ok(ToolDispatches::find_by_id(screenshot_id)
+            .filter(tool_dispatches::Column::SessionId.eq(session_id))
+            .filter(tool_dispatches::Column::HasScreenshot.eq(true))
+            .one(self.db.connection())
+            .await?
+            .is_some())
+    }
+}
+
+async fn mark_screenshot<C: ConnectionTrait>(conn: &C, dispatch_id: i64) -> AppResult<()> {
+    ToolDispatches::update_many()
+        .col_expr(tool_dispatches::Column::HasScreenshot, Expr::value(true))
+        .filter(tool_dispatches::Column::Id.eq(dispatch_id))
+        .exec(conn)
+        .await?;
+    Ok(())
+}
+
+/// Turns raw user search text into a safe FTS5 query: each whitespace token that
+/// carries a letter or digit becomes a quoted prefix term (`"token"*`), joined by
+/// spaces (implicit AND). Quoting neutralizes FTS5 operators in user input; the
+/// trailing `*` gives search-as-you-type prefix matching. Empty when nothing usable.
+fn build_fts_query(search: &str) -> String {
+    search
+        .split_whitespace()
+        .filter(|token| token.chars().any(char::is_alphanumeric))
+        .map(|token| format!("\"{}\"*", token.replace('"', "\"\"")))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Resolves a user search string against the `task_search` FTS5 index to the set of
+/// matching `session_id`s. Empty (no query) yields no matches rather than erroring.
+async fn fts_search_session_ids<C: ConnectionTrait>(
+    conn: &C,
+    search: &str,
+) -> AppResult<Vec<String>> {
+    let fts_query = build_fts_query(search);
+    if fts_query.is_empty() {
+        return Ok(Vec::new());
+    }
+    let rows = conn
+        .query_all(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT session_id FROM task_search WHERE task_search MATCH ?",
+            [fts_query.into()],
+        ))
+        .await?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|row| row.try_get::<String>("", "session_id").ok())
+        .collect())
+}
+
+async fn recompute_task<C: ConnectionTrait>(conn: &C, session_id: &str) -> AppResult<()> {
+    let dispatches = query_dispatches_for_session(conn, session_id).await?;
+    let start = query_start(conn, session_id).await?;
+    let end = query_end(conn, session_id).await?;
+    if dispatches.is_empty() && start.is_none() {
+        return Ok(());
+    }
+    let first_dispatch = dispatches.first();
+    let last_dispatch = dispatches.last();
+    let started_at = start
+        .as_ref()
+        .map(|event| event.created_at)
+        .or_else(|| first_dispatch.map(|row| row.created_at))
+        .unwrap_or_else(now_epoch_ms);
+    let ended_at = end.as_ref().map(|event| event.created_at);
+    let agent_id = first_dispatch
+        .map(|row| row.agent_id.clone())
+        .or_else(|| start.as_ref().map(|event| event.agent_id.clone()))
+        .unwrap_or_default();
+    let slug = first_dispatch
+        .map(|row| row.slug.clone())
+        .or_else(|| start.as_ref().map(|event| event.slug.clone()))
+        .unwrap_or_default();
+    let agent_label = first_dispatch
+        .map(|row| row.agent_label.clone())
+        .or_else(|| start.as_ref().map(|event| event.agent_label.clone()))
+        .unwrap_or_else(|| "agent".to_string());
+    let site = first_site_of(&dispatches);
+    let title = site
+        .as_ref()
+        .map(|site| format!("Browsed {site}"))
+        .unwrap_or_else(|| format!("Session on {agent_label}"));
+    let cursor_id = last_dispatch.map(|row| row.id).unwrap_or(0);
+    let last_at = last_dispatch
+        .map(|row| row.created_at)
+        .unwrap_or(started_at);
+    let duration_ms = ended_at.unwrap_or(last_at).saturating_sub(started_at);
+    let error_count = dispatches
+        .iter()
+        .filter(|row| result_is_error(row.result_meta.as_deref()))
+        .count() as i64;
+    let end_event = end.clone().map(SessionEndEvent::from);
+    let status = derive_status(&dispatches, end_event.as_ref());
+    let tool_sequence: Vec<String> = dispatches.iter().map(|row| row.tool_name.clone()).collect();
+    let screenshot_ids: Vec<i64> = dispatches
+        .iter()
+        .filter(|row| row.has_screenshot)
+        .map(|row| row.id)
+        .collect();
+    let last_screenshot_dispatch_id = screenshot_ids.last().copied();
+    // Materialize the live-updating token totals so the audit surfaces read one field instead of
+    // re-summing dispatches. `tokens_measured` matches the efficiency projection's eligibility, so a
+    // legacy/unmeasured session reports absent rather than a misleading zero downstream.
+    let tokens_measured = !dispatches.is_empty()
+        && dispatches
+            .iter()
+            .all(|row| row.token_estimator_version == ELIGIBLE_TOKEN_ESTIMATOR_VERSION);
+    let tool_input_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.tool_input_token_estimate.max(0))
+    });
+    let tool_output_token_estimate = dispatches.iter().fold(0i64, |total, row| {
+        total.saturating_add(row.tool_output_token_estimate.max(0))
+    });
+    Tasks::insert(tasks::ActiveModel {
+        session_id: Set(session_id.to_owned()),
+        agent_id: Set(agent_id),
+        slug: Set(slug),
+        agent_label: Set(agent_label),
+        title: Set(title),
+        site: Set(site),
+        started_at: Set(started_at),
+        ended_at: Set(ended_at),
+        duration_ms: Set(duration_ms),
+        dispatch_count: Set(i64::try_from(dispatches.len()).unwrap_or(i64::MAX)),
+        tool_sequence_json: Set(serde_json::to_string(&tool_sequence)?),
+        status: Set(status.as_str().to_owned()),
+        error_count: Set(error_count),
+        last_screenshot_dispatch_id: Set(last_screenshot_dispatch_id),
+        cursor_id: Set(cursor_id),
+        has_screenshots: Set(!screenshot_ids.is_empty()),
+        tool_input_token_estimate: Set(tool_input_token_estimate),
+        tool_output_token_estimate: Set(tool_output_token_estimate),
+        tokens_measured: Set(tokens_measured),
+        updated_at: Set(now_epoch_ms()),
+        // Owned by name_session via set_task_summary, not by the recompute projection:
+        // NULL on first insert, and deliberately absent from update_columns below so a
+        // later recompute never clobbers a declared summary.
+        task_summary: Set(None),
+    })
+    .on_conflict(
+        OnConflict::column(tasks::Column::SessionId)
+            .update_columns([
+                tasks::Column::AgentId,
+                tasks::Column::Slug,
+                tasks::Column::AgentLabel,
+                tasks::Column::Title,
+                tasks::Column::Site,
+                tasks::Column::StartedAt,
+                tasks::Column::EndedAt,
+                tasks::Column::DurationMs,
+                tasks::Column::DispatchCount,
+                tasks::Column::ToolSequenceJson,
+                tasks::Column::Status,
+                tasks::Column::ErrorCount,
+                tasks::Column::LastScreenshotDispatchId,
+                tasks::Column::CursorId,
+                tasks::Column::HasScreenshots,
+                tasks::Column::ToolInputTokenEstimate,
+                tasks::Column::ToolOutputTokenEstimate,
+                tasks::Column::TokensMeasured,
+                tasks::Column::UpdatedAt,
+            ])
+            .to_owned(),
+    )
+    .exec_without_returning(conn)
+    .await?;
+    Ok(())
+}
+
+async fn query_dispatches_for_session<C: ConnectionTrait>(
+    conn: &C,
+    session_id: &str,
+) -> AppResult<Vec<ToolDispatchRow>> {
+    Ok(ToolDispatches::find()
+        .filter(tool_dispatches::Column::SessionId.eq(session_id))
+        // created_at first so a script tool (stamped with its start) sorts
+        // before the child primitives it recorded while executing; id breaks
+        // ties for rows written in the same millisecond.
+        .order_by_asc(tool_dispatches::Column::CreatedAt)
+        .order_by_asc(tool_dispatches::Column::Id)
+        .all(conn)
+        .await?)
+}
+
+/// `SELECT session_id FROM agent_session_starts WHERE <condition>`, for filtering tasks by
+/// what their start rows recorded.
+fn sessions_started_by(condition: impl sea_orm::sea_query::IntoCondition) -> SelectStatement {
+    Query::select()
+        .column(agent_session_starts::Column::SessionId)
+        .from(AgentSessionStarts)
+        .cond_where(condition)
+        .to_owned()
+}
+
+async fn query_start<C: ConnectionTrait>(
+    conn: &C,
+    session_id: &str,
+) -> AppResult<Option<agent_session_starts::Model>> {
+    Ok(AgentSessionStarts::find()
+        .filter(agent_session_starts::Column::SessionId.eq(session_id))
+        .order_by_asc(agent_session_starts::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+async fn query_end<C: ConnectionTrait>(
+    conn: &C,
+    session_id: &str,
+) -> AppResult<Option<agent_session_ends::Model>> {
+    Ok(AgentSessionEnds::find()
+        .filter(agent_session_ends::Column::SessionId.eq(session_id))
+        .order_by_asc(agent_session_ends::Column::Id)
+        .one(conn)
+        .await?)
+}
+
+fn derive_status(dispatches: &[ToolDispatchRow], end: Option<&SessionEndEvent>) -> TaskStatus {
+    let Some(end) = end else {
+        return TaskStatus::Live;
+    };
+    match end.kind.as_str() {
+        "cancelled" => TaskStatus::Cancelled,
+        "errored" if dispatches.is_empty() => TaskStatus::Failed,
+        "closed" if dispatches.is_empty() => TaskStatus::Done,
+        "closed" | "errored"
+            if dispatches.len() >= SUSTAINED_ERROR_TAIL
+                && dispatches[dispatches.len() - SUSTAINED_ERROR_TAIL..]
+                    .iter()
+                    .all(|row| result_is_error(row.result_meta.as_deref())) =>
+        {
+            TaskStatus::Failed
+        }
+        "closed" | "errored" => TaskStatus::Done,
+        _ => TaskStatus::Live,
+    }
+}
+
+fn first_site_of(dispatches: &[ToolDispatchRow]) -> Option<String> {
+    for row in dispatches {
+        if let Some(url) = row.url.as_deref().and_then(hostname_of) {
+            return Some(url);
+        }
+    }
+    for row in dispatches {
+        if let Some(url) = row
+            .args_json
+            .as_deref()
+            .and_then(url_from_args)
+            .and_then(|url| hostname_of(&url))
+        {
+            return Some(url);
+        }
+    }
+    None
+}
+
+fn hostname_of(raw: &str) -> Option<String> {
+    Url::parse(raw)
+        .ok()
+        .and_then(|url| url.host_str().map(str::to_string))
+}
+
+fn url_from_args(raw: &str) -> Option<String> {
+    serde_json::from_str::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+fn result_is_error(result_meta: Option<&str>) -> bool {
+    result_meta
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .is_some_and(|value| {
+            value.get("isError").and_then(serde_json::Value::as_bool) == Some(true)
+                && value.get("cancelled").and_then(serde_json::Value::as_bool) != Some(true)
+        })
+}
+
+fn safe_stringify(value: &serde_json::Value) -> String {
+    serde_json::to_string(value).unwrap_or_else(|_| "\"<unserialisable>\"".to_string())
+}
+
+pub fn bounded_args_json(value: &serde_json::Value) -> String {
+    truncate_utf8(&safe_stringify(value), ARGS_JSON_MAX)
+}
+
+/// Replaces a redacted secret with this fixed marker. The original length is
+/// dropped on purpose so the ledger leaks neither the value nor its size.
+const REDACTED_MARKER: &str = "[redacted]";
+
+/// Scrubs explicit password fields even without runtime hints, before bounding.
+/// Hints additionally redact selected field values or all values/script source.
+/// Typed credential metadata remains readable; raw CDP strings use the separate
+/// context-aware script boundary below, including when their JSON is malformed.
+pub fn redacted_args_json(
+    value: &serde_json::Value,
+    hints: Option<&browseros_mcp::AuditHints>,
+) -> String {
+    // Explicit password fields are sensitive even when admission/cancellation
+    // prevented the handler from supplying runtime hints. Scrub before bounding,
+    // since truncation can otherwise persist a prefix of the secret.
+    let mut redacted = value.clone();
+    redact_password_fields(&mut redacted);
+    if let Some(hints) = hints {
+        redact_args(&mut redacted, hints);
+    }
+    bounded_args_json(&redacted)
+}
+
+/// Script CDP parameters can be malformed, so parsing cannot authorize keeping
+/// their bytes. Credential params are omitted wholesale at this string boundary;
+/// typed tool options still retain metadata and scrub explicit password fields.
+pub fn redacted_script_args(method: &str, args: &serde_json::Value) -> String {
+    let mut sanitized = args.clone();
+    if let Some(values) = sanitized.as_array_mut()
+        && browseros_mcp::tools::credentials::is_credential_primitive(method, values)
+    {
+        let parameter = match method {
+            "cdp" => Some(1),
+            "cdpJsonForPage" => Some(2),
+            _ => None,
+        };
+        if let Some(parameter) = parameter.and_then(|index| values.get_mut(index)) {
+            *parameter = json!(REDACTED_MARKER);
+        }
+    }
+    redacted_args_json(&sanitized, None)
+}
+
+fn redact_password_fields(value: &mut serde_json::Value) -> bool {
+    let mut changed = false;
+    match value {
+        serde_json::Value::Object(object) => {
+            for (key, value) in object {
+                if key == "password" {
+                    *value = json!(REDACTED_MARKER);
+                    changed = true;
+                } else {
+                    changed |= redact_password_fields(value);
+                }
+            }
+        }
+        serde_json::Value::Array(values) => {
+            for value in values {
+                changed |= redact_password_fields(value);
+            }
+        }
+        serde_json::Value::String(text) => {
+            // Raw CDP paramsJson crosses as a serialized object in an argument
+            // array. Preserve other strings byte-for-byte, including JSON whose
+            // formatting the script might rely on. Parent source uses its hint.
+            if let Ok(mut nested) = serde_json::from_str::<serde_json::Value>(text)
+                && (nested.is_object() || nested.is_array())
+                && redact_password_fields(&mut nested)
+                && let Ok(scrubbed) = serde_json::to_string(&nested)
+            {
+                *text = scrubbed;
+                changed = true;
+            }
+        }
+        _ => {}
+    }
+    changed
+}
+
+fn redact_args(value: &mut serde_json::Value, hints: &browseros_mcp::AuditHints) {
+    let serde_json::Value::Object(object) = value else {
+        return;
+    };
+    let redact_top = hints.redact_all_values
+        || object
+            .get("ref")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|ref_id| hints.sensitive_refs.iter().any(|r| r == ref_id));
+    if redact_top {
+        for key in ["value", "text", "code"] {
+            if object.contains_key(key) {
+                object.insert(key.to_string(), json!(REDACTED_MARKER));
+            }
+        }
+    }
+    if let Some(serde_json::Value::Array(fields)) = object.get_mut("fields") {
+        for field in fields {
+            let serde_json::Value::Object(entry) = field else {
+                continue;
+            };
+            let matches = hints.redact_all_values
+                || entry
+                    .get("ref")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|ref_id| hints.sensitive_refs.iter().any(|r| r == ref_id));
+            if matches && entry.contains_key("value") {
+                entry.insert("value".to_string(), json!(REDACTED_MARKER));
+            }
+        }
+    }
+}
+
+pub fn result_meta(
+    is_error: bool,
+    cancelled: bool,
+    structured_content: &serde_json::Value,
+    content_block_count: usize,
+) -> String {
+    let structured_keys: Vec<String> = structured_content
+        .as_object()
+        .map(|obj| {
+            obj.keys()
+                .take(RESULT_STRUCTURED_KEYS_MAX)
+                .map(|key| bounded_json_string(key))
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut summary = json!({
+        "isError": is_error,
+        "cancelled": cancelled,
+        "contentSummary": format!("{content_block_count} block(s)"),
+        "structuredKeys": structured_keys,
+    });
+    if let Some(cancellation_kind) = structured_content
+        .get("cancellationKind")
+        .and_then(serde_json::Value::as_str)
+    {
+        summary["cancellationKind"] = json!(bounded_json_string(cancellation_kind));
+    }
+    let serialized = summary.to_string();
+    debug_assert!(serialized.len() <= RESULT_META_MAX);
+    serialized
+}
+
+fn bounded_json_string(value: &str) -> String {
+    let value = truncate_utf8(value, RESULT_STRUCTURED_KEY_MAX);
+    if serde_json::to_string(&value).map_or(usize::MAX, |encoded| encoded.len())
+        <= RESULT_JSON_STRING_MAX
+    {
+        return value;
+    }
+    let mut end = value.len().saturating_sub(1);
+    loop {
+        while !value.is_char_boundary(end) {
+            end = end.saturating_sub(1);
+        }
+        let candidate = format!("{}~", &value[..end]);
+        if serde_json::to_string(&candidate).map_or(usize::MAX, |encoded| encoded.len())
+            <= RESULT_JSON_STRING_MAX
+        {
+            return candidate;
+        }
+        end = end.saturating_sub(1);
+    }
+}
+
+fn truncate_utf8(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes.saturating_sub(1);
+    while !value.is_char_boundary(end) {
+        end = end.saturating_sub(1);
+    }
+    format!("{}~", &value[..end])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        AuditLog, ListTasksQuery, RecordToolDispatchInput, TaskStatus, bounded_args_json,
+        redacted_args_json, result_meta,
+    };
+    use crate::db::{DATABASE_FILENAME, Database};
+    use browseros_mcp::AuditHints;
+    use browseros_mcp::token_estimate::estimate_tool_output_tokens;
+    use rmcp::model::ContentBlock;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+
+    /// When a session started, so a fixture dispatch can be placed inside it. A dispatch
+    /// timestamped before its own session start is not a state the server can produce, and
+    /// a test that fakes one stops testing anything real.
+    async fn started_at(audit: &AuditLog, session_id: &str) -> anyhow::Result<i64> {
+        Ok(super::query_start(audit.db.connection(), session_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("start missing"))?
+            .created_at)
+    }
+    use serde_json::json;
+    use tempfile::tempdir;
+
+    fn parse(json_text: &str) -> serde_json::Value {
+        serde_json::from_str(json_text)
+            .unwrap_or_else(|err| panic!("args_json is valid JSON: {err}"))
+    }
+
+    #[test]
+    fn malformed_credential_cdp_parameters_are_redacted_before_parsing() {
+        let args = json!([
+            1,
+            "Autofill.fillCredential",
+            "{\"password\":\"synthetic-malformed-secret\",}"
+        ]);
+        let out = super::redacted_script_args("cdpJsonForPage", &args);
+        assert!(!out.contains("synthetic-malformed-secret"));
+        assert!(out.contains("Autofill.fillCredential"));
+        assert!(out.contains("[redacted]"));
+    }
+
+    #[test]
+    fn redacts_passwords_in_script_arrays_and_serialized_cdp_parameters() {
+        let args = json!([
+            1,
+            "Autofill.fillCredential",
+            json!({"username":"synthetic-user", "password":"synthetic-cdp-secret"}).to_string()
+        ]);
+        let output = redacted_args_json(&args, None);
+        assert!(!output.contains("synthetic-cdp-secret"));
+        assert!(output.contains("synthetic-user"));
+        assert!(output.contains("[redacted]"));
+    }
+
+    #[test]
+    fn redacted_args_json_passes_through_without_hints() {
+        // No hints behaves exactly like bounded_args_json, byte for byte.
+        let args = json!({ "kind": "fill", "ref": "e1", "value": "secret" });
+        assert_eq!(redacted_args_json(&args, None), bounded_args_json(&args));
+        let empty = AuditHints::default();
+        assert_eq!(
+            redacted_args_json(&args, Some(&empty)),
+            bounded_args_json(&args)
+        );
+    }
+
+    #[test]
+    fn redacted_args_json_redacts_a_single_ref_fill() {
+        let args = json!({ "kind": "fill", "ref": "e1", "value": "hunter2" });
+        let hints = AuditHints {
+            sensitive_refs: vec!["e1".to_string()],
+            ..AuditHints::default()
+        };
+        let out = parse(&redacted_args_json(&args, Some(&hints)));
+        assert_eq!(out["value"], json!("[redacted]"));
+        // A ref the tool did not flag is untouched.
+        let other = AuditHints {
+            sensitive_refs: vec!["e2".to_string()],
+            ..AuditHints::default()
+        };
+        assert_eq!(
+            parse(&redacted_args_json(&args, Some(&other)))["value"],
+            json!("hunter2")
+        );
+    }
+
+    #[test]
+    fn redacted_args_json_redacts_only_the_flagged_field_entry() {
+        // A login form: the password ref is flagged, the username next to it is not.
+        let args = json!({
+            "kind": "fill",
+            "fields": [
+                { "ref": "e1", "value": "alice" },
+                { "ref": "e2", "value": "hunter2" },
+            ],
+        });
+        let hints = AuditHints {
+            sensitive_refs: vec!["e2".to_string()],
+            ..AuditHints::default()
+        };
+        let out = parse(&redacted_args_json(&args, Some(&hints)));
+        assert_eq!(out["fields"][0]["value"], json!("alice"));
+        assert_eq!(out["fields"][1]["value"], json!("[redacted]"));
+    }
+
+    #[test]
+    fn redacted_args_json_redact_all_covers_value_text_and_every_field() {
+        let args = json!({
+            "kind": "fill",
+            "value": "cvv-123",
+            "text": "typed-secret",
+            "fields": [
+                { "ref": "e1", "value": "card" },
+                { "ref": "e2", "value": "exp" },
+            ],
+        });
+        let hints = AuditHints {
+            redact_all_values: true,
+            ..AuditHints::default()
+        };
+        let out = parse(&redacted_args_json(&args, Some(&hints)));
+        assert_eq!(out["value"], json!("[redacted]"));
+        assert_eq!(out["text"], json!("[redacted]"));
+        assert_eq!(out["fields"][0]["value"], json!("[redacted]"));
+        assert_eq!(out["fields"][1]["value"], json!("[redacted]"));
+    }
+
+    fn dispatch(session_id: &str, url: &str, is_error: bool) -> RecordToolDispatchInput {
+        RecordToolDispatchInput {
+            agent_id: if session_id.starts_with("a") {
+                "agent-a"
+            } else {
+                "agent-b"
+            }
+            .to_string(),
+            slug: "agent".to_string(),
+            agent_label: "Agent".to_string(),
+            session_id: session_id.to_string(),
+            tool_name: "navigate".to_string(),
+            page_id: Some(1),
+            tab_id: Some(11),
+            target_id: Some("target".to_string()),
+            url: Some(url.to_string()),
+            title: None,
+            args_json: bounded_args_json(&json!({ "url": url })),
+            result_meta: result_meta(is_error, false, &json!({ "page": 1 }), 1),
+            duration_ms: 10,
+            dispatch_id: crate::ids::DispatchId::new(),
+            created_at: None,
+            parent_dispatch_id: None,
+            tool_input_token_estimate: 11,
+            tool_output_token_estimate: 22,
+            token_estimator_version: 1,
+        }
+    }
+
+    #[test]
+    fn result_metadata_bounds_json_escaped_strings() -> anyhow::Result<()> {
+        let mut structured = serde_json::Map::new();
+        for index in 0..16 {
+            structured.insert(
+                format!("{}-{index:02}", "\0".repeat(124)),
+                serde_json::Value::Null,
+            );
+        }
+        structured.insert(
+            "cancellationKind".to_string(),
+            serde_json::Value::String("\0".repeat(1024)),
+        );
+
+        let meta = result_meta(false, false, &serde_json::Value::Object(structured), 1);
+
+        assert!(meta.len() <= 4096);
+        serde_json::from_str::<serde_json::Value>(&meta)?;
+        Ok(())
+    }
+
+    /// The state a restart leaves behind: a start row with no end, unreachable by the idle
+    /// sweeper because the map that held it died with its process, and reading as `live`
+    /// forever because status is inferred from the missing end.
+    #[tokio::test]
+    async fn a_session_stranded_by_a_restart_is_closed_on_the_way_back_up() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://one.example.com", false))
+            .await?;
+        assert_eq!(
+            audit.get_task("a1").await?.map(|task| task.summary.status),
+            Some(TaskStatus::Live),
+            "a session with no end row reads as live, which is the bug"
+        );
+
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 1);
+        let task = audit
+            .get_task("a1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_ne!(
+            task.summary.status,
+            TaskStatus::Live,
+            "still live after reconciling"
+        );
+        Ok(())
+    }
+
+    /// A session id can be presented again after its session ended, on the legacy transport
+    /// where the id comes from the client's own header, and that writes a second start row.
+    /// Asking "has this id ever ended" would see the first end and skip the second start,
+    /// leaving the reused session `live` forever, which is the state being repaired.
+    #[tokio::test]
+    async fn a_reused_session_id_is_closed_for_its_second_life_too() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+
+        // First life: started, worked, ended cleanly.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://one.example.com", false))
+            .await?;
+        audit
+            .record_session_end("a1", "closed", Some("transport closed"))
+            .await?;
+
+        // Second life under the same id, stranded by a restart.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://two.example.com", false))
+            .await?;
+
+        assert_eq!(
+            audit.close_sessions_open_from_previous_run().await?,
+            1,
+            "the second life was skipped because the first had ended"
+        );
+        // Balanced in one pass: two starts, two ends, nothing left for the next boot.
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 0);
+        Ok(())
+    }
+
+    /// Dispatches are looked up by session id, so for a reused id they span every life that
+    /// id has had. A second life that exited before dispatching anything must not inherit
+    /// the first life's last dispatch, which sits before it even started.
+    #[tokio::test]
+    async fn a_reused_id_is_never_ended_before_it_started() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+
+        // First life: worked, then ended cleanly.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        let mut early = dispatch("a1", "https://one.example.com", false);
+        early.created_at = Some(1_700_000_000_000);
+        audit.record_tool_dispatch(early).await?;
+        audit
+            .record_session_end("a1", "closed", Some("transport closed"))
+            .await?;
+
+        // Second life under the same id, stranded before it dispatched anything.
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 1);
+
+        let conn = audit.db.connection();
+        let ends = super::AgentSessionEnds::find()
+            .filter(super::agent_session_ends::Column::SessionId.eq("a1"))
+            .order_by_asc(super::agent_session_ends::Column::Id)
+            .all(conn)
+            .await?;
+        let starts = super::AgentSessionStarts::find()
+            .filter(super::agent_session_starts::Column::SessionId.eq("a1"))
+            .order_by_asc(super::agent_session_starts::Column::Id)
+            .all(conn)
+            .await?;
+        assert_eq!(starts.len(), 2);
+        assert_eq!(ends.len(), 2);
+        let second_start = starts[1].created_at;
+        let reconciled = ends[1].created_at;
+        assert!(
+            reconciled >= second_start,
+            "ended at {reconciled} before it started at {second_start}"
+        );
+        Ok(())
+    }
+
+    /// A dispatch row records when its tool *started*, so ending a session at the last
+    /// dispatch would backdate it to before that tool ran. A session killed part way
+    /// through a long `run` would lose the whole run from its duration.
+    #[tokio::test]
+    async fn the_end_covers_the_final_tool_rather_than_starting_it() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        let began = started_at(&audit, "a1").await?;
+        let mut long_run = dispatch("a1", "https://one.example.com", false);
+        long_run.created_at = Some(began + 1_000);
+        long_run.duration_ms = 90_000;
+        audit.record_tool_dispatch(long_run).await?;
+
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 1);
+        let task = audit
+            .get_task("a1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(
+            task.summary.ended_at,
+            Some(began + 1_000 + 90_000),
+            "the ninety second run must be inside the session, not after its end"
+        );
+        Ok(())
+    }
+
+    /// The end time is the last moment there is evidence the session was alive, not the
+    /// moment we noticed. Stamping `now()` would report the downtime as part of the
+    /// session, so a short task reconciled the next morning would read as an overnight one.
+    #[tokio::test]
+    async fn the_recorded_end_is_the_last_activity_not_the_reconciliation_time()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        let began = started_at(&audit, "a1").await?;
+        let mut worked = dispatch("a1", "https://one.example.com", false);
+        worked.created_at = Some(began + 1_000);
+        audit.record_tool_dispatch(worked).await?;
+
+        // A session that never dispatched has nothing but its start to go on. It is read
+        // back from the end row rather than the task projection, which hides zero-dispatch
+        // sessions from the cockpit on purpose.
+        audit
+            .record_session_start("b1", "agent-b", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 2);
+
+        let worked = audit
+            .get_task("a1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(
+            worked.summary.ended_at,
+            // The fixture dispatch runs for 10ms, and the end covers it.
+            Some(began + 1_000 + 10),
+            "the end must sit at the end of the last dispatch, not at the reconciliation"
+        );
+
+        let conn = audit.db.connection();
+        let idle_start = super::query_start(conn, "b1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("start missing"))?;
+        let idle_end = super::query_end(conn, "b1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("end missing"))?;
+        assert_eq!(
+            idle_end.created_at, idle_start.created_at,
+            "a session that never dispatched ends where it started"
+        );
+        assert_eq!(idle_end.reason.as_deref(), Some("server exited"));
+        Ok(())
+    }
+
+    /// Reconciliation must not rewrite history. A session that already ended keeps the
+    /// reason it ended for, and a second boot finds nothing left to do.
+    #[tokio::test]
+    async fn sessions_that_already_ended_are_left_alone_and_reconciling_is_idempotent()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start("a1", "agent-a", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://one.example.com", false))
+            .await?;
+        audit
+            .record_session_end("a1", "cancelled", Some("operator requested stop"))
+            .await?;
+        let before = audit.get_task("a1").await?.map(|task| task.summary.status);
+
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 0);
+        assert_eq!(
+            audit.get_task("a1").await?.map(|task| task.summary.status),
+            before
+        );
+
+        // And a second pass over a database it already reconciled.
+        audit
+            .record_session_start("b1", "agent-b", "agent", "Agent", "claude-code", "1.0")
+            .await?;
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 1);
+        assert_eq!(audit.close_sessions_open_from_previous_run().await?, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_token_estimates_persist_and_sum_by_session() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut first = dispatch("a1", "https://one.example.com", false);
+        first.tool_input_token_estimate = 12;
+        first.tool_output_token_estimate = 34;
+        audit.record_tool_dispatch(first).await?;
+        let mut second = dispatch("a1", "https://two.example.com", false);
+        second.tool_input_token_estimate = 56;
+        second.tool_output_token_estimate = 78;
+        audit.record_tool_dispatch(second).await?;
+
+        let rows = audit
+            .list_dispatches(super::ListDispatchesQuery {
+                session_id: Some("a1".to_string()),
+                ..Default::default()
+            })
+            .await?
+            .rows;
+        assert_eq!(rows.len(), 2);
+        assert!(rows.iter().all(|row| row.token_estimator_version == 1));
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.tool_input_token_estimate)
+                .sum::<i64>(),
+            68
+        );
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.tool_output_token_estimate)
+                .sum::<i64>(),
+            112
+        );
+
+        let task = audit
+            .get_task_summary("a1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert_eq!(task.dispatch_count, 2);
+        assert!(task.tokens_measured);
+        assert_eq!(task.tool_input_token_estimate, 68);
+        assert_eq!(task.tool_output_token_estimate, 112);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_summary_reports_unmeasured_for_any_legacy_dispatch() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // One v1 dispatch alone measures cleanly.
+        audit
+            .record_tool_dispatch(dispatch("solo-v1", "https://one.example.com", false))
+            .await?;
+        let measured = audit
+            .get_task_summary("solo-v1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("task missing"))?;
+        assert!(measured.tokens_measured);
+        assert_eq!(measured.tool_input_token_estimate, 11);
+        assert_eq!(measured.tool_output_token_estimate, 22);
+
+        // A single unmeasured (v0) dispatch taints the whole session, and a negative per-dispatch
+        // estimate never drags the materialized total below zero.
+        audit
+            .record_tool_dispatch(dispatch("mixed", "https://one.example.com", false))
+            .await?;
+        let mut legacy = dispatch("mixed", "https://two.example.com", false);
+        legacy.token_estimator_version = 0;
+        legacy.tool_input_token_estimate = -5;
+        legacy.tool_output_token_estimate = 7;
+        audit.record_tool_dispatch(legacy).await?;
+        let mixed = audit
+            .get_task_summary("mixed")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("mixed task missing"))?;
+        assert!(!mixed.tokens_measured);
+        assert_eq!(mixed.tool_input_token_estimate, 11);
+        assert_eq!(mixed.tool_output_token_estimate, 29);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn dispatch_token_estimates_are_clamped_non_negative() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut input = dispatch("a1", "https://example.com", false);
+        input.tool_input_token_estimate = -1;
+        input.tool_output_token_estimate = -2;
+        input.token_estimator_version = -3;
+        audit.record_tool_dispatch(input).await?;
+
+        let row = audit
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        assert_eq!(row.tool_input_token_estimate, 0);
+        assert_eq!(row.tool_output_token_estimate, 0);
+        assert_eq!(row.token_estimator_version, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn operator_cancellation_replaces_only_the_output_estimate() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let mut input = dispatch("a1", "https://example.com", false);
+        input.tool_input_token_estimate = 123;
+        input.tool_output_token_estimate = 456;
+        let dispatch_id = input.dispatch_id.clone();
+        audit.record_tool_dispatch(input).await?;
+
+        assert!(audit.mark_dispatch_operator_cancelled(&dispatch_id).await?);
+
+        let row = audit
+            .list_dispatches(Default::default())
+            .await?
+            .rows
+            .into_iter()
+            .next()
+            .ok_or_else(|| anyhow::anyhow!("dispatch missing"))?;
+        assert_eq!(row.tool_input_token_estimate, 123);
+        assert_eq!(row.token_estimator_version, 1);
+        assert_eq!(
+            row.tool_output_token_estimate,
+            estimate_tool_output_tokens(&[ContentBlock::text("Operation cancelled by the User")])
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn migrations_and_dispatch_pagination_work() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        assert!(
+            audit
+                .list_dispatches(Default::default())
+                .await?
+                .rows
+                .is_empty()
+        );
+        for idx in 0..5 {
+            let url = format!("https://example{idx}.com");
+            audit
+                .record_tool_dispatch(dispatch("a1", &url, false))
+                .await?;
+        }
+        let first = audit
+            .list_dispatches(super::ListDispatchesQuery {
+                limit: Some(2),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(first.rows.len(), 2);
+        assert!(first.next_cursor.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_filters_compose_before_pagination() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://alpha.example.com", false))
+            .await?;
+        audit.record_session_end("a1", "closed", None).await?;
+        for _ in 0..3 {
+            audit
+                .record_tool_dispatch(dispatch("b1", "https://beta.example.com", true))
+                .await?;
+        }
+        audit.record_session_end("b1", "closed", None).await?;
+        let done = audit
+            .list_tasks(ListTasksQuery {
+                status: Some(TaskStatus::Done),
+                search: Some("alpha".to_string()),
+                limit: Some(1),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(done.tasks.len(), 1);
+        assert_eq!(done.tasks[0].session_id, "a1");
+        assert_eq!(done.next_cursor, None);
+        let failed = audit
+            .list_tasks(ListTasksQuery {
+                status: Some(TaskStatus::Failed),
+                site: Some("beta.example.com".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(failed.tasks.len(), 1);
+        assert_eq!(failed.tasks[0].session_id, "b1");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn task_summary_is_searchable_survives_recompute_and_is_purged() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        // A dispatch materializes the listable task row; the summary is set out-of-band.
+        audit
+            .record_tool_dispatch(dispatch("s1", "https://shop.example.com", false))
+            .await?;
+        audit
+            .set_task_summary("s1", "Reconciled the quarterly wholesale invoices")
+            .await?;
+
+        // FTS5 search over the summary finds the session (title/site do not contain the term),
+        // and the summary round-trips on the returned task.
+        let hit = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("wholesale".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(hit.tasks.len(), 1);
+        assert_eq!(hit.tasks[0].session_id, "s1");
+        assert_eq!(
+            hit.tasks[0].task_summary.as_deref(),
+            Some("Reconciled the quarterly wholesale invoices")
+        );
+
+        // A later recompute (session end) must not clobber the declared summary.
+        audit.record_session_end("s1", "closed", None).await?;
+        let after = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("reconciled".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert_eq!(after.tasks.len(), 1);
+        assert_eq!(
+            after.tasks[0].task_summary.as_deref(),
+            Some("Reconciled the quarterly wholesale invoices")
+        );
+
+        // A non-matching query returns nothing.
+        let miss = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("zzznotthere".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert!(miss.tasks.is_empty());
+
+        // Retention purges the task and its search-index rows.
+        audit.delete_sessions(&["s1".to_string()]).await?;
+        let purged = audit
+            .list_tasks(ListTasksQuery {
+                search: Some("wholesale".to_string()),
+                ..Default::default()
+            })
+            .await?;
+        assert!(purged.tasks.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completed_session_recovers_after_tool_error() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_tool_dispatch(dispatch("recovered", "https://example.com", true))
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("recovered", "https://example.com", false))
+            .await?;
+        audit
+            .record_session_end("recovered", "errored", None)
+            .await?;
+
+        let summary = audit
+            .get_task_summary("recovered")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("recovered task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Done);
+        assert_eq!(summary.error_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn completed_session_failure_requires_three_error_tail() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session_id, error_tail) in [("two-errors", 2), ("three-errors", 3)] {
+            audit
+                .record_tool_dispatch(dispatch(session_id, "https://example.com", false))
+                .await?;
+            for _ in 0..error_tail {
+                audit
+                    .record_tool_dispatch(dispatch(session_id, "https://example.com", true))
+                    .await?;
+            }
+            audit.record_session_end(session_id, "closed", None).await?;
+        }
+
+        let two_errors = audit
+            .get_task_summary("two-errors")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("two-error task missing"))?;
+        assert_eq!(two_errors.status, TaskStatus::Done);
+        assert_eq!(two_errors.error_count, 2);
+
+        let three_errors = audit
+            .get_task_summary("three-errors")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("three-error task missing"))?;
+        assert_eq!(three_errors.status, TaskStatus::Failed);
+        assert_eq!(three_errors.error_count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn active_session_stays_live_after_three_error_tail() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for _ in 0..3 {
+            audit
+                .record_tool_dispatch(dispatch("active", "https://example.com", true))
+                .await?;
+        }
+
+        let summary = audit
+            .get_task_summary("active")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("active task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Live);
+        assert_eq!(summary.error_count, 3);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_dispatch_tasks_keep_end_event_status() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for (session_id, kind) in [("empty-closed", "closed"), ("empty-errored", "errored")] {
+            audit
+                .record_session_start(session_id, "agent", "agent", "Agent", "client", "1")
+                .await?;
+            audit.record_session_end(session_id, kind, None).await?;
+        }
+
+        let closed = audit
+            .get_task_summary("empty-closed")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("empty closed task missing"))?;
+        assert_eq!(closed.status, TaskStatus::Done);
+
+        let errored = audit
+            .get_task_summary("empty-errored")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("empty errored task missing"))?;
+        assert_eq!(errored.status, TaskStatus::Failed);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn cancelled_end_is_terminal_even_when_dispatches_include_errors() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join("audit.sqlite")).await?);
+        audit
+            .record_session_start("cancelled-1", "agent", "codex", "Codex", "Codex", "1")
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("cancelled-1", "https://example.com", true))
+            .await?;
+        audit
+            .record_session_end("cancelled-1", "cancelled", Some("operator requested stop"))
+            .await?;
+
+        let summary = audit
+            .get_task_summary("cancelled-1")
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("cancelled task missing"))?;
+        assert_eq!(summary.status, TaskStatus::Cancelled);
+        assert_eq!(summary.error_count, 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn zero_dispatch_tasks_are_excluded_before_pagination() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        for session_id in ["handshake-1", "handshake-2"] {
+            audit
+                .record_session_start(session_id, "agent", "agent", "Agent", "client", "1")
+                .await?;
+        }
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://alpha.example.com", false))
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("b1", "https://beta.example.com", false))
+            .await?;
+
+        let page = audit
+            .list_tasks(ListTasksQuery {
+                limit: Some(2),
+                ..Default::default()
+            })
+            .await?;
+
+        assert_eq!(
+            page.tasks
+                .iter()
+                .map(|task| task.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["b1", "a1"]
+        );
+        assert_eq!(page.next_cursor, None);
+        assert!(
+            audit
+                .get_task_summary("handshake-1")
+                .await?
+                .is_some_and(|task| task.dispatch_count == 0)
+        );
+        assert!(audit.get_task("handshake-1").await?.is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retention_queries_select_and_delete_sessions() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        let first = audit
+            .record_tool_dispatch(dispatch("a1", "https://one.example.com", false))
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("a1", "https://two.example.com", false))
+            .await?;
+        audit
+            .record_tool_dispatch(dispatch("b2", "https://three.example.com", false))
+            .await?;
+        audit.mark_screenshot(first).await?;
+
+        // A cutoff in the future makes every session "older than" it.
+        let future = crate::clock::now_epoch_ms() + 1_000_000;
+        let mut older = audit.sessions_older_than(future).await?;
+        older.sort();
+        assert_eq!(older, vec!["a1".to_string(), "b2".to_string()]);
+        assert!(audit.sessions_older_than(0).await?.is_empty());
+
+        let shots = audit
+            .screenshot_dispatches_for_sessions(&["a1".to_string()])
+            .await?;
+        assert_eq!(shots, vec![("a1".to_string(), first)]);
+        assert!(
+            audit
+                .screenshot_dispatches_for_sessions(&[])
+                .await?
+                .is_empty()
+        );
+
+        let counts = audit.delete_sessions(&["a1".to_string()]).await?;
+        assert_eq!(counts.dispatches, 2);
+        assert_eq!(counts.tasks, 1);
+        assert!(audit.get_task_summary("a1").await?.is_none());
+        assert_eq!(
+            audit.sessions_older_than(future).await?,
+            vec!["b2".to_string()]
+        );
+
+        audit.reclaim_disk().await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn retention_includes_sessions_without_dispatches() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let audit = AuditLog::new(Database::open(dir.path().join(DATABASE_FILENAME)).await?);
+        audit
+            .record_session_start("c3", "agent-c", "agent", "Agent", "cli", "1.0")
+            .await?;
+
+        let future = crate::clock::now_epoch_ms() + 1_000_000;
+        assert_eq!(
+            audit.sessions_older_than(future).await?,
+            vec!["c3".to_string()]
+        );
+
+        let counts = audit.delete_sessions(&["c3".to_string()]).await?;
+        assert_eq!(counts.session_starts, 1);
+        assert!(audit.get_task_summary("c3").await?.is_none());
+        assert!(audit.sessions_older_than(future).await?.is_empty());
+        Ok(())
+    }
+}
+
+/// Row counts removed by an audit-retention delete.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AuditDeleteCounts {
+    pub dispatches: u64,
+    pub session_starts: u64,
+    pub session_ends: u64,
+    pub tasks: u64,
+}
+
+#[derive(FromQueryResult)]
+struct SessionIdRow {
+    session_id: String,
+}
+
+#[derive(FromQueryResult)]
+struct StrandedSessionRow {
+    session_id: String,
+    unclosed: i64,
+    latest_start: i64,
+    latest_dispatch: i64,
+}
+
+impl AuditLog {
+    /// Session ids whose most recent activity is older than `cutoff` (unix
+    /// millis). "Activity" spans dispatches AND lifecycle events, so a session
+    /// that only started/ended without any tool dispatch is still swept once it
+    /// ages out. The UNION-then-GROUP BY has no query-builder form, so it uses a
+    /// bound raw statement (as the recording-stream join does).
+    pub async fn sessions_older_than(&self, cutoff: i64) -> AppResult<Vec<String>> {
+        let statement = Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            "SELECT session_id FROM (\
+               SELECT session_id, created_at FROM tool_dispatches \
+               UNION ALL SELECT session_id, created_at FROM agent_session_starts \
+               UNION ALL SELECT session_id, created_at FROM agent_session_ends\
+             ) GROUP BY session_id HAVING max(created_at) < ?",
+            [cutoff.into()],
+        );
+        Ok(SessionIdRow::find_by_statement(statement)
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(|row| row.session_id)
+            .collect())
+    }
+
+    /// `(session_id, dispatch_id)` for every dispatch in `session_ids` carrying
+    /// a screenshot. The dispatch id is the screenshot id on disk.
+    pub async fn screenshot_dispatches_for_sessions(
+        &self,
+        session_ids: &[String],
+    ) -> AppResult<Vec<(String, i64)>> {
+        if session_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(ToolDispatches::find()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .filter(tool_dispatches::Column::HasScreenshot.eq(true))
+            .all(self.db.connection())
+            .await?
+            .into_iter()
+            .map(|row| (row.session_id, row.id))
+            .collect())
+    }
+
+    /// Deletes every audit row for `session_ids` across the four audit tables in
+    /// one transaction. `tasks` is included so the derived summary never shows a
+    /// phantom session.
+    pub async fn delete_sessions(&self, session_ids: &[String]) -> AppResult<AuditDeleteCounts> {
+        if session_ids.is_empty() {
+            return Ok(AuditDeleteCounts::default());
+        }
+        let txn = self.db.connection().begin().await?;
+        let dispatches = ToolDispatches::delete_many()
+            .filter(tool_dispatches::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .exec(&txn)
+            .await?
+            .rows_affected;
+        let session_starts = AgentSessionStarts::delete_many()
+            .filter(agent_session_starts::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .exec(&txn)
+            .await?
+            .rows_affected;
+        let session_ends = AgentSessionEnds::delete_many()
+            .filter(agent_session_ends::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .exec(&txn)
+            .await?
+            .rows_affected;
+        let tasks = Tasks::delete_many()
+            .filter(tasks::Column::SessionId.is_in(session_ids.iter().cloned()))
+            .exec(&txn)
+            .await?
+            .rows_affected;
+        // task_search is an FTS5 virtual table (not a SeaORM entity); purge its rows for
+        // the same sessions so the search index does not retain deleted summaries.
+        let placeholders = session_ids
+            .iter()
+            .map(|_| "?")
+            .collect::<Vec<_>>()
+            .join(", ");
+        let delete_index = format!("DELETE FROM task_search WHERE session_id IN ({placeholders})");
+        txn.execute(Statement::from_sql_and_values(
+            DbBackend::Sqlite,
+            &delete_index,
+            session_ids.iter().map(|id| id.clone().into()),
+        ))
+        .await?;
+        txn.commit().await?;
+        Ok(AuditDeleteCounts {
+            dispatches,
+            session_starts,
+            session_ends,
+            tasks,
+        })
+    }
+
+    /// Every dispatch id that currently owns a screenshot on disk. The orphan
+    /// sweep treats any screenshot file whose id is absent here as removable.
+    pub async fn screenshot_dispatch_ids(&self) -> AppResult<Vec<i64>> {
+        Ok(ToolDispatches::find()
+            .select_only()
+            .column(tool_dispatches::Column::Id)
+            .filter(tool_dispatches::Column::HasScreenshot.eq(true))
+            .into_tuple::<i64>()
+            .all(self.db.connection())
+            .await?)
+    }
+
+    /// Returns freed database pages to the OS. New databases open in incremental
+    /// auto-vacuum mode, where this is a cheap `incremental_vacuum`. Legacy
+    /// databases are converted once (set incremental + full `VACUUM`) so later
+    /// reclaims are cheap.
+    pub async fn reclaim_disk(&self) -> AppResult<()> {
+        let conn = self.db.connection();
+        let mode = conn
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA auto_vacuum",
+            ))
+            .await?
+            .map(|row| row.try_get::<i64>("", "auto_vacuum"))
+            .transpose()?
+            .unwrap_or(0);
+        if mode == 2 {
+            conn.execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA incremental_vacuum",
+            ))
+            .await?;
+        } else {
+            conn.execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "PRAGMA auto_vacuum = INCREMENTAL",
+            ))
+            .await?;
+            conn.execute(Statement::from_string(DbBackend::Sqlite, "VACUUM"))
+                .await?;
+        }
+        Ok(())
+    }
+}

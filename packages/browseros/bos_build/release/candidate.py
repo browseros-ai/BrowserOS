@@ -14,6 +14,7 @@ from ..products.resource_sources import source_resources_for_product
 from .components import (
     AllocationRecord,
     component_by_id,
+    component_for_source,
     component_version_from_package,
     components_for_candidate,
     read_component_version,
@@ -795,7 +796,7 @@ class GitHubCandidateBackend:
         )
 
     def _version_at_ref(self, component: str, ref: str) -> str:
-        spec = component_by_id(component)
+        spec = component_for_source(self.repo_root, component, ref=ref)
         content = self._git("show", f"{ref}:{spec.manifest_path}")
         if spec.manifest_path.suffix == ".json":
             document = json.loads(content)

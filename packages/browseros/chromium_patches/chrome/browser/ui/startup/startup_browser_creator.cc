@@ -1,5 +1,5 @@
 diff --git a/chrome/browser/ui/startup/startup_browser_creator.cc b/chrome/browser/ui/startup/startup_browser_creator.cc
-index 661831f8e98d65b9e2b4767f3424b49701be4665..5f0437474ad5661003bf1b2689969c7b55ca77e0 100644
+index 661831f8e98d65b9e2b4767f3424b49701be4665..d5964284f8c649152a271de1915bc1a9255dae0f 100644
 --- a/chrome/browser/ui/startup/startup_browser_creator.cc
 +++ b/chrome/browser/ui/startup/startup_browser_creator.cc
 @@ -42,6 +42,9 @@
@@ -54,7 +54,7 @@ index 661831f8e98d65b9e2b4767f3424b49701be4665..5f0437474ad5661003bf1b2689969c7b
 +    // BrowserOS onboarding hands off to the agent extension so the user
 +    // can finish setting up a provider or coding agent; a chrome:// page
 +    // cannot navigate there itself. The agent extension only exists on
-+    // BrowserOS builds. BrowserClaw instead hands off to its MCP page.
++    // BrowserOS builds. BrowserClaw instead hands off to its cockpit.
 +    // The BrowserOS target is the first-run setup step, not the settings
 +    // page: it drops the user straight into the new tab page once they
 +    // connect something.
@@ -64,9 +64,9 @@ index 661831f8e98d65b9e2b4767f3424b49701be4665..5f0437474ad5661003bf1b2689969c7b
 +                        browseros::kAgentExtensionId +
 +                        "/app.html#/onboarding/ai");
 +    } else if (browseros::IsBrowserClawProduct()) {
-+      // The native callback now owns the final MCP CTA as well; UI resources
++      // The native callback owns the final cockpit CTA as well; UI resources
 +      // must not navigate the picker before its primary extension is ready.
-+      tabs.emplace_back("chrome://newtab/#/mcp");
++      tabs.emplace_back("chrome://newtab/");
 +    }
 +    ProfilePicker::SetFirstRunTabsInNextProfileOpened(tabs);
 +    return;

@@ -7,6 +7,7 @@
 import * as rrweb from 'rrweb'
 import { defineContentScript } from 'wxt/utils/define-content-script'
 import { createRecorderBuffer, type RecorderMessage } from '@/modules/recorder'
+import { maskRecorderInput } from '@/modules/recorder/recorder-mask'
 import { createRecorderPersistence } from '@/modules/recorder/recorder-persistence'
 
 /** Records each eligible main-frame document from load and relays rrweb batches. */
@@ -107,8 +108,12 @@ export default defineContentScript({
     })
 
     try {
+      // Mask every input through maskInputFn (rrweb selects inputs to mask by type,
+      // not by attribute), which keeps ordinary fields readable and masks only
+      // password and payment-card fields, matching the server's audit redaction.
       const stop = rrweb.record({
-        maskInputOptions: { password: true },
+        maskAllInputs: true,
+        maskInputFn: maskRecorderInput,
         sampling: {
           mousemove: false,
           scroll: 250,

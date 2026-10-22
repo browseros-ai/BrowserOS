@@ -1,9 +1,9 @@
 diff --git a/chrome/browser/browseros/server/browseros_server_updater.cc b/chrome/browser/browseros/server/browseros_server_updater.cc
 new file mode 100644
-index 0000000000000000000000000000000000000000..7c5df6afacc045b7d34559b9d47a85481bb57ed6
+index 0000000000000000000000000000000000000000..776dee2e279693e201cd9387e2b158b273186a68
 --- /dev/null
 +++ b/chrome/browser/browseros/server/browseros_server_updater.cc
-@@ -0,0 +1,641 @@
+@@ -0,0 +1,662 @@
 +// Copyright 2024 The Chromium Authors
 +// Use of this source code is governed by a BSD-style license that can be
 +// found in the LICENSE file.
@@ -347,6 +347,23 @@ index 0000000000000000000000000000000000000000..7c5df6afacc045b7d34559b9d47a8548
 +    return;
 +  }
 +
++  // The same build already failed supervision this session. Wait for a newer
++  // release rather than re-fetching it every poll; the next browser launch
++  // retries it, and the manager readmits it sooner if bundled can't serve.
++  const base::Version& rejected = version_store_->rejected_version();
++  if (rejected.IsValid() && item->version == rejected) {
++    LOG(INFO) << "browseros: Skipping rejected server version "
++              << rejected.GetString();
++    if (reported_skipped_versions_.insert(rejected).second) {
++      base::DictValue props;
++      props.Set("version", rejected.GetString());
++      browseros_metrics::BrowserOSMetrics::Log("server.ota.skipped_rejected",
++                                               std::move(props));
++    }
++    ResetState();
++    return;
++  }
++
 +  LOG(INFO) << "browseros: New version available: "
 +            << item->version.GetString();
 +  pending_item_ = *item;
@@ -615,7 +632,11 @@ index 0000000000000000000000000000000000000000..7c5df6afacc045b7d34559b9d47a8548
 +            }
 +          },
 +          versions_dir, kMaxVersionsToKeep, manager_->GetRunningVersion(),
-+          version_store_->GetBestAvailable().version));
++          // Protect the ready download even when rejected: it is the fallback
++          // when the bundled server cannot serve.
++          version_store_->fallback_download()
++              ? version_store_->fallback_download()->version
++              : version_store_->GetBestAvailable().version));
 +}
 +
 +void BrowserOSServerUpdater::OnError(const std::string& stage,

@@ -64,7 +64,7 @@ describe('screenshot tool', () => {
         quality: 80,
         fullPage: false,
         annotate: false,
-        clip: { x: 5, y: 7, width: 2048, height: 1536, scale: 0.5 },
+        clip: { x: 5, y: 7, width: 2048, height: 1536, scale: 1 },
       },
     })
     expect(result.content).toEqual([
@@ -95,7 +95,7 @@ describe('screenshot tool', () => {
 
     const result = await executeTool(
       screenshot,
-      { page: 3, fullPage: true, annotate: false },
+      { page: 3, fullPage: true, annotate: false, size: { width: 1 } },
       { session },
     )
 
@@ -117,4 +117,57 @@ describe('screenshot tool', () => {
       bytes: Buffer.from('jpeg-data', 'base64').length,
     })
   })
+
+  it.each([
+    [{ width: 1024, height: 768 }, 768 / 1800],
+    [{ width: 1024 }, 1024 / 1440],
+    [{ height: 768 }, 768 / 1800],
+    [{ width: 4096, height: 4096 }, 1],
+    [{}, 1],
+  ])('caps only supplied dimensions for size %j', async (size, scale) => {
+    let captured: ScreenshotCaptureOptions | undefined
+    const session = {
+      screenshot: async (_page: number, options: ScreenshotCaptureOptions) => {
+        captured = options
+        return { data: 'jpeg-data', mimeType: 'image/jpeg', annotations: [] }
+      },
+      pages: {
+        getSession: async () => ({
+          session: {
+            Page: {
+              getLayoutMetrics: async () => ({
+                layoutViewport: {
+                  pageX: 10,
+                  pageY: 14,
+                  clientWidth: 2880,
+                  clientHeight: 3600,
+                },
+                cssLayoutViewport: {
+                  pageX: 5,
+                  pageY: 7,
+                  clientWidth: 1440,
+                  clientHeight: 1800,
+                },
+              }),
+            },
+          },
+        }),
+      },
+    } as unknown as BrowserSession
+    await executeTool(screenshot, { page: 3, size }, { session })
+    expect(captured?.clip).toEqual({
+      x: 5,
+      y: 7,
+      width: 1440,
+      height: 1800,
+      scale,
+    })
+  })
+
+  it.each([{ width: 0 }, { height: 4097 }, { width: 1.5 }])(
+    'rejects invalid supplied dimensions %j',
+    (size) => {
+      expect(screenshot.input.safeParse({ page: 3, size }).success).toBe(false)
+    },
+  )
 })
