@@ -98,7 +98,7 @@ test('tests that owner ports are refused before making any request', async () =>
 
 test('tests that a fake watch gets isolated state, logs, and idempotent teardown without launching a process', async () => {
   const out = await mkdtemp(join(tmpdir(), 'watch-test-'))
-  const signals: string[] = []
+  const signals: Array<[number, string]> = []
   let env: NodeJS.ProcessEnv = {}
   let exit!: () => void
   const exited = new Promise<void>((resolve) => {
@@ -117,8 +117,9 @@ test('tests that a fake watch gets isolated state, logs, and idempotent teardown
         return { pid: 12345, exited }
       },
       health: async () => health,
-      signal: (_pid, signal) => {
-        signals.push(signal)
+      supervisor: async () => 12346,
+      signal: (pid, signal) => {
+        signals.push([pid, signal])
         exit()
       },
       processes: async () => '',
@@ -132,7 +133,7 @@ test('tests that a fake watch gets isolated state, logs, and idempotent teardown
     expect(env.CARGO_TARGET_DIR).toBeTruthy()
     await watch.stop()
     await watch.stop()
-    expect(signals).toEqual(['SIGINT'])
+    expect(signals).toEqual([[12346, 'SIGINT']])
     expect(await Bun.file(join(out, 'dev-watch.log')).text()).toContain(
       'Server=9402',
     )
@@ -153,6 +154,8 @@ test('tests that startup timeout and leaked processes fail clearly with fake pro
         return { pid: 12345, exited: Promise.resolve() }
       },
       health: async () => health,
+      supervisor: async () => 12346,
+      graceMs: 5,
       signal: () => {},
       processes: async () =>
         `56789 browser --user-data-dir=${directory}/browseros-dev-test`,
@@ -164,6 +167,67 @@ test('tests that startup timeout and leaked processes fail clearly with fake pro
     expect((await stat(directory)).isDirectory()).toBe(true)
   } finally {
     await rm(directory, { recursive: true, force: true })
+    await rm(out, { recursive: true, force: true })
+  }
+})
+
+test('tests that teardown waits for exiting descendants before declaring a leak', async () => {
+  const out = await mkdtemp(join(tmpdir(), 'watch-settle-test-'))
+  let root = ''
+  let scans = 0
+  const watch = await startDevWatch(
+    { out, startupTimeout: 10, keyEnv: {} },
+    {
+      spawn: (env) => {
+        root = String(env.TMPDIR)
+        return { pid: 12345, exited: Promise.resolve() }
+      },
+      supervisor: async () => 12346,
+      signal: () => {},
+      graceMs: 100,
+      processes: async () =>
+        ++scans === 1 ? `56789 browser --user-data-dir=${root}/profile` : '',
+    },
+  )
+  try {
+    await watch.stop()
+    expect(scans).toBeGreaterThan(1)
+    await expect(stat(root)).rejects.toThrow()
+  } finally {
+    await rm(root, { recursive: true, force: true })
+    await rm(out, { recursive: true, force: true })
+  }
+})
+
+test('tests that a startup timeout still tears down and an unresponsive supervisor gets group SIGKILL', async () => {
+  const out = await mkdtemp(join(tmpdir(), 'watch-timeout-test-'))
+  const signals: Array<[number, string]> = []
+  let exit!: () => void
+  const exited = new Promise<void>((resolve) => {
+    exit = resolve
+  })
+  const watch = await startDevWatch(
+    { out, startupTimeout: 5, keyEnv: {} },
+    {
+      spawn: () => ({ pid: 12345, exited }),
+      supervisor: async () => 12346,
+      graceMs: 5,
+      signal: (pid, signal) => {
+        signals.push([pid, signal])
+        if (signal === 'SIGKILL') exit()
+      },
+      processes: async () => '',
+    },
+  )
+  try {
+    await expect(watch.ready()).rejects.toThrow('waiting for Ports:')
+    await watch.stop()
+    expect(signals).toEqual([
+      [12346, 'SIGINT'],
+      [-12345, 'SIGKILL'],
+    ])
+    await expect(stat(watch.directory)).rejects.toThrow()
+  } finally {
     await rm(out, { recursive: true, force: true })
   }
 })

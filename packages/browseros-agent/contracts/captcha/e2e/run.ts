@@ -138,8 +138,8 @@ async function main(): Promise<number> {
       },
     )
   }
-  process.once('SIGINT', interrupt)
-  process.once('SIGTERM', interrupt)
+  process.on('SIGINT', interrupt)
+  process.on('SIGTERM', interrupt)
   try {
     const keys = await resources.own(
       () => configureKeys(options.keys),

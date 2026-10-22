@@ -113,9 +113,20 @@ function spawnWatch(env: NodeJS.ProcessEnv, fd: number) {
 const defaults = {
   spawn: spawnWatch,
   health: fetchHealth,
+  graceMs: 15_000,
+  supervisor: async (pid: number) => {
+    try {
+      const { stdout } = await promisify(execFile)('pgrep', ['-P', String(pid)])
+      const children = stdout.trim().split(/\s+/).map(Number)
+      return children.length === 1 ? (children[0] ?? pid) : pid
+    } catch (error) {
+      if ((error as { code?: number }).code !== 1) throw error
+      return pid
+    }
+  },
   signal: (pid: number, signal: NodeJS.Signals) => {
     try {
-      process.kill(-pid, signal)
+      process.kill(pid, signal)
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
     }
@@ -217,17 +228,25 @@ export async function startDevWatch(
     stop() {
       stopped ??= (async () => {
         if (child.pid && !finished) {
-          dependencies.signal(child.pid, 'SIGINT')
-          await waitForExit(exited, 15_000)
+          const supervisor = await dependencies.supervisor(child.pid)
+          // Bun forwards signals: hitting its whole group sends SIGINT twice.
+          if (!finished) dependencies.signal(supervisor, 'SIGINT')
+          await waitForExit(exited, dependencies.graceMs)
           if (!finished) {
-            dependencies.signal(child.pid, 'SIGKILL')
+            dependencies.signal(-child.pid, 'SIGKILL')
             await waitForExit(exited, 3000)
           }
         }
-        const leaks = (await dependencies.processes())
-          .split('\n')
-          .filter((line) => line.includes(directory))
-          .map((line) => line.trim().split(/\s+/)[0])
+        const deadline = Date.now() + dependencies.graceMs
+        let leaks: string[] = []
+        while (true) {
+          leaks = (await dependencies.processes())
+            .split('\n')
+            .filter((line) => line.includes(directory))
+            .map((line) => line.trim().split(/\s+/)[0] ?? '')
+          if (!leaks.length || Date.now() >= deadline) break
+          await Bun.sleep(Math.min(100, Math.max(1, deadline - Date.now())))
+        }
         if (leaks.length)
           throw new Error(
             `dev-watch cleanup failed: leftover PIDs ${leaks.join(', ')} reference ${directory}`,
