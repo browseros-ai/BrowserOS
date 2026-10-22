@@ -83,6 +83,24 @@ impl PageAccess {
     pub(crate) fn epoch_guard(&self) -> Result<Option<crate::connection::EpochGuard>, CoreError> {
         self.view.epoch_guard()
     }
+
+    pub(super) async fn frame_capability(
+        self: &Arc<Self>,
+        session: ProtocolSession,
+        frame: FrameId,
+    ) -> Result<ProtocolSession, CoreError> {
+        let session = self.frame_session(session, Some(frame.clone())).await?;
+        let endpoint = session
+            .session_id()
+            .cloned()
+            .ok_or_else(|| cdp_policy::unsupported("frame_session"))?;
+        let root = self.session().await?;
+        Ok(session.with_admission(Arc::new(PageProtocol {
+            access: self.clone(),
+            root_session: root.session_id,
+            frame: Some((frame, endpoint)),
+        })))
+    }
 }
 struct Admission<'a> {
     access: &'a PageAccess,
@@ -152,5 +170,245 @@ impl ProtocolAdmission for PageProtocol {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use crate::{Browser, CdpConnection, NativeCapabilities, TargetBinding, TargetIntent};
+    use browseros_cdp::{CdpError, CdpEvent};
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicU64, Ordering},
+    };
+    use tokio::sync::broadcast;
+
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    struct Native {
+        tree: Mutex<Value>,
+        tab: Mutex<Value>,
+        calls: Mutex<Vec<(String, Option<SessionId>)>>,
+        epoch: AtomicU64,
+        events: broadcast::Sender<CdpEvent>,
+    }
+
+    impl Native {
+        fn new() -> Arc<Self> {
+            Arc::new(Self {
+                tree: Mutex::new(json!({"frame":{"id":"root"},"childFrames":[{
+                    "frame":{"id":"cross"},"childFrames":[{"frame":{"id":"same"}}]
+                }]})),
+                tab: Mutex::new(json!({"tabId":1,"targetId":"page","windowId":11,
+                    "url":"https://local.test","title":"test","isActive":true,"isLoading":false,
+                    "loadProgress":1.0,"isPinned":false,"isHidden":false,
+                    "browserProfileId":"eng","liveBrowserContextId":"live-eng"})),
+                calls: Mutex::new(Vec::new()),
+                epoch: AtomicU64::new(1),
+                events: broadcast::channel(32).0,
+            })
+        }
+
+        fn reply(
+            &self,
+            expected: Option<u64>,
+            method: &str,
+            params: Value,
+            session: Option<&SessionId>,
+        ) -> Result<Value, CdpError> {
+            if let Some(expected) = expected {
+                let actual = self.connection_epoch();
+                if expected != actual {
+                    return Err(CdpError::ConnectionEpochChanged { expected, actual });
+                }
+            }
+            self.calls
+                .lock()
+                .map_err(|_| CdpError::SessionGone)?
+                .push((method.into(), session.cloned()));
+            Ok(match method {
+                "Browser.getProfiles" => {
+                    json!({"profiles":[{"browserProfileId":"eng","name":"eng","directory":"directory-eng","loaded":true,"browserContextId":"live-eng"}]})
+                }
+                "Browser.getWindows" => {
+                    json!({"windows":[{"windowId":11,"windowType":"normal","bounds":{},"isActive":true,"isVisible":true,"tabCount":1,"browserProfileId":"eng","liveBrowserContextId":"live-eng"}]})
+                }
+                "Browser.getTabs" => {
+                    json!({"tabs":[self.tab.lock().map_err(|_| CdpError::SessionGone)?.clone()]})
+                }
+                "Browser.getTabInfo" => {
+                    json!({"tab":self.tab.lock().map_err(|_| CdpError::SessionGone)?.clone()})
+                }
+                "Target.attachToTarget" => {
+                    json!({"sessionId":format!("session-{}", params["targetId"].as_str().unwrap_or_default())})
+                }
+                "Page.getFrameTree" => {
+                    json!({"frameTree":self.tree.lock().map_err(|_| CdpError::SessionGone)?.clone()})
+                }
+                "DOM.getFrameOwner" => {
+                    json!({"backendNodeId":if params["frameId"] == "same" { 2 } else { 1 }})
+                }
+                "DOM.describeNode" if params["backendNodeId"] == 2 => {
+                    json!({"node":{"contentDocument":{"frameId":"same"}}})
+                }
+                "DOM.describeNode" => json!({"node":{"frameId":"cross"}}),
+                "Runtime.evaluate" => json!({"result":{"value":session.map(SessionId::as_str)}}),
+                _ => json!({}),
+            })
+        }
+    }
+
+    impl CdpConnection for Native {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move { self.reply(None, method, params, session) })
+        }
+        fn send_at_epoch<'a>(
+            &'a self,
+            epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move { self.reply(Some(epoch), method, params, session) })
+        }
+        fn send_raw_json<'a>(
+            &'a self,
+            method: &'a str,
+            params: &'a str,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async move {
+                Ok(serde_json::to_string(&self.reply(
+                    None,
+                    method,
+                    serde_json::from_str(params)?,
+                    session,
+                )?)?)
+            })
+        }
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        fn connection_epoch(&self) -> u64 {
+            self.epoch.load(Ordering::SeqCst)
+        }
+    }
+
+    async fn fixture() -> Result<(Arc<Native>, BrowserView, crate::PageId), CoreError> {
+        let native = Native::new();
+        let browser = Browser::new_with_native(
+            native.clone(),
+            NativeCapabilities::from_browseros_version(Some("0.51.1.3")),
+        );
+        browser
+            .set_target(Some(TargetBinding {
+                intent: TargetIntent {
+                    browser_profile_id: crate::BrowserProfileId("eng".into()),
+                    directory: "directory-eng".into(),
+                    name: "eng".into(),
+                    window: None,
+                },
+                revision: 1,
+            }))
+            .await;
+        let view = browser.view().await;
+        let page = view
+            .list_pages()
+            .await?
+            .pages
+            .into_iter()
+            .next()
+            .ok_or("missing page")?
+            .page_id;
+        Ok((native, view, page))
+    }
+
+    #[tokio::test]
+    async fn tests_that_nested_same_process_frames_inherit_the_oopif_session() -> TestResult {
+        let (_, view, page) = fixture().await?;
+        for (frame, expected) in [
+            ("root", "session-page"),
+            ("cross", "session-cross"),
+            ("same", "session-cross"),
+        ] {
+            let session = view
+                .frame_session(page.clone(), FrameId(frame.into()))
+                .await?;
+            let result = session
+                .send_value("Runtime.evaluate", json!({"expression":"location.href"}))
+                .await?;
+            assert_eq!(result["result"]["value"], expected);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_unknown_frames_are_refused_before_attachment() -> TestResult {
+        let (native, view, page) = fixture().await?;
+        assert!(
+            view.frame_session(page, FrameId("foreign".into()))
+                .await
+                .is_err()
+        );
+        assert!(
+            !native
+                .calls
+                .lock()
+                .map_err(|_| "poisoned")?
+                .iter()
+                .any(|(method, session)| method == "DOM.getFrameOwner"
+                    || session
+                        .as_ref()
+                        .is_some_and(|id| id.as_str() == "session-foreign"))
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_retained_frames_recheck_membership_scope_and_epoch() -> TestResult {
+        for frame in ["same", "cross"] {
+            for change in ["tree", "scope", "epoch", "target"] {
+                let (native, view, page) = fixture().await?;
+                let session = view.frame_session(page, FrameId(frame.into())).await?;
+                match change {
+                    "tree" => {
+                        *native.tree.lock().map_err(|_| "poisoned")? =
+                            json!({"frame":{"id":"root"}})
+                    }
+                    "scope" => {
+                        native.tab.lock().map_err(|_| "poisoned")?["liveBrowserContextId"] =
+                            json!("other")
+                    }
+                    "target" => {
+                        native.tab.lock().map_err(|_| "poisoned")?["targetId"] = json!("replaced")
+                    }
+                    _ => {
+                        native.epoch.fetch_add(1, Ordering::SeqCst);
+                    }
+                }
+                let result = session
+                    .send_value("Runtime.evaluate", json!({"expression":"1"}))
+                    .await;
+                assert!(result.is_err(), "{frame}/{change}: {result:?}");
+                assert!(
+                    !native
+                        .calls
+                        .lock()
+                        .map_err(|_| "poisoned")?
+                        .iter()
+                        .any(|(method, _)| method == "Runtime.evaluate")
+                );
+            }
+        }
+        Ok(())
     }
 }

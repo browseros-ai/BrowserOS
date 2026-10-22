@@ -942,6 +942,58 @@ impl BrowserView {
             None => self.session.pages.get_session(page).await,
         }
     }
+    /// A frame endpoint admitted through this page capability, including same-process children.
+    pub async fn frame_session(
+        &self,
+        page: PageId,
+        frame: crate::FrameId,
+    ) -> Result<crate::ProtocolSession, CoreError> {
+        let access = Arc::new(PageAccess::new(
+            self.clone(),
+            self.page(page.clone()).await?,
+        ));
+        let mut session = access.session().await?.session;
+        let tree = session.send_value("Page.getFrameTree", json!({})).await?;
+        fn path(tree: &Value, id: &str) -> Option<Vec<crate::FrameId>> {
+            let current = crate::FrameId(tree["frame"]["id"].as_str()?.to_owned());
+            if current.as_str() == id {
+                return Some(vec![current]);
+            }
+            for child in tree["childFrames"].as_array().into_iter().flatten() {
+                if let Some(mut descendants) = path(child, id) {
+                    descendants.insert(0, current);
+                    return Some(descendants);
+                }
+            }
+            None
+        }
+        let chain = path(&tree["frameTree"], frame.as_str())
+            .ok_or_else(|| TargetError::PageTargetChanged(page.clone()))?;
+        for child in chain.into_iter().skip(1) {
+            let owner = session
+                .send_value("DOM.getFrameOwner", json!({"frameId":child.as_str()}))
+                .await?;
+            let node = session
+                .send_value(
+                    "DOM.describeNode",
+                    json!({"backendNodeId":owner["backendNodeId"],"depth":1}),
+                )
+                .await?;
+            let target = self
+                .session
+                .frames()
+                .resolve_frame_target_with_epoch(
+                    page.clone(),
+                    Some(child.clone()),
+                    Some(&session),
+                    node["node"].get("contentDocument").is_none(),
+                    access.epoch_guard()?,
+                )
+                .await?;
+            session = access.frame_capability(target.session, child).await?;
+        }
+        Ok(session)
+    }
     pub async fn observe(&self, page: PageId) -> Result<Arc<Observer>, CoreError> {
         let access = self.page_access(page.clone()).await?;
         let observer = self.session.observe(page).await;
