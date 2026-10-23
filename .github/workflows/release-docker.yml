@@ -51,7 +51,12 @@ jobs:
             https://ghcr.io/v2/*) ;;
             *) echo 'Unexpected upload location'; exit 1 ;;
           esac
-          curl --silent --show-error --fail \
+          cleanup_status="$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
             --header "Authorization: Bearer $token" \
-            --request DELETE "$location"
-          echo 'GHCR accepted a blob upload using the workflow token; canceled without publishing.'
+            --request DELETE "$location")"
+          case "$cleanup_status" in
+            204|404) ;;
+            405) echo 'GHCR does not implement upload cancellation; the empty upload will expire.' ;;
+            *) echo "Unexpected upload cleanup status: $cleanup_status"; exit 1 ;;
+          esac
+          echo 'GHCR accepted a blob upload using the workflow token; no image version published.' 
