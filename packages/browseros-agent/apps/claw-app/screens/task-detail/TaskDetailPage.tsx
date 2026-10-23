@@ -57,7 +57,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
           <Skeleton className="h-9 w-3/4" />
           <Skeleton className="h-5 w-2/3" />
         </div>
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
           <Skeleton className="h-[420px] rounded-2xl" />
           <Skeleton className="h-[420px] rounded-2xl" />
         </div>
@@ -105,7 +105,7 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
       {session.status === 'failed' && !data.humanHelpEnabled ? (
         <AskForHelpTip />
       ) : null}
-      <div className="grid items-stretch gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 items-stretch gap-5 lg:grid-cols-[minmax(0,1.65fr)_minmax(0,1fr)]">
         <TaskPlayer
           ref={(node) => {
             if (!node || focus !== 'player' || focusedRef.current) return
