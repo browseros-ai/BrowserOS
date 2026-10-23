@@ -13,6 +13,7 @@
 import { ArrowRight, ArrowUpRight } from 'lucide-react'
 import { useState } from 'react'
 import type { Harness } from '@/components/harness/harness.types'
+import { AnimatedBadge } from '@/components/motion/animated-badge'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   FIRST_RUN_COPY,
@@ -113,6 +114,14 @@ export function CockpitOnboarding({
           onCopied={() => track(AnalyticsEvent.OnboardingTaskCopied)}
         />
       </div>
+
+      <p className="mt-3 flex flex-wrap items-center gap-2 text-[14px] text-ink-3">
+        <AnimatedBadge status="loading" size="sm">
+          Listening
+        </AnimatedBadge>
+        Paste it into {found ? connectedHarnesses[0] : 'Claude'}, press Enter,
+        then come back here to watch. This page updates by itself.
+      </p>
 
       <div className="mt-5">
         <OnboardingDemo />
