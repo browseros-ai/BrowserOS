@@ -119,6 +119,11 @@
             clearTimeout(idleTimer);
             idleMs = command.idleMs;
             const target = { x: command.x, y: command.y };
+            if (player && host?.isConnected && Math.hypot(player.pos.x - target.x, player.pos.y - target.y) <= 2) {
+              player.place(target);
+              remember();
+              return { status: 'arrived' };
+            }
             if (!ensurePlayer(target)) return { status: 'skipped', reason: 'unsupported' };
             const arrival = player.moveTo(target, {
               params: { style: 'signature_arc', timing: 'fixed', glideDurationMs: command.travelMs },

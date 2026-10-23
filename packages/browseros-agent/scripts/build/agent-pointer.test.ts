@@ -23,6 +23,7 @@ const tracedStub = `${stub}
 const OriginalPlayer = BrowserOSAgentCursor.MotionPlayer;
 BrowserOSAgentCursor.MotionPlayer = class extends OriginalPlayer {
   moveTo(point, options) {
+    globalThis.moves = (globalThis.moves || 0) + 1;
     globalThis.start = {...this.pos};
     globalThis.options = options;
     return super.moveTo(point, options);
@@ -284,6 +285,54 @@ describe('agent pointer page expression', () => {
     expect(Reflect.get(h.world, 'loads')).toBe(1)
     await h.advance(450)
     await restarted
+  })
+
+  test('tests that moves within two pixels arrive immediately while three-pixel moves travel', async () => {
+    for (const [dx, dy, immediate] of [
+      [0, 0, true],
+      [2, 0, true],
+      [1, 1, true],
+      [3, 0, false],
+      [2, 2, false],
+    ] as const) {
+      const h = harness()
+      const first = h.execute(command, tracedStub)
+      await h.advance(450)
+      await first
+      const target = { x: command.x + dx, y: command.y + dy }
+      let result: unknown
+      const repeated = h
+        .execute({ ...command, ...target }, tracedStub)
+        .then((value: unknown) => {
+          result = value
+        })
+      for (let turn = 0; turn < 8; turn++) await Promise.resolve()
+      expect(result).toEqual(immediate ? { status: 'arrived' } : undefined)
+      expect(Reflect.get(h.world, 'moves')).toBe(immediate ? 1 : 2)
+      if (immediate) expect(h.api().pos).toEqual(target)
+      await h.advance(450)
+      await repeated
+      expect(result).toEqual({ status: 'arrived' })
+      expect(h.api().pos).toEqual(target)
+    }
+  })
+
+  test('tests that immediate arrival re-arms idle teardown', async () => {
+    const h = harness()
+    const cmd = { ...command, idleMs: 200 }
+    const first = h.execute(cmd, tracedStub)
+    await h.advance(450)
+    await first
+    await h.advance(100)
+    const repeated = h.execute(cmd, tracedStub)
+    for (let turn = 0; turn < 8; turn++) await Promise.resolve()
+    expect(Reflect.get(h.world, 'moves')).toBe(1)
+    await repeated
+    await h.advance(110)
+    expect(h.root.children).toHaveLength(1)
+    await h.advance(100)
+    expect(h.root.children).toHaveLength(0)
+    expect(h.frames.size).toBe(0)
   })
 
   test('tests that fixed signature arc timing stays within the travel budget', () => {
