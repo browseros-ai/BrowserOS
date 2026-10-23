@@ -24,6 +24,7 @@ export function parseWatchPorts(log: string) {
 export interface Preflight {
   url: string
   port: number
+  hostedMode: '1' | '0'
   toolPresent: boolean | null
   health: unknown
   ok: boolean
@@ -63,10 +64,12 @@ export async function checkDevPreflight(
       }
     },
   },
+  hostedMode: '1' | '0' = '1',
 ): Promise<Preflight> {
   const result: Preflight = {
     url,
     port: Number(new URL(url).port),
+    hostedMode,
     toolPresent: null,
     health: null,
     ok: false,
@@ -155,7 +158,12 @@ async function waitForExit(exited: Promise<unknown>, ms: number) {
 
 /** Registers a handle immediately; waiting for readiness must happen after ownership. */
 export async function startDevWatch(
-  options: { out: string; startupTimeout: number; keyEnv: NodeJS.ProcessEnv },
+  options: {
+    out: string
+    startupTimeout: number
+    keyEnv: NodeJS.ProcessEnv
+    hostedMode?: '1' | '0'
+  },
   overrides: Partial<typeof defaults> = {},
 ) {
   const dependencies = { ...defaults, ...overrides }
@@ -173,6 +181,7 @@ export async function startDevWatch(
         {
           ...process.env,
           ...options.keyEnv,
+          BROWSERCLAW_HOSTED_MODE: options.hostedMode ?? '1',
           BROWSERCLAW_DIR: join(directory, 'state'),
           TMPDIR: directory,
           CARGO_TARGET_DIR:
