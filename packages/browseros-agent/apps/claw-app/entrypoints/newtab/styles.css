@@ -128,6 +128,11 @@
   --color-amber-tint: var(--amber-tint);
   --color-red: var(--red);
   --color-red-tint: var(--red-tint);
+  /* Status text on tinted surfaces, one step darker than the status hue so
+     small labels pass WCAG AA. */
+  --color-green-ink: var(--green-ink);
+  --color-amber-ink: var(--amber-ink);
+  --color-red-ink: var(--red-ink);
   --color-blue: var(--blue);
 
   /* Type families. Variable fonts get the "Variable" suffix; Newsreader is
@@ -467,6 +472,9 @@ body {
   --amber-tint: hsl(42 90% 94%);
   --red: #e11d48;
   --red-tint: hsl(4 65% 95%);
+  --green-ink: #13793a;
+  --amber-ink: #8a5300;
+  --red-ink: #b8123b;
   --blue: #0e7490;
 
   /* Ledger table. The header is a quiet cool-tint strip with muted
@@ -647,6 +655,9 @@ body {
   --amber-tint: #2a2113;
   --red: #ff6b81;
   --red-tint: #2b1618;
+  --green-ink: #3ecf8e;
+  --amber-ink: #f0b65c;
+  --red-ink: #ff8a9b;
   --blue: #6cc6e2;
 
   /* Ledger table, gray. Header and band are quiet steps between --card and

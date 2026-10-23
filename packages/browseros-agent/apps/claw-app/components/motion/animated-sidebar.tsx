@@ -396,7 +396,7 @@ function MobileSidebar({
         }
         onClick={() => context.setOpenMobile(false)}
         className={cn(
-          "fixed inset-0 bg-black/40",
+          "fixed inset-0 bg-ink-deep/40",
           context.openMobile
             ? "pointer-events-auto"
             : "pointer-events-none",
