@@ -100,6 +100,13 @@ prepare_data() {
   # running against this profile yet, so a lock here is stale. (One container
   # per data folder; two would corrupt the profile.)
   rm -f "$PROFILE"/SingletonLock "$PROFILE"/SingletonSocket "$PROFILE"/SingletonCookie
+
+  # Disabling network updates still lets Chromium select a previously downloaded
+  # server. Clear only its ready selectors (legacy and Claw layouts), so an old
+  # profile cannot override this image's server. Keep downloaded files and all
+  # application data; the browser/server processes have not started yet.
+  rm -f "$PROFILE/.browseros/current_version" \
+    "$PROFILE/.browseros/BrowserClawServer/current_version"
 }
 
 start_display() {
@@ -132,8 +139,8 @@ sandbox_flags=(--no-sandbox)
 is_true "$NEO_SANDBOX" && sandbox_flags=()
 
 # Suppress only BrowserOS's managed extension provider. Keep these arguments
-# additive to NEO_ARGS so derived images retain their own flags, such as the
-# captcha image's server updater override; user extensions and MCP stay enabled.
+# additive to NEO_ARGS so callers retain their own flags; user extensions and
+# the native MCP server stay enabled.
 browseros_extension_flags=()
 if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
   browseros_extension_flags=(--disable-browseros-extensions)
@@ -153,6 +160,8 @@ apply_policies() {
 }
 
 start_neo() {
+  # Releases verify the packaged/overlaid server, so pin it for the image's
+  # lifetime. Keep this outside NEO_ARGS, which Compose/callers may replace.
   # shellcheck disable=SC2086  # NEO_ARGS is a flag list by design
   spawn_as_neo browserclaw \
     "${sandbox_flags[@]}" \
@@ -164,6 +173,7 @@ start_neo() {
     --browseros-proxy-port=9010 \
     --browseros-cdp-port="$CDP_PORT" \
     --browseros-server-port="$SERVER_PORT" \
+    --disable-browseros-server-updater \
     --hide-crash-restore-bubble \
     --start-maximized \
     $NEO_ARGS

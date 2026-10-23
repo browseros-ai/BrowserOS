@@ -3,7 +3,7 @@
 # BrowserOS neo on a virtual display, streamed to a browser tab over noVNC,
 # with Neo's MCP server reachable from outside the container.
 #
-#   docker build --build-arg NEO_VERSION=0.51.1.4 -t neo .
+#   docker build --no-cache-filter neo --build-arg NEO_VERSION=0.51.1.4 -t neo .
 #
 # The runtime contract (ports 6080/9010, /data, env vars) is documented in
 # README.md; entrypoint.sh implements it.
@@ -13,7 +13,11 @@
 # is how CI artifacts and drafts that never reached the CDN get tested.
 FROM scratch AS neo-deb
 
-FROM ubuntu:24.04
+# An optional build context containing <arch>/browseros-claw-server-rs.
+# Releases supply this commit's server; standalone builds keep the .deb's server.
+FROM scratch AS neo-server
+
+FROM ubuntu:24.04 AS neo-runtime
 
 ARG TARGETARCH
 ARG NEO_VERSION=""
@@ -62,6 +66,16 @@ RUN --mount=type=bind,from=neo-deb,target=/tmp/neo-local \
     apt-get install -y --no-install-recommends /tmp/neo.deb; \
     rm -rf /tmp/neo.deb /var/lib/apt/lists/*
 
+# The browser launches the bundled path, so replace that executable in place.
+# A changed package layout must fail instead of silently shipping an old server.
+RUN --mount=type=bind,from=neo-server,target=/tmp/neo-server \
+    set -eu; \
+    if [ -n "$(ls -A /tmp/neo-server)" ]; then \
+      paths=$(find /usr/lib /opt -type f -name browseros-claw-server); \
+      test -n "$paths" && test "$(printf '%s\n' "$paths" | wc -l)" -eq 1; \
+      install -m 0755 "/tmp/neo-server/$TARGETARCH/browseros-claw-server-rs" "$paths"; \
+    fi
+
 # Ubuntu's image ships an `ubuntu` user at uid 1000; Neo's user takes that uid
 # so bind-mounted folders match the usual first user on Linux hosts.
 RUN userdel -r ubuntu \
@@ -76,6 +90,8 @@ COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 ENV NEO_SCREEN=1600x1000 \
     BROWSERCLAW_HOSTED_MODE=1 \
     NEO_SANDBOX=false \
+    BROWSEROS_CAPSOLVER_API_KEY_FILE=/home/neo/.config/browseros/captcha/capsolver-api-key \
+    BROWSEROS_2CAPTCHA_API_KEY_FILE=/home/neo/.config/browseros/captcha/2captcha-api-key \
     NEO_DISABLE_BROWSEROS_EXTENSIONS=false \
     NEO_ARGS="" \
     PUID=1000 \
@@ -90,3 +106,22 @@ HEALTHCHECK --interval=5s --timeout=5s --start-period=90s --retries=3 \
 # tini reaps orphans and forwards `docker stop`'s SIGTERM to the entrypoint,
 # which gives Neo time to flush cookies before the container exits.
 ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/neo-entrypoint"]
+
+# The release CLI always rebuilds this final stage (--no-cache-filter neo), even
+# without keys. Caching it could retain rotated/removed secret contents.
+FROM neo-runtime AS neo
+
+# Keys are intentionally part of the final image and readable by image users.
+# BuildKit keeps their input values out of arguments/logs; it does not hide the
+# installed files. Rebuild without layer reuse when rotating either secret.
+RUN --mount=type=secret,id=capsolver_api_key,required=false \
+    --mount=type=secret,id=twocaptcha_api_key,required=false \
+    set -eu; \
+    destination=/home/neo/.config/browseros/captcha; \
+    install -d -m 0700 -o neo -g neo "$destination"; \
+    if [ -s /run/secrets/capsolver_api_key ]; then \
+      install -m 0400 -o neo -g neo /run/secrets/capsolver_api_key "$destination/capsolver-api-key"; \
+    fi; \
+    if [ -s /run/secrets/twocaptcha_api_key ]; then \
+      install -m 0400 -o neo -g neo /run/secrets/twocaptcha_api_key "$destination/2captcha-api-key"; \
+    fi

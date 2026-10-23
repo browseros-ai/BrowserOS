@@ -54,7 +54,9 @@ class ImageRequest:
     """What to build. Without push the image is loaded into local Docker,
     which holds one platform, so it defaults to the host's architecture. An
     explicit platform (or a .deb's own) may differ from the host on purpose,
-    e.g. to test an amd64 package on Apple silicon under emulation."""
+    e.g. to test an amd64 package on Apple silicon under emulation. Optional
+    server binaries override the package's server. Key paths are BuildKit inputs;
+    their contents are intentionally installed in the image, never read here."""
 
     version: str = ""
     repository: str = DEFAULT_REPOSITORY
@@ -62,6 +64,9 @@ class ImageRequest:
     latest: bool = False
     platforms: tuple[str, ...] = ()
     deb: Optional[Path] = None
+    server_dir: Optional[Path] = None
+    capsolver_key_file: Optional[Path] = None
+    twocaptcha_key_file: Optional[Path] = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +158,22 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
     if request.latest and not request.push:
         raise ImageError("--latest requires --push")
     platforms = _platforms(request, ops)
+    if request.server_dir is not None:
+        for platform in platforms:
+            arch = platform.split("/")[1]
+            if not (request.server_dir / arch / "browseros-claw-server-rs").is_file():
+                raise ImageError(f"Server directory has no {arch}/browseros-claw-server-rs")
+    keys = [
+        (name, key_file)
+        for name, key_file in (
+            ("capsolver_api_key", request.capsolver_key_file),
+            ("twocaptcha_api_key", request.twocaptcha_key_file),
+        )
+        if key_file is not None
+    ]
+    for name, key_file in keys:
+        if not key_file.is_file():
+            raise ImageError(f"{name} key file does not exist: {key_file}")
     if request.deb is None:
         _require_published(request.version, platforms, ops)
 
@@ -174,6 +195,14 @@ def build_image(request: ImageRequest, ops: ImageOperations, context: Path) -> I
         ]
     else:
         argv.append("--load")
+    if request.server_dir is not None:
+        argv += ["--build-context", f"neo-server={request.server_dir}"]
+    # Re-run the final credentials stage even for keyless builds: secret
+    # contents (and their removal) are not reliable cache invalidators. Keep
+    # the expensive browser installation cached in the preceding runtime stage.
+    argv += ["--no-cache-filter", "neo"]
+    for name, key_file in keys:
+        argv += ["--secret", f"id={name},src={key_file}"]
     staging = ops.staged_deb(request.deb) if request.deb is not None else nullcontext(None)
     with staging as deb_dir:
         if deb_dir is not None:
