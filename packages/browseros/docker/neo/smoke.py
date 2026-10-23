@@ -90,6 +90,17 @@ class McpClient:
             raise RuntimeError(f"{name}: {text[:300]}")
         return text
 
+    def tools(self) -> list[dict]:
+        """Read every page so release checks also cover tools beyond page one."""
+        tools = []
+        params = {}
+        while True:
+            page = self.call("tools/list", params)
+            tools.extend(page["tools"])
+            if not page.get("nextCursor"):
+                return tools
+            params = {"cursor": page["nextCursor"]}
+
 
 def accepts_task_name(client: McpClient) -> bool:
     """Whether this claw-server knows the taskName argument, in either mode.
@@ -138,7 +149,7 @@ def main() -> None:
     check("MCP initialize from the host", bool(client.session_id), info.get("serverInfo", {}).get("name", ""))
     client.notify("notifications/initialized")
 
-    listed = client.call("tools/list")["tools"]
+    listed = client.tools()
     tools = {tool["name"] for tool in listed}
     check("MCP lists the tabs tool", "tabs" in tools, f"{len(tools)} tools")
     check("human help disabled", not tools & HUMAN_HELP_TOOLS)

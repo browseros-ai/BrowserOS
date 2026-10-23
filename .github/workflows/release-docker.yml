@@ -1,12 +1,9 @@
 name: "Release: Neo Docker image"
 
-# Publishes ghcr.io/browseros-ai/neo:<version> for linux/amd64 and linux/arm64
-# from a Neo version whose Linux release has both packages on the CDN. The
-# amd64 image is smoke-tested before anything is pushed; `browseros release
-# docker` refuses a version missing either package. Tag latest only for a
-# version that has been promoted. See
-# packages/browseros/bos_build/docs/docker-image.md.
-
+# One image for both architectures: the released Linux browser, this commit's
+# server, and optional provider key files. Keys are intentionally embedded and
+# extractable by anyone who can pull the image. Both native smoke jobs must pass
+# before publication; use latest only for a promoted browser version.
 on:
   workflow_dispatch:
     inputs:
@@ -18,17 +15,185 @@ on:
         description: "Also tag :latest (only for a promoted version)"
         type: boolean
         default: false
+      verify_paid:
+        description: "Require a paid Google reCAPTCHA demo PASS"
+        type: boolean
+        default: false
+      push:
+        description: "Publish after both native smoke jobs pass"
+        type: boolean
+        default: true
 
 permissions: {}
-
 concurrency:
   group: release-docker
   cancel-in-progress: false
 
 jobs:
-  image:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            rust_target: x86_64-unknown-linux-gnu
+          - arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/neo-docker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Set up cross compiler
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          python3 -m pip install ziglang==0.15.2
+          python3 -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)' >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version 0.23.0
+      - name: Build this commit's server
+        working-directory: packages/browseros-agent
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+          # Match the normal server release: replacing its executable must not
+          # silently remove telemetry, feedback cohorts, or error reporting.
+          CLAW_POSTHOG_KEY: ${{ secrets.CLAW_POSTHOG_KEY }}
+          CLAW_SENTRY_DSN: ${{ secrets.CLAW_SENTRY_DSN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CLAW_POSTHOG_KEY" ]; then
+            echo 'CLAW_POSTHOG_KEY is required' >&2
+            exit 1
+          fi
+          cargo zigbuild --release --locked --target "$RUST_TARGET.2.17" -p claw-server --bin browseros-claw-server-rs
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          binary = Path(os.environ["CARGO_TARGET_DIR"]) / os.environ["RUST_TARGET"] / "release/browseros-claw-server-rs"
+          if os.environ["CLAW_POSTHOG_KEY"].encode() not in binary.read_bytes():
+              raise SystemExit("Compiled server is missing its PostHog configuration")
+          PY
+      - uses: actions/upload-artifact@v7
+        with:
+          name: neo-server-${{ matrix.arch }}
+          path: target/neo-docker/${{ matrix.rust_target }}/release/browseros-claw-server-rs
+          if-no-files-found: error
+
+  verify:
+    needs: server
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    # Reuse the existing protected environment that owns the provider secrets.
+    environment: neo-captcha
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ inputs.version }}
+      ARCH: ${{ matrix.arch }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v8.3.2
+      - uses: actions/download-artifact@v8
+        with:
+          name: neo-server-${{ matrix.arch }}
+          path: ${{ runner.temp }}/neo-servers/${{ matrix.arch }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Prepare build secrets
+        id: keys
+        env:
+          CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+          VERIFY_PAID: ${{ inputs.verify_paid }}
+        run: |
+          set -euo pipefail
+          umask 077
+          export BROWSEROS_CAPSOLVER_API_KEY_FILE="$RUNNER_TEMP/neo-capsolver-key"
+          export BROWSEROS_2CAPTCHA_API_KEY_FILE="$RUNNER_TEMP/neo-2captcha-key"
+          echo "BROWSEROS_CAPSOLVER_API_KEY_FILE=$BROWSEROS_CAPSOLVER_API_KEY_FILE" >> "$GITHUB_ENV"
+          echo "BROWSEROS_2CAPTCHA_API_KEY_FILE=$BROWSEROS_2CAPTCHA_API_KEY_FILE" >> "$GITHUB_ENV"
+          printf '%s' "$CAPSOLVER_API_KEY" > "$BROWSEROS_CAPSOLVER_API_KEY_FILE"
+          printf '%s' "$TWOCAPTCHA_API_KEY" > "$BROWSEROS_2CAPTCHA_API_KEY_FILE"
+          keyed=0
+          if [ -s "$BROWSEROS_CAPSOLVER_API_KEY_FILE" ] || [ -s "$BROWSEROS_2CAPTCHA_API_KEY_FILE" ]; then keyed=1; fi
+          if [ "$VERIFY_PAID" = true ] && [ "$keyed" = 0 ]; then
+            echo 'Paid verification requires a provider key' >&2
+            exit 1
+          fi
+          echo "keyed=$keyed" >> "$GITHUB_OUTPUT"
+      - name: Build native image
+        run: |
+          uv run --directory packages/browseros browseros release docker \
+            --version "$VERSION" --platform "linux/$ARCH" --server-dir "$RUNNER_TEMP/neo-servers"
+      - name: Verify viewer, MCP, and hosted CAPTCHA on and off
+        id: smoke
+        env:
+          KEYED: ${{ steps.keys.outputs.keyed }}
+        run: |
+          set -euo pipefail
+          for hosted in 1 0; do
+            name="neo-smoke-$hosted"
+            docker run -d --name "$name" --shm-size=1g -e BROWSERCLAW_HOSTED_MODE="$hosted" \
+              -p 127.0.0.1::9010 -p 127.0.0.1::6080 "ghcr.io/browseros-ai/neo:$VERSION" >/dev/null
+            for _ in $(seq 1 90); do
+              state=$(docker inspect -f '{{.State.Health.Status}}' "$name")
+              [ "$state" != unhealthy ] || exit 1
+              [ "$state" != healthy ] || break
+              sleep 2
+            done
+            [ "$state" = healthy ]
+            port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "9010/tcp") 0).HostPort}}' "$name")
+            python3 packages/browseros/docker/neo/captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"
+            if [ "$hosted" = 1 ]; then
+              vnc=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "6080/tcp") 0).HostPort}}' "$name")
+              python3 packages/browseros/docker/neo/smoke.py --mcp-port "$port" --vnc-port "$vnc"
+              echo "mcp_url=http://127.0.0.1:$port/mcp" >> "$GITHUB_OUTPUT"
+            fi
+          done
+      - uses: oven-sh/setup-bun@v2
+        if: inputs.verify_paid && matrix.arch == 'amd64'
+        with:
+          bun-version: 1.4.2
+      - name: Verify paid demo
+        if: inputs.verify_paid && matrix.arch == 'amd64'
+        working-directory: packages/browseros-agent
+        env:
+          MCP_URL: ${{ steps.smoke.outputs.mcp_url }}
+        run: |
+          bun install --frozen-lockfile > "$RUNNER_TEMP/neo-install.log" 2>&1
+          result=0
+          bun run test:captcha-e2e -- --mcp-url "$MCP_URL" --pages demo --only google-recaptcha-demo --keys real --paid --out "$RUNNER_TEMP/captcha-e2e" > "$RUNNER_TEMP/captcha-e2e.log" 2>&1 || result=$?
+          if [ -f "$RUNNER_TEMP/captcha-e2e/results.md" ]; then cat "$RUNNER_TEMP/captcha-e2e/results.md"; fi
+          [ "$result" -eq 0 ]
+          python3 -c 'import json, os; r=json.load(open(os.environ["RUNNER_TEMP"]+"/captcha-e2e/results.json")); assert len(r)==1 and r[0]["outcome"]=="PASS"'
+      - name: Remove containers and secret files
+        if: always()
+        run: |
+          docker rm -fv neo-smoke-1 neo-smoke-0 >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"
+
+  publish:
+    needs: [server, verify]
+    if: inputs.push
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: neo-captcha
     permissions:
       contents: read
       packages: write
@@ -36,46 +201,42 @@ jobs:
       VERSION: ${{ inputs.version }}
     steps:
       - uses: actions/checkout@v7
-
       - uses: astral-sh/setup-uv@v8.3.2
-
-      # QEMU builds the arm64 image on this x64 runner. It only runs apt and
-      # dpkg, so emulation is slow but reliable.
+      - uses: actions/download-artifact@v8
+        with:
+          name: neo-server-amd64
+          path: ${{ runner.temp }}/neo-servers/amd64
+      - uses: actions/download-artifact@v8
+        with:
+          name: neo-server-arm64
+          path: ${{ runner.temp }}/neo-servers/arm64
       - uses: docker/setup-qemu-action@v4
-
       - uses: docker/setup-buildx-action@v4
-
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Build amd64 for the smoke test
-        run: |
-          uv run --directory packages/browseros browseros release docker \
-            --version "$VERSION" --platform linux/amd64
-
-      - name: Smoke test
-        working-directory: packages/browseros/docker/neo
+      - name: Prepare build secrets
         env:
-          NEO_VERSION: ${{ inputs.version }}
-          NEO_DATA: ${{ runner.temp }}/neo-data
+          CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
         run: |
-          set -euo pipefail
-          if ! docker compose up -d --wait --wait-timeout 180 || ! python3 smoke.py; then
-            docker compose logs
-            exit 1
-          fi
-          docker compose down
-
+          umask 077
+          export BROWSEROS_CAPSOLVER_API_KEY_FILE="$RUNNER_TEMP/neo-capsolver-key"
+          export BROWSEROS_2CAPTCHA_API_KEY_FILE="$RUNNER_TEMP/neo-2captcha-key"
+          echo "BROWSEROS_CAPSOLVER_API_KEY_FILE=$BROWSEROS_CAPSOLVER_API_KEY_FILE" >> "$GITHUB_ENV"
+          echo "BROWSEROS_2CAPTCHA_API_KEY_FILE=$BROWSEROS_2CAPTCHA_API_KEY_FILE" >> "$GITHUB_ENV"
+          printf '%s' "$CAPSOLVER_API_KEY" > "$BROWSEROS_CAPSOLVER_API_KEY_FILE"
+          printf '%s' "$TWOCAPTCHA_API_KEY" > "$BROWSEROS_2CAPTCHA_API_KEY_FILE"
       - name: Push amd64 and arm64
         env:
           LATEST: ${{ inputs.latest }}
         run: |
           set -euo pipefail
-          args=(--version "$VERSION" --push)
-          if [ "$LATEST" = true ]; then
-            args+=(--latest)
-          fi
+          args=(--version "$VERSION" --push --server-dir "$RUNNER_TEMP/neo-servers")
+          if [ "$LATEST" = true ]; then args+=(--latest); fi
           uv run --directory packages/browseros browseros release docker "${args[@]}"
+      - name: Remove secret files
+        if: always()
+        run: rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"

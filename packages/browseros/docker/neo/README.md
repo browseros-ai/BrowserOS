@@ -64,12 +64,20 @@ Ports inside the container are always 6080 and 9010; change only the host side.
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
 your agent's own harness keeps its workflows and asks you for help itself. Instead of calling
 `name_session`, an agent names its task with an optional `taskName` argument on any tool call.
-`BROWSERCLAW_HOSTED_MODE=0` restores the full tool set of the BrowserOS app.
+`BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and hides `solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.
 With `docker run`, recreate it with the new flag and the existing data volume.
 The viewer's screen follows the browser tab's size once it connects, so `NEO_SCREEN`
 only matters until then.
+
+Images built with a CapSolver or 2Captcha key also offer `solve_captcha` in hosted
+mode. Keyless builds omit that tool. Provider keys are embedded files: anyone who
+can pull such an image can extract them. See the [build and release guide](../../bos_build/docs/docker-image.md)
+for key configuration and rotation.
+
+The server updater is disabled so the server stays at the version verified with
+the image. Pull a newer image and recreate the container to update it.
 
 ## Read what your agent did
 
@@ -152,14 +160,14 @@ The Dockerfile reads the version's published `release.json` from the BrowserOS C
 package for the architecture being built, and checks its sha256:
 
 ```sh
-docker build --build-arg NEO_VERSION=0.51.1.4 -t neo .
+docker build --no-cache-filter neo --build-arg NEO_VERSION=0.51.1.4 -t neo .
 ```
 
 To test a Neo build that isn't on the CDN (a CI artifact, say), put its `.deb` alone in a
 folder and pass that folder as the `neo-deb` build context:
 
 ```sh
-docker build --build-context neo-deb=/path/to/folder -t neo .
+docker build --no-cache-filter neo --build-context neo-deb=/path/to/folder -t neo .
 ```
 
 Maintainers build and publish the image with `browseros release docker`; see

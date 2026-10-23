@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Neo Docker image build contract, exercised through build_image."""
 
+import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -69,6 +70,7 @@ class PushTest(unittest.TestCase):
                     "--provenance", "mode=min",
                     "--annotation",
                     "index:org.opencontainers.image.source=https://github.com/browseros-ai/BrowserOS",
+                    "--no-cache-filter", "neo",
                     str(CONTEXT),
                 ]
             ],
@@ -118,6 +120,7 @@ class LoadTest(unittest.TestCase):
                 "--build-arg", "NEO_VERSION=0.52.0.1",
                 "--tag", "ghcr.io/browseros-ai/neo:0.52.0.1",
                 "--load",
+                "--no-cache-filter", "neo",
                 str(CONTEXT),
             ],
         )
@@ -170,6 +173,7 @@ class LocalDebTest(unittest.TestCase):
                 "--build-arg", "NEO_VERSION=0.51.1.4",
                 "--tag", "ghcr.io/browseros-ai/neo:0.51.1.4",
                 "--load",
+                "--no-cache-filter", "neo",
                 "--build-context", "neo-deb=/staged",
                 str(CONTEXT),
             ],
@@ -199,6 +203,56 @@ class LocalDebTest(unittest.TestCase):
             build_image(ImageRequest(deb=renamed), FakeOperations(), CONTEXT)
         result = build_image(ImageRequest(deb=renamed, version="0.51.1.4"), FakeOperations(), CONTEXT)
         self.assertEqual(result.platforms, ("linux/arm64",))
+
+
+class ImageContentsTest(unittest.TestCase):
+    def test_provider_keys_use_secret_mounts_and_always_rebuild_credentials(self):
+        ops = FakeOperations(release=_release("arm64_deb"))
+        with tempfile.TemporaryDirectory() as directory:
+            capsolver = Path(directory) / "capsolver"
+            twocaptcha = Path(directory) / "2captcha"
+            capsolver.write_text("fake-capsolver-value")
+            twocaptcha.write_text("fake-2captcha-value")
+            request = ImageRequest(
+                version="0.52.0.1", capsolver_key_file=capsolver,
+                twocaptcha_key_file=twocaptcha,
+            )
+
+            build_image(request, ops, CONTEXT)
+
+            argv = ops.builds[0]
+            self.assertIn(f"id=capsolver_api_key,src={capsolver}", argv)
+            self.assertIn(f"id=twocaptcha_api_key,src={twocaptcha}", argv)
+            self.assertIn("--no-cache-filter", argv)
+            self.assertIn("neo", argv)
+            self.assertNotIn("fake-capsolver-value", " ".join(argv))
+            self.assertNotIn("fake-2captcha-value", " ".join(argv))
+
+    def test_missing_key_file_is_rejected_before_building(self):
+        ops = FakeOperations(release=_release("arm64_deb"))
+        request = ImageRequest(version="0.52.0.1", capsolver_key_file=Path("/missing/key"))
+
+        with self.assertRaisesRegex(ImageError, "key file"):
+            build_image(request, ops, CONTEXT)
+
+        self.assertEqual(ops.builds, [])
+
+    def test_server_override_supplies_only_the_requested_architectures(self):
+        ops = FakeOperations(release=_release("arm64_deb"))
+        with tempfile.TemporaryDirectory() as directory:
+            servers = Path(directory)
+            (servers / "arm64").mkdir()
+            (servers / "arm64/browseros-claw-server-rs").write_bytes(b"fake-server")
+
+            build_image(ImageRequest(version="0.52.0.1", server_dir=servers), ops, CONTEXT)
+
+            self.assertIn(f"neo-server={servers}", ops.builds[0])
+
+            with self.assertRaisesRegex(ImageError, "amd64"):
+                build_image(
+                    ImageRequest(version="0.52.0.1", server_dir=servers, push=True),
+                    FakeOperations(release=_release("x64_deb", "arm64_deb")), CONTEXT,
+                )
 
 
 if __name__ == "__main__":

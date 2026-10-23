@@ -1,3 +1,5 @@
+"""Exercise the release verifier through a stateful JSON/SSE MCP peer."""
+
 import contextlib
 import io
 import json
@@ -8,11 +10,11 @@ import threading
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-import release
+import captcha_smoke
 
 
 @contextlib.contextmanager
-def server(token=200, tags=403, tools=None, sse=False, bad_token=False, remote_error=False):
+def server(tools=None, sse=False, remote_error=False, paginated=False):
     requests = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -29,12 +31,7 @@ def server(token=200, tags=403, tools=None, sse=False, bad_token=False, remote_e
 
         def do_GET(self):
             requests.append((self.path, self.headers.get("Authorization")))
-            if self.path.startswith("/token?"):
-                self.reply(token, {} if bad_token else {"token": "anonymous-test-token"})
-            elif self.path.endswith("/tags/list"):
-                self.reply(tags, {"tags": ["bootstrap"]})
-            else:
-                self.reply(200, {"status": "ok"})
+            self.reply(200, {"status": "ok"})
 
         def do_POST(self):
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -45,6 +42,8 @@ def server(token=200, tags=403, tools=None, sse=False, bad_token=False, remote_e
             result = {"tools": [{"name": name} for name in tools or []]}
             if body["method"] == "initialize":
                 result = {"serverInfo": {"name": "test"}}
+            elif paginated and not body.get("params", {}).get("cursor"):
+                result = {"tools": [], "nextCursor": "page-two"}
             self.reply(200, {"id": body.get("id"), "result": result}, sse)
 
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -58,47 +57,37 @@ def server(token=200, tags=403, tools=None, sse=False, bad_token=False, remote_e
         thread.join()
 
 
-class ReleaseTests(unittest.TestCase):
-    def tests_that_only_explicit_anonymous_denial_allows_private_push(self):
-        for token, tags in [(200, 401), (200, 403), (401, 200), (403, 200)]:
-            with self.subTest(token=token, tags=tags), server(token, tags) as (url, requests):
-                release.require_private(url)
-                self.assertIsNone(requests[0][1])
-                if len(requests) > 1:
-                    self.assertEqual(requests[1][1], "Bearer anonymous-test-token")
-
-    def tests_that_public_or_inconclusive_registry_responses_block_push(self):
-        for token, tags, bad in [(200, 200, False), (500, 403, False),
-                                 (200, 404, False), (200, 500, False), (200, 403, True)]:
-            with self.subTest(token=token, tags=tags, bad=bad):
-                with server(token, tags, bad_token=bad) as (url, _):
-                    with self.assertRaises(RuntimeError):
-                        release.require_private(url)
-
+class CaptchaSmokeTests(unittest.TestCase):
     def tests_that_hosted_tool_checks_work_with_json_and_sse_sessions(self):
         for sse in [False, True]:
             for hosted in [False, True]:
-                tools = ["tabs", "solve_captcha"] if hosted else ["tabs"]
-                with self.subTest(sse=sse, hosted=hosted):
-                    with server(tools=tools, sse=sse) as (url, requests):
-                        with contextlib.redirect_stdout(io.StringIO()) as output:
-                            release.verify(url, hosted)
-                        self.assertEqual(json.loads(output.getvalue().splitlines()[1]), sorted(tools))
-                        self.assertIn(("tools/list", "test-session"), requests)
+                for keyed in [False, True]:
+                    tools = ["tabs", "solve_captcha"] if hosted and keyed else ["tabs"]
+                    with self.subTest(sse=sse, hosted=hosted, keyed=keyed):
+                        with server(tools=tools, sse=sse) as (url, requests):
+                            with contextlib.redirect_stdout(io.StringIO()) as output:
+                                captcha_smoke.verify(url, hosted, keyed)
+                            self.assertEqual(json.loads(output.getvalue().splitlines()[1]), sorted(tools))
+                            self.assertIn(("tools/list", "test-session"), requests)
+
+    def tests_that_captcha_can_be_on_a_later_mcp_page(self):
+        with server(tools=["tabs", "solve_captcha"], paginated=True) as (url, _):
+            with contextlib.redirect_stdout(io.StringIO()):
+                captcha_smoke.verify(url, True)
 
     def tests_that_wrong_tool_availability_fails_verification(self):
         for hosted, tools in [(True, ["tabs"]), (False, ["tabs", "solve_captcha"]), (False, [])]:
             with self.subTest(hosted=hosted, tools=tools), server(tools=tools) as (url, _):
                 with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(RuntimeError):
-                    release.verify(url, hosted)
+                    captcha_smoke.verify(url, hosted)
 
     def tests_that_remote_error_bodies_never_reach_public_logs(self):
         with server(remote_error=True) as (url, _):
-            result = subprocess.run([sys.executable, str(Path(release.__file__)), "verify", url, "1"],
+            result = subprocess.run([sys.executable, str(Path(captcha_smoke.__file__)), url, "1", "1"],
                                     capture_output=True, text=True)
         self.assertEqual(result.returncode, 1)
         self.assertNotIn("fake-private-remote-value", result.stdout + result.stderr)
-        self.assertEqual(result.stderr.strip(), "Release verification failed")
+        self.assertEqual(result.stderr.strip(), "Docker CAPTCHA verification failed")
 
 
 if __name__ == "__main__":

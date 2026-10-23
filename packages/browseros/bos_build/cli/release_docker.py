@@ -35,6 +35,17 @@ def docker_command(
     deb: Optional[Path] = typer.Option(
         None, "--deb", help="Local .deb to test instead of the CDN; loaded locally, never pushed"
     ),
+    server_dir: Optional[Path] = typer.Option(
+        None, "--server-dir", help="Override servers from <dir>/<arch>/browseros-claw-server-rs"
+    ),
+    capsolver_key_file: Optional[Path] = typer.Option(
+        None, "--capsolver-key-file", envvar="BROWSEROS_CAPSOLVER_API_KEY_FILE",
+        help="CapSolver key file to embed in the image (readable by image users)",
+    ),
+    twocaptcha_key_file: Optional[Path] = typer.Option(
+        None, "--twocaptcha-key-file", envvar="BROWSEROS_2CAPTCHA_API_KEY_FILE",
+        help="2Captcha key file to embed in the image (readable by image users)",
+    ),
     repository: str = typer.Option(DEFAULT_REPOSITORY, "--repository"),
     github_output: Optional[Path] = typer.Option(None, "--github-output"),
 ) -> None:
@@ -46,6 +57,9 @@ def docker_command(
         latest=latest,
         platforms=tuple(platform or ()),
         deb=deb.resolve() if deb else None,
+        server_dir=server_dir.resolve() if server_dir else None,
+        capsolver_key_file=capsolver_key_file.resolve() if capsolver_key_file else None,
+        twocaptcha_key_file=twocaptcha_key_file.resolve() if twocaptcha_key_file else None,
     )
     try:
         result = build_image(request, DockerOperations(), image_context())
