@@ -32,8 +32,11 @@ responses block keyed publication. If bootstrap becomes public, a maintainer
 must make **neo-captcha** private in its GitHub package settings, then rerun.
 Do not change the public `neo` package's visibility.
 
-The workflow requires healthy containers and `solve_captcha` present with
-hosted mode on, absent with hosted mode off. **Until the hosted-gate PR (W9)
+Before publishing either architecture, the workflow checks both native
+images: amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`. Each requires
+healthy containers and `solve_captcha` present with hosted mode on, absent
+with hosted mode off. The paid demo runs only on amd64. Both verification
+jobs must pass before publication. **Until the hosted-gate PR (W9)
 merges, the off check intentionally fails and nothing keyed is pushed.**
 Verification prints health JSON, tool names and the paid runner table; never
 container logs. Server build jobs receive no environment secrets.
@@ -62,5 +65,5 @@ for persistence and other runtime options. Keep the updater flag when adding
 `NEO_ARGS`. To test the release guards locally:
 
 ```sh
-python3 -m unittest discover -s packages/browseros/docker/neo-captcha -p 'test_*.py'
+uv run --no-project --with PyYAML==6.0.3 python -m unittest discover -s packages/browseros/docker/neo-captcha -p 'test_*.py'
 ```
