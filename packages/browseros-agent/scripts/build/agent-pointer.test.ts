@@ -8,7 +8,7 @@ const assets = new URL(
   import.meta.url,
 )
 const template = readFileSync(new URL('agent-pointer.js', assets), 'utf8')
-const stub = readFileSync(new URL('agent-cursor-stub.js', assets), 'utf8')
+const cursor = readFileSync(new URL('agent-cursor.js', assets), 'utf8')
 const command = {
   op: 'move',
   kind: 'hover',
@@ -19,7 +19,7 @@ const command = {
   idleMs: 4000,
 }
 const key = Symbol.for('browseros.agentPointer')
-const tracedStub = `${stub}
+const tracedCursor = `${cursor}
 const OriginalPlayer = BrowserOSAgentCursor.MotionPlayer;
 BrowserOSAgentCursor.MotionPlayer = class extends OriginalPlayer {
   moveTo(point, options) {
@@ -37,6 +37,7 @@ function harness(
     unsupported?: boolean
     reduced?: boolean
     strictCsp?: boolean
+    framesPaused?: boolean
   } = {},
 ) {
   let now = 0
@@ -57,6 +58,12 @@ function harness(
     save() {},
     restore() {},
     translate() {},
+    rotate() {},
+    scale() {},
+    roundRect() {},
+    createRadialGradient() {
+      return { addColorStop() {} }
+    },
   }
   class Sheet {
     cssText = ''
@@ -128,6 +135,7 @@ function harness(
     performance: { now: () => now },
     matchMedia: () => ({ matches: !!options.reduced }),
     CSSStyleSheet: options.strictCsp ? Sheet : undefined,
+    Path2D: class {},
     setTimeout: (run: () => void, ms: number) => {
       const id = nextId++
       timers.set(id, { at: now + ms, run })
@@ -143,7 +151,7 @@ function harness(
   }
   const context = { ...world, window: world, globalThis: world }
   Object.assign(world, { top: options.frame ? {} : world })
-  const execute = (cmd = command, bundle = stub) =>
+  const execute = (cmd = command, bundle = cursor) =>
     runInNewContext(
       template
         .replace('__BROWSEROS_POINTER_CURSOR__', () => bundle)
@@ -154,9 +162,11 @@ function harness(
   const advance = async (ms: number) => {
     for (let elapsed = 0; elapsed < ms; elapsed += 10) {
       now += Math.min(10, ms - elapsed)
-      const pending = [...frames.values()]
-      frames.clear()
-      for (const run of pending) run(now)
+      if (!options.framesPaused) {
+        const pending = [...frames.values()]
+        frames.clear()
+        for (const run of pending) run(now)
+      }
       for (const [id, timer] of [...timers])
         if (timer.at <= now && timers.delete(id)) timer.run()
       await Promise.resolve()
@@ -216,10 +226,8 @@ describe('agent pointer page expression', () => {
   })
 
   test('tests that a stalled player times out and a failing player fails open', async () => {
-    const bundle =
-      'var BrowserOSAgentCursor = { MotionPlayer: class { pos = {x:0,y:0}; place(p) {this.pos=p} moveTo() {return new Promise(()=>{})} destroy() {} } };'
-    const h = harness()
-    const moving = h.execute({ ...command, timeoutMs: 50 }, bundle)
+    const h = harness({ framesPaused: true })
+    const moving = h.execute({ ...command, timeoutMs: 50 })
     await h.advance(60)
     expect(await moving).toEqual({ status: 'timeout' })
     const bad = harness()
@@ -270,7 +278,7 @@ describe('agent pointer page expression', () => {
 
   test('tests that the bundle executes once and a later move continues from the last tip', async () => {
     const h = harness()
-    const bundle = `${stub}\nglobalThis.loads = (globalThis.loads || 0) + 1; const OriginalPlayer = BrowserOSAgentCursor.MotionPlayer; BrowserOSAgentCursor.MotionPlayer = class extends OriginalPlayer { place(p) { globalThis.placed = {...p}; super.place(p) } moveTo(p,o) { globalThis.start = {...this.pos}; globalThis.options = o; return super.moveTo(p,o) } };`
+    const bundle = `${cursor}\nglobalThis.loads = (globalThis.loads || 0) + 1; const OriginalPlayer = BrowserOSAgentCursor.MotionPlayer; BrowserOSAgentCursor.MotionPlayer = class extends OriginalPlayer { place(p) { globalThis.placed = {...p}; super.place(p) } moveTo(p,o) { globalThis.start = {...this.pos}; globalThis.options = o; return super.moveTo(p,o) } };`
     const first = h.execute(command, bundle)
     await h.advance(450)
     await first
@@ -296,13 +304,13 @@ describe('agent pointer page expression', () => {
       [2, 2, false],
     ] as const) {
       const h = harness()
-      const first = h.execute(command, tracedStub)
+      const first = h.execute(command, tracedCursor)
       await h.advance(450)
       await first
       const target = { x: command.x + dx, y: command.y + dy }
       let result: unknown
       const repeated = h
-        .execute({ ...command, ...target }, tracedStub)
+        .execute({ ...command, ...target }, tracedCursor)
         .then((value: unknown) => {
           result = value
         })
@@ -320,11 +328,11 @@ describe('agent pointer page expression', () => {
   test('tests that immediate arrival re-arms idle teardown', async () => {
     const h = harness()
     const cmd = { ...command, idleMs: 200 }
-    const first = h.execute(cmd, tracedStub)
-    await h.advance(450)
+    const first = h.execute(cmd, tracedCursor)
+    await h.advance(command.travelMs)
     await first
     await h.advance(100)
-    const repeated = h.execute(cmd, tracedStub)
+    const repeated = h.execute(cmd, tracedCursor)
     for (let turn = 0; turn < 8; turn++) await Promise.resolve()
     expect(Reflect.get(h.world, 'moves')).toBe(1)
     await repeated
@@ -382,7 +390,7 @@ describe('agent pointer page expression', () => {
       const h = harness()
       h.world.innerWidth = viewport.width
       h.world.innerHeight = viewport.height
-      const moving = h.execute({ ...command, ...target }, tracedStub)
+      const moving = h.execute({ ...command, ...target }, tracedCursor)
       const start = Reflect.get(h.world, 'start')
       expect(start).toEqual(expected)
       if (target.x === 400)
@@ -394,7 +402,7 @@ describe('agent pointer page expression', () => {
 
   test('tests that signature arc meets the arrival upper bound across 40–1600 pixels in both directions', async () => {
     const h = harness()
-    const moving = h.execute(command, tracedStub)
+    const moving = h.execute(command, tracedCursor)
     const params = Reflect.get(h.world, 'options').params
     expect(params).toEqual({
       style: 'signature_arc',
@@ -421,7 +429,7 @@ describe('agent pointer page expression', () => {
       h.world.innerWidth = 1280
       h.world.innerHeight = 800
       const target = { x: 640, y }
-      const moving = h.execute({ ...command, ...target }, tracedStub)
+      const moving = h.execute({ ...command, ...target }, tracedCursor)
       const from = Reflect.get(h.world, 'start')
       const params = Reflect.get(h.world, 'options').params
       const trajectory = planMove(params, { from, to: target })
@@ -438,27 +446,4 @@ describe('agent pointer page expression', () => {
       expect(await moving).toEqual({ status: 'arrived' })
     }
   })
-})
-
-test('tests that the stub sizes for DPR and resolves superseded moves and placement', async () => {
-  const h = harness()
-  const result = runInNewContext(`${stub}; BrowserOSAgentCursor`, h.context)
-  const canvas = h.document.createElement('canvas')
-  const player = new result.MotionPlayer(canvas, { float: false })
-  const first = player.moveTo(
-    { x: 100, y: 100 },
-    { params: { glideDurationMs: 400 } },
-  )
-  const second = player.moveTo(
-    { x: 200, y: 100 },
-    { params: { glideDurationMs: 400 } },
-  )
-  await first
-  player.place({ x: 20, y: 30 })
-  await second
-  expect(player.pos).toEqual({ x: 20, y: 30 })
-  await h.advance(20)
-  expect([canvas.width, canvas.height]).toEqual([1600, 1200])
-  player.destroy()
-  expect(h.frames.size).toBe(0)
 })

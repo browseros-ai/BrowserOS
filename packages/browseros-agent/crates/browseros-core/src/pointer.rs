@@ -39,7 +39,7 @@ impl Pointer {
         let template = TEMPLATE.get_or_init(|| {
             include_str!("assets/agent-pointer.js").replace(
                 "__BROWSEROS_POINTER_CURSOR__",
-                include_str!(concat!(env!("OUT_DIR"), "/agent-cursor.js")),
+                include_str!("assets/agent-cursor.js"),
             )
         });
         let command = json!({
@@ -122,24 +122,21 @@ async fn evaluate_bool(session: &ProtocolSession, expression: &str) -> Option<bo
 }
 
 #[cfg(test)]
-#[path = "../build.rs"]
-mod cursor_build;
-
-#[cfg(test)]
 mod tests {
     use super::{Pointer, PointerAction, hide_for_capture, restore_after_capture};
     use crate::{ProtocolSession, input::Point, test_support::TestConnection, timeouts};
     use serde_json::{Value, json};
 
     #[test]
-    fn tests_that_the_embedded_package_cursor_keeps_its_binding_and_license() {
-        let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../node_modules/@browseros/agent-cursor");
-        if package.exists() {
-            let script = include_str!(concat!(env!("OUT_DIR"), "/agent-cursor.js"));
-            assert!(script.contains("var BrowserOSAgentCursor"));
-            assert!(script.contains("MIT License"));
-        }
+    fn tests_that_the_embedded_cursor_keeps_its_binding_and_license_without_module_statements() {
+        let script = include_str!("assets/agent-cursor.js");
+        assert!(script.contains("var BrowserOSAgentCursor"));
+        assert!(script.contains("MIT License"));
+        assert!(script.contains("Copyright (c) 2025 Cua AI, Inc."));
+        assert!(script.lines().all(|line| {
+            let statement = line.trim_start();
+            !statement.starts_with("export {") && !statement.starts_with("import ")
+        }));
     }
 
     #[tokio::test]
@@ -181,9 +178,7 @@ mod tests {
                 "idleMs": timeouts::POINTER_IDLE.as_millis(),
             });
             assert!(expression.contains(&serde_json::to_string(&command)?));
-            assert!(
-                expression.contains(include_str!(concat!(env!("OUT_DIR"), "/agent-cursor.js")))
-            );
+            assert!(expression.contains(include_str!("assets/agent-cursor.js")));
             assert!(!expression.contains("__BROWSEROS_POINTER_CURSOR__"));
             assert!(!expression.contains("__BROWSEROS_POINTER_CMD__"));
         }
