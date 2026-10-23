@@ -1,6 +1,6 @@
 import { expect, test } from 'bun:test'
 import { resolve } from 'node:path'
-import { McpSession } from '../../claw-mcp/tests/mcp-client'
+import { McpSession } from '../../../contracts/claw-mcp/tests/mcp-client'
 
 test('tests that an optional MCP call timeout actually bounds a slow response', async () => {
   const server = Bun.serve({
@@ -28,7 +28,10 @@ test('tests that an optional MCP call timeout actually bounds a slow response', 
 })
 
 test('tests that server binary overrides win and Cargo target directories are honored', () => {
-  const module = resolve(import.meta.dir, '../../claw-mcp/tests/rust-server.ts')
+  const module = resolve(
+    import.meta.dir,
+    '../../../contracts/claw-mcp/tests/rust-server.ts',
+  )
   const binary = (env: NodeJS.ProcessEnv) => {
     const result = Bun.spawnSync(
       [

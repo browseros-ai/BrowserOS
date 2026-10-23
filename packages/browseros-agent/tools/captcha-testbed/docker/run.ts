@@ -11,7 +11,7 @@ import {
 } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
-import { McpSession } from '../../claw-mcp/tests/mcp-client'
+import { McpSession } from '../../../contracts/claw-mcp/tests/mcp-client'
 
 const root = resolve(import.meta.dir, '../../..')
 const binaryName = 'browseros-claw-server-rs'

@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")/../../.."
-exec bun contracts/captcha/docker/run.ts "$@"
+exec bun tools/captcha-testbed/docker/run.ts "$@"

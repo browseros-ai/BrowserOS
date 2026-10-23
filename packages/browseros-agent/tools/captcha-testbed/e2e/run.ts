@@ -2,12 +2,15 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
-import { waitUntil } from '../../claw-mcp/tests/helpers'
-import { McpSession, textOf } from '../../claw-mcp/tests/mcp-client'
+import { waitUntil } from '../../../contracts/claw-mcp/tests/helpers'
+import {
+  McpSession,
+  textOf,
+} from '../../../contracts/claw-mcp/tests/mcp-client'
 import {
   buildRustServer,
   startRustServer,
-} from '../../claw-mcp/tests/rust-server'
+} from '../../../contracts/claw-mcp/tests/rust-server'
 import type { CaptchaPage } from '../fixtures/catalog'
 import { launchConfiguredBrowser } from './browser-launch'
 import {

@@ -125,14 +125,14 @@ describe('computeAffectedSuites', () => {
     expect(suiteNames([], ['README.md', 'docs/whatever.md'])).toEqual([])
   })
 
-  it('tests that CAPTCHA contract changes select their unit suite without a browser or Rust', () => {
+  it('tests that CAPTCHA test bed changes select their unit suite without a browser or Rust', () => {
     const suites = computeAffectedSuites(
       [],
-      ['packages/browseros-agent/contracts/captcha/e2e/runner.ts'],
+      ['packages/browseros-agent/tools/captcha-testbed/e2e/runner.ts'],
     )
     expect(suites.map((suite) => suite.suite)).toEqual(['captcha'])
     expect(suites[0]).toMatchObject({
-      command: 'bun run ./scripts/run-bun-test.ts ./contracts/captcha',
+      command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
       junit_path: 'test-results/captcha.xml',
       needs_browser: false,
       needs_rust: false,

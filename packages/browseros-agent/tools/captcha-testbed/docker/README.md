@@ -24,7 +24,7 @@ on failure; open its printed noVNC URL to watch. It prints a cleanup command.
 Without `--keep`, the container and temporary files are removed on exit.
 `--clean` also removes the base and overlay images; it conflicts with `--keep`.
 Other flags, such as `--only no-captcha` or `--solve-timeout 150000`, go to the
-`contracts/captcha/e2e` runner.
+`tools/captcha-testbed/e2e` runner.
 
 ## Server build and keys
 

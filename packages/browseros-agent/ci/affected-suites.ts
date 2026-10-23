@@ -139,7 +139,7 @@ export const SUITES: Record<string, SuiteConfig> = {
   },
   captcha: {
     suite: 'captcha',
-    command: 'bun run ./scripts/run-bun-test.ts ./contracts/captcha',
+    command: 'bun run ./scripts/run-bun-test.ts ./tools/captcha-testbed',
     junit_path: 'test-results/captcha.xml',
     needs_browser: false,
     needs_rust: false,
@@ -249,7 +249,7 @@ export function computeAffectedSuites(
   ) {
     keys.add('claw-mcp')
   }
-  if (changedFiles.some((f) => f.startsWith(`${AGENT}contracts/captcha/`)))
+  if (changedFiles.some((f) => f.startsWith(`${AGENT}tools/captcha-testbed/`)))
     keys.add('captcha')
 
   return Object.keys(SUITES)
