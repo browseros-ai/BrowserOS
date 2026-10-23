@@ -73,7 +73,15 @@
         shadow.appendChild(canvas);
         document.documentElement.appendChild(host);
         player = new Player(canvas, { float: false });
-        player.place(api.pos || { x: target.x - 48, y: target.y - 32 });
+        const startCoordinate = (point, extent, offset) => {
+          const margin = Math.min(16, extent / 2);
+          return Math.max(margin, Math.min(point - offset, extent - margin));
+        };
+        // This diagonal is 160 CSS px long before viewport clamping.
+        player.place(api.pos || {
+          x: startCoordinate(target.x, window.innerWidth, 128),
+          y: startCoordinate(target.y, window.innerHeight, 96),
+        });
         return true;
       };
       api = {

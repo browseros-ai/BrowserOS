@@ -19,6 +19,15 @@ const command = {
   idleMs: 4000,
 }
 const key = Symbol.for('browseros.agentPointer')
+const tracedStub = `${stub}
+const OriginalPlayer = BrowserOSAgentCursor.MotionPlayer;
+BrowserOSAgentCursor.MotionPlayer = class extends OriginalPlayer {
+  moveTo(point, options) {
+    globalThis.start = {...this.pos};
+    globalThis.options = options;
+    return super.moveTo(point, options);
+  }
+};`
 
 function harness(
   options: {
@@ -285,6 +294,82 @@ describe('agent pointer page expression', () => {
       )
       expect(Math.abs(trajectory.arrivalT * 1000 - 400)).toBeLessThan(25)
     }
+  })
+
+  test('tests that the first move starts 160 pixels up-left within viewport margins', async () => {
+    for (const { target, expected, viewport } of [
+      {
+        target: { x: 400, y: 300 },
+        expected: { x: 272, y: 204 },
+        viewport: { width: 800, height: 600 },
+      },
+      {
+        target: { x: 20, y: 25 },
+        expected: { x: 16, y: 16 },
+        viewport: { width: 800, height: 600 },
+      },
+      {
+        target: { x: 799, y: 599 },
+        expected: { x: 671, y: 503 },
+        viewport: { width: 800, height: 600 },
+      },
+      {
+        target: { x: 1200, y: 1000 },
+        expected: { x: 784, y: 584 },
+        viewport: { width: 800, height: 600 },
+      },
+      {
+        target: { x: 4, y: 10 },
+        expected: { x: 4, y: 10 },
+        viewport: { width: 8, height: 20 },
+      },
+    ]) {
+      const h = harness()
+      h.world.innerWidth = viewport.width
+      h.world.innerHeight = viewport.height
+      const moving = h.execute({ ...command, ...target }, tracedStub)
+      const start = Reflect.get(h.world, 'start')
+      expect(start).toEqual(expected)
+      if (target.x === 400)
+        expect(Math.hypot(target.x - start.x, target.y - start.y)).toBe(160)
+      await h.advance(450)
+      expect(await moving).toEqual({ status: 'arrived' })
+    }
+  })
+
+  test('tests that the selected Cua style meets timing across 40–1600 pixels in both directions', async () => {
+    const h = harness()
+    const moving = h.execute(command, tracedStub)
+    const params = Reflect.get(h.world, 'options').params
+    const signatureTimes: number[] = []
+    const selectedTimes: number[] = []
+    for (let distance = 40; distance <= 1600; distance++) {
+      for (const direction of [1, -1]) {
+        const request = {
+          from: { x: 800, y: 400 },
+          to: { x: 800 + direction * distance, y: 400 },
+        }
+        signatureTimes.push(
+          planMove(
+            { style: 'signature_arc', timing: 'fixed', glideDurationMs: 400 },
+            request,
+          ).arrivalT * 1000,
+        )
+        const arrivalMs = planMove(params, request).arrivalT * 1000
+        selectedTimes.push(arrivalMs)
+        expect(Math.abs(arrivalMs - 400)).toBeLessThanOrEqual(50)
+      }
+    }
+    const signatureFits = signatureTimes.every((ms) => ms >= 350 && ms <= 450)
+    expect(params).toEqual({
+      style: signatureFits ? 'signature_arc' : 'classic',
+      timing: 'fixed',
+      glideDurationMs: 400,
+    })
+    expect(Math.min(...selectedTimes)).toBeGreaterThanOrEqual(350)
+    expect(Math.max(...selectedTimes)).toBeLessThanOrEqual(450)
+    await h.advance(450)
+    expect(await moving).toEqual({ status: 'arrived' })
   })
 })
 
