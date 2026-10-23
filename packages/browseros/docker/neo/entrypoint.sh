@@ -10,11 +10,13 @@
 # websockify exits, the container exits and Docker's restart policy takes over.
 set -euo pipefail
 
-readonly PROFILE=/data/profile
-readonly DOWNLOADS=/data/downloads
+: "${NEO_DATA_DIR:=/data}"
+readonly NEO_DATA_DIR
+readonly PROFILE="$NEO_DATA_DIR/profile"
+readonly DOWNLOADS="$NEO_DATA_DIR/downloads"
 # claw-server's database, recordings, skills and agent settings. It defaults to
 # ~/.browserclaw, which is not on the volume and would vanish with the container.
-readonly CLAW_DATA=/data/browserclaw
+readonly CLAW_DATA="$NEO_DATA_DIR/browserclaw"
 readonly NEO_HOME=/home/neo
 readonly XDG_DIR=/tmp/neo-xdg
 readonly CONFIGURED=/tmp/neo-configured
@@ -43,6 +45,11 @@ is_true() {
 log() { printf '[neo] %s\n' "$*"; }
 die() { log "$*" >&2; exit 1; }
 
+# This directory becomes private and owned by Neo; it must identify a data
+# folder rather than the container root or a working-directory-relative path.
+[[ "$NEO_DATA_DIR" = /* ]] || die "NEO_DATA_DIR must be an absolute path"
+[ "$(realpath -m -- "$NEO_DATA_DIR")" != / ] || die "NEO_DATA_DIR must not be the filesystem root"
+
 # Validate before starting services so the browser and its server agree.
 case "$BROWSERCLAW_HOSTED_MODE" in
   0 | 1) ;;
@@ -70,8 +77,10 @@ apply_ids() {
 
 prepare_data() {
   mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR" "$NEO_HOME/.config/gtk-3.0" "$NEO_HOME/.config/gtk-4.0"
-  chown neo:neo /data "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
-  chmod 700 "$XDG_DIR"
+  # Derived images may share the parent mount with other users. Limit ownership
+  # changes to Neo's root and data folders, and keep the cookies private there.
+  chown neo:neo "$NEO_DATA_DIR" "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
+  chmod 700 "$NEO_DATA_DIR" "$XDG_DIR"
   ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
   # There is no taskbar to restore a minimized window from, so hide Neo's

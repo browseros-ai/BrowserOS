@@ -88,6 +88,7 @@ COPY --chmod=0755 healthcheck.sh /usr/local/bin/neo-healthcheck
 COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 
 ENV NEO_SCREEN=1600x1000 \
+    NEO_DATA_DIR=/data \
     BROWSERCLAW_HOSTED_MODE=1 \
     NEO_SANDBOX=false \
     BROWSEROS_CAPSOLVER_API_KEY_FILE=/home/neo/.config/browseros/captcha/capsolver-api-key \
@@ -97,7 +98,8 @@ ENV NEO_SCREEN=1600x1000 \
     PUID=1000 \
     PGID=1000
 
-VOLUME /data
+# Callers choose their persistent mount; declaring VOLUME here would also create
+# an anonymous /data volume for every image built FROM Neo.
 EXPOSE 6080 9010
 
 HEALTHCHECK --interval=5s --timeout=5s --start-period=90s --retries=3 \
