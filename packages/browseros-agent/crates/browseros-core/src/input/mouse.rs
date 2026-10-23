@@ -1,6 +1,10 @@
-use crate::{CoreError, ProtocolSession, input::Point};
+use crate::{
+    CoreError, ProtocolSession,
+    input::{ClickOptions, Point},
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::time::Duration;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -29,12 +33,43 @@ pub async fn dispatch_click(
     click_count: i64,
     modifiers: i64,
 ) -> Result<(), CoreError> {
-    let _: Value = session
-        .send(
-            "Input.dispatchMouseEvent",
-            json!({ "type": "mouseMoved", "x": x, "y": y }),
-        )
-        .await?;
+    dispatch_click_with_options(
+        session,
+        x,
+        y,
+        ClickOptions {
+            button: Some(button),
+            click_count: Some(click_count),
+            ..Default::default()
+        },
+        modifiers,
+    )
+    .await
+}
+
+pub async fn dispatch_click_with_options(
+    session: &ProtocolSession,
+    x: f64,
+    y: f64,
+    opts: ClickOptions,
+    modifiers: i64,
+) -> Result<(), CoreError> {
+    if let Some(from) = opts.humanlike_from {
+        for step in 1..=4 {
+            let fraction = f64::from(step) / 4.0;
+            dispatch_hover(
+                session,
+                from.x + (x - from.x) * fraction,
+                from.y + (y - from.y) * fraction,
+            )
+            .await?;
+            tokio::time::sleep(Duration::from_millis(12)).await;
+        }
+    } else {
+        dispatch_hover(session, x, y).await?;
+    }
+    let button = opts.button.unwrap_or(MouseButton::Left);
+    let click_count = opts.click_count.unwrap_or(1);
     let _: Value = session
         .send(
             "Input.dispatchMouseEvent",
@@ -48,6 +83,9 @@ pub async fn dispatch_click(
             }),
         )
         .await?;
+    if opts.humanlike_from.is_some() {
+        tokio::time::sleep(Duration::from_millis(90)).await;
+    }
     let _: Value = session
         .send(
             "Input.dispatchMouseEvent",

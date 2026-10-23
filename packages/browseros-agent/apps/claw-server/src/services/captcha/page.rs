@@ -3,6 +3,7 @@ use std::{collections::HashSet, future::Future, time::Duration};
 use browseros_cdp::CdpError;
 use browseros_core::{
     BrowserView, CoreError, FrameId, PageId, ProtocolSession, TargetError,
+    input::{ClickOptions, Point},
     screenshot::{ScreenshotCaptureOptions, ScreenshotFormat, Viewport},
 };
 use serde_json::{Value, json};
@@ -184,26 +185,20 @@ impl CaptchaPage for LivePage {
             return Err(bad("Invalid click point"));
         }
         let mut last = self.last_point.lock().await;
-        let session = self.top().await?;
-        for step in 1..=4 {
-            let fraction = f64::from(step) / 4.0;
-            send(&session,"Input.dispatchMouseEvent",json!({"type":"mouseMoved","x":last.0+(x-last.0)*fraction,"y":last.1+(y-last.1)*fraction})).await?;
-            tokio::time::sleep(Duration::from_millis(12)).await;
-        }
+        let input = browser(self.view.input(self.page.clone())).await?;
+        browser(input.click_at(
+            x,
+            y,
+            ClickOptions {
+                humanlike_from: Some(Point {
+                    x: last.0,
+                    y: last.1,
+                }),
+                ..Default::default()
+            },
+        ))
+        .await?;
         *last = (x, y);
-        send(
-            &session,
-            "Input.dispatchMouseEvent",
-            json!({"type":"mousePressed","x":x,"y":y,"button":"left","clickCount":1}),
-        )
-        .await?;
-        tokio::time::sleep(Duration::from_millis(90)).await;
-        send(
-            &session,
-            "Input.dispatchMouseEvent",
-            json!({"type":"mouseReleased","x":x,"y":y,"button":"left","clickCount":1}),
-        )
-        .await?;
         Ok(())
     }
     async fn screenshot_clip(&self, rect: Rect) -> Result<String, PageError> {
@@ -514,7 +509,7 @@ mod tests {
     use tokio::sync::broadcast;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
-    type Call = (String, Value, Option<SessionId>);
+    type Call = (String, Value, Option<SessionId>, tokio::time::Instant);
     struct Native {
         widget_url: &'static str,
         calls: Mutex<Vec<Call>>,
@@ -544,6 +539,7 @@ mod tests {
                 method.into(),
                 params.clone(),
                 session.cloned(),
+                tokio::time::Instant::now(),
             ));
             let child = session.is_some_and(|id| id.as_str() == "s-widget");
             if child {
@@ -997,21 +993,72 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn tests_that_clicks_move_press_pause_and_release_on_the_top_page() -> TestResult {
         let (native, page) = fixture();
-        let started = tokio::time::Instant::now();
         page.click_at(60.0, 90.0).await?;
-        assert!(started.elapsed() >= std::time::Duration::from_millis(60));
         let calls = native.calls("Input.dispatchMouseEvent")?;
-        let n = calls.len();
-        assert!(n >= 5);
-        assert!(calls[..n - 2].iter().all(|c| c.1["type"] == "mouseMoved"));
-        assert_eq!(calls[n - 2].1["type"], "mousePressed");
-        assert_eq!(calls[n - 1].1["type"], "mouseReleased");
+        assert_click_path(
+            &calls,
+            &[(15.0, 22.5), (30.0, 45.0), (45.0, 67.5), (60.0, 90.0)],
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_invalid_click_points_dispatch_nothing() -> TestResult {
+        let (native, page) = fixture();
+        for (x, y) in [
+            (-1.0, 0.0),
+            (0.0, -1.0),
+            (f64::NAN, 0.0),
+            (0.0, f64::NAN),
+            (f64::INFINITY, 0.0),
+            (0.0, f64::INFINITY),
+        ] {
+            assert_eq!(page.click_at(x, y).await, Err(bad("Invalid click point")));
+        }
+        assert!(native.calls("Input.dispatchMouseEvent")?.is_empty());
+        assert_eq!(*page.last_point.lock().await, (0.0, 0.0));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_each_click_starts_from_the_previous_target() -> TestResult {
+        let (native, page) = fixture();
+        page.click_at(60.0, 90.0).await?;
+        page.click_at(20.0, 10.0).await?;
+        let calls = native.calls("Input.dispatchMouseEvent")?;
+        assert_eq!(calls.len(), 12);
+        assert_click_path(
+            &calls[..6],
+            &[(15.0, 22.5), (30.0, 45.0), (45.0, 67.5), (60.0, 90.0)],
+        );
+        assert_click_path(
+            &calls[6..],
+            &[(50.0, 70.0), (40.0, 50.0), (30.0, 30.0), (20.0, 10.0)],
+        );
+        Ok(())
+    }
+
+    fn assert_click_path(calls: &[Call], points: &[(f64, f64); 4]) {
+        assert_eq!(calls.len(), 6);
+        for (call, (x, y)) in calls[..4].iter().zip(points) {
+            assert_eq!(call.1, json!({"type":"mouseMoved","x":x,"y":y}));
+        }
+        for (call, event) in calls[4..].iter().zip(["mousePressed", "mouseReleased"]) {
+            assert_eq!(call.1["type"], event);
+            assert_eq!(call.1["x"], points[3].0);
+            assert_eq!(call.1["y"], points[3].1);
+            assert_eq!(call.1["button"], "left");
+            assert_eq!(call.1["clickCount"], 1);
+        }
+        for pair in calls[..5].windows(2) {
+            assert!(pair[1].3.duration_since(pair[0].3) >= Duration::from_millis(12));
+        }
+        assert!(calls[5].3.duration_since(calls[4].3) >= Duration::from_millis(90));
         assert!(
             calls
                 .iter()
                 .all(|c| c.2.as_ref().map(SessionId::as_str) == Some("s-page"))
         );
-        Ok(())
     }
 
     #[tokio::test]
