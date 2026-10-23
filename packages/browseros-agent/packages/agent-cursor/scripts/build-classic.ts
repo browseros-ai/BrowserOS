@@ -36,7 +36,6 @@ Provenance: Cua commit ${cuaCommit}.
 var BrowserOSAgentCursor = (() => {
 "use strict";
 const module = { exports: {} };
-const exports = module.exports;
 ${bundle.trimEnd()}
 return { MotionPlayer: module.exports.MotionPlayer };
 })();

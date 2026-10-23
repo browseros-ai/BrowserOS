@@ -26,7 +26,6 @@ Provenance: Cua commit 4a44f4d39677c2d906d588b5b205a85aa8353354.
 var BrowserOSAgentCursor = (() => {
 "use strict";
 const module = { exports: {} };
-const exports = module.exports;
 var __defProp = Object.defineProperty;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
