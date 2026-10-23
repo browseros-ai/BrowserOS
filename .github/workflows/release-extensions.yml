@@ -90,6 +90,8 @@ on:
         description: "Immutable source commit"
         value: ${{ jobs.prepare.outputs.release_sha }}
     secrets:
+      BROWSEROS_PACKAGES_TOKEN:
+        required: false
       GH_TOKEN:
         required: false
       R2_ACCOUNT_ID:
@@ -402,6 +404,7 @@ jobs:
       - name: Build and upload immutable extension CRX
         working-directory: packages/browseros
         env:
+          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
           BRANCH: ${{ inputs.branch || '' }}
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}

@@ -1,8 +1,16 @@
 version: 2
 
+registries:
+  browseros-packages:
+    type: "npm-registry"
+    url: "https://browseros-private-packages.shadowfax92.workers.dev"
+    token: ${{secrets.BROWSEROS_PACKAGES_TOKEN}}
+
 updates:
   - package-ecosystem: "bun"
     directory: "/packages/browseros-agent"
+    registries:
+      - "browseros-packages"
     schedule:
       interval: "weekly"
       day: "monday"
