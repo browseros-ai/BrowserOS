@@ -19,9 +19,6 @@ import {
   AnimatedSidebarMenuItem,
 } from '@/components/motion/animated-sidebar'
 import { CARD_TARGET_CLASS, Card } from '@/components/motion/card'
-import { SidebarHelp } from '@/components/sidebar/SidebarHelp'
-import { SidebarPrivacy } from '@/components/sidebar/SidebarPrivacy'
-import { SidebarThemeToggle } from '@/components/sidebar/SidebarThemeToggle'
 import { cn } from '@/lib/utils'
 import { useLiveSessions } from '@/modules/api/audit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
@@ -88,7 +85,7 @@ function NavMenu({
 
 /**
  * The one sidebar: brand, the daily destinations with words (not icon-only),
- * and Settings with the remaining utilities pinned to the bottom.
+ * and Settings with the connected agents pinned to the bottom.
  */
 export function AppSidebar() {
   return (
@@ -113,9 +110,6 @@ export function AppSidebar() {
           <NavMenu items={secondaryNavItems} />
         </nav>
         <ConnectedAgentsCard />
-        <SidebarThemeToggle expanded />
-        <SidebarPrivacy expanded />
-        <SidebarHelp expanded />
       </AnimatedSidebarFooter>
     </AnimatedSidebar>
   )
