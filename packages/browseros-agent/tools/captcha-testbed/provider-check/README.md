@@ -6,7 +6,7 @@ From `packages/browseros-agent`:
 bun run captcha:provider-check
 bun run captcha:provider-check --balance-only
 bun run captcha:provider-check --json
-bun test contracts/captcha/provider-check
+bun test tools/captcha-testbed/provider-check
 ```
 
 Reads and trims keys from these files:

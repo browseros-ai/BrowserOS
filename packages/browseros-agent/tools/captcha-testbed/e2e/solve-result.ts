@@ -1,4 +1,4 @@
-import type { McpToolResult } from '../../claw-mcp/tests/mcp-client'
+import type { McpToolResult } from '../../../contracts/claw-mcp/tests/mcp-client'
 
 const statuses = new Set([
   'solved',

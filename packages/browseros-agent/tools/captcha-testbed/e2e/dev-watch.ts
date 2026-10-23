@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, open, readFile, realpath, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
-import { McpSession } from '../../claw-mcp/tests/mcp-client'
+import { McpSession } from '../../../contracts/claw-mcp/tests/mcp-client'
 
 const ownerPorts = new Set([9010, 9011, 9121, 9211, 9212, 9213, 9214, 9215])
 

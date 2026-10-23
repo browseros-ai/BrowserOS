@@ -5,7 +5,7 @@ From `packages/browseros-agent`:
 ```sh
 bun run captcha:fixtures
 bun run captcha:fixtures --host 0.0.0.0 --public-host host.docker.internal --port 18080
-bun test contracts/captcha/fixtures
+bun test tools/captcha-testbed/fixtures
 ```
 
 The CLI prints fixture and demo URLs. Default bind/public host: `127.0.0.1`; default port: random in 10101–20202. `--host` selects the listener; `--public-host` selects advertised URLs. Ctrl-C stops the server.

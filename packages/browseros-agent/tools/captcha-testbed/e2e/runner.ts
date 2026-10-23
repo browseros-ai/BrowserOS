@@ -1,9 +1,9 @@
-import { parsePageId } from '../../claw-mcp/tests/helpers'
+import { parsePageId } from '../../../contracts/claw-mcp/tests/helpers'
 import {
   McpRequestError,
   McpSession,
   textOf,
-} from '../../claw-mcp/tests/mcp-client'
+} from '../../../contracts/claw-mcp/tests/mcp-client'
 import type { CaptchaFamily, CaptchaPage } from '../fixtures/catalog'
 import { bodyProbe, observationProbe, readyProbe, submitProbe } from './probes'
 import { parseSolveResult } from './solve-result'

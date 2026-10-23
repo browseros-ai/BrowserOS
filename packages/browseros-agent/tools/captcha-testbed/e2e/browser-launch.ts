@@ -1,7 +1,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { launchBrowser } from '../../claw-mcp/tests/browser'
+import { launchBrowser } from '../../../contracts/claw-mcp/tests/browser'
 
 /** Preserve argument boundaries without changing the shared browser harness. */
 export async function launchConfiguredBrowser(
