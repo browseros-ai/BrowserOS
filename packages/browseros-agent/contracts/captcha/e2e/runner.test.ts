@@ -116,6 +116,43 @@ test('tests that a token_applied stub passes after the site accepts submission',
   expect(exitCode(records)).toBe(0)
 })
 
+for (const [bodyText, verdict, note] of [
+  ['REJECTED: invalid-token', 'rejected', 'false positive'],
+  [
+    'waiting for verification',
+    'error',
+    'independent check failed; verdict timed out',
+  ],
+] as const) {
+  test(`tests that token_applied fails through the runner when the verdict is ${verdict}`, async () => {
+    const selected = [pages[0] as CaptchaPage]
+    const stub = await startStubMcp({
+      scenario: 'token-applied',
+      pages: selected,
+      bodyText,
+    })
+    try {
+      const records = await runCaptchaE2E({
+        mcpUrl: stub.url,
+        fixtureOrigin: 'http://fixtures.invalid',
+        pages: selected,
+        tokenLengthExpression,
+        probeTimeoutMs: 20,
+        pollIntervalMs: 1,
+      })
+      expect(records[0]).toMatchObject({
+        status: 'token_applied',
+        verdict,
+        outcome: 'FAIL',
+        note,
+      })
+      expect(exitCode(records)).toBe(1)
+    } finally {
+      await stub.stop()
+    }
+  })
+}
+
 for (const [acceptance, outcome, note] of [
   ['accepted', 'PASS', 'token applied; site accepted on submit'],
   ['rejected', 'FAIL', 'false positive'],
