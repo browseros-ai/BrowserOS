@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { toast } from 'sonner'
+import { toast, toastApiError, toastSuccess } from '@/modules/toast/toast'
 import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
@@ -70,7 +70,7 @@ export function useHelpTakeover(
           setInControlSessionId((current) =>
             current === sessionId ? null : current,
           )
-          toast.error('Could not bring the agent tab forward')
+          toastApiError('Could not bring the agent tab forward', err)
           // eslint-disable-next-line no-console
           console.warn('focus browser tab failed', { browserTabId, err })
         },
@@ -88,11 +88,11 @@ export function useHelpTakeover(
           void queryClient.invalidateQueries({
             queryKey: useLiveSessions.getKey(),
           })
-          if (result.resolved) toast.success('Handed back to the agent')
+          if (result.resolved) toastSuccess('Handed back to the agent')
           else toast('The agent already stopped waiting')
         },
         onError: (err) => {
-          toast.error('Could not hand back to the agent')
+          toastApiError('Could not hand back to the agent', err)
           // eslint-disable-next-line no-console
           console.warn('resolve help failed', { sessionId, err })
         },
@@ -114,7 +114,7 @@ export function useHelpTakeover(
           void queryClient.invalidateQueries({ queryKey: useSessions.getKey() })
         },
         onError: (err) => {
-          toast.error('Could not stop the agent')
+          toastApiError('Could not stop the agent', err)
           // eslint-disable-next-line no-console
           console.warn('cancel session failed', { sessionId, err })
         },

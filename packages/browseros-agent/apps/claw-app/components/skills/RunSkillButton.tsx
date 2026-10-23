@@ -5,7 +5,7 @@
  */
 
 import { Copy } from 'lucide-react'
-import { toast } from 'sonner'
+import { toastSuccess } from '@/modules/toast/toast'
 import { Button } from '@/components/ui/button'
 import { skillCommand } from '@/screens/skills/skills.helpers'
 
@@ -21,9 +21,10 @@ export function RunSkillButton({ name, size = 'sm' }: RunSkillButtonProps) {
       return
     }
     void navigator.clipboard.writeText(skillCommand(name)).then(() => {
-      toast.success(`Copied ${skillCommand(name)}`, {
-        description: 'Paste it into your coding agent to run this skill.',
-      })
+      toastSuccess(
+        `Copied ${skillCommand(name)}`,
+        'Paste it into your coding agent to run this skill.',
+      )
     })
   }
   return (

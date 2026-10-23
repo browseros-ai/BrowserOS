@@ -6,7 +6,7 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
-import { toast } from 'sonner'
+import { toastPromise } from '@/modules/toast/toast'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,7 +36,7 @@ export function DeleteSkillDialog({
   const remove = useDeleteSkill()
 
   const onConfirm = () => {
-    void toast.promise(
+    toastPromise(
       remove.mutateAsync({ name }).then(() => {
         void queryClient.invalidateQueries({ queryKey: useSkills.getKey() })
         onDeleted()

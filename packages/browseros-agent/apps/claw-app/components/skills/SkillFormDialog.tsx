@@ -8,7 +8,7 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ReactElement, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { toast } from 'sonner'
+import { toastPromise } from '@/modules/toast/toast'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import {
@@ -117,7 +117,7 @@ function CreateForm({ onClose }: { onClose: () => void }) {
 
   const onSubmit = form.handleSubmit((values) => {
     const name = neoName(values.name)
-    void toast.promise(
+    toastPromise(
       create
         .mutateAsync({
           name,
@@ -267,7 +267,7 @@ function EditForm({
   })
 
   const onSubmit = form.handleSubmit((values) => {
-    void toast.promise(
+    toastPromise(
       update
         .mutateAsync({
           name,

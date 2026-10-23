@@ -11,7 +11,7 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { toast } from 'sonner'
+import { toastPromise } from '@/modules/toast/toast'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -90,7 +90,7 @@ export function ManageAuditFilesDialog() {
   // take a while, so we don't block the UI on it.
   const onCleanup = () => {
     setOpen(false)
-    toast.promise(runCleanup.mutateAsync(), {
+    toastPromise(runCleanup.mutateAsync(), {
       loading: 'Cleaning up old audit files…',
       success: (result) =>
         `Removed ${result.sessionsDeleted} session${

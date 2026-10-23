@@ -12,6 +12,7 @@ import {
 } from '@/components/motion/animated-sidebar'
 import { AppSidebar, SidebarBrand } from './AppSidebar'
 import { SIDEBAR_WIDTH } from './layout.constants'
+import { ToastHost } from '@/modules/toast/ToastHost'
 import { PageTransition } from './PageTransition'
 
 /**
@@ -37,6 +38,7 @@ export function AppLayout() {
         </div>
         <PageTransition />
       </AnimatedSidebarInset>
+      <ToastHost />
     </AnimatedSidebarProvider>
   )
 }

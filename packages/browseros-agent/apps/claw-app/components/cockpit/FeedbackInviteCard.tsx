@@ -11,7 +11,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { CalendarCheck, X } from 'lucide-react'
 import { useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { toast } from 'sonner'
+import { toastApiError } from '@/modules/toast/toast'
 import { Button } from '@/components/ui/button'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
@@ -169,7 +169,7 @@ export function FeedbackInviteCard() {
           appeared.current = false
         },
         onError: () => {
-          toast.error(
+          toastApiError(
             'Could not save your response. The invitation may appear again.',
           )
         },
