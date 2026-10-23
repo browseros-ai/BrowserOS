@@ -4,18 +4,7 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import {
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  Check,
-  Code,
-  MessageSquare,
-  Mic,
-  PanelLeft,
-  Plus,
-} from 'lucide-react'
-import { ClaudeAiIcon } from '@/components/ui/svgs/claudeAiIcon'
+import type { ReactNode } from 'react'
 import { cn } from '@/lib/utils'
 import { CLAUDE_LIGHT } from './claude-light'
 import {
@@ -23,181 +12,194 @@ import {
   DemoToolRows,
   NeoConnectedChip,
   TrafficLights,
+  Transcript,
 } from './demo-parts'
 import { DEMO_PROMPT, type DemoFrame } from './timeline'
-
-/** Claude's brand orange: the send button, the running dot, the spinner. */
-const CLAUDE_ORANGE = 'bg-(--claude-orange)'
 
 /** Chat and Code keep different histories; the Switch beat changes both. */
 const RECENTS = {
   chat: ['Weekend trip ideas', 'Thank-you note draft'],
-  code: ['Fix the signup bug', 'Sort my inbox', 'Tidy the README'],
+  code: ['Fix the signup bug', 'Sort my inbox'],
 } as const
+
+const ROW = 'flex h-7 flex-none items-center gap-[7px] rounded-[7px] px-2'
 
 /**
  * The Claude desktop app, the way most people run Claude Code (owner, round
- * 5), in Claude's own default light colors (round 8). It opens on Chat, and
- * the Switch beat moves it to Code (round 9): only then do the code recents,
- * the code placeholder and the "BrowserOS neo ✓" chip (the one sign of the
- * connection) appear. A simplified drawing, not a copy of the app.
+ * 5), in Claude's own default light theme (round 8) and the system face, as
+ * Paper draws it. It opens on Chat, and the Switch beat moves it to Code
+ * (round 9): only then do the code recents, the code placeholder and the
+ * "BrowserOS neo ✓" chip (the one sign of the connection) appear. The cockpit
+ * window has no "Browsing…" line: tool row ③ already shows the work (Paper).
  */
 export function DemoClaudeWindow({
   frame,
   front,
-  fading,
-  spinGlyph,
 }: {
   frame: DemoFrame['agent']
   front: boolean
-  fading: boolean
-  spinGlyph: string
 }) {
   const typing = frame.composer.length > 0
   const code = frame.switched
-  const mode = code ? 'code' : 'chat'
   const blank = code ? 'New session' : 'New chat'
   return (
     <div
       style={CLAUDE_LIGHT}
-      className={cn(
-        'absolute top-3 left-[18px] flex h-[378px] w-[442px] overflow-hidden rounded-xl border border-(--claude-border) bg-(--claude-main) shadow-[0_34px_60px_-30px_rgb(20_20_19/0.4),0_8px_20px_-12px_rgb(20_20_19/0.18)] transition-[opacity,transform] duration-500 ease-out',
-        front ? 'z-6' : 'z-4',
-        frame.open && !fading
-          ? 'opacity-100'
-          : 'translate-y-3.5 scale-[0.98] opacity-0',
-      )}
+      className="flex size-full overflow-hidden rounded-xl bg-(--claude-main) font-[system-ui,sans-serif] shadow-[0_0_0_1px_rgb(0_0_0/0.1),0_34px_60px_-28px_rgb(0_0_0/0.38),0_10px_24px_-12px_rgb(0_0_0/0.18)]"
     >
-      <div className="flex w-[134px] flex-none flex-col border-(--claude-border) border-r bg-(--claude-sidebar)">
-        <div className="flex h-[34px] flex-none items-center gap-2 pl-3 text-(--claude-muted)">
-          <span className="mr-[3px]">
-            <TrafficLights active={front} />
-          </span>
-          <PanelLeft aria-hidden className="size-[13px]" />
-          <ArrowLeft aria-hidden className="size-3" />
-          <ArrowRight aria-hidden className="size-3 opacity-55" />
+      <div className="flex w-[146px] flex-none flex-col gap-1 border-(--claude-border) border-r bg-(--claude-sidebar) px-2.5 pb-3">
+        <div className="flex h-9 flex-none items-center gap-1.5 pl-0.5">
+          <TrafficLights size={10} />
+          <span className="w-1.5" />
+          <svg aria-hidden width="15" height="15" viewBox="0 0 16 16">
+            <rect
+              x="2"
+              y="3"
+              width="12"
+              height="10"
+              rx="2"
+              fill="none"
+              stroke="#717783"
+              strokeWidth="1.3"
+            />
+            <path d="M6 3v10" stroke="#717783" strokeWidth="1.3" />
+          </svg>
+          <svg aria-hidden width="14" height="14" viewBox="0 0 16 16">
+            <path
+              d="M13 8H3M7 4L3 8l4 4"
+              fill="none"
+              stroke="#717783"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <svg aria-hidden width="14" height="14" viewBox="0 0 16 16">
+            <path
+              d="M3 8h10M9 4l4 4-4 4"
+              fill="none"
+              stroke="#C3CAD6"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </div>
-        {/* Chat | Code: the white thumb slides to Code on the Switch beat. */}
-        <div className="relative mx-2.5 mt-0.5 mb-2 grid grid-cols-2 gap-0.5 rounded-lg bg-(--claude-toggle) p-0.5">
-          <i
-            className={cn(
-              'absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-3px)] rounded-md bg-white shadow-[0_1px_2px_rgb(0_0_0/0.12)] transition-transform duration-300 ease-out',
-              code && 'translate-x-[calc(100%+2px)]',
-            )}
-          />
-          <span
-            className={cn(
-              'relative flex h-[22px] items-center justify-center gap-1 rounded-md font-medium text-[11px] transition-colors duration-300',
-              code ? 'text-(--claude-muted)' : 'text-(--claude-ink)',
-            )}
-          >
-            <MessageSquare aria-hidden className="size-[11px]" />
-            Chat
-          </span>
-          <span
-            className={cn(
-              'relative flex h-[22px] items-center justify-center gap-1 rounded-md font-medium text-[11px] transition-colors duration-300',
-              code ? 'text-(--claude-ink)' : 'text-(--claude-muted)',
-            )}
-          >
-            <Code aria-hidden className="size-[11px]" />
-            Code
-          </span>
+        {/* Chat | Code: the white segment moves to Code on the Switch beat. */}
+        <div className="mb-1.5 flex gap-0.5 rounded-lg bg-(--claude-toggle) p-0.5">
+          <ToggleSegment on={!code} label="Chat">
+            <path
+              d="M3 3.5h10v7H7l-3 2.5v-2.5H3z"
+              fill="none"
+              strokeWidth="1.4"
+              strokeLinejoin="round"
+            />
+          </ToggleSegment>
+          <ToggleSegment on={code} label="Code">
+            <path
+              d="M6 4.5L2.5 8 6 11.5M10 4.5L13.5 8 10 11.5"
+              fill="none"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </ToggleSegment>
         </div>
+        <span className="h-1 flex-none" />
         <div
           className={cn(
-            'mx-1.5 flex h-[25px] items-center gap-1.5 rounded-[7px] px-2 font-medium text-[11.5px]',
-            frame.sent
-              ? 'text-(--claude-text)'
-              : 'bg-(--claude-selected) text-(--claude-ink)',
+            ROW,
+            'font-medium text-(--claude-strong) text-[12px] leading-4 transition-colors duration-300',
+            !frame.sent && 'bg-(--claude-selected)',
           )}
         >
-          <Plus aria-hidden className="size-2.5" strokeWidth={2.5} />
+          <svg aria-hidden width="12" height="12" viewBox="0 0 16 16">
+            <path
+              d="M8 3v10M3 8h10"
+              fill="none"
+              stroke="#575D69"
+              strokeWidth="1.6"
+              strokeLinecap="round"
+            />
+          </svg>
           {blank}
         </div>
-        <div className="mx-3.5 mt-3.5 mb-1 text-(--claude-muted) text-[11px] leading-3">
+        <div className="px-2 pt-2.5 pb-1 text-(--claude-muted) text-[11px] leading-[14px]">
           Recents
         </div>
-        <div
-          className={cn(
-            'mx-1.5 flex items-center justify-between overflow-hidden rounded-[7px] bg-(--claude-selected) px-2 font-medium text-(--claude-ink) text-[11px] transition-[height,opacity] duration-300 ease-out',
-            frame.sent ? 'h-[23px] opacity-100' : 'h-0 opacity-0',
-          )}
-        >
-          Cheapest flight
-          <i
+        {frame.sent && (
+          <div
             className={cn(
-              'size-1.5 flex-none rounded-full transition-opacity',
-              CLAUDE_ORANGE,
-              frame.working ? 'animate-pulse-dot' : 'opacity-0',
+              ROW,
+              'animate-demo-rise bg-(--claude-selected) font-medium text-(--claude-ink) text-[12px] leading-4',
             )}
-          />
-        </div>
-        {RECENTS[mode].map((title) => (
+          >
+            <span className="min-w-0 flex-1 truncate">Cheapest flight</span>
+            <i
+              className={cn(
+                'size-1.5 flex-none rounded-full bg-(--claude-orange)',
+                frame.working && 'animate-pulse-dot',
+              )}
+            />
+          </div>
+        )}
+        {RECENTS[code ? 'code' : 'chat'].map((title) => (
           <div
             key={title}
-            className="mx-1.5 flex h-[23px] items-center truncate rounded-[7px] px-2 text-(--claude-text) text-[11px]"
+            className={cn(ROW, 'text-(--claude-text) text-[12px] leading-4')}
           >
-            {title}
+            <span className="min-w-0 truncate">{title}</span>
           </div>
         ))}
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-[34px] flex-none items-center px-3.5 text-(--claude-muted) text-[11.5px]">
+        <div className="flex h-9 flex-none items-center px-4 font-medium text-(--claude-text) text-[12px] leading-4">
           {frame.sent ? 'Cheapest flight' : blank}
         </div>
-        <div className="relative flex min-h-0 flex-1 flex-col px-3.5 pt-0.5 pb-2.5">
-          <ClaudeAiIcon
-            aria-hidden
-            className={cn(
-              'absolute top-[38%] left-1/2 -mt-3.5 -ml-3.5 size-7 transition-[opacity,transform] duration-300 ease-out',
-              frame.sent && 'scale-80 opacity-0',
+        <div className="flex min-h-0 flex-1 flex-col gap-2 px-4 pt-0.5 pb-2.5">
+          <Transcript gap={8}>
+            {frame.sent && (
+              <div className="animate-demo-rise rounded-[10px] bg-(--claude-bubble) px-3 py-2 text-(--claude-ink) text-[13px] leading-[18px]">
+                {DEMO_PROMPT}
+              </div>
             )}
-          />
-          <div
-            className={cn(
-              'max-w-[88%] self-end rounded-[12px_12px_4px_12px] bg-(--claude-bubble) px-[11px] py-[7px] text-(--claude-ink) text-[13px] leading-[17px] transition-[opacity,transform] duration-300 ease-out',
-              frame.sent ? 'opacity-100' : 'translate-y-1.5 opacity-0',
-            )}
-          >
-            {DEMO_PROMPT}
-          </div>
-          <DemoToolRows shown={frame.tools} lit={frame.litTool} tone="claude" />
-          <div className="mt-[9px] grid">
-            <div
-              className={cn(
-                'col-start-1 row-start-1 flex items-center gap-[7px] text-(--claude-muted) text-[11px] leading-4 transition-opacity duration-400',
-                frame.working ? 'opacity-100' : 'opacity-0',
-              )}
-            >
-              <span className="w-3 text-center font-mono font-semibold text-(--claude-orange) text-[12px]">
-                {spinGlyph}
-              </span>
-              Browsing… ({frame.seconds}s)
-            </div>
-            <div
-              className={cn(
-                'col-start-1 row-start-1 flex items-center gap-[7px] font-medium text-(--claude-ink) text-[12px] leading-4 transition-opacity duration-400',
-                frame.answered ? 'opacity-100' : 'opacity-0',
-              )}
-            >
-              <span className="grid size-4 flex-none place-items-center rounded-full bg-(--claude-ink) text-white">
-                <Check aria-hidden className="size-2.5" strokeWidth={3} />
-              </span>
-              Cheapest is $142, nonstop, Fri 7:05 am.
-            </div>
-          </div>
-          <div className="mt-auto flex items-start gap-2 rounded-xl border border-(--claude-composer-border) bg-white p-2.5 text-[13px] leading-[17px] shadow-[0_2px_8px_-4px_rgb(0_0_0/0.1)]">
-            <Plus
-              aria-hidden
-              className="mt-0.5 size-3 flex-none text-(--claude-muted)"
+            <DemoToolRows
+              shown={frame.tools}
+              lit={frame.litTool}
+              tone="claude"
             />
-            <span className="min-w-0 flex-1">
+            {frame.answered && (
+              <div className="flex animate-demo-rise items-start gap-[9px] pt-0.5 pr-2 pl-[9px] font-medium text-(--claude-ink) text-[13.5px] leading-5">
+                <span className="mt-px grid size-[18px] flex-none place-items-center rounded-full bg-(--claude-text)">
+                  <svg aria-hidden width="11" height="11" viewBox="0 0 16 16">
+                    <path
+                      d="M3.5 8.5l3 3 6-7"
+                      fill="none"
+                      stroke="#fff"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+                Cheapest is $142, nonstop, Fri 7:05 am.
+              </div>
+            )}
+          </Transcript>
+          <div className="flex flex-none flex-col gap-[7px]">
+            <div
+              className={cn(
+                'flex flex-col gap-1 rounded-xl border bg-white pt-2 pr-[9px] pb-1.5 pl-3 text-[13px] leading-[19px] transition-[border-color,box-shadow] duration-200',
+                typing
+                  ? 'border-[#BEBDB9] shadow-[0_0_0_3px_rgb(0_0_0/0.035),0_1px_3px_rgb(0_0_0/0.06)]'
+                  : 'border-(--claude-composer-border) shadow-[0_1px_3px_rgb(0_0_0/0.05)]',
+              )}
+            >
               {typing ? (
                 <span className="text-(--claude-ink)">
                   {frame.composer}
-                  {front && <Caret className="mx-px h-3.5" />}
+                  {front && <Caret className="ml-px h-4" />}
                 </span>
               ) : (
                 <span className="text-(--claude-muted)">
@@ -206,31 +208,80 @@ export function DemoClaudeWindow({
                     : 'How can I help you today?'}
                 </span>
               )}
-            </span>
-            {typing ? (
-              <span
-                className={cn(
-                  '-my-0.5 -mr-0.5 grid size-5 flex-none place-items-center self-end rounded-full text-white',
-                  CLAUDE_ORANGE,
-                )}
-              >
-                <ArrowUp aria-hidden className="size-2.5" strokeWidth={2.5} />
-              </span>
-            ) : (
-              <Mic
-                aria-hidden
-                className="mt-0.5 size-3 flex-none text-(--claude-muted)"
-              />
-            )}
+              <div className="flex items-center justify-between">
+                <svg aria-hidden width="14" height="14" viewBox="0 0 16 16">
+                  <path
+                    d="M8 3v10M3 8h10"
+                    fill="none"
+                    stroke="#717783"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span
+                  className={cn(
+                    'grid size-6 place-items-center rounded-full bg-(--claude-orange) transition-opacity duration-200',
+                    !typing && 'opacity-45',
+                  )}
+                >
+                  <svg aria-hidden width="12" height="12" viewBox="0 0 16 16">
+                    <path
+                      d="M8 13V3M4 7l4-4 4 4"
+                      fill="none"
+                      stroke="#fff"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+              </div>
+            </div>
+            <NeoConnectedChip
+              className={cn(
+                'bg-(--claude-bubble) text-(--claude-text)',
+                !code && 'invisible',
+              )}
+            />
           </div>
-          <NeoConnectedChip
-            className={cn(
-              'border-(--claude-border) bg-(--claude-sidebar) text-(--claude-text)',
-              !code && 'invisible opacity-0',
-            )}
-          />
         </div>
       </div>
     </div>
+  )
+}
+
+/** One half of Chat | Code: the selected half is white and bold. */
+function ToggleSegment({
+  on,
+  label,
+  children,
+}: {
+  on: boolean
+  label: string
+  children: ReactNode
+}) {
+  return (
+    <span
+      className={cn(
+        'flex h-6 flex-1 items-center justify-center gap-[5px] rounded-md text-[12px] leading-4 transition-[background-color,color,box-shadow] duration-300',
+        on
+          ? 'bg-white font-semibold text-(--claude-strong) shadow-[0_0_0_1px_rgb(0_0_0/0.06),0_1px_2px_rgb(0_0_0/0.1)]'
+          : 'font-medium text-[#898881]',
+      )}
+    >
+      <svg
+        aria-hidden
+        width="12"
+        height="12"
+        viewBox="0 0 16 16"
+        className={cn(
+          'transition-[stroke] duration-300',
+          on ? 'stroke-(--claude-strong)' : 'stroke-[#717783]',
+        )}
+      >
+        {children}
+      </svg>
+      {label}
+    </span>
   )
 }

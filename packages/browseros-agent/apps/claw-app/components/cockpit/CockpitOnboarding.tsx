@@ -3,10 +3,11 @@
  * Copyright 2026 BrowserOS
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
- * The cockpit's first run, until the person's first agent activity (round 7):
- * neo's one line, one quiet status row (the connected apps as marks, or Get
- * Claude when none were found, and the Claude Cowork step), the demo, then two
- * tasks to try. Cockpit passes the real installed, user-facing harnesses.
+ * The cockpit's first run, until the person's first agent activity (final
+ * Paper, Try one on top): neo's one line, one quiet status row (the connected
+ * apps as marks, or Get Claude when none were found, and the Claude Cowork
+ * step), then "Your turn" with the one prompt to copy, then the demo of that
+ * prompt. Cockpit passes the real installed, user-facing harnesses.
  */
 
 import { ArrowRight, ArrowUpRight } from 'lucide-react'
@@ -16,7 +17,7 @@ import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   FIRST_RUN_COPY,
   GET_CLAUDE_URL,
-  TRY_PROMPTS,
+  TRY_PROMPT,
 } from '@/screens/cockpit/cockpit-onboarding.helpers'
 import { InstallExtensionDialog } from '@/screens/mcp/InstallExtensionDialog'
 import { ConnectedApps } from './ConnectedApps'
@@ -32,6 +33,7 @@ export function CockpitOnboarding({
 }: CockpitOnboardingProps) {
   const [coworkGuideOpen, setCoworkGuideOpen] = useState(false)
   const found = connectedHarnesses.length > 0
+  const line = found ? FIRST_RUN_COPY.ready : FIRST_RUN_COPY.noApps
 
   return (
     <section className="flex flex-col" aria-label="Getting started">
@@ -43,15 +45,15 @@ export function CockpitOnboarding({
           className="size-10 shrink-0 rounded-[10px]"
         />
         <h1 className="flex flex-wrap items-baseline gap-x-[9px] font-extrabold text-[32px] text-cyanotype-ink leading-10 tracking-[-0.03em]">
-          <span>{found ? FIRST_RUN_COPY.ready : FIRST_RUN_COPY.noApps}</span>
+          {line.lead && <span>{line.lead}</span>}
           <em className="font-medium font-serif text-[35px] tracking-[-0.01em]">
-            {FIRST_RUN_COPY.lineAccent}
+            {line.accent}
           </em>
-          <span>{FIRST_RUN_COPY.lineTail}</span>
+          <span>{line.tail}</span>
         </h1>
       </div>
 
-      <div className="flex min-h-[44px] items-center gap-2.5 pt-2.5 pl-[54px]">
+      <div className="flex min-h-10 items-center gap-2.5 pt-2.5 pl-[54px]">
         <div className="flex min-w-0 flex-1 items-center gap-3.5">
           {found ? (
             <ConnectedApps harnesses={connectedHarnesses} />
@@ -101,28 +103,19 @@ export function CockpitOnboarding({
         </button>
       </div>
 
-      <div className="mt-5">
-        <OnboardingDemo />
+      {/* Paper: 18 px of spacer plus 18 px of padding above the prompt row. */}
+      <div className="mt-9 flex flex-wrap items-center gap-2.5">
+        <span className="whitespace-nowrap pr-1 font-semibold text-[15px] text-cyanotype-ink leading-5">
+          {FIRST_RUN_COPY.tryLabel}
+        </span>
+        <PromptPill
+          prompt={TRY_PROMPT}
+          onCopied={() => track(AnalyticsEvent.OnboardingTaskCopied)}
+        />
       </div>
 
-      <div className="mt-[18px] flex flex-col gap-2">
-        <div className="flex items-start gap-3.5">
-          <span className="shrink-0 whitespace-nowrap pt-[11px] font-semibold text-[15px] text-ink leading-5">
-            {FIRST_RUN_COPY.tryLabel}
-          </span>
-          <div className="flex min-w-0 flex-1 flex-wrap gap-2.5">
-            {TRY_PROMPTS.map((prompt) => (
-              <PromptPill
-                key={prompt}
-                prompt={prompt}
-                onCopied={() => track(AnalyticsEvent.OnboardingTaskCopied)}
-              />
-            ))}
-          </div>
-        </div>
-        <p className="text-[14px] text-ink-3 leading-5">
-          {FIRST_RUN_COPY.tryHint}
-        </p>
+      <div className="mt-5">
+        <OnboardingDemo />
       </div>
 
       <InstallExtensionDialog

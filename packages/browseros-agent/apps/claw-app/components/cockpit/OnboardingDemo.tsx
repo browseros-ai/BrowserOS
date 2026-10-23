@@ -4,14 +4,14 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  *
  * The first-run demo that replaced the onboarding video: a drawn macOS
- * desktop where an AI app asks and neo finds the $142 flight. Claude plays by
+ * desktop (Paper's 976×520 stage, wallpaper and slim menu bar) where an AI app
+ * asks and neo finds the $142 flight. Claude plays by
  * default; the Terminal, Claude and ChatGPT dock tiles switch to that app's
  * flow (round 10). One requestAnimationFrame clock drives `demoFrameAt`
  * (onboarding-demo/timeline), so pause, replay, the loop wrap, a flow switch
  * and reduced motion all land on exact frames.
  */
 
-import { Pause, Play, RotateCcw } from 'lucide-react'
 import {
   type ReactNode,
   useEffect,
@@ -30,8 +30,9 @@ import {
   demoFrameAt,
 } from './onboarding-demo/timeline'
 
-const STAGE_WIDTH = 960
-const STAGE_HEIGHT = 480
+/** Paper's cockpit stage; the column is 976 px wide at 1280. */
+const STAGE_WIDTH = 976
+const STAGE_HEIGHT = 520
 /** A hidden tab resumes where it paused instead of jumping ahead. */
 const MAX_STEP_MS = 64
 /** Claude Code's working spinner, one glyph per ~110 ms. */
@@ -43,7 +44,7 @@ const ANALYTICS = { surface: 'demo' } as const
 const REDUCED_MOTION_QUERY = '(prefers-reduced-motion: reduce)'
 
 const FLIGHT_STORY =
-  'ask it to find the cheapest flight to New York next Friday. neo opens the flight search, fills it in, reads five flights and tags the cheapest, $142 at 7:05 am, and the answer comes back.'
+  'ask it to use neo to find the cheapest one-way flight to NYC next Friday on Google Flights. neo opens Google Flights, fills it in, reads five flights and tags the cheapest, $142 at 7:05 am, and the answer comes back.'
 
 /** What the drawn desktop shows, per flow, for screen readers. */
 const STAGE_LABELS: Record<DemoApp, string> = {
@@ -110,9 +111,11 @@ function useDemoPlayback(): Playback {
         }
       }
       const frame = demoFrameAt(c.t, c.app)
-      const spin = frame.agent.working
-        ? Math.floor(now / SPIN_STEP_MS) % SPIN_GLYPHS.length
-        : 0
+      // Only Terminal draws the spinner; the apps' windows need no re-render.
+      const spin =
+        frame.agent.working && c.app === 'terminal'
+          ? Math.floor(now / SPIN_STEP_MS) % SPIN_GLYPHS.length
+          : 0
       const key = JSON.stringify(frame)
       if (jumped || key !== c.key || spin !== c.spin) {
         c.key = key
@@ -187,7 +190,7 @@ export function setStageMotionPaused(
   }
 }
 
-/** Lays the stage out at 960×480 and scales it to the player's width. */
+/** Lays the stage out at 976×520 and scales it to the player's width. */
 function useStageScale() {
   const boxRef = useRef<HTMLDivElement>(null)
   const [scale, setScale] = useState(1)
@@ -228,13 +231,13 @@ export function OnboardingDemo() {
   }, [jumpId])
 
   return (
-    <figure className="m-0 flex flex-col gap-1.5">
+    <figure className="m-0">
       {/* Not role="img": the dock's app tiles inside the stage are buttons,
           so the scene is described in text and its drawing is aria-hidden. */}
       <p className="sr-only">{STAGE_LABELS[playback.frame.agent.app]}</p>
       <div
         ref={boxRef}
-        className="relative aspect-[2/1] w-full overflow-hidden rounded-[14px] border border-accent-tint-2 bg-accent-tint"
+        className="relative aspect-[976/520] w-full overflow-hidden rounded-2xl bg-[#EAF1FF] shadow-[0_0_0_1px_#CFDBF0,0_30px_60px_-30px_rgb(1_18_63/0.35)]"
       >
         <div
           ref={stageRef}
@@ -245,33 +248,45 @@ export function OnboardingDemo() {
             height: STAGE_HEIGHT,
             transform: `scale(${scale})`,
           }}
-          className="absolute top-0 left-0 origin-top-left font-sans text-cyanotype-ink data-instant:[&_*]:animate-none! data-instant:[&_*]:transition-none! motion-reduce:[&_*]:animate-none! motion-reduce:[&_*]:transition-none! data-paused:[&_*]:[animation-play-state:paused]"
+          className="absolute top-0 left-0 origin-top-left font-sans text-[#01123F] data-instant:[&_*]:animate-none! data-instant:[&_*]:transition-none! motion-reduce:[&_*]:animate-none! motion-reduce:[&_*]:transition-none! data-paused:[&_*]:[animation-play-state:paused]"
         >
           <DemoDesktop
             frame={playback.frame}
             spinGlyph={playback.spinGlyph}
             onPickApp={playback.pickApp}
           />
-        </div>
-        <div className="absolute right-3 bottom-3 z-10 flex gap-1.5">
-          <DemoControl
-            label={playback.playing ? 'Pause the demo' : 'Play the demo'}
-            onClick={playback.togglePlaying}
-          >
-            {playback.playing ? (
-              <Pause aria-hidden className="size-3.5 fill-current" />
-            ) : (
-              <Play aria-hidden className="size-3.5 fill-current" />
-            )}
-          </DemoControl>
-          <DemoControl label="Replay the demo" onClick={playback.replay}>
-            <RotateCcw aria-hidden className="size-[15px]" />
-          </DemoControl>
+          {/* S from the right edge, centred on the dock (Paper). */}
+          <div className="absolute top-[451px] right-5 z-10 flex gap-2">
+            <DemoControl
+              label={playback.playing ? 'Pause the demo' : 'Play the demo'}
+              onClick={playback.togglePlaying}
+            >
+              {playback.playing ? (
+                <svg aria-hidden width="12" height="12" viewBox="0 0 12 12">
+                  <rect x="2.5" y="2" width="2.4" height="8" rx="0.8" />
+                  <rect x="7.1" y="2" width="2.4" height="8" rx="0.8" />
+                </svg>
+              ) : (
+                <svg aria-hidden width="12" height="12" viewBox="0 0 12 12">
+                  <path d="M3.5 2.2v7.6a.6.6 0 0 0 .9.5l6-3.8a.6.6 0 0 0 0-1L4.4 1.7a.6.6 0 0 0-.9.5z" />
+                </svg>
+              )}
+            </DemoControl>
+            <DemoControl label="Replay the demo" onClick={playback.replay}>
+              <svg aria-hidden width="14" height="14" viewBox="0 0 14 14">
+                <path
+                  d="M11.5 7a4.5 4.5 0 1 1-1.4-3.3M11.4 1.8v2.6H8.8"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </DemoControl>
+          </div>
         </div>
       </div>
-      <figcaption className="h-5 text-[14px] text-ink-3 leading-5">
-        Click Terminal, Claude or ChatGPT to see it there.
-      </figcaption>
     </figure>
   )
 }
@@ -291,7 +306,7 @@ function DemoControl({
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="grid size-[30px] place-items-center rounded-lg border border-white/90 bg-card/70 text-ink-2 backdrop-blur-sm transition-colors hover:bg-card hover:text-cyanotype-ink focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-accent/25 dark:border-white/10"
+      className="grid size-8 cursor-pointer place-items-center rounded-full border border-[#DCE4F2] bg-white/88 fill-[#575D69] text-[#575D69] shadow-[0_2px_6px_rgb(1_18_63/0.08)] transition-colors hover:bg-white hover:fill-[#01123F] hover:text-[#01123F] focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-[#0254EC]/25"
     >
       {children}
     </button>

@@ -36,32 +36,33 @@ export function getOnboardingState({
 }
 
 /**
- * neo's one line on the cockpit's first run (round 7). The onboarding page
- * ends after the import, so this is where neo picks the conversation back up:
- * the apps it connected (the cockpit has the real list; the page did not), the
- * Claude Cowork step, then the demo. Plain words only: no MCP, server or config.
+ * neo's one line on the cockpit's first run (final Paper, Try one on top).
+ * The onboarding page ends after the import, so this is where neo picks the
+ * conversation back up: the apps it connected (the cockpit has the real list;
+ * the page did not), the one prompt to try, the demo of it, and the Claude
+ * Cowork step. Plain words only: no MCP, server or config.
  */
 export const FIRST_RUN_COPY = {
-  /** With apps connected; "Almost there." when none were found. */
-  ready: 'You’re all set.',
-  noApps: 'Almost there.',
-  lineAccent: 'Watch me',
-  lineTail: 'do one.',
+  /** With apps connected: "*Watch me,* then you try." */
+  ready: { lead: null, accent: 'Watch me,', tail: 'then you try.' },
+  /** With none found: "Almost there. *Watch me* first." */
+  noApps: { lead: 'Almost there.', accent: 'Watch me', tail: 'first.' },
   connected: 'Connected',
   connectedApps: 'Connected apps',
+  /** The popover's footer: a running app only sees neo after a restart. */
   restartHint: 'If one is open, restart it once.',
   noneFound: 'I didn’t find an AI app yet.',
   getClaude: 'Get Claude',
   coworkQuestion: 'Using Claude Cowork?',
   coworkAction: 'Set it up',
-  tryLabel: 'Try one',
-  tryHint: 'Paste one into Claude or ChatGPT, then watch it here.',
+  tryLabel: 'Your turn',
 } as const
 
 export const GET_CLAUDE_URL = 'https://claude.ai/download'
 
-/** The same chore the demo shows first, then an everyday one. */
-export const TRY_PROMPTS = [
-  'Find the cheapest flight to New York next Friday.',
-  'Read me today’s top news.',
-] as const
+/**
+ * The one task to try (owner). The demo types these exact words in every app,
+ * so the pill copies what the person just watched.
+ */
+export const TRY_PROMPT =
+  'Use neo, find me the cheapest one-way flight to NYC next Friday on Google Flights.'

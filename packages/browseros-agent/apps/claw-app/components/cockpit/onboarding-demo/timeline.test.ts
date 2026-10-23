@@ -16,13 +16,12 @@ import {
 } from './timeline'
 
 describe('demoFrameAt', () => {
-  it('starts on a calm desktop with neo in front, with no menu bar to drive', () => {
+  it('starts on a calm desktop with neo in front and its new tab waiting', () => {
     const frame = demoFrameAt(0)
-    expect('menu' in frame).toBe(false)
     expect(frame.fading).toBe(true)
     expect(frame.front).toBe('neo')
     expect(frame.agent.open).toBe(false)
-    expect(frame.neo.up).toBe(false)
+    expect(frame.neo.pageShown).toBe(false)
     expect(frame.neo.url).toBe('')
   })
 
@@ -31,7 +30,8 @@ describe('demoFrameAt', () => {
     expect(hovering.pointer).toMatchObject({ on: true, at: 'dock' })
     expect(hovering.dock.tip).toBe(true)
     expect(demoFrameAt(1550).dock.bounce).toBe(true)
-    const opened = demoFrameAt(2300)
+    expect(demoFrameAt(1999).agent.open).toBe(false)
+    const opened = demoFrameAt(2000)
     expect(opened.agent.open).toBe(true)
     expect(opened.front).toBe('agent')
   })
@@ -52,15 +52,26 @@ describe('demoFrameAt', () => {
     expect(demoFrameAt(4300).callout).toBeNull()
   })
 
-  it('Ask: the prompt is fully typed and not yet sent', () => {
+  it('Ask: the pointer rests on the Claude tile again, its label showing', () => {
+    expect(demoFrameAt(4400).pointer.at).toBe('toggle')
     const frame = demoFrameAt(DEMO_KEY_FRAMES.ask)
+    expect(frame.pointer).toMatchObject({ on: true, at: 'dock' })
+    expect(frame.dock.tip).toBe(true)
     expect(frame.agent.composer).toBe(DEMO_PROMPT)
     expect(frame.agent.sent).toBe(false)
     expect(frame.front).toBe('agent')
   })
 
+  it('types the cockpit’s own prompt, and sends it before neo takes over', () => {
+    expect(DEMO_PROMPT).toBe(
+      'Use neo, find me the cheapest one-way flight to NYC next Friday on Google Flights.',
+    )
+    expect(demoFrameAt(4500).agent.composer).toBe('')
+    expect(demoFrameAt(9999).agent.sent).toBe(true)
+  })
+
   it('types the prompt one character at a time', () => {
-    const lengths = [5500, 6500, 7500, 8500].map(
+    const lengths = [5000, 6000, 7000, 8000].map(
       (t) => demoFrameAt(t).agent.composer.length,
     )
     expect(lengths).toEqual([...lengths].sort((a, b) => a - b))
@@ -71,7 +82,8 @@ describe('demoFrameAt', () => {
   it('Watch: neo is in front, ③ is lit and "Cheapest" lands on $142', () => {
     const frame = demoFrameAt(DEMO_KEY_FRAMES.watch)
     expect(frame.front).toBe('neo')
-    expect(frame.neo.up).toBe(true)
+    expect(frame.pointer.on).toBe(false)
+    expect(frame.neo.pageShown).toBe(true)
     expect(frame.neo.url).toBe('google.com/travel/flights')
     expect(frame.neo.to).toBe('New York')
     expect(frame.neo.when).toBe('Next Friday')
@@ -86,13 +98,13 @@ describe('demoFrameAt', () => {
   })
 
   it('lights each tool row while it touches the page', () => {
-    expect(demoFrameAt(11_100).agent.litTool).toBe(0)
-    expect(demoFrameAt(11_100).neo.urlLit).toBe(true)
-    expect(demoFrameAt(13_700).agent.litTool).toBe(1)
-    expect(demoFrameAt(13_700).neo.badges[1]).toBe('live')
+    expect(demoFrameAt(10_600).agent.litTool).toBe(0)
+    expect(demoFrameAt(10_600).neo.urlLit).toBe(true)
+    expect(demoFrameAt(13_200).agent.litTool).toBe(1)
+    expect(demoFrameAt(13_200).neo.badges[1]).toBe('live')
   })
 
-  it('Done: Claude answers, the amber clears and the closing line shows', () => {
+  it('Done: Claude answers and the ring settles on $142', () => {
     const frame = demoFrameAt(DEMO_KEY_FRAMES.done)
     expect(frame.agent.answered).toBe(true)
     expect(frame.agent.working).toBe(false)
@@ -107,19 +119,24 @@ describe('demoFrameAt', () => {
   })
 
   it('fades out at the end of the loop and clamps outside it', () => {
-    expect(demoFrameAt(32_000).fading).toBe(true)
-    expect(DEMO_LOOP_MS).toBe(32_500)
+    expect(demoFrameAt(31_500).fading).toBe(true)
+    expect(DEMO_LOOP_MS).toBe(32_000)
     expect(demoFrameAt(DEMO_LOOP_MS + 5000)).toEqual(demoFrameAt(DEMO_LOOP_MS))
     expect(demoFrameAt(-10)).toEqual(demoFrameAt(0))
   })
 
-  it('keeps the beats in order', () => {
+  it('keeps Paper’s beat table: Switch 2–4.5 s, Ask to 10 s, Watch to 24 s', () => {
+    expect(DEMO_KEY_FRAMES.switch).toBeGreaterThan(2000)
     expect(DEMO_KEY_FRAMES.switch).toBeLessThan(4500)
     expect(DEMO_KEY_FRAMES.ask).toBeGreaterThan(4500)
-    expect(DEMO_KEY_FRAMES.ask).toBeLessThan(10_500)
-    expect(DEMO_KEY_FRAMES.watch).toBeGreaterThan(10_500)
-    expect(DEMO_KEY_FRAMES.watch).toBeLessThan(24_500)
-    expect(DEMO_KEY_FRAMES.done).toBeLessThan(DEMO_LOOP_MS)
+    expect(DEMO_KEY_FRAMES.ask).toBeLessThan(10_000)
+    expect(demoFrameAt(9999).front).toBe('agent')
+    expect(demoFrameAt(10_000).front).toBe('neo')
+    expect(DEMO_KEY_FRAMES.watch).toBeLessThan(24_000)
+    expect(demoFrameAt(23_999).agent.answered).toBe(false)
+    expect(demoFrameAt(24_000).agent.answered).toBe(true)
+    expect(DEMO_KEY_FRAMES.done).toBeGreaterThan(24_000)
+    expect(DEMO_KEY_FRAMES.done).toBeLessThan(30_000)
   })
 })
 
@@ -138,14 +155,25 @@ describe('per-app flows', () => {
     expect('claude'.startsWith(typing.agent.command)).toBe(true)
     expect(typing.agent.switched).toBe(false)
     expect(typing.callout).toBe('Type claude, then press ⏎')
+    expect(typing.agent.commandRun).toBe(false)
     const started = demoFrameAt(3800, 'terminal')
     expect(started.agent.command).toBe('claude')
+    expect(started.agent.commandRun).toBe(true)
     expect(started.agent.switched).toBe(true)
-    // No toggle to click: the pointer stays on Terminal in the dock.
-    expect(started.pointer.at).toBe('dock')
-    expect(started.dock.tip).toBe(true)
+    expect(started.callout).toBe('Type claude, then press ⏎')
     // Timed like the other two callouts: gone shortly after the switch.
     expect(demoFrameAt(4300, 'terminal').callout).toBeNull()
+  })
+
+  it('Terminal: your hands go to the keyboard, so the pointer and label leave', () => {
+    const opening = demoFrameAt(2200, 'terminal')
+    expect(opening.pointer).toMatchObject({ on: true, at: 'dock' })
+    expect(opening.dock.tip).toBe(true)
+    for (const t of [3000, 3800, DEMO_KEY_FRAMES.ask]) {
+      const frame = demoFrameAt(t, 'terminal')
+      expect(frame.pointer.on).toBe(false)
+      expect(frame.dock.tip).toBe(false)
+    }
   })
 
   it('ChatGPT: opens on Chat, a callout says Switch to Work, the click flips it', () => {

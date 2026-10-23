@@ -4,17 +4,6 @@
  * SPDX-License-Identifier: AGPL-3.0-or-later
  */
 
-import {
-  ArrowLeft,
-  ArrowRight,
-  ArrowUp,
-  Check,
-  ChevronDown,
-  Mic,
-  PanelLeft,
-  Plus,
-  SquarePen,
-} from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { CHATGPT_DARK } from './chatgpt-dark'
 import {
@@ -22,193 +11,200 @@ import {
   DemoToolRows,
   NeoConnectedChip,
   TrafficLights,
+  Transcript,
 } from './demo-parts'
 import { DEMO_PROMPT, type DemoFrame } from './timeline'
 
-const RECENTS = {
-  chat: ['Weekend trip ideas', 'Thank-you note draft'],
-  work: ['Fix the signup bug', 'Sort my inbox', 'Tidy the README'],
-} as const
+/** ChatGPT keeps one history across Chat and Work (Paper). */
+const RECENTS = ['Weekend trip ideas', 'Thank-you note draft'] as const
+
+const ROW =
+  'flex h-[30px] flex-none items-center rounded-lg px-1.5 text-[13px] leading-[18px]'
 
 /**
  * The ChatGPT desktop app in its dark theme, drawn from the owner's
- * screenshot (round 10): Codex now runs inside it, behind the Work half of
- * the Chat | Work toggle at the top. It opens on Chat; the Switch beat moves
- * it to Work. Simplified like the Claude window: no projects, no recap card,
- * no model picker, and the composer stays at the bottom throughout.
+ * screenshot (round 10): Codex runs inside it, behind the Work half of the
+ * Chat | Work toggle at the top. It opens on Chat, with its greeting and
+ * composer centred; the Switch beat moves it to Work. Paper draws this window
+ * only at the 1200 px beat size; this is that design fitted to the cockpit's
+ * grid, so the cockpit window, like Claude's, has no "Working…" line.
  */
 export function DemoChatGptWindow({
   frame,
   front,
-  fading,
 }: {
   frame: DemoFrame['agent']
   front: boolean
-  fading: boolean
 }) {
   const typing = frame.composer.length > 0
   const work = frame.switched
   return (
     <div
       style={CHATGPT_DARK}
-      className={cn(
-        'absolute top-3 left-[18px] flex h-[378px] w-[442px] overflow-hidden rounded-xl border border-(--chatgpt-border) bg-(--chatgpt-main) text-(--chatgpt-text) shadow-[0_34px_60px_-30px_rgb(0_0_0/0.6),0_8px_20px_-12px_rgb(0_0_0/0.35)] transition-[opacity,transform] duration-500 ease-out',
-        front ? 'z-6' : 'z-4',
-        frame.open && !fading
-          ? 'opacity-100'
-          : 'translate-y-3.5 scale-[0.98] opacity-0',
-      )}
+      className="flex size-full overflow-hidden rounded-xl bg-(--chatgpt-main) text-(--chatgpt-ink) shadow-[0_0_0_1px_rgb(0_0_0/0.35),0_34px_60px_-28px_rgb(1_18_63/0.55),0_10px_24px_-12px_rgb(1_18_63/0.3)]"
     >
-      <div className="flex w-[134px] flex-none flex-col bg-(--chatgpt-sidebar)">
-        <div className="flex h-[34px] flex-none items-center gap-2 pl-3 text-(--chatgpt-muted)">
-          <span className="mr-[3px]">
-            <TrafficLights active={front} />
-          </span>
-          <ArrowLeft aria-hidden className="size-3" />
-          <ArrowRight aria-hidden className="size-3 opacity-55" />
-          <PanelLeft aria-hidden className="size-[13px]" />
+      <div className="flex w-[140px] flex-none flex-col gap-0.5 border-(--chatgpt-border) border-r bg-(--chatgpt-sidebar) px-2.5 pb-3">
+        <div className="flex h-9 flex-none items-center pl-0.5">
+          <TrafficLights size={10} />
         </div>
-        <div className="mx-3 mt-1 mb-2 flex items-center gap-1 font-semibold text-(--chatgpt-ink) text-[13px]">
+        <div className="flex h-[30px] flex-none items-center gap-[5px] px-1.5 font-semibold text-[15px] leading-5">
           ChatGPT
-          <ChevronDown aria-hidden className="size-3 text-(--chatgpt-muted)" />
+          <svg aria-hidden width="10" height="10" viewBox="0 0 16 16">
+            <path
+              d="M4 6l4 4 4-4"
+              fill="none"
+              stroke="#8C8D90"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
         </div>
         <div
           className={cn(
-            'mx-1.5 flex h-[25px] items-center gap-1.5 rounded-[7px] px-2 text-(--chatgpt-ink) text-[11.5px]',
+            ROW,
+            'gap-2 text-(--chatgpt-text) transition-colors duration-300',
             !frame.sent && 'bg-(--chatgpt-selected)',
           )}
         >
-          <SquarePen aria-hidden className="size-3" />
+          <svg aria-hidden width="13" height="13" viewBox="0 0 16 16">
+            <path
+              d="M11.5 2.5l2 2L7 11H5V9l6.5-6.5zM3 13.5h10"
+              fill="none"
+              stroke="#DADAD6"
+              strokeWidth="1.4"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
           New chat
         </div>
-        <div className="mx-3.5 mt-3.5 mb-1 text-(--chatgpt-muted) text-[11px] leading-3">
+        <div className="px-1.5 pt-3 pb-1 text-(--chatgpt-muted) text-[12px] leading-4">
           Recents
         </div>
-        <div
-          className={cn(
-            'mx-1.5 flex items-center justify-between overflow-hidden rounded-[7px] bg-(--chatgpt-selected) px-2 text-(--chatgpt-ink) text-[11px] transition-[height,opacity] duration-300 ease-out',
-            frame.sent ? 'h-[23px] opacity-100' : 'h-0 opacity-0',
-          )}
-        >
-          Cheapest flight
-          <i
-            className={cn(
-              'size-1.5 flex-none rounded-full bg-(--chatgpt-ink) transition-opacity',
-              frame.working ? 'animate-pulse-dot' : 'opacity-0',
-            )}
-          />
-        </div>
-        {RECENTS[work ? 'work' : 'chat'].map((title) => (
-          <div
-            key={title}
-            className="mx-1.5 flex h-[23px] items-center truncate rounded-[7px] px-2 text-(--chatgpt-text) text-[11px]"
-          >
-            {title}
+        {frame.sent && (
+          <div className={cn(ROW, 'animate-demo-rise bg-(--chatgpt-selected)')}>
+            Cheapest flight
+          </div>
+        )}
+        {RECENTS.map((title) => (
+          <div key={title} className={cn(ROW, 'text-(--chatgpt-text)')}>
+            <span className="min-w-0 truncate">{title}</span>
           </div>
         ))}
       </div>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        {/* Chat | Work: the lighter thumb slides to Work on the Switch beat. */}
-        <div className="flex h-[44px] flex-none items-center justify-center">
-          <div className="relative grid w-[124px] grid-cols-2 rounded-full bg-(--chatgpt-toggle) p-0.5">
-            <i
-              className={cn(
-                'absolute top-0.5 bottom-0.5 left-0.5 w-[calc(50%-2px)] rounded-full border border-white/10 bg-(--chatgpt-toggle-on) transition-transform duration-300 ease-out',
-                work && 'translate-x-full',
-              )}
-            />
-            {(['Chat', 'Work'] as const).map((label) => (
-              <span
-                key={label}
-                className={cn(
-                  'relative flex h-[22px] items-center justify-center text-[11.5px] transition-colors duration-300',
-                  (label === 'Work') === work
-                    ? 'text-(--chatgpt-ink)'
-                    : 'text-(--chatgpt-muted)',
-                )}
-              >
-                {label}
-              </span>
-            ))}
+        {/* Chat | Work, centred at the top of the conversation. */}
+        <div className="flex h-9 flex-none items-center justify-center">
+          <div className="flex gap-0.5 rounded-full bg-(--chatgpt-toggle) p-[3px]">
+            {(['Chat', 'Work'] as const).map((label) => {
+              const on = (label === 'Work') === work
+              return (
+                <span
+                  key={label}
+                  className={cn(
+                    'flex h-6 items-center rounded-full px-4 font-medium text-[12.5px] leading-4 transition-[background-color,color,box-shadow] duration-300',
+                    on
+                      ? 'bg-(--chatgpt-toggle-on) text-(--chatgpt-ink) shadow-[0_0_0_1px_#4B4C55]'
+                      : 'text-(--chatgpt-soft)',
+                  )}
+                >
+                  {label}
+                </span>
+              )
+            })}
           </div>
         </div>
-        <div className="relative flex min-h-0 flex-1 flex-col px-3.5 pt-0.5 pb-2.5">
-          <div
-            className={cn(
-              'absolute inset-x-3.5 top-[34%] text-center font-medium text-(--chatgpt-ink) text-[17px] tracking-[-0.01em] transition-opacity duration-300',
-              frame.sent && 'opacity-0',
-            )}
-          >
-            {work ? 'What should we work on?' : 'What can I help with?'}
-          </div>
-          <div
-            className={cn(
-              'max-w-[88%] self-end rounded-[14px] bg-(--chatgpt-composer) px-[11px] py-[7px] text-(--chatgpt-ink) text-[13px] leading-[17px] transition-[opacity,transform] duration-300 ease-out',
-              frame.sent ? 'opacity-100' : 'translate-y-1.5 opacity-0',
-            )}
-          >
-            {DEMO_PROMPT}
-          </div>
-          <DemoToolRows
-            shown={frame.tools}
-            lit={frame.litTool}
-            tone="chatgpt"
-          />
-          <div className="mt-[9px] grid">
-            <div
-              className={cn(
-                'col-start-1 row-start-1 flex items-center gap-[7px] text-(--chatgpt-muted) text-[11px] leading-4 transition-opacity duration-400',
-                frame.working ? 'opacity-100' : 'opacity-0',
+        <div
+          className={cn(
+            'flex min-h-0 flex-1 flex-col px-4 pt-1 pb-3',
+            frame.sent ? 'gap-1.5' : 'gap-4',
+          )}
+        >
+          {frame.sent ? (
+            <Transcript gap={6}>
+              <div className="max-w-[236px] animate-demo-rise self-end rounded-2xl bg-(--chatgpt-selected) px-[13px] py-2 text-[13px] leading-[18px]">
+                {DEMO_PROMPT}
+              </div>
+              <DemoToolRows
+                shown={frame.tools}
+                lit={frame.litTool}
+                tone="chatgpt"
+              />
+              {frame.answered && (
+                <div className="flex animate-demo-rise items-start gap-[9px] pt-0.5 pr-2 pl-[9px] font-medium text-[13.5px] leading-5">
+                  <span className="mt-px grid size-[18px] flex-none place-items-center rounded-full bg-(--chatgpt-ink)">
+                    <svg aria-hidden width="11" height="11" viewBox="0 0 16 16">
+                      <path
+                        d="M3.5 8.5l3 3 6-7"
+                        fill="none"
+                        stroke="#292A36"
+                        strokeWidth="2.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  </span>
+                  Cheapest is $142, nonstop, Fri 7:05 am.
+                </div>
               )}
-            >
-              <i className="ml-1 size-2 flex-none animate-pulse-dot rounded-full bg-(--chatgpt-ink)" />
-              Browsing… ({frame.seconds}s)
-            </div>
-            <div
-              className={cn(
-                'col-start-1 row-start-1 flex items-center gap-[7px] font-medium text-(--chatgpt-ink) text-[12px] leading-4 transition-opacity duration-400',
-                frame.answered ? 'opacity-100' : 'opacity-0',
-              )}
-            >
-              <span className="grid size-4 flex-none place-items-center rounded-full bg-(--chatgpt-ink) text-(--chatgpt-main)">
-                <Check aria-hidden className="size-2.5" strokeWidth={3} />
-              </span>
-              Cheapest is $142, nonstop, Fri 7:05 am.
-            </div>
-          </div>
-          <div className="mt-auto flex items-start gap-2 rounded-[16px] bg-(--chatgpt-composer) p-2.5 text-[13px] leading-[17px]">
-            <Plus
-              aria-hidden
-              className="mt-0.5 size-3 flex-none text-(--chatgpt-muted)"
-            />
-            <span className="min-w-0 flex-1">
+            </Transcript>
+          ) : (
+            <>
+              <span className="flex-1" />
+              <div className="text-center text-[22px] leading-7">
+                {work ? 'What should we work on?' : 'What can I help with?'}
+              </div>
+            </>
+          )}
+          <div className="flex flex-none flex-col gap-[7px]">
+            <div className="flex flex-col gap-2 rounded-[18px] bg-(--chatgpt-composer) pt-2.5 pr-2.5 pb-2 pl-3.5 text-[13px] leading-[18px]">
               {typing ? (
-                <span className="text-(--chatgpt-ink)">
+                <span>
                   {frame.composer}
-                  {front && <Caret className="mx-px h-3.5" />}
+                  {front && <Caret className="ml-px h-4" />}
                 </span>
               ) : (
-                <span className="text-(--chatgpt-muted)">Ask anything</span>
+                <span className="text-(--chatgpt-muted-2)">Ask anything</span>
               )}
-            </span>
-            {typing ? (
-              <span className="-my-0.5 -mr-0.5 grid size-5 flex-none place-items-center self-end rounded-full bg-(--chatgpt-ink) text-(--chatgpt-main)">
-                <ArrowUp aria-hidden className="size-2.5" strokeWidth={2.5} />
-              </span>
-            ) : (
-              <Mic
-                aria-hidden
-                className="mt-0.5 size-3 flex-none text-(--chatgpt-muted)"
-              />
-            )}
+              <div className="flex items-center justify-between">
+                <svg aria-hidden width="14" height="14" viewBox="0 0 16 16">
+                  <path
+                    d="M8 3v10M3 8h10"
+                    fill="none"
+                    stroke="#DADAD6"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                  />
+                </svg>
+                <span
+                  className={cn(
+                    'grid size-6 place-items-center rounded-full transition-colors duration-200',
+                    typing ? 'bg-(--chatgpt-ink)' : 'bg-(--chatgpt-ink)/40',
+                  )}
+                >
+                  <svg aria-hidden width="12" height="12" viewBox="0 0 16 16">
+                    <path
+                      d="M8 13V3M4 7l4-4 4 4"
+                      fill="none"
+                      stroke="#292A36"
+                      strokeWidth="1.8"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </span>
+              </div>
+            </div>
+            <NeoConnectedChip
+              className={cn(
+                'bg-(--chatgpt-toggle) text-(--chatgpt-text)',
+                !work && 'invisible',
+              )}
+            />
           </div>
-          <NeoConnectedChip
-            className={cn(
-              'border-(--chatgpt-border) bg-(--chatgpt-sidebar) text-(--chatgpt-text)',
-              !work && 'invisible opacity-0',
-            )}
-          />
+          {!frame.sent && <span className="flex-1" />}
         </div>
       </div>
     </div>

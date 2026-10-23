@@ -117,6 +117,36 @@ describe('ConnectedApps', () => {
     expect(listedApps()).toEqual([])
   })
 
+  it('puts the restart hint in the popover, not beside Connected', async () => {
+    expect(container.textContent).not.toContain('restart it once')
+    await fire(trigger(), 'click')
+    const popover = document.getElementById(
+      trigger().getAttribute('aria-controls') ?? '',
+    )
+    expect(popover?.lastElementChild?.textContent).toBe(
+      'If one is open, restart it once.',
+    )
+  })
+
+  it('Escape closes a hover-opened popover and handing focus back does not reopen it', async () => {
+    // focus() dispatches focusin synchronously in a browser; linkedom does not.
+    const button = trigger()
+    button.focus = () => {
+      button.dispatchEvent(new window.Event('focusin', { bubbles: true }))
+    }
+    await fire(button, 'focusin')
+    expect(trigger().getAttribute('aria-expanded')).toBe('true')
+    await fire(document, 'keydown', 'Escape')
+    expect(trigger().getAttribute('aria-expanded')).toBe('false')
+    expect(listedApps()).toEqual([])
+  })
+
+  it('stacks the leftmost mark on top', () => {
+    const marks = [...trigger().children] as HTMLElement[]
+    const layers = marks.slice(0, 3).map((mark) => Number(mark.style.zIndex))
+    expect(layers).toEqual([...layers].sort((a, b) => b - a))
+  })
+
   it('a click outside closes it', async () => {
     await fire(trigger(), 'click')
     await fire(document.getElementById('outside') as HTMLElement, 'pointerdown')

@@ -31,20 +31,20 @@ const SEVEN: Harness[] = [
 describe('CockpitOnboarding', () => {
   it('leads with neo’s one line, not the cockpit headline or bubbles', () => {
     const html = render(['Claude Code', 'Codex'])
-    expect(html).toContain('You’re all set.')
-    expect(html).toContain('>Watch me</em>')
-    expect(html).toContain('do one.')
-    // The demo's drawn new tab still says it; the page itself does not.
+    expect(html).toContain('>Watch me,</em>')
+    expect(html).toContain('then you try.')
+    expect(html).not.toContain('You’re all set.')
+    // The demo's drawn new tab once said it; the page itself does not.
     expect(html).not.toMatch(/<h1[^>]*>[^<]*What are your agents/)
     expect(html).not.toContain('Your AI apps are connected.')
   })
 
-  it('shows the connected apps as marks with Connected and the restart hint', () => {
+  it('shows the connected apps as marks with Connected, the hint kept for the popover', () => {
     const html = render(['Claude Code', 'Codex'])
     expect(html).toContain('aria-label="Connected apps: Claude Code, Codex"')
     expect(html).toContain('aria-expanded="false"')
     expect(html).toContain('>Connected</span>')
-    expect(html).toContain('If one is open, restart it once.')
+    expect(html).not.toContain('If one is open, restart it once.')
     expect(html).not.toMatch(/>\+\d/)
   })
 
@@ -57,6 +57,8 @@ describe('CockpitOnboarding', () => {
   it('with no app found, says so and makes Get Claude the one primary action', () => {
     const html = render()
     expect(html).toContain('Almost there.')
+    expect(html).toContain('>Watch me</em>')
+    expect(html).toContain('first.')
     expect(html).toContain('I didn’t find an AI app yet.')
     expect(html).toContain('href="https://claude.ai/download"')
     expect(html).not.toContain('Connected apps')
@@ -70,18 +72,22 @@ describe('CockpitOnboarding', () => {
     }
   })
 
-  it('shows the demo and the two copyable prompts', () => {
+  it('puts Your turn and the one prompt above the demo, with no caption or hint', () => {
     const html = render(['Claude Code'])
+    const prompt =
+      'Use neo, find me the cheapest one-way flight to NYC next Friday on Google Flights.'
     expect(html).not.toContain('<video')
-    expect(html).toContain('aria-label="Pause the demo"')
-    expect(html).toContain('Try one')
-    expect(html).toContain(
-      'aria-label="Copy: Find the cheapest flight to New York next Friday."',
+    expect(html.indexOf('>Your turn</span>')).toBeGreaterThan(0)
+    expect(html.indexOf(`aria-label="Copy: ${prompt}"`)).toBeGreaterThan(
+      html.indexOf('>Your turn</span>'),
     )
-    expect(html).toContain('aria-label="Copy: Read me today’s top news."')
-    expect(html).toContain(
-      'Paste one into Claude or ChatGPT, then watch it here.',
+    expect(html.indexOf('aria-label="Pause the demo"')).toBeGreaterThan(
+      html.indexOf(`aria-label="Copy: ${prompt}"`),
     )
+    expect(html.match(/aria-label="Copy: /g)).toHaveLength(1)
+    expect(html).not.toContain('Try one')
+    expect(html).not.toContain('then watch it here')
+    expect(html).not.toContain('to see it there')
   })
 
   it('reads without jargon', () => {

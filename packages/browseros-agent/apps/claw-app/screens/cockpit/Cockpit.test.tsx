@@ -286,7 +286,7 @@ describe('Cockpit (v2)', () => {
     })
     expect(firstRun).toContain('I didn’t find an AI app yet.')
     expect(firstRun).toContain('Almost there.')
-    expect(firstRun).toContain('Try one')
+    expect(firstRun).toContain('Your turn')
     expect(firstRun).not.toMatch(/<h1[^>]*>[^<]*What are your agents/)
     expect(firstRun).not.toContain('<video')
     expect(firstRun).not.toContain('Since you started')
@@ -297,7 +297,7 @@ describe('Cockpit (v2)', () => {
       sessions: 'empty',
       stats: 'measured',
     })
-    expect(waiting).toContain('You’re all set.')
+    expect(waiting).toContain('then you try.')
     expect(waiting).toContain('Connected apps: Codex')
     expect(waiting).toContain('Set it up')
     expect(waiting).not.toContain('Since you started')

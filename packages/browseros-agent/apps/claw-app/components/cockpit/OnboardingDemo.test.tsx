@@ -70,6 +70,8 @@ describe('OnboardingDemo', () => {
     )
     expect(html).toContain('aria-label="Pause the demo"')
     expect(html).toContain('aria-label="Replay the demo"')
-    expect(html).toContain('Click Terminal, Claude or ChatGPT to see it there.')
+    // Final Paper cut the caption; the tiles show their names on hover.
+    expect(html).not.toContain('to see it there')
+    expect(html).not.toContain('<figcaption')
   })
 })
