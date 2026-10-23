@@ -27,6 +27,8 @@ pub use mouse::MouseButton as PublicMouseButton;
 pub struct ClickOptions {
     pub button: Option<MouseButton>,
     pub click_count: Option<i64>,
+    /// Path start in the target's coordinate space: page coordinates for `click_at`,
+    /// frame coordinates for ref clicks inside iframes.
     pub humanlike_from: Option<Point>,
 }
 
