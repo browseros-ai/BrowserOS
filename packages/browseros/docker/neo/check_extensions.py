@@ -8,6 +8,7 @@ profile data to the host.
 
 import argparse
 import json
+import os
 from pathlib import Path
 import time
 import urllib.request
@@ -21,7 +22,8 @@ NEO_IDS = {"adlpneommgkgeanpaekgoaolcpncohkf", "pjimfkbpehlcllblajnpfamdfjhhlgkc
 
 
 def extension_state() -> dict:
-    prefs = json.loads(Path("/data/profile/Default/Preferences").read_text())
+    data_dir = Path(os.environ.get("NEO_DATA_DIR") or "/data")
+    prefs = json.loads((data_dir / "profile/Default/Preferences").read_text())
     records = prefs.get("extensions", {}).get("settings", {})
     # Chromium retains per-ID bookkeeping after uninstalling a managed extension.
     # Manifest/path metadata distinguishes installed extensions from those remnants.

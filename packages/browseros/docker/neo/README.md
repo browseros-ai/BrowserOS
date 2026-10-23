@@ -121,13 +121,34 @@ Within `/v1`, fields are only ever added, never renamed or removed.
 
 ## Your data
 
-Everything Neo keeps lives under `/data`:
+Everything Neo keeps lives under `/data` by default:
 
 ```
 /data/profile      the Neo profile: logins, cookies, history, settings
 /data/browserclaw  agent data: sessions, recordings, skills, agent settings
 /data/downloads    Neo's Downloads folder
 ```
+
+`NEO_DATA_DIR` changes the directory **inside the container**. For example, a
+derived image can set `NEO_DATA_DIR=/var/lib/mirror/browseros`; Neo then uses
+`profile`, `browserclaw`, and `downloads` below that directory. Mount that directory
+or a persistent parent explicitly:
+
+```sh
+docker run --rm --shm-size=1g \
+  -p 127.0.0.1:6080:6080 -p 127.0.0.1:9010:9010 \
+  -e NEO_DATA_DIR=/var/lib/mirror/browseros \
+  -v "$HOME/neo-data:/var/lib/mirror/browseros" \
+  ghcr.io/browseros-ai/neo:latest
+```
+
+The path must be absolute and must not resolve to `/`. Neo makes the data root
+private (`0700`) and gives it and its three data directories to `PUID`/`PGID`;
+parent directories keep their ownership and permissions. The image declares no
+Docker volumes, so persistence requires an explicit mount. Compose and the
+default `docker run` example already provide one at `/data`; neither changes.
+`NEO_DATA` in Compose chooses the host directory. Compose keeps its existing
+`/data` target; using a custom container directory requires your own Compose override.
 
 - **Sign in once.** Logins survive `docker compose down` / `up` and image upgrades.
 - **One container per data folder.** Two containers on one profile corrupt it.

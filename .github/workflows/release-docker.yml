@@ -141,6 +141,8 @@ jobs:
         run: |
           uv run --directory packages/browseros browseros release docker \
             --version "$VERSION" --platform "linux/$ARCH" --server-dir "$RUNNER_TEMP/neo-servers"
+          # Derived images must not inherit an implicit anonymous data volume.
+          test "$(docker image inspect -f '{{len .Config.Volumes}}' "ghcr.io/browseros-ai/neo:$VERSION")" = 0
       - name: Verify viewer, MCP, and hosted CAPTCHA on and off
         id: smoke
         env:
@@ -150,11 +152,20 @@ jobs:
           for hosted in 1 0; do
             name="neo-smoke-$hosted"
             volume="neo-smoke-$hosted-data"
+            # Cover both the default explicit mount and a private data root
+            # nested below a root-owned parent, as used by derived cell images.
+            data_dir=/data
+            mount_dir=/data
+            if [ "$hosted" = 1 ]; then
+              data_dir=/var/lib/mirror/browseros
+              mount_dir=/var/lib/mirror
+            fi
             docker volume create "$volume" >/dev/null
             # Reuse each profile across extension modes, including graceful
             # shutdown so installed-extension state is flushed before restart.
             for extensions_disabled in false true; do
-              docker run -d --name "$name" --shm-size=1g -v "$volume:/data" \
+              docker run -d --name "$name" --shm-size=1g -v "$volume:$mount_dir" \
+                -e NEO_DATA_DIR="$data_dir" \
                 -e BROWSERCLAW_HOSTED_MODE="$hosted" -e NEO_DISABLE_BROWSEROS_EXTENSIONS="$extensions_disabled" \
                 -p 127.0.0.1::9010 -p 127.0.0.1::6080 "ghcr.io/browseros-ai/neo:$VERSION" >/dev/null
               for _ in $(seq 1 90); do
@@ -164,6 +175,10 @@ jobs:
                 sleep 2
               done
               [ "$state" = healthy ]
+              docker exec "$name" sh -c '[ "$(stat -c %u:%g:%a "$NEO_DATA_DIR")" = "$PUID:$PGID:700" ]'
+              if [ "$hosted" = 1 ]; then
+                test "$(docker exec "$name" stat -c %u:%g:%a /var/lib/mirror)" = 0:0:755
+              fi
               port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "9010/tcp") 0).HostPort}}' "$name")
               python3 packages/browseros/docker/neo/captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"
               docker exec -i "$name" python3 - "$extensions_disabled" < packages/browseros/docker/neo/check_extensions.py
