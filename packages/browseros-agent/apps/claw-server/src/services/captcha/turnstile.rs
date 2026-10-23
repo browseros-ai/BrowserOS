@@ -41,8 +41,6 @@ return { token, sitekey,
 
 const APPLY: &str = r#"
 /* turnstile:apply */
-if (!widget && !document.querySelector('iframe[src*="challenges.cloudflare.com"]'))
-    return { written: false, callbackRan: false, callbackDeclared: false };
 let selector = null;
 if (widget) {
     const path = [];
@@ -1029,6 +1027,7 @@ mod tests {
             ("rejects", true, false, true),
             ("named", true, true, true),
             ("render", true, true, true),
+            ("explicit", false, false, true),
             ("gone", false, false, false),
         ] {
             let code = format!(
@@ -1043,7 +1042,7 @@ mod tests {
                     querySelectorAll:()=>[input]
                 }};
                 widget.parentNode.children=[widget];
-                const document = {{querySelectorAll:s=>s==='.cf-turnstile'?(mode==='gone'?[]:[widget]):[input],querySelector:()=>null}};
+                const document = {{querySelectorAll:s=>s==='.cf-turnstile'?(['gone','explicit'].includes(mode)?[]:[widget]):(mode==='gone'?[]:[input]),querySelector:()=>null}};
                 const getComputedStyle=()=>({{visibility:'visible'}});
                 const window = {{turnstile:mode==='render'?{{record:{{sitekey:'test-key',callback(){{}}}}}}:{{}}}};
                 if(mode==='named')window.accepted=()=>{{}};
