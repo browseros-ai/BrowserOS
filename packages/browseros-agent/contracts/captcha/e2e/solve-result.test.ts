@@ -1,6 +1,46 @@
 import { expect, test } from 'bun:test'
 import { parseSolveResult, stubSolveResult } from './solve-result'
 
+test('tests that token_applied preserves the v1.4 status and event without event data', () => {
+  const parsed = parseSolveResult({
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify({
+          status: 'token_applied',
+          method: 'token',
+          reason: 'awaiting_submit',
+          events: [
+            {
+              event: 'captcha.token_applied',
+              data: { token: 'NEVER_REPORT_THIS' },
+            },
+          ],
+        }),
+      },
+    ],
+  })
+  expect(parsed).toMatchObject({
+    status: 'token_applied',
+    method: 'token',
+    reason: 'awaiting_submit',
+    events: ['captcha.token_applied'],
+  })
+  expect(JSON.stringify(parsed)).not.toContain('NEVER_REPORT_THIS')
+})
+
+test('tests that the token_applied stub follows contract v1.4', () => {
+  expect(
+    parseSolveResult(stubSolveResult('token_applied', 'recaptcha_v2')),
+  ).toMatchObject({
+    status: 'token_applied',
+    type: 'recaptcha_v2',
+    method: 'token',
+    reason: 'awaiting_submit',
+    events: ['captcha.token_applied'],
+  })
+})
+
 test('tests that stub terminal reasons match the v1.1 contract', () => {
   for (const [status, reason] of [
     ['solved', 'auto_passed'],
