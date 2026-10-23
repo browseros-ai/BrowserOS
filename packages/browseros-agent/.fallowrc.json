@@ -16,8 +16,7 @@
     "scripts/dev/inspect-ui.ts",
     "scripts/patch-windows-exe.ts",
     "packages/agent-cursor/src/index.ts",
-    "packages/agent-cursor/scripts/classic-entry.ts",
-    "packages/agent-cursor/playground/playground.js"
+    "packages/agent-cursor/scripts/classic-entry.ts"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",
@@ -46,7 +45,8 @@
     "apps/server/src/lib/db/migrations/**",
     "packages/cdp-protocol/src/generated/**",
     ".agents/skills/**",
-    ".claude/skills/**"
+    ".claude/skills/**",
+    "packages/agent-cursor/playground/**"
   ],
   "rules": {
     "unused-files": "warn",
