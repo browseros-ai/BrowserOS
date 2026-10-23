@@ -41,25 +41,34 @@ export function SidebarBrand() {
   )
 }
 
-function NavMenuItem({ item }: { item: NavItem }) {
+function NavLinkButton({ item }: { item: NavItem }) {
   const { pathname } = useLocation()
   const href = useHref(item.to)
   const active = isNavItemActive(item.to, pathname)
   const Icon = item.icon
   return (
-    <AnimatedSidebarMenuItem>
-      <AnimatedSidebarMenuButton
-        href={href}
-        isActive={active}
-        icon={<Icon className="size-[18px]" strokeWidth={1.75} />}
-        className={cn(
-          'min-h-10 text-[15px]',
-          active && 'font-semibold text-primary',
-        )}
-      >
-        {item.name}
-      </AnimatedSidebarMenuButton>
-    </AnimatedSidebarMenuItem>
+    <AnimatedSidebarMenuButton
+      href={href}
+      isActive={active}
+      icon={<Icon className="size-[18px]" strokeWidth={1.75} />}
+      className={cn('text-[15px]', active && 'font-semibold text-primary')}
+    >
+      {item.name}
+    </AnimatedSidebarMenuButton>
+  )
+}
+
+// beUI's menu clones its direct children to attach the hover pill, so each
+// item must be an AnimatedSidebarMenuItem rendered right here, not wrapped.
+function NavMenu({ items }: { items: NavItem[] }) {
+  return (
+    <AnimatedSidebarMenu>
+      {items.map((item) => (
+        <AnimatedSidebarMenuItem key={item.to}>
+          <NavLinkButton item={item} />
+        </AnimatedSidebarMenuItem>
+      ))}
+    </AnimatedSidebarMenu>
   )
 }
 
@@ -79,20 +88,12 @@ export function AppSidebar() {
       </AnimatedSidebarHeader>
       <AnimatedSidebarContent className="px-3">
         <nav aria-label="Main">
-          <AnimatedSidebarMenu>
-            {primaryNavItems.map((item) => (
-              <NavMenuItem key={item.to} item={item} />
-            ))}
-          </AnimatedSidebarMenu>
+          <NavMenu items={primaryNavItems} />
         </nav>
       </AnimatedSidebarContent>
       <AnimatedSidebarFooter className="gap-1 px-3">
         <nav aria-label="Settings">
-          <AnimatedSidebarMenu>
-            {secondaryNavItems.map((item) => (
-              <NavMenuItem key={item.to} item={item} />
-            ))}
-          </AnimatedSidebarMenu>
+          <NavMenu items={secondaryNavItems} />
         </nav>
         <SidebarThemeToggle expanded />
         <SidebarPrivacy expanded />
