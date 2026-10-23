@@ -20,6 +20,7 @@ import {
   useState,
   useSyncExternalStore,
 } from 'react'
+import { Page } from '@/components/layout/Page'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
@@ -118,7 +119,7 @@ function UltrafastWaitlistPending({
   status: 'loading' | 'unavailable'
 }) {
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-3 px-8 py-14">
+    <Page>
       <h1 className="font-[650] text-[32px] text-cyanotype-ink leading-[39px] tracking-[-0.035em]">
         <span className="text-cyanotype-blue italic">Ultrafast</span> mode
       </h1>
@@ -127,7 +128,7 @@ function UltrafastWaitlistPending({
           ? 'Loading…'
           : "Can't reach neo's local service right now. This page will load once it's back."}
       </p>
-    </div>
+    </Page>
   )
 }
 
@@ -156,7 +157,7 @@ export function UltrafastWaitlistView({
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-7 px-8 py-14">
+    <Page>
       <header className="space-y-3">
         <p className="font-semibold text-[12px] text-cyanotype-blue uppercase leading-[18px] tracking-[0.1em]">
           Coming soon
@@ -257,6 +258,6 @@ export function UltrafastWaitlistView({
           )}
         </div>
       </section>
-    </div>
+    </Page>
   )
 }

@@ -9,6 +9,7 @@ import { RunningGrid } from '@/components/cockpit/RunningGrid'
 import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
 import { UltrafastBanner } from '@/components/cockpit/UltrafastBanner'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
+import { Page } from '@/components/layout/Page'
 import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
@@ -79,16 +80,14 @@ export function Cockpit() {
 
   const content =
     state !== 'ready' ? (
-      // Tighter top than the ready cockpit (Paper: 26 px), so the prompt and
-      // the whole demo sit above an 800 px fold at 1280 wide.
-      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6 px-8 pt-[26px] pb-16">
+      <Page>
         <UltrafastBanner />
         <ProductHuntBanner />
         <FeedbackInviteCard />
         <CockpitOnboarding connectedHarnesses={connectedHarnesses} />
-      </div>
+      </Page>
     ) : (
-      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
+      <Page>
         <NeedsYouBanner
           sessions={sessions}
           onTakeOver={takeover.takeOver}
@@ -110,11 +109,11 @@ export function Cockpit() {
         <ProductHuntBanner />
         <FeedbackInviteCard />
         <RecentActivity />
-      </div>
+      </Page>
     )
 
   return (
-    <div className="flex min-h-screen flex-col">
+    <>
       {content}
       {takeover.inControlSession && (
         <InControlBar
@@ -124,6 +123,6 @@ export function Cockpit() {
           isHandingBack={takeover.isHandingBack}
         />
       )}
-    </div>
+    </>
   )
 }

@@ -10,6 +10,8 @@ import { AuditEmpty } from '@/components/audit/AuditEmpty'
 import { AuditHoverPreview } from '@/components/audit/AuditHoverPreview'
 import { FilterBar } from '@/components/audit/FilterBar'
 import { ManageAuditFilesDialog } from '@/components/audit/ManageAuditFilesDialog'
+import { Page } from '@/components/layout/Page'
+import { PageHeader } from '@/components/layout/PageHeader'
 import {
   Table,
   TableBody,
@@ -95,13 +97,8 @@ export function Audit() {
   const visibleColumnCount = table.getVisibleFlatColumns().length
 
   return (
-    <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 pt-8 pb-16">
-      <header className="flex items-start justify-between gap-4">
-        <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
-          Audit
-        </h1>
-        <ManageAuditFilesDialog />
-      </header>
+    <Page className="relative">
+      <PageHeader title="History" actions={<ManageAuditFilesDialog />} />
 
       {!isError && (tasks.length > 0 || hasActiveFilters) && (
         <FilterBar
@@ -208,7 +205,7 @@ export function Audit() {
       )}
 
       <AuditHoverPreview task={hoveredTask} />
-    </div>
+    </Page>
   )
 }
 

@@ -78,7 +78,7 @@ describe('Audit screen', () => {
   it('renders the header', () => {
     dataOverride = { ...baseData }
     const html = renderApp()
-    expect(html).toContain('Audit')
+    expect(html).toContain('History')
   })
 
   it('shows the editorial empty state when there are no tasks', () => {

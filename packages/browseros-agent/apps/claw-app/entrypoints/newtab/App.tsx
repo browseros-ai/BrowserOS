@@ -2,6 +2,7 @@ import { DiagnosticsPage } from '@browseros/diagnostics/view'
 import type { ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
 import { AppLayout } from '@/components/layout/AppLayout'
+import { Page } from '@/components/layout/Page'
 import { Analytics } from '@/modules/analytics/Analytics'
 import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
@@ -25,9 +26,9 @@ export function App() {
           <Route
             path="/diagnostics"
             element={
-              <div className="mx-auto max-w-5xl px-6 py-10">
+              <Page>
                 <DiagnosticsPage />
-              </div>
+              </Page>
             }
           />
           <Route path="/skills" element={<Skills />} />

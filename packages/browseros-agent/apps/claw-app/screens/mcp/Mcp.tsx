@@ -4,6 +4,7 @@ import {
   type Harness,
   isUserFacingHarness,
 } from '@/components/harness/harness.types'
+import { Page } from '@/components/layout/Page'
 import { EditorialEmpty } from '@/components/ui/EditorialEmpty'
 import {
   useConnectHarness,
@@ -85,7 +86,7 @@ export function Mcp() {
         : null
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-8 pt-8 pb-16">
+    <Page>
       <HeroCard url={url} />
       <section className="space-y-2">
         <header className="flex items-baseline justify-between gap-3">
@@ -124,7 +125,7 @@ export function Mcp() {
       </section>
       <ClaudeDesktopCard />
       <ManualSetupCard endpointUrl={url} />
-    </div>
+    </Page>
   )
 }
 

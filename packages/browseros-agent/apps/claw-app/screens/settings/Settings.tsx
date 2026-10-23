@@ -8,6 +8,8 @@ import type { AgentSettings } from '@browseros/claw-api'
 import { JevTokenSource } from '@browseros/claw-api'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRef, useState, useSyncExternalStore } from 'react'
+import { Page } from '@/components/layout/Page'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -78,15 +80,11 @@ export function Settings() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-xl flex-col gap-8 px-8 pt-8 pb-16">
-      <header className="flex flex-col gap-1">
-        <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
-          Settings
-        </h1>
-        <p className="text-ink-2 text-sm">
-          Choose the tools and tips your agents receive.
-        </p>
-      </header>
+    <Page>
+      <PageHeader
+        title="Settings"
+        lede="Choose the tools and tips your agents receive."
+      />
 
       {settings.isError ? (
         <div className="rounded-9 border border-ledger-border bg-card px-6 py-10 text-center text-ink-2 text-sm">
@@ -168,7 +166,7 @@ export function Settings() {
           )}
         </div>
       )}
-    </div>
+    </Page>
   )
 }
 

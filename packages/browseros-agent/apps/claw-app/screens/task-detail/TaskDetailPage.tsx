@@ -6,6 +6,7 @@ import {
 } from '@/components/audit/ScreenshotLightbox'
 import { TaskHeader } from '@/components/audit/TaskHeader'
 import { EmptyState } from '@/components/cockpit/EmptyState'
+import { Page } from '@/components/layout/Page'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   AutoHideTabs,
@@ -57,17 +58,17 @@ export function TaskDetailPage() {
 
   if (isPending) {
     return (
-      <div className="mx-auto w-full max-w-5xl space-y-6 px-8 pt-10 pb-20">
+      <Page>
         <Skeleton className="h-6 w-32" />
         <Skeleton className="h-40 w-full rounded-2xl" />
         <Skeleton className="h-44 w-full rounded-2xl" />
         <Skeleton className="h-96 w-full rounded-2xl" />
-      </div>
+      </Page>
     )
   }
   if (isError || !detail) {
     return (
-      <div className="mx-auto w-full max-w-5xl px-8 pt-10 pb-20">
+      <Page>
         <EmptyState
           title="Task not found"
           hint={
@@ -75,7 +76,7 @@ export function TaskDetailPage() {
             'No dispatches for this session id. It may have been pruned or never existed.'
           }
         />
-      </div>
+      </Page>
     )
   }
 
@@ -115,7 +116,7 @@ export function TaskDetailPage() {
   }))
 
   return (
-    <div className="mx-auto w-full max-w-5xl space-y-6 px-8 pt-10 pb-20">
+    <Page>
       <TaskHeader detail={detail} />
       <AutoHideTabs
         items={items}
@@ -133,6 +134,6 @@ export function TaskDetailPage() {
         startId={openScreenshotId}
         onClose={() => setOpenScreenshotId(null)}
       />
-    </div>
+    </Page>
   )
 }

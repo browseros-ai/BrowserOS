@@ -8,6 +8,7 @@ import type { Skill, SkillRun, SkillTokenSavings } from '@browseros/claw-api'
 import { ArrowLeft, Check } from 'lucide-react'
 import type { ReactNode } from 'react'
 import { useNavigate } from 'react-router'
+import { Page } from '@/components/layout/Page'
 import { DeleteSkillDialog } from '@/components/skills/DeleteSkillDialog'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { SkillFormDialog } from '@/components/skills/SkillFormDialog'
@@ -45,7 +46,7 @@ export function SkillDetail() {
   const navigate = useNavigate()
 
   return (
-    <div className="relative mx-auto flex w-full max-w-5xl flex-col gap-6 px-8 pt-8 pb-16">
+    <Page className="relative">
       <button
         type="button"
         onClick={() => navigate('/skills')}
@@ -71,7 +72,7 @@ export function SkillDetail() {
           onDeleted={() => navigate('/skills')}
         />
       )}
-    </div>
+    </Page>
   )
 }
 

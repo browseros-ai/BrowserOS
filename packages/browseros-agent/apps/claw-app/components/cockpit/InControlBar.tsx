@@ -29,7 +29,7 @@ export function InControlBar({
   const site = help?.url ? siteOf(help.url) : undefined
 
   return (
-    <div className="fixed inset-x-0 bottom-0 z-40 border-amber/40 border-t bg-amber-tint/95 px-4 py-3 backdrop-blur">
+    <div className="fixed inset-x-0 bottom-0 z-40 border-amber/40 border-t bg-amber-tint/95 px-4 py-3 backdrop-blur md:left-(--sidebar-width)">
       <div className="mx-auto flex max-w-[1040px] flex-col gap-2">
         <div className="flex flex-col gap-0.5">
           <p className="font-semibold text-[14px] text-ink">

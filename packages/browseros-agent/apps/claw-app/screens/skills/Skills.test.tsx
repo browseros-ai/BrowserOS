@@ -60,7 +60,7 @@ describe('Skills list screen', () => {
   it('renders the header that teaches how skills are made', () => {
     dataOverride = { ...baseData, skills: [sampleSkill] }
     const html = renderApp()
-    expect(html).toContain('Skills')
+    expect(html).toContain('Saved tasks')
     expect(html).toContain('Stop retyping the same prompts.')
     expect(html).toContain('save this as a skill in neo')
     expect(html).not.toContain('New skill')

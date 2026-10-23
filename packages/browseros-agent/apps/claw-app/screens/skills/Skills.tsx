@@ -7,6 +7,8 @@
 import type { Skill } from '@browseros/claw-api'
 import type { ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router'
+import { Page } from '@/components/layout/Page'
+import { PageHeader } from '@/components/layout/PageHeader'
 import { DeleteSkillDialog } from '@/components/skills/DeleteSkillDialog'
 import { RunSkillButton } from '@/components/skills/RunSkillButton'
 import { Button } from '@/components/ui/button'
@@ -40,27 +42,27 @@ export function Skills() {
     })
 
   return (
-    <div className="relative mx-auto flex w-full max-w-6xl flex-col gap-6 px-8 pt-8 pb-16">
-      <header className="flex flex-col gap-3">
-        <h1 className="font-extrabold text-3xl leading-tight tracking-tight md:text-4xl">
-          Skills
-        </h1>
-        <div className="flex flex-col gap-2">
-          <p className="font-semibold text-ink text-xl tracking-tight">
-            Stop retyping the same prompts.
-          </p>
-          <p className="text-ink-2 text-sm">
-            A skill is a task you do often, saved under a short name. Type the
-            name to run it again.
-          </p>
-          <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ink-2 text-sm">
-            To make one, finish a task and tell your agent
-            <code className="rounded bg-primary/10 px-2 py-px font-medium font-mono text-[13px] text-primary">
-              save this as a skill in neo
-            </code>
-          </p>
-        </div>
-      </header>
+    <Page className="relative">
+      <PageHeader
+        title="Saved tasks"
+        lede={
+          <div className="flex flex-col gap-2">
+            <p className="font-semibold text-ink text-xl tracking-tight">
+              Stop retyping the same prompts.
+            </p>
+            <p className="text-ink-2 text-sm">
+              A skill is a task you do often, saved under a short name. Type the
+              name to run it again.
+            </p>
+            <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ink-2 text-sm">
+              To make one, finish a task and tell your agent
+              <code className="rounded bg-primary/10 px-2 py-px font-medium font-mono text-[13px] text-primary">
+                save this as a skill in neo
+              </code>
+            </p>
+          </div>
+        }
+      />
 
       {isError ? (
         <SkillsNotice>
@@ -122,7 +124,7 @@ export function Skills() {
           </Table>
         </LedgerCard>
       )}
-    </div>
+    </Page>
   )
 }
 
