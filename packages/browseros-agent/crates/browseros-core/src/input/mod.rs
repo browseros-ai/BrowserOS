@@ -11,7 +11,10 @@ use geometry::{
     call_on_element, click_blocker_at_point, focus_element_js, get_element_center, js_click,
     scroll_into_view,
 };
-use mouse::{MouseButton, dispatch_click, dispatch_drag, dispatch_hover, dispatch_scroll};
+use mouse::{
+    MouseButton, dispatch_click, dispatch_click_with_options, dispatch_drag, dispatch_hover,
+    dispatch_scroll,
+};
 use serde_json::{Value, json};
 use std::sync::Arc;
 
@@ -24,6 +27,7 @@ pub use mouse::MouseButton as PublicMouseButton;
 pub struct ClickOptions {
     pub button: Option<MouseButton>,
     pub click_count: Option<i64>,
+    pub humanlike_from: Option<Point>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -136,9 +140,8 @@ impl Input {
 
     pub async fn click_at(&self, x: f64, y: f64, opts: ClickOptions) -> Result<(), CoreError> {
         self.with_page_session_retry(|session| {
-            let button = opts.button.unwrap_or(MouseButton::Left);
-            let click_count = opts.click_count.unwrap_or(1);
-            async move { dispatch_click(&session, x, y, button, click_count, 0).await }
+            let opts = opts.clone();
+            async move { dispatch_click_with_options(&session, x, y, opts, 0).await }
         })
         .await
     }
@@ -179,15 +182,7 @@ impl Input {
         match get_element_center(session, target.backend_node_id).await {
             Ok(point) => {
                 self.check_click_point(session, &target, point).await?;
-                dispatch_click(
-                    session,
-                    point.x,
-                    point.y,
-                    opts.button.unwrap_or(MouseButton::Left),
-                    opts.click_count.unwrap_or(1),
-                    0,
-                )
-                .await?;
+                dispatch_click_with_options(session, point.x, point.y, opts, 0).await?;
                 Ok(Some(point))
             }
             Err(_err) => {
@@ -585,7 +580,7 @@ const SELECT_OPTION_FN: &str = "function(val){\
 
 #[cfg(test)]
 mod tests {
-    use super::{ClickOptions, Input, ScrollDirection};
+    use super::{ClickOptions, Input, Point, PublicMouseButton, ScrollDirection};
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, Ref,
         connection::CdpConnection,
@@ -596,6 +591,7 @@ mod tests {
     use serde_json::{Value, json};
     use std::sync::{Arc, Mutex};
     use tokio::sync::broadcast;
+    use tokio::time::{Duration, Instant};
 
     #[derive(Clone, Copy)]
     enum HitTestResponse {
@@ -608,6 +604,7 @@ mod tests {
         hit_test: HitTestResponse,
         hit_test_calls: usize,
         mouse_events: usize,
+        mouse_calls: Vec<(Value, Instant)>,
         page_scrolls: usize,
         select_calls: usize,
         select_result: Option<&'static str>,
@@ -621,6 +618,15 @@ mod tests {
     }
 
     impl HarnessConnection {
+        fn mouse_calls(&self) -> Result<Vec<(Value, Instant)>, CoreError> {
+            Ok(self
+                .state
+                .lock()
+                .map_err(|_| CoreError::Message("poisoned".into()))?
+                .mouse_calls
+                .clone())
+        }
+
         fn mouse_events(&self) -> usize {
             match self.state.lock() {
                 Ok(state) => state.mouse_events,
@@ -708,6 +714,7 @@ mod tests {
                     "Input.dispatchMouseEvent" => {
                         if let Ok(mut state) = self.state.lock() {
                             state.mouse_events += 1;
+                            state.mouse_calls.push((params, Instant::now()));
                         }
                         Ok(json!({}))
                     }
@@ -805,6 +812,7 @@ mod tests {
                 hit_test,
                 hit_test_calls: 0,
                 mouse_events: 0,
+                mouse_calls: Vec::new(),
                 page_scrolls: 0,
                 select_calls: 0,
                 select_result,
@@ -856,6 +864,85 @@ mod tests {
                 ..AxNode::default()
             },
         ]
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_default_clicks_preserve_the_exact_mouse_events() -> Result<(), CoreError> {
+        for kind in 0..3 {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            let started = Instant::now();
+            match kind {
+                0 => input.click_at(50.0, 25.0, ClickOptions::default()).await?,
+                1 => assert_eq!(
+                    input.click(&ref_id, ClickOptions::default()).await?,
+                    Some(Point { x: 50.0, y: 25.0 })
+                ),
+                _ => assert_eq!(
+                    input
+                        .click_backend_node(10, ClickOptions::default())
+                        .await?,
+                    Some(Point { x: 50.0, y: 25.0 })
+                ),
+            }
+            let calls = connection.mouse_calls()?;
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|(params, _)| params.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    json!({"type":"mouseMoved","x":50.0,"y":25.0}),
+                    json!({"type":"mousePressed","x":50.0,"y":25.0,"button":"left","clickCount":1,"modifiers":0}),
+                    json!({"type":"mouseReleased","x":50.0,"y":25.0,"button":"left","clickCount":1,"modifiers":0}),
+                ]
+            );
+            assert_eq!(started.elapsed(), Duration::ZERO);
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_humanlike_clicks_follow_the_path_for_coordinates_and_refs()
+    -> Result<(), CoreError> {
+        for kind in 0..3 {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            let opts = ClickOptions {
+                button: Some(PublicMouseButton::Right),
+                click_count: Some(2),
+                humanlike_from: Some(Point { x: 10.0, y: 5.0 }),
+            };
+            match kind {
+                0 => input.click_at(50.0, 25.0, opts).await?,
+                1 => assert_eq!(
+                    input.click(&ref_id, opts).await?,
+                    Some(Point { x: 50.0, y: 25.0 })
+                ),
+                _ => assert_eq!(
+                    input.click_backend_node(10, opts).await?,
+                    Some(Point { x: 50.0, y: 25.0 })
+                ),
+            }
+            let calls = connection.mouse_calls()?;
+            assert_eq!(
+                calls
+                    .iter()
+                    .map(|(params, _)| params.clone())
+                    .collect::<Vec<_>>(),
+                vec![
+                    json!({"type":"mouseMoved","x":20.0,"y":10.0}),
+                    json!({"type":"mouseMoved","x":30.0,"y":15.0}),
+                    json!({"type":"mouseMoved","x":40.0,"y":20.0}),
+                    json!({"type":"mouseMoved","x":50.0,"y":25.0}),
+                    json!({"type":"mousePressed","x":50.0,"y":25.0,"button":"right","clickCount":2,"modifiers":0}),
+                    json!({"type":"mouseReleased","x":50.0,"y":25.0,"button":"right","clickCount":2,"modifiers":0}),
+                ]
+            );
+            for pair in calls[..5].windows(2) {
+                assert!(pair[1].1.duration_since(pair[0].1) >= Duration::from_millis(12));
+            }
+            assert!(calls[5].1.duration_since(calls[4].1) >= Duration::from_millis(90));
+        }
+        Ok(())
     }
 
     #[tokio::test]
