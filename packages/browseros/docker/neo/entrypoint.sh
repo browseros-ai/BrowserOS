@@ -26,6 +26,7 @@ readonly CDP_PORT=9110
 readonly SERVER_PORT=9210
 
 : "${NEO_SCREEN:=1600x1000}" "${NEO_SANDBOX:=false}" "${NEO_ARGS:=}"
+: "${NEO_DISABLE_BROWSEROS_EXTENSIONS:=false}"
 : "${PUID:=1000}" "${PGID:=1000}"
 # Shared browser/server deployment flag (README). Hosted mode hides local-agent
 # MCP tools and enables hosted browser reporting; both processes require exact 1.
@@ -130,6 +131,14 @@ start_display() {
 sandbox_flags=(--no-sandbox)
 is_true "$NEO_SANDBOX" && sandbox_flags=()
 
+# Suppress only BrowserOS's managed extension provider. Keep these arguments
+# additive to NEO_ARGS so derived images retain their own flags, such as the
+# captcha image's server updater override; user extensions and MCP stay enabled.
+browseros_extension_flags=()
+if is_true "$NEO_DISABLE_BROWSEROS_EXTENSIONS"; then
+  browseros_extension_flags=(--disable-browseros-extensions)
+fi
+
 # --no-sandbox is deliberate here, so drop Chromium's "unsupported command-line
 # flag" bar for it. Written only in that mode: the same policy would also hide
 # warnings for risky flags passed through NEO_ARGS. This build reads policies
@@ -147,6 +156,7 @@ start_neo() {
   # shellcheck disable=SC2086  # NEO_ARGS is a flag list by design
   spawn_as_neo browserclaw \
     "${sandbox_flags[@]}" \
+    "${browseros_extension_flags[@]}" \
     --user-data-dir="$PROFILE" \
     --no-first-run \
     --no-default-browser-check \

@@ -76,6 +76,7 @@ COPY --chmod=0755 neo-quit.py /usr/local/bin/neo-quit
 ENV NEO_SCREEN=1600x1000 \
     BROWSERCLAW_HOSTED_MODE=1 \
     NEO_SANDBOX=false \
+    NEO_DISABLE_BROWSEROS_EXTENSIONS=false \
     NEO_ARGS="" \
     PUID=1000 \
     PGID=1000
