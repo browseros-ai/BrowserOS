@@ -35,43 +35,34 @@ export function getOnboardingState({
   return 'first-run'
 }
 
-export const HERO_COPY = {
-  eyebrow: 'WELCOME',
-  h1Prefix: 'You watch. Your agent',
-  h1Accent: 'works.',
-  subhead:
-    'Your agents are wired in. Watch a quick demo, then hand your first task to any of them.',
+/**
+ * neo's one line on the cockpit's first run (final Paper, Try one on top).
+ * The onboarding page ends after the import, so this is where neo picks the
+ * conversation back up: the apps it connected (the cockpit has the real list;
+ * the page did not), the one prompt to try, the demo of it, and the Claude
+ * Cowork step. Plain words only: no MCP, server or config.
+ */
+export const FIRST_RUN_COPY = {
+  /** With apps connected: "*Watch me,* then you try." */
+  ready: { lead: null, accent: 'Watch me,', tail: 'then you try.' },
+  /** With none found: "Almost there. *Watch me* first." */
+  noApps: { lead: 'Almost there.', accent: 'Watch me', tail: 'first.' },
+  connected: 'Connected',
+  connectedApps: 'Connected apps',
+  /** The popover's footer: a running app only sees neo after a restart. */
+  restartHint: 'If one is open, restart it once.',
+  noneFound: 'I didn’t find an AI app yet.',
+  getClaude: 'Get Claude',
+  coworkQuestion: 'Using Claude Cowork?',
+  coworkAction: 'Set it up',
+  tryLabel: 'Your turn',
 } as const
 
-export const PANEL_COPY = {
-  heading: 'Hand off your first task',
-  // Three status messages share one fixed-height slot so copying never
-  // reflows the panel. Keep each to at most two lines at panel width.
-  tieBack: 'Then come back here to watch it run.',
-  waiting: 'Waiting for your first run. Come back the moment you press enter.',
-  copied: 'Copied. Paste it into your agent, then watch it here.',
-} as const
+export const GET_CLAUDE_URL = 'https://claude.ai/download'
 
-export const MANAGE_COPY = {
-  label: 'Manage agents',
-  href: '/mcp',
-} as const
-
-export const STARTER_PROMPT_LABEL = 'Paste this prompt into your agent.'
-
-export const STARTER_PROMPT =
-  'Using BrowserOS neo, search for the current monthly prices of streaming services such as Netflix, Disney plus, Hulu, Max and Apple TV'
-
-export const CONNECTED_COPY = {
-  suffix: 'connected',
-} as const
-
-export const FOOTER_COPY = {
-  docs: 'Read the docs',
-  // Deep-link to the BrowserClaw section instead of the docs root
-  // so a first-run reader lands on install / first-run / MCP setup
-  // instead of BrowserOS's general index. Mintlify canonicalises
-  // the URL without a trailing slash, so we use the no-slash form
-  // to avoid triggering a redirect on every click.
-  docsHref: 'https://docs.browseros.com/browserclaw',
-} as const
+/**
+ * The one task to try (owner). The demo types these exact words in every app,
+ * so the pill copies what the person just watched.
+ */
+export const TRY_PROMPT =
+  'Use neo, find me the cheapest one-way flight to NYC next Friday on Google Flights.'

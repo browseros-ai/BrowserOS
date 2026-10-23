@@ -17,13 +17,11 @@
   "dependencies": {
     "@base-ui/react": "^1.8.0",
     "@browseros/shared": "workspace:*",
-    "@tabler/icons-react": "^3.48.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "lucide-react": "^0.577.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
-    "react-hook-form": "~7.88.0",
     "react-router": "^7.18.4",
     "tailwind-merge": "^3.7.0"
   },

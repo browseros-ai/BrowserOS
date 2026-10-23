@@ -79,14 +79,13 @@ export function Cockpit() {
 
   const content =
     state !== 'ready' ? (
-      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
+      // Tighter top than the ready cockpit (Paper: 26 px), so the prompt and
+      // the whole demo sit above an 800 px fold at 1280 wide.
+      <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6 px-8 pt-[26px] pb-16">
         <UltrafastBanner />
         <ProductHuntBanner />
         <FeedbackInviteCard />
-        <CockpitOnboarding
-          state={state}
-          connectedHarnesses={connectedHarnesses}
-        />
+        <CockpitOnboarding connectedHarnesses={connectedHarnesses} />
       </div>
     ) : (
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-8 px-8 pt-12 pb-16">
