@@ -1192,6 +1192,89 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_pointer_keeps_the_humanlike_click_path_after_its_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for kind in 0..3 {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| state.moved_box = true)?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            let opts = ClickOptions {
+                button: Some(PublicMouseButton::Right),
+                click_count: Some(2),
+                humanlike_from: Some(Point { x: 10.0, y: 5.0 }),
+            };
+            connection.take_calls()?;
+            let path = match kind {
+                0 => {
+                    input.click_at(50.0, 25.0, opts).await?;
+                    [(20.0, 10.0), (30.0, 15.0), (40.0, 20.0), (50.0, 25.0)]
+                }
+                1 => {
+                    assert_eq!(
+                        input.click(&ref_id, opts).await?,
+                        Some(Point { x: 250.0, y: 125.0 })
+                    );
+                    [(70.0, 35.0), (130.0, 65.0), (190.0, 95.0), (250.0, 125.0)]
+                }
+                _ => {
+                    assert_eq!(
+                        input.click_backend_node(10, opts).await?,
+                        Some(Point { x: 250.0, y: 125.0 })
+                    );
+                    [(70.0, 35.0), (130.0, 65.0), (190.0, 95.0), (250.0, 125.0)]
+                }
+            };
+            let (x, y) = path[3];
+            let mut expected: Vec<Value> = path
+                .iter()
+                .map(|(x, y)| json!({"type":"mouseMoved","x":x,"y":y}))
+                .collect();
+            for event in ["mousePressed", "mouseReleased"] {
+                expected.push(
+                    json!({"type":event,"x":x,"y":y,"button":"right","clickCount":2,"modifiers":0}),
+                );
+            }
+            let mouse = connection.mouse_calls()?;
+            assert_eq!(
+                mouse
+                    .iter()
+                    .map(|(params, _)| params.clone())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            for pair in mouse[..5].windows(2) {
+                assert!(pair[1].1.duration_since(pair[0].1) >= Duration::from_millis(12));
+            }
+            assert!(mouse[5].1.duration_since(mouse[4].1) >= Duration::from_millis(90));
+            let calls = connection.take_calls()?;
+            let position = |pending: bool| {
+                calls.iter().position(|call| {
+                    call.method == "Runtime.evaluate" && call.params["awaitPromise"] == pending
+                })
+            };
+            let movement = position(true).ok_or("missing pointer move")?;
+            let effect = position(false).ok_or("missing click effect")?;
+            assert!(
+                calls[effect].params["expression"]
+                    .as_str()
+                    .is_some_and(|expression| expression.contains(&format!(".click({x},{y})")))
+            );
+            let first_mouse = calls
+                .iter()
+                .position(|call| call.method == "Input.dispatchMouseEvent")
+                .ok_or("missing mouse input")?;
+            assert!(movement < effect && effect < first_mouse, "{kind}");
+            assert!(
+                calls[first_mouse..first_mouse + 6]
+                    .iter()
+                    .all(|call| call.method == "Input.dispatchMouseEvent"),
+                "{kind}"
+            );
+        }
+        Ok(())
+    }
+
     #[derive(Clone, Copy, Debug)]
     enum PointerInput {
         Click,
