@@ -277,9 +277,9 @@ impl BrowserView {
         load_default: bool,
     ) -> Self {
         let mut view = Self::unbound(session, unbound_default_window);
-        // Unavailable targeting (old native or Pro disabled) keeps the unbound path and
-        // sends no getProfiles. Retain any saved binding so re-enabling support can retry
-        // it on a later capture; the host discloses why it was not applied to this call.
+        // Older natives cannot honor regular-profile routing (they ignore the context params),
+        // so they keep the unbound path, send no getProfiles, and only disclose an explicit
+        // binding saved on a newer browser. A capable browser retries it on a later capture.
         if !view.supports(NativeFeature::ProfileTargeting) {
             view.unapplied = binding;
             return view;
@@ -941,6 +941,92 @@ impl BrowserView {
             Some(access) => access.session().await,
             None => self.session.pages.get_session(page).await,
         }
+    }
+    /// A frame endpoint admitted through this page capability, including same-process children.
+    pub async fn frame_session(
+        &self,
+        page: PageId,
+        frame: crate::FrameId,
+    ) -> Result<crate::ProtocolSession, CoreError> {
+        let access = Arc::new(PageAccess::new(
+            self.clone(),
+            self.page(page.clone()).await?,
+        ));
+        let root = access.session().await?.session;
+        let tree = root.send_value("Page.getFrameTree", json!({})).await?;
+        if tree["frameTree"]["frame"]["id"] == frame.as_str() {
+            return Ok(root);
+        }
+        fn children(node: &Value, frames: &mut Vec<crate::FrameId>) {
+            if matches!(
+                node["nodeName"].as_str(),
+                Some("IFRAME" | "FRAME" | "OBJECT" | "EMBED" | "FENCEDFRAME")
+            ) && let Some(id) = node["frameId"].as_str()
+            {
+                frames.push(crate::FrameId(id.to_owned()));
+            }
+            for key in ["children", "shadowRoots"] {
+                for child in node[key].as_array().into_iter().flatten() {
+                    children(child, frames);
+                }
+            }
+            if let Some(document) = node.get("contentDocument") {
+                children(document, frames);
+            }
+        }
+        let mut pending = vec![root];
+        let mut visited = BTreeSet::new();
+        while let Some(parent) = pending.pop() {
+            if !visited.insert(parent.session_id().cloned()) {
+                continue;
+            }
+            // Page.getFrameTree omits remote children. Piercing DOM includes their owners,
+            // including those under closed shadow roots, without granting a foreign target.
+            let document = parent
+                .send_value("DOM.getDocument", json!({"depth":-1,"pierce":true}))
+                .await?;
+            let mut frames = Vec::new();
+            children(&document["root"], &mut frames);
+            for child in frames {
+                let owner = parent
+                    .send_value("DOM.getFrameOwner", json!({"frameId":child.as_str()}))
+                    .await?;
+                let backend = owner["backendNodeId"]
+                    .as_i64()
+                    .ok_or_else(|| CoreError::Message("Frame owner has no backend node".into()))?;
+                let described = parent
+                    .send_value(
+                        "DOM.describeNode",
+                        json!({"backendNodeId":backend,"depth":1}),
+                    )
+                    .await?;
+                let cross_process = described["node"].get("contentDocument").is_none();
+                let target = self
+                    .session
+                    .frames()
+                    .resolve_frame_target_with_epoch(
+                        page.clone(),
+                        Some(child.clone()),
+                        Some(&parent),
+                        cross_process,
+                        access.epoch_guard()?,
+                    )
+                    .await?;
+                let session = access
+                    .frame_capability(target.session, child.clone(), parent.clone(), backend)
+                    .await?;
+                if child == frame {
+                    return Ok(session);
+                }
+                if cross_process && !session.same_session(&parent) {
+                    pending.push(session);
+                }
+            }
+        }
+        Err(CoreError::Message(format!(
+            "Frame {} is no longer part of page {page:?}",
+            frame.as_str()
+        )))
     }
     pub async fn observe(&self, page: PageId) -> Result<Arc<Observer>, CoreError> {
         let access = self.page_access(page.clone()).await?;

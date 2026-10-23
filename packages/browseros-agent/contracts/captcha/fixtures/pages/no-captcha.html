@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Ordinary form</title></head>
+<body>
+<h1>Ordinary form</h1>
+<form id="captcha-form" method="post" action="/submit/no-captcha">
+  <label>Name <input name="name" autocomplete="name"></label>
+  <button id="submit" type="submit">Submit</button>
+</form>
+<script>
+window.__captchaFixture = { id: 'no-captcha', family: 'none', sitekey: null, rendered: true, callbackFired: false, tokenLength: 0, errors: [] };
+document.documentElement.dataset.captchaFixture = JSON.stringify(window.__captchaFixture);
+</script>
+</body>
+</html>

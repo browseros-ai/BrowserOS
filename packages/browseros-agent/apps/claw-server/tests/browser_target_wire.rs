@@ -18,7 +18,7 @@ use tokio::{net::TcpListener, sync::broadcast, task::JoinHandle};
 
 /// The first native release with profile targeting, which this wire test models.
 fn current_native() -> NativeCapabilities {
-    NativeCapabilities::from_browseros_version(Some("0.51.1.3")).with_pro_enabled(true)
+    NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
 }
 
 struct NativeProfiles {

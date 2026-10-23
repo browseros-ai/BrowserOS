@@ -5,4 +5,5 @@
 //! permission. See `effects::page_ownership_notice`.
 
 pub mod browser_connected;
+pub mod captcha_busy;
 pub mod navigate_scheme;

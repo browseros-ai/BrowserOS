@@ -14,7 +14,6 @@ use tokio_util::sync::CancellationToken;
 /// test is about an older or unknown one.
 pub(crate) fn current_native() -> browseros_core::NativeCapabilities {
     browseros_core::NativeCapabilities::from_browseros_version(Some("0.51.1.3"))
-        .with_pro_enabled(true)
 }
 
 /// A browser session on `connection` that models the current native (profile targeting on).

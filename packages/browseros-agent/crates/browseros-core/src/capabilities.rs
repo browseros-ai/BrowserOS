@@ -1,4 +1,4 @@
-//! Effective native feature gate: browser compatibility plus process-fixed host policy.
+//! Native feature gate for a server that ships ahead of the browser.
 //!
 //! claw-server is updated over the air independently of the native BrowserOS/Neo
 //! browser, so a new server routinely drives an older browser. CDP surface that a
@@ -15,10 +15,6 @@
 //! legacy `browserContextId` directory labels. An identity that is missing, blank or
 //! malformed is unknown, and unknown supports no feature in the table; ordinary
 //! browsing never consults this gate.
-//!
-//! A native implementation alone does not enable Pro features. Hosts explicitly opt in
-//! through [`NativeCapabilities::with_pro_enabled`]; the default is off. Keeping policy in
-//! this gate makes tool discovery, typed calls, raw CDP and saved-target capture agree.
 //!
 //! Adding a native feature: land the Chromium patch, add a [`NativeFeature`] variant and
 //! one `FEATURES` row whose minimum is the first `BROWSEROS_VERSION` that ships it, list
@@ -116,8 +112,6 @@ struct FeatureSpec {
     feature: NativeFeature,
     label: &'static str,
     min_browseros: BrowserOsVersion,
-    /// Host opt-in is independent of the browser version and never grants native support.
-    requires_pro: bool,
     /// Raw methods refused while the feature is unsupported.
     raw_methods: &'static [&'static str],
     /// Raw (method, parameter) pairs refused while unsupported. Pairs, never bare parameter
@@ -132,7 +126,6 @@ const FEATURES: &[FeatureSpec] = &[
         feature: NativeFeature::ProfileTargeting,
         label: "profile targeting",
         min_browseros: BrowserOsVersion::new(0, 51, 1, 3),
-        requires_pro: true,
         raw_methods: &["Browser.getProfiles", "Browser.loadProfile"],
         raw_params: &[
             ("History.search", "browserContextId"),
@@ -149,7 +142,6 @@ const FEATURES: &[FeatureSpec] = &[
         feature: NativeFeature::Credentials,
         label: "credentials",
         min_browseros: BrowserOsVersion::new(0, 51, 2, 1),
-        requires_pro: false,
         raw_methods: &[
             "Autofill.getCredentialContext",
             "Autofill.listCredentials",
@@ -161,7 +153,7 @@ const FEATURES: &[FeatureSpec] = &[
     },
 ];
 
-/// The connected browser's native identity and host feature policy, fixed for one process.
+/// The connected browser's native identity, fixed for one server process.
 ///
 /// In production the browser that launches claw-server writes this identity into the launch
 /// config, and the server is assumed to keep talking to that parent for its lifetime; a
@@ -170,31 +162,16 @@ const FEATURES: &[FeatureSpec] = &[
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeCapabilities {
     browseros: Option<BrowserOsVersion>,
-    pro_enabled: bool,
 }
 
 impl NativeCapabilities {
     /// Lenient by design: blank or malformed input yields unknown rather than an error, so a
-    /// bad identity can only hide features, never stop the server. Pro starts disabled.
+    /// bad identity can only hide features, never stop the server.
     #[must_use]
     pub fn from_browseros_version(raw: Option<&str>) -> Self {
         Self {
             browseros: raw.and_then(BrowserOsVersion::parse),
-            pro_enabled: false,
         }
-    }
-
-    /// Applies the host's Pro opt-in without changing the reported native identity.
-    /// Hosts resolve policy once at startup and copy this value into all browser sessions.
-    #[must_use]
-    pub const fn with_pro_enabled(mut self, enabled: bool) -> Self {
-        self.pro_enabled = enabled;
-        self
-    }
-
-    #[must_use]
-    pub const fn pro_enabled(&self) -> bool {
-        self.pro_enabled
     }
 
     #[must_use]
@@ -204,28 +181,20 @@ impl NativeCapabilities {
 
     #[must_use]
     pub fn supports(&self, feature: NativeFeature) -> bool {
-        self.require(feature).is_ok()
+        self.browseros
+            .is_some_and(|version| version >= feature.spec().min_browseros)
     }
 
     /// Fails before an operation that needs `feature` is sent to the browser.
     pub fn require(&self, feature: NativeFeature) -> Result<(), CoreError> {
-        let spec = feature.spec();
-        // Compatibility is checked first so old/unknown browsers still report the native
-        // upgrade they need. Pro can only narrow support, never override that requirement.
-        if self
-            .browseros
-            .is_none_or(|version| version < spec.min_browseros)
-        {
-            return Err(CoreError::NativeFeatureUnavailable {
-                feature,
-                required: spec.min_browseros,
-                reported: self.browseros,
-            });
+        if self.supports(feature) {
+            return Ok(());
         }
-        if spec.requires_pro && !self.pro_enabled {
-            return Err(CoreError::ProFeatureDisabled { feature });
-        }
-        Ok(())
+        Err(CoreError::NativeFeatureUnavailable {
+            feature,
+            required: feature.spec().min_browseros,
+            reported: self.browseros,
+        })
     }
 
     /// Refuses only raw CDP that a table row lists for an unsupported feature. Everything
@@ -279,35 +248,7 @@ mod tests {
     use serde_json::json;
 
     fn native(raw: &str) -> NativeCapabilities {
-        NativeCapabilities::from_browseros_version(Some(raw)).with_pro_enabled(true)
-    }
-
-    #[test]
-    fn profile_targeting_is_opt_in_even_on_a_current_native() {
-        let caps = NativeCapabilities::from_browseros_version(Some("0.51.2.1"));
-        assert!(!caps.supports(NativeFeature::ProfileTargeting));
-        assert!(matches!(
-            caps.require(NativeFeature::ProfileTargeting),
-            Err(CoreError::ProFeatureDisabled { .. })
-        ));
-        assert!(caps.supports(NativeFeature::Credentials));
-        assert!(caps.check_raw("Browser.getProfiles", &json!({})).is_err());
-        assert!(
-            caps.check_raw("History.getRecent", &json!({"browserContextId":"c"}))
-                .is_err()
-        );
-        assert!(caps.check_raw("Browser.getTabs", &json!({})).is_ok());
-        assert!(
-            caps.check_raw("Target.createTarget", &json!({"browserContextId":"otr"}))
-                .is_ok()
-        );
-        let pro = caps.with_pro_enabled(true);
-        assert_eq!(pro.browseros_version(), caps.browseros_version());
-        assert!(pro.supports(NativeFeature::ProfileTargeting));
-        assert!(
-            !pro.with_pro_enabled(false)
-                .supports(NativeFeature::ProfileTargeting)
-        );
+        NativeCapabilities::from_browseros_version(Some(raw))
     }
 
     #[test]
