@@ -2517,43 +2517,38 @@ mod tests {
         use crate::services::captcha::{CaptchaService, config};
         let mut call =
             crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), mode).await?;
-        call.state.captcha = if enabled {
+        let config = if enabled {
             let key = tempfile::NamedTempFile::new()?;
             std::fs::write(key.path(), "dummy-test-key")?;
-            CaptchaService::from_config(config::CaptchaConfig::from_lookup(|name| {
+            config::CaptchaConfig::from_lookup(|name| {
                 (name == config::CAPSOLVER_KEY_FILE_ENV)
                     .then(|| key.path().to_string_lossy().into_owned())
-            }))
+            })
         } else {
-            None
+            config::CaptchaConfig::default()
         };
+        call.state.captcha = CaptchaService::from_config(config, mode);
         Ok(ClawMcpService::new(call.state))
     }
 
     #[tokio::test]
-    async fn tests_that_solve_captcha_is_listed_and_decorated_in_both_modes() -> anyhow::Result<()>
-    {
-        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
-            let service = captcha_test_service(true, mode).await?;
-            let tool = service
-                .listed_tools(true)
-                .into_iter()
-                .find(|tool| tool.name == "solve_captcha")
-                .ok_or_else(|| anyhow::anyhow!("solve_captcha missing"))?;
-            let properties = &tool.input_schema["properties"];
-            assert!(properties.get("session").is_some());
-            assert!(properties.get("agentName").is_some());
-            assert_eq!(properties.get("taskName").is_some(), mode.is_hosted());
-            assert!(tool.output_schema.is_some());
-            assert!(service.get_tool("solve_captcha").is_some());
-        }
+    async fn tests_that_hosted_solve_captcha_is_listed_and_decorated() -> anyhow::Result<()> {
+        let service = captcha_test_service(true, ServerMode::Hosted).await?;
+        let tool = service
+            .listed_tools(true)
+            .into_iter()
+            .find(|tool| tool.name == "solve_captcha")
+            .ok_or_else(|| anyhow::anyhow!("solve_captcha missing"))?;
+        let properties = &tool.input_schema["properties"];
+        assert!(properties.get("session").is_some());
+        assert!(properties.get("agentName").is_some());
+        assert!(properties.get("taskName").is_some());
+        assert!(tool.output_schema.is_some());
+        assert!(service.get_tool("solve_captcha").is_some());
         Ok(())
     }
 
-    #[tokio::test]
-    async fn tests_that_disabled_solve_captcha_is_absent_and_method_not_found() -> anyhow::Result<()>
-    {
-        let service = captcha_test_service(false, ServerMode::Desktop).await?;
+    async fn assert_solve_captcha_is_absent(service: ClawMcpService) -> anyhow::Result<()> {
         assert!(
             !service
                 .listed_tools(true)
@@ -2579,9 +2574,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tests_that_desktop_solve_captcha_is_absent_with_a_key() -> anyhow::Result<()> {
+        assert_solve_captcha_is_absent(captcha_test_service(true, ServerMode::Desktop).await?).await
+    }
+
+    #[tokio::test]
+    async fn tests_that_unkeyed_solve_captcha_is_absent_in_both_modes() -> anyhow::Result<()> {
+        for mode in [ServerMode::Desktop, ServerMode::Hosted] {
+            assert_solve_captcha_is_absent(captcha_test_service(false, mode).await?).await?;
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn tests_that_solve_captcha_rejects_bad_pages_and_reports_no_browser()
     -> anyhow::Result<()> {
-        let service = captcha_test_service(true, ServerMode::Desktop).await?;
+        let service = captcha_test_service(true, ServerMode::Hosted).await?;
         let (_client, transport) = tokio::io::duplex(4096);
         let running = rmcp::service::serve_directly(service, transport, None);
         for args in [

@@ -21,6 +21,8 @@ bun run test:captcha-e2e -- --dev-watch --pages fixtures --keys placeholder
 
 `--dev-watch` runs `bun run dev:claw:watch:new` from this worktree. It uses random ports, a fresh browser profile and `BROWSERCLAW_DIR`, and the same key modes described above. It inherits `CARGO_TARGET_DIR`, defaulting to `/Volumes/extssd/cargo-target/captcha-e2e-dev-watch`. Allow ten minutes for startup, or set `--startup-timeout <milliseconds>` for a cold build.
 
+For forced-token runs, set `BROWSEROS_CAPTCHA_TEST_FORCE_METHOD=token` in the server environment with `--dev-watch` or the harness; `token_applied` passes a `solved` expectation only when the site accepts the runner's form submission.
+
 Before opening pages, it requires healthy, connected browser status and `solve_captcha` in `tools/list`. With `--expect-tool-missing`, it requires the tool to be absent. It refuses the owner's ports (9010, 9011, 9121, 9211–9215). `--mcp-url`, `--headless`, and `--browser-arg` cannot be combined with this mode.
 
 The output directory contains `dev-watch.log`, `results.md`, and `results.json`. The Markdown header records hosted mode. Dev-watch JSON contains a `preflight` object (`url`, `port`, `hostedMode`, `toolPresent`, `health`, `ok`) and a `results` array; other modes keep the results array. Preflight is printed and saved before pages run, including failures. Shutdown and Ctrl+C signal the watch supervisor once, escalate to killing only the spawned process group after 15 seconds if needed, and wait for surviving processes referencing its temporary directories before removing them. A leak fails the run and preserves the directory for diagnosis; Cargo output remains cached.

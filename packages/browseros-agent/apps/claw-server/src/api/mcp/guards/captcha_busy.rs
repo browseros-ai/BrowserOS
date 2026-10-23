@@ -25,6 +25,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::{
         api::mcp::test_support::tool_call,
+        config::ServerMode,
         services::captcha::{
             CaptchaService,
             config::{CAPSOLVER_KEY_FILE_ENV, CaptchaConfig},
@@ -35,9 +36,12 @@ pub(crate) mod tests {
     pub(crate) fn enable_captcha(call: &mut ToolCall) -> anyhow::Result<()> {
         let file = tempfile::NamedTempFile::new()?;
         std::fs::write(file.path(), "dummy-test-key")?;
-        call.state.captcha = CaptchaService::from_config(CaptchaConfig::from_lookup(|name| {
-            (name == CAPSOLVER_KEY_FILE_ENV).then(|| file.path().to_string_lossy().into_owned())
-        }));
+        call.state.captcha = CaptchaService::from_config(
+            CaptchaConfig::from_lookup(|name| {
+                (name == CAPSOLVER_KEY_FILE_ENV).then(|| file.path().to_string_lossy().into_owned())
+            }),
+            ServerMode::Hosted,
+        );
         anyhow::ensure!(call.state.captcha.is_some(), "service disabled");
         Ok(())
     }

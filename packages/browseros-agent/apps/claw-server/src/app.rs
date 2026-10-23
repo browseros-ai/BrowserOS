@@ -221,6 +221,7 @@ impl AppState {
             browser.clone(),
             tab_activity.clone(),
         ));
+        let captcha = crate::services::captcha::CaptchaService::from_env(config.mode);
         Ok(Self {
             config,
             audit_log,
@@ -247,7 +248,7 @@ impl AppState {
             targets,
             session_efficiency,
             browser,
-            captcha: crate::services::captcha::CaptchaService::from_env(),
+            captcha,
             visuals,
             capture,
             cockpit,
