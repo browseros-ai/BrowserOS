@@ -57,7 +57,7 @@ const pages: CaptchaPage[] = [
 const tokenLengthExpression = () => '0'
 
 async function run(
-  scenario: 'contract' | 'no-tool' | 'false-positive',
+  scenario: Parameters<typeof startStubMcp>[0]['scenario'],
   overrides = {},
   stubPages = pages,
 ) {
@@ -97,6 +97,81 @@ test('tests that contract results all pass with independent acceptance and exit 
   })
   expect(exitCode(records)).toBe(0)
   expect(records.every((r) => r.latencyMs >= 0)).toBe(true)
+})
+
+test('tests that a token_applied stub passes after the site accepts submission', async () => {
+  const records = await run('token-applied')
+  expect(records[0]).toMatchObject({
+    status: 'token_applied',
+    method: 'token',
+    reason: 'awaiting_submit',
+    events: ['captcha.token_applied'],
+    verdict: 'accepted',
+    tokenLength: 123,
+    callbackFired: true,
+    outcome: 'PASS',
+    note: 'token applied; site accepted on submit',
+  })
+  expect(records.every((record) => record.outcome === 'PASS')).toBe(true)
+  expect(exitCode(records)).toBe(0)
+})
+
+for (const [acceptance, outcome, note] of [
+  ['accepted', 'PASS', 'token applied; site accepted on submit'],
+  ['rejected', 'FAIL', 'false positive'],
+  ['error', 'FAIL', 'independent check failed'],
+  ['n/a', 'FAIL', 'independent check failed'],
+] as const) {
+  test(`tests that token_applied with a ${acceptance} verdict gets ${outcome}`, () => {
+    expect(
+      classifyOutcome(
+        pages[0] as CaptchaPage,
+        'token_applied',
+        acceptance,
+        'awaiting_submit',
+      ),
+    ).toEqual({ outcome, note })
+  })
+}
+
+test('tests that token_applied keeps expectation and missing-tool rules', () => {
+  for (const page of pages.slice(1)) {
+    expect(
+      classifyOutcome(page, 'token_applied', 'accepted', 'awaiting_submit'),
+    ).toEqual({ outcome: 'FAIL', note: '' })
+  }
+  expect(
+    classifyOutcome(
+      pages[0] as CaptchaPage,
+      'token_applied',
+      'accepted',
+      'awaiting_submit',
+      { expectToolMissing: true },
+    ),
+  ).toEqual({ outcome: 'FAIL', note: '' })
+})
+
+test('tests that the table shows token_applied and its reason alongside the outcome note', async () => {
+  const records = await run('contract')
+  const first = records[0]
+  if (!first) throw new Error('missing result')
+  const record = {
+    ...first,
+    status: 'token_applied',
+    reason: 'awaiting_submit',
+    note: 'token applied; site accepted on submit',
+  }
+  const table = renderTable([record])
+  expect(table).toContain('| solved | solved | token_applied |')
+  expect(table).toContain(
+    'awaiting_submit; token applied; site accepted on submit |',
+  )
+  expect(renderTable([{ ...record, note: '' }])).toContain(
+    '| awaiting_submit |',
+  )
+  expect(renderTable([{ ...record, reason: 'n/a' }])).not.toContain(
+    'n/a; token applied',
+  )
 })
 
 test('tests that contract verdicts cover demo success messages and JSON success responses', async () => {

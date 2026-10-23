@@ -3,7 +3,7 @@ import type { CaptchaPage } from '../fixtures/catalog'
 import { probes } from './probes'
 import { stubSolveResult } from './solve-result'
 
-type Scenario = 'contract' | 'no-tool' | 'false-positive'
+type Scenario = 'contract' | 'no-tool' | 'false-positive' | 'token-applied'
 type StubPage = { entry: CaptchaPage; solved: boolean; submitted: boolean }
 
 function evaluateProbe(
@@ -140,7 +140,10 @@ export async function startStubMcp(options: {
           stubSolveResult(
             options.scenario === 'false-positive'
               ? 'solved'
-              : (state.entry.expect[0] ?? 'error'),
+              : options.scenario === 'token-applied' &&
+                  state.entry.expect.includes('solved')
+                ? 'token_applied'
+                : (state.entry.expect[0] ?? 'error'),
             state.entry.family,
           ),
         )
@@ -177,7 +180,11 @@ if (import.meta.main) {
     args: Bun.argv.slice(2),
     options: { scenario: { type: 'string', default: 'contract' } },
   })
-  if (!['contract', 'no-tool', 'false-positive'].includes(values.scenario))
+  if (
+    !['contract', 'no-tool', 'false-positive', 'token-applied'].includes(
+      values.scenario,
+    )
+  )
     throw new Error('unknown scenario')
   const stub = await startStubMcp({ scenario: values.scenario as Scenario })
   console.log(stub.url)

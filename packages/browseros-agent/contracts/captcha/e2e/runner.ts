@@ -33,6 +33,18 @@ export interface ResultRecord extends ReturnType<typeof parseSolveResult> {
   note: string
 }
 
+function classifyAppliedToken(
+  verdict: string,
+): Pick<ResultRecord, 'outcome' | 'note'> {
+  if (verdict === 'accepted')
+    return { outcome: 'PASS', note: 'token applied; site accepted on submit' }
+  return {
+    outcome: 'FAIL',
+    note:
+      verdict === 'rejected' ? 'false positive' : 'independent check failed',
+  }
+}
+
 export function classifyOutcome(
   page: CaptchaPage,
   status: string,
@@ -48,6 +60,8 @@ export function classifyOutcome(
           : 'FAIL',
       note: '',
     }
+  if (status === 'token_applied' && page.expect.includes('solved'))
+    return classifyAppliedToken(verdict)
   if (page.expect.some((expected) => expected === status)) {
     const needsVerdict =
       status === 'solved' ||
@@ -247,7 +261,12 @@ export function renderTable(records: readonly ResultRecord[]): string {
           `${r.latencyMs} ms`,
           r.costUsd ?? 'n/a',
           r.outcome,
-          r.note,
+          [
+            r.status === 'token_applied' && r.reason !== 'n/a' ? r.reason : '',
+            r.note,
+          ]
+            .filter(Boolean)
+            .join('; '),
         ]
           .map(cell)
           .join(' | ')} |`,

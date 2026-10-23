@@ -2,6 +2,7 @@ import type { McpToolResult } from '../../claw-mcp/tests/mcp-client'
 
 const statuses = new Set([
   'solved',
+  'token_applied',
   'already_clear',
   'unsupported',
   'failed',
@@ -50,6 +51,7 @@ export function parseSolveResult(result: McpToolResult) {
 export function stubSolveResult(status: string, type: string): McpToolResult {
   const reasons: Record<string, string> = {
     solved: 'auto_passed',
+    token_applied: 'awaiting_submit',
     already_clear: 'no_captcha',
     unsupported: 'unsupported_type',
     failed: 'browser_error',
@@ -59,12 +61,20 @@ export function stubSolveResult(status: string, type: string): McpToolResult {
   const value = {
     status,
     type: type === 'none' ? null : type,
-    method: status === 'solved' ? 'auto_pass' : 'none',
+    method:
+      status === 'token_applied'
+        ? 'token'
+        : status === 'solved'
+          ? 'auto_pass'
+          : 'none',
     reason: reasons[status],
     durationMs: 1,
     paidTasks: 0,
     costUsd: 0,
-    events: [],
+    events:
+      status === 'token_applied'
+        ? [{ event: 'captcha.token_applied', data: { callbackRan: true } }]
+        : [],
   }
   return {
     content: [{ type: 'text', text: JSON.stringify(value) }],
