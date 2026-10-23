@@ -5,8 +5,8 @@
  */
 
 import { Copy } from 'lucide-react'
-import { toastSuccess } from '@/modules/toast/toast'
 import { Button } from '@/components/ui/button'
+import { toastSuccess } from '@/modules/toast/toast'
 import { skillCommand } from '@/screens/skills/skills.helpers'
 
 interface RunSkillButtonProps {

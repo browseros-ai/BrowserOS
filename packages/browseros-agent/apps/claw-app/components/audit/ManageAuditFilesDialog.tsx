@@ -11,7 +11,6 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { toastPromise } from '@/modules/toast/toast'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -45,6 +44,7 @@ import {
   useSessions,
   useSetAuditRetention,
 } from '@/modules/api/audit.hooks'
+import { toastPromise } from '@/modules/toast/toast'
 import {
   choiceFromRetention,
   cleanupConfirmText,

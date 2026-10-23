@@ -6,7 +6,6 @@
 
 import { useQueryClient } from '@tanstack/react-query'
 import type { ReactElement } from 'react'
-import { toastPromise } from '@/modules/toast/toast'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -20,6 +19,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { useDeleteSkill, useSkills } from '@/modules/api/skills.hooks'
+import { toastPromise } from '@/modules/toast/toast'
 
 interface DeleteSkillDialogProps {
   name: string

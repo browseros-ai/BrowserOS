@@ -8,7 +8,6 @@ import { zodResolver } from '@hookform/resolvers/zod'
 import { useQueryClient } from '@tanstack/react-query'
 import { type ReactElement, useState } from 'react'
 import { useForm } from 'react-hook-form'
-import { toastPromise } from '@/modules/toast/toast'
 import { z } from 'zod'
 import { Button } from '@/components/ui/button'
 import {
@@ -38,6 +37,7 @@ import {
   useSkills,
   useUpdateSkill,
 } from '@/modules/api/skills.hooks'
+import { toastPromise } from '@/modules/toast/toast'
 import { neoName, parseSkillBody } from '@/screens/skills/skills.helpers'
 
 const createSchema = z.object({

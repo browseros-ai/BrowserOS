@@ -10,9 +10,9 @@ import {
   AnimatedSidebarProvider,
   AnimatedSidebarTrigger,
 } from '@/components/motion/animated-sidebar'
+import { ToastHost } from '@/modules/toast/ToastHost'
 import { AppSidebar, SidebarBrand } from './AppSidebar'
 import { SIDEBAR_WIDTH } from './layout.constants'
-import { ToastHost } from '@/modules/toast/ToastHost'
 import { PageTransition } from './PageTransition'
 
 /**
