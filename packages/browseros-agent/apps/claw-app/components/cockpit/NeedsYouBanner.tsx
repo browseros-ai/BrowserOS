@@ -1,10 +1,19 @@
 import type { HelpRequest } from '@browseros/claw-api'
-import { Hand, Square, TriangleAlert } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { cn } from '@/lib/utils'
+import { CircleCheck, Hand, KeyRound, ShieldCheck } from 'lucide-react'
+import {
+  Alert,
+  AlertAction,
+  AlertContent,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/motion/alert'
+import { Button } from '@/components/motion/button/base'
 import type { LiveSessionCardRecord } from '@/screens/cockpit/cockpit.helpers'
-import { siteOf } from '@/screens/cockpit/cockpit.helpers'
-import { needsYouTone } from './needsYouTone'
+import {
+  helpRequestSite,
+  helpRequestTitle,
+  waitingLabel,
+} from '@/screens/cockpit/cockpit.helpers'
 
 interface NeedsYouBannerProps {
   /** Every live session; the banner picks out the ones waiting on a human. */
@@ -15,16 +24,23 @@ interface NeedsYouBannerProps {
   cancelPendingSessionId?: string
 }
 
-function waitLabel(requestedAt: number, now: number): string {
-  const seconds = Math.max(0, Math.floor((now - requestedAt) / 1000))
-  const minutes = Math.floor(seconds / 60)
-  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`
-}
+const KIND_ICON = {
+  login: KeyRound,
+  captcha: ShieldCheck,
+  approval: CircleCheck,
+  other: Hand,
+} as const
+
+const KIND_HINT = {
+  login: 'Sign in there, then come back here.',
+  captcha: 'Finish the check there, then come back here.',
+  approval: 'Look it over there, then come back here.',
+  other: 'Do what it asks there, then come back here.',
+} as const
 
 /**
- * The prominent cockpit alert shown whenever at least one agent is parked
- * waiting for a human. It features the oldest request in full and, when several
- * agents need help at once, lists the rest so none is buried below the fold.
+ * Every agent waiting on a person, oldest first, each as its own request in
+ * plain words with one clear action. This is the only amber surface on Home.
  */
 export function NeedsYouBanner({
   sessions,
@@ -40,87 +56,33 @@ export function NeedsYouBanner({
     .sort((left, right) => left.help.requestedAt - right.help.requestedAt)
 
   if (pending.length === 0) return null
-
   const now = Date.now()
-  const [featured, ...rest] = pending
 
   return (
     <section
       data-needs-you-banner
-      aria-live="polite"
-      className="rounded-2xl border border-amber/40 bg-amber-tint px-5 py-4"
+      aria-label="Waiting for you"
+      className="ph-no-capture flex flex-col gap-3"
     >
-      <div className="flex items-start gap-4">
-        <span className="mt-0.5 inline-flex size-9 shrink-0 items-center justify-center rounded-full bg-[#b85c10] text-white">
-          <TriangleAlert className="size-4.5" />
-        </span>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-3">
-            <h2 className="font-semibold text-[15px] text-ink leading-tight">
-              {pending.length === 1
-                ? 'One agent needs you right now'
-                : `${pending.length} agents need you right now`}
-            </h2>
-            {pending.length > 1 && (
-              <span className="inline-flex shrink-0 items-center rounded-full bg-[#b85c10] px-2 py-0.5 font-mono text-[10px] text-white uppercase tracking-[0.1em]">
-                {pending.length} need you
-              </span>
-            )}
-          </div>
-          <FeaturedRequest
-            session={featured.session}
-            help={featured.help}
-            now={now}
-            onTakeOver={onTakeOver}
-            onStop={onStop}
-            isTakeOverPending={
-              pendingTakeOverSessionId === featured.session.sessionId
-            }
-            isStopPending={
-              cancelPendingSessionId === featured.session.sessionId
-            }
-          />
-        </div>
-      </div>
-
-      {rest.length > 0 && (
-        <ul className="mt-3 flex flex-col gap-2 border-amber/30 border-t pt-3">
-          {rest.map(({ session, help }) => (
-            <li
-              key={session.sessionId}
-              className="flex items-center gap-3 text-[13px]"
-            >
-              <span
-                aria-hidden
-                className="inline-block size-2 shrink-0 rounded-full"
-                style={{ background: session.color }}
-              />
-              <span className="min-w-0 flex-1 truncate text-ink">
-                <span className="font-medium">{session.label}</span>
-                <span className="text-ink-3"> · {help.reason}</span>
-              </span>
-              <span className="shrink-0 font-mono text-[11px] text-ink-3 tabular-nums">
-                {waitLabel(help.requestedAt, now)}
-              </span>
-              <Button
-                type="button"
-                size="xs"
-                data-take-over={session.sessionId}
-                onClick={() => onTakeOver(session.sessionId, help.browserTabId)}
-                disabled={pendingTakeOverSessionId === session.sessionId}
-                className={cn('shrink-0', needsYouTone.action)}
-              >
-                Take over
-              </Button>
-            </li>
-          ))}
-        </ul>
-      )}
+      {pending.map(({ session, help }) => (
+        <HelpRequestAlert
+          key={session.sessionId}
+          session={session}
+          help={help}
+          now={now}
+          onTakeOver={onTakeOver}
+          onStop={onStop}
+          isTakeOverPending={pendingTakeOverSessionId === session.sessionId}
+          isStopPending={cancelPendingSessionId === session.sessionId}
+        />
+      ))}
     </section>
   )
 }
 
-interface FeaturedRequestProps {
+// ---------------------------------------------------------------------------
+
+interface HelpRequestAlertProps {
   session: LiveSessionCardRecord
   help: HelpRequest
   now: number
@@ -130,7 +92,7 @@ interface FeaturedRequestProps {
   isStopPending: boolean
 }
 
-function FeaturedRequest({
+function HelpRequestAlert({
   session,
   help,
   now,
@@ -138,54 +100,59 @@ function FeaturedRequest({
   onStop,
   isTakeOverPending,
   isStopPending,
-}: FeaturedRequestProps) {
-  const site = help.url ? siteOf(help.url) : undefined
-  const context = [session.label, session.name, site]
-    .filter(Boolean)
-    .join(' · ')
+}: HelpRequestAlertProps) {
+  const kind = help.kind ?? 'other'
+  const Icon = KIND_ICON[kind]
+  const site = helpRequestSite(help)
 
   return (
-    <>
-      <p className="mt-1 font-mono text-[11px] text-ink-3 uppercase tracking-[0.06em]">
-        {context}
-      </p>
-      <p className="mt-1 font-medium text-[14px] text-ink">{help.reason}</p>
-      {help.resumeHint && (
-        <p className="mt-0.5 text-[13px] text-ink-2 italic">
-          “{help.resumeHint}”
-        </p>
-      )}
-      <div className="mt-2.5 flex flex-wrap items-center gap-2">
-        <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[11px] text-ink-3 uppercase tracking-[0.08em]">
-          Waiting
-          <span className="tabular-nums">
-            {waitLabel(help.requestedAt, now)}
+    <Alert
+      variant="warning"
+      className="rounded-2xl px-5 py-5 md:px-6"
+      contentClassName="gap-4 md:gap-[18px]"
+    >
+      <span
+        aria-hidden
+        className="grid size-11 shrink-0 place-items-center rounded-full border border-amber/40 bg-card text-amber-ink"
+      >
+        <Icon className="size-[22px]" strokeWidth={1.75} />
+      </span>
+      <AlertContent className="flex min-w-0 flex-col gap-2.5 space-y-0">
+        <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
+          <AlertTitle className="font-bold text-[19px] text-cyanotype-ink leading-snug tracking-[-0.015em]">
+            {helpRequestTitle(session.label, help)}
+          </AlertTitle>
+          <span className="whitespace-nowrap font-semibold text-[13.5px] text-amber-ink">
+            {waitingLabel(help.requestedAt, now)}
           </span>
-        </span>
-        <Button
-          type="button"
-          size="sm"
-          data-take-over={session.sessionId}
-          onClick={() => onTakeOver(session.sessionId, help.browserTabId)}
-          disabled={isTakeOverPending}
-          className={needsYouTone.action}
-        >
-          <Hand className="size-3.5" />
-          Take over
-        </Button>
-        <Button
-          type="button"
-          size="sm"
-          variant="ghost"
-          data-stop-session={session.sessionId}
-          onClick={() => onStop(session.sessionId)}
-          disabled={isStopPending}
-          aria-label="Stop session"
-        >
-          <Square className="size-3.5" />
-          Stop
-        </Button>
-      </div>
-    </>
+        </div>
+        <AlertDescription className="max-w-[64ch] text-[15px] text-ink-2">
+          “{help.reason}”
+        </AlertDescription>
+        <AlertAction className="gap-2.5 pt-0.5">
+          <Button
+            data-take-over={session.sessionId}
+            onClick={() => onTakeOver(session.sessionId, help.browserTabId)}
+            disabled={isTakeOverPending}
+            className="font-semibold"
+          >
+            <Hand aria-hidden className="size-4" />
+            Help now
+          </Button>
+          <Button
+            variant="ghost"
+            data-stop-session={session.sessionId}
+            onClick={() => onStop(session.sessionId)}
+            disabled={isStopPending}
+            className="font-semibold"
+          >
+            Stop task
+          </Button>
+          <span className="text-[13.5px] text-ink-3">
+            We’ll bring the {site} page to the front. {KIND_HINT[kind]}
+          </span>
+        </AlertAction>
+      </AlertContent>
+    </Alert>
   )
 }

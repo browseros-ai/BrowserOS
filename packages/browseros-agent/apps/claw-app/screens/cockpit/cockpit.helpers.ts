@@ -191,3 +191,30 @@ export function homeLede(
   }
   return 'Nothing is running right now.'
 }
+
+/** The site a help request is about, in the words a person would use. */
+export function helpRequestSite(help: HelpRequest): string {
+  if (help.url) return siteOf(help.url)
+  return help.title || 'this'
+}
+
+/** "Claude Code needs you to sign in to linkedin.com", from the request's kind. */
+export function helpRequestTitle(app: string, help: HelpRequest): string {
+  const site = help.url ? siteOf(help.url) : help.title || 'a page'
+  switch (help.kind) {
+    case 'login':
+      return `${app} needs you to sign in to ${site}`
+    case 'captcha':
+      return `${app} needs you to prove you’re not a robot on ${site}`
+    case 'approval':
+      return `${app} wants your OK on ${site}`
+    default:
+      return `${app} needs a hand on ${site}`
+  }
+}
+
+/** "Waiting 3 min", or "Just asked" in the first minute. */
+export function waitingLabel(requestedAt: number, now: number): string {
+  const minutes = Math.floor(Math.max(0, now - requestedAt) / MINUTE_MS)
+  return minutes < 1 ? 'Just asked' : `Waiting ${minutes} min`
+}
