@@ -750,6 +750,7 @@ mod tests {
                 loader_id: "main-loader".into(),
             },
             user_agent: None,
+            forced_method: None,
         };
         let challenge = Challenge {
             kind: CaptchaKind::RecaptchaV2,

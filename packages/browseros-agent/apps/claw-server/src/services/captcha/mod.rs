@@ -38,12 +38,14 @@ pub struct SolveCtx<'a, P: CaptchaPage, B: CaptchaBackend> {
     pub page_url: String,
     pub document: DocumentId,
     pub user_agent: Option<String>,
+    pub forced_method: Option<config::ForcedMethod>,
 }
 
 pub struct CaptchaService {
     pub providers: ProviderChain,
     reservations: Arc<TabReservations>,
     events: CaptchaEventBus,
+    forced_method: Option<config::ForcedMethod>,
 }
 
 #[derive(Debug)]
@@ -62,6 +64,7 @@ impl CaptchaService {
             providers: ProviderChain::new(&config),
             reservations: Arc::default(),
             events: CaptchaEventBus::new(),
+            forced_method: config.force_method,
         }))
     }
 
@@ -144,6 +147,17 @@ impl CaptchaService {
                     }
                     return page_failure(PageError::Navigated);
                 }
+                if let Some(challenge) = detection
+                    .challenges
+                    .iter()
+                    .find(|challenge| challenge.kind.is_supported())
+                {
+                    lease.set_progress(Some(challenge.kind), SolveStep::Detecting);
+                }
+                let detection = match wait_for_ready_detection(page, driver, detection).await {
+                    Ok(detection) => detection,
+                    Err(error) => return page_failure(error),
+                };
                 host = url::Url::parse(&detection.document.url)
                     .ok()
                     .and_then(|url| url.host_str().map(str::to_owned));
@@ -199,6 +213,7 @@ impl CaptchaService {
                             page_url: detection.document.url.clone(),
                             document: detection.document,
                             user_agent,
+                            forced_method: self.forced_method,
                         };
                         return driver.solve(&ctx, challenge).await;
                     }
@@ -389,6 +404,49 @@ impl SolveDriver for LiveDriver {
         }
     }
 }
+async fn wait_for_ready_detection<P: CaptchaPage>(
+    page: &P,
+    driver: &impl SolveDriver,
+    mut detection: Detection,
+) -> Result<Detection, PageError> {
+    if !detection
+        .challenges
+        .iter()
+        .any(|challenge| challenge.kind.is_supported())
+    {
+        return Ok(detection);
+    }
+    let document = detection.document.clone();
+    let until = Instant::now() + Duration::from_secs(5);
+    while !detection
+        .challenges
+        .iter()
+        .any(|challenge| challenge.kind.is_supported() && challenge.state == ChallengeState::Active)
+        && (!detection.complete
+            || detection.challenges.iter().any(|challenge| {
+                challenge.kind.is_supported() && challenge.state == ChallengeState::Unknown
+            }))
+    {
+        tokio::time::sleep_until((Instant::now() + Duration::from_millis(500)).min(until)).await;
+        if Instant::now() >= until {
+            break;
+        }
+        match tokio::time::timeout_at(until, async {
+            let next = driver.detect(page).await?;
+            if next.document != document || page.document().await? != document {
+                return Err(PageError::Navigated);
+            }
+            Ok(next)
+        })
+        .await
+        {
+            Ok(next) => detection = next?,
+            Err(_) => break,
+        }
+    }
+    Ok(detection)
+}
+
 fn terminal(status: SolveStatus, reason: SolveReason, message: &str) -> FlowResult {
     FlowResult {
         status,
@@ -519,6 +577,7 @@ mod orchestration_tests {
         scans: Mutex<VecDeque<Result<Detection, PageError>>>,
         stall: bool,
         result: Option<FlowResult>,
+        expected_forced_method: Option<config::ForcedMethod>,
     }
     impl FakeDriver {
         fn new(detection: Detection) -> Self {
@@ -526,22 +585,29 @@ mod orchestration_tests {
                 scans: Mutex::new(VecDeque::from([Ok(detection)])),
                 stall: false,
                 result: None,
+                expected_forced_method: None,
             }
         }
     }
     impl SolveDriver for FakeDriver {
         async fn detect<P: CaptchaPage>(&self, _: &P) -> Result<Detection, PageError> {
-            self.scans
+            let mut scans = self
+                .scans
                 .lock()
-                .map_err(|_| PageError::Browser("poisoned".into()))?
-                .pop_front()
-                .ok_or_else(|| PageError::Browser("no scan".into()))?
+                .map_err(|_| PageError::Browser("poisoned".into()))?;
+            if scans.len() > 1 {
+                scans.pop_front()
+            } else {
+                scans.front().cloned()
+            }
+            .ok_or_else(|| PageError::Browser("no scan".into()))?
         }
         async fn solve<P: CaptchaPage, B: CaptchaBackend>(
             &self,
             ctx: &SolveCtx<'_, P, B>,
             challenge: &Challenge,
         ) -> FlowResult {
+            assert_eq!(ctx.forced_method, self.expected_forced_method);
             let (method, reason) = match challenge.kind {
                 CaptchaKind::RecaptchaV2 => (SolveMethod::Checkbox, SolveReason::CheckboxPassed),
                 CaptchaKind::Turnstile => (SolveMethod::AutoPass, SolveReason::AutoPassed),
@@ -575,6 +641,7 @@ mod orchestration_tests {
             providers: ProviderChain::new(&config::CaptchaConfig::default()),
             reservations: Arc::default(),
             events: CaptchaEventBus::new(),
+            forced_method: None,
         }
     }
     fn scan(challenges: &[(CaptchaKind, ChallengeState)], complete: bool) -> Detection {
@@ -639,6 +706,39 @@ mod orchestration_tests {
         assert_eq!(value["paidTasks"], 0);
         assert_eq!(value["costUsd"], 0.0);
         assert_eq!(value["page"], 42);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_startup_force_method_reaches_the_selected_flow() -> anyhow::Result<()> {
+        let key = tempfile::NamedTempFile::new()?;
+        std::fs::write(key.path(), "test-key")?;
+        let config = config::CaptchaConfig::from_lookup(|name| match name {
+            config::CAPSOLVER_KEY_FILE_ENV => Some(key.path().to_string_lossy().into_owned()),
+            config::TEST_FORCE_METHOD_ENV => Some("token".into()),
+            _ => None,
+        });
+        let service = CaptchaService::from_config(config)
+            .ok_or_else(|| anyhow::anyhow!("missing service"))?;
+        let driver = FakeDriver {
+            expected_forced_method: Some(config::ForcedMethod::Token),
+            ..FakeDriver::new(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
+                true,
+            ))
+        };
+        let outcome = service
+            .solve_with(
+                &FakePage(Ok(document("current"))),
+                PageId(42),
+                CancellationToken::new(),
+                false,
+                Instant::now() + Duration::from_secs(120),
+                &driver,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(outcome.status, SolveStatus::Solved);
         Ok(())
     }
 
@@ -768,12 +868,14 @@ mod orchestration_tests {
             scans: Mutex::new(VecDeque::from([Ok(stale.clone()), Ok(scan(&[], true))])),
             stall: false,
             result: None,
+            expected_forced_method: None,
         };
         assert_eq!(run(&driver, false).await?.reason, SolveReason::NoCaptcha);
         let driver = FakeDriver {
             scans: Mutex::new(VecDeque::from([Ok(stale.clone()), Ok(stale)])),
             stall: false,
             result: None,
+            expected_forced_method: None,
         };
         assert_eq!(run(&driver, false).await?.reason, SolveReason::Navigated);
         Ok(())
@@ -901,6 +1003,205 @@ mod orchestration_tests {
                 )
             );
         }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_loading_supported_widget_is_rescanned_before_routing()
+    -> anyhow::Result<()> {
+        for (state, complete) in [
+            (ChallengeState::Unknown, true),
+            (ChallengeState::Unknown, false),
+            (ChallengeState::WidgetOnly, false),
+        ] {
+            let mut driver = FakeDriver::new(scan(&[(CaptchaKind::RecaptchaV2, state)], complete));
+            driver.scans = Mutex::new(VecDeque::from([
+                Ok(scan(&[(CaptchaKind::RecaptchaV2, state)], complete)),
+                Ok(scan(
+                    &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+                    false,
+                )),
+                Ok(scan(
+                    &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
+                    true,
+                )),
+            ]));
+            let started = tokio::time::Instant::now();
+            let outcome = run(&driver, false).await?;
+            assert_eq!(outcome.reason, SolveReason::CheckboxPassed);
+            assert_eq!(outcome.status, SolveStatus::Solved);
+            assert!(started.elapsed() >= Duration::from_secs(1));
+            assert!(started.elapsed() < Duration::from_secs(5));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_a_loading_widget_can_become_already_passed() -> anyhow::Result<()> {
+        let mut driver = FakeDriver::new(scan(
+            &[(CaptchaKind::Turnstile, ChallengeState::Unknown)],
+            false,
+        ));
+        driver.scans = Mutex::new(VecDeque::from([
+            Ok(scan(
+                &[(CaptchaKind::Turnstile, ChallengeState::Unknown)],
+                false,
+            )),
+            Ok(scan(
+                &[(CaptchaKind::Turnstile, ChallengeState::Passed)],
+                true,
+            )),
+        ]));
+        let outcome = run(&driver, false).await?;
+        assert_eq!(outcome.status, SolveStatus::AlreadyClear);
+        assert_eq!(outcome.reason, SolveReason::AlreadyPassed);
+        assert_eq!(outcome.attempts, Attempts::default());
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_unreadable_supported_widgets_get_only_five_seconds_to_load()
+    -> anyhow::Result<()> {
+        let started = tokio::time::Instant::now();
+        let outcome = run(
+            &FakeDriver::new(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+                false,
+            )),
+            false,
+        )
+        .await?;
+        assert_eq!(outcome.status, SolveStatus::Failed);
+        assert_eq!(outcome.reason, SolveReason::ScanIncomplete);
+        assert_eq!(outcome.paid_tasks, 0);
+        assert_eq!(outcome.attempts, Attempts::default());
+        assert_eq!(started.elapsed(), Duration::from_secs(5));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_readiness_waits_preserve_cancellation_and_the_overall_deadline()
+    -> anyhow::Result<()> {
+        for cancelled in [false, true] {
+            let service = service();
+            let cancel = CancellationToken::new();
+            if cancelled {
+                let token = cancel.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(750)).await;
+                    token.cancel();
+                });
+            }
+            let driver = FakeDriver::new(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+                false,
+            ));
+            let outcome = service
+                .solve_with(
+                    &FakePage(Ok(document("current"))),
+                    PageId(42),
+                    cancel,
+                    false,
+                    tokio::time::Instant::now() + Duration::from_secs(1),
+                    &driver,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+            assert_eq!(
+                outcome.reason,
+                if cancelled {
+                    SolveReason::CallerCancelled
+                } else {
+                    SolveReason::DeadlineExceeded
+                }
+            );
+            assert_eq!(outcome.attempts, Attempts::default());
+            assert_eq!(outcome.kind, Some(CaptchaKind::RecaptchaV2));
+            assert!(service.reservations.active(42).is_none());
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_readiness_survives_an_empty_incomplete_rescan() -> anyhow::Result<()> {
+        let mut driver = FakeDriver::new(scan(
+            &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+            false,
+        ));
+        driver.scans = Mutex::new(VecDeque::from([
+            Ok(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+                false,
+            )),
+            Ok(scan(&[], false)),
+            Ok(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Active)],
+                true,
+            )),
+        ]));
+        let outcome = run(&driver, false).await?;
+        assert_eq!(outcome.reason, SolveReason::CheckboxPassed);
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_readiness_navigation_cancels_before_the_flow() -> anyhow::Result<()> {
+        let mut next = scan(&[(CaptchaKind::RecaptchaV2, ChallengeState::Passed)], true);
+        next.document = document("navigated");
+        let mut driver = FakeDriver::new(scan(
+            &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+            false,
+        ));
+        driver.scans = Mutex::new(VecDeque::from([
+            Ok(scan(
+                &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+                false,
+            )),
+            Ok(next),
+        ]));
+        let outcome = run(&driver, false).await?;
+        assert_eq!(outcome.status, SolveStatus::Cancelled);
+        assert_eq!(outcome.reason, SolveReason::Navigated);
+        assert_eq!(outcome.attempts, Attempts::default());
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_readiness_rescans_cannot_run_past_the_five_second_budget()
+    -> anyhow::Result<()> {
+        struct SlowDriver(std::sync::atomic::AtomicBool);
+        impl SolveDriver for SlowDriver {
+            async fn detect<P: CaptchaPage>(&self, _: &P) -> Result<Detection, PageError> {
+                if self.0.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                    std::future::pending::<()>().await;
+                }
+                Ok(scan(
+                    &[(CaptchaKind::RecaptchaV2, ChallengeState::Unknown)],
+                    false,
+                ))
+            }
+            async fn solve<P: CaptchaPage, B: CaptchaBackend>(
+                &self,
+                _: &SolveCtx<'_, P, B>,
+                _: &Challenge,
+            ) -> FlowResult {
+                panic!("an unreadable widget must not reach a solve flow");
+            }
+        }
+        let started = Instant::now();
+        let outcome = service()
+            .solve_with(
+                &FakePage(Ok(document("current"))),
+                PageId(42),
+                CancellationToken::new(),
+                false,
+                started + Duration::from_secs(120),
+                &SlowDriver(false.into()),
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?;
+        assert_eq!(outcome.reason, SolveReason::ScanIncomplete);
+        assert_eq!(started.elapsed(), Duration::from_secs(5));
         Ok(())
     }
 }
