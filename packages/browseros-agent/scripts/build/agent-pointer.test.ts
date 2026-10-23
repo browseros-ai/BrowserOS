@@ -26,6 +26,7 @@ function harness(
     frame?: boolean
     unsupported?: boolean
     reduced?: boolean
+    strictCsp?: boolean
   } = {},
 ) {
   let now = 0
@@ -47,6 +48,12 @@ function harness(
     restore() {},
     translate() {},
   }
+  class Sheet {
+    cssText = ''
+    replaceSync(rule: string) {
+      this.cssText = rule
+    }
+  }
   class Element {
     parent: Element | null = null
     children: Element[] = []
@@ -60,6 +67,7 @@ function harness(
     clientHeight = 600
     width = 0
     height = 0
+    adoptedStyleSheets: Sheet[] = []
     constructor(readonly tagName: string) {}
     get isConnected(): boolean {
       return this === root || !!this.parent?.isConnected
@@ -96,7 +104,11 @@ function harness(
   const document = {
     visibilityState: options.hidden ? 'hidden' : 'visible',
     documentElement: options.unsupported ? null : root,
-    createElement: (tag: string) => new Element(tag),
+    createElement: (tag: string) => {
+      if (options.strictCsp && tag === 'style')
+        throw new Error('inline styles blocked')
+      return new Element(tag)
+    },
   }
   const world = {
     document,
@@ -105,6 +117,7 @@ function harness(
     innerHeight: 600,
     performance: { now: () => now },
     matchMedia: () => ({ matches: !!options.reduced }),
+    CSSStyleSheet: options.strictCsp ? Sheet : undefined,
     setTimeout: (run: () => void, ms: number) => {
       const id = nextId++
       timers.set(id, { at: now + ms, run })
@@ -204,6 +217,45 @@ describe('agent pointer page expression', () => {
       await bad.execute(command, 'throw new Error("unavailable")'),
     ).toEqual({ status: 'skipped', reason: 'error' })
     expect(bad.root.children).toHaveLength(0)
+  })
+
+  test('tests that overlapping captures stay hidden until both are restored', async () => {
+    const h = harness()
+    const moving = h.execute()
+    await h.advance(450)
+    await moving
+    const canvas = h.shadows[0]?.children.find(
+      (child) => child.tagName === 'canvas',
+    )
+    expect(h.api().hide()).toBe(true)
+    expect(h.api().hide()).toBe(true)
+    expect(h.api().show()).toBe(true)
+    expect(canvas?.styles.get('visibility')).toBe('hidden')
+    expect(h.api().show()).toBe(true)
+    expect(canvas?.styles.get('visibility')).toBe('visible')
+    h.api().hide()
+    await h.advance(4100)
+    const restarted = h.execute()
+    await h.advance(450)
+    await restarted
+    const nextCanvas = h.shadows[1]?.children.find(
+      (child) => child.tagName === 'canvas',
+    )
+    expect(h.api().show()).toBe(true)
+    expect(nextCanvas?.styles.get('visibility')).toBe('visible')
+  })
+
+  test('tests that print hiding uses CSSOM when inline styles are blocked', async () => {
+    const h = harness({ strictCsp: true })
+    const moving = h.execute()
+    await h.advance(450)
+    expect(await moving).toEqual({ status: 'arrived' })
+    expect(h.shadows[0]?.adoptedStyleSheets[0]?.cssText).toContain(
+      '@media print',
+    )
+    expect(
+      h.shadows[0]?.children.some((child) => child.tagName === 'style'),
+    ).toBe(false)
   })
 
   test('tests that the bundle executes once and a later move continues from the last tip', async () => {

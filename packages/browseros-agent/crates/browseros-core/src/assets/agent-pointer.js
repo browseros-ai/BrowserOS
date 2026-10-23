@@ -20,6 +20,7 @@
       let host = null;
       let canvas = null;
       let player = null;
+      let hideDepth = 0;
       let idleTimer = null;
       let idleMs = cmd.idleMs;
       let generation = 0;
@@ -32,6 +33,7 @@
         try { if (player) player.destroy(); } catch (_) {}
         try { if (host) host.remove(); } catch (_) {}
         player = canvas = host = null;
+        hideDepth = 0;
       };
       const armIdle = () => {
         clearTimeout(idleTimer);
@@ -51,15 +53,24 @@
         }
         if (typeof host.attachShadow !== 'function') { dispose(); return false; }
         const shadow = host.attachShadow({ mode: 'closed' });
-        const style = document.createElement('style');
-        style.textContent = '@media print { :host { display:none !important } }';
+        const printRule = '@media print { :host { display:none !important } }';
+        if (typeof CSSStyleSheet === 'function' && 'adoptedStyleSheets' in shadow) {
+          // CSSOM also works on pages whose CSP forbids inline style elements.
+          const sheet = new CSSStyleSheet();
+          sheet.replaceSync(printRule);
+          shadow.adoptedStyleSheets = [sheet];
+        } else {
+          const style = document.createElement('style');
+          style.textContent = printRule;
+          shadow.appendChild(style);
+        }
         canvas = document.createElement('canvas');
         for (const [name, value] of Object.entries({ width: '100%', height: '100%', display: 'block',
           position: 'absolute', inset: '0', 'pointer-events': 'none' })) {
           canvas.style.setProperty(name, value, 'important');
         }
         if (!canvas.getContext('2d')) { dispose(); return false; }
-        shadow.append(style, canvas);
+        shadow.appendChild(canvas);
         document.documentElement.appendChild(host);
         player = new Player(canvas, { float: false });
         player.place(api.pos || { x: target.x - 48, y: target.y - 32 });
@@ -81,13 +92,15 @@
           try {
             if (!canvas || !host?.isConnected) return false;
             canvas.style.setProperty('visibility', 'hidden', 'important');
+            hideDepth += 1;
             return true;
           } catch (_) { return false; }
         },
         show() {
           try {
             if (!canvas || !host?.isConnected) return false;
-            canvas.style.setProperty('visibility', 'visible', 'important');
+            hideDepth = Math.max(0, hideDepth - 1);
+            canvas.style.setProperty('visibility', hideDepth ? 'hidden' : 'visible', 'important');
             return true;
           } catch (_) { return false; }
         },
