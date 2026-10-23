@@ -296,11 +296,17 @@ impl CaptchaPage for LivePage {
     }
 }
 
-async fn browser<T>(future: impl Future<Output = Result<T, CoreError>>) -> Result<T, PageError> {
-    tokio::time::timeout(REQUEST_TIMEOUT, future)
-        .await
-        .map_err(|_| PageError::Timeout)?
-        .map_err(page_error)
+fn browser<T>(
+    future: impl Future<Output = Result<T, CoreError>>,
+) -> impl Future<Output = Result<T, PageError>> {
+    // Box before constructing the async state so core futures do not inflate every caller.
+    let future = Box::pin(future);
+    async move {
+        tokio::time::timeout(REQUEST_TIMEOUT, future)
+            .await
+            .map_err(|_| PageError::Timeout)?
+            .map_err(page_error)
+    }
 }
 async fn send(session: &ProtocolSession, method: &str, params: Value) -> Result<Value, PageError> {
     browser(session.send_value(method, params)).await
@@ -510,6 +516,7 @@ mod tests {
     type TestResult = Result<(), Box<dyn std::error::Error>>;
     type Call = (String, Value, Option<SessionId>);
     struct Native {
+        widget_url: &'static str,
         calls: Mutex<Vec<Call>>,
         evaluations: Mutex<VecDeque<Result<Value, CdpError>>>,
         child_failure: Mutex<Option<(&'static str, bool, CdpError)>>,
@@ -517,8 +524,9 @@ mod tests {
         events: broadcast::Sender<CdpEvent>,
     }
     impl Native {
-        fn new() -> Arc<Self> {
+        fn new(widget_url: &'static str) -> Arc<Self> {
             Arc::new(Self {
+                widget_url,
                 calls: Mutex::new(Vec::new()),
                 evaluations: Mutex::new(VecDeque::new()),
                 child_failure: Mutex::new(None),
@@ -569,7 +577,7 @@ mod tests {
                     json!({"sessionId":format!("s-{}",params["targetId"].as_str().unwrap_or_default())})
                 }
                 "Page.getFrameTree" if child => {
-                    json!({"frameTree":{"frame":{"id":"widget","parentId":"root","url":"https://widget.test","loaderId":"widget-loader"}}})
+                    json!({"frameTree":{"frame":{"id":"widget","parentId":"root","url":self.widget_url,"loaderId":"widget-loader"}}})
                 }
                 "Page.getFrameTree" => {
                     json!({"frameTree":{"frame":{"id":"root","url":"http://fixture.test","loaderId":"main-loader"}}})
@@ -669,7 +677,7 @@ mod tests {
         }
     }
     fn fixture() -> (Arc<Native>, LivePage) {
-        let native = Native::new();
+        let native = Native::new("https://widget.test");
         let view = BrowserView::unbound(
             BrowserSession::new(native.clone(), Default::default()),
             None,
@@ -687,6 +695,100 @@ mod tests {
                 height: 65.0,
             }),
         }
+    }
+
+    #[tokio::test]
+    async fn tests_that_live_recaptcha_solves_on_a_small_stack() -> anyhow::Result<()> {
+        use super::super::{
+            LiveDriver, SolveCtx, SolveDriver,
+            config::CaptchaConfig,
+            events::{CaptchaEventBus, EventLog},
+            providers::ProviderChain,
+            reservation::TabReservations,
+            types::{CaptchaKind, Challenge, ChallengeState, SolveMethod, SolveStatus},
+        };
+        use tokio_util::sync::CancellationToken;
+
+        let native = Native::new("https://www.google.com/recaptcha/api2/anchor?k=test-key");
+        for checked in [false, true] {
+            for value in [
+                json!({"width":800,"height":600}),
+                json!({"response":checked,"present":true,"hidden":false,"frameReady":false}),
+                json!({"checked":checked,"error":false,"rect":{"x":9,"y":20,"width":24,"height":24}}),
+            ] {
+                native
+                    .evaluations
+                    .lock()
+                    .map_err(|_| anyhow::anyhow!("poisoned"))?
+                    .push_back(Ok(json!({"result":{"value":value}})));
+            }
+        }
+        let page = LivePage::new(
+            BrowserView::unbound(
+                BrowserSession::new(native.clone(), Default::default()),
+                None,
+            ),
+            PageId(1),
+        );
+        let backend = ProviderChain::new(&CaptchaConfig::default());
+        let events = EventLog::new(CaptchaEventBus::new(), "small-stack".into(), 1);
+        let reservations = Arc::<TabReservations>::default();
+        let lease = reservations
+            .try_reserve(1, "small-stack")
+            .map_err(|_| anyhow::anyhow!("page busy"))?;
+        let cancel = CancellationToken::new();
+        let ctx = SolveCtx {
+            page: &page,
+            backend: &backend,
+            events: &events,
+            lease: &lease,
+            cancel: &cancel,
+            deadline: tokio::time::Instant::now() + Duration::from_secs(10),
+            page_url: "http://fixture.test".into(),
+            document: DocumentId {
+                url: "http://fixture.test".into(),
+                loader_id: "main-loader".into(),
+            },
+            user_agent: None,
+        };
+        let challenge = Challenge {
+            kind: CaptchaKind::RecaptchaV2,
+            state: ChallengeState::Active,
+            frame: None,
+            challenge_frame: None,
+            sitekey: Some("test-key".into()),
+            invisible: false,
+            enterprise: false,
+            recaptcha_s: None,
+            action: None,
+            cdata: None,
+            callback: None,
+        };
+        let result = std::thread::scope(|scope| -> anyhow::Result<_> {
+            std::thread::Builder::new()
+                .name("captcha-small-stack".into())
+                .stack_size(512 * 1024)
+                .spawn_scoped(scope, || -> anyhow::Result<_> {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()?;
+                    Ok(runtime.block_on(LiveDriver.solve(&ctx, &challenge)))
+                })?
+                .join()
+                .map_err(|_| anyhow::anyhow!("solver thread panicked"))?
+        })?;
+        assert_eq!(result.status, SolveStatus::Solved);
+        assert_eq!(result.method, SolveMethod::Checkbox);
+        assert_eq!(result.attempts.checkbox, 1);
+        assert_eq!(result.paid_tasks, 0);
+        assert_eq!(
+            native
+                .calls("Input.dispatchMouseEvent")
+                .map_err(anyhow::Error::msg)?
+                .len(),
+            6
+        );
+        Ok(())
     }
 
     #[tokio::test]
