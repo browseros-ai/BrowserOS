@@ -33,4 +33,25 @@ jobs:
             jq -r '.errors[]? | "\(.code): \(.message)"' "$response"
             exit 1
           fi
-          echo 'GHCR accepted pull,push scope for the workflow token.'
+          token="$(jq -er '.token // .access_token' "$response")"
+          echo "::add-mask::$token"
+          headers="$RUNNER_TEMP/ghcr-upload.headers"
+          if ! curl --silent --show-error --fail-with-body \
+            --header "Authorization: Bearer $token" \
+            --request POST \
+            --dump-header "$headers" \
+            --output "$response" \
+            'https://ghcr.io/v2/browseros-ai/neo/blobs/uploads/'; then
+            jq -r '.errors[]? | "\(.code): \(.message)"' "$response"
+            exit 1
+          fi
+          location="$(awk 'tolower($1) == "location:" {sub(/\r$/, "", $2); print $2}' "$headers")"
+          case "$location" in
+            /v2/*) location="https://ghcr.io$location" ;;
+            https://ghcr.io/v2/*) ;;
+            *) echo 'Unexpected upload location'; exit 1 ;;
+          esac
+          curl --silent --show-error --fail \
+            --header "Authorization: Bearer $token" \
+            --request DELETE "$location"
+          echo 'GHCR accepted a blob upload using the workflow token; canceled without publishing.'
