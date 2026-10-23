@@ -5,7 +5,9 @@ use crate::{
     ids::{ConvoId, DispatchId, SessionId},
     services::sessions::Session,
 };
-use browseros_core::{BrowserSession, PageId, pages::PageInfo, target::BrowserView};
+use browseros_core::{
+    BrowserSession, PageId, pages::PageInfo, pointer::Pointer, target::BrowserView,
+};
 use browseros_mcp::{
     BrowserToolDefaults, BrowserToolOptions, OutputFileAccess, TargetStore, ToolCtx, ToolDef,
     ToolResult, execute_tool,
@@ -533,7 +535,7 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 _ => Vec::new(),
             };
             let ctx = ToolCtx::new(BrowserToolOptions {
-                browser: view.clone(),
+                browser: view.clone().with_pointer(Pointer::default()),
                 target: Some(call.target_store.clone()),
                 defaults: BrowserToolDefaults {
                     default_window_id: None,

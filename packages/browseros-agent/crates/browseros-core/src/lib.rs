@@ -10,6 +10,7 @@ pub mod navigation;
 pub mod observer;
 pub mod page_signals;
 pub mod pages;
+pub mod pointer;
 pub mod profiles;
 pub mod screenshot;
 pub mod settle;

@@ -2,6 +2,7 @@ use crate::{
     BrowserView, CoreError, NativeCapabilities, PageId, ProtocolSession, TabId, TargetBinding,
     connection::CdpConnection,
     pages::PageInfo,
+    pointer,
     screenshot::ScreenshotFormat,
     session::{BrowserSession, BrowserSessionHooks},
 };
@@ -141,9 +142,14 @@ impl Browser {
         if let Some(quality) = quality {
             params.insert("quality".to_string(), Value::from(quality));
         }
+        let hidden = pointer::hide_for_capture(&session).await;
         let screenshot = session
             .send::<_, CaptureScreenshotResult>("Page.captureScreenshot", Value::Object(params))
-            .await?;
+            .await;
+        if hidden {
+            pointer::restore_after_capture(&session).await;
+        }
+        let screenshot = screenshot?;
         let dpr_result = session
             .send::<_, EvaluateResult>(
                 "Runtime.evaluate",

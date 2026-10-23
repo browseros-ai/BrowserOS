@@ -10,7 +10,7 @@ use crate::{
     },
     framework::{AuditHints, ToolCtx, ToolError, ToolExecResult, ToolResult, merge_structured},
 };
-use browseros_core::{ConsoleEntry, PageId, settle::SettleOutcome};
+use browseros_core::{ConsoleEntry, PageId, pointer, settle::SettleOutcome};
 use rmcp::model::ContentBlock;
 use serde_json::{Value, json};
 
@@ -282,13 +282,18 @@ impl ToolResponse {
                 struct CaptureScreenshotResult {
                     data: String,
                 }
-                let result: CaptureScreenshotResult = page_session
+                let hidden = pointer::hide_for_capture(&page_session.session).await;
+                let result = page_session
                     .session
-                    .send(
+                    .send::<_, CaptureScreenshotResult>(
                         "Page.captureScreenshot",
                         json!({ "format": "png", "captureBeyondViewport": false }),
                     )
-                    .await?;
+                    .await;
+                if hidden {
+                    pointer::restore_after_capture(&page_session.session).await;
+                }
+                let result = result?;
                 self.text(format!("[Page {page} screenshot]"));
                 self.image(result.data, "image/png");
                 Ok(())
@@ -471,4 +476,258 @@ fn console_summary_line(page: u32, entries: &[ConsoleEntry]) -> Option<String> {
         entries.len(),
         first.summary_text()
     ))
+}
+
+#[cfg(test)]
+mod pointer_capture_tests {
+    use super::{PostAction, ToolResponse};
+    use crate::{
+        framework::{BrowserToolDefaults, BrowserToolOptions, ToolCtx},
+        output_file::create_browser_output_file_access,
+    };
+    use browseros_cdp::{CdpError, CdpEvent};
+    use browseros_core::{
+        Browser, CdpConnection, PageId, SessionId,
+        screenshot::{ScreenshotCaptureOptions, ScreenshotFormat},
+    };
+    use futures_util::future::BoxFuture;
+    use serde_json::{Value, json};
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::broadcast;
+    use tokio_util::sync::CancellationToken;
+
+    #[derive(Clone, Copy, Debug)]
+    enum CapturePath {
+        Plain,
+        Annotated,
+        Browser,
+        PostAction,
+    }
+    const PATHS: [CapturePath; 4] = [
+        CapturePath::Plain,
+        CapturePath::Annotated,
+        CapturePath::Browser,
+        CapturePath::PostAction,
+    ];
+
+    struct CaptureConnection {
+        calls: Mutex<Vec<(String, Value)>>,
+        events: broadcast::Sender<CdpEvent>,
+        fail_hide: bool,
+        fail_capture: bool,
+    }
+
+    impl CaptureConnection {
+        fn new(fail_hide: bool, fail_capture: bool) -> Arc<Self> {
+            let (events, _) = broadcast::channel(8);
+            Arc::new(Self {
+                calls: Mutex::new(Vec::new()),
+                events,
+                fail_hide,
+                fail_capture,
+            })
+        }
+
+        fn capture_calls(&self) -> Vec<String> {
+            self.calls
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .filter_map(|(method, params)| {
+                    let expression = params["expression"].as_str().unwrap_or_default();
+                    if method == "Page.captureScreenshot" {
+                        Some("capture".to_string())
+                    } else if expression.contains("p.hide()") {
+                        Some("hide".to_string())
+                    } else if expression.contains("p.show()") {
+                        Some("show".to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        }
+
+        fn tab() -> Value {
+            json!({ "tabId": 101, "targetId": "target-1", "url": "https://example.test/", "title": "Example", "isActive": true,
+                "isLoading": false, "loadProgress": 1.0, "isPinned": false, "isHidden": false, "windowId": 1, "index": 0 })
+        }
+    }
+
+    impl CdpConnection for CaptureConnection {
+        fn send<'a>(
+            &'a self,
+            method: &'a str,
+            params: Value,
+            _session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                self.calls
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push((method.to_string(), params.clone()));
+                match method {
+                    "Browser.getTabs" => Ok(json!({ "tabs": [Self::tab()] })),
+                    "Browser.getTabInfo" => Ok(json!({ "tab": Self::tab() })),
+                    "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
+                    "Page.getFrameTree" => Ok(
+                        json!({ "frameTree": { "frame": { "id": "main", "loaderId": "loader-1", "url": "https://example.test/" } } }),
+                    ),
+                    "Accessibility.getFullAXTree" => Ok(json!({ "nodes": [] })),
+                    "Page.captureScreenshot" if self.fail_capture => {
+                        Err(CdpError::Transport("capture failed".into()))
+                    }
+                    "Page.captureScreenshot" => Ok(json!({ "data": "cG5n" })),
+                    "Runtime.evaluate"
+                        if self.fail_hide
+                            && params["expression"]
+                                .as_str()
+                                .is_some_and(|js| js.contains("p.hide()")) =>
+                    {
+                        Err(CdpError::Transport("hide failed".into()))
+                    }
+                    "Runtime.evaluate" => Ok(json!({ "result": { "value": true } })),
+                    "Page.enable"
+                    | "DOM.enable"
+                    | "Runtime.enable"
+                    | "Accessibility.enable"
+                    | "Runtime.runIfWaitingForDebugger"
+                    | "Target.setAutoAttach"
+                    | "Runtime.releaseObjectGroup" => Ok(json!({})),
+                    _ => Err(CdpError::Transport(format!(
+                        "unexpected capture fixture call: {method}"
+                    ))),
+                }
+            })
+        }
+
+        fn send_raw_json<'a>(
+            &'a self,
+            method: &'a str,
+            params: &'a str,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<String, CdpError>> {
+            Box::pin(async move {
+                Ok(self
+                    .send(method, serde_json::from_str(params)?, session)
+                    .await?
+                    .to_string())
+            })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            Box::pin(async move {
+                if expected_epoch != 1 {
+                    return Err(CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
+                self.send(method, params, session).await
+            })
+        }
+
+        fn events(&self) -> broadcast::Receiver<CdpEvent> {
+            self.events.subscribe()
+        }
+        fn is_connected(&self) -> bool {
+            true
+        }
+        fn connection_epoch(&self) -> u64 {
+            1
+        }
+    }
+
+    async fn capture(path: CapturePath, connection: Arc<CaptureConnection>) -> anyhow::Result<()> {
+        let browser = Browser::new(connection);
+        browser.list_pages().await?;
+        match path {
+            CapturePath::Browser => {
+                let capture = browser
+                    .screenshot(PageId(1), ScreenshotFormat::Png, None, false)
+                    .await?;
+                assert_eq!(capture.data, "cG5n");
+            }
+            CapturePath::Plain | CapturePath::Annotated => {
+                let capture = browser
+                    .view()
+                    .await
+                    .screenshot(
+                        PageId(1),
+                        ScreenshotCaptureOptions {
+                            annotate: Some(matches!(path, CapturePath::Annotated)),
+                            ..Default::default()
+                        },
+                    )
+                    .await?;
+                assert_eq!(capture.data, "cG5n");
+                assert!(capture.annotations.is_empty());
+            }
+            CapturePath::PostAction => {
+                let ctx = ToolCtx::new(BrowserToolOptions {
+                    browser: browser.view().await,
+                    target: None,
+                    defaults: BrowserToolDefaults::default(),
+                    cancel: CancellationToken::new(),
+                    output_files: create_browser_output_file_access(),
+                    inner_call_hook: None,
+                    preloaded_helpers: Vec::new(),
+                });
+                let mut response = ToolResponse::new();
+                response
+                    .run_session_post_action(PostAction::Screenshot { page: 1 }, &ctx)
+                    .await?;
+                assert_eq!(response.content.len(), 2);
+                assert!(serde_json::to_string(&response.content)?.contains("cG5n"));
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_every_capture_hides_then_restores_the_pointer() -> anyhow::Result<()> {
+        for path in PATHS {
+            let connection = CaptureConnection::new(false, false);
+            capture(path, connection.clone()).await?;
+            assert_eq!(
+                connection.capture_calls(),
+                ["hide", "capture", "show"],
+                "{path:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_every_capture_restores_the_pointer_on_capture_failure() {
+        for path in PATHS {
+            let connection = CaptureConnection::new(false, true);
+            let error = capture(path, connection.clone()).await.err();
+            assert!(
+                error.is_some_and(|error| error.to_string().contains("capture failed")),
+                "{path:?}"
+            );
+            assert_eq!(
+                connection.capture_calls(),
+                ["hide", "capture", "show"],
+                "{path:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn tests_that_every_capture_survives_a_failed_pointer_hide() -> anyhow::Result<()> {
+        for path in PATHS {
+            let connection = CaptureConnection::new(true, false);
+            capture(path, connection.clone()).await?;
+            assert_eq!(connection.capture_calls(), ["hide", "capture"], "{path:?}");
+        }
+        Ok(())
+    }
 }

@@ -4,8 +4,12 @@ pub mod keyboard;
 pub mod mouse;
 
 use crate::{
-    CoreError, CoveredElementTarget, PageId, ProtocolSession, Ref, observer::Observer,
-    pages::PageManager, snapshot::RefEntry, target::page_access::PageAccess,
+    CoreError, CoveredElementTarget, PageId, ProtocolSession, Ref,
+    observer::Observer,
+    pages::PageManager,
+    pointer::{Pointer, PointerAction},
+    snapshot::RefEntry,
+    target::page_access::PageAccess,
 };
 use geometry::{
     call_on_element, click_blocker_at_point, focus_element_js, get_element_center, js_click,
@@ -59,6 +63,7 @@ pub struct Input {
     pages: Arc<PageManager>,
     page_id: PageId,
     access: Option<Arc<PageAccess>>,
+    pointer: Option<Pointer>,
 }
 
 #[derive(Debug, Clone)]
@@ -99,11 +104,17 @@ impl Input {
             pages,
             page_id,
             access: None,
+            pointer: None,
         }
     }
 
     pub(crate) fn with_access(mut self, access: Arc<PageAccess>) -> Self {
         self.access = Some(access);
+        self
+    }
+
+    pub(crate) fn with_pointer(mut self, pointer: Option<Pointer>) -> Self {
+        self.pointer = pointer;
         self
     }
 
@@ -143,14 +154,30 @@ impl Input {
     pub async fn click_at(&self, x: f64, y: f64, opts: ClickOptions) -> Result<(), CoreError> {
         self.with_page_session_retry(|session| {
             let opts = opts.clone();
-            async move { dispatch_click_with_options(&session, x, y, opts, 0).await }
+            async move {
+                if let Some(pointer) = self.drawing_pointer().await
+                    && pointer
+                        .move_to(&session, PointerAction::Click, Point { x, y })
+                        .await
+                {
+                    pointer.click_effect(&session, Point { x, y }).await;
+                }
+                dispatch_click_with_options(&session, x, y, opts, 0).await
+            }
         })
         .await
     }
 
     pub async fn hover_at(&self, x: f64, y: f64) -> Result<(), CoreError> {
-        self.with_page_session_retry(|session| async move { dispatch_hover(&session, x, y).await })
-            .await
+        self.with_page_session_retry(|session| async move {
+            if let Some(pointer) = self.drawing_pointer().await {
+                pointer
+                    .move_to(&session, PointerAction::Hover, Point { x, y })
+                    .await;
+            }
+            dispatch_hover(&session, x, y).await
+        })
+        .await
     }
 
     pub async fn type_at(&self, x: f64, y: f64, text: &str, clear: bool) -> Result<(), CoreError> {
@@ -182,8 +209,21 @@ impl Input {
     ) -> Result<Option<Point>, CoreError> {
         scroll_into_view(session, target.backend_node_id).await;
         match get_element_center(session, target.backend_node_id).await {
-            Ok(point) => {
+            Ok(mut point) => {
                 self.check_click_point(session, &target, point).await?;
+                if let Some(pointer) = self.drawing_pointer().await
+                    && pointer.move_to(session, PointerAction::Click, point).await
+                {
+                    point = match get_element_center(session, target.backend_node_id).await {
+                        Ok(point) => point,
+                        Err(_) => {
+                            js_click(session, target.backend_node_id).await?;
+                            return Ok(None);
+                        }
+                    };
+                    self.check_click_point(session, &target, point).await?;
+                    pointer.click_effect(session, point).await;
+                }
                 dispatch_click_with_options(session, point.x, point.y, opts, 0).await?;
                 Ok(Some(point))
             }
@@ -217,8 +257,14 @@ impl Input {
         target: InputTarget,
     ) -> Result<Point, CoreError> {
         scroll_into_view(session, target.backend_node_id).await;
-        let point = get_element_center(session, target.backend_node_id).await?;
+        let mut point = get_element_center(session, target.backend_node_id).await?;
         self.check_click_point(session, &target, point).await?;
+        if let Some(pointer) = self.drawing_pointer().await
+            && pointer.move_to(session, PointerAction::Hover, point).await
+        {
+            point = get_element_center(session, target.backend_node_id).await?;
+            self.check_click_point(session, &target, point).await?;
+        }
         dispatch_hover(session, point.x, point.y).await?;
         Ok(point)
     }
@@ -226,6 +272,13 @@ impl Input {
     pub async fn focus(&self, ref_id: &Ref) -> Result<(), CoreError> {
         let resolved = self.observer.resolve_ref(ref_id).await?;
         scroll_into_view(&resolved.session, resolved.backend_node_id).await;
+        if let Some(pointer) = self.drawing_pointer().await
+            && let Ok(point) = get_element_center(&resolved.session, resolved.backend_node_id).await
+        {
+            pointer
+                .move_to(&resolved.session, PointerAction::Focus, point)
+                .await;
+        }
         focus_element_js(&resolved.session, resolved.backend_node_id).await
     }
 
@@ -481,6 +534,20 @@ impl Input {
             .unwrap_or(false)
     }
 
+    async fn drawing_pointer(&self) -> Option<Pointer> {
+        let pointer = self.pointer?;
+        let page = match &self.access {
+            Some(access) => access.fresh().await.ok()?,
+            None => self
+                .pages
+                .refresh(self.page_id.clone())
+                .await
+                .ok()
+                .flatten()?,
+        };
+        page.is_active.then_some(pointer)
+    }
+
     async fn page_session(&self) -> Result<ProtocolSession, CoreError> {
         match &self.access {
             Some(access) => Ok(access.session().await?.session),
@@ -586,7 +653,11 @@ mod tests {
     use crate::{
         BrowserSession, BrowserSessionHooks, CoreError, Ref,
         connection::CdpConnection,
+        pointer::Pointer,
         snapshot::{AxNode, AxValue},
+        target::BrowserView,
+        test_support::TestCall,
+        timeouts,
     };
     use browseros_cdp::{CdpError, CdpEvent};
     use futures_util::future::BoxFuture;
@@ -602,6 +673,14 @@ mod tests {
         Error,
     }
 
+    #[derive(Clone, Copy)]
+    enum PointerResponse {
+        Arrived,
+        Skipped,
+        Error,
+        Pending,
+    }
+
     struct HarnessState {
         hit_test: HitTestResponse,
         hit_test_calls: usize,
@@ -611,6 +690,19 @@ mod tests {
         select_calls: usize,
         select_result: Option<&'static str>,
         select_semantics_preserved: bool,
+        calls: Vec<TestCall>,
+        pointer_response: PointerResponse,
+        pointer_moved: bool,
+        effect_pending: bool,
+        moved_box: bool,
+        missing_geometry: bool,
+        missing_geometry_after_move: bool,
+        hit_test_after_move: Option<HitTestResponse>,
+        field_value: String,
+        tab_active: bool,
+        tab_info_error: bool,
+        tab_list_error: bool,
+        tab_target: &'static str,
     }
 
     struct HarnessConnection {
@@ -627,6 +719,21 @@ mod tests {
                 .map_err(|_| CoreError::Message("poisoned".into()))?
                 .mouse_calls
                 .clone())
+        }
+
+        fn configure(&self, update: impl FnOnce(&mut HarnessState)) -> Result<(), CoreError> {
+            let mut state = self
+                .state
+                .lock()
+                .map_err(|_| CoreError::Message("poisoned test state".into()))?;
+            update(&mut state);
+            Ok(())
+        }
+
+        fn take_calls(&self) -> Result<Vec<TestCall>, CoreError> {
+            let mut calls = Vec::new();
+            self.configure(|state| calls = std::mem::take(&mut state.calls))?;
+            Ok(calls)
         }
 
         fn mouse_events(&self) -> usize {
@@ -673,9 +780,39 @@ mod tests {
             _session: Option<&'a crate::SessionId>,
         ) -> BoxFuture<'a, Result<Value, CdpError>> {
             Box::pin(async move {
+                self.configure(|state| {
+                    state.calls.push(TestCall {
+                        method: method.to_string(),
+                        params: params.clone(),
+                    });
+                })
+                .map_err(|err| CdpError::Protocol {
+                    code: -1,
+                    message: err.to_string(),
+                })?;
                 match method {
-                    "Browser.getTabs" => Ok(json!({ "tabs": [tab_value()] })),
-                    "Browser.getTabInfo" => Ok(json!({ "tab": tab_value() })),
+                    "Browser.getTabs" | "Browser.getTabInfo" => {
+                        let state = self.state.lock().map_err(|_| CdpError::Protocol {
+                            code: -1,
+                            message: "poisoned test state".into(),
+                        })?;
+                        if (method == "Browser.getTabs" && state.tab_list_error)
+                            || (method == "Browser.getTabInfo" && state.tab_info_error)
+                        {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "tab information unavailable".into(),
+                            });
+                        }
+                        let mut tab = tab_value();
+                        tab["isActive"] = json!(state.tab_active);
+                        tab["targetId"] = json!(state.tab_target);
+                        Ok(if method == "Browser.getTabs" {
+                            json!({ "tabs": [tab] })
+                        } else {
+                            json!({ "tab": tab })
+                        })
+                    }
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -698,6 +835,47 @@ mod tests {
                         "nodes": ax_tree(self.target_role, self.target_name)
                     })),
                     "Runtime.evaluate" => {
+                        if params["awaitPromise"] == true {
+                            let response = {
+                                let mut state =
+                                    self.state.lock().map_err(|_| CdpError::Protocol {
+                                        code: -1,
+                                        message: "poisoned test state".into(),
+                                    })?;
+                                state.pointer_moved = true;
+                                state.pointer_response
+                            };
+                            return match response {
+                                PointerResponse::Arrived => {
+                                    Ok(json!({ "result": { "value": { "status": "arrived" } } }))
+                                }
+                                PointerResponse::Skipped => Ok(
+                                    json!({ "result": { "value": { "status": "skipped", "reason": "hidden" } } }),
+                                ),
+                                PointerResponse::Error => Err(CdpError::Protocol {
+                                    code: -32000,
+                                    message: "drawing failed".into(),
+                                }),
+                                PointerResponse::Pending => std::future::pending().await,
+                            };
+                        }
+                        let effect = params["expression"]
+                            .as_str()
+                            .is_some_and(|expression| expression.contains(".click("));
+                        if effect {
+                            let pending = self
+                                .state
+                                .lock()
+                                .map_err(|_| CdpError::Protocol {
+                                    code: -1,
+                                    message: "poisoned test state".into(),
+                                })?
+                                .effect_pending;
+                            if pending {
+                                return std::future::pending().await;
+                            }
+                            return Ok(json!({ "result": { "value": true } }));
+                        }
                         if params
                             .get("expression")
                             .and_then(Value::as_str)
@@ -709,10 +887,31 @@ mod tests {
                         Ok(json!({ "result": { "value": [] } }))
                     }
                     "DOM.resolveNode" => Ok(json!({ "object": { "objectId": "target-object" } })),
-                    "DOM.getContentQuads" => Ok(json!({
-                        "quads": [[0.0, 0.0, 100.0, 0.0, 100.0, 50.0, 0.0, 50.0]]
-                    })),
+                    "DOM.getContentQuads" => {
+                        let state = self.state.lock().map_err(|_| CdpError::Protocol {
+                            code: -1,
+                            message: "poisoned test state".into(),
+                        })?;
+                        if state.missing_geometry
+                            || (state.pointer_moved && state.missing_geometry_after_move)
+                        {
+                            Ok(json!({ "quads": [] }))
+                        } else if state.pointer_moved && state.moved_box {
+                            Ok(
+                                json!({ "quads": [[200.0, 100.0, 300.0, 100.0, 300.0, 150.0, 200.0, 150.0]] }),
+                            )
+                        } else {
+                            Ok(json!({ "quads": [[0.0, 0.0, 100.0, 0.0, 100.0, 50.0, 0.0, 50.0]] }))
+                        }
+                    }
                     "Runtime.callFunctionOn" => self.call_function(params),
+                    "Input.insertText" => {
+                        if let Ok(mut state) = self.state.lock() {
+                            state.field_value =
+                                params["text"].as_str().unwrap_or_default().to_string();
+                        }
+                        Ok(json!({}))
+                    }
                     "Input.dispatchMouseEvent" => {
                         if let Ok(mut state) = self.state.lock() {
                             state.mouse_events += 1;
@@ -732,6 +931,25 @@ mod tests {
             _session: Option<&'a crate::SessionId>,
         ) -> BoxFuture<'a, Result<String, CdpError>> {
             Box::pin(async { Ok("{}".to_string()) })
+        }
+
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a crate::SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            // This harness has one immutable epoch and cannot reconnect.
+            Box::pin(async move {
+                if expected_epoch != 1 {
+                    return Err(CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
+                self.send(method, params, session).await
+            })
         }
 
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
@@ -758,7 +976,11 @@ mod tests {
                 let response = match self.state.lock() {
                     Ok(mut state) => {
                         state.hit_test_calls += 1;
-                        state.hit_test
+                        if state.pointer_moved {
+                            state.hit_test_after_move.unwrap_or(state.hit_test)
+                        } else {
+                            state.hit_test
+                        }
                     }
                     Err(_err) => HitTestResponse::Error,
                 };
@@ -775,6 +997,16 @@ mod tests {
             }
             if function.contains("return this.checked") {
                 return Ok(json!({ "result": { "value": false } }));
+            }
+            if function.contains("browserosPrepareFill") || function.contains("this.focus()") {
+                return Ok(json!({ "result": { "value": true } }));
+            }
+            if function.contains("typeof this.value === 'string'") {
+                let state = self.state.lock().map_err(|_| CdpError::Protocol {
+                    code: -1,
+                    message: "poisoned test state".into(),
+                })?;
+                return Ok(json!({ "result": { "value": state.field_value } }));
             }
             if function.contains("this.options")
                 && let Ok(mut state) = self.state.lock()
@@ -819,6 +1051,19 @@ mod tests {
                 select_calls: 0,
                 select_result,
                 select_semantics_preserved: false,
+                calls: Vec::new(),
+                pointer_response: PointerResponse::Arrived,
+                pointer_moved: false,
+                effect_pending: false,
+                moved_box: false,
+                missing_geometry: false,
+                missing_geometry_after_move: false,
+                hit_test_after_move: None,
+                field_value: String::new(),
+                tab_active: true,
+                tab_info_error: false,
+                tab_list_error: false,
+                tab_target: "target-1",
             }),
             target_role,
             target_name,
@@ -944,6 +1189,769 @@ mod tests {
             }
             assert!(calls[5].1.duration_since(calls[4].1) >= Duration::from_millis(90));
         }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_the_pointer_keeps_the_humanlike_click_path_after_its_effect()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for kind in 0..3 {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| state.moved_box = true)?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            let opts = ClickOptions {
+                button: Some(PublicMouseButton::Right),
+                click_count: Some(2),
+                humanlike_from: Some(Point { x: 10.0, y: 5.0 }),
+            };
+            connection.take_calls()?;
+            let path = match kind {
+                0 => {
+                    input.click_at(50.0, 25.0, opts).await?;
+                    [(20.0, 10.0), (30.0, 15.0), (40.0, 20.0), (50.0, 25.0)]
+                }
+                1 => {
+                    assert_eq!(
+                        input.click(&ref_id, opts).await?,
+                        Some(Point { x: 250.0, y: 125.0 })
+                    );
+                    [(70.0, 35.0), (130.0, 65.0), (190.0, 95.0), (250.0, 125.0)]
+                }
+                _ => {
+                    assert_eq!(
+                        input.click_backend_node(10, opts).await?,
+                        Some(Point { x: 250.0, y: 125.0 })
+                    );
+                    [(70.0, 35.0), (130.0, 65.0), (190.0, 95.0), (250.0, 125.0)]
+                }
+            };
+            let (x, y) = path[3];
+            let mut expected: Vec<Value> = path
+                .iter()
+                .map(|(x, y)| json!({"type":"mouseMoved","x":x,"y":y}))
+                .collect();
+            for event in ["mousePressed", "mouseReleased"] {
+                expected.push(
+                    json!({"type":event,"x":x,"y":y,"button":"right","clickCount":2,"modifiers":0}),
+                );
+            }
+            let mouse = connection.mouse_calls()?;
+            assert_eq!(
+                mouse
+                    .iter()
+                    .map(|(params, _)| params.clone())
+                    .collect::<Vec<_>>(),
+                expected
+            );
+            for pair in mouse[..5].windows(2) {
+                assert!(pair[1].1.duration_since(pair[0].1) >= Duration::from_millis(12));
+            }
+            assert!(mouse[5].1.duration_since(mouse[4].1) >= Duration::from_millis(90));
+            let calls = connection.take_calls()?;
+            let position = |pending: bool| {
+                calls.iter().position(|call| {
+                    call.method == "Runtime.evaluate" && call.params["awaitPromise"] == pending
+                })
+            };
+            let movement = position(true).ok_or("missing pointer move")?;
+            let effect = position(false).ok_or("missing click effect")?;
+            assert!(
+                calls[effect].params["expression"]
+                    .as_str()
+                    .is_some_and(|expression| expression.contains(&format!(".click({x},{y})")))
+            );
+            let first_mouse = calls
+                .iter()
+                .position(|call| call.method == "Input.dispatchMouseEvent")
+                .ok_or("missing mouse input")?;
+            assert!(movement < effect && effect < first_mouse, "{kind}");
+            assert!(
+                calls[first_mouse..first_mouse + 6]
+                    .iter()
+                    .all(|call| call.method == "Input.dispatchMouseEvent"),
+                "{kind}"
+            );
+        }
+        Ok(())
+    }
+
+    #[derive(Clone, Copy, Debug)]
+    enum PointerInput {
+        Click,
+        Hover,
+        Focus,
+        Fill,
+        ClickAt,
+        HoverAt,
+    }
+
+    const POINTER_INPUTS: [PointerInput; 6] = [
+        PointerInput::Click,
+        PointerInput::Hover,
+        PointerInput::Focus,
+        PointerInput::Fill,
+        PointerInput::ClickAt,
+        PointerInput::HoverAt,
+    ];
+
+    impl PointerInput {
+        async fn run(self, input: &Input, ref_id: &Ref) -> Result<Option<Point>, CoreError> {
+            match self {
+                Self::Click => input.click(ref_id, ClickOptions::default()).await,
+                Self::Hover => input.hover(ref_id).await.map(Some),
+                Self::Focus => input.focus(ref_id).await.map(|()| None),
+                Self::Fill => input.fill(ref_id, "s3cr3t-pa55", true).await,
+                Self::ClickAt => input
+                    .click_at(50.0, 25.0, ClickOptions::default())
+                    .await
+                    .map(|()| None),
+                Self::HoverAt => input.hover_at(50.0, 25.0).await.map(|()| None),
+            }
+        }
+
+        fn has_effect(self) -> bool {
+            matches!(self, Self::Click | Self::Fill | Self::ClickAt)
+        }
+    }
+
+    fn protocol_fingerprint(calls: &[TestCall]) -> Result<u64, serde_json::Error> {
+        let calls: Vec<_> = calls
+            .iter()
+            .map(|call| json!([call.method, call.params]))
+            .collect();
+        Ok(serde_json::to_vec(&calls)?
+            .iter()
+            .fold(0xcbf29ce484222325_u64, |hash, byte| {
+                (hash ^ u64::from(*byte)).wrapping_mul(0x100000001b3)
+            }))
+    }
+
+    #[tokio::test]
+    async fn tests_that_disabled_inputs_preserve_the_legacy_protocol()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut fingerprints = Vec::new();
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let calls = connection.take_calls()?;
+            assert!(
+                !calls.iter().any(|call| call.method == "Runtime.evaluate"),
+                "{action:?}"
+            );
+            assert!(
+                !calls.iter().any(|call| call.method == "Browser.getTabInfo"),
+                "{action:?}"
+            );
+            fingerprints.push(protocol_fingerprint(&calls)?);
+        }
+        // Frozen from the pre-pointer implementation, including every method,
+        // parameter and call order. FNV keeps the six protocol fixtures compact.
+        assert_eq!(
+            fingerprints,
+            [
+                330485151911381825,
+                4901122941126342504,
+                3409248084207721572,
+                10110058399755172322,
+                5312967615472211188,
+                4986025384446686415,
+            ]
+        );
+        Ok(())
+    }
+
+    fn pointer_calls(calls: &[TestCall]) -> impl Iterator<Item = &TestCall> {
+        calls
+            .iter()
+            .filter(|call| call.method == "Runtime.evaluate")
+    }
+
+    fn press_count(calls: &[TestCall]) -> usize {
+        calls
+            .iter()
+            .filter(|call| {
+                call.method == "Input.dispatchMouseEvent" && call.params["type"] == "mousePressed"
+            })
+            .count()
+    }
+
+    fn assert_real_input_once(calls: &[TestCall], action: PointerInput) {
+        let mouse_types: Vec<_> = calls
+            .iter()
+            .filter(|call| call.method == "Input.dispatchMouseEvent")
+            .map(|call| call.params["type"].as_str().unwrap_or_default())
+            .collect();
+        let expected: &[&str] = match action {
+            PointerInput::Click | PointerInput::Fill | PointerInput::ClickAt => {
+                &["mouseMoved", "mousePressed", "mouseReleased"]
+            }
+            PointerInput::Hover | PointerInput::HoverAt => &["mouseMoved"],
+            PointerInput::Focus => &[],
+        };
+        assert_eq!(mouse_types, expected, "{action:?}");
+        let focuses = calls
+            .iter()
+            .filter(|call| {
+                call.params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|function| function.contains("this.focus()"))
+            })
+            .count();
+        assert_eq!(
+            focuses,
+            usize::from(matches!(action, PointerInput::Focus | PointerInput::Fill)),
+            "{action:?}"
+        );
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.method == "Input.insertText")
+                .count(),
+            usize::from(matches!(action, PointerInput::Fill)),
+            "{action:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tests_that_enabled_inputs_move_before_real_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let calls = connection.take_calls()?;
+            assert_real_input_once(&calls, action);
+            let tab_checks: Vec<_> = calls
+                .iter()
+                .enumerate()
+                .filter(|(_, call)| call.method == "Browser.getTabInfo")
+                .collect();
+            assert_eq!(tab_checks.len(), 1, "{action:?}");
+            assert_eq!(tab_checks[0].1.params, json!({ "tabId": 101 }));
+            let movement = calls
+                .iter()
+                .position(|call| {
+                    call.method == "Runtime.evaluate" && call.params["awaitPromise"] == true
+                })
+                .ok_or("missing pointer move")?;
+            assert!(tab_checks[0].0 < movement, "{action:?}");
+            let real_input = calls
+                .iter()
+                .position(|call| {
+                    call.method == "Input.dispatchMouseEvent"
+                        || call.params["functionDeclaration"]
+                            .as_str()
+                            .is_some_and(|function| function.contains("this.focus()"))
+                })
+                .ok_or("missing real input")?;
+            assert!(movement < real_input, "{action:?}");
+            let effects: Vec<_> = pointer_calls(&calls)
+                .filter(|call| call.params["awaitPromise"] == false)
+                .collect();
+            assert_eq!(
+                effects.len(),
+                usize::from(action.has_effect()),
+                "{action:?}"
+            );
+            let quads = calls
+                .iter()
+                .filter(|call| call.method == "DOM.getContentQuads")
+                .count();
+            assert_eq!(
+                quads,
+                match action {
+                    PointerInput::Focus => 1,
+                    PointerInput::ClickAt | PointerInput::HoverAt => 0,
+                    _ => 2,
+                },
+                "{action:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_moved_targets_use_the_fresh_center_for_effects_and_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in [PointerInput::Click, PointerInput::Hover, PointerInput::Fill] {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| state.moved_box = true)?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            assert_eq!(
+                action.run(&input, &ref_id).await?,
+                Some(Point { x: 250.0, y: 125.0 })
+            );
+            let calls = connection.take_calls()?;
+            for call in calls
+                .iter()
+                .filter(|call| call.method == "Input.dispatchMouseEvent")
+            {
+                assert_eq!(call.params["x"], 250.0);
+                assert_eq!(call.params["y"], 125.0);
+            }
+            let hit_tests: Vec<_> = calls
+                .iter()
+                .filter(|call| {
+                    call.params["functionDeclaration"]
+                        .as_str()
+                        .is_some_and(|function| function.contains("elementFromPoint"))
+                })
+                .collect();
+            assert_eq!(hit_tests.len(), 2);
+            assert_eq!(
+                hit_tests[1].params["arguments"],
+                json!([{ "value": 250.0 }, { "value": 125.0 }])
+            );
+            if action.has_effect() {
+                let effect = pointer_calls(&calls)
+                    .find(|call| call.params["awaitPromise"] == false)
+                    .ok_or("missing click effect")?;
+                assert!(
+                    effect.params["expression"]
+                        .as_str()
+                        .is_some_and(|expression| expression.contains(".click(250,125)"))
+                );
+                let effect_index = calls
+                    .iter()
+                    .position(|call| std::ptr::eq(call, effect))
+                    .ok_or("missing effect call")?;
+                let hit_index = calls
+                    .iter()
+                    .position(|call| std::ptr::eq(call, hit_tests[1]))
+                    .ok_or("missing recheck")?;
+                let mouse_index = calls
+                    .iter()
+                    .position(|call| call.method == "Input.dispatchMouseEvent")
+                    .ok_or("missing mouse input")?;
+                assert!(hit_index < effect_index && effect_index < mouse_index);
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_newly_covered_targets_stop_before_effects_or_mouse_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in [PointerInput::Click, PointerInput::Hover, PointerInput::Fill] {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| {
+                state.hit_test_after_move = Some(HitTestResponse::Blocked("div#overlay"))
+            })?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            let error = action
+                .run(&input, &ref_id)
+                .await
+                .err()
+                .ok_or("covered action succeeded")?;
+            if matches!(action, PointerInput::Fill) {
+                assert!(error.to_string().contains("covered by <div#overlay>"));
+            } else {
+                assert!(matches!(error, CoreError::ElementCovered { .. }));
+            }
+            let calls = connection.take_calls()?;
+            assert!(
+                !calls
+                    .iter()
+                    .any(|call| call.method == "Input.dispatchMouseEvent")
+            );
+            assert_eq!(pointer_calls(&calls).count(), 1);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_skipped_moves_preserve_legacy_input_without_effects_or_rechecks()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let legacy = connection.take_calls()?;
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| state.pointer_response = PointerResponse::Skipped)?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let mut calls = connection.take_calls()?;
+            assert_eq!(pointer_calls(&calls).count(), 1, "{action:?}");
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabInfo")
+                    .count(),
+                1,
+                "{action:?}"
+            );
+            calls.retain(|call| {
+                call.method != "Runtime.evaluate" && call.method != "Browser.getTabInfo" &&
+                    // Focus must measure once before asking the page to draw.
+                    !(matches!(action, PointerInput::Focus) && call.method == "DOM.getContentQuads")
+            });
+            assert_eq!(calls, legacy, "{action:?}");
+        }
+        Ok(())
+    }
+
+    async fn assert_skipped_tab_uses_legacy_input(
+        read_error: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let legacy = connection.take_calls()?;
+
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| {
+                state.tab_active = read_error;
+                state.tab_info_error = read_error;
+                state.tab_list_error = read_error;
+                // A hidden tab must not enter either animation deadline.
+                state.pointer_response = PointerResponse::Pending;
+                state.effect_pending = true;
+                state.moved_box = true;
+            })?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            let started = tokio::time::Instant::now();
+            action.run(&input, &ref_id).await?;
+            assert_eq!(started.elapsed(), std::time::Duration::ZERO, "{action:?}");
+            let mut calls = connection.take_calls()?;
+            assert_eq!(pointer_calls(&calls).count(), 0, "{action:?}");
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabInfo")
+                    .count(),
+                1,
+                "{action:?}"
+            );
+            // PageManager's existing recovery may list tabs after a failed read.
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabs")
+                    .count(),
+                usize::from(read_error),
+                "{action:?}"
+            );
+            calls.retain(|call| {
+                !matches!(
+                    call.method.as_str(),
+                    "Browser.getTabInfo" | "Browser.getTabs"
+                )
+            });
+            assert_eq!(calls, legacy, "{action:?}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inactive_tabs_skip_drawing_and_keep_legacy_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_skipped_tab_uses_legacy_input(false).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_failed_fresh_tab_reads_skip_drawing_and_keep_legacy_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_skipped_tab_uses_legacy_input(true).await
+    }
+
+    #[tokio::test]
+    async fn tests_that_disabled_inputs_never_query_tab_activity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| {
+                state.tab_active = false;
+                state.tab_info_error = true;
+                state.tab_list_error = true;
+            })?;
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let calls = connection.take_calls()?;
+            assert!(!calls.iter().any(|call| matches!(
+                call.method.as_str(),
+                "Browser.getTabInfo" | "Browser.getTabs"
+            )));
+            assert_eq!(pointer_calls(&calls).count(), 0);
+            assert_real_input_once(&calls, action);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_tab_activity_is_refreshed_for_each_action()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let input = input.with_pointer(Some(Pointer::default()));
+        for active in [false, true, false] {
+            connection.configure(|state| state.tab_active = active)?;
+            connection.take_calls()?;
+            input.hover_at(50.0, 25.0).await?;
+            let calls = connection.take_calls()?;
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabInfo")
+                    .count(),
+                1
+            );
+            assert_eq!(pointer_calls(&calls).count(), usize::from(active));
+            assert_real_input_once(&calls, PointerInput::HoverAt);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_guarded_input_checks_activity_through_its_captured_access()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, _input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let page = session
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .next()
+            .ok_or("missing page")?;
+        let view = BrowserView::unbound(session, None)
+            .with_expected_created_page(&page)?
+            .with_pointer(Pointer::default());
+        let input = view.input(page.page_id).await?;
+        assert!(input.access.is_some());
+        for active in [false, true] {
+            connection.configure(|state| state.tab_active = active)?;
+            connection.take_calls()?;
+            assert_eq!(input.drawing_pointer().await.is_some(), active);
+            let calls = connection.take_calls()?;
+            // The captured view also refreshes its saved page incarnation.
+            assert_eq!(calls.len(), 2);
+            assert!(calls.iter().all(|call| call.method == "Browser.getTabInfo"));
+            assert_eq!(calls[0].params, json!({ "tabId": 101 }));
+        }
+        connection.configure(|state| state.tab_target = "replacement-target")?;
+        assert!(input.drawing_pointer().await.is_none());
+        let input = input.with_pointer(None);
+        connection.take_calls()?;
+        assert!(input.drawing_pointer().await.is_none());
+        assert!(connection.take_calls()?.is_empty());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_drawing_errors_recheck_and_send_real_input_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| {
+                state.pointer_response = PointerResponse::Error;
+                state.moved_box = true;
+            })?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            let point = action.run(&input, &ref_id).await?;
+            if matches!(
+                action,
+                PointerInput::Click | PointerInput::Hover | PointerInput::Fill
+            ) {
+                assert_eq!(point, Some(Point { x: 250.0, y: 125.0 }));
+            }
+            let calls = connection.take_calls()?;
+            assert_eq!(
+                press_count(&calls),
+                usize::from(action.has_effect()),
+                "{action:?}"
+            );
+            assert_real_input_once(&calls, action);
+            assert_eq!(
+                pointer_calls(&calls)
+                    .filter(|call| call.params["awaitPromise"] == true)
+                    .count(),
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_unanswered_moves_finish_at_the_deadline_and_input_runs_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| state.pointer_response = PointerResponse::Pending)?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            let started = tokio::time::Instant::now();
+            action.run(&input, &ref_id).await?;
+            assert_eq!(
+                started.elapsed(),
+                timeouts::POINTER_MOVE_DEADLINE,
+                "{action:?}"
+            );
+            let calls = connection.take_calls()?;
+            assert_eq!(
+                press_count(&calls),
+                usize::from(action.has_effect()),
+                "{action:?}"
+            );
+            assert_real_input_once(&calls, action);
+            assert_eq!(
+                pointer_calls(&calls)
+                    .filter(|call| call.params["awaitPromise"] == true)
+                    .count(),
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_an_unanswered_effect_is_bounded_and_the_click_runs_once()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.effect_pending = true)?;
+        let input = input.with_pointer(Some(Pointer::default()));
+        connection.take_calls()?;
+        let started = tokio::time::Instant::now();
+        input.click_at(12.5, 17.0, ClickOptions::default()).await?;
+        assert_eq!(started.elapsed(), timeouts::POINTER_EFFECT_DEADLINE);
+        assert_eq!(press_count(&connection.take_calls()?), 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_focus_succeeds_without_drawable_geometry()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        connection.configure(|state| state.missing_geometry = true)?;
+        let input = input.with_pointer(Some(Pointer::default()));
+        connection.take_calls()?;
+        input.focus(&ref_id).await?;
+        let calls = connection.take_calls()?;
+        assert_eq!(pointer_calls(&calls).count(), 0);
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|call| call.params["functionDeclaration"]
+                    .as_str()
+                    .is_some_and(|function| function.contains("this.focus()")))
+                .count(),
+            1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_missing_click_geometry_keeps_the_js_fallback()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for after_move in [false, true] {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| {
+                state.missing_geometry = !after_move;
+                state.missing_geometry_after_move = after_move;
+            })?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            assert_eq!(input.click(&ref_id, ClickOptions::default()).await?, None);
+            let calls = connection.take_calls()?;
+            assert_eq!(press_count(&calls), 0);
+            assert_eq!(pointer_calls(&calls).count(), usize::from(after_move));
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.params["functionDeclaration"] == "function(){this.click()}")
+                    .count(),
+                1
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_fill_values_never_enter_pointer_expressions()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let input = input.with_pointer(Some(Pointer::default()));
+        connection.take_calls()?;
+        input.fill(&ref_id, "s3cr3t-pa55", true).await?;
+        let calls = connection.take_calls()?;
+        assert_eq!(pointer_calls(&calls).count(), 2);
+        for call in pointer_calls(&calls) {
+            assert!(
+                !call.params["expression"]
+                    .as_str()
+                    .ok_or("missing expression")?
+                    .contains("s3cr3t-pa55")
+            );
+        }
+        let inserts: Vec<_> = calls
+            .iter()
+            .filter(|call| call.method == "Input.insertText")
+            .collect();
+        assert_eq!(inserts.len(), 1);
+        assert_eq!(inserts[0].params["text"], "s3cr3t-pa55");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_browser_views_enable_pointer_input_only_on_the_configured_clone()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, _input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let page = session
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .next()
+            .ok_or("missing page")?
+            .page_id;
+        let view = BrowserView::unbound(session, None);
+        for enabled in [false, true, false] {
+            let selected = if enabled {
+                view.clone().with_pointer(Pointer::default())
+            } else {
+                view.clone()
+            };
+            let input = selected.input(page.clone()).await?;
+            connection.take_calls()?;
+            input.click_at(50.0, 25.0, ClickOptions::default()).await?;
+            let calls = connection.take_calls()?;
+            assert_eq!(pointer_calls(&calls).count(), if enabled { 2 } else { 0 });
+            assert_eq!(press_count(&calls), 1);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_other_input_operations_do_not_draw_a_pointer()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let input = input.with_pointer(Some(Pointer::default()));
+        connection.take_calls()?;
+        input.type_at(50.0, 25.0, "text", true).await?;
+        input.type_text("text").await?;
+        input.press("Enter").await?;
+        input.select_option(&ref_id, "Choice").await?;
+        input.select_backend_node(10, "Choice").await?;
+        input.drag(&ref_id, &ref_id).await?;
+        input
+            .drag_at(Point { x: 0.0, y: 0.0 }, Point { x: 1.0, y: 1.0 })
+            .await?;
+        input
+            .scroll(ScrollDirection::Down, 1, Some(&ref_id))
+            .await?;
+        input
+            .upload_file_by_ref(&ref_id, vec!["fixture.txt".into()])
+            .await?;
+        input.handle_dialog(true, None).await?;
+        assert_eq!(pointer_calls(&connection.take_calls()?).count(), 0);
         Ok(())
     }
 

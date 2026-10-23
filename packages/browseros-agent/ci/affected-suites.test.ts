@@ -49,6 +49,40 @@ describe('computeAffectedSuites', () => {
     expect(suiteNames([pkg('@browseros/app', 'apps/app')])).toEqual(['agent'])
   })
 
+  it('tests that the cursor package selects its own and pointer integration suites', () => {
+    const suites = computeAffectedSuites(
+      [pkg('@browseros/agent-cursor', 'packages/agent-cursor')],
+      [],
+    )
+    expect(suites).toEqual([
+      {
+        suite: 'agent-cursor',
+        command: '(cd packages/agent-cursor && bun run test)',
+        junit_path: 'test-results/agent-cursor.xml',
+        needs_browser: false,
+        needs_rust: false,
+      },
+      {
+        suite: 'build',
+        command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
+        junit_path: 'test-results/build.xml',
+        needs_browser: false,
+        needs_rust: false,
+      },
+    ])
+  })
+
+  it('tests that a committed cursor asset change selects its freshness suite', () => {
+    expect(
+      suiteNames(
+        [],
+        [
+          'packages/browseros-agent/crates/browseros-core/src/assets/agent-cursor.js',
+        ],
+      ),
+    ).toEqual(['agent-cursor', 'build'])
+  })
+
   it('maps any affected Rust crate to all three Rust suites', () => {
     expect(
       suiteNames([
@@ -170,6 +204,7 @@ describe('computeAffectedSuites', () => {
       pkg('@browseros/app-onboard', 'apps/app-onboard'),
       pkg('@browseros/build-server-tools', 'packages/build-server-tools'),
       pkg('@browseros/claw-server', 'apps/claw-server'),
+      pkg('@browseros/agent-cursor', 'packages/agent-cursor'),
     ]
     expect(new Set(suiteNames(allPackages))).toEqual(
       new Set(
