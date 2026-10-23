@@ -66,14 +66,6 @@ mock.module('@/modules/api/help.hooks', () => ({
   }),
 }))
 
-mock.module('sonner', () => ({
-  toast: Object.assign(() => {}, {
-    success: () => {},
-    error: () => {},
-    message: () => {},
-  }),
-}))
-
 mock.module('@/components/ui/popover', () => ({
   ..._popover,
   Popover: ({ children }: { children?: ReactNode }) => <>{children}</>,

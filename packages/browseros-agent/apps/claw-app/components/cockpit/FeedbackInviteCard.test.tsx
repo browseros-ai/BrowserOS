@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test'
 import { parseHTML } from 'linkedom'
 import { act } from 'react'
 import type { Root } from 'react-dom/client'
+import * as _toast from '@/modules/toast/toast'
 
 interface HookState {
   invitation: { eligible: boolean; bookUrl?: string; requestedAt?: number }
@@ -83,10 +84,9 @@ mock.module('@/modules/analytics/events', () => ({
   },
 }))
 
-mock.module('sonner', () => ({
-  toast: {
-    error: (message: string) => state.errors.push(message),
-  },
+mock.module('@/modules/toast/toast', () => ({
+  ..._toast,
+  toastApiError: (message: string) => state.errors.push(message),
 }))
 
 const storage: Record<string, string> = {}
@@ -236,7 +236,7 @@ describe('FeedbackInviteCard', () => {
     await render()
 
     expect(container.textContent).toContain(
-      "You're one of our most active users",
+      'You’re one of our most active users',
     )
     expect(state.recorded).toEqual(['shown'])
     expect(state.tracked).toEqual(['feedback_invite_shown'])
@@ -256,7 +256,7 @@ describe('FeedbackInviteCard', () => {
     await render()
 
     expect(container.textContent).toContain(
-      "You're one of our most active users",
+      'You’re one of our most active users',
     )
   })
 
@@ -314,7 +314,7 @@ describe('FeedbackInviteCard', () => {
     await render()
 
     expect(container.textContent).toContain(
-      "You're one of our most active users",
+      'You’re one of our most active users',
     )
     expect(state.tracked).toEqual([])
     expect(state.recorded).toEqual(
@@ -329,7 +329,7 @@ describe('FeedbackInviteCard', () => {
     await render()
 
     expect(container.textContent).toContain(
-      "You're one of our most active users",
+      'You’re one of our most active users',
     )
     expect(state.tracked).toEqual([])
     expect(storage.feedbackInviteShownTracked).toBeUndefined()
@@ -375,7 +375,7 @@ describe('FeedbackInviteCard', () => {
     await render()
 
     expect(container.textContent).toContain(
-      "You're one of our most active users",
+      'You’re one of our most active users',
     )
     expect(state.recorded).toEqual(['shown'])
   })
@@ -400,7 +400,7 @@ describe('FeedbackInviteCard', () => {
     await render()
 
     expect(container.textContent).toContain(
-      "You're one of our most active users",
+      'You’re one of our most active users',
     )
     expect(state.recorded).toEqual(['shown'])
   })
@@ -413,7 +413,7 @@ describe('FeedbackInviteCard', () => {
     await render()
 
     expect(container.textContent).toContain(
-      "You're one of our most active users",
+      'You’re one of our most active users',
     )
   })
 

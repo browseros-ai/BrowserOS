@@ -1,10 +1,10 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { toast, toastApiError, toastSuccess } from '@/modules/toast/toast'
+import { useState, useSyncExternalStore } from 'react'
 import { useLiveSessions, useSessions } from '@/modules/api/audit.hooks'
 import { useCancelSession } from '@/modules/api/cancel.hooks'
 import { useFocusBrowserTab } from '@/modules/api/focus.hooks'
 import { useResolveHelp } from '@/modules/api/help.hooks'
+import { toast, toastApiError, toastSuccess } from '@/modules/toast/toast'
 import type { LiveSessionCardRecord } from './cockpit.helpers'
 
 export interface HelpTakeover {
@@ -135,4 +135,16 @@ export function useHelpTakeover(
         : undefined,
     isHandingBack: resolve.isPending,
   }
+}
+
+function subscribeToMinutes(onChange: () => void): () => void {
+  const timer = window.setInterval(onChange, 60_000)
+  return () => window.clearInterval(timer)
+}
+
+const currentHour = () => new Date().getHours()
+
+/** The local hour, re-read every minute so a tab left open keeps the right greeting. */
+export function useCurrentHour(): number {
+  return useSyncExternalStore(subscribeToMinutes, currentHour, currentHour)
 }

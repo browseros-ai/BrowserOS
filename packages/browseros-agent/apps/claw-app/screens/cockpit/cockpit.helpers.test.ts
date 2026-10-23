@@ -4,6 +4,8 @@ import {
   colorForSlug,
   formatRelative,
   formatToolTrail,
+  partOfDay,
+  roundTimeSaved,
   sessionsToLiveCards,
   siteOf,
 } from './cockpit.helpers'
@@ -266,5 +268,28 @@ describe('sessionsToLiveCards', () => {
       'session-b',
       'session-c',
     ])
+  })
+})
+
+describe('partOfDay', () => {
+  it('switches at 5:00, 12:00 and 17:00 local time', () => {
+    expect(partOfDay(4)).toBe('evening')
+    expect(partOfDay(5)).toBe('morning')
+    expect(partOfDay(11)).toBe('morning')
+    expect(partOfDay(12)).toBe('afternoon')
+    expect(partOfDay(16)).toBe('afternoon')
+    expect(partOfDay(17)).toBe('evening')
+  })
+})
+
+describe('roundTimeSaved', () => {
+  it('uses hours from one hour up, minutes below, and nothing under a minute', () => {
+    expect(roundTimeSaved(30.4 * 3_600_000)).toEqual({
+      amount: 30,
+      unit: 'hour',
+    })
+    expect(roundTimeSaved(3_600_000)).toEqual({ amount: 1, unit: 'hour' })
+    expect(roundTimeSaved(59 * 60_000)).toEqual({ amount: 59, unit: 'minute' })
+    expect(roundTimeSaved(20_000)).toBeNull()
   })
 })

@@ -1,8 +1,8 @@
-import { X } from 'lucide-react'
 import { useEffect, useState } from 'react'
-import { Button } from '@/components/ui/button'
+import { Button } from '@/components/motion/button/base'
 import { ProductHuntIcon } from '@/components/ui/svgs/productHuntIcon'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
+import { PromoCard } from './PromoCard'
 
 const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ext'
 
@@ -10,6 +10,11 @@ const PRODUCT_HUNT_URL = 'https://bit.ly/browseros-ext'
 // 2026 (PDT), so it never lingers past the launch window.
 const HIDE_AFTER = Date.parse('2026-08-15T07:00:00Z')
 const DISMISS_KEY = 'productHuntBannerDismissed'
+
+/** True while the launch window is open and the reader has not dismissed it. */
+export function isProductHuntPromoAvailable(): boolean {
+  return !readDismissed() && withinLaunchWindow()
+}
 
 function withinLaunchWindow(): boolean {
   return Date.now() < HIDE_AFTER
@@ -31,43 +36,7 @@ function persistDismissed(): void {
   }
 }
 
-export function ProductHuntBannerCard({
-  onOpen,
-  onDismiss,
-}: {
-  onOpen: () => void
-  onDismiss: () => void
-}) {
-  return (
-    <div className="flex items-center gap-3 rounded-[9px] border border-[#ff6154]/25 bg-[#ff6154]/[0.06] px-4 py-2.5">
-      <ProductHuntIcon className="size-7 shrink-0" />
-      <p className="min-w-0 flex-1 truncate text-[13px] text-cyanotype-ink leading-5">
-        <span className="font-semibold">Live on Product Hunt.</span>{' '}
-        <span className="text-cyanotype-soft">
-          A vote or comment helps keep BrowserOS free.
-        </span>
-      </p>
-      <Button
-        size="sm"
-        onClick={onOpen}
-        aria-label="Support BrowserOS on Product Hunt"
-        className="h-7 shrink-0 bg-[#ff6154] px-3 text-[#18181b] text-[13px] hover:bg-[#e5563f]"
-      >
-        Support →
-      </Button>
-      <button
-        type="button"
-        onClick={onDismiss}
-        aria-label="Dismiss"
-        className="shrink-0 rounded-sm p-1 text-cyanotype-soft opacity-60 transition-opacity hover:opacity-100"
-      >
-        <X className="size-3.5" />
-      </button>
-    </div>
-  )
-}
-
-export function ProductHuntBanner() {
+export function ProductHuntBanner({ onClosed }: { onClosed?: () => void }) {
   const [dismissed, setDismissed] = useState(readDismissed)
   const visible = !dismissed && withinLaunchWindow()
 
@@ -86,7 +55,26 @@ export function ProductHuntBanner() {
     track(AnalyticsEvent.ProductHuntBannerDismissed)
     setDismissed(true)
     persistDismissed()
+    onClosed?.()
   }
 
-  return <ProductHuntBannerCard onOpen={handleOpen} onDismiss={handleDismiss} />
+  return (
+    <PromoCard
+      aria-label="Product Hunt launch"
+      icon={<ProductHuntIcon />}
+      title="We’re live on Product Hunt"
+      description="A vote or comment helps keep BrowserOS free."
+      onDismiss={handleDismiss}
+      action={
+        <Button
+          size="sm"
+          onClick={handleOpen}
+          aria-label="Support BrowserOS on Product Hunt"
+          className="h-[34px] px-3.5 font-semibold text-[13.5px]"
+        >
+          Support us
+        </Button>
+      }
+    />
+  )
 }

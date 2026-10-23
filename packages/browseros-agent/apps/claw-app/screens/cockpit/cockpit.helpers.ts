@@ -149,3 +149,45 @@ export function sessionsToLiveCards(
       left.sessionId.localeCompare(right.sessionId),
   )
 }
+
+export type PartOfDay = 'morning' | 'afternoon' | 'evening'
+
+/** Morning from 5:00 to 11:59, afternoon to 16:59, evening otherwise. */
+export function partOfDay(hour: number): PartOfDay {
+  if (hour >= 5 && hour < 12) return 'morning'
+  if (hour >= 12 && hour < 17) return 'afternoon'
+  return 'evening'
+}
+
+export interface TimeSaved {
+  amount: number
+  unit: 'hour' | 'minute'
+}
+
+const MINUTE_MS = 60_000
+const HOUR_MS = 60 * MINUTE_MS
+
+/** Rounds measured time saved to whole hours, or minutes under an hour; null under a minute. */
+export function roundTimeSaved(ms: number): TimeSaved | null {
+  if (ms >= HOUR_MS) return { amount: Math.round(ms / HOUR_MS), unit: 'hour' }
+  const minutes = Math.round(ms / MINUTE_MS)
+  return minutes >= 1 ? { amount: minutes, unit: 'minute' } : null
+}
+
+/** The line under the greeting: what the agents are doing in one sentence. */
+export function homeLede(
+  sessions: LiveSessionCardRecord[],
+  inControl: LiveSessionCardRecord | null,
+): string {
+  if (inControl) return `You’re helping ${inControl.label} with one task.`
+  const waiting = sessions.filter((session) => session.helpRequest)
+  if (waiting.length === 1) {
+    return `${waiting[0]?.label} needs your help with one task.`
+  }
+  if (waiting.length > 1) return `${waiting.length} tasks need your help.`
+  if (sessions.length === 1) return 'Your AI agents are working on one task.'
+  if (sessions.length > 1) {
+    return `Your AI agents are working on ${sessions.length} tasks.`
+  }
+  return 'Nothing is running right now.'
+}

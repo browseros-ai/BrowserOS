@@ -1,20 +1,25 @@
-import { CockpitHero } from '@/components/cockpit/CockpitHero'
+import type { CockpitStats } from '@browseros/claw-api'
 import { CockpitOnboarding } from '@/components/cockpit/CockpitOnboarding'
-import { FeedbackInviteCard } from '@/components/cockpit/FeedbackInviteCard'
 import { InControlBar } from '@/components/cockpit/InControlBar'
 import { NeedsYouBanner } from '@/components/cockpit/NeedsYouBanner'
-import { ProductHuntBanner } from '@/components/cockpit/ProductHuntBanner'
+import {
+  PromoSlot,
+  type PromoSlotState,
+  usePromoSlot,
+} from '@/components/cockpit/PromoSlot'
 import { RecentActivity } from '@/components/cockpit/RecentActivity'
 import { RunningGrid } from '@/components/cockpit/RunningGrid'
-import { SavedStatsBand } from '@/components/cockpit/SavedStatsBand'
-import { UltrafastBanner } from '@/components/cockpit/UltrafastBanner'
+import { TimeSavedCard } from '@/components/cockpit/TimeSavedCard'
 import { isUserFacingHarness } from '@/components/harness/harness.types'
 import { Page } from '@/components/layout/Page'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { cn } from '@/lib/utils'
 import { useSessions } from '@/modules/api/audit.hooks'
 import { useCockpitStats } from '@/modules/api/cockpit.hooks'
 import { useConnections } from '@/modules/api/connections.hooks'
 import { useCockpitData } from './cockpit.data'
-import { useHelpTakeover } from './cockpit.hooks'
+import { homeLede, partOfDay } from './cockpit.helpers'
+import { useCurrentHour, useHelpTakeover } from './cockpit.hooks'
 import { getOnboardingState } from './cockpit-onboarding.helpers'
 
 const ONBOARDING_PROBE_LIMIT = 1
@@ -22,6 +27,8 @@ const ONBOARDING_PROBE_LIMIT = 1
 export function Cockpit() {
   const { sessions } = useCockpitData()
   const takeover = useHelpTakeover(sessions)
+  const hour = useCurrentHour()
+  const promo = usePromoSlot()
 
   // When no live session is connected, these probes decide which onboarding
   // shell to show. Their stable keys are shared with RecentActivity and MCP.
@@ -71,23 +78,23 @@ export function Cockpit() {
           hasActivity: hasHistoricalActivity,
         })
       : 'ready'
-  const shouldLoadStats =
-    probesResolved && state === 'ready' && !hasLiveSessions
   const stats = useCockpitStats({
-    enabled: shouldLoadStats,
-    refetchInterval: 3000,
+    enabled: probesResolved && state === 'ready',
+    refetchInterval: 60_000,
   })
 
   const content =
     state !== 'ready' ? (
       <Page>
-        <UltrafastBanner />
-        <ProductHuntBanner />
-        <FeedbackInviteCard />
         <CockpitOnboarding connectedHarnesses={connectedHarnesses} />
       </Page>
     ) : (
       <Page>
+        <PageHeader
+          title={`Good ${partOfDay(hour)}`}
+          lede={homeLede(sessions, takeover.inControlSession)}
+        />
+        <TopStrip stats={stats.data} promo={promo} />
         <NeedsYouBanner
           sessions={sessions}
           onTakeOver={takeover.takeOver}
@@ -95,19 +102,11 @@ export function Cockpit() {
           pendingTakeOverSessionId={takeover.pendingTakeOverSessionId}
           cancelPendingSessionId={takeover.stopPendingSessionId}
         />
-        <UltrafastBanner />
-        <CockpitHero />
-        {shouldLoadStats && stats.data?.hasMeasuredStats ? (
-          <SavedStatsBand stats={stats.data} />
-        ) : (
-          <RunningGrid
-            sessions={sessions}
-            onTakeOver={takeover.takeOver}
-            takeOverPendingSessionId={takeover.pendingTakeOverSessionId}
-          />
-        )}
-        <ProductHuntBanner />
-        <FeedbackInviteCard />
+        <RunningGrid
+          sessions={sessions}
+          onTakeOver={takeover.takeOver}
+          takeOverPendingSessionId={takeover.pendingTakeOverSessionId}
+        />
         <RecentActivity />
       </Page>
     )
@@ -124,5 +123,32 @@ export function Cockpit() {
         />
       )}
     </>
+  )
+}
+
+// ---------------------------------------------------------------------------
+
+/** Time saved and the one promotion, side by side; either takes the row alone. */
+function TopStrip({
+  stats,
+  promo,
+}: {
+  stats?: CockpitStats
+  promo: PromoSlotState
+}) {
+  const showSaved = (stats?.allTime.sessionCount ?? 0) > 0
+  if (!showSaved && promo.kind === null) return null
+  return (
+    <div
+      className={cn(
+        'grid grid-cols-1 gap-3.5',
+        showSaved &&
+          promo.kind !== null &&
+          'md:grid-cols-[minmax(0,1fr)_minmax(0,1.45fr)]',
+      )}
+    >
+      {showSaved && stats ? <TimeSavedCard stats={stats} /> : null}
+      <PromoSlot {...promo} />
+    </div>
   )
 }
