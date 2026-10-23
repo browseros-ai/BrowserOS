@@ -68,7 +68,8 @@ jobs:
           # bundled extensions while the native MCP server keeps serving tools.
           for extensions_disabled in false true; do
             export NEO_DISABLE_BROWSEROS_EXTENSIONS="$extensions_disabled"
-            if ! docker compose up -d --wait --wait-timeout 180 || ! python3 smoke.py; then
+            if ! docker compose up -d --wait --wait-timeout 180 || ! python3 smoke.py \
+              || ! docker compose exec -T neo python3 - "$extensions_disabled" < check_extensions.py; then
               docker compose logs
               exit 1
             fi
