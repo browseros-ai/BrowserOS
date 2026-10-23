@@ -17,6 +17,8 @@ import { useHelpTakeover } from './cockpit.hooks'
 import { getOnboardingState } from './cockpit-onboarding.helpers'
 
 const ONBOARDING_PROBE_LIMIT = 1
+// Pause the waitlist promotion across both cockpit layouts until re-enabled.
+const SHOW_ULTRAFAST_BANNER = false
 
 export function Cockpit() {
   const { sessions } = useCockpitData()
@@ -82,7 +84,7 @@ export function Cockpit() {
       // Tighter top than the ready cockpit (Paper: 26 px), so the prompt and
       // the whole demo sit above an 800 px fold at 1280 wide.
       <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6 px-8 pt-[26px] pb-16">
-        <UltrafastBanner />
+        {SHOW_ULTRAFAST_BANNER && <UltrafastBanner />}
         <ProductHuntBanner />
         <FeedbackInviteCard />
         <CockpitOnboarding connectedHarnesses={connectedHarnesses} />
@@ -96,7 +98,7 @@ export function Cockpit() {
           pendingTakeOverSessionId={takeover.pendingTakeOverSessionId}
           cancelPendingSessionId={takeover.stopPendingSessionId}
         />
-        <UltrafastBanner />
+        {SHOW_ULTRAFAST_BANNER && <UltrafastBanner />}
         <CockpitHero />
         {shouldLoadStats && stats.data?.hasMeasuredStats ? (
           <SavedStatsBand stats={stats.data} />
