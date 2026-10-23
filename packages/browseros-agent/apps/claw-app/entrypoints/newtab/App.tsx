@@ -1,7 +1,7 @@
 import { DiagnosticsPage } from '@browseros/diagnostics/view'
 import type { ReactNode } from 'react'
 import { HashRouter, Navigate, Route, Routes } from 'react-router'
-import { CockpitShell } from '@/components/layout/CockpitShell'
+import { AppLayout } from '@/components/layout/AppLayout'
 import { Analytics } from '@/modules/analytics/Analytics'
 import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
@@ -19,7 +19,7 @@ export function App() {
     <HashRouter>
       <Analytics />
       <Routes>
-        <Route element={<CockpitShell />}>
+        <Route element={<AppLayout />}>
           <Route path="/" element={<Cockpit />} />
           <Route path="/mcp" element={<Mcp />} />
           <Route
