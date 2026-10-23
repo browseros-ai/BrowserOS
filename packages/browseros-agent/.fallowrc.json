@@ -14,7 +14,10 @@
     "apps/app/entrypoints/selection.content.ts",
     "scripts/run-bun-test.ts",
     "scripts/dev/inspect-ui.ts",
-    "scripts/patch-windows-exe.ts"
+    "scripts/patch-windows-exe.ts",
+    "packages/agent-cursor/src/index.ts",
+    "packages/agent-cursor/scripts/classic-entry.ts",
+    "packages/agent-cursor/playground/playground.js"
   ],
   "ignoreDependencies": [
     "tailwind-scrollbar-hide",
@@ -61,6 +64,13 @@
     "duplicate-exports": "off"
   },
   "overrides": [
+    {
+      "files": ["packages/agent-cursor/src/**"],
+      "rules": {
+        "unused-exports": "off",
+        "private-type-leaks": "off"
+      }
+    },
     {
       "files": [
         "**/*.test.ts",

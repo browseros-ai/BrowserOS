@@ -101,6 +101,13 @@ export const SUITES: Record<string, SuiteConfig> = {
     needs_browser: false,
     needs_rust: false,
   },
+  'agent-cursor': {
+    suite: 'agent-cursor',
+    command: '(cd packages/agent-cursor && bun run test)',
+    junit_path: 'test-results/agent-cursor.xml',
+    needs_browser: false,
+    needs_rust: false,
+  },
   build: {
     suite: 'build',
     command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
@@ -161,6 +168,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-app': ['claw-app'],
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
+  '@browseros/agent-cursor': ['agent-cursor'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
@@ -219,6 +227,12 @@ export function computeAffectedSuites(
   }
 
   // Path signals for things that are not workspace packages.
+  if (
+    changedFiles.includes(
+      `${AGENT}crates/browseros-core/src/assets/agent-cursor.js`,
+    )
+  )
+    keys.add('agent-cursor')
   if (
     changedFiles.some(
       (f) =>

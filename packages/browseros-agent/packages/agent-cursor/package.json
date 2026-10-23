@@ -1,0 +1,19 @@
+{
+  "name": "@browseros/agent-cursor",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "test": "bun run ../../scripts/run-bun-test.ts --cwd=./packages/agent-cursor ./packages/agent-cursor",
+    "typecheck": "tsc --noEmit",
+    "build:classic": "bun scripts/build-classic.ts",
+    "playground": "bun build ./src/index.ts --target browser --format esm --outdir ./dist && bun playground/serve.mjs"
+  }
+}

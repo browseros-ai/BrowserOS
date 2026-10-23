@@ -7,7 +7,7 @@
       "devDependencies": {
         "@aws-sdk/client-s3": "^3.1140.0",
         "@biomejs/biome": "2.5.14",
-        "@browseros/agent-cursor": "1.0.0",
+        "@browseros/agent-cursor": "workspace:*",
         "@browseros/build-server-tools": "workspace:*",
         "@browseros/shared": "workspace:*",
         "@sentry/cli": "^3.8.0",
@@ -328,6 +328,10 @@
         "ai": ">=7.0.0-beta.0",
       },
     },
+    "packages/agent-cursor": {
+      "name": "@browseros/agent-cursor",
+      "version": "0.0.1",
+    },
     "packages/agent-mcp-manager": {
       "name": "@browseros/agent-mcp-manager",
       "version": "0.0.4-rc.4",
@@ -621,7 +625,7 @@
 
     "@browseros/acpx-ai-provider": ["@browseros/acpx-ai-provider@workspace:packages/acpx-ai-provider"],
 
-    "@browseros/agent-cursor": ["@browseros/agent-cursor@1.0.0", "https://browseros-private-packages.shadowfax92.workers.dev/@browseros/agent-cursor/-/agent-cursor-1.0.0.tgz", {}, "sha512-Tx3GMUWuqsv1B8g3xuSm0W0OuvNsIJyMAwAqrxuOHPXg70yLzLEpiGnJkOADl/aE9dxTpJA6rpN0hjT97md39g=="],
+    "@browseros/agent-cursor": ["@browseros/agent-cursor@workspace:packages/agent-cursor"],
 
     "@browseros/agent-mcp-manager": ["@browseros/agent-mcp-manager@workspace:packages/agent-mcp-manager"],
 

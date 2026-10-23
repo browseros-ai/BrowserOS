@@ -93,7 +93,7 @@
   "devDependencies": {
     "@aws-sdk/client-s3": "^3.1140.0",
     "@biomejs/biome": "2.5.14",
-    "@browseros/agent-cursor": "1.0.0",
+    "@browseros/agent-cursor": "workspace:*",
     "@browseros/build-server-tools": "workspace:*",
     "@browseros/shared": "workspace:*",
     "@sentry/cli": "^3.8.0",

@@ -13,6 +13,11 @@ const bun = process.execPath
 const testSuites = {
   all: [
     {
+      label: 'agent cursor tests',
+      cwd: resolve(projectRoot, 'packages/agent-cursor'),
+      argv: [bun, 'run', 'test'],
+    },
+    {
       label: 'diagnostics tests',
       cwd: resolve(projectRoot, 'packages/diagnostics'),
       argv: [bun, 'run', 'test'],
