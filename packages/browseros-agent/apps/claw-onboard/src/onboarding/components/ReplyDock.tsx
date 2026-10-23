@@ -181,7 +181,7 @@ function ProfileChip({ sources, selectedId, onPick }: ProfileChipProps) {
     </>
   )
   const chip =
-    'flex h-[60px] items-center gap-2.5 whitespace-nowrap rounded-full border border-border-strong bg-card pl-3 text-[17px] text-ink-deep leading-[22px]'
+    'flex h-[60px] items-center gap-2.5 whitespace-nowrap rounded-full border border-[#CBD5E1] bg-card pl-3 text-[17px] text-ink-deep leading-[22px]'
 
   if (single) {
     return (
@@ -203,7 +203,7 @@ function ProfileChip({ sources, selectedId, onPick }: ProfileChipProps) {
         className={cn(
           chip,
           'cursor-pointer pr-5 outline-none transition-[border-color,box-shadow] hover:border-ink-4 focus-visible:ring-4 focus-visible:ring-primary/25',
-          open && 'border-primary ring-4 ring-primary/12',
+          open && 'border-[1.5px] border-primary ring-4 ring-primary/12',
         )}
       >
         {label}
@@ -260,7 +260,7 @@ function ProfileChip({ sources, selectedId, onPick }: ProfileChipProps) {
                     aria-hidden
                     className={cn(
                       'flex size-5 shrink-0 items-center justify-center rounded-full border-2',
-                      isSelected ? 'border-primary' : 'border-border-strong',
+                      isSelected ? 'border-primary' : 'border-[#CBD5E1]',
                     )}
                   >
                     {isSelected && (

@@ -209,17 +209,16 @@ function Bubble({ bubble, lead, onToggleItem }: BubbleProps) {
       )
     case 'keychain':
       return (
-        <div className={cn(BUBBLE, corner, 'flex flex-col gap-3.5 pb-[18px]')}>
+        // Paper rounds this bubble on every corner: it carries a picture.
+        <div className={cn(BUBBLE, 'flex flex-col gap-3.5 pb-[18px]')}>
           <p className="m-0">
             Your Mac will ask for its password. Click{' '}
             <b className="font-bold">Allow</b>.
           </p>
           {/* Half-size picture of the real prompt, so the sheet macOS shows
               next is recognisable rather than alarming. */}
-          <div className="w-[230px] overflow-hidden rounded-md ring-1 ring-border-strong">
-            {/* zoom, unlike a transform, also halves the layout box. */}
-            <MacKeychainPreview className="w-[460px] [zoom:0.5]" />
-          </div>
+          {/* zoom, unlike a transform, also halves the layout box. */}
+          <MacKeychainPreview className="[zoom:0.5]" />
         </div>
       )
     case 'progress':
@@ -229,7 +228,7 @@ function Bubble({ bubble, lead, onToggleItem }: BubbleProps) {
           className={cn(
             BUBBLE,
             corner,
-            'flex w-[380px] max-w-full flex-col gap-2.5 pb-4',
+            'flex w-[380px] max-w-full flex-col gap-3 pb-4',
           )}
         >
           <span>{bubble.text}</span>
@@ -292,13 +291,13 @@ function ImportChips({ bubble, className, onToggleItem }: ImportChipsProps) {
                   'inline-flex h-10 items-center gap-[7px] whitespace-nowrap rounded-full border-[1.5px] pr-4 pl-3 font-medium text-[17px] leading-[22px] outline-none transition-colors duration-150 focus-visible:ring-4 focus-visible:ring-primary/25 enabled:cursor-pointer',
                   chip.on
                     ? 'border-ink-deep bg-ink-deep text-white enabled:hover:border-ink-deep/90 enabled:hover:bg-ink-deep/90'
-                    : 'border-border-strong bg-card text-ink-deep enabled:hover:border-ink-4',
+                    : 'border-[#B9C9E6] bg-card text-ink-deep enabled:hover:border-ink-4',
                 )}
               >
                 {chip.on ? (
-                  <Check aria-hidden className="size-4" strokeWidth={2.5} />
+                  <Check aria-hidden className="size-4" strokeWidth={2} />
                 ) : (
-                  <Plus aria-hidden className="size-4" strokeWidth={2.25} />
+                  <Plus aria-hidden className="size-4" strokeWidth={1.8} />
                 )}
                 {chip.label}
               </button>

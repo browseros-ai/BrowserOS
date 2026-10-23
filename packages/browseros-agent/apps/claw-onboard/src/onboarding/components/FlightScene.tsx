@@ -20,6 +20,10 @@ const FLIGHTS = [
 ] as const
 const CHEAPEST_ROW = 2
 
+/** The cockpit's Try one pill and the demo type the same words. */
+const HI_PROMPT =
+  'Use neo, find me the cheapest one-way flight to NYC next Friday on Google Flights.'
+
 const LOOP_MS = 9900
 const ROW_STEP_MS = 700
 
@@ -50,7 +54,8 @@ export function flightSceneFrameAt(t: number): SceneFrame {
   return {
     asked: t >= 700,
     status: t >= 6900 ? 'done' : t >= 1500 ? 'working' : 'idle',
-    seconds: t >= 1500 ? 1 + Math.floor((t - 1500) / 1000) : 0,
+    // Stops counting when the answer lands, like the cockpit demo.
+    seconds: t >= 1500 ? 1 + Math.floor((Math.min(t, 6899) - 1500) / 1000) : 0,
     rows: t >= 1900,
     ring:
       t >= 6900
@@ -96,27 +101,27 @@ export function FlightScene({ live }: FlightSceneProps) {
   return (
     <div
       role="img"
-      aria-label="Claude Code asks neo to find the cheapest flight to New York; neo checks five results and tags $142."
+      aria-label="Claude Code asks neo for the cheapest one-way flight to NYC next Friday; neo checks five results on Google Flights and tags $142."
       className="relative h-[306px] w-[544px] max-w-full overflow-hidden rounded-[18px] border border-accent-tint-2 bg-secondary"
     >
-      <div className="absolute top-[18px] left-[182px] flex h-[270px] w-[344px] flex-col overflow-hidden rounded-[10px] border border-border-strong bg-card shadow-[0_22px_44px_-24px_rgb(1_18_63/0.35)]">
-        <div className="flex h-[30px] shrink-0 items-end border-border-2 border-b bg-bg-sunken pr-2.5 pl-[46px]">
-          <div className="flex h-6 w-[190px] items-center gap-1.5 rounded-t-md border border-border-2 border-b-0 bg-card pr-1.5 pl-2 font-medium text-[11px] text-ink-deep">
+      <div className="absolute top-[18px] left-[182px] flex h-[270px] w-[344px] flex-col overflow-hidden rounded-[10px] border border-[#CBD5E1] bg-card shadow-[0_22px_44px_-24px_rgb(1_18_63/0.35)]">
+        <div className="flex h-[30px] shrink-0 items-end border-[#DAE5FF] border-b bg-[#F1F5FD] pr-2.5 pl-[46px]">
+          <div className="flex h-6 w-[190px] items-center gap-1.5 rounded-t-md border border-[#DAE5FF] border-b-0 bg-card pr-1.5 pl-2 font-medium text-[11px] text-ink-deep">
             <i className="size-3 shrink-0 rounded-[3px] bg-ink-deep" />
             <span className="flex-1">Flights</span>
             <span className="flex h-[18px] items-center gap-1 rounded-[9px] bg-secondary px-1.5 font-mono text-[11px] text-primary">
               <i
                 className={cn(
                   'size-[5px] rounded-full transition-colors duration-400',
-                  frame.status === 'done' ? 'bg-primary' : 'bg-amber',
+                  frame.status === 'done' ? 'bg-primary' : 'bg-[#F5B957]',
                 )}
               />
               claude
             </span>
           </div>
         </div>
-        <div className="flex h-8 shrink-0 items-center gap-2 border-border-2 border-b pr-2.5 pl-[46px]">
-          <div className="flex h-[22px] flex-1 items-center gap-1.5 rounded-md bg-card-tint px-2 font-mono text-[11px] text-ink-deep">
+        <div className="flex h-8 shrink-0 items-center gap-2 border-[#EEF2F8] border-b pr-2.5 pl-[46px]">
+          <div className="flex h-[22px] flex-1 items-center gap-1.5 rounded-md bg-[#F5F8FF] px-2 font-mono text-[11px] text-ink-deep">
             <Lock aria-hidden className="size-[9px] text-ink-3" />
             google.com/travel/flights
           </div>
@@ -142,7 +147,7 @@ export function FlightScene({ live }: FlightSceneProps) {
               <div
                 key={time}
                 className={cn(
-                  'flex h-8 items-center gap-2.5 border-border-2 border-b px-1.5 text-ink-deep last:border-b-0',
+                  'flex h-8 items-center gap-2.5 border-[#EEF2F8] border-b px-1.5 text-ink-deep last:border-b-0',
                   fade,
                   frame.rows ? 'opacity-100' : 'opacity-0',
                 )}
@@ -153,7 +158,7 @@ export function FlightScene({ live }: FlightSceneProps) {
                 <span className="w-12 shrink-0 text-[11px] text-ink-3">
                   {stops}
                 </span>
-                <i className="h-1.5 flex-1 rounded-[3px] bg-bg-sunken" />
+                <i className="h-1.5 flex-1 rounded-[3px] bg-[#E8EEF8]" />
                 <span className="flex w-[70px] shrink-0 justify-end">
                   {index === CHEAPEST_ROW && (
                     <span
@@ -186,51 +191,53 @@ export function FlightScene({ live }: FlightSceneProps) {
 
       {/* Claude Code in a terminal asks; neo does it (owner, round 9: the
           terminal reads better here than a drawing of the Claude app). */}
-      <div className="absolute top-[60px] left-[18px] flex h-[200px] w-[200px] flex-col overflow-hidden rounded-[10px] bg-ink-deep shadow-[0_26px_50px_-24px_rgb(1_18_63/0.6)]">
-        <div className="relative flex h-[26px] shrink-0 items-center border-white/10 border-b px-2.5">
+      <div className="absolute top-[60px] left-[18px] flex h-[200px] w-[206px] flex-col overflow-hidden rounded-[10px] bg-ink-deep shadow-[0_26px_50px_-24px_rgb(1_18_63/0.6)]">
+        <div className="relative flex h-[26px] shrink-0 items-center border-[#12285F] border-b px-2.5">
           <span className="flex gap-[5px]">
-            <i className="size-2 rounded-full bg-white/20" />
-            <i className="size-2 rounded-full bg-white/20" />
-            <i className="size-2 rounded-full bg-white/20" />
+            <i className="size-2 rounded-full bg-[#EAF1FF]/18" />
+            <i className="size-2 rounded-full bg-[#EAF1FF]/18" />
+            <i className="size-2 rounded-full bg-[#EAF1FF]/18" />
           </span>
-          <span className="absolute inset-x-0 top-[7px] text-center font-mono text-[11px] text-ink-4 leading-3 tracking-[0.02em]">
+          <span className="absolute inset-x-0 top-[7px] text-center font-medium font-mono text-[#7E8FB8] text-[11px] leading-3 tracking-[0.02em]">
             Claude Code
           </span>
         </div>
-        <div className="flex flex-col gap-3 p-3">
+        <div className="flex flex-col gap-2.5 p-3">
           <div
             className={cn(
-              'ml-3.5 rounded-[10px_10px_3px_10px] bg-white/10 px-2.5 py-2 font-medium text-[12px] text-white leading-4 transition-[opacity,transform] duration-500 ease-out',
+              'ml-3.5 rounded-[10px_10px_3px_10px] bg-[#EAF1FF]/10 px-2.5 py-2 font-medium text-[12px] text-white leading-4 transition-[opacity,transform] duration-500 ease-out',
               frame.asked ? 'opacity-100' : 'translate-y-1.5 opacity-0',
             )}
           >
-            Find the cheapest flight to New York next Friday.
+            {HI_PROMPT}
           </div>
-          <div className="grid">
-            <div
+          {/* Paper keeps "Working in neo" above the answer once it lands. */}
+          <div
+            className={cn(
+              'flex items-center gap-1.5 font-mono text-[#7E8FB8] text-[11px] leading-4',
+              fade,
+              frame.status === 'idle' ? 'opacity-0' : 'opacity-100',
+            )}
+          >
+            <i
               className={cn(
-                'col-start-1 row-start-1 flex items-center gap-1.5 self-start font-mono text-[11px] text-ink-4 leading-4',
-                fade,
-                frame.status === 'working' ? 'opacity-100' : 'opacity-0',
+                'size-1.5 shrink-0 rounded-full bg-[#F5B957]',
+                frame.status === 'working' && 'animate-pulse-dot',
               )}
-            >
-              <i className="size-1.5 shrink-0 animate-pulse-dot rounded-full bg-amber" />
-              Working in neo · {frame.seconds}s
-            </div>
-            <div
-              className={cn(
-                'col-start-1 row-start-1 flex items-start gap-1.5 self-start font-semibold text-[12.5px] text-white leading-[17px]',
-                fade,
-                frame.status === 'done' ? 'opacity-100' : 'opacity-0',
-              )}
-            >
-              <Check
-                aria-hidden
-                className="mt-[3px] size-[11px] shrink-0 text-accent-tint-2"
-                strokeWidth={3}
-              />
-              Cheapest is $142, nonstop, Fri 7:05 am.
-            </div>
+            />
+            Working in neo · {frame.seconds}s
+          </div>
+          <div
+            className={cn(
+              'flex items-start gap-[7px] font-semibold text-[12.5px] text-white leading-[17px]',
+              fade,
+              frame.status === 'done' ? 'opacity-100' : 'opacity-0',
+            )}
+          >
+            <span className="mt-0.5 grid size-3.5 shrink-0 place-items-center rounded-full bg-white/14">
+              <Check aria-hidden className="size-[9px]" strokeWidth={3.5} />
+            </span>
+            Cheapest is $142, nonstop, Fri 7:05 am.
           </div>
         </div>
       </div>

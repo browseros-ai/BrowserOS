@@ -301,7 +301,7 @@ function addLogins(turns: ChatTurn[], input: OnboardingChatInput): DockItem[] {
       // Without logins (always on Windows, or a profile with none saved) neo
       // asks the plainer question: there is nothing to sign the AI in with.
       text: includesLogins(source.supportedItems)
-        ? 'Want your AI signed in like you?'
+        ? 'Want your AI to use your logins?'
         : `Want your ${browser} things here?`,
     },
     {

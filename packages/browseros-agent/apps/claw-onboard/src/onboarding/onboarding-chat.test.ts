@@ -93,7 +93,7 @@ describe('Logins', () => {
   it('asks about logins with one chip per supported item, opt-ins off', () => {
     const result = chat(snapshot())
     expect(result.progress).toBe(2)
-    expect(texts(result)).toContain('Want your AI signed in like you?')
+    expect(texts(result)).toContain('Want your AI to use your logins?')
     const chips = chipsOf(result)
     expect(chips.browser).toBe('Chrome')
     expect(chips.editable).toBe(true)
