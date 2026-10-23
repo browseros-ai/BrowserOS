@@ -94,6 +94,14 @@ return { transition: args.wasVisible === true && !!args.selector && !visible(doc
         && !window._cf_chl_opt };
 "#;
 
+const TOKEN_PRESENT: &str = r#"
+/* turnstile:token-present */
+const allInputs = [...document.querySelectorAll('input[name="cf-turnstile-response"]')];
+const inputs = widget ? [...widget.querySelectorAll('input[name="cf-turnstile-response"]')]
+    : (allInputs.length === 1 ? allInputs : []);
+return inputs.length > 0 && inputs.every(input => input.value === args.token);
+"#;
+
 fn script(body: &str, args: &Value) -> String {
     format!("(async () => {{ const args = {args}; {WIDGET} {body} }})()")
 }
@@ -484,6 +492,15 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
             }
         } else if !flag(&evidence, "transition") {
             if Instant::now() >= until {
+                let retained =
+                    checked(ctx, ctx.page.eval_main(&script(TOKEN_PRESENT, &args))).await?;
+                if retained.as_bool() != Some(true) {
+                    return Ok((
+                        SolveStatus::Failed,
+                        SolveReason::AcceptanceUnconfirmed,
+                        "The applied token is no longer in the form; take a fresh snapshot and retry.".into(),
+                    ));
+                }
                 return Ok((
                     SolveStatus::TokenApplied,
                     SolveReason::AwaitingSubmit,
@@ -559,6 +576,7 @@ mod tests {
         error: Option<PageError>,
         applied: Option<String>,
         written: bool,
+        token_retained: bool,
         callback_declared: bool,
         callback: bool,
         transition: bool,
@@ -581,6 +599,7 @@ mod tests {
                 error: None,
                 applied: None,
                 written: true,
+                token_retained: true,
                 callback_declared: true,
                 callback: false,
                 transition: false,
@@ -622,6 +641,9 @@ mod tests {
                     "callbackDeclared": state.callback_declared,
                     "transition": state.transition}),
                 );
+            }
+            if expression.contains("turnstile:token-present") {
+                return Ok(json!(state.token_retained));
             }
             if expression.contains("turnstile:verify") {
                 return Ok(json!({"transition": state.transition}));
@@ -875,6 +897,23 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn tests_that_cleared_tokens_remain_unconfirmed() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.callback = true;
+            state.token_retained = false;
+        }
+        let result = finish(&page, &FakeBackend::token()).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+        assert!(!result.message.contains("Submit"));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn tests_that_tokens_without_response_fields_remain_unconfirmed() -> anyhow::Result<()> {
         let page = FakePage::default();
         {
@@ -1068,6 +1107,41 @@ mod tests {
             assert_eq!(output["value"]["callbackDeclared"], declared, "{mode}");
             assert_eq!(output["value"]["callbackRan"], ran, "{mode}");
             assert_eq!(output["value"]["written"], written, "{mode}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_retained_tokens_must_match_the_applied_value() -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = script_context().await;
+        for (values, retained) in [
+            (vec!["test-token"], true),
+            (vec![""], false),
+            (vec!["replaced-token"], false),
+            (vec![], false),
+        ] {
+            let code = format!(
+                "const inputs = {}.map(value=>({{value}})); const document = {{querySelectorAll:s=>s==='.cf-turnstile'?[]:inputs}}; return await {};",
+                json!(values),
+                script(
+                    TOKEN_PRESENT,
+                    &json!({"sitekey":"test-key","token":"test-token"})
+                ),
+            );
+            let result = execute_tool(
+                &browseros_mcp::tools::run::definition(),
+                json!({"code":code}),
+                &ctx,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            assert!(!result.is_error);
+            let output = result
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+            assert_eq!(output["ok"], true);
+            assert_eq!(output["value"], retained);
         }
         Ok(())
     }

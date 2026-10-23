@@ -57,6 +57,7 @@ const APPLY: &str = r#"
  try{if(typeof fn==='function'){fn.call(owner,p.token);return {written:true,callback:true}}}catch{}
  return {written:true,callback:false};
 "#;
+const TOKEN_PRESENT: &str = "return fields.length > 0 && fields.every(e => e.value === p.token);";
 
 #[derive(Deserialize)]
 struct Anchor {
@@ -739,6 +740,23 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 self.pause(POLL).await?;
             }
             if self.bounded(self.ctx.page.document()).await? == self.ctx.document {
+                let retained: bool = decode(
+                    self.bounded(self.ctx.page.eval_main(&self.script(
+                        "token-present",
+                        TOKEN_PRESENT,
+                        before.anchor.as_ref(),
+                        before.frame.as_ref(),
+                        Some(&token),
+                    )))
+                    .await?,
+                )?;
+                self.current().await?;
+                if !retained {
+                    return Err(fail(
+                        SolveReason::AcceptanceUnconfirmed,
+                        "The applied token is no longer in the form; take a fresh snapshot and retry.",
+                    ));
+                }
                 return Err(Stop(
                     SolveStatus::TokenApplied,
                     SolveReason::AwaitingSubmit,
@@ -886,6 +904,7 @@ mod tests {
         rejected: u32,
         revision: u32,
         written: bool,
+        token_retained: bool,
         callback: bool,
         transition: bool,
         navigation_after_apply: bool,
@@ -924,6 +943,7 @@ mod tests {
                 rejected: 0,
                 revision: 0,
                 written: true,
+                token_retained: true,
                 callback: true,
                 transition: true,
                 navigation_after_apply: false,
@@ -1033,6 +1053,9 @@ mod tests {
                     s.scripts.push(expression.into());
                 });
                 return Ok(self.read(|s| json!({"written": s.written, "callback": s.callback})));
+            }
+            if expression.starts_with("/*recaptcha:token-present*/") {
+                return Ok(self.read(|s| json!(s.token_retained)));
             }
             if expression.starts_with("/*recaptcha:clear*/") {
                 if self.read(|s| s.transient_navigation_errors > 0) {
@@ -1287,6 +1310,29 @@ mod tests {
             assert!(!result.message.contains("test-token"));
         }
         Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_cleared_tokens_remain_unconfirmed() {
+        let page = FakePage::new(false);
+        page.edit(|state| {
+            state.transition = false;
+            state.token_retained = false;
+        });
+        let (result, _) = run_with_method(
+            &page,
+            &FakeBackend::new(vec![SolveAnswer::Token("test-token".into())]),
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            Some(super::super::config::ForcedMethod::Token),
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+        assert!(!result.message.contains("Submit"));
     }
 
     #[tokio::test(start_paused = true)]
