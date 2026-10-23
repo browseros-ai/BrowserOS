@@ -349,6 +349,10 @@ impl CaptchaService {
                 CaptchaEventName::Solved,
                 json!({"type":kind,"method":flow.method,"durationMs":duration_ms}),
             ),
+            SolveStatus::TokenApplied => events.emit(
+                CaptchaEventName::TokenApplied,
+                json!({"type":kind,"method":flow.method,"durationMs":duration_ms,"callbackRan":flow.callback_ran}),
+            ),
             SolveStatus::NeedsHuman => events.emit(
                 CaptchaEventName::Handoff,
                 json!({"type":kind,"reason":flow.reason,"humanHelp":human_help_available}),
@@ -461,8 +465,20 @@ fn terminal(status: SolveStatus, reason: SolveReason, message: &str) -> FlowResu
         attempts: Attempts::default(),
         paid_tasks: 0,
         cost_usd: 0.0,
+        callback_ran: false,
         message: message.into(),
     }
+}
+
+fn token_applied_message(callback_ran: bool) -> String {
+    let callback = if callback_ran {
+        "the callback ran"
+    } else {
+        "no callback was declared"
+    };
+    format!(
+        "The CAPTCHA token is in the page; {callback}. Submit the form or continue the action and check the result. If the site rejects it, call solve_captcha again."
+    )
 }
 fn page_failure(error: PageError) -> FlowResult {
     let (status, reason, message) = match error {
@@ -701,6 +717,7 @@ mod orchestration_tests {
                 },
                 paid_tasks: 0,
                 cost_usd: 0.0,
+                callback_ran: false,
                 message: ctx.user_agent.clone().unwrap_or_default(),
             })
         }
@@ -752,6 +769,53 @@ mod orchestration_tests {
             )
             .await
             .map_err(|error| anyhow::anyhow!("{error:?}"))
+    }
+
+    #[tokio::test]
+    async fn tests_that_token_application_emits_its_event_without_human_handoff()
+    -> anyhow::Result<()> {
+        for kind in [CaptchaKind::RecaptchaV2, CaptchaKind::Turnstile] {
+            for callback_ran in [false, true] {
+                for human_help in [false, true] {
+                    let driver = FakeDriver {
+                        result: Some(FlowResult {
+                            status: SolveStatus::TokenApplied,
+                            method: SolveMethod::Token,
+                            reason: SolveReason::AwaitingSubmit,
+                            attempts: Attempts {
+                                token: 1,
+                                ..Default::default()
+                            },
+                            paid_tasks: 1,
+                            cost_usd: 0.001,
+                            callback_ran,
+                            message: token_applied_message(callback_ran),
+                        }),
+                        ..FakeDriver::new(scan(&[(kind, ChallengeState::Active)], true))
+                    };
+                    let outcome = run(&driver, human_help).await?;
+                    let event = outcome
+                        .events
+                        .last()
+                        .ok_or_else(|| anyhow::anyhow!("missing event"))?;
+                    assert_eq!(event.event, CaptchaEventName::TokenApplied);
+                    assert_eq!(
+                        event.data,
+                        json!({"type":kind,"method":"token",
+                        "durationMs":outcome.duration_ms,"callbackRan":callback_ran})
+                    );
+                    assert!(!outcome.events.iter().any(|event| matches!(
+                        event.event,
+                        CaptchaEventName::Failed | CaptchaEventName::Handoff
+                    )));
+                    assert!(!outcome.message.contains("request_human_help"));
+                    assert!(!outcome.message.contains("tell the user"));
+                    assert!(outcome.message.contains("Submit the form"));
+                    assert!(outcome.message.contains("call solve_captcha again"));
+                }
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test]
@@ -1052,6 +1116,7 @@ mod orchestration_tests {
                     },
                     paid_tasks: 2,
                     cost_usd: 0.002,
+                    callback_ran: false,
                     message: "ERROR_ZERO_BALANCE".into(),
                 }),
                 ..FakeDriver::new(scan(

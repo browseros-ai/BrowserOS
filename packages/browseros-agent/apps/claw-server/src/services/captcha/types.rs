@@ -260,6 +260,7 @@ pub enum PageError {
 #[serde(rename_all = "snake_case")]
 pub enum SolveStatus {
     Solved,
+    TokenApplied,
     AlreadyClear,
     Unsupported,
     Failed,
@@ -283,7 +284,8 @@ pub enum SolveReason {
     AutoPassed,
     CheckboxPassed,
     TilesAccepted,
-    TokenAccepted, // solved
+    TokenAccepted,  // solved
+    AwaitingSubmit, // token_applied
     NoCaptcha,
     AlreadyPassed,
     NotBlocking,     // already_clear
@@ -319,6 +321,8 @@ pub enum CaptchaEventName {
     Solving,
     #[serde(rename = "captcha.solved")]
     Solved,
+    #[serde(rename = "captcha.token_applied")]
+    TokenApplied,
     #[serde(rename = "captcha.failed")]
     Failed,
     #[serde(rename = "captcha.handoff")]
@@ -362,6 +366,7 @@ pub struct FlowResult {
     pub attempts: Attempts,
     pub paid_tasks: u32,
     pub cost_usd: f64,
+    pub callback_ran: bool,
     pub message: String,
 }
 
@@ -383,8 +388,28 @@ mod tests {
     use serde_json::{json, to_value};
 
     #[test]
+    fn tests_that_token_applied_values_round_trip() -> anyhow::Result<()> {
+        let status: SolveStatus = serde_json::from_value(json!("token_applied"))?;
+        let reason: SolveReason = serde_json::from_value(json!("awaiting_submit"))?;
+        let event: CaptchaEventName = serde_json::from_value(json!("captcha.token_applied"))?;
+        assert_eq!(to_value(status)?, "token_applied");
+        assert_eq!(to_value(reason)?, "awaiting_submit");
+        assert_eq!(to_value(event)?, "captcha.token_applied");
+        Ok(())
+    }
+
+    #[test]
     fn tests_that_each_terminal_status_matches_the_wire_contract() -> anyhow::Result<()> {
         for (status, status_wire, reason, reason_wire, kind, method, method_wire) in [
+            (
+                SolveStatus::TokenApplied,
+                "token_applied",
+                SolveReason::AwaitingSubmit,
+                "awaiting_submit",
+                Some(CaptchaKind::RecaptchaV2),
+                SolveMethod::Token,
+                "token",
+            ),
             (
                 SolveStatus::Solved,
                 "solved",
@@ -505,6 +530,7 @@ mod tests {
             (CaptchaEventName::Detected, "captcha.detected"),
             (CaptchaEventName::Solving, "captcha.solving"),
             (CaptchaEventName::Solved, "captcha.solved"),
+            (CaptchaEventName::TokenApplied, "captcha.token_applied"),
             (CaptchaEventName::Failed, "captcha.failed"),
             (CaptchaEventName::Handoff, "captcha.handoff"),
         ] {

@@ -59,6 +59,7 @@ for (const input of inputs) {
     input.dispatchEvent(new Event('change', {bubbles: true}));
 }
 let callbackRan = false;
+let callbackDeclared = !!(widget?.getAttribute('data-callback') ?? args.callback);
 try {
     let owner = window, fn;
     const name = widget?.getAttribute('data-callback') ?? args.callback;
@@ -79,9 +80,10 @@ try {
         return null;
     }
     if (typeof fn !== 'function') { owner = find(window.turnstile); fn = owner?.callback; }
+    callbackDeclared ||= typeof fn === 'function';
     if (typeof fn === 'function') { await fn.call(owner, args.token); callbackRan = true; }
-} catch {}
-return { written: inputs.length > 0, callbackRan, selector, wasVisible };
+} catch { callbackDeclared = true; }
+return { written: inputs.length > 0, callbackRan, callbackDeclared, selector, wasVisible };
 "#;
 
 const TRANSITION: &str = r#"
@@ -90,6 +92,14 @@ return { transition: args.wasVisible === true && !!args.selector && !visible(doc
     ready: document.readyState === 'complete',
     captchaFree: !document.querySelector('.cf-turnstile, .g-recaptcha, .h-captcha, [name="cf-turnstile-response"], [name="g-recaptcha-response"], [name="h-captcha-response"], iframe[src*="challenges.cloudflare.com"], iframe[src*="recaptcha"], iframe[src*="hcaptcha"]')
         && !window._cf_chl_opt };
+"#;
+
+const TOKEN_PRESENT: &str = r#"
+/* turnstile:token-present */
+const allInputs = [...document.querySelectorAll('input[name="cf-turnstile-response"]')];
+const inputs = widget ? [...widget.querySelectorAll('input[name="cf-turnstile-response"]')]
+    : (allInputs.length === 1 ? allInputs : []);
+return inputs.length > 0 && inputs.every(input => input.value === args.token);
 "#;
 
 fn script(body: &str, args: &Value) -> String {
@@ -107,6 +117,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
         attempts: Attempts::default(),
         paid_tasks: 0,
         cost_usd: 0.0,
+        callback_ran: false,
         message: String::new(),
     };
     let (status, reason, message) = match run(ctx, challenge, &mut result).await {
@@ -465,7 +476,8 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
         Err(_) if Instant::now() >= ctx.deadline => return Err(PageError::Timeout),
         Err(_) => return Ok(unconfirmed()),
     };
-    if !flag(&applied, "written") || !flag(&applied, "callbackRan") {
+    result.callback_ran = flag(&applied, "callbackRan");
+    if !flag(&applied, "written") || (flag(&applied, "callbackDeclared") && !result.callback_ran) {
         return Ok(unconfirmed());
     }
     loop {
@@ -480,7 +492,20 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
             }
         } else if !flag(&evidence, "transition") {
             if Instant::now() >= until {
-                return Ok(unconfirmed());
+                let retained =
+                    checked(ctx, ctx.page.eval_main(&script(TOKEN_PRESENT, &args))).await?;
+                if retained.as_bool() != Some(true) {
+                    return Ok((
+                        SolveStatus::Failed,
+                        SolveReason::AcceptanceUnconfirmed,
+                        "The applied token is no longer in the form; take a fresh snapshot and retry.".into(),
+                    ));
+                }
+                return Ok((
+                    SolveStatus::TokenApplied,
+                    SolveReason::AwaitingSubmit,
+                    super::token_applied_message(result.callback_ran),
+                ));
             }
             pause(ctx, until).await?;
             continue;
@@ -488,7 +513,7 @@ async fn token<P: CaptchaPage, B: CaptchaBackend>(
         return Ok((
             SolveStatus::Solved,
             SolveReason::TokenAccepted,
-            "Turnstile's callback ran and the page accepted the token; continue.".into(),
+            "The page accepted the Turnstile token; continue.".into(),
         ));
     }
 }
@@ -550,6 +575,9 @@ mod tests {
         navigated: bool,
         error: Option<PageError>,
         applied: Option<String>,
+        written: bool,
+        token_retained: bool,
+        callback_declared: bool,
         callback: bool,
         transition: bool,
         failed: bool,
@@ -570,6 +598,9 @@ mod tests {
                 navigated: false,
                 error: None,
                 applied: None,
+                written: true,
+                token_retained: true,
+                callback_declared: true,
                 callback: false,
                 transition: false,
                 failed: false,
@@ -605,8 +636,14 @@ mod tests {
             }
             if expression.contains("turnstile:apply") {
                 state.applied = Some(expression.into());
-                return Ok(json!({"written": true, "callbackRan": state.callback,
-                    "transition": state.transition}));
+                return Ok(
+                    json!({"written": state.written, "callbackRan": state.callback,
+                    "callbackDeclared": state.callback_declared,
+                    "transition": state.transition}),
+                );
+            }
+            if expression.contains("turnstile:token-present") {
+                return Ok(json!(state.token_retained));
             }
             if expression.contains("turnstile:verify") {
                 return Ok(json!({"transition": state.transition}));
@@ -616,7 +653,7 @@ mod tests {
                 "token": state.polls >= state.token_at
                     || (state.pass_on_click && !state.clicks.is_empty()),
                 "sitekey": "fresh-key", "action": "fresh-action", "cdata": "fresh-data",
-                "callback": "onAccepted", "failed": state.failed,
+                "callback": if state.callback_declared { Some("onAccepted") } else { None }, "failed": state.failed,
             }))
         }
 
@@ -832,6 +869,68 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn tests_that_applied_tokens_await_submit_without_a_visible_transition()
+    -> anyhow::Result<()> {
+        for callback_declared in [false, true] {
+            let page = FakePage::default();
+            {
+                let mut state = page.state();
+                state.callback_declared = callback_declared;
+                state.callback = callback_declared;
+            }
+            let result = finish(&page, &FakeBackend::token()).await?;
+            assert_eq!(serde_json::to_value(result.status)?, "token_applied");
+            assert_eq!(serde_json::to_value(result.reason)?, "awaiting_submit");
+            assert_eq!(result.method, SolveMethod::Token);
+            assert_eq!(result.paid_tasks, 1);
+            assert_eq!(result.callback_ran, callback_declared);
+            assert!(result.message.contains(if callback_declared {
+                "callback ran"
+            } else {
+                "no callback was declared"
+            }));
+            assert!(result.message.to_lowercase().contains("submit"));
+            assert!(result.message.contains("solve_captcha"));
+            assert!(!result.message.contains("test-token"));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_cleared_tokens_remain_unconfirmed() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.callback = true;
+            state.token_retained = false;
+        }
+        let result = finish(&page, &FakeBackend::token()).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+        assert!(!result.message.contains("Submit"));
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_tokens_without_response_fields_remain_unconfirmed() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        {
+            let mut state = page.state();
+            state.written = false;
+            state.callback = true;
+            state.transition = true;
+        }
+        let result = finish(&page, &FakeBackend::token()).await?;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn tests_that_forced_tokens_skip_turnstile_waits_and_clicks() -> anyhow::Result<()> {
         for token_at in [3, usize::MAX] {
             let page = FakePage::default();
@@ -911,9 +1010,8 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn tests_that_widget_errors_require_error_attributes() -> anyhow::Result<()> {
-        use browseros_mcp::framework::{BrowserToolOptions, ToolCtx, execute_tool};
+    async fn script_context() -> browseros_mcp::framework::ToolCtx {
+        use browseros_mcp::framework::{BrowserToolOptions, ToolCtx};
         struct NoBrowser;
         impl browseros_core::CdpConnection for NoBrowser {
             fn send<'a>(
@@ -945,7 +1043,7 @@ mod tests {
             }
         }
         let browser = browseros_core::Browser::new(Arc::new(NoBrowser));
-        let ctx = ToolCtx::new(BrowserToolOptions {
+        ToolCtx::new(BrowserToolOptions {
             browser: browser.view().await,
             target: None,
             defaults: Default::default(),
@@ -953,7 +1051,105 @@ mod tests {
             output_files: browseros_mcp::output_file::create_browser_output_file_access(),
             inner_call_hook: None,
             preloaded_helpers: vec![],
-        });
+        })
+    }
+
+    #[tokio::test]
+    async fn tests_that_apply_distinguishes_absent_missing_throwing_and_render_callbacks()
+    -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = script_context().await;
+        for (mode, declared, ran, written) in [
+            ("absent", false, false, true),
+            ("missing", true, false, true),
+            ("throws", true, false, true),
+            ("rejects", true, false, true),
+            ("named", true, true, true),
+            ("render", true, true, true),
+            ("explicit", false, false, true),
+            ("gone", false, false, false),
+        ] {
+            let code = format!(
+                r#"
+                const mode = {};
+                class Event {{}}
+                const input = {{value:'',dispatchEvent(){{}}}};
+                const widget = {{
+                    tagName:'DIV',parentElement:null,parentNode:{{children:[]}},isConnected:true,
+                    getBoundingClientRect:()=>({{width:300,height:65}}),
+                    getAttribute:()=>['missing','throws','rejects','named'].includes(mode)?'accepted':null,
+                    querySelectorAll:()=>[input]
+                }};
+                widget.parentNode.children=[widget];
+                const document = {{querySelectorAll:s=>s==='.cf-turnstile'?(['gone','explicit'].includes(mode)?[]:[widget]):(mode==='gone'?[]:[input]),querySelector:()=>null}};
+                const getComputedStyle=()=>({{visibility:'visible'}});
+                const window = {{turnstile:mode==='render'?{{record:{{sitekey:'test-key',callback(){{}}}}}}:{{}}}};
+                if(mode==='named')window.accepted=()=>{{}};
+                if(mode==='throws')window.accepted=()=>{{throw new Error('callback failed')}};
+                if(mode==='rejects')window.accepted=async()=>{{throw new Error('callback failed')}};
+                return await {};
+            "#,
+                json!(mode),
+                script(APPLY, &json!({"sitekey":"test-key","token":"test-token"}))
+            );
+            let result = execute_tool(
+                &browseros_mcp::tools::run::definition(),
+                json!({"code":code}),
+                &ctx,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            assert!(!result.is_error, "{mode}: {:?}", result.structured_content);
+            let output = result
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+            assert_eq!(output["ok"], true, "{mode}: {output}");
+            assert_eq!(output["value"]["callbackDeclared"], declared, "{mode}");
+            assert_eq!(output["value"]["callbackRan"], ran, "{mode}");
+            assert_eq!(output["value"]["written"], written, "{mode}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_retained_tokens_must_match_the_applied_value() -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = script_context().await;
+        for (values, retained) in [
+            (vec!["test-token"], true),
+            (vec![""], false),
+            (vec!["replaced-token"], false),
+            (vec![], false),
+        ] {
+            let code = format!(
+                "const inputs = {}.map(value=>({{value}})); const document = {{querySelectorAll:s=>s==='.cf-turnstile'?[]:inputs}}; return await {};",
+                json!(values),
+                script(
+                    TOKEN_PRESENT,
+                    &json!({"sitekey":"test-key","token":"test-token"})
+                ),
+            );
+            let result = execute_tool(
+                &browseros_mcp::tools::run::definition(),
+                json!({"code":code}),
+                &ctx,
+            )
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}"))?;
+            assert!(!result.is_error);
+            let output = result
+                .structured_content
+                .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+            assert_eq!(output["ok"], true);
+            assert_eq!(output["value"], retained);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_widget_errors_require_error_attributes() -> anyhow::Result<()> {
+        use browseros_mcp::framework::execute_tool;
+        let ctx = script_context().await;
         for key in ["2x00000000000000000000AB", "ordinary-public-key"] {
             for error in [None, Some("data-error-code"), Some("aria-invalid")] {
                 let code = format!(
@@ -1060,12 +1256,28 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_token_needs_callback_and_transition() -> anyhow::Result<()> {
-        for (callback, transition, solved) in [
-            (true, true, true),
-            (true, false, false),
-            (false, true, false),
-            (false, false, false),
+    async fn tests_that_token_status_distinguishes_application_from_acceptance()
+    -> anyhow::Result<()> {
+        for (callback, transition, status, reason) in [
+            (true, true, SolveStatus::Solved, SolveReason::TokenAccepted),
+            (
+                true,
+                false,
+                SolveStatus::TokenApplied,
+                SolveReason::AwaitingSubmit,
+            ),
+            (
+                false,
+                true,
+                SolveStatus::Failed,
+                SolveReason::AcceptanceUnconfirmed,
+            ),
+            (
+                false,
+                false,
+                SolveStatus::Failed,
+                SolveReason::AcceptanceUnconfirmed,
+            ),
         ] {
             let page = FakePage::default();
             {
@@ -1075,22 +1287,8 @@ mod tests {
             }
             let backend = FakeBackend::token();
             let result = finish(&page, &backend).await?;
-            assert_eq!(
-                result.status,
-                if solved {
-                    SolveStatus::Solved
-                } else {
-                    SolveStatus::Failed
-                }
-            );
-            assert_eq!(
-                result.reason,
-                if solved {
-                    SolveReason::TokenAccepted
-                } else {
-                    SolveReason::AcceptanceUnconfirmed
-                }
-            );
+            assert_eq!(result.status, status);
+            assert_eq!(result.reason, reason);
             assert_eq!(result.method, SolveMethod::Token);
             assert_eq!(result.paid_tasks, 1);
             assert_eq!(result.cost_usd, 0.001);
@@ -1101,8 +1299,8 @@ mod tests {
                     && params.action.as_deref() == Some("fresh-action") && params.cdata.as_deref() == Some("fresh-data")));
             assert!(page.state().applied.is_some());
             assert!(!result.message.contains("test-token"));
-            if !solved {
-                assert!(result.message.contains("submit"));
+            if status != SolveStatus::Solved {
+                assert!(result.message.to_lowercase().contains("submit"));
             }
         }
         Ok(())
