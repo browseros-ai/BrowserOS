@@ -103,8 +103,9 @@ const globalDescriptors = new Map(
   ].map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]),
 )
 
-const { UltrafastWaitlist, UltrafastWaitlistView, normalizeEmail } =
-  await import('./UltrafastWaitlist')
+const { UltrafastWaitlist, normalizeEmail } = await import(
+  './UltrafastWaitlist'
+)
 const { priceForId } = await import('./ultrafast-price')
 
 const JOINED_KEY = 'ultrafastWaitlistJoined:v1'
