@@ -57,8 +57,6 @@ jobs:
 
       - name: Install dependencies
         run: bun ci
-        env:
-          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
 
       - name: Compute affected suites
         id: affected
@@ -121,8 +119,6 @@ jobs:
 
       - name: Install dependencies
         run: bun ci
-        env:
-          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
 
       - name: Resolve BrowserOS cache key
         if: matrix.needs_browser == true

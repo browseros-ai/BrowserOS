@@ -90,8 +90,6 @@ on:
         type: boolean
         default: true
     secrets:
-      BROWSEROS_PACKAGES_TOKEN:
-        required: false
       R2_ACCOUNT_ID:
         required: false
       R2_ACCESS_KEY_ID:
@@ -297,8 +295,6 @@ jobs:
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browseros'
         working-directory: ${{ steps.inputs.outputs.browseros_repo }}/packages/browseros-agent
         run: bun ci
-        env:
-          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
 
       - name: Setup BrowserOS neo server toolchain
         if: steps.inputs.outputs.resource_mode == 'source' && steps.inputs.outputs.products == 'browserclaw'

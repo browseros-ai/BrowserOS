@@ -52,8 +52,6 @@ jobs:
 
       - name: Install dependencies
         run: bun ci
-        env:
-          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
 
       - name: Create dev env file
         run: cp .env.development.example .env.development
