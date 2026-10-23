@@ -726,6 +726,7 @@ mod tests {
             capsolver: Some(primary.client.config.clone()),
             twocaptcha: Some(backup.client.config.clone()),
             paid_task_limit: 3,
+            force_method: None,
         });
         let task = token_task(false);
         let cancel = CancellationToken::new();

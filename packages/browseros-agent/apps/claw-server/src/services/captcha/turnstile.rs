@@ -5,6 +5,7 @@ use tokio::time::{Duration, Instant, sleep_until};
 
 use super::{
     SolveCtx,
+    config::ForcedMethod,
     page::CaptchaPage,
     providers::CaptchaBackend,
     types::{
@@ -35,8 +36,7 @@ return { token, sitekey,
     action: widget?.getAttribute('data-action') ?? args.action,
     cdata: widget?.getAttribute('data-cdata') ?? args.cdata,
     callback: widget?.getAttribute('data-callback') ?? args.callback,
-    failed: sitekey === '2x00000000000000000000AB'
-        || !!widget?.querySelector('[data-error-code], [aria-invalid="true"]') };
+    failed: !!widget?.querySelector('[data-error-code], [aria-invalid="true"]') };
 "#;
 
 const APPLY: &str = r#"
@@ -290,6 +290,9 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         ));
     }
     guard(ctx).await?;
+    if ctx.forced_method == Some(ForcedMethod::Token) {
+        return token(ctx, challenge, result).await;
+    }
     attempt(ctx, result, SolveMethod::AutoPass, SolveStep::AutoPass, 1);
     let state = wait_token(ctx, challenge, Duration::from_secs(8)).await?;
     if flag(&state, "token") {
@@ -346,6 +349,14 @@ async fn run<P: CaptchaPage, B: CaptchaBackend>(
         }
     }
 
+    token(ctx, challenge, result).await
+}
+
+async fn token<P: CaptchaPage, B: CaptchaBackend>(
+    ctx: &SolveCtx<'_, P, B>,
+    challenge: &Challenge,
+    result: &mut FlowResult,
+) -> Result<Terminal, PageError> {
     let configured = ctx.backend.is_configured();
     let state = read(ctx, challenge).await?;
     if flag(&state, "token") {
@@ -766,6 +777,18 @@ mod tests {
         cancel: &CancellationToken,
         budget: Duration,
     ) -> anyhow::Result<FlowResult> {
+        run_with_method(page, backend, cancel, budget, None)
+            .await
+            .map(|(result, _)| result)
+    }
+
+    async fn run_with_method(
+        page: &FakePage,
+        backend: &FakeBackend,
+        cancel: &CancellationToken,
+        budget: Duration,
+        forced_method: Option<super::super::config::ForcedMethod>,
+    ) -> anyhow::Result<(FlowResult, Vec<super::super::types::CaptchaEvent>)> {
         let reservations = Arc::<TabReservations>::default();
         let lease = reservations
             .try_reserve(42, "cap_test")
@@ -779,7 +802,7 @@ mod tests {
                 rect: None,
             });
         }
-        Ok(solve(
+        let result = solve(
             &SolveCtx {
                 page,
                 backend,
@@ -790,10 +813,12 @@ mod tests {
                 page_url: document().url,
                 document: document(),
                 user_agent: None,
+                forced_method,
             },
             &challenge,
         )
-        .await)
+        .await;
+        Ok((result, events.events()))
     }
 
     async fn finish(page: &FakePage, backend: &FakeBackend) -> anyhow::Result<FlowResult> {
@@ -804,6 +829,159 @@ mod tests {
             Duration::from_secs(120),
         )
         .await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_forced_tokens_skip_turnstile_waits_and_clicks() -> anyhow::Result<()> {
+        for token_at in [3, usize::MAX] {
+            let page = FakePage::default();
+            {
+                let mut state = page.state();
+                state.token_at = token_at;
+                state.pass_on_click = true;
+                state.rect = Some(Rect {
+                    x: 20.,
+                    y: 20.,
+                    width: 24.,
+                    height: 24.,
+                });
+                state.callback = true;
+                state.transition = true;
+            }
+            let backend = FakeBackend::token();
+            let started = Instant::now();
+            let (result, events) = run_with_method(
+                &page,
+                &backend,
+                &CancellationToken::new(),
+                Duration::from_secs(120),
+                Some(super::super::config::ForcedMethod::Token),
+            )
+            .await?;
+            assert_eq!(
+                (result.status, result.method, result.reason),
+                (
+                    SolveStatus::Solved,
+                    SolveMethod::Token,
+                    SolveReason::TokenAccepted
+                )
+            );
+            assert_eq!(
+                result.attempts,
+                Attempts {
+                    token: 1,
+                    ..Default::default()
+                }
+            );
+            assert_eq!(result.paid_tasks, 1);
+            assert!(matches!(
+                backend.tasks().as_slice(),
+                [SolveTask::TurnstileToken(_)]
+            ));
+            assert!(page.state().clicks.is_empty());
+            assert!(page.state().applied.is_some());
+            assert_eq!(started.elapsed(), Duration::ZERO);
+            assert_eq!(events.len(), 1);
+            assert_eq!(events[0].data["method"], "token");
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_forced_turnstile_tokens_still_require_acceptance() -> anyhow::Result<()> {
+        let page = FakePage::default();
+        let (result, _) = run_with_method(
+            &page,
+            &FakeBackend::token(),
+            &CancellationToken::new(),
+            Duration::from_secs(120),
+            Some(super::super::config::ForcedMethod::Token),
+        )
+        .await?;
+        assert_eq!(
+            (result.status, result.method, result.reason),
+            (
+                SolveStatus::Failed,
+                SolveMethod::Token,
+                SolveReason::AcceptanceUnconfirmed
+            )
+        );
+        assert!(page.state().clicks.is_empty());
+        assert!(page.state().applied.is_some());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_widget_errors_require_error_attributes() -> anyhow::Result<()> {
+        use browseros_mcp::framework::{BrowserToolOptions, ToolCtx, execute_tool};
+        struct NoBrowser;
+        impl browseros_core::CdpConnection for NoBrowser {
+            fn send<'a>(
+                &'a self,
+                _: &'a str,
+                _: Value,
+                _: Option<&'a browseros_core::SessionId>,
+            ) -> futures_util::future::BoxFuture<'a, Result<Value, browseros_cdp::CdpError>>
+            {
+                Box::pin(async { Err(browseros_cdp::CdpError::NotConnected) })
+            }
+            fn send_raw_json<'a>(
+                &'a self,
+                _: &'a str,
+                _: &'a str,
+                _: Option<&'a browseros_core::SessionId>,
+            ) -> futures_util::future::BoxFuture<'a, Result<String, browseros_cdp::CdpError>>
+            {
+                Box::pin(async { Err(browseros_cdp::CdpError::NotConnected) })
+            }
+            fn events(&self) -> tokio::sync::broadcast::Receiver<browseros_cdp::CdpEvent> {
+                tokio::sync::broadcast::channel(1).1
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            fn connection_epoch(&self) -> u64 {
+                1
+            }
+        }
+        let browser = browseros_core::Browser::new(Arc::new(NoBrowser));
+        let ctx = ToolCtx::new(BrowserToolOptions {
+            browser: browser.view().await,
+            target: None,
+            defaults: Default::default(),
+            cancel: CancellationToken::new(),
+            output_files: browseros_mcp::output_file::create_browser_output_file_access(),
+            inner_call_hook: None,
+            preloaded_helpers: vec![],
+        });
+        for key in ["2x00000000000000000000AB", "ordinary-public-key"] {
+            for error in [None, Some("data-error-code"), Some("aria-invalid")] {
+                let code = format!(
+                    "const key={}; const error={}; const widget={{getAttribute:name=>name==='data-sitekey'?key:null,querySelector:selector=>error&&selector.includes('['+error)?{{}}:null}}; const document={{querySelectorAll:selector=>selector==='.cf-turnstile'?[widget]:[]}}; const window={{}}; return await {};",
+                    json!(key),
+                    json!(error),
+                    script(READ, &json!({"sitekey":key})),
+                );
+                let result = execute_tool(
+                    &browseros_mcp::tools::run::definition(),
+                    json!({"code":code}),
+                    &ctx,
+                )
+                .await
+                .map_err(|error| anyhow::anyhow!("{error}"))?;
+                assert!(!result.is_error, "{:?}", result.structured_content);
+                let output = result
+                    .structured_content
+                    .ok_or_else(|| anyhow::anyhow!("missing script result"))?;
+                assert_eq!(output["ok"], true);
+                assert_eq!(
+                    output["value"]["failed"],
+                    error.is_some(),
+                    "{key}: {error:?}"
+                );
+            }
+        }
+        Ok(())
     }
 
     #[tokio::test(start_paused = true)]
@@ -1294,7 +1472,7 @@ mod tests {
             (
                 "turnstile-block",
                 SolveMethod::AutoPass,
-                SolveReason::ChallengeNotPassed,
+                SolveReason::NoProvider,
             ),
         ] {
             let mut page = FixturePage {
@@ -1323,6 +1501,7 @@ mod tests {
                     page_url: document.url.clone(),
                     document,
                     user_agent: None,
+                    forced_method: None,
                 },
                 &challenge,
             )
