@@ -175,3 +175,37 @@ export function parseResultMeta(raw: string | null | undefined): {
     return null
   }
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function startOfDay(ms: number): number {
+  const day = new Date(ms)
+  day.setHours(0, 0, 0, 0)
+  return day.getTime()
+}
+
+/** "2:41 PM" for today, "Yesterday", then "Oct 21" in the reader's locale. */
+export function taskWhen(startedAt: number, now: number): string {
+  const days = Math.round((startOfDay(now) - startOfDay(startedAt)) / DAY_MS)
+  if (days <= 0) {
+    return new Date(startedAt).toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    })
+  }
+  if (days === 1) return 'Yesterday'
+  return new Date(startedAt).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  })
+}
+
+/** "took 4 min" style length of a task, rounded for people rather than logs. */
+export function tookLabel(durationMs: number): string {
+  const minutes = Math.round(Math.max(0, durationMs) / 60_000)
+  if (minutes < 1) return 'took under a minute'
+  if (minutes < 60) return `took ${minutes} min`
+  const hours = Math.floor(minutes / 60)
+  const rest = minutes % 60
+  return rest === 0 ? `took ${hours} h` : `took ${hours} h ${rest} min`
+}
