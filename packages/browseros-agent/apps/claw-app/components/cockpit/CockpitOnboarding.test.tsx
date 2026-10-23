@@ -7,95 +7,91 @@
 import { describe, expect, it } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { MemoryRouter } from 'react-router'
+import type { Harness } from '@/components/harness/harness.types'
 import { CockpitOnboarding } from './CockpitOnboarding'
 
-function render(
-  state: 'first-run' | 'waiting',
-  connectedHarnesses: readonly string[] = [],
-): string {
+function render(connectedHarnesses: readonly Harness[] = []): string {
   return renderToStaticMarkup(
     <MemoryRouter>
-      <CockpitOnboarding
-        state={state}
-        connectedHarnesses={connectedHarnesses}
-      />
+      <CockpitOnboarding connectedHarnesses={connectedHarnesses} />
     </MemoryRouter>,
   )
 }
 
+const SEVEN: Harness[] = [
+  'Claude Code',
+  'Codex',
+  'Cursor',
+  'OpenCode',
+  'Antigravity',
+  'VS Code',
+  'Zed',
+]
+
 describe('CockpitOnboarding', () => {
-  it('first-run: hero, a paused video, and the start panel render', () => {
-    const html = render('first-run')
-    expect(html).toContain('You watch. Your agent')
-    expect(html).toContain('works.')
-    // The hero plays inline on demand, without a poster-to-lightbox step or a
-    // youtube embed (blocked from the extension origin).
-    expect(html).toContain('<video')
-    expect(html.toLowerCase()).not.toContain('autoplay')
-    expect(html).toContain('onboarding-recording/video.mp4')
-    expect(html).not.toContain('youtube-nocookie.com/embed')
-    expect(html).toContain('Hand off your first task')
-    expect(html).toContain('Copy task')
-    expect(html).toContain('Manage agents')
-    expect(html).toContain('Paste this prompt into your agent.')
-    expect(html).toContain(
-      'Using BrowserOS neo, search for the current monthly prices',
-    )
+  it('leads with neo’s one line, not the cockpit headline or bubbles', () => {
+    const html = render(['Claude Code', 'Codex'])
+    expect(html).toContain('>Watch me,</em>')
+    expect(html).toContain('then you try.')
+    expect(html).not.toContain('You’re all set.')
+    // The demo's drawn new tab once said it; the page itself does not.
+    expect(html).not.toMatch(/<h1[^>]*>[^<]*What are your agents/)
+    expect(html).not.toContain('Your AI apps are connected.')
   })
 
-  it('first-run: retires the single setup demo and the numbered step strip', () => {
-    const html = render('first-run')
-    expect(html).not.toContain('first-run-demo.mp4')
-    expect(html).not.toContain('Install BrowserClaw as an MCP.')
-    expect(html).not.toContain('Watch it here.')
+  it('shows the connected apps as marks with Connected, the hint kept for the popover', () => {
+    const html = render(['Claude Code', 'Codex'])
+    expect(html).toContain('aria-label="Connected apps: Claude Code, Codex"')
+    expect(html).toContain('aria-expanded="false"')
+    expect(html).toContain('>Connected</span>')
+    expect(html).not.toContain('If one is open, restart it once.')
+    expect(html).not.toMatch(/>\+\d/)
   })
 
-  it('first-run: shows the tie-back status, not the waiting status or a connected line', () => {
-    const html = render('first-run')
-    expect(html).toContain('Then come back here to watch it run.')
-    expect(html).not.toContain('Waiting for your first run')
-    expect(html).not.toContain('connected')
+  it('caps the marks at three and collapses the rest into +N', () => {
+    const html = render(SEVEN)
+    expect(html).toContain('>+4</span>')
+    expect(html).toContain(`aria-label="Connected apps: ${SEVEN.join(', ')}"`)
   })
 
-  it('waiting: the waiting status renders and connected agents show as chips', () => {
-    const html = render('waiting', ['Claude Code', 'Cursor'])
-    expect(html).toContain('Waiting for your first run')
-    expect(html).toContain('Claude Code')
-    expect(html).toContain('Cursor')
-    expect(html).toContain('2 connected')
+  it('with no app found, says so and makes Get Claude the one primary action', () => {
+    const html = render()
+    expect(html).toContain('Almost there.')
+    expect(html).toContain('>Watch me</em>')
+    expect(html).toContain('first.')
+    expect(html).toContain('I didn’t find an AI app yet.')
+    expect(html).toContain('href="https://claude.ai/download"')
+    expect(html).not.toContain('Connected apps')
   })
 
-  it('waiting: shows every connected agent as a chip, never a +N overflow', () => {
-    const harnesses = [
-      'Claude Code',
-      'Codex',
-      'Cursor',
-      'OpenCode',
-      'Gemini',
-      'Cline',
-      'Zed',
-    ]
-    const html = render('waiting', harnesses)
-    expect(html).toContain('7 connected')
-    for (const harness of harnesses) {
-      expect(html).toContain(harness)
+  it('keeps the quiet Cowork link in both states', () => {
+    for (const harnesses of [[], ['Claude Code']] as Harness[][]) {
+      const html = render(harnesses)
+      expect(html).toContain('Using Claude Cowork?')
+      expect(html).toContain('Set it up')
     }
-    expect(html).not.toContain('+3')
   })
 
-  it('waiting: retains the starter prompt tile so the reader can still copy', () => {
-    const html = render('waiting', ['Claude Code'])
-    expect(html).toContain(
-      'Using BrowserOS neo, search for the current monthly prices',
+  it('puts Your turn and the one prompt above the demo, with no caption or hint', () => {
+    const html = render(['Claude Code'])
+    const prompt =
+      'Use neo, find me the cheapest one-way flight to NYC next Friday on Google Flights.'
+    expect(html).not.toContain('<video')
+    expect(html.indexOf('>Your turn</span>')).toBeGreaterThan(0)
+    expect(html.indexOf(`aria-label="Copy: ${prompt}"`)).toBeGreaterThan(
+      html.indexOf('>Your turn</span>'),
     )
+    expect(html.indexOf('aria-label="Pause the demo"')).toBeGreaterThan(
+      html.indexOf(`aria-label="Copy: ${prompt}"`),
+    )
+    expect(html.match(/aria-label="Copy: /g)).toHaveLength(1)
+    expect(html).not.toContain('Try one')
+    expect(html).not.toContain('then watch it here')
+    expect(html).not.toContain('to see it there')
   })
 
-  it('renders the docs link in both states with no refresh affordance', () => {
-    for (const state of ['first-run', 'waiting'] as const) {
-      const html = render(state)
-      expect(html).toContain('https://docs.browseros.com/')
-      expect(html).not.toContain('Refresh the page.')
-      expect(html).not.toContain('Already set up?')
-    }
+  it('reads without jargon', () => {
+    const text = render(SEVEN).replace(/<[^>]+>/g, ' ')
+    expect(text).not.toMatch(/\b(MCP|server|endpoint|config)\b/i)
   })
 })

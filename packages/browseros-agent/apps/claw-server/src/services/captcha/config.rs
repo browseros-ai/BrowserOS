@@ -5,6 +5,13 @@ pub const TWOCAPTCHA_KEY_FILE_ENV: &str = "BROWSEROS_2CAPTCHA_API_KEY_FILE";
 pub const TWOCAPTCHA_URL_ENV: &str = "BROWSEROS_2CAPTCHA_API_URL";
 pub const CAPSOLVER_URL_ENV: &str = "BROWSEROS_CAPSOLVER_API_URL";
 pub const PAID_TASK_LIMIT_ENV: &str = "BROWSEROS_CAPTCHA_PAID_TASK_LIMIT";
+pub const TEST_FORCE_METHOD_ENV: &str = "BROWSEROS_CAPTCHA_TEST_FORCE_METHOD";
+
+/// Test-only: skip free paths. Vendors reject localhost websiteURLs, so use public pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForcedMethod {
+    Token,
+}
 
 #[derive(Clone)]
 pub struct ApiKey(String);
@@ -38,6 +45,7 @@ pub struct CaptchaConfig {
     pub capsolver: Option<ProviderConfig>,
     pub twocaptcha: Option<ProviderConfig>,
     pub paid_task_limit: u32,
+    pub force_method: Option<ForcedMethod>,
 }
 
 impl Default for CaptchaConfig {
@@ -46,6 +54,7 @@ impl Default for CaptchaConfig {
             capsolver: None,
             twocaptcha: None,
             paid_task_limit: 100,
+            force_method: None,
         }
     }
 }
@@ -68,6 +77,15 @@ impl CaptchaConfig {
             paid_task_limit: lookup(PAID_TASK_LIMIT_ENV)
                 .and_then(|value| value.trim().parse().ok())
                 .unwrap_or(100),
+            force_method: lookup(TEST_FORCE_METHOD_ENV).and_then(|value| {
+                if value.trim() == "token" {
+                    tracing::warn!(target: "captcha", "test-only: CAPTCHA free paths are skipped");
+                    Some(ForcedMethod::Token)
+                } else {
+                    tracing::warn!(target: "captcha", variable = TEST_FORCE_METHOD_ENV, "Unsupported CAPTCHA test force method ignored; only token is supported");
+                    None
+                }
+            }),
         }
     }
 
@@ -133,6 +151,79 @@ fn provider(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Clone, Default)]
+    struct LogWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for LogWriter {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn config_and_logs(vars: &[(&str, String)]) -> (CaptchaConfig, String) {
+        let writer = LogWriter::default();
+        let output = writer.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .without_time()
+            .with_ansi(false)
+            .with_max_level(tracing::Level::WARN)
+            .with_writer(move || writer.clone())
+            .finish();
+        let config = tracing::subscriber::with_default(subscriber, || from_vars(vars));
+        let bytes = output.0.lock().unwrap_or_else(|p| p.into_inner());
+        (config, String::from_utf8_lossy(&bytes).into_owned())
+    }
+
+    #[test]
+    fn tests_that_force_method_is_unset_by_default_without_a_warning() {
+        let (config, logs) = config_and_logs(&[]);
+        assert_eq!(config.force_method, None);
+        assert_eq!(CaptchaConfig::default().force_method, None);
+        assert!(logs.is_empty(), "{logs}");
+    }
+
+    #[test]
+    fn tests_that_token_force_method_warns_once_at_startup() {
+        for value in ["token", " token \n"] {
+            let (config, logs) =
+                config_and_logs(&[("BROWSEROS_CAPTCHA_TEST_FORCE_METHOD", value.into())]);
+            assert_eq!(config.force_method, Some(ForcedMethod::Token));
+            assert!(!config.has_provider());
+            assert_eq!(logs.lines().count(), 1, "{logs}");
+            assert!(logs.contains("WARN"), "{logs}");
+            assert!(
+                logs.contains("test-only: CAPTCHA free paths are skipped"),
+                "{logs}"
+            );
+        }
+    }
+
+    #[test]
+    fn tests_that_unsupported_force_methods_are_ignored_with_a_warning() {
+        for value in ["tiles", "junk", "TOKEN", "", " \n"] {
+            let (config, logs) =
+                config_and_logs(&[("BROWSEROS_CAPTCHA_TEST_FORCE_METHOD", value.into())]);
+            assert_eq!(config.force_method, None);
+            assert_eq!(logs.lines().count(), 1, "{logs}");
+            assert!(logs.contains("WARN"), "{logs}");
+            assert!(
+                logs.contains("BROWSEROS_CAPTCHA_TEST_FORCE_METHOD"),
+                "{logs}"
+            );
+            assert!(logs.contains("ignored"), "{logs}");
+            assert!(!logs.contains("free paths are skipped"), "{logs}");
+        }
+    }
+
     fn from_vars(vars: &[(&str, String)]) -> CaptchaConfig {
         CaptchaConfig::from_lookup(|name| {
             vars.iter()

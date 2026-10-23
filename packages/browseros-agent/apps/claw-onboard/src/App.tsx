@@ -1,10 +1,10 @@
 import { Route, Routes } from 'react-router'
-import { OnboardingV2 } from '@/onboarding/OnboardingV2'
+import { OnboardingChat } from '@/onboarding/OnboardingChat'
 
 export function App() {
   return (
     <Routes>
-      <Route path="*" element={<OnboardingV2 />} />
+      <Route path="*" element={<OnboardingChat />} />
     </Routes>
   )
 }

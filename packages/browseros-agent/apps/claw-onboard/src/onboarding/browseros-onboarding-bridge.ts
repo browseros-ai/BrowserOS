@@ -15,7 +15,7 @@ import {
   type BrowserOSSetupState,
   type BrowserOSStartImportRequest,
 } from './browseros-onboarding-api'
-import { MOCK_BROWSEROS_IMPORT_SOURCES } from './onboarding-v2.helpers'
+import { MOCK_BROWSEROS_IMPORT_SOURCES } from './mock-import-sources'
 
 export interface BrowserOSOnboardingBridge {
   isMock: boolean

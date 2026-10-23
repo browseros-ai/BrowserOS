@@ -37,6 +37,7 @@ export function parseOptions(argv: string[]) {
       paid: { type: 'boolean' },
       'expect-tool-missing': { type: 'boolean' },
       'mcp-url': { type: 'string' },
+      'hosted-mode': { type: 'string' },
       'dev-watch': { type: 'boolean' },
       'startup-timeout': { type: 'string', default: '600000' },
       'fixture-bind': { type: 'string' },
@@ -49,6 +50,13 @@ export function parseOptions(argv: string[]) {
       out: { type: 'string' },
     },
   })
+  if (
+    values['hosted-mode'] !== undefined &&
+    !['1', '0'].includes(values['hosted-mode'])
+  )
+    throw new Error('--hosted-mode must be 1 or 0')
+  if (values['mcp-url'] && values['hosted-mode'] !== undefined)
+    throw new Error('--hosted-mode cannot be combined with --mcp-url')
   const solveTimeout = Number(values['solve-timeout'])
   const startupTimeout = Number(values['startup-timeout'])
   if (
@@ -89,6 +97,7 @@ export function parseOptions(argv: string[]) {
     paid: values.paid,
     expectToolMissing: values['expect-tool-missing'],
     mcpUrl: values['mcp-url'],
+    hostedMode: (values['hosted-mode'] ?? '1') as '1' | '0',
     devWatch: values['dev-watch'],
     startupTimeout,
     fixtureBind: values['fixture-bind'],
@@ -117,6 +126,16 @@ export function selectPages(
   )
     throw new Error('no matching pages or unknown --only id')
   return selected
+}
+
+export function startHarnessServer(
+  cdpPort: number,
+  options: { keyEnv: NodeJS.ProcessEnv; hostedMode: '1' | '0' },
+  spawn = startRustServer,
+) {
+  return spawn(cdpPort, {
+    env: { ...options.keyEnv, BROWSERCLAW_HOSTED_MODE: options.hostedMode },
+  })
 }
 
 async function main(): Promise<number> {
@@ -154,11 +173,17 @@ async function main(): Promise<number> {
             out: options.out,
             startupTimeout: options.startupTimeout,
             keyEnv: keys.env,
+            hostedMode: options.hostedMode,
           }),
         (watch) => watch.stop(),
       )
       mcpUrl = await watch.ready()
-      preflight = await checkDevPreflight(mcpUrl, options.expectToolMissing)
+      preflight = await checkDevPreflight(
+        mcpUrl,
+        options.expectToolMissing,
+        undefined,
+        options.hostedMode,
+      )
       console.log(renderPreflight(preflight))
       await writeFile(
         join(options.out, 'results.json'),
@@ -166,7 +191,7 @@ async function main(): Promise<number> {
       )
       await writeFile(
         join(options.out, 'results.md'),
-        `# CAPTCHA E2E\n\n${renderPreflight(preflight)}`,
+        `# CAPTCHA E2E\n\nHosted mode: ${options.hostedMode}\n\n${renderPreflight(preflight)}`,
       )
       if (!preflight.ok)
         throw new Error(`dev-watch preflight failed: ${preflight.error}`)
@@ -191,7 +216,11 @@ async function main(): Promise<number> {
         (browser) => browser.kill(),
       )
       const server = await resources.own(
-        () => startRustServer(browser.cdpPort, { env: keys.env }),
+        () =>
+          startHarnessServer(browser.cdpPort, {
+            keyEnv: keys.env,
+            hostedMode: options.hostedMode,
+          }),
         (server) => server.stop(),
       )
       mcpUrl = server.baseUrl
@@ -222,7 +251,7 @@ async function main(): Promise<number> {
     const sha =
       Bun.spawnSync(['git', 'rev-parse', 'HEAD']).stdout.toString().trim() ||
       'unknown'
-    const header = `# CAPTCHA E2E\n\nTime: ${new Date().toISOString()}\n\nGit: ${sha}\n\nServer: ${mcpUrl}\n\nKeys: ${options.keys}; browser: ${options.headed ? 'headed' : 'headless'}\n\n${preflight ? renderPreflight(preflight) : ''}`
+    const header = `# CAPTCHA E2E\n\nTime: ${new Date().toISOString()}\n\nGit: ${sha}\n\nServer: ${mcpUrl}\n\nHosted mode: ${options.mcpUrl ? 'endpoint-owned' : options.hostedMode}\n\nKeys: ${options.keys}; browser: ${options.headed ? 'headed' : 'headless'}\n\n${preflight ? renderPreflight(preflight) : ''}`
     const table = renderTable(records)
     const summary = ['PASS', 'FAIL', 'UNVERIFIED']
       .map(

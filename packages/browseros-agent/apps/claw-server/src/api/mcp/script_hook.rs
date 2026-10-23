@@ -369,7 +369,7 @@ mod tests {
             .try_reserve(42, "cap_test")
             .map_err(|_| anyhow::anyhow!("busy"))?;
         let hook = hook_for(&call);
-        let expected = "page 42 is busy: solve_captcha (request cap_test) is working on a unknown CAPTCHA (detecting, 0s). Wait for it to return, then take a fresh snapshot.";
+        let expected = "page 42 is busy: solve_captcha (request cap_test) is working on an unknown CAPTCHA (detecting, 0s). Wait for it to return, then take a fresh snapshot.";
         assert_eq!(hook.authorize(Some(42)).await, Err(expected.into()));
         assert!(
             call.foreign_pages

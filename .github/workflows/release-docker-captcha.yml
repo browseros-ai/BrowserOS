@@ -1,0 +1,289 @@
+name: "Release: Private Neo CAPTCHA image"
+
+on:
+  workflow_dispatch:
+    inputs:
+      neo_version:
+        description: "Public Neo image version (e.g. 0.51.2.1)"
+        required: true
+        type: string
+      verify_paid:
+        description: "Require a paid Google reCAPTCHA demo PASS"
+        type: boolean
+        default: false
+      push:
+        description: "Publish the verified keyed image"
+        type: boolean
+        default: true
+
+permissions: {}
+concurrency:
+  group: release-docker-captcha
+  cancel-in-progress: false
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x64
+            arch: amd64
+            rust_target: x86_64-unknown-linux-gnu
+          - target: linux-arm64
+            arch: arm64
+            rust_target: aarch64-unknown-linux-gnu
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target/captcha-hosted-image
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Install workflow test dependency
+        run: python3 -m pip install PyYAML==6.0.3
+      - name: Test release guards
+        run: python3 -m unittest discover -s packages/browseros/docker/neo-captcha -p 'test_*.py'
+      - name: Set up cross compiler
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup target add "$RUST_TARGET"
+          python3 -m pip install ziglang==0.15.2
+          python3 -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent)' >> "$GITHUB_PATH"
+          cargo install --locked cargo-zigbuild --version 0.23.0
+      - name: Build this commit's server
+        working-directory: packages/browseros-agent
+        env:
+          RUST_TARGET: ${{ matrix.rust_target }}
+        run: cargo zigbuild --release --locked --target "$RUST_TARGET.2.17" -p claw-server --bin browseros-claw-server-rs
+      - uses: actions/upload-artifact@v7
+        with:
+          name: claw-server-${{ matrix.arch }}
+          path: target/captcha-hosted-image/${{ matrix.rust_target }}/release/browseros-claw-server-rs
+          if-no-files-found: error
+
+  bootstrap:
+    needs: server
+    outputs:
+      short_sha: ${{ steps.tag.outputs.short_sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: neo-captcha
+    permissions:
+      contents: read
+      packages: write
+    env:
+      IMAGE: ghcr.io/browseros-ai/neo-captcha
+      NEO_VERSION: ${{ inputs.neo_version }}
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate version and tag
+        id: tag
+        run: |
+          [[ "$NEO_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v8
+        with:
+          name: claw-server-amd64
+          path: packages/browseros/docker/neo-captcha/servers/amd64
+      - uses: actions/download-artifact@v8
+        with:
+          name: claw-server-arm64
+          path: packages/browseros/docker/neo-captcha/servers/arm64
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check bootstrap
+        id: bootstrap
+        run: |
+          if docker buildx imagetools inspect "$IMAGE:bootstrap" >/dev/null 2>&1; then
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Create keyless bootstrap package
+        if: steps.bootstrap.outputs.needed == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: packages/browseros/docker/neo-captcha
+          build-args: NEO_IMAGE=ghcr.io/browseros-ai/neo:${{ inputs.neo_version }}
+          platforms: linux/amd64,linux/arm64
+          tags: ghcr.io/browseros-ai/neo-captcha:bootstrap
+          push: true
+          no-cache: true
+          provenance: false
+          sbom: false
+      - name: Require private package
+        run: python3 packages/browseros/docker/neo-captcha/release.py private
+
+  verify:
+    needs: [server, bootstrap]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    environment: neo-captcha
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      NEO_VERSION: ${{ inputs.neo_version }}
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: claw-server-${{ matrix.arch }}
+          path: packages/browseros/docker/neo-captcha/servers/${{ matrix.arch }}
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require private package
+        run: python3 packages/browseros/docker/neo-captcha/release.py private
+      - name: Prepare build secrets
+        env:
+          CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$CAPSOLVER_API_KEY" > "$RUNNER_TEMP/neo-captcha-capsolver"
+          printf '%s' "$TWOCAPTCHA_API_KEY" > "$RUNNER_TEMP/neo-captcha-2captcha"
+      - name: Load native image for verification
+        uses: docker/build-push-action@v6
+        with:
+          context: packages/browseros/docker/neo-captcha
+          build-args: NEO_IMAGE=ghcr.io/browseros-ai/neo:${{ inputs.neo_version }}
+          platforms: linux/${{ matrix.arch }}
+          tags: neo-captcha:verify
+          load: true
+          no-cache: true
+          provenance: false
+          sbom: false
+          secret-files: |
+            capsolver_api_key=${{ runner.temp }}/neo-captcha-capsolver
+            twocaptcha_api_key=${{ runner.temp }}/neo-captcha-2captcha
+      - name: Verify hosted on and off
+        id: smoke
+        run: |
+          for hosted in 1 0; do
+            name="neo-captcha-$hosted"
+            docker run -d --name "$name" --shm-size=1g -e BROWSERCLAW_HOSTED_MODE="$hosted" -p 127.0.0.1::9010 neo-captcha:verify >/dev/null
+            for _ in $(seq 1 90); do
+              state=$(docker inspect -f '{{.State.Health.Status}}' "$name")
+              [ "$state" != unhealthy ] || exit 1
+              [ "$state" != healthy ] || break
+              sleep 2
+            done
+            [ "$state" = healthy ]
+            port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "9010/tcp") 0).HostPort}}' "$name")
+            python3 packages/browseros/docker/neo-captcha/release.py verify "http://127.0.0.1:$port" "$hosted"
+            if [ "$hosted" = 1 ]; then echo "mcp_url=http://127.0.0.1:$port/mcp" >> "$GITHUB_OUTPUT"; fi
+          done
+      - uses: oven-sh/setup-bun@v2
+        if: inputs.verify_paid && matrix.arch == 'amd64'
+        with:
+          bun-version: 1.4.2
+      - name: Verify paid demo
+        if: inputs.verify_paid && matrix.arch == 'amd64'
+        working-directory: packages/browseros-agent
+        env:
+          MCP_URL: ${{ steps.smoke.outputs.mcp_url }}
+          BROWSEROS_CAPSOLVER_API_KEY_FILE: ${{ runner.temp }}/neo-captcha-capsolver
+          BROWSEROS_2CAPTCHA_API_KEY_FILE: ${{ runner.temp }}/neo-captcha-2captcha
+        run: |
+          bun install --frozen-lockfile > "$RUNNER_TEMP/neo-captcha-install.log" 2>&1
+          result=0
+          bun run test:captcha-e2e -- --mcp-url "$MCP_URL" --pages demo --only google-recaptcha-demo --keys real --paid --out "$RUNNER_TEMP/captcha-e2e" > "$RUNNER_TEMP/captcha-e2e.log" 2>&1 || result=$?
+          if [ -f "$RUNNER_TEMP/captcha-e2e/results.md" ]; then cat "$RUNNER_TEMP/captcha-e2e/results.md"; fi
+          [ "$result" -eq 0 ]
+          python3 -c 'import json, os; r=json.load(open(os.environ["RUNNER_TEMP"]+"/captcha-e2e/results.json")); assert len(r)==1 and r[0]["outcome"]=="PASS"'
+      - name: Remove containers and secret files
+        if: always()
+        run: |
+          docker rm -fv neo-captcha-1 neo-captcha-0 >/dev/null 2>&1 || true
+          rm -f "$RUNNER_TEMP/neo-captcha-capsolver" "$RUNNER_TEMP/neo-captcha-2captcha"
+
+  publish:
+    needs: [server, bootstrap, verify]
+    if: inputs.push
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: neo-captcha
+    permissions:
+      contents: read
+      packages: write
+    env:
+      NEO_VERSION: ${{ inputs.neo_version }}
+      DOCKER_BUILD_RECORD_UPLOAD: "false"
+      DOCKER_BUILD_SUMMARY: "false"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: claw-server-amd64
+          path: packages/browseros/docker/neo-captcha/servers/amd64
+      - uses: actions/download-artifact@v8
+        with:
+          name: claw-server-arm64
+          path: packages/browseros/docker/neo-captcha/servers/arm64
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Require private package
+        run: python3 packages/browseros/docker/neo-captcha/release.py private
+      - name: Prepare build secrets
+        env:
+          CAPSOLVER_API_KEY: ${{ secrets.CAPSOLVER_API_KEY }}
+          TWOCAPTCHA_API_KEY: ${{ secrets.TWOCAPTCHA_API_KEY }}
+        run: |
+          umask 077
+          printf '%s' "$CAPSOLVER_API_KEY" > "$RUNNER_TEMP/neo-captcha-capsolver"
+          printf '%s' "$TWOCAPTCHA_API_KEY" > "$RUNNER_TEMP/neo-captcha-2captcha"
+      - name: Recheck privacy before publication
+        run: python3 packages/browseros/docker/neo-captcha/release.py private
+      - name: Publish verified image
+        uses: docker/build-push-action@v6
+        with:
+          context: packages/browseros/docker/neo-captcha
+          build-args: NEO_IMAGE=ghcr.io/browseros-ai/neo:${{ inputs.neo_version }}
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ghcr.io/browseros-ai/neo-captcha:${{ inputs.neo_version }}-${{ needs.bootstrap.outputs.short_sha }}
+            ghcr.io/browseros-ai/neo-captcha:latest
+          push: true
+          no-cache: true
+          provenance: false
+          sbom: false
+          secret-files: |
+            capsolver_api_key=${{ runner.temp }}/neo-captcha-capsolver
+            twocaptcha_api_key=${{ runner.temp }}/neo-captcha-2captcha
+      - name: Remove secret files
+        if: always()
+        run: rm -f "$RUNNER_TEMP/neo-captcha-capsolver" "$RUNNER_TEMP/neo-captcha-2captcha"

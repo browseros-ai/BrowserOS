@@ -174,6 +174,10 @@
   --animate-pulse-dot: pulse-dot 1.4s ease-in-out infinite;
   --animate-fade-up: fade-up 0.4s cubic-bezier(0.2, 0.7, 0.3, 1) both;
   --animate-fade-in: fade-in 0.35s ease both;
+  /* Cockpit first-run demo (components/cockpit/OnboardingDemo). */
+  --animate-demo-rise: demo-rise 0.36s cubic-bezier(0.2, 0.7, 0.3, 1) both;
+  --animate-demo-blink: demo-blink 1.05s steps(1) infinite;
+  --animate-demo-bounce: demo-bounce 0.8s cubic-bezier(0.3, 0.1, 0.3, 1);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -226,6 +230,33 @@
   }
   to {
     opacity: 1;
+  }
+}
+
+@keyframes demo-rise {
+  from {
+    opacity: 0;
+    transform: translateY(5px);
+  }
+}
+
+@keyframes demo-blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes demo-bounce {
+  0%,
+  50%,
+  100% {
+    transform: none;
+  }
+  22% {
+    transform: translateY(-16px);
+  }
+  72% {
+    transform: translateY(-7px);
   }
 }
 
