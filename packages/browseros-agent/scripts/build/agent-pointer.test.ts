@@ -45,7 +45,20 @@ function harness(
   const timers = new Map<number, { at: number; run: () => void }>()
   const frames = new Map<number, (time: number) => void>()
   const shadows: Element[] = []
+  const paints: unknown[] = []
   const drawing = {
+    get fillStyle() {
+      return paints.at(-1)
+    },
+    set fillStyle(value: unknown) {
+      paints.push(value)
+    },
+    get strokeStyle() {
+      return paints.at(-1)
+    },
+    set strokeStyle(value: unknown) {
+      paints.push(value)
+    },
     setTransform() {},
     clearRect() {},
     beginPath() {},
@@ -178,6 +191,7 @@ function harness(
     advance,
     root,
     shadows,
+    paints,
     frames,
     document,
     context,
@@ -274,6 +288,20 @@ describe('agent pointer page expression', () => {
     expect(
       h.shadows[0]?.children.some((child) => child.tagName === 'style'),
     ).toBe(false)
+  })
+
+  test('tests that the cursor and its ripple paint in neo deep blue instead of Cua blue', async () => {
+    const h = harness()
+    const moving = h.execute({ ...command, kind: 'click' })
+    await h.advance(450)
+    await moving
+    expect(h.api().click(command.x, command.y)).toBe(true)
+    await h.advance(200)
+    expect(h.paints).toContain('#0043cd')
+    expect(h.paints).not.toContain('#5ec0e8')
+    expect(h.paints.some((paint) => String(paint).startsWith('rgba('))).toBe(
+      true,
+    )
   })
 
   test('tests that the bundle executes once and a later move continues from the last tip', async () => {

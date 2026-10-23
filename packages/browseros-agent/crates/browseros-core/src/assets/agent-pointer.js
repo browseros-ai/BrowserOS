@@ -72,7 +72,8 @@
         if (!canvas.getContext('2d')) { dispose(); return false; }
         shadow.appendChild(canvas);
         document.documentElement.appendChild(host);
-        player = new Player(canvas, { float: false });
+        // Neo deep blue: claw-app's --cyanotype-blue token.
+        player = new Player(canvas, { fill: '#0043cd', float: false });
         const startCoordinate = (point, extent, offset) => {
           const margin = Math.min(16, extent / 2);
           return Math.max(margin, Math.min(point - offset, extent - margin));
