@@ -153,6 +153,10 @@
   --shadow-card: 0 1px 2px var(--shadow-key), 0 1px 3px var(--shadow-ambient);
   --shadow-pop:
     0 8px 30px var(--shadow-pop-key), 0 2px 8px var(--shadow-pop-ambient);
+  /* A framed page picture inside a card, so a busy website reads as a preview. */
+  --shadow-shot:
+    0 0 0 1px var(--shot-ring), 0 10px 24px -12px var(--shot-key),
+    0 2px 6px -2px var(--shot-ambient);
 
   /* Tailwind's stock shadow scale, re-declared through the same indirection.
      33 live `shadow-{xs,sm,md,lg,xl,2xl}` utilities carry most of this app's
@@ -401,6 +405,9 @@ body {
   --shadow-ambient: hsl(224 97% 13% / 0.04);
   --shadow-pop-key: hsl(224 97% 13% / 0.14);
   --shadow-pop-ambient: hsl(224 97% 13% / 0.08);
+  --shot-ring: hsl(224 60% 40% / 0.12);
+  --shot-key: hsl(224 97% 13% / 0.45);
+  --shot-ambient: hsl(224 97% 13% / 0.12);
   /* Tailwind's three stock shadow alphas, verbatim, so overriding the stock
      scale in @theme is a no-op in light mode. */
   --shadow-tint-1: rgb(0 0 0 / 0.05);
@@ -586,6 +593,9 @@ body {
   --shadow-ambient: rgb(0 0 0 / 0.28);
   --shadow-pop-key: rgb(0 0 0 / 0.55);
   --shadow-pop-ambient: rgb(0 0 0 / 0.4);
+  --shot-ring: rgb(255 255 255 / 0.08);
+  --shot-key: rgb(0 0 0 / 0.7);
+  --shot-ambient: rgb(0 0 0 / 0.3);
   /* Tailwind's stock scale at 5-10% black is invisible on an L* 11 page.
      Same geometry, enough alpha to actually read. */
   --shadow-tint-1: rgb(0 0 0 / 0.3);

@@ -106,6 +106,7 @@ export function Cockpit() {
           sessions={sessions}
           onTakeOver={takeover.takeOver}
           takeOverPendingSessionId={takeover.pendingTakeOverSessionId}
+          inControlSessionId={takeover.inControlSession?.sessionId}
         />
         <RecentActivity />
       </Page>

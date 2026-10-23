@@ -3,7 +3,6 @@ import type { SessionBrowserTab, SessionSummary } from '@browseros/claw-api'
 import {
   colorForSlug,
   formatRelative,
-  formatToolTrail,
   partOfDay,
   roundTimeSaved,
   sessionsToLiveCards,
@@ -68,22 +67,6 @@ describe('display fallbacks', () => {
   it('keeps slug colors deterministic', () => {
     expect(colorForSlug('finance')).toBe(colorForSlug('finance'))
     expect(colorForSlug('travel')).toMatch(/^#[0-9A-F]{6}$/i)
-  })
-})
-
-describe('formatToolTrail', () => {
-  it('joins tool names and caps the visible tail', () => {
-    const tools = ['navigate', 'snapshot', 'act', 'read', 'grep', 'screenshot']
-    expect(
-      formatToolTrail(
-        tools.map((name, index) => ({ name, at: index })),
-        4,
-      ),
-    ).toBe('act -> read -> grep -> screenshot')
-  })
-
-  it('returns an empty string for an empty trail', () => {
-    expect(formatToolTrail([])).toBe('')
   })
 })
 

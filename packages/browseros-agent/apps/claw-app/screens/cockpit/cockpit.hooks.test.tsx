@@ -234,12 +234,9 @@ describe('cockpit human-help takeover', () => {
     const card = container.querySelector(
       '[data-session-card="session-blocked"]',
     )
-    expect(
-      card?.querySelector('[data-caption-tone="needs-you"]'),
-    ).not.toBeNull()
-    expect(card?.querySelector('[data-caption-tone="blue"]')).toBeNull()
+    expect(card?.getAttribute('data-needs-you')).toBe('session-blocked')
     expect(card?.textContent).toContain('Enter the LinkedIn verification code')
-    expect(card?.textContent).toContain('Needs you')
+    expect(card?.textContent).toContain('Waiting for you')
     // The prominent banner also surfaces the request.
     expect(container.querySelector('[data-needs-you-banner]')).not.toBeNull()
   })
@@ -287,9 +284,7 @@ describe('cockpit human-help takeover', () => {
     await render([session({ helpRequest: undefined })])
 
     expect(container.querySelector('[data-needs-you-banner]')).toBeNull()
-    expect(
-      container.querySelector('[data-caption-tone="needs-you"]'),
-    ).toBeNull()
-    expect(container.querySelector('[data-caption-tone="blue"]')).not.toBeNull()
+    expect(container.querySelector('[data-needs-you]')).toBeNull()
+    expect(container.textContent).toContain('Working')
   })
 })

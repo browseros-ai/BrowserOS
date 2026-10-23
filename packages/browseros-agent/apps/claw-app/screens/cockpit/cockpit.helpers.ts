@@ -19,7 +19,6 @@ const PALETTE = [
   '#DB2777',
 ]
 
-const TRAIL_DISPLAY_CAP = 4
 const MERGED_TRAIL_CAP = 8
 
 export function colorForSlug(slug: string): string {
@@ -50,24 +49,14 @@ export function formatRelative(ms: number, now: number): string {
   return `${days}d ago`
 }
 
-/** Returns the most recent N tool names joined for compact card trail rows. */
-export function formatToolTrail(
-  recentTools: ToolEvent[],
-  max: number = TRAIL_DISPLAY_CAP,
-): string {
-  if (recentTools.length === 0) return ''
-  return recentTools
-    .slice(-max)
-    .map((tool) => tool.name)
-    .join(' -> ')
-}
-
 export interface LiveSessionCardRecord {
   sessionId: string
   profileId?: string
   slug: string
   label: string
   name: string
+  /** The connected agent's harness name, such as "Claude Code", when known. */
+  harness?: string
   color: string
   startedAt: number
   state: LiveSessionActivityState
@@ -132,6 +121,7 @@ export function sessionsToLiveCards(
       slug: session.slug,
       label: session.label || session.slug,
       name: session.name,
+      harness: session.harness,
       color: session.color ?? colorForSlug(session.slug),
       startedAt: session.startedAt,
       state: session.live?.state ?? 'idle',
