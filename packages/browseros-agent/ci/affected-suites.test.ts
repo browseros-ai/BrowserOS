@@ -49,7 +49,7 @@ describe('computeAffectedSuites', () => {
     expect(suiteNames([pkg('@browseros/app', 'apps/app')])).toEqual(['agent'])
   })
 
-  it('tests that the cursor package selects its isolated Bun suite', () => {
+  it('tests that the cursor package selects its own and pointer integration suites', () => {
     const suites = computeAffectedSuites(
       [pkg('@browseros/agent-cursor', 'packages/agent-cursor')],
       [],
@@ -59,6 +59,13 @@ describe('computeAffectedSuites', () => {
         suite: 'agent-cursor',
         command: '(cd packages/agent-cursor && bun run test)',
         junit_path: 'test-results/agent-cursor.xml',
+        needs_browser: false,
+        needs_rust: false,
+      },
+      {
+        suite: 'build',
+        command: 'bun run ./scripts/run-bun-test.ts ./scripts/build',
+        junit_path: 'test-results/build.xml',
         needs_browser: false,
         needs_rust: false,
       },
@@ -73,7 +80,7 @@ describe('computeAffectedSuites', () => {
           'packages/browseros-agent/crates/browseros-core/src/assets/agent-cursor.js',
         ],
       ),
-    ).toEqual(['agent-cursor'])
+    ).toEqual(['agent-cursor', 'build'])
   })
 
   it('maps any affected Rust crate to all three Rust suites', () => {

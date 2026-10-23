@@ -1313,5 +1313,5 @@ class MotionPlayer {
     drawEffectsOver(g, f, fill);
   }
 }
-return module.exports;
+return { MotionPlayer: module.exports.MotionPlayer };
 })();

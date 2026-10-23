@@ -168,7 +168,7 @@ const PACKAGE_SUITES: Record<string, string[]> = {
   '@browseros/claw-app': ['claw-app'],
   '@browseros/claw-onboard': ['claw-onboard'],
   '@browseros/app-onboard': ['app-onboard'],
-  '@browseros/agent-cursor': ['agent-cursor'],
+  '@browseros/agent-cursor': ['agent-cursor', 'build'],
   // The build suite exercises scripts/build, which uses build-server-tools, so
   // an affected build-server-tools (or a scripts/ change, handled below) runs it.
   '@browseros/build-server-tools': ['build'],
@@ -231,8 +231,10 @@ export function computeAffectedSuites(
     changedFiles.includes(
       `${AGENT}crates/browseros-core/src/assets/agent-cursor.js`,
     )
-  )
+  ) {
     keys.add('agent-cursor')
+    keys.add('build')
+  }
   if (
     changedFiles.some(
       (f) =>
