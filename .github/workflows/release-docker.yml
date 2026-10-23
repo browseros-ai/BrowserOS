@@ -31,6 +31,9 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: read
+      # The neo package must also grant this repository Actions Write access.
+      # Its source-repository link alone does not authorize existing-package
+      # pushes. See packages/browseros/bos_build/docs/docker-image.md.
       packages: write
     env:
       VERSION: ${{ inputs.version }}
