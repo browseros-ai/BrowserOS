@@ -522,6 +522,7 @@ dependencies = [
  "browseros-core",
  "browseros-decide",
  "browseros-mcp",
+ "bytes",
  "clap",
  "claw-api",
  "futures-util",

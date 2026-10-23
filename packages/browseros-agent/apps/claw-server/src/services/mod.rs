@@ -3,6 +3,7 @@ pub mod audit;
 pub mod audit_settings;
 pub mod browser;
 pub mod captcha;
+pub mod capture;
 pub mod cockpit;
 pub mod error_reporting;
 pub mod feedback_cohort;

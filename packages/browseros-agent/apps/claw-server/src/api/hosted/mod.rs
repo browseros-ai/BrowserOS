@@ -6,10 +6,12 @@
 //! Nothing here may use the cockpit's `claw_api` types: the cockpit contract changes freely,
 //! this one only additively (`tests/dependency_boundaries.rs` enforces the split).
 //!
-//! This module is the HTTP adapter. It parses query parameters, calls [`SessionRecords`],
-//! and maps failures into the spec's `Error` body. What a session record contains, and when
-//! it is complete, is decided in `records`.
+//! This module is the HTTP adapter. It parses query parameters, calls [`SessionRecords`] (the
+//! stored record) or the capture hub (the live view, in `live`), and maps failures into the
+//! spec's `Error` body. What a session record contains, and when it is complete, is decided in
+//! `records`; live views are decided in `services::capture`.
 
+mod live;
 mod records;
 
 use crate::{AppState, error::AppError, error::RequestId};
@@ -30,6 +32,11 @@ pub fn router() -> Router<AppState> {
         .route("/v1/sessions", get(list))
         .route("/v1/sessions/{session_id}", get(session))
         .route("/v1/sessions/{session_id}/recording", get(recording))
+        .route(
+            "/v1/sessions/{session_id}/screencast",
+            get(live::screencast),
+        )
+        .route("/v1/sessions/{session_id}/video", get(live::video))
 }
 
 async fn list(

@@ -12,6 +12,7 @@ use crate::{
         agent_settings::AgentSettingsStore,
         audit::AuditWorker,
         browser::{BrowserService, TabRegistry},
+        capture::{CaptureHub, CdpPortTransport, LiveSessionTabs},
         cockpit::{CockpitQuery, SessionVisualService, TabActivityRecord, TabActivityService},
         harness::HarnessService,
         harness_skills::load_browserclaw_skill,
@@ -59,6 +60,9 @@ pub struct AppState {
     pub browser: Arc<BrowserService>,
     pub captcha: Option<Arc<crate::services::captcha::CaptchaService>>,
     pub visuals: Arc<SessionVisualService>,
+    /// Live screencast and video of session tabs for the hosted `/v1` API; idle (no browser
+    /// connection, no captures) until someone watches.
+    pub capture: Arc<CaptureHub>,
     pub cockpit: Arc<CockpitQuery>,
     pub help: Arc<crate::services::help::HelpRegistry>,
     pub extension_updates: Arc<crate::services::extension_updates::ExtensionUpdates>,
@@ -184,6 +188,16 @@ impl AppState {
             browser.clone(),
             tab_activity.clone(),
         );
+        let shutdown = ShutdownHandle::new();
+        let capture = CaptureHub::new(
+            Arc::new(LiveSessionTabs::new(
+                sessions.clone(),
+                audit_log.clone(),
+                visuals.clone(),
+            )),
+            Arc::new(CdpPortTransport::new(config.cdp_port)),
+            shutdown.child_token(),
+        );
         let audit_worker = AuditWorker::new(audit_log.clone());
         sessions.set_audit_flush_hook(Arc::new({
             let audit_worker = Arc::downgrade(&audit_worker);
@@ -236,10 +250,11 @@ impl AppState {
             browser,
             captcha,
             visuals,
+            capture,
             cockpit,
             help: Arc::new(crate::services::help::HelpRegistry::new(HELP_MAX_WAIT)),
             extension_updates: Arc::default(),
-            shutdown: ShutdownHandle::new(),
+            shutdown,
             migration,
         })
     }

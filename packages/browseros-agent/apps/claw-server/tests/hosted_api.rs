@@ -223,6 +223,8 @@ async fn v1_is_not_served_outside_hosted_mode() -> anyhow::Result<()> {
         "/v1/sessions",
         "/v1/sessions/s1",
         "/v1/sessions/s1/recording",
+        "/v1/sessions/s1/screencast",
+        "/v1/sessions/s1/video",
     ] {
         let (status, _) = get(&app.router, uri).await?;
         assert_eq!(status, StatusCode::NOT_FOUND, "{uri}");
