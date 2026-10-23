@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Lightbulb } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useParams } from 'react-router'
+import { StepLogDialog } from '@/components/audit/StepLogDialog'
 import { EmptyState } from '@/components/cockpit/EmptyState'
 import { Page } from '@/components/layout/Page'
 import {
@@ -131,7 +132,9 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
         />
       </div>
       <PagesVisited pages={data.pages} />
-      <TechnicalDetails session={session} dispatchCount={dispatches.length} />
+      <TechnicalDetails session={session} dispatchCount={dispatches.length}>
+        <StepLogDialog session={session} dispatches={dispatches} />
+      </TechnicalDetails>
     </Page>
   )
 }
