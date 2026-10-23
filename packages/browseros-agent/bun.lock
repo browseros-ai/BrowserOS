@@ -7,6 +7,7 @@
       "devDependencies": {
         "@aws-sdk/client-s3": "^3.1140.0",
         "@biomejs/biome": "2.5.14",
+        "@browseros/agent-cursor": "1.0.0",
         "@browseros/build-server-tools": "workspace:*",
         "@browseros/shared": "workspace:*",
         "@sentry/cli": "^3.8.0",
@@ -619,6 +620,8 @@
     "@braintree/sanitize-url": ["@braintree/sanitize-url@7.1.2", "", {}, "sha512-jigsZK+sMF/cuiB7sERuo9V7N9jx+dhmHHnQyDSVdpZwVutaBu7WvNYqMDLSgFgfB30n452TP3vjDAvFC973mA=="],
 
     "@browseros/acpx-ai-provider": ["@browseros/acpx-ai-provider@workspace:packages/acpx-ai-provider"],
+
+    "@browseros/agent-cursor": ["@browseros/agent-cursor@1.0.0", "https://browseros-private-packages.shadowfax92.workers.dev/@browseros/agent-cursor/-/agent-cursor-1.0.0.tgz", {}, "sha512-Tx3GMUWuqsv1B8g3xuSm0W0OuvNsIJyMAwAqrxuOHPXg70yLzLEpiGnJkOADl/aE9dxTpJA6rpN0hjT97md39g=="],
 
     "@browseros/agent-mcp-manager": ["@browseros/agent-mcp-manager@workspace:packages/agent-mcp-manager"],
 

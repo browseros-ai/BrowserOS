@@ -24,6 +24,8 @@ jobs:
 
       - name: Install dependencies
         run: bun ci
+        env:
+          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
 
       - name: Run security audit
         id: audit
