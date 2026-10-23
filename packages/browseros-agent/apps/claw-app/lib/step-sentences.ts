@@ -218,6 +218,8 @@ export interface DescribedStep {
   firstAt: number
   isError: boolean
   cancelled: boolean
+  /** True for behind-the-scenes work, present only when asked to include it. */
+  hidden: boolean
 }
 
 export interface DescribedSteps {
@@ -233,20 +235,26 @@ export interface DescribedSteps {
  */
 export function describeSteps(
   dispatches: readonly ToolDispatchRow[],
+  options: { includeHidden?: boolean } = {},
 ): DescribedSteps {
   const steps: DescribedStep[] = []
   let hiddenCount = 0
   for (const dispatch of dispatches) {
-    if (isBehindTheScenes(dispatch)) {
+    const hidden = isBehindTheScenes(dispatch)
+    if (hidden) {
       hiddenCount += 1
-      continue
+      if (!options.includeHidden) continue
     }
     const sentence = describeStep(dispatch)
     const meta = parseMeta(dispatch.resultMeta)
     const isError = meta.isError === true
     const cancelled = meta.cancellationKind === 'cockpit.operator-cancelled'
     const previous = steps.at(-1)
-    if (previous && previous.sentence === sentence) {
+    if (
+      previous &&
+      previous.sentence === sentence &&
+      previous.hidden === hidden
+    ) {
       previous.dispatchIds.push(dispatch.dispatchId)
       continue
     }
@@ -257,6 +265,7 @@ export function describeSteps(
       firstAt: dispatch.createdAt,
       isError,
       cancelled,
+      hidden,
     })
   }
   return { steps, hiddenCount }

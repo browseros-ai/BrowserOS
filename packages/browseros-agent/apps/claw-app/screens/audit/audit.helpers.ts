@@ -209,3 +209,14 @@ export function tookLabel(durationMs: number): string {
   const rest = minutes % 60
   return rest === 0 ? `took ${hours} h` : `took ${hours} h ${rest} min`
 }
+
+/** "Today at 2:41 PM", "Yesterday at 9:05 AM", then "Oct 21 at 4:10 PM". */
+export function taskDayAndTime(startedAt: number, now: number): string {
+  const time = new Date(startedAt).toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  })
+  const days = Math.round((startOfDay(now) - startOfDay(startedAt)) / DAY_MS)
+  const day = days <= 0 ? 'Today' : taskWhen(startedAt, now)
+  return `${day} at ${time}`
+}

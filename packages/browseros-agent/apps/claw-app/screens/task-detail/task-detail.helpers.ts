@@ -9,95 +9,102 @@
  */
 
 import type { SessionScreenshot } from '@browseros/claw-api'
+import type { DescribedStep } from '@/lib/step-sentences'
 import type { ToolDispatchRow } from '@/modules/api/audit.hooks'
+import type { ReplayAction } from '@/screens/replay/session-replay'
 
-export interface TabGroup {
-  /**
-   * Stable id used by the shadcn Tabs primitive. `'session'` for
-   * pageId-less dispatches; `'page-${pageId}'` for a real tab.
-   */
-  id: string
-  pageId: number | null
-  /** Human label shown on the tab trigger. */
-  label: string
-  /**
-   * Latest URL observed among this group's dispatches. Null when
-   * every dispatch in the group has a null url (typical for the
-   * Session bucket). Displayed as the tab body's header hint.
-   */
-  displayUrl: string | null
-  displayTitle: string | null
-  /** Chronological subset of the task's dispatches for this group. */
-  dispatches: ToolDispatchRow[]
-  dispatchCount: number
-  /** Chronological subset of the session's screenshots for this group. */
-  screenshots: SessionScreenshot[]
+/** When each dispatch completed, by dispatch id. */
+export function dispatchTimes(
+  dispatches: readonly ToolDispatchRow[],
+): Map<number, number> {
+  return new Map(dispatches.map((row) => [row.dispatchId, row.createdAt]))
 }
 
-/** Groups task dispatches into a session overview and first-seen page buckets for task detail. */
-export function groupDispatchesByTab(
-  dispatches: ToolDispatchRow[],
-  allScreenshots: readonly SessionScreenshot[],
-): TabGroup[] {
-  const buckets = new Map<number, ToolDispatchRow[]>()
-  const pageBuckets: Array<[number, ToolDispatchRow[]]> = []
-  for (const d of dispatches) {
-    if (d.pageId === undefined) continue
-    const arr = buckets.get(d.pageId)
-    if (arr) {
-      arr.push(d)
-    } else {
-      const rows = [d]
-      buckets.set(d.pageId, rows)
-      pageBuckets.push([d.pageId, rows])
+/** The step under the playhead: the last one that started at or before `at`. */
+export function activeStepIndex(
+  steps: readonly DescribedStep[],
+  at: number | null,
+): number {
+  if (at === null) return -1
+  let index = -1
+  for (const [i, step] of steps.entries()) {
+    if (step.firstAt > at) break
+    index = i
+  }
+  return index
+}
+
+/** The replay action to seek to for a step: the first one recorded for it. */
+export function actionForStep(
+  step: DescribedStep,
+  actions: readonly ReplayAction[],
+): ReplayAction | undefined {
+  const ids = new Set(step.dispatchIds)
+  return actions.find(
+    (action) =>
+      action.frame.dispatchId != null && ids.has(action.frame.dispatchId),
+  )
+}
+
+/** The picture for a step: one it took itself, else the latest taken before it. */
+export function snapshotForStep(
+  step: DescribedStep,
+  dispatches: readonly ToolDispatchRow[],
+  screenshots: readonly SessionScreenshot[],
+): number | null {
+  const ids = new Set(step.dispatchIds)
+  const own = dispatches.filter(
+    (row) => ids.has(row.dispatchId) && row.screenshotId != null,
+  )
+  const ownShot = own.at(-1)?.screenshotId
+  if (ownShot != null) return ownShot
+  let latest: SessionScreenshot | undefined
+  for (const shot of screenshots) {
+    if (
+      shot.capturedAt <= step.firstAt &&
+      (!latest || shot.capturedAt > latest.capturedAt)
+    ) {
+      latest = shot
     }
   }
-
-  const groups: TabGroup[] = []
-
-  if (dispatches.length > 0) {
-    groups.push({
-      id: 'session',
-      pageId: null,
-      label: 'Session',
-      displayUrl: null,
-      displayTitle: null,
-      dispatches,
-      dispatchCount: dispatches.length,
-      screenshots: [...allScreenshots],
-    })
-  }
-
-  pageBuckets.forEach(([pageId, rows], idx) => {
-    // Prefer a paired title/url snapshot to avoid showing a stale title beside a fresh URL.
-    const reversed = [...rows].reverse()
-    const lastPaired = reversed.find((d) => d.url && d.title)
-    const lastWithUrl = lastPaired ?? reversed.find((d) => d.url)
-    const lastWithTitle = lastPaired ?? reversed.find((d) => d.title)
-    const screenshotIds = new Set(
-      rows.flatMap((row) =>
-        row.screenshotId === undefined ? [] : [row.screenshotId],
-      ),
-    )
-    groups.push({
-      id: `page-${pageId}`,
-      pageId,
-      label: `Tab ${idx + 1}`,
-      displayUrl: lastWithUrl?.url ?? null,
-      displayTitle: lastWithTitle?.title ?? null,
-      dispatches: rows,
-      dispatchCount: rows.length,
-      screenshots: allScreenshots.filter((screenshot) =>
-        screenshotIds.has(screenshot.screenshotId),
-      ),
-    })
-  })
-
-  return groups
+  return latest?.screenshotId ?? null
 }
 
-/** Selects the session overview when available so task detail opens at the task-wide timeline. */
-export function pickDefaultTabId(groups: TabGroup[]): string | undefined {
-  const session = groups.find((g) => g.id === 'session')
-  return session?.id ?? groups[0]?.id
+export interface VisitedPage {
+  url: string
+  title: string
+  host: string
+}
+
+/** Every web page the task touched, once each, in the order it first went there. */
+export function pagesVisited(
+  dispatches: readonly ToolDispatchRow[],
+): VisitedPage[] {
+  const pages = new Map<string, VisitedPage>()
+  for (const row of dispatches) {
+    if (!row.url) continue
+    let parsed: URL
+    try {
+      parsed = new URL(row.url)
+    } catch {
+      continue
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue
+    parsed.hash = ''
+    const url = parsed.toString()
+    const host = parsed.hostname.replace(/^www\./, '')
+    const existing = pages.get(url)
+    if (existing) {
+      if (row.title) existing.title = row.title
+      continue
+    }
+    pages.set(url, { url, host, title: row.title || host })
+  }
+  return [...pages.values()]
+}
+
+/** "1:05" from the start of the task. */
+export function offsetLabel(at: number, startedAt: number): string {
+  const seconds = Math.max(0, Math.floor((at - startedAt) / 1000))
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
 }

@@ -14,11 +14,19 @@ export interface PageHeaderProps {
   lede?: ReactNode
   /** A link back to the parent page, shown above the title. */
   back?: { to: string; label: string }
+  /** A small row between the back link and the title, such as a status. */
+  eyebrow?: ReactNode
   /** Controls aligned to the right of the title. */
   actions?: ReactNode
 }
 
-export function PageHeader({ title, lede, back, actions }: PageHeaderProps) {
+export function PageHeader({
+  title,
+  lede,
+  back,
+  eyebrow,
+  actions,
+}: PageHeaderProps) {
   return (
     <header className="flex flex-col gap-3">
       {back ? (
@@ -29,6 +37,9 @@ export function PageHeader({ title, lede, back, actions }: PageHeaderProps) {
           <ChevronLeft aria-hidden className="size-4" />
           {back.label}
         </Link>
+      ) : null}
+      {eyebrow ? (
+        <div className="flex flex-wrap items-center gap-2.5">{eyebrow}</div>
       ) : null}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 flex-col gap-2">

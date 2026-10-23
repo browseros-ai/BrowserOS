@@ -42,8 +42,12 @@ export interface TodoListProps {
   defaultOpen?: boolean;
   onOpenChange?: (open: boolean) => void;
   collapseOnComplete?: boolean;
-  maxHeight?: number;
+  maxHeight?: number | string;
   className?: string;
+  // claw-app: rows become buttons so a step list can seek a player.
+  onSelect?: (id: string) => void;
+  // claw-app: past steps in a finished task are not crossed out.
+  strikeCompleted?: boolean;
 }
 
 function statusLabel(status: TodoItemStatus) {
@@ -207,6 +211,8 @@ export function TodoList({
   collapseOnComplete = true,
   maxHeight = 248,
   className,
+  onSelect,
+  strikeCompleted = true,
 }: TodoListProps) {
   const reduce = useReducedMotion() ?? false;
   const baseId = useId();
@@ -337,6 +343,14 @@ export function TodoList({
                     }
                     className="flex min-h-9 items-center gap-2.5 rounded-xl px-1.5 py-1"
                   >
+                    {onSelect ? (
+                      <button
+                        type="button"
+                        aria-current={status === "in-progress" ? "step" : undefined}
+                        data-todo-id={item.id}
+                        onClick={() => onSelect(item.id)}
+                        className="-mx-1.5 -my-1 flex min-h-9 w-[calc(100%+0.75rem)] items-center gap-2.5 rounded-xl px-1.5 py-1 text-left outline-none transition-colors hover:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring"
+                      >
                     <TodoStatusIcon status={status} progress={item.progress} />
                     <span className="sr-only">{statusLabel(status)}: </span>
                     <span
@@ -354,8 +368,8 @@ export function TodoList({
                           aria-hidden="true"
                           initial={false}
                           animate={{
-                            scaleX: status === "completed" ? 1 : 0,
-                            opacity: status === "completed" ? 1 : 0,
+                            scaleX: status === "completed" && strikeCompleted ? 1 : 0,
+                            opacity: status === "completed" && strikeCompleted ? 1 : 0,
                           }}
                           transition={
                             reduce
@@ -371,6 +385,45 @@ export function TodoList({
                         {item.detail}
                       </span>
                     ) : null}
+                      </button>
+                    ) : (
+                      <>
+                    <TodoStatusIcon status={status} progress={item.progress} />
+                    <span className="sr-only">{statusLabel(status)}: </span>
+                    <span
+                      className={cn(
+                        "min-w-0 flex-1 truncate text-sm leading-5",
+                        status === "pending" && "text-muted-foreground/65",
+                        status === "in-progress" && "text-foreground",
+                        status === "completed" && "text-muted-foreground/60",
+                        status === "cancelled" && "text-muted-foreground/55",
+                      )}
+                    >
+                      <span className="relative inline-block max-w-full">
+                        {item.title}
+                        <motion.span
+                          aria-hidden="true"
+                          initial={false}
+                          animate={{
+                            scaleX: status === "completed" && strikeCompleted ? 1 : 0,
+                            opacity: status === "completed" && strikeCompleted ? 1 : 0,
+                          }}
+                          transition={
+                            reduce
+                              ? { duration: 0 }
+                              : { duration: 0.28, ease: EASE_OUT, delay: 0.06 }
+                          }
+                          className="absolute inset-x-0 top-1/2 h-px origin-left bg-current"
+                        />
+                      </span>
+                    </span>
+                    {item.detail ? (
+                      <span className="shrink-0 text-sm text-muted-foreground/55">
+                        {item.detail}
+                      </span>
+                    ) : null}
+                      </>
+                    )}
                   </motion.li>
                 );
               })}

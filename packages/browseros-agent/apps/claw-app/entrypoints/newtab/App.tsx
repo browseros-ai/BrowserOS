@@ -7,7 +7,6 @@ import { Analytics } from '@/modules/analytics/Analytics'
 import { Audit } from '@/screens/audit/Audit'
 import { Cockpit } from '@/screens/cockpit/Cockpit'
 import { Mcp } from '@/screens/mcp/Mcp'
-import { Replay } from '@/screens/replay/Replay'
 import { Settings } from '@/screens/settings/Settings'
 import { SkillDetail } from '@/screens/skills/SkillDetail'
 import { Skills } from '@/screens/skills/Skills'
@@ -55,7 +54,7 @@ export function App() {
             path="/audit/:sessionId/replay"
             element={
               <SensitiveRouteContent>
-                <Replay />
+                <TaskDetailPage focus="player" />
               </SensitiveRouteContent>
             }
           />

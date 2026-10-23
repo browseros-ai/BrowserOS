@@ -112,33 +112,6 @@ mock.module('./PlaybackTransport', () => ({
   },
 }))
 
-mock.module('./EventTimeline', () => ({
-  EventTimeline: ({
-    actions,
-    currentIndex,
-    onSelectAction,
-  }: {
-    actions: readonly ReplayAction[]
-    currentIndex: number
-    onSelectAction: (action: ReplayAction) => void
-  }) => (
-    <div data-event-timeline data-current-index={currentIndex}>
-      {actions.map((action, index) => (
-        <button
-          type="button"
-          key={action.frame.dispatchId ?? action.sourceIndex}
-          data-action-dispatch={action.frame.dispatchId}
-          data-action-start={action.startAt}
-          data-action-current={index === currentIndex}
-          onClick={() => onSelectAction(action)}
-        >
-          {action.frame.caption}
-        </button>
-      ))}
-    </div>
-  ),
-}))
-
 /** Scrub destinations the fake transport exposes as buttons. */
 const seekTargets = [0, 3, 9, 14, 16, 24.225, 26.717, 38.321]
 
@@ -371,8 +344,8 @@ async function renderReplay() {
   await act(async () => {
     root.render(
       <StrictMode>
-        <MemoryRouter initialEntries={['/audit/session-1/replay']}>
-          <Replay />
+        <MemoryRouter initialEntries={['/audit/session-1']}>
+          <ReplayHarness />
         </MemoryRouter>
       </StrictMode>,
     )
@@ -963,4 +936,30 @@ describe('Replay Trendshift regression', () => {
   })
 })
 
-const { Replay } = await import('./Replay')
+const { ReplayPanel } = await import('./ReplayPanel')
+const { useReplaySession } = await import('./use-replay-session')
+
+/** The panel plus a plain action list wired the way a step list drives it. */
+function ReplayHarness() {
+  const session = useReplaySession('session-1')
+  if (session.isLoading || !session.replay) return null
+  return (
+    <>
+      <ReplayPanel session={session} />
+      <div data-event-timeline data-current-index={session.state.currentIndex}>
+        {session.plan.actions.map((action: ReplayAction, index: number) => (
+          <button
+            type="button"
+            key={action.frame.dispatchId ?? action.sourceIndex}
+            data-action-dispatch={action.frame.dispatchId}
+            data-action-start={action.startAt}
+            data-action-current={index === session.state.currentIndex}
+            onClick={() => session.selectAction(action)}
+          >
+            {action.frame.caption}
+          </button>
+        ))}
+      </div>
+    </>
+  )
+}

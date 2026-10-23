@@ -169,6 +169,18 @@ describe('describeSteps', () => {
     ])
   })
 
+  it('keeps behind-the-scenes calls, flagged, when asked to', () => {
+    const { steps, hiddenCount } = describeSteps(
+      [
+        call('name_session'),
+        call('act', { args: { kind: 'click' }, ...FLIGHTS }),
+      ],
+      { includeHidden: true },
+    )
+    expect(hiddenCount).toBe(1)
+    expect(steps.map((step) => step.hidden)).toEqual([true, false])
+  })
+
   it('folds repeated identical steps into one', () => {
     const first = call('read', { ...FLIGHTS, at: 5_000 })
     const second = call('read', FLIGHTS)
