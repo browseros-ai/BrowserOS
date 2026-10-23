@@ -21,6 +21,7 @@ import {
 } from '@/modules/api/agent-settings.hooks'
 import { toastApiError } from '@/modules/toast/toast'
 import { PagesVisited } from './PagesVisited'
+import { SnapshotGallery } from './SnapshotGallery'
 import { TaskPageHeader } from './TaskPageHeader'
 import { TaskPlayer } from './TaskPlayer'
 import { TaskSteps } from './TaskSteps'
@@ -132,6 +133,21 @@ export function TaskDetailPage({ focus }: { focus?: 'player' } = {}) {
         />
       </div>
       <PagesVisited pages={data.pages} />
+      <SnapshotGallery
+        sessionId={sessionId}
+        startedAt={session.startedAt}
+        screenshots={data.screenshots}
+        dispatches={dispatches}
+        onPlayFrom={(dispatchId) => {
+          const step = data.allSteps.find((candidate) =>
+            candidate.dispatchIds.includes(dispatchId),
+          )
+          if (step) selectStep(step)
+          document
+            .getElementById('player')
+            ?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+        }}
+      />
       <TechnicalDetails session={session} dispatchCount={dispatches.length}>
         <StepLogDialog session={session} dispatches={dispatches} />
       </TechnicalDetails>
