@@ -121,7 +121,7 @@
             const target = { x: command.x, y: command.y };
             if (!ensurePlayer(target)) return { status: 'skipped', reason: 'unsupported' };
             const arrival = player.moveTo(target, {
-              params: { style: 'classic', timing: 'fixed', glideDurationMs: command.travelMs },
+              params: { style: 'signature_arc', timing: 'fixed', glideDurationMs: command.travelMs },
               reducedMotion: typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches,
             });
             const result = await Promise.race([

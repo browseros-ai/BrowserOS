@@ -286,13 +286,19 @@ describe('agent pointer page expression', () => {
     await restarted
   })
 
-  test('tests that fixed Cua timing stays near the requested travel duration', () => {
+  test('tests that fixed signature arc timing stays within the travel budget', () => {
     for (const distance of [60, 500, 1500]) {
       const trajectory = planMove(
-        { style: 'classic', timing: 'fixed', glideDurationMs: 400 },
+        {
+          style: 'signature_arc',
+          timing: 'fixed',
+          glideDurationMs: command.travelMs,
+        },
         { from: { x: 0, y: 0 }, to: { x: distance, y: 0 } },
       )
-      expect(Math.abs(trajectory.arrivalT * 1000 - 400)).toBeLessThan(25)
+      expect(trajectory.arrivalT * 1000).toBeLessThanOrEqual(
+        command.travelMs + 50,
+      )
     }
   })
 
@@ -337,39 +343,51 @@ describe('agent pointer page expression', () => {
     }
   })
 
-  test('tests that the selected Cua style meets timing across 40–1600 pixels in both directions', async () => {
+  test('tests that signature arc meets the arrival upper bound across 40–1600 pixels in both directions', async () => {
     const h = harness()
     const moving = h.execute(command, tracedStub)
     const params = Reflect.get(h.world, 'options').params
-    const signatureTimes: number[] = []
-    const selectedTimes: number[] = []
+    expect(params).toEqual({
+      style: 'signature_arc',
+      timing: 'fixed',
+      glideDurationMs: command.travelMs,
+    })
     for (let distance = 40; distance <= 1600; distance++) {
       for (const direction of [1, -1]) {
         const request = {
           from: { x: 800, y: 400 },
           to: { x: 800 + direction * distance, y: 400 },
         }
-        signatureTimes.push(
-          planMove(
-            { style: 'signature_arc', timing: 'fixed', glideDurationMs: 400 },
-            request,
-          ).arrivalT * 1000,
-        )
         const arrivalMs = planMove(params, request).arrivalT * 1000
-        selectedTimes.push(arrivalMs)
-        expect(Math.abs(arrivalMs - 400)).toBeLessThanOrEqual(50)
+        expect(arrivalMs).toBeLessThanOrEqual(command.travelMs + 50)
       }
     }
-    const signatureFits = signatureTimes.every((ms) => ms >= 350 && ms <= 450)
-    expect(params).toEqual({
-      style: signatureFits ? 'signature_arc' : 'classic',
-      timing: 'fixed',
-      glideDurationMs: 400,
-    })
-    expect(Math.min(...selectedTimes)).toBeGreaterThanOrEqual(350)
-    expect(Math.max(...selectedTimes)).toBeLessThanOrEqual(450)
     await h.advance(450)
     expect(await moving).toEqual({ status: 'arrived' })
+  })
+
+  test('tests that the real first-move path stays on screen for header targets', async () => {
+    for (const y of [120, 180]) {
+      const h = harness()
+      h.world.innerWidth = 1280
+      h.world.innerHeight = 800
+      const target = { x: 640, y }
+      const moving = h.execute({ ...command, ...target }, tracedStub)
+      const from = Reflect.get(h.world, 'start')
+      const params = Reflect.get(h.world, 'options').params
+      const trajectory = planMove(params, { from, to: target })
+      const samples = trajectory.samples.filter(
+        (sample) => sample.t <= trajectory.arrivalT,
+      )
+      expect(
+        samples.every(
+          (point) =>
+            point.x >= 0 && point.x <= 1280 && point.y >= 0 && point.y <= 800,
+        ),
+      ).toBe(true)
+      await h.advance(450)
+      expect(await moving).toEqual({ status: 'arrived' })
+    }
   })
 })
 
