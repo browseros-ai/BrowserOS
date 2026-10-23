@@ -1,11 +1,10 @@
 import type { SessionSummary } from '@browseros/claw-api'
 import { ExternalLink } from 'lucide-react'
 import { useLocation } from 'react-router'
+import { SessionStatusBadge } from '@/components/audit/SessionStatusBadge'
 import { AgentMark } from '@/components/harness/AgentMark'
 import { PageHeader } from '@/components/layout/PageHeader'
-import { AnimatedBadge } from '@/components/motion/animated-badge'
 import { ButtonLink } from '@/components/motion/button/base'
-import { SESSION_STATUS_BADGE } from '@/lib/status'
 import { taskDayAndTime, tookLabel } from '@/screens/audit/audit.helpers'
 
 interface TaskPageHeaderProps {
@@ -17,7 +16,6 @@ interface TaskPageHeaderProps {
 /** Status, agent, when and how long, then the task in a sentence and its summary. */
 export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
   const location = useLocation()
-  const status = SESSION_STATUS_BADGE[session.status]
   // Router state carries where the person came from; a direct link goes to History.
   const from =
     typeof location.state === 'object' &&
@@ -34,15 +32,13 @@ export function TaskPageHeader({ session, lastPageUrl }: TaskPageHeaderProps) {
       back={back}
       eyebrow={
         <>
-          <AnimatedBadge
-            status={status.badge}
-            showIcon={session.status !== 'live'}
-          >
-            {status.label}
-          </AnimatedBadge>
+          <SessionStatusBadge status={session.status} size="md" />
           <span className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink-3">
-            <AgentMark harness={session.harness} color={session.color} />
-            <span>{session.label}</span>
+            <AgentMark
+              harness={session.harness}
+              label={session.label || session.slug}
+              color={session.color}
+            />
             <span aria-hidden>·</span>
             <span>{taskDayAndTime(session.startedAt, Date.now())}</span>
             <span aria-hidden>·</span>

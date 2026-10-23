@@ -120,7 +120,7 @@ function HelpRequestAlert({
       <AlertContent className="flex min-w-0 flex-col gap-2.5 space-y-0">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
           <AlertTitle className="font-bold text-[19px] text-cyanotype-ink leading-snug tracking-[-0.015em]">
-            {helpRequestTitle(session.label, help)}
+            {helpRequestTitle(session.agentName, help)}
           </AlertTitle>
           <span className="whitespace-nowrap font-semibold text-[13.5px] text-amber-ink">
             {waitingLabel(help.requestedAt, now)}

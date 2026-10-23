@@ -220,6 +220,7 @@ const liveSession: LiveSessionCardRecord = {
   sessionId: 'session-connected',
   slug: 'claude-code',
   label: 'Claude Code',
+  agentName: 'Claude Code',
   name: 'Find a flight',
   color: '#2F6FE0',
   startedAt: 100,

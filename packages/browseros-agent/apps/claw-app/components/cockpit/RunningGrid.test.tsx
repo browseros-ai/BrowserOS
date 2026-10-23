@@ -73,6 +73,7 @@ function session(
     sessionId: 'session-live',
     profileId: 'profile-shared',
     slug: 'codex',
+    agentName: 'Codex',
     label: 'Codex',
     name: 'Research BrowserClaw',
     color: '#0254ec',

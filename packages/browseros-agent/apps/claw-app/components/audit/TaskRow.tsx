@@ -7,14 +7,13 @@
 import { Globe } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router'
 import { AgentMark } from '@/components/harness/AgentMark'
-import { AnimatedBadge } from '@/components/motion/animated-badge'
-import { SESSION_STATUS_BADGE } from '@/lib/status'
 import {
   type TaskSummary,
   taskScreenshotUrl,
   useTaskScreenshotBaseUrl,
 } from '@/modules/api/audit.hooks'
 import { taskWhen, tookLabel } from '@/screens/audit/audit.helpers'
+import { SessionStatusBadge } from './SessionStatusBadge'
 
 interface TaskRowProps {
   task: TaskSummary
@@ -25,7 +24,6 @@ interface TaskRowProps {
 export function TaskRow({ task, now }: TaskRowProps) {
   const location = useLocation()
   const screenshotBaseUrl = useTaskScreenshotBaseUrl()
-  const status = SESSION_STATUS_BADGE[task.status]
   const shot =
     task.latestScreenshotId != null && screenshotBaseUrl !== null
       ? taskScreenshotUrl(
@@ -65,22 +63,21 @@ export function TaskRow({ task, now }: TaskRowProps) {
           </span>
         ) : null}
         <span className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink-3">
-          <AgentMark harness={task.harness} color={task.color} />
-          <span>{task.label}</span>
+          <AgentMark
+            harness={task.harness}
+            label={task.label || task.slug}
+            color={task.color}
+          />
           <span aria-hidden>·</span>
           <span>{taskWhen(task.startedAt, now)}</span>
           <span aria-hidden>·</span>
           <span>{tookLabel(task.durationMs)}</span>
         </span>
       </span>
-      <AnimatedBadge
-        status={status.badge}
-        size="sm"
-        showIcon={task.status !== 'live'}
+      <SessionStatusBadge
+        status={task.status}
         className="col-start-2 justify-self-start sm:col-start-auto sm:justify-self-end"
-      >
-        {status.label}
-      </AnimatedBadge>
+      />
     </NavLink>
   )
 }

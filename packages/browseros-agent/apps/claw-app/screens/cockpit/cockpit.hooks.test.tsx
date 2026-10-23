@@ -120,6 +120,7 @@ function session(
     sessionId: 'session-blocked',
     profileId: 'profile-shared',
     slug: 'claude-code',
+    agentName: 'Claude Code',
     label: 'Claude-code',
     name: 'Outreach messaging',
     color: '#0254ec',

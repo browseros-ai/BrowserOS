@@ -92,8 +92,11 @@ export function AgentRunningCard({
           />
         )}
         <p className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink-3">
-          <AgentMark harness={session.harness} color={session.color} />
-          <span>{session.label}</span>
+          <AgentMark
+            harness={session.harness}
+            label={session.label}
+            color={session.color}
+          />
           <span aria-hidden>·</span>
           <span>
             {pages} {pages === 1 ? 'page' : 'pages'}

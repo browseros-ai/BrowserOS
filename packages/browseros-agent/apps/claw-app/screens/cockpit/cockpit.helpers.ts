@@ -5,6 +5,7 @@ import type {
   SessionSummary,
   ToolEvent,
 } from '@browseros/claw-api'
+import { agentIdentity } from '@/components/harness/harness.types'
 
 // Missing parent colors fall back to a stable slug hash so card identity does
 // not flicker between live-session polls.
@@ -57,6 +58,8 @@ export interface LiveSessionCardRecord {
   name: string
   /** The connected agent's harness name, such as "Claude Code", when known. */
   harness?: string
+  /** The agent's name for sentences, such as "Claude" or "Codex". */
+  agentName: string
   color: string
   startedAt: number
   state: LiveSessionActivityState
@@ -122,6 +125,8 @@ export function sessionsToLiveCards(
       label: session.label || session.slug,
       name: session.name,
       harness: session.harness,
+      agentName: agentIdentity(session.harness, session.label || session.slug)
+        .name,
       color: session.color ?? colorForSlug(session.slug),
       startedAt: session.startedAt,
       state: session.live?.state ?? 'idle',
@@ -169,10 +174,10 @@ export function homeLede(
   sessions: LiveSessionCardRecord[],
   inControl: LiveSessionCardRecord | null,
 ): string {
-  if (inControl) return `You’re helping ${inControl.label} with one task.`
+  if (inControl) return `You’re helping ${inControl.agentName} with one task.`
   const waiting = sessions.filter((session) => session.helpRequest)
   if (waiting.length === 1) {
-    return `${waiting[0]?.label} needs your help with one task.`
+    return `${waiting[0]?.agentName} needs your help with one task.`
   }
   if (waiting.length > 1) return `${waiting.length} tasks need your help.`
   if (sessions.length === 1) return 'Your AI agents are working on one task.'

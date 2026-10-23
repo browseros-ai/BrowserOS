@@ -6,34 +6,38 @@
 
 import { cn } from '@/lib/utils'
 import { HarnessIcon } from './HarnessIcon'
-import { asHarness } from './harness.types'
+import { agentIdentity } from './harness.types'
 
 interface AgentMarkProps {
+  /** The session's harness name, when the server knows it. */
   harness?: string
-  /** Shown when the harness has no mark of its own. */
+  /** The session's agent label or slug, such as "claude". */
+  label?: string
+  /** Shown as a dot when the agent has no mark of its own. */
   color?: string
   className?: string
 }
 
-/** A connected agent's logo in a small round badge, or its colour dot. */
-export function AgentMark({ harness, color, className }: AgentMarkProps) {
-  const known = asHarness(harness)
+/** A connected agent's mark and name, drawn the way Connected agents draws it. */
+export function AgentMark({
+  harness,
+  label,
+  color,
+  className,
+}: AgentMarkProps) {
+  const agent = agentIdentity(harness, label)
   return (
-    <span
-      aria-hidden
-      className={cn(
-        'inline-grid size-[22px] shrink-0 place-items-center rounded-full border border-border-2 bg-card',
-        className,
-      )}
-    >
-      {known ? (
-        <HarnessIcon harness={known} className="size-[13px]" />
+    <span className={cn('inline-flex min-w-0 items-center gap-1.5', className)}>
+      {agent.harness ? (
+        <HarnessIcon harness={agent.harness} className="size-4 shrink-0" />
       ) : (
         <span
-          className="size-2 rounded-full"
+          aria-hidden
+          className="size-2.5 shrink-0 rounded-full"
           style={{ background: color ?? 'currentColor' }}
         />
       )}
+      <span className="truncate">{agent.name}</span>
     </span>
   )
 }

@@ -27,7 +27,7 @@ export function InControlBar({
 }: InControlBarProps) {
   const [note, setNote] = useState('')
   const help = session.helpRequest
-  const app = session.label
+  const app = session.agentName
   const site = help ? helpRequestSite(help) : 'the'
 
   return (
