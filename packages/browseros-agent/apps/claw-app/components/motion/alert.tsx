@@ -42,9 +42,9 @@ export function useAlert(): AlertState {
 
 const VARIANT_CLASS: Record<AlertVariant, string> = {
   default: "bg-background text-foreground",
-  info: "bg-primary/5 text-primary",
-  success: "bg-emerald-500/5 text-emerald-700 dark:text-emerald-400",
-  warning: "bg-amber-500/5 text-amber-800 dark:text-amber-300",
+  info: "border border-border-2 bg-accent-tint text-primary",
+  success: "border border-green/30 bg-green-tint text-green-ink",
+  warning: "border border-amber/40 bg-amber-tint text-amber-ink",
   destructive: "bg-destructive/5 text-destructive",
 };
 
