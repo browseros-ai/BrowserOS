@@ -48,6 +48,8 @@ export interface TodoListProps {
   onSelect?: (id: string) => void;
   // claw-app: past steps in a finished task are not crossed out.
   strikeCompleted?: boolean;
+  // claw-app: fill the parent's height and scroll inside it instead of maxHeight.
+  fill?: boolean;
 }
 
 function statusLabel(status: TodoItemStatus) {
@@ -213,6 +215,7 @@ export function TodoList({
   className,
   onSelect,
   strikeCompleted = true,
+  fill = false,
 }: TodoListProps) {
   const reduce = useReducedMotion() ?? false;
   const baseId = useId();
@@ -225,6 +228,7 @@ export function TodoList({
   const completed = items.filter((item) => item.status === "completed").length;
   const allComplete = items.length > 0 && completed === items.length;
   const itemCount = items.length;
+  const activeId = items.find((item) => item.status === "in-progress")?.id;
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -244,9 +248,24 @@ export function TodoList({
     previousComplete.current = allComplete;
   }, [allComplete, collapseOnComplete, setOpen]);
 
+  // claw-app: a selectable list follows its current row, centred in its own
+  // scroll area, so the page itself never scrolls.
+  useLayoutEffect(() => {
+    if (!onSelect || activeId === undefined) return;
+    const viewport = viewportRef.current;
+    const row = viewport?.querySelector<HTMLElement>(`[data-todo-id="${activeId}"]`);
+    if (!viewport || !row) return;
+    const top = row.offsetTop - viewport.clientHeight / 2 + row.offsetHeight / 2;
+    if (typeof viewport.scrollTo === "function") {
+      viewport.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+    } else {
+      viewport.scrollTop = top;
+    }
+  }, [activeId, onSelect, reduce]);
+
   useLayoutEffect(() => {
     const viewport = viewportRef.current;
-    if (!viewport || itemCount === 0) return;
+    if (onSelect || !viewport || itemCount === 0) return;
 
     const frame = requestAnimationFrame(() => {
       if (viewport.scrollHeight <= viewport.clientHeight) return;
@@ -260,13 +279,14 @@ export function TodoList({
       }
     });
     return () => cancelAnimationFrame(frame);
-  }, [itemCount, reduce]);
+  }, [itemCount, onSelect, reduce]);
 
   return (
     <section
       aria-label="Agent task list"
       className={cn(
         "w-full overflow-hidden rounded-2xl border border-border/70",
+        fill && "flex h-full flex-col",
         className,
       )}
     >
@@ -314,11 +334,12 @@ export function TodoList({
         role="region"
         aria-labelledby={triggerId}
         open={currentOpen}
+        className={fill ? "min-h-0 flex-1" : undefined}
       >
         <div
           ref={viewportRef}
-          className="scrollbar-hide overflow-y-auto px-2 pb-2"
-          style={{ maxHeight }}
+          className={cn("scrollbar-hide relative overflow-y-auto px-2 pb-2", fill && "h-full")}
+          style={fill ? undefined : { maxHeight }}
         >
           {items.length ? (
             <ol aria-live="polite" className="space-y-0">

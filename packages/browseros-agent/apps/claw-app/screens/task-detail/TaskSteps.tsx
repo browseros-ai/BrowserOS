@@ -52,18 +52,20 @@ export function TaskSteps({
   }))
 
   return (
-    <div className="flex min-h-0 flex-col gap-2">
+    // contain: size lets the player set the row's height; the list then
+    // scrolls inside it instead of stretching the row.
+    <div className="flex h-[460px] min-h-0 flex-col gap-2 lg:h-auto lg:min-h-[380px] lg:[contain:size]">
       <TodoList
+        fill
         title="What happened"
         items={items}
         collapseOnComplete={false}
         strikeCompleted={false}
-        maxHeight={420}
         onSelect={(id) => {
           const step = steps[Number(id)]
           if (step) onSelect(step)
         }}
-        className="border-border-2 bg-card shadow-card [&_h3]:font-bold [&_h3]:text-[15.5px] [&_h3]:text-cyanotype-ink"
+        className="min-h-0 flex-1 border-border-2 bg-card shadow-card [&_h3]:font-bold [&_h3]:text-[15.5px] [&_h3]:text-cyanotype-ink"
       />
       {hiddenCount > 0 ? (
         <p className="flex flex-wrap items-center justify-between gap-2 px-1 text-[13.5px] text-ink-3">
