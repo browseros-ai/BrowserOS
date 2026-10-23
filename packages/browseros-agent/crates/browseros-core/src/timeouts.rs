@@ -35,3 +35,13 @@ pub const ACTION_SETTLE_CDP_CALL_TIMEOUT: Duration = Duration::from_millis(250);
 /// load lifecycle finishing, so this is a ceiling rather than the usual cost.
 /// A settled page answers after one quiet interval.
 pub const ARRIVAL_READY_BUDGET: Duration = Duration::from_millis(1_500);
+
+/// Agent pointer travel time: the page plays each move over about this long.
+pub const POINTER_TRAVEL: Duration = Duration::from_millis(400);
+/// Hard cap on waiting for the pointer to arrive. A safety net, not the normal
+/// path: hidden pages skip drawing instead of waiting it out.
+pub const POINTER_MOVE_DEADLINE: Duration = Duration::from_millis(1_000);
+/// Cap on the no-wait pointer calls: click effect and screenshot hide/show.
+pub const POINTER_EFFECT_DEADLINE: Duration = Duration::from_millis(250);
+/// The page removes its pointer this long after the last agent action.
+pub const POINTER_IDLE: Duration = Duration::from_millis(4_000);
