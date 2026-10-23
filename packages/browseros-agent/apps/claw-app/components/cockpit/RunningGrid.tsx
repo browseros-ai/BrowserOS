@@ -126,7 +126,7 @@ function IdleCard() {
       >
         <MessageSquareText className="size-[18px]" strokeWidth={1.75} />
       </span>
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <div className="flex min-w-0 flex-1 basis-[calc(100%-60px)] flex-col gap-0.5 md:basis-auto">
         <p className="font-bold text-[16px] text-cyanotype-ink">
           Ask your AI agents to use neo
         </p>
@@ -139,7 +139,7 @@ function IdleCard() {
         text={TRY_PROMPT}
         label="Copy an example"
         size="sm"
-        className="h-[34px] font-semibold text-[13.5px]"
+        className="ml-[60px] h-[34px] font-semibold text-[13.5px] md:ml-0"
       />
     </Card>
   )

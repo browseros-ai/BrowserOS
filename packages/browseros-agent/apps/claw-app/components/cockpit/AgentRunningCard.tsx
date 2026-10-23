@@ -88,7 +88,7 @@ export function AgentRunningCard({
             label={describeLiveStep(tab)}
             initialSeconds={startedSeconds}
             running={session.state === 'active'}
-            className="gap-2 font-sans text-[14px] text-ink-2"
+            className="min-w-0 gap-2 font-sans text-[14px] text-ink-2 [&>span:last-child]:whitespace-nowrap [&>span:nth-child(2)]:min-w-0 [&>span:nth-child(2)]:truncate"
           />
         )}
         <p className="flex flex-wrap items-center gap-2 text-[13.5px] text-ink-3">
