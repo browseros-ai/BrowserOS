@@ -55,7 +55,7 @@ impl Input {
         scroll_into_view(session, target.backend_node_id).await;
         let mut point = get_element_center(session, target.backend_node_id).await?;
         self.check_click_point(session, &target, point).await?;
-        if let Some(pointer) = self.pointer
+        if let Some(pointer) = self.drawing_pointer().await
             && pointer.move_to(session, PointerAction::Fill, point).await
         {
             point = get_element_center(session, target.backend_node_id).await?;

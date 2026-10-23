@@ -155,7 +155,7 @@ impl Input {
         self.with_page_session_retry(|session| {
             let opts = opts.clone();
             async move {
-                if let Some(pointer) = self.pointer
+                if let Some(pointer) = self.drawing_pointer().await
                     && pointer
                         .move_to(&session, PointerAction::Click, Point { x, y })
                         .await
@@ -170,7 +170,7 @@ impl Input {
 
     pub async fn hover_at(&self, x: f64, y: f64) -> Result<(), CoreError> {
         self.with_page_session_retry(|session| async move {
-            if let Some(pointer) = self.pointer {
+            if let Some(pointer) = self.drawing_pointer().await {
                 pointer
                     .move_to(&session, PointerAction::Hover, Point { x, y })
                     .await;
@@ -211,7 +211,7 @@ impl Input {
         match get_element_center(session, target.backend_node_id).await {
             Ok(mut point) => {
                 self.check_click_point(session, &target, point).await?;
-                if let Some(pointer) = self.pointer
+                if let Some(pointer) = self.drawing_pointer().await
                     && pointer.move_to(session, PointerAction::Click, point).await
                 {
                     point = match get_element_center(session, target.backend_node_id).await {
@@ -259,7 +259,7 @@ impl Input {
         scroll_into_view(session, target.backend_node_id).await;
         let mut point = get_element_center(session, target.backend_node_id).await?;
         self.check_click_point(session, &target, point).await?;
-        if let Some(pointer) = self.pointer
+        if let Some(pointer) = self.drawing_pointer().await
             && pointer.move_to(session, PointerAction::Hover, point).await
         {
             point = get_element_center(session, target.backend_node_id).await?;
@@ -272,7 +272,7 @@ impl Input {
     pub async fn focus(&self, ref_id: &Ref) -> Result<(), CoreError> {
         let resolved = self.observer.resolve_ref(ref_id).await?;
         scroll_into_view(&resolved.session, resolved.backend_node_id).await;
-        if let Some(pointer) = self.pointer
+        if let Some(pointer) = self.drawing_pointer().await
             && let Ok(point) = get_element_center(&resolved.session, resolved.backend_node_id).await
         {
             pointer
@@ -534,6 +534,20 @@ impl Input {
             .unwrap_or(false)
     }
 
+    async fn drawing_pointer(&self) -> Option<Pointer> {
+        let pointer = self.pointer?;
+        let page = match &self.access {
+            Some(access) => access.fresh().await.ok()?,
+            None => self
+                .pages
+                .refresh(self.page_id.clone())
+                .await
+                .ok()
+                .flatten()?,
+        };
+        page.is_active.then_some(pointer)
+    }
+
     async fn page_session(&self) -> Result<ProtocolSession, CoreError> {
         match &self.access {
             Some(access) => Ok(access.session().await?.session),
@@ -685,6 +699,10 @@ mod tests {
         missing_geometry_after_move: bool,
         hit_test_after_move: Option<HitTestResponse>,
         field_value: String,
+        tab_active: bool,
+        tab_info_error: bool,
+        tab_list_error: bool,
+        tab_target: &'static str,
     }
 
     struct HarnessConnection {
@@ -773,8 +791,28 @@ mod tests {
                     message: err.to_string(),
                 })?;
                 match method {
-                    "Browser.getTabs" => Ok(json!({ "tabs": [tab_value()] })),
-                    "Browser.getTabInfo" => Ok(json!({ "tab": tab_value() })),
+                    "Browser.getTabs" | "Browser.getTabInfo" => {
+                        let state = self.state.lock().map_err(|_| CdpError::Protocol {
+                            code: -1,
+                            message: "poisoned test state".into(),
+                        })?;
+                        if (method == "Browser.getTabs" && state.tab_list_error)
+                            || (method == "Browser.getTabInfo" && state.tab_info_error)
+                        {
+                            return Err(CdpError::Protocol {
+                                code: -32000,
+                                message: "tab information unavailable".into(),
+                            });
+                        }
+                        let mut tab = tab_value();
+                        tab["isActive"] = json!(state.tab_active);
+                        tab["targetId"] = json!(state.tab_target);
+                        Ok(if method == "Browser.getTabs" {
+                            json!({ "tabs": [tab] })
+                        } else {
+                            json!({ "tab": tab })
+                        })
+                    }
                     "Target.attachToTarget" => Ok(json!({ "sessionId": "session-1" })),
                     "Page.enable"
                     | "DOM.enable"
@@ -895,6 +933,25 @@ mod tests {
             Box::pin(async { Ok("{}".to_string()) })
         }
 
+        fn send_at_epoch<'a>(
+            &'a self,
+            expected_epoch: u64,
+            method: &'a str,
+            params: Value,
+            session: Option<&'a crate::SessionId>,
+        ) -> BoxFuture<'a, Result<Value, CdpError>> {
+            // This harness has one immutable epoch and cannot reconnect.
+            Box::pin(async move {
+                if expected_epoch != 1 {
+                    return Err(CdpError::ConnectionEpochChanged {
+                        expected: expected_epoch,
+                        actual: 1,
+                    });
+                }
+                self.send(method, params, session).await
+            })
+        }
+
         fn events(&self) -> broadcast::Receiver<CdpEvent> {
             let (_tx, rx) = broadcast::channel(1);
             rx
@@ -1003,6 +1060,10 @@ mod tests {
                 missing_geometry_after_move: false,
                 hit_test_after_move: None,
                 field_value: String::new(),
+                tab_active: true,
+                tab_info_error: false,
+                tab_list_error: false,
+                tab_target: "target-1",
             }),
             target_role,
             target_name,
@@ -1195,6 +1256,10 @@ mod tests {
                 !calls.iter().any(|call| call.method == "Runtime.evaluate"),
                 "{action:?}"
             );
+            assert!(
+                !calls.iter().any(|call| call.method == "Browser.getTabInfo"),
+                "{action:?}"
+            );
             fingerprints.push(protocol_fingerprint(&calls)?);
         }
         // Frozen from the pre-pointer implementation, including every method,
@@ -1275,12 +1340,20 @@ mod tests {
             action.run(&input, &ref_id).await?;
             let calls = connection.take_calls()?;
             assert_real_input_once(&calls, action);
+            let tab_checks: Vec<_> = calls
+                .iter()
+                .enumerate()
+                .filter(|(_, call)| call.method == "Browser.getTabInfo")
+                .collect();
+            assert_eq!(tab_checks.len(), 1, "{action:?}");
+            assert_eq!(tab_checks[0].1.params, json!({ "tabId": 101 }));
             let movement = calls
                 .iter()
                 .position(|call| {
                     call.method == "Runtime.evaluate" && call.params["awaitPromise"] == true
                 })
                 .ok_or("missing pointer move")?;
+            assert!(tab_checks[0].0 < movement, "{action:?}");
             let real_input = calls
                 .iter()
                 .position(|call| {
@@ -1422,13 +1495,169 @@ mod tests {
             action.run(&input, &ref_id).await?;
             let mut calls = connection.take_calls()?;
             assert_eq!(pointer_calls(&calls).count(), 1, "{action:?}");
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabInfo")
+                    .count(),
+                1,
+                "{action:?}"
+            );
             calls.retain(|call| {
-                call.method != "Runtime.evaluate" &&
+                call.method != "Runtime.evaluate" && call.method != "Browser.getTabInfo" &&
                     // Focus must measure once before asking the page to draw.
                     !(matches!(action, PointerInput::Focus) && call.method == "DOM.getContentQuads")
             });
             assert_eq!(calls, legacy, "{action:?}");
         }
+        Ok(())
+    }
+
+    async fn assert_skipped_tab_uses_legacy_input(
+        read_error: bool,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let legacy = connection.take_calls()?;
+
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| {
+                state.tab_active = read_error;
+                state.tab_info_error = read_error;
+                state.tab_list_error = read_error;
+                // A hidden tab must not enter either animation deadline.
+                state.pointer_response = PointerResponse::Pending;
+                state.effect_pending = true;
+                state.moved_box = true;
+            })?;
+            let input = input.with_pointer(Some(Pointer::default()));
+            connection.take_calls()?;
+            let started = tokio::time::Instant::now();
+            action.run(&input, &ref_id).await?;
+            assert_eq!(started.elapsed(), std::time::Duration::ZERO, "{action:?}");
+            let mut calls = connection.take_calls()?;
+            assert_eq!(pointer_calls(&calls).count(), 0, "{action:?}");
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabInfo")
+                    .count(),
+                1,
+                "{action:?}"
+            );
+            // PageManager's existing recovery may list tabs after a failed read.
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabs")
+                    .count(),
+                usize::from(read_error),
+                "{action:?}"
+            );
+            calls.retain(|call| {
+                !matches!(
+                    call.method.as_str(),
+                    "Browser.getTabInfo" | "Browser.getTabs"
+                )
+            });
+            assert_eq!(calls, legacy, "{action:?}");
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_inactive_tabs_skip_drawing_and_keep_legacy_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_skipped_tab_uses_legacy_input(false).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_failed_fresh_tab_reads_skip_drawing_and_keep_legacy_input()
+    -> Result<(), Box<dyn std::error::Error>> {
+        assert_skipped_tab_uses_legacy_input(true).await
+    }
+
+    #[tokio::test]
+    async fn tests_that_disabled_inputs_never_query_tab_activity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        for action in POINTER_INPUTS {
+            let (connection, input, ref_id) = input_harness(HitTestResponse::Clear).await?;
+            connection.configure(|state| {
+                state.tab_active = false;
+                state.tab_info_error = true;
+                state.tab_list_error = true;
+            })?;
+            connection.take_calls()?;
+            action.run(&input, &ref_id).await?;
+            let calls = connection.take_calls()?;
+            assert!(!calls.iter().any(|call| matches!(
+                call.method.as_str(),
+                "Browser.getTabInfo" | "Browser.getTabs"
+            )));
+            assert_eq!(pointer_calls(&calls).count(), 0);
+            assert_real_input_once(&calls, action);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_tab_activity_is_refreshed_for_each_action()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let input = input.with_pointer(Some(Pointer::default()));
+        for active in [false, true, false] {
+            connection.configure(|state| state.tab_active = active)?;
+            connection.take_calls()?;
+            input.hover_at(50.0, 25.0).await?;
+            let calls = connection.take_calls()?;
+            assert_eq!(
+                calls
+                    .iter()
+                    .filter(|call| call.method == "Browser.getTabInfo")
+                    .count(),
+                1
+            );
+            assert_eq!(pointer_calls(&calls).count(), usize::from(active));
+            assert_real_input_once(&calls, PointerInput::HoverAt);
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn tests_that_guarded_input_checks_activity_through_its_captured_access()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let (connection, _input, _ref_id) = input_harness(HitTestResponse::Clear).await?;
+        let session = BrowserSession::new(connection.clone(), BrowserSessionHooks::default());
+        let page = session
+            .pages
+            .list()
+            .await?
+            .into_iter()
+            .next()
+            .ok_or("missing page")?;
+        let view = BrowserView::unbound(session, None)
+            .with_expected_created_page(&page)?
+            .with_pointer(Pointer::default());
+        let input = view.input(page.page_id).await?;
+        assert!(input.access.is_some());
+        for active in [false, true] {
+            connection.configure(|state| state.tab_active = active)?;
+            connection.take_calls()?;
+            assert_eq!(input.drawing_pointer().await.is_some(), active);
+            let calls = connection.take_calls()?;
+            // The captured view also refreshes its saved page incarnation.
+            assert_eq!(calls.len(), 2);
+            assert!(calls.iter().all(|call| call.method == "Browser.getTabInfo"));
+            assert_eq!(calls[0].params, json!({ "tabId": 101 }));
+        }
+        connection.configure(|state| state.tab_target = "replacement-target")?;
+        assert!(input.drawing_pointer().await.is_none());
+        let input = input.with_pointer(None);
+        connection.take_calls()?;
+        assert!(input.drawing_pointer().await.is_none());
+        assert!(connection.take_calls()?.is_empty());
         Ok(())
     }
 
