@@ -704,7 +704,7 @@ function LightboxFrame({
           {failed && (
             <p
               role="status"
-              className="absolute inset-0 flex items-center justify-center bg-neutral-900 p-4 text-center text-sm text-white"
+              className="absolute inset-0 flex items-center justify-center bg-ink-deep p-4 text-center text-sm text-white"
             >
               Unable to load this image.
             </p>

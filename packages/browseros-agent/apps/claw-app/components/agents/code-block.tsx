@@ -126,8 +126,8 @@ export function CodeBlock({
           className={cn(
             "ml-auto inline-flex shrink-0 items-center gap-1 text-[10px] font-medium",
             streaming
-              ? "text-blue-600 dark:text-blue-400"
-              : "text-emerald-600 dark:text-emerald-400",
+              ? "text-primary"
+              : "text-green-ink",
           )}
         >
           {streaming ? (
@@ -175,7 +175,7 @@ export function CodeBlock({
                     showLineNumbers
                       ? "grid-cols-[2.75rem_minmax(0,1fr)]"
                       : "grid-cols-1",
-                    highlighted.has(lineNumber) && "bg-blue-500/[0.07]",
+                    highlighted.has(lineNumber) && "bg-primary/[0.07]",
                   )}
                 >
                   {showLineNumbers ? (
