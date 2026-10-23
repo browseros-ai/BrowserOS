@@ -10,6 +10,7 @@ use crate::{
     observer::Observer,
     page_signals::PageSignals,
     pages::{MovePageOptions, NewPageOptions, PageCreation, PageInfo, PageSession},
+    pointer::Pointer,
     profiles::{BrowserProfileInfo, LoadProfileOutcome, ProfileSelector, default_profile},
     screenshot::{ScreenshotCaptureOptions, ScreenshotCaptureResult},
     windows::WindowInfo,
@@ -90,6 +91,7 @@ pub trait PageAdmission: Send + Sync {
 #[derive(Clone)]
 pub struct BrowserView {
     session: Arc<BrowserSession>,
+    pointer: Option<Pointer>,
     binding: Option<TargetBinding>,
     /// A saved binding this view did not apply because the native browser lacks profile
     /// targeting. Routing is unbound; hosts only disclose it, and it stays persisted so a
@@ -341,12 +343,18 @@ impl BrowserView {
             signals: session.page_signals.clone(),
             signal_windows: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             session,
+            pointer: None,
             binding: None,
             unapplied: None,
             source: None,
             capture: Ok(None),
             unbound_default_window,
         }
+    }
+    #[must_use]
+    pub fn with_pointer(mut self, pointer: Pointer) -> Self {
+        self.pointer = Some(pointer);
+        self
     }
     pub fn binding(&self) -> Option<&TargetBinding> {
         self.binding.as_ref()
@@ -1039,7 +1047,7 @@ impl BrowserView {
     pub async fn input(&self, page: PageId) -> Result<Input, CoreError> {
         let access = self.page_access(page.clone()).await?;
         let observer = self.session.observe(page.clone()).await;
-        Ok(match access {
+        let input = match access {
             Some(access) => Input::new(
                 Arc::new(observer.with_access(access.clone())),
                 self.session.pages.clone(),
@@ -1047,7 +1055,8 @@ impl BrowserView {
             )
             .with_access(access),
             None => Input::new(observer, self.session.pages.clone(), page),
-        })
+        };
+        Ok(input.with_pointer(self.pointer))
     }
     pub async fn nav(&self, page: PageId) -> Result<Navigation, CoreError> {
         let access = self.page_access(page.clone()).await?;

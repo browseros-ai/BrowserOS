@@ -10,7 +10,7 @@ use super::{
     keyboard::press_combo,
     mouse::{MouseButton, dispatch_click},
 };
-use crate::{CoreError, ProtocolSession, Ref};
+use crate::{CoreError, ProtocolSession, Ref, pointer::PointerAction};
 use serde_json::{Value, json};
 
 const PREPARE_FILL_JS: &str = include_str!("../assets/prepare-fill.js");
@@ -53,8 +53,15 @@ impl Input {
         // to whatever happens to be focused elsewhere on the page.
         prepare_fill(session, target.backend_node_id, "validate").await?;
         scroll_into_view(session, target.backend_node_id).await;
-        let point = get_element_center(session, target.backend_node_id).await?;
+        let mut point = get_element_center(session, target.backend_node_id).await?;
         self.check_click_point(session, &target, point).await?;
+        if let Some(pointer) = self.pointer
+            && pointer.move_to(session, PointerAction::Fill, point).await
+        {
+            point = get_element_center(session, target.backend_node_id).await?;
+            self.check_click_point(session, &target, point).await?;
+            pointer.click_effect(session, point).await;
+        }
         // Native focus delivery can be deferred on background tabs until the
         // first input event. Click before checking focus so a page focus handler
         // cannot redirect the subsequent text insertion to another field.
