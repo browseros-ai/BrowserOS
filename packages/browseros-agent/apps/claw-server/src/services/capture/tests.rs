@@ -323,9 +323,13 @@ async fn a_pinned_stream_ends_when_its_tab_closes() {
         .unwrap_or_else(|e| panic!("{e}"));
     h.browser.wait_for("Page.startScreencast", 1).await;
 
+    // Closing a tab detaches its sessions and releases the session's claim on it.
+    h.tabs.set("s", live(&[2]));
     h.browser.emit_detached("capture-1");
 
     assert!(next(&mut frames).await.is_none());
+    // The stream ended with its tab; it did not jump to the session's other tab.
+    assert_eq!(h.browser.sent("Target.attachToTarget").len(), 1);
 }
 
 #[tokio::test]
@@ -435,4 +439,129 @@ fn quality_parses_only_the_published_presets() {
     assert_eq!(Quality::parse("high"), Some(Quality::High));
     assert_eq!(Quality::parse("medium"), None);
     let _ = CaptureError::NoOpenTab;
+}
+
+/// Whether `stream` is still open with nothing to deliver for `wait`.
+async fn still_open<S: futures_util::Stream + Unpin>(stream: &mut S, wait: Duration) -> bool {
+    tokio::time::timeout(wait, stream.next()).await.is_err()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_viewer_that_stops_reading_does_not_keep_an_ended_session_capturing() {
+    let h = harness();
+    h.tabs.set("s", live(&[1]));
+    let screencast = h
+        .hub
+        .screencast("s", Quality::High, None)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let video = h
+        .hub
+        .video("s", Quality::High, None)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    let init = [mp4_box(b"ftyp", b"av01"), mp4_box(b"moov", b"tracks")].concat();
+    let fragments = (0..6)
+        .map(|n| [mp4_box(b"moof", &[n]), mp4_box(b"mdat", b"frame")].concat())
+        .collect::<Vec<_>>();
+    h.browser.wait_for("Page.startScreenRecording", 1).await;
+
+    // Neither viewer reads anything while the browser keeps producing.
+    for n in 0..6 {
+        h.browser.emit_frame("capture-1", &[n], f64::from(n));
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    h.browser
+        .push_recording("capture-2", &[init, fragments.concat()].concat());
+    tokio::time::sleep(Duration::from_secs(1)).await;
+
+    h.tabs.set(
+        "s",
+        SessionView {
+            live: false,
+            tabs: Vec::new(),
+        },
+    );
+    tokio::time::sleep(Duration::from_secs(3)).await;
+
+    assert_eq!(h.browser.sent("Page.stopScreencast").len(), 1);
+    assert_eq!(h.browser.sent("Page.stopScreenRecording").len(), 1);
+    drop((screencast, video));
+}
+
+#[tokio::test(start_paused = true)]
+async fn ending_the_session_stops_its_capture_without_the_grace_period() {
+    let h = harness();
+    h.tabs.set("s", live(&[1]));
+    let mut frames = h
+        .hub
+        .screencast("s", Quality::High, None)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    h.browser.wait_for("Page.startScreencast", 1).await;
+
+    h.tabs.set(
+        "s",
+        SessionView {
+            live: false,
+            tabs: Vec::new(),
+        },
+    );
+    assert!(next(&mut frames).await.is_none());
+    tokio::time::sleep(STOP_GRACE / 4).await;
+
+    assert_eq!(h.browser.sent("Page.stopScreencast").len(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unpinned_screencast_waits_for_the_sessions_next_tab() {
+    let h = harness();
+    h.tabs.set("s", live(&[1]));
+    let mut frames = h
+        .hub
+        .screencast("s", Quality::High, None)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    h.browser.wait_for("Page.startScreencast", 1).await;
+
+    // The agent closes its only tab before opening the next one.
+    h.tabs.set("s", live(&[]));
+    h.browser.emit_detached("capture-1");
+    assert!(still_open(&mut frames, Duration::from_secs(3)).await);
+
+    h.tabs.set("s", live(&[2]));
+    h.browser.wait_for("Page.startScreencast", 2).await;
+    h.browser.emit_frame("capture-2", b"next tab", 1.0);
+    assert_eq!(
+        next(&mut frames).await.map(|f| (f.tab_id, f.jpeg)),
+        Some((2, b"next tab"[..].into()))
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_earlier_grace_timer_does_not_cut_a_later_grace_period_short() {
+    let h = harness();
+    h.tabs.set("s", live(&[1]));
+    let first = h
+        .hub
+        .screencast("s", Quality::High, None)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    h.browser.wait_for("Page.startScreencast", 1).await;
+
+    drop(first); // t=0: the first grace period starts
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let second = h
+        .hub
+        .screencast("s", Quality::High, None)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    drop(second); // t=4: a new grace period, ending at t=9
+
+    tokio::time::sleep(Duration::from_millis(1500)).await; // t=5.5
+    assert!(h.browser.sent("Page.stopScreencast").is_empty());
+    tokio::time::sleep(STOP_GRACE).await;
+    assert_eq!(h.browser.sent("Page.stopScreencast").len(), 1);
+    assert_eq!(h.browser.sent("Page.startScreencast").len(), 1);
 }

@@ -18,7 +18,7 @@ use std::{
     collections::HashMap,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicU64, AtomicUsize, Ordering},
     },
     time::Duration,
 };
@@ -66,6 +66,9 @@ pub(super) struct Capture {
     pub(super) key: CaptureKey,
     /// Changed only under the registry lock, so the grace stop and a new viewer never race.
     viewers: AtomicUsize,
+    /// Counts the times the last viewer left. A grace timer stops the capture only if no one
+    /// joined and left again since it started, so every departure gets its full grace period.
+    departures: AtomicU64,
     stop: CancellationToken,
     pub(super) ended: CancellationToken,
     ready: watch::Sender<Option<Result<(), String>>>,
@@ -81,6 +84,7 @@ impl Capture {
         Arc::new(Self {
             key,
             viewers: AtomicUsize::new(0),
+            departures: AtomicU64::new(0),
             stop: CancellationToken::new(),
             ended: CancellationToken::new(),
             ready: watch::channel(None).0,
@@ -95,6 +99,8 @@ impl Capture {
 pub(super) struct Lease {
     pub(super) capture: Arc<Capture>,
     registry: Registry,
+    /// Set by [`Lease::end_now`]: the last viewer leaving stops the capture without a grace.
+    stop_on_release: bool,
 }
 
 impl Lease {
@@ -119,24 +125,38 @@ impl Lease {
     /// first so none is lost between reading the init segment and the next fragment.
     pub(super) fn video(&self) -> (watch::Receiver<Option<Bytes>>, broadcast::Receiver<Bytes>) {
         let fragments = self.capture.fragments.subscribe();
-        (self.capture.init.subscribe(), fragments)
+        // Deliver an init segment captured before this viewer came, too.
+        let mut init = self.capture.init.subscribe();
+        init.mark_changed();
+        (init, fragments)
+    }
+
+    /// Leaves for good, as when the session ended: if this was the last viewer the capture
+    /// stops now instead of lingering for a viewer that cannot come back.
+    pub(super) fn end_now(mut self) {
+        self.stop_on_release = true;
     }
 }
 
 impl Drop for Lease {
     fn drop(&mut self) {
-        let last = {
-            let _registry = lock(&self.registry);
-            self.capture.viewers.fetch_sub(1, Ordering::SeqCst) == 1
+        let departure = {
+            let mut captures = lock(&self.registry);
+            if self.capture.viewers.fetch_sub(1, Ordering::SeqCst) != 1 {
+                return;
+            }
+            if self.stop_on_release {
+                stop(&mut captures, &self.capture);
+                return;
+            }
+            self.capture.departures.fetch_add(1, Ordering::SeqCst) + 1
         };
-        if !last {
-            return;
-        }
         match tokio::runtime::Handle::try_current() {
             Ok(runtime) => {
                 runtime.spawn(stop_after_grace(
                     self.registry.clone(),
                     self.capture.clone(),
+                    departure,
                 ));
             }
             Err(_) => self.capture.stop.cancel(),
@@ -154,6 +174,7 @@ pub(super) fn join(registry: &Registry, key: &CaptureKey) -> Option<Lease> {
     Some(Lease {
         capture: capture.clone(),
         registry: registry.clone(),
+        stop_on_release: false,
     })
 }
 
@@ -177,6 +198,7 @@ pub(super) fn join_or_start(
         return Lease {
             capture: capture.clone(),
             registry: registry.clone(),
+            stop_on_release: false,
         };
     }
     let capture = Capture::new(key.clone());
@@ -187,21 +209,31 @@ pub(super) fn join_or_start(
     Lease {
         capture,
         registry: registry.clone(),
+        stop_on_release: false,
     }
 }
 
-async fn stop_after_grace(registry: Registry, capture: Arc<Capture>) {
+async fn stop_after_grace(registry: Registry, capture: Arc<Capture>, departure: u64) {
     tokio::select! {
         () = tokio::time::sleep(STOP_GRACE) => {}
         () = capture.ended.cancelled() => return,
     }
     let mut captures = lock(&registry);
-    if capture.viewers.load(Ordering::SeqCst) > 0 {
+    // Someone is watching again, or left again later and owns a newer grace period.
+    if capture.viewers.load(Ordering::SeqCst) > 0
+        || capture.departures.load(Ordering::SeqCst) != departure
+    {
         return;
     }
+    stop(&mut captures, &capture);
+}
+
+/// Unregisters the capture and tells its worker to stop. Takes the locked registry so a new
+/// viewer cannot join between the check and the stop.
+fn stop(captures: &mut HashMap<CaptureKey, Arc<Capture>>, capture: &Arc<Capture>) {
     if captures
         .get(&capture.key)
-        .is_some_and(|current| Arc::ptr_eq(current, &capture))
+        .is_some_and(|current| Arc::ptr_eq(current, capture))
     {
         captures.remove(&capture.key);
     }

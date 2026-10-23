@@ -37,16 +37,16 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use tab_capture::{CaptureKey, Kind, Lease, Registry};
-use tokio::sync::{broadcast, mpsc};
+use tab_capture::{CaptureKey, Kind, Lease, RawFrame, Registry};
+use tokio::sync::{broadcast, mpsc, watch};
 use tokio_util::sync::CancellationToken;
 
 /// How often an open stream re-reads its session: to follow the current tab, to notice a closed
 /// tab or an ended session, and to refresh the URL it reports.
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
-/// Failed attempts to move a screencast whose tab is gone before the stream gives up. A closed
-/// tab can stay ranked first until its claim is released, so a few retries ride that out.
-const SWITCH_ATTEMPTS: u32 = 5;
+/// Video fragments queued for one viewer. One that falls further behind skips whole fragments,
+/// so a viewer that stops reading never holds up its stream's shutdown or session checks.
+const VIDEO_QUEUE: usize = 4;
 
 /// Why a live view could not be opened.
 #[derive(Debug, thiserror::Error)]
@@ -75,13 +75,31 @@ pub struct Frame {
 }
 
 /// A live screencast; it ends when the session ends, its pinned tab closes, or the server shuts
-/// down.
-pub struct Frames(mpsc::Receiver<Frame>);
+/// down. It holds only the newest frame: a slow reader gets the latest one when it reads,
+/// skipping those it missed, so the stream behind it never waits on it.
+pub struct Frames(Pin<Box<dyn Stream<Item = Frame> + Send>>);
+
+impl Frames {
+    fn new(latest: watch::Receiver<Option<Frame>>) -> Self {
+        Self(Box::pin(futures_util::stream::unfold(
+            latest,
+            |mut latest| async move {
+                loop {
+                    latest.changed().await.ok()?;
+                    let frame = latest.borrow_and_update().clone();
+                    if let Some(frame) = frame {
+                        return Some((frame, latest));
+                    }
+                }
+            },
+        )))
+    }
+}
 
 impl Stream for Frames {
     type Item = Frame;
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Frame>> {
-        self.0.poll_recv(cx)
+        self.0.as_mut().poll_next(cx)
     }
 }
 
@@ -133,12 +151,16 @@ impl CaptureHub {
         let view = self.live_view(session_id).await?;
         let current = pick(&view, tab)?;
         let lease = self.lease(&current, Kind::Screencast, quality).await?;
-        let (tx, rx) = mpsc::channel(1);
-        tokio::spawn(
-            self.clone()
-                .follow(session_id.to_string(), quality, tab, current, lease, tx),
-        );
-        Ok(Frames(rx))
+        let (latest, frames) = watch::channel(None);
+        tokio::spawn(self.clone().follow(
+            session_id.to_string(),
+            quality,
+            tab,
+            current,
+            lease,
+            latest,
+        ));
+        Ok(Frames::new(frames))
     }
 
     /// Streams `tab`, or the session's current tab, as fragmented AV1 MP4. The video stays on
@@ -152,7 +174,7 @@ impl CaptureHub {
         let view = self.live_view(session_id).await?;
         let target = pick(&view, tab)?;
         let lease = self.lease(&target, Kind::Video, quality).await?;
-        let (tx, rx) = mpsc::channel(2);
+        let (tx, rx) = mpsc::channel(VIDEO_QUEUE);
         tokio::spawn(self.clone().play(session_id.to_string(), target, lease, tx));
         Ok(VideoChunks(rx))
     }
@@ -204,88 +226,86 @@ impl CaptureHub {
     }
 
     /// Forwards one viewer's screencast, moving it to the session's current tab as that
-    /// changes. Dropping the lease on a switch or an exit is what lets an unwatched capture
-    /// stop.
+    /// changes, and waiting through moments when the session has no tab. Nothing here waits on
+    /// the viewer: frames replace the newest one, so shutdown and session checks always run.
+    /// Dropping a lease on a switch or an exit is what lets an unwatched capture stop.
     async fn follow(
         self: Arc<Self>,
         session_id: String,
         quality: Quality,
         pinned: Option<i64>,
-        mut tab: CaptureTab,
-        mut lease: Lease,
-        tx: mpsc::Sender<Frame>,
+        tab: CaptureTab,
+        lease: Lease,
+        latest: watch::Sender<Option<Frame>>,
     ) {
-        let mut frames = lease.frames();
+        let mut showing = Some(Showing::new(tab, lease));
         let mut check = tokio::time::interval(SESSION_CHECK_INTERVAL);
         check.reset();
-        let mut failed_switches = 0;
         loop {
             enum Next {
                 Frame,
                 Check,
-                Ended,
                 Stop,
             }
             let next = tokio::select! {
                 () = self.shutdown.cancelled() => Next::Stop,
-                () = tx.closed() => Next::Stop,
-                () = lease.capture.ended.cancelled() => Next::Ended,
-                changed = frames.changed() => if changed.is_ok() { Next::Frame } else { Next::Ended },
+                () = latest.closed() => Next::Stop,
+                activity = activity(showing.as_mut()) => match activity {
+                    Activity::Frame => Next::Frame,
+                    // The tab closed or the link broke: decide now instead of at the next tick.
+                    Activity::Ended => Next::Check,
+                },
                 _ = check.tick() => Next::Check,
             };
             match next {
                 Next::Stop => return,
                 Next::Frame => {
-                    let Some(raw) = frames.borrow_and_update().clone() else {
-                        continue;
-                    };
-                    let frame = Frame {
-                        jpeg: raw.jpeg.clone(),
-                        tab_id: tab.tab_id,
-                        url: tab.url.clone(),
-                        captured_at: raw.captured_at,
-                    };
-                    if tx.send(frame).await.is_err() {
-                        return;
+                    if let Some(showing) = showing.as_mut() {
+                        let raw = showing.frames.borrow_and_update().clone();
+                        if let Some(raw) = raw {
+                            latest.send_replace(Some(showing.frame(&raw)));
+                        }
                     }
                 }
-                Next::Ended | Next::Check => {
-                    // A pinned tab's capture ending means the tab closed (or the link broke).
-                    if matches!(next, Next::Ended) && pinned.is_some() {
+                Next::Check => match self.resolve(&session_id, pinned).await {
+                    Resolved::End => {
+                        if let Some(showing) = showing.take() {
+                            showing.lease.end_now();
+                        }
                         return;
                     }
-                    let Some(next_tab) = self.next_tab(&session_id, pinned).await else {
-                        return;
-                    };
-                    if next_tab.target_id != tab.target_id || lease.capture.ended.is_cancelled() {
+                    Resolved::Wait => {
+                        if showing.as_ref().is_some_and(Showing::ended) {
+                            showing = None;
+                        }
+                    }
+                    Resolved::Show(next_tab) => {
+                        if let Some(current) = showing.as_mut().filter(|current| {
+                            !current.ended() && current.tab.target_id == next_tab.target_id
+                        }) {
+                            // Same tab; pick up its latest URL.
+                            current.tab = next_tab;
+                            continue;
+                        }
                         match self.lease(&next_tab, Kind::Screencast, quality).await {
-                            Ok(next_lease) => {
-                                lease = next_lease;
-                                frames = lease.frames();
-                                failed_switches = 0;
-                            }
+                            Ok(lease) => showing = Some(Showing::new(next_tab, lease)),
+                            // Retried at the next check; until then keep the old tab if it lives.
                             Err(error) => {
                                 tracing::debug!(%error, "screencast could not switch tabs");
-                                if lease.capture.ended.is_cancelled() {
-                                    // Nothing to show until the switch works; wait a beat so
-                                    // the ended capture does not spin this loop.
-                                    failed_switches += 1;
-                                    if failed_switches >= SWITCH_ATTEMPTS {
-                                        return;
-                                    }
-                                    check.tick().await;
+                                if showing.as_ref().is_some_and(Showing::ended) {
+                                    showing = None;
                                 }
-                                continue;
                             }
                         }
                     }
-                    tab = next_tab;
-                }
+                },
             }
         }
     }
 
     /// Forwards one viewer's video: the init segment, then fragments until the tab closes.
+    /// Sends never wait: a full queue skips the fragment, which is safe because every fragment
+    /// starts on a keyframe.
     async fn play(
         self: Arc<Self>,
         session_id: String,
@@ -296,55 +316,133 @@ impl CaptureHub {
         let (mut init, mut fragments) = lease.video();
         let mut check = tokio::time::interval(SESSION_CHECK_INTERVAL);
         check.reset();
-        let init_segment = loop {
-            if let Some(init) = init.borrow_and_update().clone() {
-                break init;
-            }
-            tokio::select! {
-                () = self.shutdown.cancelled() => return,
-                () = tx.closed() => return,
-                () = lease.capture.ended.cancelled() => return,
-                changed = init.changed() => if changed.is_err() { return },
-                _ = check.tick() => if !self.still_open(&session_id, tab.tab_id).await { return },
-            }
-        };
-        if tx.send(init_segment).await.is_err() {
-            return;
-        }
+        let mut started = false;
         loop {
-            tokio::select! {
-                () = self.shutdown.cancelled() => return,
-                () = tx.closed() => return,
-                () = lease.capture.ended.cancelled() => return,
-                _ = check.tick() => if !self.still_open(&session_id, tab.tab_id).await { return },
-                fragment = fragments.recv() => match fragment {
-                    Ok(fragment) => if tx.send(fragment).await.is_err() { return },
-                    // Every fragment starts on a keyframe, so skipping ahead keeps the video valid.
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
-                    Err(broadcast::error::RecvError::Closed) => return,
+            enum Next {
+                Init,
+                Fragment(Result<Bytes, broadcast::error::RecvError>),
+                Check,
+                Stop,
+            }
+            let next = tokio::select! {
+                () = self.shutdown.cancelled() => Next::Stop,
+                () = tx.closed() => Next::Stop,
+                () = lease.capture.ended.cancelled() => Next::Stop,
+                changed = init.changed(), if !started => {
+                    if changed.is_ok() { Next::Init } else { Next::Stop }
+                }
+                fragment = fragments.recv(), if started => Next::Fragment(fragment),
+                _ = check.tick() => Next::Check,
+            };
+            match next {
+                Next::Stop => return,
+                Next::Init => {
+                    let Some(segment) = init.borrow_and_update().clone() else {
+                        continue;
+                    };
+                    // The queue is empty before the first send, so this cannot be full.
+                    if tx.try_send(segment).is_err() {
+                        return;
+                    }
+                    started = true;
+                }
+                Next::Fragment(Ok(fragment)) => match tx.try_send(fragment) {
+                    Ok(()) | Err(mpsc::error::TrySendError::Full(_)) => {}
+                    Err(mpsc::error::TrySendError::Closed(_)) => return,
                 },
+                Next::Fragment(Err(broadcast::error::RecvError::Lagged(_))) => {}
+                Next::Fragment(Err(broadcast::error::RecvError::Closed)) => return,
+                Next::Check => {
+                    if matches!(
+                        self.resolve(&session_id, Some(tab.tab_id)).await,
+                        Resolved::End
+                    ) {
+                        lease.end_now();
+                        return;
+                    }
+                }
             }
         }
     }
 
-    /// The tab a stream should show now, or `None` when it should end.
-    async fn next_tab(&self, session_id: &str, pinned: Option<i64>) -> Option<CaptureTab> {
+    /// What a stream should show now. A lookup error is treated as "wait": a passing failure
+    /// to read the browser's tabs should not end a partner's stream.
+    async fn resolve(&self, session_id: &str, pinned: Option<i64>) -> Resolved {
         let view = match self.tabs.view(session_id).await {
             Ok(Some(view)) if view.live => view,
-            Ok(_) => return None,
+            Ok(_) => return Resolved::End,
             Err(error) => {
                 tracing::debug!(%error, "live view session check failed");
-                return None;
+                return Resolved::Wait;
             }
         };
         match pinned {
-            Some(tab_id) => view.tabs.into_iter().find(|tab| tab.tab_id == tab_id),
-            None => view.tabs.into_iter().next(),
+            Some(tab_id) => view
+                .tabs
+                .into_iter()
+                .find(|tab| tab.tab_id == tab_id)
+                .map_or(Resolved::End, Resolved::Show),
+            // A live session between tabs: the agent closed one before opening the next.
+            None => view
+                .tabs
+                .into_iter()
+                .next()
+                .map_or(Resolved::Wait, Resolved::Show),
         }
     }
+}
 
-    async fn still_open(&self, session_id: &str, tab_id: i64) -> bool {
-        self.next_tab(session_id, Some(tab_id)).await.is_some()
+enum Resolved {
+    Show(CaptureTab),
+    /// Keep the stream open: the session is live but has nothing to show right now.
+    Wait,
+    /// Close the stream: the session ended, or its pinned tab closed.
+    End,
+}
+
+/// The tab a screencast stream shows, and its hold on that tab's capture.
+struct Showing {
+    tab: CaptureTab,
+    lease: Lease,
+    frames: watch::Receiver<Option<Arc<RawFrame>>>,
+}
+
+impl Showing {
+    fn new(tab: CaptureTab, lease: Lease) -> Self {
+        let frames = lease.frames();
+        Self { tab, lease, frames }
+    }
+
+    fn ended(&self) -> bool {
+        self.lease.capture.ended.is_cancelled()
+    }
+
+    fn frame(&self, raw: &RawFrame) -> Frame {
+        Frame {
+            jpeg: raw.jpeg.clone(),
+            tab_id: self.tab.tab_id,
+            url: self.tab.url.clone(),
+            captured_at: raw.captured_at,
+        }
+    }
+}
+
+enum Activity {
+    Frame,
+    Ended,
+}
+
+/// Resolves when the shown capture produces a frame or ends. Never resolves while nothing is
+/// shown or once its end was seen; the next check then replaces or drops it.
+async fn activity(showing: Option<&mut Showing>) -> Activity {
+    let Some(showing) = showing.filter(|showing| !showing.ended()) else {
+        return std::future::pending().await;
+    };
+    tokio::select! {
+        () = showing.lease.capture.ended.cancelled() => Activity::Ended,
+        changed = showing.frames.changed() => {
+            if changed.is_ok() { Activity::Frame } else { Activity::Ended }
+        }
     }
 }
 
