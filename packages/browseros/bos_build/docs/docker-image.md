@@ -104,7 +104,8 @@ gh workflow run release-docker.yml --ref main -f version=0.52.0.1 -f push=false
 The workflow builds this commit's server for both architectures, then builds and
 tests each image natively: amd64 on `ubuntu-latest`, arm64 on `ubuntu-24.04-arm`.
 Both run the viewer/MCP smoke check and require correct `solve_captcha` availability
-with hosted mode on and off. Both verification jobs must pass before publication.
+with hosted mode on and off. Each mode also toggles bundled extensions on/off
+using the same data volume and checks their installed state. Both verification jobs must pass before publication.
 `push=false` stops after verification without publishing an image.
 `verify_paid=true` additionally requires a paid Google reCAPTCHA demo PASS on amd64
 and spends provider credit. Containers and temporary key files are always removed.
@@ -129,9 +130,29 @@ any embedded provider key files. The release does not change package visibility.
 `org.opencontainers.image.source` annotation on the pushed index (it also requests a
 provenance attestation so a single-platform push has an index to annotate). The
 Dockerfile's label of the same name is not enough on its own: GitHub reads the
-index, and the label only reaches the per-platform images. The link is what lets the
-workflow's `GITHUB_TOKEN` push; a package created without it must be connected in its
-package settings first.
+index, and the label only reaches the per-platform images. This source link
+identifies the repository; it does not retroactively grant a workflow permission
+to push an existing package.
+
+## Workflow access to an existing package
+
+Publishing requires both the job's `packages: write` token scope and the package's
+permission for the publishing repository. In the
+[neo package settings](https://github.com/orgs/browseros-ai/packages/container/neo/settings),
+**Manage Actions access** must list `browseros-ai/BrowserOS` with **Role: Write**
+(or an existing Admin grant). Add the repository if it is missing, then choose
+Write. Repository source metadata and access for individual users are separate
+from this Actions grant.
+
+When the grant is missing, `docker login` and builds can succeed, but the push
+fails with `denied: permission_denied: write_package` even when the runner reports
+`Packages: write`. Requesting a GHCR registry token with `pull,push` scope can also
+succeed without authorizing the upload. Verify the fix with an actual write using
+the workflow's `GITHUB_TOKEN`, then rerun the release workflow. The workflow uses
+that short-lived token; workstation publishing credentials have separate access.
+
+GitHub documents package Actions access in
+[Configuring a package's access control and visibility](https://docs.github.com/en/packages/learn-github-packages/configuring-a-packages-access-control-and-visibility#ensuring-workflow-access-to-your-package).
 
 ## Runtime notes for maintainers
 

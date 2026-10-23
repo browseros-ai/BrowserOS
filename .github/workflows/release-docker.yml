@@ -149,22 +149,36 @@ jobs:
           set -euo pipefail
           for hosted in 1 0; do
             name="neo-smoke-$hosted"
-            docker run -d --name "$name" --shm-size=1g -e BROWSERCLAW_HOSTED_MODE="$hosted" \
-              -p 127.0.0.1::9010 -p 127.0.0.1::6080 "ghcr.io/browseros-ai/neo:$VERSION" >/dev/null
-            for _ in $(seq 1 90); do
-              state=$(docker inspect -f '{{.State.Health.Status}}' "$name")
-              [ "$state" != unhealthy ] || exit 1
-              [ "$state" != healthy ] || break
-              sleep 2
+            volume="neo-smoke-$hosted-data"
+            docker volume create "$volume" >/dev/null
+            # Reuse each profile across extension modes, including graceful
+            # shutdown so installed-extension state is flushed before restart.
+            for extensions_disabled in false true; do
+              docker run -d --name "$name" --shm-size=1g -v "$volume:/data" \
+                -e BROWSERCLAW_HOSTED_MODE="$hosted" -e NEO_DISABLE_BROWSEROS_EXTENSIONS="$extensions_disabled" \
+                -p 127.0.0.1::9010 -p 127.0.0.1::6080 "ghcr.io/browseros-ai/neo:$VERSION" >/dev/null
+              for _ in $(seq 1 90); do
+                state=$(docker inspect -f '{{.State.Health.Status}}' "$name")
+                [ "$state" != unhealthy ] || exit 1
+                [ "$state" != healthy ] || break
+                sleep 2
+              done
+              [ "$state" = healthy ]
+              port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "9010/tcp") 0).HostPort}}' "$name")
+              python3 packages/browseros/docker/neo/captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"
+              docker exec -i "$name" python3 - "$extensions_disabled" < packages/browseros/docker/neo/check_extensions.py
+              if [ "$hosted" = 1 ]; then
+                vnc=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "6080/tcp") 0).HostPort}}' "$name")
+                python3 packages/browseros/docker/neo/smoke.py --mcp-port "$port" --vnc-port "$vnc"
+                if [ "$extensions_disabled" = true ]; then
+                  echo "mcp_url=http://127.0.0.1:$port/mcp" >> "$GITHUB_OUTPUT"
+                fi
+              fi
+              if [ "$extensions_disabled" = false ]; then
+                docker stop -t 20 "$name" >/dev/null
+                docker rm "$name" >/dev/null
+              fi
             done
-            [ "$state" = healthy ]
-            port=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "9010/tcp") 0).HostPort}}' "$name")
-            python3 packages/browseros/docker/neo/captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"
-            if [ "$hosted" = 1 ]; then
-              vnc=$(docker inspect -f '{{(index (index .NetworkSettings.Ports "6080/tcp") 0).HostPort}}' "$name")
-              python3 packages/browseros/docker/neo/smoke.py --mcp-port "$port" --vnc-port "$vnc"
-              echo "mcp_url=http://127.0.0.1:$port/mcp" >> "$GITHUB_OUTPUT"
-            fi
           done
       - uses: oven-sh/setup-bun@v2
         if: inputs.verify_paid && matrix.arch == 'amd64'
@@ -186,6 +200,7 @@ jobs:
         if: always()
         run: |
           docker rm -fv neo-smoke-1 neo-smoke-0 >/dev/null 2>&1 || true
+          docker volume rm neo-smoke-1-data neo-smoke-0-data >/dev/null 2>&1 || true
           rm -f "$RUNNER_TEMP/neo-capsolver-key" "$RUNNER_TEMP/neo-2captcha-key"
 
   publish:
@@ -196,6 +211,9 @@ jobs:
     environment: neo-captcha
     permissions:
       contents: read
+      # The neo package must also grant this repository Actions Write access.
+      # Its source-repository link alone does not authorize existing-package
+      # pushes. See packages/browseros/bos_build/docs/docker-image.md.
       packages: write
     env:
       VERSION: ${{ inputs.version }}

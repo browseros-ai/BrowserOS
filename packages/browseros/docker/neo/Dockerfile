@@ -92,6 +92,7 @@ ENV NEO_SCREEN=1600x1000 \
     NEO_SANDBOX=false \
     BROWSEROS_CAPSOLVER_API_KEY_FILE=/home/neo/.config/browseros/captcha/capsolver-api-key \
     BROWSEROS_2CAPTCHA_API_KEY_FILE=/home/neo/.config/browseros/captcha/2captcha-api-key \
+    NEO_DISABLE_BROWSEROS_EXTENSIONS=false \
     NEO_ARGS="" \
     PUID=1000 \
     PGID=1000

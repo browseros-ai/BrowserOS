@@ -3862,6 +3862,8 @@ class DockerImageWorkflowTest(unittest.TestCase):
         self.assertNotIn("--push", steps["Build native image"]["run"])
         smoke = next(step for step in verify["steps"] if step.get("id") == "smoke")
         self.assertIn("for hosted in 1 0", smoke["run"])
+        self.assertIn("for extensions_disabled in false true", smoke["run"])
+        self.assertIn("< packages/browseros/docker/neo/check_extensions.py", smoke["run"])
         self.assertIn('captcha_smoke.py "http://127.0.0.1:$port" "$hosted" "$KEYED"', smoke["run"])
         self.assertEqual(self.jobs["publish"]["if"], "inputs.push")
 

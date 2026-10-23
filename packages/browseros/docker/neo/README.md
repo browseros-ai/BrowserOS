@@ -56,6 +56,7 @@ NEO_VNC_PORT=7080 NEO_MCP_PORT=7010 NEO_DATA=/mnt/neo docker compose up -d --wai
 | Starting screen size | `-e NEO_SCREEN=1920x1080` | `NEO_SCREEN` | `1600x1000` |
 | Hosted mode (see below) | `-e BROWSERCLAW_HOSTED_MODE=0` | `BROWSERCLAW_HOSTED_MODE` | `1` |
 | Chromium sandbox (see [Security](#security)) | `-e NEO_SANDBOX=true` | `NEO_SANDBOX` | `false` |
+| Disable bundled BrowserOS extensions | `-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` | `NEO_DISABLE_BROWSEROS_EXTENSIONS` | `false` |
 | Extra Neo command-line flags | `-e NEO_ARGS="--lang=de"` | `NEO_ARGS` | empty |
 
 Ports inside the container are always 6080 and 9010; change only the host side.
@@ -78,6 +79,21 @@ for key configuration and rotation.
 
 The server updater is disabled so the server stays at the version verified with
 the image. Pull a newer image and recreate the container to update it.
+To run without the bundled BrowserOS extensions, pass
+`-e NEO_DISABLE_BROWSEROS_EXTENSIONS=true` to `docker run`, or use Compose:
+
+```sh
+NEO_DISABLE_BROWSEROS_EXTENSIONS=true docker compose up -d --wait
+```
+
+MCP browser tools and user-installed extensions remain enabled. The BrowserOS
+extension UI and rrweb page recordings are unavailable while disabled. This
+setting adds `--disable-browseros-extensions` without replacing `NEO_ARGS`, so
+derived images keep their own flags. It accepts `true`/`1`/`yes`/`on` and
+`false`/`0`/`no`/`off`, ignoring case; other values stop startup.
+Recreate the container after changing it; `docker restart` keeps the old setting.
+With an existing data volume, Neo may uninstall its bundled extensions and
+install them again when re-enabled.
 
 ## Read what your agent did
 
