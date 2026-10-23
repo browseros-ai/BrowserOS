@@ -6,7 +6,6 @@
 
 import type { RecordingMetadata } from '@browseros/claw-api'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
 import type { RunStatus } from '@/lib/status'
 import { describeStep, verbForTool } from '@/lib/step-sentences'
 import {
@@ -80,13 +79,10 @@ export interface UseReplayDataResult {
   replay: ReplayData | null
   sessionId: string
   isLoading: boolean
-  navigate: ReturnType<typeof useNavigate>
 }
 
-/** Loads task metadata and stable rrweb event buckets for the replay page. */
-export function useReplayData(): UseReplayDataResult {
-  const { sessionId = '' } = useParams<{ sessionId: string }>()
-  const navigate = useNavigate()
+/** Loads task metadata and stable rrweb event buckets for one session's replay. */
+export function useReplayData(sessionId: string): UseReplayDataResult {
   const taskQuery = useSessionDetail({
     variables: { sessionId },
     enabled: sessionId.length > 0,
@@ -202,7 +198,6 @@ export function useReplayData(): UseReplayDataResult {
     replay,
     sessionId,
     isLoading: taskQuery.isLoading,
-    navigate,
   }
 }
 

@@ -352,7 +352,6 @@ beforeEach(async () => {
     replay: replayData([]),
     sessionId: 'session-1',
     isLoading: false,
-    navigate: mock(() => undefined) as never,
   }
   container = dom.document.getElementById('root') as unknown as HTMLElement
   const { createRoot } = await import('react-dom/client')
