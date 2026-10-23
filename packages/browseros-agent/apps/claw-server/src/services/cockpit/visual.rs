@@ -29,7 +29,16 @@ struct CaptureCandidate {
     tab_id: i64,
     page_id: u32,
     target_id: String,
+    url: String,
     last_activity_at: Option<i64>,
+}
+
+/// One tab a session has open, as live views address it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionTab {
+    pub tab_id: i64,
+    pub target_id: String,
+    pub url: String,
 }
 
 #[derive(Default)]
@@ -90,6 +99,35 @@ impl SessionVisualService {
         };
         self.capture_with_session(&session, true, browser_tab_id)
             .await
+    }
+
+    /// The session's open, live tabs, the current one first: the order the preview picks from,
+    /// so every live view agrees on which tab a session is "on".
+    pub async fn ranked_tabs(&self, session_id: &str) -> AppResult<Vec<SessionTab>> {
+        self.session_tabs.drain_writes().await;
+        let Some(browser) = self.browser.session().await else {
+            return Ok(Vec::new());
+        };
+        let pages = browser
+            .pages
+            .list()
+            .await
+            .map_err(|error| AppError::Internal(error.to_string()))?;
+        let ownership = self
+            .session_tabs
+            .list_open_session_tabs(&[session_id.to_string()])
+            .await?;
+        let activity = self.tab_activity.reconcile_pages(&pages).await;
+        Ok(
+            rank_candidates(session_id, &ownership, &pages, &activity, None)
+                .into_iter()
+                .map(|candidate| SessionTab {
+                    tab_id: candidate.tab_id,
+                    target_id: candidate.target_id,
+                    url: candidate.url,
+                })
+                .collect(),
+        )
     }
 
     /// Captures through a teardown-owned session lease after live request resolution has stopped.
@@ -187,6 +225,19 @@ fn select_candidate(
     activity: &[TabActivityRecord],
     browser_tab_id: Option<i64>,
 ) -> Option<CaptureCandidate> {
+    rank_candidates(session_id, ownership, pages, activity, browser_tab_id)
+        .into_iter()
+        .next()
+}
+
+/// The session's owned tabs that are live pages, most recently used by a tool first.
+fn rank_candidates(
+    session_id: &str,
+    ownership: &[crate::db::entities::session_tabs::Model],
+    pages: &[PageInfo],
+    activity: &[TabActivityRecord],
+    browser_tab_id: Option<i64>,
+) -> Vec<CaptureCandidate> {
     let pages_by_tab = pages
         .iter()
         .map(|page| (page.tab_id.0, page))
@@ -213,6 +264,7 @@ fn select_candidate(
                 tab_id: row.tab_id,
                 page_id: page.page_id.0,
                 target_id: page.target_id.as_str().to_string(),
+                url: page.url.clone(),
                 last_activity_at: activity_by_incarnation
                     .get(&(row.tab_id, page.page_id.0, page.target_id.as_str()))
                     .copied(),
@@ -226,7 +278,7 @@ fn select_candidate(
             .then_with(|| left.tab_id.cmp(&right.tab_id))
             .then_with(|| left.page_id.cmp(&right.page_id))
     });
-    candidates.into_iter().next()
+    candidates
 }
 
 fn capture_options() -> ScreenshotCaptureOptions {

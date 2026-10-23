@@ -4,7 +4,8 @@ info:
   version: 1.0.0
   description: |
     Read-only record of what agents did in a hosted BrowserOS neo: sessions, their tool calls
-    with screenshots, and the page recording. Served only when claw-server runs with
+    with screenshots, the page recording, and a live view of the tabs a session is working
+    in. Served only when claw-server runs with
     `BROWSERCLAW_HOSTED_MODE=1` (the Docker image's default).
 
     Compatibility: changes within `/v1` are additive. New response fields and new values of an
@@ -133,6 +134,79 @@ paths:
           $ref: '#/components/responses/NotFound'
         '500':
           $ref: '#/components/responses/InternalError'
+  /v1/sessions/{sessionId}/screencast:
+    get:
+      operationId: getSessionScreencast
+      summary: A live MJPEG view of the tab the session is working in.
+      description: |
+        A `multipart/x-mixed-replace` stream of JPEG frames, so an `<img src>` pointing here
+        plays it. Frames arrive only when the page changes, at most at the quality's frame
+        rate, with near-zero latency. Without `tab` the stream follows the session's current
+        tab: the one its latest tool call touched. With `tab` it stays on that tab and ends
+        when the tab closes. The stream ends when the session ends.
+
+        Each part carries `Content-Type: image/jpeg`, `Content-Length`, and the headers
+        `X-Tab-Id` (the browser tab the frame shows), `X-Url` (that tab's URL) and
+        `X-Frame-At` (Unix epoch ms when the browser captured it).
+
+        Capture runs only while someone is watching. All viewers of one tab and quality share
+        one capture.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/Quality'
+        - $ref: '#/components/parameters/Tab'
+      responses:
+        '200':
+          description: The frame stream, open until the session (or the pinned tab) ends.
+          content:
+            multipart/x-mixed-replace:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/LiveViewNotFound'
+        '409':
+          $ref: '#/components/responses/NotLive'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /v1/sessions/{sessionId}/video:
+    get:
+      operationId: getSessionVideo
+      summary: A live AV1 video of one tab the session is working in.
+      description: |
+        A fragmented MP4 (AV1) stream for Media Source Extensions or WebCodecs. It starts with
+        the initialization segment, then sends one fragment about every 2 seconds; every
+        fragment begins with a keyframe, so playback can start at any fragment. Latency is
+        about one fragment. It uses far less bandwidth and browser work than `/screencast`.
+
+        The video stays on one tab: `tab`, or the session's current tab when the request
+        starts. It ends when that tab closes or the session ends. A client that falls behind
+        skips whole fragments.
+
+        Capture runs only while someone is watching. All viewers of one tab and quality share
+        one capture.
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+        - $ref: '#/components/parameters/Quality'
+        - $ref: '#/components/parameters/Tab'
+      responses:
+        '200':
+          description: The video stream, open until the tab closes or the session ends.
+          content:
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '404':
+          $ref: '#/components/responses/LiveViewNotFound'
+        '409':
+          $ref: '#/components/responses/NotLive'
+        '500':
+          $ref: '#/components/responses/InternalError'
 components:
   parameters:
     SessionId:
@@ -144,6 +218,25 @@ components:
         `_meta["com.browseros.neo/session"]` on a tool result.
       schema:
         type: string
+    Quality:
+      name: quality
+      in: query
+      description: >-
+        `low` is 480×300 at up to 4 frames per second (10 for `/video`); `high` is 1280×800 at
+        up to 10 frames per second (15 for `/video`). Frames keep the tab's aspect ratio.
+      schema:
+        type: string
+        x-extensible-enum: [low, high]
+        default: high
+    Tab:
+      name: tab
+      in: query
+      description: >-
+        A browser tab id the session has open (`toolCalls[].page.tabId` on the session).
+        Without it, the session's current tab is used.
+      schema:
+        type: integer
+        format: int64
   responses:
     BadRequest:
       description: A query parameter is invalid or out of range (`invalid_request`).
@@ -155,6 +248,22 @@ components:
       description: >-
         No session with at least one tool call has this id (`session_not_found`). A session
         is also gone once audit retention (7 days by default) deletes it.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    LiveViewNotFound:
+      description: >-
+        No session has this id (`session_not_found`), or `tab` is not a tab the session has
+        open (`tab_not_found`).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotLive:
+      description: >-
+        There is nothing to watch: the session has ended (`session_not_live`), or it has no
+        open tab yet (`no_open_tab`).
       content:
         application/json:
           schema:
@@ -359,7 +468,15 @@ components:
       properties:
         code:
           type: string
-          x-extensible-enum: [invalid_request, session_not_found, internal_error]
+          x-extensible-enum:
+            [
+              invalid_request,
+              session_not_found,
+              tab_not_found,
+              session_not_live,
+              no_open_tab,
+              internal_error,
+            ]
         message:
           type: string
         requestId:

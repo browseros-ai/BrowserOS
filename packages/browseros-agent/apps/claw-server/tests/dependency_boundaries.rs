@@ -141,6 +141,26 @@ fn tab_cleanup_to_browser_is_an_allowed_service_edge() {
 }
 
 #[test]
+fn capture_reads_session_tabs_through_cockpit_and_sessions() {
+    assert!(
+        violations(
+            "services/capture/ports.rs",
+            "use crate::services::{cockpit::SessionVisualService, sessions::Sessions};"
+        )
+        .is_empty()
+    );
+    let errors = violations(
+        "services/capture/ports.rs",
+        "use crate::services::harness::HarnessService;",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("services/capture -> services/harness"))
+    );
+}
+
+#[test]
 fn services_cannot_depend_on_api() {
     let errors = violations("services/browser/example.rs", "use crate::api::http;");
     assert!(
@@ -525,6 +545,8 @@ fn allowed_service_edge(source: &str, target: &str) -> bool {
         (source, target),
         ("browser", "sessions")
             | ("cockpit", "browser" | "sessions" | "profiles")
+            // Live views read a session's liveness and its ranked tabs, the preview's ranking.
+            | ("capture", "cockpit" | "sessions")
             | ("recordings", "browser")
             | ("replay", "recordings")
             | ("tab_cleanup", "browser")

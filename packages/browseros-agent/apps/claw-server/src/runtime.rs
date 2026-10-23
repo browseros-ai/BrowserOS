@@ -30,7 +30,7 @@ impl ShutdownHandle {
         self.token.cancelled().await;
     }
 
-    fn child_token(&self) -> CancellationToken {
+    pub(crate) fn child_token(&self) -> CancellationToken {
         self.token.child_token()
     }
 }

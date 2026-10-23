@@ -83,7 +83,11 @@ Within `/v1`, fields are only ever added, never renamed or removed.
 | `GET /v1/sessions?client=&since=&until=&q=&cursor=&limit=` | Sessions, most recently active first |
 | `GET /v1/sessions/{id}?include=screenshots&wait=60` | One session and every tool call, with each screenshot inlined |
 | `GET /v1/sessions/{id}/recording` | The page recording as rrweb events, one entry per page |
+| `GET /v1/sessions/{id}/screencast?quality=low\|high&tab=` | A live MJPEG view of the tab the agent is working in; works as an `<img src>` |
+| `GET /v1/sessions/{id}/video?quality=low\|high&tab=` | The same tab as live AV1 video (fragmented MP4, ~2 s behind), for Media Source Extensions |
 
+- **The live views** stream only while you watch, and only the session's own tabs. Without
+  `tab`, `/screencast` follows the agent from tab to tab. Both close when the session ends.
 - **The session id** is the `Mcp-Session-Id` header your MCP client got from `initialize`, or
   `_meta["com.browseros.neo/session"]` on a tool result.
 - **Fetch once the session is `complete`.** Screenshots and the recording land a few seconds

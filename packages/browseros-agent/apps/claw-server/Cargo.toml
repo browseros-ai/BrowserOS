@@ -26,6 +26,7 @@ hosted-api.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 base64.workspace = true
+bytes.workspace = true
 clap.workspace = true
 futures-util.workspace = true
 posthog-rs.workspace = true

@@ -7,4 +7,4 @@ pub use query::{
     CockpitQuery, LiveActivityState, LiveSessionFilters, LiveSessionProjection,
     LiveStateProjection, LiveTabProjection,
 };
-pub use visual::SessionVisualService;
+pub use visual::{SessionTab, SessionVisualService};
