@@ -131,6 +131,17 @@ mod tests {
     use crate::{ProtocolSession, input::Point, test_support::TestConnection, timeouts};
     use serde_json::{Value, json};
 
+    #[test]
+    fn tests_that_the_embedded_package_cursor_keeps_its_binding_and_license() {
+        let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../node_modules/@browseros/agent-cursor");
+        if package.exists() {
+            let script = include_str!(concat!(env!("OUT_DIR"), "/agent-cursor.js"));
+            assert!(script.contains("var BrowserOSAgentCursor"));
+            assert!(script.contains("MIT License"));
+        }
+    }
+
     #[tokio::test]
     async fn tests_that_moves_send_the_cursor_and_timed_command()
     -> Result<(), Box<dyn std::error::Error>> {
