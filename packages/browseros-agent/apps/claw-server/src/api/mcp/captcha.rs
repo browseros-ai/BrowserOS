@@ -96,10 +96,10 @@ pub fn solve_captcha_tool() -> Tool {
         "type":"object",
         "required":["status","type","method","reason","requestId","page","durationMs","attempts","paidTasks","costUsd","message","events"],
         "properties": {
-            "status":{"type":"string","enum":["solved","already_clear","unsupported","failed","cancelled","needs_human"]},
+            "status":{"type":"string","enum":["solved","token_applied","already_clear","unsupported","failed","cancelled","needs_human"]},
             "type":{"type":["string","null"],"enum":["recaptcha_v2","recaptcha_v3","turnstile","cloudflare_challenge","hcaptcha","geetest","aws_waf","arkose","unknown",null]},
             "method":{"type":"string","enum":["none","auto_pass","checkbox","tiles","token"]},
-            "reason":{"type":"string","enum":["auto_passed","checkbox_passed","tiles_accepted","token_accepted","no_captcha","already_passed","not_blocking","unsupported_type","scan_incomplete","acceptance_unconfirmed","provider_error","browser_error","deadline_exceeded","caller_cancelled","tab_closed","navigated","no_provider","provider_unavailable","tiles_exhausted","challenge_not_passed","spend_limit_reached"]},
+            "reason":{"type":"string","enum":["auto_passed","checkbox_passed","tiles_accepted","token_accepted","awaiting_submit","no_captcha","already_passed","not_blocking","unsupported_type","scan_incomplete","acceptance_unconfirmed","provider_error","browser_error","deadline_exceeded","caller_cancelled","tab_closed","navigated","no_provider","provider_unavailable","tiles_exhausted","challenge_not_passed","spend_limit_reached"]},
             "requestId":{"type":"string","pattern":"^cap_[0-9A-HJKMNP-TV-Z]{26}$"},
             "page":{"type":"integer","minimum":1},
             "durationMs":{"type":"integer","minimum":0},
@@ -109,7 +109,7 @@ pub fn solve_captcha_tool() -> Tool {
             "costUsd":{"type":"number","minimum":0},
             "message":{"type":"string"},
             "events":{"type":"array","items":{"type":"object","required":["event","requestId","page","atMs","data"],"properties":{
-                "event":{"type":"string","enum":["captcha.detected","captcha.solving","captcha.solved","captcha.failed","captcha.handoff"]},
+                "event":{"type":"string","enum":["captcha.detected","captcha.solving","captcha.solved","captcha.token_applied","captcha.failed","captcha.handoff"]},
                 "requestId":{"type":"string"},"page":{"type":"integer","minimum":1},"atMs":{"type":"integer","minimum":0},"data":{"type":"object"}}}}
         }
     });
@@ -118,7 +118,7 @@ pub fn solve_captcha_tool() -> Tool {
     };
     Tool::new(
         "solve_captcha",
-        "Call when a snapshot shows a CAPTCHA or an action appears blocked. Detects, solves, and verifies the CAPTCHA on the page. Do not act on the page while this runs. Never click CAPTCHAs yourself.",
+        "Call when a snapshot shows a CAPTCHA or an action appears blocked. Detects, solves, and verifies the CAPTCHA on the page. token_applied: the token is in the page; submit and check. Do not act on the page while this runs. Never click CAPTCHAs yourself.",
         schema,
     ).with_raw_output_schema(std::sync::Arc::new(output))
         .with_annotations(ToolAnnotations::with_title("Solve a CAPTCHA").read_only(false).destructive(false).idempotent(false).open_world(true))
@@ -139,5 +139,33 @@ mod tests {
             tool.input_schema.get("properties"),
             Some(&json!({"page": {"type": "integer", "minimum": 1}}))
         );
+    }
+
+    #[test]
+    fn tests_that_output_schema_accepts_token_applied() -> anyhow::Result<()> {
+        let tool = solve_captcha_tool();
+        let output = serde_json::to_value(tool.output_schema)?;
+        for (pointer, value) in [
+            ("/properties/status/enum", "token_applied"),
+            ("/properties/reason/enum", "awaiting_submit"),
+            (
+                "/properties/events/items/properties/event/enum",
+                "captcha.token_applied",
+            ),
+        ] {
+            assert!(
+                output
+                    .pointer(pointer)
+                    .and_then(Value::as_array)
+                    .is_some_and(|values| values.contains(&json!(value))),
+                "{value}"
+            );
+        }
+        assert!(
+            tool.description
+                .as_deref()
+                .is_some_and(|text| text.contains("token_applied"))
+        );
+        Ok(())
     }
 }

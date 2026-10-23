@@ -104,9 +104,12 @@ fn log_data(event: &CaptchaEvent) -> Value {
                 fields["round"] = typed::<u32>(data, "round");
             }
         }
-        CaptchaEventName::Solved => {
+        CaptchaEventName::Solved | CaptchaEventName::TokenApplied => {
             fields["method"] = typed::<SolveMethod>(data, "method");
             fields["durationMs"] = typed::<u64>(data, "durationMs");
+            if event.event == CaptchaEventName::TokenApplied {
+                fields["callbackRan"] = typed::<bool>(data, "callbackRan");
+            }
         }
         CaptchaEventName::Failed => {
             fields["status"] = typed::<SolveStatus>(data, "status");
@@ -141,6 +144,25 @@ mod tests {
     use super::*;
     use serde_json::json;
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn tests_that_token_applied_logs_callback_state_without_secrets() {
+        for callback_ran in [false, true] {
+            let event = CaptchaEvent {
+                event: CaptchaEventName::TokenApplied,
+                request_id: "cap_test".into(),
+                page: 42,
+                at_ms: 10,
+                data: json!({"type":"turnstile","method":"token","durationMs":10,
+                    "callbackRan":callback_ran,"token":"secret-token"}),
+            };
+            assert_eq!(
+                log_data(&event),
+                json!({"type":"turnstile","method":"token",
+                "durationMs":10,"callbackRan":callback_ran})
+            );
+        }
+    }
 
     #[test]
     fn tests_that_events_are_stamped_kept_in_order_and_broadcast() -> anyhow::Result<()> {

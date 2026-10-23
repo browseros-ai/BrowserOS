@@ -718,7 +718,8 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                 "No response field for this widget",
             ));
         }
-        if applied.callback {
+        self.out.callback_ran = applied.callback;
+        if applied.callback || self.challenge.callback.is_none() {
             self.ctx
                 .lease
                 .set_progress(Some(CaptchaKind::RecaptchaV2), SolveStep::Verifying);
@@ -736,6 +737,13 @@ impl<P: CaptchaPage, B: CaptchaBackend> Flow<'_, '_, P, B> {
                     break;
                 }
                 self.pause(POLL).await?;
+            }
+            if self.bounded(self.ctx.page.document()).await? == self.ctx.document {
+                return Err(Stop(
+                    SolveStatus::TokenApplied,
+                    SolveReason::AwaitingSubmit,
+                    super::token_applied_message(applied.callback),
+                ));
             }
         }
         Err(fail(
@@ -825,6 +833,7 @@ pub async fn solve<P: CaptchaPage, B: CaptchaBackend>(
             attempts: Attempts::default(),
             paid_tasks: 0,
             cost_usd: 0.0,
+            callback_ran: false,
             message: String::new(),
         },
     };
@@ -876,6 +885,7 @@ mod tests {
         loading_tile_reads: u32,
         rejected: u32,
         revision: u32,
+        written: bool,
         callback: bool,
         transition: bool,
         navigation_after_apply: bool,
@@ -913,6 +923,7 @@ mod tests {
                 loading_tile_reads: 0,
                 rejected: 0,
                 revision: 0,
+                written: true,
                 callback: true,
                 transition: true,
                 navigation_after_apply: false,
@@ -1021,7 +1032,7 @@ mod tests {
                     }
                     s.scripts.push(expression.into());
                 });
-                return Ok(self.read(|s| json!({"written": true, "callback": s.callback})));
+                return Ok(self.read(|s| json!({"written": s.written, "callback": s.callback})));
             }
             if expression.starts_with("/*recaptcha:clear*/") {
                 if self.read(|s| s.transient_navigation_errors > 0) {
@@ -1242,6 +1253,62 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
+    async fn tests_that_applied_tokens_await_submit_without_a_visible_transition()
+    -> anyhow::Result<()> {
+        for callback in [None, Some("passed"), Some("<inline>")] {
+            let page = FakePage::new(false);
+            page.edit(|state| {
+                state.callback = callback.is_some();
+                state.transition = false;
+            });
+            let mut challenge = challenge();
+            challenge.callback = callback.map(str::to_owned);
+            let (result, _) = run_with_method(
+                &page,
+                &FakeBackend::new(vec![SolveAnswer::Token("test-token".into())]),
+                &challenge,
+                &CancellationToken::new(),
+                Instant::now() + Duration::from_secs(120),
+                Some(super::super::config::ForcedMethod::Token),
+            )
+            .await;
+            assert_eq!(serde_json::to_value(result.status)?, "token_applied");
+            assert_eq!(serde_json::to_value(result.reason)?, "awaiting_submit");
+            assert_eq!(result.method, SolveMethod::Token);
+            assert_eq!(result.paid_tasks, 1);
+            assert_eq!(result.callback_ran, callback.is_some());
+            assert!(result.message.contains(if callback.is_some() {
+                "callback ran"
+            } else {
+                "no callback was declared"
+            }));
+            assert!(result.message.to_lowercase().contains("submit"));
+            assert!(result.message.contains("solve_captcha"));
+            assert!(!result.message.contains("test-token"));
+        }
+        Ok(())
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn tests_that_tokens_without_response_fields_remain_unconfirmed() {
+        let page = FakePage::new(false);
+        page.edit(|state| state.written = false);
+        let (result, _) = run_with_method(
+            &page,
+            &FakeBackend::new(vec![SolveAnswer::Token("test-token".into())]),
+            &challenge(),
+            &CancellationToken::new(),
+            Instant::now() + Duration::from_secs(120),
+            Some(super::super::config::ForcedMethod::Token),
+        )
+        .await;
+        assert_eq!(
+            (result.status, result.reason),
+            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
     async fn tests_that_forced_tokens_skip_checkbox_and_image_work() {
         for tiles in [false, true] {
             let page = FakePage::new(tiles);
@@ -1284,8 +1351,8 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn tests_that_forced_recaptcha_tokens_still_require_acceptance() {
-        for (callback, transition) in [(false, true), (true, false)] {
+    async fn tests_that_forced_recaptcha_tokens_require_the_declared_callback() {
+        for (callback, transition) in [(false, true), (false, false)] {
             let page = FakePage::new(false);
             page.edit(|state| {
                 state.callback = callback;
@@ -1392,8 +1459,8 @@ mod tests {
         assert!((result.cost_usd - 0.008).abs() < 0.00001);
     }
     #[tokio::test(start_paused = true)]
-    async fn tests_that_token_requires_callback_and_transition() {
-        for (callback, transition) in [(false, false), (true, false), (false, true)] {
+    async fn tests_that_tokens_with_an_uninvoked_callback_remain_unconfirmed() {
+        for (callback, transition) in [(false, false), (false, true)] {
             let page = FakePage::new(true);
             page.edit(|s| {
                 s.layout = "rc-imageselect-table-42".into();
@@ -1467,7 +1534,7 @@ mod tests {
         .await;
         assert_eq!(
             (result.status, result.reason),
-            (SolveStatus::Failed, SolveReason::AcceptanceUnconfirmed)
+            (SolveStatus::TokenApplied, SolveReason::AwaitingSubmit)
         );
     }
     #[tokio::test(start_paused = true)]
