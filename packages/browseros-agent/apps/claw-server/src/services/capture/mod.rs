@@ -44,6 +44,9 @@ use tokio_util::sync::CancellationToken;
 /// How often an open stream re-reads its session: to follow the current tab, to notice a closed
 /// tab or an ended session, and to refresh the URL it reports.
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
+/// How long a followed screencast waits for the browser to start capturing its new tab before
+/// it re-checks the session and tries again.
+const SWITCH_TIMEOUT: Duration = Duration::from_secs(5);
 /// Video fragments queued for one viewer. One that falls further behind skips whole fragments,
 /// so a viewer that stops reading never holds up its stream's shutdown or session checks.
 const VIDEO_QUEUE: usize = 4;
@@ -287,11 +290,28 @@ impl CaptureHub {
                             current.tab = next_tab;
                             continue;
                         }
-                        match self.lease(&next_tab, Kind::Screencast, quality).await {
-                            Ok(lease) => showing = Some(Showing::new(next_tab, lease)),
+                        // Starting a capture waits on the browser. Stay responsive to the viewer
+                        // leaving and to shutdown meanwhile, and give up after a while so the
+                        // session check runs again.
+                        let switched = tokio::select! {
+                            () = self.shutdown.cancelled() => return,
+                            () = latest.closed() => return,
+                            switched = tokio::time::timeout(
+                                SWITCH_TIMEOUT,
+                                self.lease(&next_tab, Kind::Screencast, quality),
+                            ) => switched,
+                        };
+                        match switched {
+                            Ok(Ok(lease)) => showing = Some(Showing::new(next_tab, lease)),
                             // Retried at the next check; until then keep the old tab if it lives.
-                            Err(error) => {
+                            Ok(Err(error)) => {
                                 tracing::debug!(%error, "screencast could not switch tabs");
+                                if showing.as_ref().is_some_and(Showing::ended) {
+                                    showing = None;
+                                }
+                            }
+                            Err(_) => {
+                                tracing::debug!("screencast tab switch timed out");
                                 if showing.as_ref().is_some_and(Showing::ended) {
                                     showing = None;
                                 }

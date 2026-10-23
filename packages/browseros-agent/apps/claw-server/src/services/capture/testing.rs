@@ -36,6 +36,7 @@ pub struct ScriptedCdp {
     events: broadcast::Sender<CdpEvent>,
     recordings: Mutex<HashMap<String, VecDeque<Vec<u8>>>>,
     failing_reads: Mutex<HashMap<String, usize>>,
+    attach_delay: Mutex<Duration>,
 }
 
 impl ScriptedCdp {
@@ -49,6 +50,7 @@ impl ScriptedCdp {
             events: broadcast::channel(64).0,
             recordings: Mutex::default(),
             failing_reads: Mutex::default(),
+            attach_delay: Mutex::new(Duration::ZERO),
         })
     }
 
@@ -107,6 +109,11 @@ impl ScriptedCdp {
             .push_back(bytes.to_vec());
     }
 
+    /// Makes every later `Target.attachToTarget` take `delay`, like a busy browser.
+    pub fn delay_attaches(&self, delay: Duration) {
+        *lock(&self.attach_delay) = delay;
+    }
+
     /// Fails the next `count` `IO.read`s on `session`, as Chromium does before a recording's
     /// first bytes are written.
     pub fn fail_reads(&self, session: &str, count: usize) {
@@ -160,6 +167,12 @@ impl CdpConnection for ScriptedCdp {
         session: Option<&'a SessionId>,
     ) -> BoxFuture<'a, Result<Value, CdpError>> {
         Box::pin(async move {
+            if method == "Target.attachToTarget" {
+                let delay = *lock(&self.attach_delay);
+                if !delay.is_zero() {
+                    tokio::time::sleep(delay).await;
+                }
+            }
             let fails = self.read_fails(method, session);
             let reply = self.reply(method, session);
             lock(&self.sent).push(SentCommand {

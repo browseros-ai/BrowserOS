@@ -565,3 +565,30 @@ async fn an_earlier_grace_timer_does_not_cut_a_later_grace_period_short() {
     assert_eq!(h.browser.sent("Page.stopScreencast").len(), 1);
     assert_eq!(h.browser.sent("Page.startScreencast").len(), 1);
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_slow_tab_switch_does_not_keep_a_departed_viewer_capturing() {
+    let h = harness();
+    h.tabs.set("s", live(&[1, 2]));
+    let frames = h
+        .hub
+        .screencast("s", Quality::High, None)
+        .await
+        .unwrap_or_else(|e| panic!("{e}"));
+    h.browser.wait_for("Page.startScreencast", 1).await;
+
+    // The agent moves to tab 2 while the browser is slow to attach.
+    h.browser.delay_attaches(Duration::from_secs(60));
+    h.tabs.set("s", live(&[2, 1]));
+    h.browser.wait_for("Target.attachToTarget", 2).await;
+    drop(frames);
+
+    // The viewer left mid-switch, so tab 1's capture stops after its grace period, not after
+    // the browser finally answers.
+    tokio::time::sleep(STOP_GRACE + Duration::from_secs(2)).await;
+    let stops = h.browser.sent("Page.stopScreencast");
+    assert_eq!(
+        stops.first().and_then(|stop| stop.session.as_deref()),
+        Some("capture-1")
+    );
+}
