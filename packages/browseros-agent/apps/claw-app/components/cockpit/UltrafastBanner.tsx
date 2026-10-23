@@ -68,7 +68,7 @@ export function UltrafastBanner({ onClosed }: { onClosed?: () => void }) {
           onClick={() => track(AnalyticsEvent.UltrafastBannerClicked)}
           className="h-[34px] px-3.5 font-semibold text-[13.5px]"
         >
-          Request early access
+          Join the waitlist
         </ButtonLink>
       }
     />

@@ -12,7 +12,7 @@
  * analytics consent, and signup never enables tracking or person profiles.
  */
 
-import { Check, Zap } from 'lucide-react'
+import { Check } from 'lucide-react'
 import {
   type FormEvent,
   useEffect,
@@ -21,8 +21,11 @@ import {
   useSyncExternalStore,
 } from 'react'
 import { Page } from '@/components/layout/Page'
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
+import { PageHeader } from '@/components/layout/PageHeader'
+import { AnimatedBadge } from '@/components/motion/animated-badge'
+import { StatefulButton } from '@/components/motion/button/stateful'
+import { Card } from '@/components/motion/card'
+import { Input } from '@/components/motion/input'
 import { AnalyticsEvent, track } from '@/modules/analytics/events'
 import {
   isCapturing,
@@ -38,9 +41,11 @@ import { submitUltrafastSignup } from './ultrafast-signup'
 
 const PERKS = [
   'Faster clicks, typing, and navigation',
-  'Bring your own Claude, Codex, or other agent subscription to power your main agent',
-  'Use 10× fewer tokens from your main agent, with our browser-action model handling most actions',
+  'Keep using your own Claude, Codex, or other AI subscription',
+  'Your AI agents use far fewer tokens, because our model handles most browser actions',
 ]
+
+const BACK_HOME = { to: '/', label: 'Home' }
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -120,10 +125,8 @@ function UltrafastWaitlistPending({
 }) {
   return (
     <Page>
-      <h1 className="font-[650] text-[32px] text-cyanotype-ink leading-[39px] tracking-[-0.035em]">
-        <span className="text-cyanotype-blue italic">Ultrafast</span> mode
-      </h1>
-      <p role="status" className="text-[14px] text-cyanotype-soft leading-6">
+      <PageHeader title="Ultrafast mode" back={BACK_HOME} />
+      <p role="status" className="text-[15px] text-ink-2">
         {status === 'loading'
           ? 'Loading…'
           : "Can't reach neo's local service right now. This page will load once it's back."}
@@ -158,106 +161,99 @@ export function UltrafastWaitlistView({
 
   return (
     <Page>
-      <header className="space-y-3">
-        <p className="font-semibold text-[12px] text-cyanotype-blue uppercase leading-[18px] tracking-[0.1em]">
+      <div className="flex flex-col gap-3">
+        <AnimatedBadge
+          status="info"
+          size="sm"
+          showIcon={false}
+          className="self-start"
+        >
           Coming soon
-        </p>
-        <h1 className="font-[650] text-[32px] text-cyanotype-ink leading-[39px] tracking-[-0.035em]">
-          <span className="text-cyanotype-blue italic">Ultrafast</span> mode
-        </h1>
-        <p className="text-[15px] text-cyanotype-soft leading-6">
-          We trained our own browser-action model for faster browser tasks.
-        </p>
-      </header>
+        </AnimatedBadge>
+        <PageHeader
+          title="Ultrafast mode"
+          lede="We trained our own model for browser actions, so tasks finish faster."
+          back={BACK_HOME}
+        />
+      </div>
 
-      <section
+      <Card
         aria-label="Ultrafast pricing"
-        className="flex flex-col gap-[22px] rounded-xl border border-cyanotype-border bg-card p-6 shadow-[0_3px_12px_#102a4305]"
+        className="gap-[18px] border-border-2 bg-card px-6 shadow-card"
       >
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex min-w-0 flex-1 items-center gap-3">
-            <span className="flex size-10 shrink-0 items-center justify-center rounded-[10px] bg-accent-tint/50">
-              <Zap
-                aria-hidden="true"
-                className="size-[22px] text-cyanotype-blue"
-              />
-            </span>
-            <h2 className="min-w-0 flex-1 font-semibold text-[15px] text-cyanotype-ink leading-[22px] tracking-[-0.015em]">
-              Unlimited browser-action model access
-            </h2>
-          </div>
-          <p className="flex shrink-0 items-baseline gap-[3px] text-cyanotype-ink">
-            <span className="font-bold text-[28px] tabular-nums leading-[34px] tracking-[-0.04em]">
+        <div className="flex flex-wrap items-baseline justify-between gap-3">
+          <h2 className="font-bold text-[17px] text-cyanotype-ink tracking-[-0.01em]">
+            Unlimited Ultrafast access
+          </h2>
+          <p className="flex items-baseline gap-1">
+            <span className="font-extrabold text-[28px] text-cyanotype-ink tabular-nums tracking-[-0.03em]">
               ${price}
             </span>
-            <span className="text-[13px] text-cyanotype-soft">/month</span>
+            <span className="text-[14px] text-ink-3">/month</span>
           </p>
         </div>
-        <ul className="space-y-3.5">
+        <ul className="flex flex-col gap-3">
           {PERKS.map((perk) => (
             <li
               key={perk}
-              className="flex items-start gap-2.5 text-[14px] text-cyanotype-ink leading-[22px]"
+              className="flex items-start gap-2.5 text-[15px] text-ink leading-[22px]"
             >
               <Check
                 aria-hidden="true"
-                className="mt-0.5 size-[18px] shrink-0 text-cyanotype-blue"
+                className="mt-0.5 size-[17px] shrink-0 text-primary"
               />
               <span className="min-w-0 flex-1">{perk}</span>
             </li>
           ))}
         </ul>
-        <div className="pt-0.5">
-          {joined ? (
-            <p
-              role="status"
-              className="flex items-center gap-2 font-semibold text-[13px] text-cyanotype-ink"
-            >
-              <Check className="size-4 text-cyanotype-blue" />
-              You're on the list. We'll email you when it's ready.
-            </p>
-          ) : (
-            <form onSubmit={handleSubmit} noValidate className="space-y-2">
-              <div className="flex flex-col items-start gap-2 sm:flex-row">
-                <Input
-                  type="email"
-                  name="email"
-                  autoComplete="email"
-                  placeholder="you@example.com"
-                  aria-label="Email"
-                  aria-invalid={invalid || undefined}
-                  value={value}
-                  disabled={pending}
-                  onChange={(event) => {
-                    setValue(event.target.value)
-                    setInvalid(false)
-                  }}
-                  className="h-[42px] min-w-0 rounded-md border-cyanotype-border bg-background text-[14px] sm:flex-1"
-                />
-                <div className="flex w-full shrink-0 flex-col gap-2.5 sm:w-auto">
-                  <Button
-                    type="submit"
-                    disabled={pending}
-                    className="h-[42px] rounded-md bg-cyanotype-blue px-4 text-[14px] text-on-cyanotype hover:bg-cyanotype-blue-hover"
-                  >
-                    {pending ? 'Joining…' : 'Request early access'}
-                  </Button>
-                </div>
-              </div>
-              {invalid && (
-                <p role="alert" className="text-[12px] text-destructive">
-                  Enter a valid email address.
-                </p>
-              )}
-              {error && (
-                <p role="alert" className="text-[12px] text-destructive">
-                  {error}
-                </p>
-              )}
-            </form>
-          )}
-        </div>
-      </section>
+        {joined ? (
+          <p
+            role="status"
+            className="flex items-center gap-2 font-semibold text-[15px] text-green-ink"
+          >
+            <Check aria-hidden className="size-4" />
+            You're on the list. We'll email you when it's ready.
+          </p>
+        ) : (
+          <form
+            onSubmit={handleSubmit}
+            noValidate
+            className="flex flex-col gap-2"
+          >
+            <div className="flex flex-col items-stretch gap-2.5 sm:flex-row sm:items-end">
+              <Input
+                type="email"
+                name="email"
+                label="Email"
+                autoComplete="email"
+                placeholder="you@example.com"
+                value={value}
+                disabled={pending}
+                error={invalid ? 'Enter a valid email address.' : undefined}
+                onChange={(next) => {
+                  setValue(next)
+                  setInvalid(false)
+                }}
+                className="min-w-0 sm:flex-1"
+                classNames={{ field: 'bg-background' }}
+              />
+              <StatefulButton
+                type="submit"
+                state={pending ? 'loading' : 'idle'}
+                loadingText="Joining…"
+                className="h-11 font-semibold"
+              >
+                Join the waitlist
+              </StatefulButton>
+            </div>
+            {error && (
+              <p role="alert" className="text-[13px] text-destructive">
+                {error}
+              </p>
+            )}
+          </form>
+        )}
+      </Card>
     </Page>
   )
 }
