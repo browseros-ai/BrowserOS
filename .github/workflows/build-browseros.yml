@@ -92,6 +92,8 @@ on:
         description: "Uploaded lane-manifest artifact name"
         value: ${{ jobs.build.outputs.lane-artifact }}
     secrets:
+      BROWSEROS_PACKAGES_TOKEN:
+        required: false
       R2_ACCOUNT_ID:
         required: false
       R2_ACCESS_KEY_ID:
@@ -246,6 +248,8 @@ jobs:
         if: inputs.resource-mode == 'source' && inputs.product == 'browseros'
         working-directory: packages/browseros-agent
         run: bun ci
+        env:
+          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
 
       - name: Setup BrowserOS neo server toolchain
         if: inputs.resource-mode == 'source' && inputs.product == 'browserclaw'

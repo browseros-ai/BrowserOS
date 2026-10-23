@@ -49,6 +49,8 @@ on:
         description: "Immutable source commit"
         value: ${{ jobs.prepare.outputs.release_sha }}
     secrets:
+      BROWSEROS_PACKAGES_TOKEN:
+        required: false
       R2_ACCOUNT_ID:
         required: true
       R2_ACCESS_KEY_ID:
@@ -231,6 +233,8 @@ jobs:
       - name: Install browseros-agent dependencies
         working-directory: packages/browseros-agent
         run: bun ci
+        env:
+          BROWSEROS_PACKAGES_TOKEN: ${{ secrets.BROWSEROS_PACKAGES_TOKEN }}
 
       - name: Stamp onboarding artifact version
         working-directory: packages/browseros
