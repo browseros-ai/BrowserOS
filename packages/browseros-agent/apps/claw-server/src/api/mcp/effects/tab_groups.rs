@@ -26,7 +26,7 @@ use tracing::warn;
 /// Creates or joins the durable tab group for a successful `tabs new` call.
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
-        if context.result.is_error {
+        if context.call.state.config.mode.is_hosted() || context.result.is_error {
             return Ok(None);
         }
         if context.call.identity.is_none() || context.call.browser_session.is_none() {
@@ -158,6 +158,10 @@ pub struct CreatedPage {
 }
 
 pub(crate) async fn created_page(call: &ToolCall, page_id: u32) -> Option<CreatedPage> {
+    // Script-created pages share this entry point with the ordinary tab effect.
+    if call.state.config.mode.is_hosted() {
+        return None;
+    }
     // The shared registry can reconcile another incarnation while ownership or
     // response work awaits. Core validates this candidate against the creating
     // view's immutable receipt; the registry alone cannot prove creation identity.
@@ -191,6 +195,9 @@ fn spawn_tab_group_work(call: ToolCall, created: Option<CreatedPage>) -> JoinHan
 /// script hook so a page a script opens joins the agent's group the same way a
 /// `tabs new` page does.
 pub(crate) async fn run_tab_group_work(call: ToolCall, created: Option<CreatedPage>) {
+    if call.state.config.mode.is_hosted() {
+        return;
+    }
     let (Some(identity), Some(browser), Some(tab_groups)) = (
         call.identity.as_ref(),
         call.view.as_ref(),

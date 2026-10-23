@@ -32,11 +32,16 @@ pub use service::SESSION_ARG_DESCRIPTION;
 #[must_use]
 pub fn browser_mcp_service(state: AppState) -> ClawMcpService {
     let browser = Arc::downgrade(&state.browser);
+    let mode = state.config.mode;
     state
         .sessions
         .set_retained_group_hook(Arc::new(move |ownership, key, action| {
             let browser = browser.clone();
             Box::pin(async move {
+                // Complete retention bookkeeping without touching hosted browser groups.
+                if mode.is_hosted() {
+                    return true;
+                }
                 let session = match browser.upgrade() {
                     Some(browser) => browser.session().await,
                     None => None,

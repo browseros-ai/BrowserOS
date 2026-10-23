@@ -539,7 +539,11 @@ async fn execute_with_cancellation(call: &ToolCall) -> DispatchExecution {
                 target: Some(call.target_store.clone()),
                 defaults: BrowserToolDefaults {
                     default_window_id: None,
-                    default_tab_group_id: call.default_tab_group_id.clone(),
+                    default_tab_group_id: if call.state.config.mode.is_hosted() {
+                        None
+                    } else {
+                        call.default_tab_group_id.clone()
+                    },
                 },
                 cancel: call.cancel.clone(),
                 output_files: call.output_files.clone(),
@@ -705,6 +709,126 @@ pub fn linked_cancel_token(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn tests_that_hosted_tabs_and_scripts_stay_ungrouped_with_remembered_groups()
+    -> anyhow::Result<()> {
+        use crate::api::mcp::test_support::{
+            ProfileConnection, current_session, tool_call_in_mode,
+        };
+        use crate::config::ServerMode;
+
+        for script in [false, true] {
+            for remembered in [false, true] {
+                let native = ProfileConnection::new().with_default_profile();
+                let browser = current_session(native.clone());
+                browser.pages.list().await?;
+                let args = if script {
+                    json!({"code":"await browser.open('https://synthetic.test/hosted'); return await browser.open('https://synthetic.test/hosted');"})
+                } else {
+                    json!({"action":"new", "url":"https://synthetic.test/hosted"})
+                };
+                let mut call = tool_call_in_mode(
+                    if script { "run" } else { "tabs" },
+                    args,
+                    ServerMode::Hosted,
+                )
+                .await?;
+                call.browser_session = Some(browser.clone());
+                call.view = Some(BrowserView::capture(browser.clone(), None, None).await);
+                let identity = call
+                    .identity
+                    .as_ref()
+                    .ok_or_else(|| anyhow::anyhow!("identity missing"))?;
+                let ownership = call.state.sessions.ownership();
+                if remembered {
+                    let group = call
+                        .view
+                        .as_ref()
+                        .ok_or_else(|| anyhow::anyhow!("view missing"))?
+                        .cdp(
+                            "Browser.createTabGroup",
+                            json!({"tabIds":[104], "title":"Keep this name"}),
+                            None,
+                        )
+                        .await?;
+                    let id = group["group"]["groupId"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("group missing"))?
+                        .to_string();
+                    ownership
+                        .set_tab_group_ref(identity.ownership_key.clone(), Some(id.clone()))
+                        .await;
+                    call.default_tab_group_id = Some(id);
+                }
+                let before = native
+                    .groups
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .clone();
+                let result = dispatch_tool_call(call.clone()).await?;
+                assert_ne!(result.is_error, Some(true), "{result:?}");
+                let pages = browser.pages.list().await?;
+                let created = pages
+                    .iter()
+                    .filter(|page| page.url == "https://synthetic.test/hosted")
+                    .collect::<Vec<_>>();
+                assert_eq!(created.len(), if script { 2 } else { 1 });
+                for page in created {
+                    // Await the same worker used by detached effects as well as scripts.
+                    let captured = effects::tab_groups::created_page(&call, page.page_id.0).await;
+                    effects::tab_groups::run_tab_group_work(call.clone(), captured).await;
+                    assert_eq!(
+                        browser
+                            .pages
+                            .get_info(page.page_id.clone())
+                            .await
+                            .and_then(|page| page.group_id),
+                        None
+                    );
+                    assert_eq!(
+                        ownership.owner_of_page(&page.page_id).await,
+                        Some(identity.ownership_key.clone())
+                    );
+                }
+                assert_eq!(
+                    *native.groups.lock().unwrap_or_else(|p| p.into_inner()),
+                    before
+                );
+                assert!(
+                    !call
+                        .state
+                        .tab_activity
+                        .snapshot(Some(browser.as_ref()))
+                        .await
+                        .is_empty()
+                );
+                call.state
+                    .audit_worker
+                    .flush_session(call.session_id.as_str())
+                    .await?;
+                assert!(
+                    !call
+                        .state
+                        .audit_log
+                        .list_dispatches(Default::default())
+                        .await?
+                        .rows
+                        .is_empty()
+                );
+                let text = result
+                    .content
+                    .iter()
+                    .filter_map(ContentBlock::as_text)
+                    .map(|text| text.text.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                assert!(!text.contains("rename it"), "{text}");
+                assert!(!text.contains("taskName="), "{text}");
+            }
+        }
+        Ok(())
+    }
 
     #[tokio::test]
     async fn deferred_grouping_preserves_explicit_group_update() -> anyhow::Result<()> {

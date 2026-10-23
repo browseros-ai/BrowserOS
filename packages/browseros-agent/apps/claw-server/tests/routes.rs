@@ -2624,6 +2624,13 @@ async fn handle_mock_cdp_method(
                 }
             }))
         }
+        "Browser.closeTabGroup" => {
+            let group_id = params.get("groupId").and_then(Value::as_str);
+            tabs.lock()
+                .await
+                .retain(|tab| tab.group_id.as_deref() != group_id);
+            Ok(json!({}))
+        }
         "Browser.updateTabGroup" => {
             let group_id = params
                 .get("groupId")
@@ -2676,7 +2683,7 @@ fn tab_json(tab: &MockTab) -> Value {
 async fn hosted_mode_refuses_hidden_tools_with_the_alternative() -> anyhow::Result<()> {
     let app = hosted_test_app().await?;
     for (tool, expected) in [
-        ("name_session", "taskName"),
+        ("name_session", "task naming is not required"),
         ("save_skill", "Skills are not available"),
         ("mark_skill_run", "Skills are not available"),
         ("request_human_help", "tell the user"),
@@ -2703,47 +2710,194 @@ async fn hosted_mode_refuses_hidden_tools_with_the_alternative() -> anyhow::Resu
 }
 
 /// `taskName` on any call names the session before the tool runs, and a value that cannot
-/// become a label fails the call without touching the name. Desktop accepts it too, though
-/// only hosted advertises it.
+/// become a label fails the desktop call without touching the name.
 #[tokio::test]
 async fn task_name_on_any_call_names_the_session() -> anyhow::Result<()> {
-    for app in [hosted_test_app().await?, test_app().await?] {
-        let mode = app.state.config.mode;
-        let first = stateless_mcp_request(
-            &app.router,
-            "tools/call",
-            json!({ "name": "tabs", "arguments": {
-                "action": "list", "taskName": "Invoice Processing"
-            } }),
-            Some("Claude Code"),
-        )
-        .await?;
-        let handle = first["result"]["_meta"]["com.browseros.neo/session"]
-            .as_str()
-            .ok_or_else(|| anyhow::anyhow!("{mode:?}: missing session handle: {first}"))?;
-        let session = app
-            .state
-            .sessions
-            .lookup(&SessionId::new(handle))
-            .await
-            .ok_or_else(|| anyhow::anyhow!("{mode:?}: missing session"))?;
-        assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
+    let app = test_app().await?;
+    let mode = app.state.config.mode;
+    let first = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "tabs", "arguments": {
+            "action": "list", "taskName": "Invoice Processing"
+        } }),
+        Some("Claude Code"),
+    )
+    .await?;
+    let handle = first["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("{mode:?}: missing session handle: {first}"))?;
+    let session = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(handle))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("{mode:?}: missing session"))?;
+    assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
 
-        let rejected = stateless_mcp_request(
+    let rejected = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({ "name": "tabs", "arguments": {
+            "action": "list", "session": handle, "taskName": "!!!"
+        } }),
+        Some("Claude Code"),
+    )
+    .await?;
+    assert_eq!(rejected["result"]["isError"], true, "{rejected}");
+    let text = rejected["result"]["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default();
+    assert!(text.contains("taskName"), "{mode:?}: {text}");
+    assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_hosted_legacy_task_names_are_ignored_without_renaming_groups()
+-> anyhow::Result<()> {
+    let mock = MockCdp::start().await?;
+    mock.add_tab(101, "target-existing", 1).await;
+    mock.tabs.lock().await[0].group_id = Some("existing-group".to_string());
+    let app = test_app_with_native_and_mode(
+        mock.cdp_port,
+        false,
+        NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+        ServerMode::Hosted,
+    )
+    .await?;
+    app.state.browser.connect_once_for_testing().await?;
+    app.state.agent_settings.update(None, Some(true)).await?;
+    let id = initialize_mcp(&app).await?;
+    let session = app
+        .state
+        .sessions
+        .lookup(&SessionId::new(&id))
+        .await
+        .ok_or_else(|| anyhow::anyhow!("session missing"))?;
+    let original_label = session.label().await;
+    app.state
+        .sessions
+        .ownership()
+        .set_tab_group_ref(
+            session.convo_id().clone(),
+            Some("existing-group".to_string()),
+        )
+        .await;
+    for legacy_name in [
+        json!("Invoice Processing"),
+        json!("!!!"),
+        json!(42),
+        json!(null),
+    ] {
+        let (_, _, body) = request_json_with_headers(
             &app.router,
-            "tools/call",
-            json!({ "name": "tabs", "arguments": {
-                "action": "list", "session": handle, "taskName": "!!!"
-            } }),
-            Some("Claude Code"),
+            "POST",
+            "/mcp",
+            Some(json!({
+                "jsonrpc":"2.0", "id":2, "method":"tools/call",
+                "params":{"name":"tabs", "arguments":{"action":"list", "taskName":legacy_name}}
+            })),
+            &[("mcp-session-id", &id)],
         )
         .await?;
-        assert_eq!(rejected["result"]["isError"], true, "{rejected}");
-        let text = rejected["result"]["content"][0]["text"]
-            .as_str()
-            .unwrap_or_default();
-        assert!(text.contains("taskName"), "{mode:?}: {text}");
-        assert_eq!(session.label().await, "invoice-processing", "{mode:?}");
+        assert_ne!(body["result"]["isError"], true, "{body}");
+        assert_eq!(session.label().await, original_label);
+        let text = body["result"]["content"].to_string();
+        for removed in ["taskName", "rename it", "close your task", "take it back"] {
+            assert!(!text.contains(removed), "{removed}: {body}");
+        }
+        assert!(mock.group_updates.lock().await.is_empty());
+        assert_eq!(
+            mock.tabs.lock().await[0].group_id.as_deref(),
+            Some("existing-group")
+        );
     }
+    app.state
+        .sessions
+        .remove(session.id(), "closed", None)
+        .await?;
+    assert!(
+        mock.group_updates.lock().await.is_empty(),
+        "hosted teardown collapsed a group"
+    );
+    assert_eq!(mock.tabs.lock().await.len(), 1);
+    tokio::time::pause();
+    tokio::time::advance(Duration::from_secs(7_201)).await;
+    tokio::time::resume();
+    app.state.sessions.sweep_idle().await?;
+    assert_eq!(
+        app.state
+            .sessions
+            .ownership()
+            .tab_group_ref(session.convo_id())
+            .await,
+        None
+    );
+    assert!(mock.group_updates.lock().await.is_empty());
+    assert_eq!(mock.tabs.lock().await.len(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn tests_that_hosted_agents_can_explicitly_group_tabs_and_script_pages() -> anyhow::Result<()>
+{
+    let mock = MockCdp::start().await?;
+    let app = test_app_with_native_and_mode(
+        mock.cdp_port,
+        false,
+        NativeCapabilities::from_browseros_version(Some("0.51.1.2")),
+        ServerMode::Hosted,
+    )
+    .await?;
+    app.state.browser.connect_once_for_testing().await?;
+    let opened = stateless_mcp_request(
+        &app.router,
+        "tools/call",
+        json!({
+            "name":"tabs", "arguments":{"action":"new", "url":"https://example.com"}
+        }),
+        Some("Codex"),
+    )
+    .await?;
+    assert_ne!(opened["result"]["isError"], true, "{opened}");
+    let handle = opened["result"]["_meta"]["com.browseros.neo/session"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("handle missing: {opened}"))?;
+    assert_eq!(mock.tabs.lock().await[0].group_id, None);
+    let grouped = stateless_mcp_request(&app.router, "tools/call", json!({
+        "name":"tab_groups", "arguments":{"session":handle, "action":"create", "pages":[1], "title":"Manual"}
+    }), Some("Codex")).await?;
+    assert_ne!(grouped["result"]["isError"], true, "{grouped}");
+    let group_id = mock.tabs.lock().await[0]
+        .group_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("explicit group missing"))?;
+    for (name, args) in [
+        (
+            "tabs",
+            json!({"session":handle, "action":"new", "url":"https://example.com/explicit", "groupId":group_id}),
+        ),
+        (
+            "run",
+            json!({"session":handle, "code":format!("return await browser.open('https://example.com/script', {{tabGroupId:'{group_id}'}});")}),
+        ),
+    ] {
+        let result = stateless_mcp_request(
+            &app.router,
+            "tools/call",
+            json!({"name":name,"arguments":args}),
+            Some("Codex"),
+        )
+        .await?;
+        assert_ne!(result["result"]["isError"], true, "{result}");
+    }
+    let tabs = mock.tabs.lock().await;
+    assert_eq!(tabs.len(), 3);
+    assert!(
+        tabs.iter()
+            .all(|tab| tab.group_id.as_deref() == Some(group_id.as_str()))
+    );
+    assert!(mock.group_updates.lock().await.is_empty());
     Ok(())
 }
