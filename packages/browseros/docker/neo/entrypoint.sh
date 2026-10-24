@@ -174,9 +174,10 @@ apply_policies() {
 # The viewer is for watching agents drive Neo, so the image shows a minimal
 # browser frame: horizontal tabs, and no home or split-view button, bookmark
 # star, bookmarks bar or window buttons. BrowserOS has no switches for these
-# yet, so this sets Chromium's own prefs, policies and GTK layout on every
-# start, overriding changes made in the viewer. Replace it with switches in
-# start_neo once the browser has them.
+# yet, so this sets Chromium's own prefs, policies and GTK layout each time the
+# container starts (not when the loop below restarts Neo), overriding changes
+# made in the viewer. Replace it with switches in start_neo once the browser
+# has them.
 apply_minimal_ui() {
   # Chromium has no policy for these prefs. BrowserOS copies its vertical-tabs
   # pref into Chromium's only while Chromium's is unset, so set both. Writing

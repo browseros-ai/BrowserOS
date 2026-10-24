@@ -179,10 +179,10 @@ GitHub documents package Actions access in
   overridden. Server changes ship through a rebuilt image.
   Startup clears only persisted OTA ready selectors, keeping downloaded binaries
   and application data, so older profiles also select the image's server.
-- **Neo shows a minimal browser frame.** Before every launch the entrypoint merges
+- **Neo shows a minimal browser frame.** When the container starts, the entrypoint merges
   horizontal tabs and an unpinned split-view button into the profile's `Preferences`,
   writes a managed policy that hides the home button and turns off the bookmarks bar
   and bookmark editing (which hides the star), and sets an empty GTK button layout so
-  the window has no buttons.
-  BrowserOS has no switches for these yet; `apply_minimal_ui` is the one place to swap
-  them in.
+  the window has no buttons. Restarting only Neo inside a running container keeps
+  changes made in the viewer. BrowserOS has no switches for these yet;
+  `apply_minimal_ui` is the one place to swap them in.

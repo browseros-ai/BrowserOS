@@ -79,8 +79,9 @@ can pull such an image can extract them. See the [build and release guide](../..
 for key configuration and rotation.
 
 Neo shows a minimal browser frame for watching agents: horizontal tabs, and no
-home or split-view button, bookmark star, bookmarks bar or window buttons. Every
-start reapplies it, so changes made in the viewer last until the container restarts.
+home or split-view button, bookmark star, bookmarks bar or window buttons. Each
+container start reapplies it, so changes made in the viewer last until the container
+restarts.
 
 The server updater is disabled so the server stays at the version verified with
 the image. Pull a newer image and recreate the container to update it.
