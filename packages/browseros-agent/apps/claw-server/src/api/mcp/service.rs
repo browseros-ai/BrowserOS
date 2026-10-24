@@ -72,10 +72,8 @@ const AGENT_NAME_ARG: &str = "agentName";
 // moment an agent is deciding how to keep continuity.
 pub const SESSION_ARG_DESCRIPTION: &str = "Opaque logical task handle, including its browser_target binding. You receive one only if your client connects without its own transport session id: the server returns it in every tool result's `_meta` under `com.browseros.neo/session` and in result text. Pass it as `session` on later calls; natural successors retain the task's latest target even across server restart. If you never see one, your continuity across a remade connection is your tab group id instead: pass a known groupId on tabs action=\"new\" to recover its task binding before creation. Existing tabs keep their actual ownership. Omit session on the first call or to start a separate task after Stop; a stopped handle stays stopped. Stale browser targets require explicit browser_target reselection or clear.";
 const AGENT_NAME_ARG_DESCRIPTION: &str = "Optional fallback identifying your client application: claude, codex, cursor, opencode, antigravity, vscode, or zed. For another application, use its short product name. Put your task name in name_session, not here. BrowserOS prefers recognized MCP client metadata for the visible prefix; this fallback is used when that metadata does not identify a known product.";
-/// The sentence of [`AGENT_NAME_ARG_DESCRIPTION`] a hosted server rewrites, since it offers
-/// `taskName` instead of `name_session`.
+/// Removed from hosted guidance, where agents need not name tasks.
 const AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in name_session, not here.";
-const HOSTED_AGENT_NAME_TASK_SENTENCE: &str = "Put your task name in taskName, not here.";
 pub(super) const SAVE_SKILL_TOOL_NAME: &str = "save_skill";
 const SAVE_SKILL_DESCRIPTION: &str = "When you finish a repeatable browser task the user is likely to run again, save it as a BrowserOS neo skill so it can be re-run by name later; save genuinely repeatable, user-valuable tasks, not one-offs. Give a lowercase-hyphen name, a one-line description, the ordered steps, and any shortcuts learned this run. In the steps, name the exact browser SDK calls you actually used this session (e.g. browser.wait, browser.read, browser.pages.newPage) so a later run reuses them verbatim; never invent, rename, or guess a method that is not in the run tool's SDK (there is no browser.waitFor, for example). The skill is saved and linked into your agents under a neo- prefix (neo-<name>) so it never clobbers your own skills and you can list them all by typing /neo; a name given without the prefix is namespaced automatically. Call again with the same name to update it in place.";
 pub(super) const MARK_SKILL_RUN_TOOL_NAME: &str = "mark_skill_run";
@@ -286,7 +284,7 @@ impl ClawMcpService {
         let decorate = |tool: Tool| {
             let mut tool = with_session_arg(with_pursue_fallback_note(tool, pursue));
             if mode.is_hosted() {
-                tool = hosted::with_task_name_arg(tool);
+                tool = hosted::with_tool_guidance(tool);
             }
             if declare_agent_name {
                 tool = with_agent_name_arg(tool, mode);
@@ -1491,8 +1489,8 @@ impl ServerHandler for ClawMcpService {
             map.remove("session");
             map.remove(AGENT_NAME_ARG);
         }
-        // Accepted in every mode though only hosted advertises it; see `hosted`.
-        let task_name = match hosted::take_task_name(&mut raw_args) {
+        // Strip legacy taskName in both modes; hosted ignores it entirely.
+        let task_name = match hosted::take_task_name(&mut raw_args, self.mode()) {
             Ok(task_name) => task_name,
             Err(message) => {
                 return Ok(
@@ -1656,7 +1654,9 @@ impl ServerHandler for ClawMcpService {
         )
         .await;
         let mut result = attach_session_handle(finished, session_handle, presented_handle)?;
-        if self.state.agent_settings.task_cleanup_tip_enabled() && !result.is_error.unwrap_or(false)
+        if !self.mode().is_hosted()
+            && self.state.agent_settings.task_cleanup_tip_enabled()
+            && !result.is_error.unwrap_or(false)
         {
             result.content.push(rmcp::model::ContentBlock::text(
                 "Tip: When you finish this task, close your task’s tab group.",
@@ -2398,10 +2398,7 @@ fn with_session_arg(mut tool: Tool) -> Tool {
 /// or changes the schema based on whether that request happened to identify it.
 fn with_agent_name_arg(mut tool: Tool, mode: ServerMode) -> Tool {
     let description = if mode.is_hosted() {
-        Cow::Owned(
-            AGENT_NAME_ARG_DESCRIPTION
-                .replace(AGENT_NAME_TASK_SENTENCE, HOSTED_AGENT_NAME_TASK_SENTENCE),
-        )
+        Cow::Owned(AGENT_NAME_ARG_DESCRIPTION.replace(AGENT_NAME_TASK_SENTENCE, ""))
     } else {
         Cow::Borrowed(AGENT_NAME_ARG_DESCRIPTION)
     };
@@ -2542,7 +2539,7 @@ mod tests {
         let properties = &tool.input_schema["properties"];
         assert!(properties.get("session").is_some());
         assert!(properties.get("agentName").is_some());
-        assert!(properties.get("taskName").is_some());
+        assert!(properties.get("taskName").is_none());
         assert!(tool.output_schema.is_some());
         assert!(service.get_tool("solve_captcha").is_some());
         Ok(())
@@ -3518,7 +3515,8 @@ mod tests {
     /// Hosted lists the browser catalog (plus pursue when credentialled) and nothing that
     /// assumes a local harness or a watching person, even with human help on in settings.
     #[tokio::test]
-    async fn hosted_surface_is_the_catalog_with_task_name_on_every_tool() -> anyhow::Result<()> {
+    async fn tests_that_hosted_surface_has_no_task_name_or_group_recovery_guidance()
+    -> anyhow::Result<()> {
         let call =
             crate::api::mcp::test_support::tool_call_in_mode("tabs", json!({}), ServerMode::Hosted)
                 .await?;
@@ -3540,18 +3538,34 @@ mod tests {
         for tool in &tools {
             let schema = Value::Object(tool.input_schema.as_ref().clone());
             assert_eq!(
-                schema["properties"][hosted::TASK_NAME_ARG]["type"],
-                "string",
+                schema["properties"][hosted::TASK_NAME_ARG],
+                Value::Null,
                 "{}",
                 tool.name
             );
+            if tool.name == "tabs" {
+                assert!(
+                    tool.description
+                        .as_deref()
+                        .is_some_and(|text| text.contains("page_out_of_scope"))
+                );
+            }
+            let text = serde_json::to_string(tool)?;
+            for removed in [
+                "name_session",
+                "taskName",
+                "reclaims",
+                "read as yours again",
+                "your own group",
+                "Record yours",
+                "your continuity across a remade connection is your tab group",
+            ] {
+                assert!(!text.contains(removed), "{}: {removed}: {text}", tool.name);
+            }
             let agent_name = schema["properties"][AGENT_NAME_ARG]["description"]
                 .as_str()
                 .unwrap_or_default();
-            assert!(
-                agent_name.contains(HOSTED_AGENT_NAME_TASK_SENTENCE),
-                "{agent_name}"
-            );
+            assert!(!agent_name.contains("task name"), "{agent_name}");
         }
         assert_eq!(
             service.get_info().instructions.as_deref(),

@@ -171,8 +171,8 @@ GitHub documents package Actions access in
   profile blocks the user namespaces it needs. With the sandbox off, a managed policy
   hides Chromium's `--no-sandbox` warning bar.
 - **claw-server runs in hosted mode** (`BROWSERCLAW_HOSTED_MODE=1`): agents get the browser
-  tools without skills, human help or `name_session`, and name tasks with a `taskName`
-  argument. The entrypoint also turns human help off through `/api/v1/settings/agent` on
+  tools without skills, human help, task naming or automatic tab grouping. Explicit tab
+  groups remain available. The entrypoint also turns human help off through `/api/v1/settings/agent` on
   every start, before the container reports healthy, for claw-servers that predate the mode.
 - **The server updater is disabled by the entrypoint.** It cannot replace the
   packaged/overlaid server that passed the release checks, even when `NEO_ARGS` is

@@ -97,7 +97,13 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
                         || crate::identity::convo_id_belongs_to_slug(&owner, identity.agent.slug()),
                         |session| session.agent().slug() == identity.agent.slug(),
                     );
-                if same_client {
+                if same_client && context.call.state.config.mode.is_hosted() {
+                    format!(
+                        "Note: page {} was opened by {label} in an earlier session. You are allowed to use it; \
+                         leave it as you found it unless the user asked you to change it.",
+                        page_id.0
+                    )
+                } else if same_client {
                     format!(
                         "Note: page {} was opened by {label} in an earlier session. If that was \
                          you and you are continuing that work, pass its tab group id as groupId \

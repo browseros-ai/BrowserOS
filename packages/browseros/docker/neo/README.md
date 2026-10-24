@@ -63,8 +63,9 @@ Ports inside the container are always 6080 and 9010; change only the host side.
 
 `BROWSERCLAW_HOSTED_MODE=1` gives agents the browser tools only. Skills (`save_skill`,
 `mark_skill_run`) and human help (`request_human_help`, `await_human_help`) are hidden, since
-your agent's own harness keeps its workflows and asks you for help itself. Instead of calling
-`name_session`, an agent names its task with an optional `taskName` argument on any tool call.
+your agent's own harness keeps its workflows and asks you for help itself. Task naming
+and automatic tab grouping are off. Tabs stay ungrouped unless the agent explicitly requests
+a group; existing groups are left alone. Legacy `taskName` arguments are ignored.
 `BROWSERCLAW_HOSTED_MODE=0` restores the desktop tools and hides `solve_captcha`.
 Only exact `0` and `1` are accepted. After changing the flag, run
 `docker compose up -d --wait` to recreate the container with its new environment.

@@ -1,17 +1,15 @@
 use crate::api::mcp::{
     dispatch::{ToolEffect, ToolEffectContext},
-    hosted::rename_tip,
     naming::session_group_title,
 };
 use browseros_mcp::ToolResult;
 use futures_util::future::BoxFuture;
 use rmcp::model::ContentBlock;
 
-/// Appends a bounded rename reminder while the generated session label remains active.
-/// The reminder names whichever rename channel the server mode offers.
+/// On desktop, appends a bounded rename reminder while the generated label remains active.
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
-        if context.result.is_error {
+        if context.call.state.config.mode.is_hosted() || context.result.is_error {
             return Ok(None);
         }
         let Some(identity) = &context.call.identity else {
@@ -22,9 +20,8 @@ pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Opt
         };
         let title = session_group_title(&identity.session, &label);
         let mut result = context.result.clone();
-        result.content.push(ContentBlock::text(rename_tip(
-            context.call.state.config.mode,
-            &title,
+        result.content.push(ContentBlock::text(format!(
+            "Tip: this session is \"{title}\" — rename it with name_session name=\"<2-3 word task label>\""
         )));
         Ok(Some(result))
     })
@@ -109,7 +106,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hosted_tips_point_at_the_task_name_argument() -> anyhow::Result<()> {
+    async fn tests_that_hosted_results_have_no_naming_reminder() -> anyhow::Result<()> {
         let call = crate::api::mcp::test_support::tool_call_in_mode(
             "tabs",
             json!({ "action": "list" }),
@@ -117,14 +114,11 @@ mod tests {
         )
         .await?;
         let result = apply_result(&call, &ToolResult::text("ok", None)).await?;
-        let tip = result
-            .content
-            .last()
-            .and_then(ContentBlock::as_text)
-            .map(|text| text.text.clone())
-            .unwrap_or_default();
-        assert!(tip.contains("taskName="), "{tip}");
-        assert!(!tip.contains("name_session"), "{tip}");
+        assert_eq!(result.content.len(), 1);
+        assert_eq!(
+            result.content[0].as_text().map(|text| text.text.as_str()),
+            Some("ok")
+        );
         Ok(())
     }
 
