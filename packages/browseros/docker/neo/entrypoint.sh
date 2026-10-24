@@ -77,20 +77,21 @@ apply_ids() {
 
 # Applies a jq update to one of Chromium's JSON state files (Local State,
 # Preferences), creating the file when missing. Those files also hold every
-# setting the user made, so they are updated in place and never replaced. Fails,
-# leaving the file as it was, when it is not valid JSON; callers decide whether
-# that stops startup. Run it only while Neo is stopped: Chromium rewrites these
-# files as it exits.
+# setting the user made, so they are updated in place and never replaced. Run
+# it only while Neo is stopped: Chromium rewrites these files as it exits.
+# Returns non-zero when the file is not valid JSON or cannot be written, and
+# callers decide whether that stops startup. Callers test it with ||, which
+# turns off errexit inside, so every step is checked explicitly.
 merge_json() {
   local file=$1 update=$2 tmp
-  tmp=$(mktemp)
+  tmp=$(mktemp) || return 1
   if [ -s "$file" ]; then
-    jq "$update" "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+    jq "$update" "$file" > "$tmp"
   else
     jq -n "$update" > "$tmp"
-  fi
-  mv "$tmp" "$file"
-  chown neo:neo "$file"
+  fi && mv "$tmp" "$file" && chown neo:neo "$file" && return 0
+  rm -f "$tmp"
+  return 1
 }
 
 prepare_data() {
@@ -105,7 +106,7 @@ prepare_data() {
   # Local State pref is set, and Docker's port forwarding arrives from the
   # bridge address.
   merge_json "$PROFILE/Local State" '.browseros.server.allow_remote_in_mcp = true' \
-    || die "$PROFILE/Local State is not valid JSON; fix or remove it"
+    || die "Could not update $PROFILE/Local State; if it is not valid JSON, fix or remove it"
 
   # Chromium's profile lock outlives the container that held it. No Neo can be
   # running against this profile yet, so a lock here is stale. (One container
@@ -171,11 +172,11 @@ apply_policies() {
 }
 
 # The viewer is for watching agents drive Neo, so the image shows a minimal
-# browser frame: horizontal tabs, and no split-view button, bookmark star,
-# bookmarks bar or window buttons. BrowserOS has no switches for these yet, so
-# this sets Chromium's own prefs, policies and GTK layout on every start,
-# overriding changes made in the viewer. Replace it with switches in start_neo
-# once the browser has them.
+# browser frame: horizontal tabs, and no home or split-view button, bookmark
+# star, bookmarks bar or window buttons. BrowserOS has no switches for these
+# yet, so this sets Chromium's own prefs, policies and GTK layout on every
+# start, overriding changes made in the viewer. Replace it with switches in
+# start_neo once the browser has them.
 apply_minimal_ui() {
   # Chromium has no policy for these prefs. BrowserOS copies its vertical-tabs
   # pref into Chromium's only while Chromium's is unset, so set both. Writing
@@ -190,13 +191,14 @@ apply_minimal_ui() {
     .vertical_tabs.enabled = false
     | .browseros.vertical_tabs_enabled = false
     | .browser.pin_split_tab_button = false' \
-    || log "$prefs is not valid JSON; Chromium will recover it and the minimal frame applies from the next start"
+    || log "Could not update $prefs; Neo starts with its saved tab layout this time"
 
-  # The star is only hidden by turning bookmark editing off; claw-server only
-  # reads bookmarks.
+  # BrowserOS shows the home button by default. The star is only hidden by
+  # turning bookmark editing off; claw-server only reads bookmarks.
   local managed=/etc/chromium/policies/managed
   mkdir -p "$managed"
-  echo '{"BookmarkBarEnabled": false, "EditBookmarksEnabled": false}' > "$managed/neo-minimal-ui.json"
+  echo '{"BookmarkBarEnabled": false, "EditBookmarksEnabled": false, "ShowHomeButton": false}' \
+    > "$managed/neo-minimal-ui.json"
 
   # Chromium takes its frame-button layout from GTK. openbox keeps Neo
   # maximized, there is no taskbar to restore a minimized window from, and Neo
