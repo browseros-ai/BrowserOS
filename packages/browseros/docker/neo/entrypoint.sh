@@ -75,35 +75,37 @@ apply_ids() {
   chown -R neo:neo "$NEO_HOME"
 }
 
+# Applies a jq update to one of Chromium's JSON state files (Local State,
+# Preferences), creating the file when missing. Those files also hold every
+# setting the user made, so they are updated in place and never replaced. Fails,
+# leaving the file as it was, when it is not valid JSON; callers decide whether
+# that stops startup. Run it only while Neo is stopped: Chromium rewrites these
+# files as it exits.
+merge_json() {
+  local file=$1 update=$2 tmp
+  tmp=$(mktemp)
+  if [ -s "$file" ]; then
+    jq "$update" "$file" > "$tmp" || { rm -f "$tmp"; return 1; }
+  else
+    jq -n "$update" > "$tmp"
+  fi
+  mv "$tmp" "$file"
+  chown neo:neo "$file"
+}
+
 prepare_data() {
-  mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR" "$NEO_HOME/.config/gtk-3.0" "$NEO_HOME/.config/gtk-4.0"
+  mkdir -p "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
   # Derived images may share the parent mount with other users. Limit ownership
   # changes to Neo's root and data folders, and keep the cookies private there.
   chown neo:neo "$NEO_DATA_DIR" "$PROFILE" "$DOWNLOADS" "$CLAW_DATA" "$XDG_DIR"
   chmod 700 "$NEO_DATA_DIR" "$XDG_DIR"
   ln -sfn "$DOWNLOADS" "$NEO_HOME/Downloads"
 
-  # There is no taskbar to restore a minimized window from, so hide Neo's
-  # minimize button. Chromium takes its frame-button layout from GTK.
-  for gtk in gtk-3.0 gtk-4.0; do
-    printf '[Settings]\ngtk-decoration-layout=:maximize,close\n' > "$NEO_HOME/.config/$gtk/settings.ini"
-  done
-  chown -R neo:neo "$NEO_HOME/.config"
-
   # Neo's MCP proxy drops connections that are not from loopback unless this
   # Local State pref is set, and Docker's port forwarding arrives from the
-  # bridge address. Merge it: the file holds the profile's other browser-wide
-  # settings and must never be replaced.
-  local state="$PROFILE/Local State" tmp
-  tmp=$(mktemp)
-  if [ -s "$state" ]; then
-    jq '.browseros.server.allow_remote_in_mcp = true' "$state" > "$tmp" \
-      || die "$state is not valid JSON; fix or remove it"
-  else
-    echo '{"browseros":{"server":{"allow_remote_in_mcp":true}}}' > "$tmp"
-  fi
-  mv "$tmp" "$state"
-  chown neo:neo "$state"
+  # bridge address.
+  merge_json "$PROFILE/Local State" '.browseros.server.allow_remote_in_mcp = true' \
+    || die "$PROFILE/Local State is not valid JSON; fix or remove it"
 
   # Chromium's profile lock outlives the container that held it. No Neo can be
   # running against this profile yet, so a lock here is stale. (One container
@@ -166,6 +168,45 @@ apply_policies() {
     mkdir -p "$managed"
     echo '{"CommandLineFlagSecurityWarningsEnabled": false}' > "$managed/neo-docker.json"
   fi
+}
+
+# The viewer is for watching agents drive Neo, so the image shows a minimal
+# browser frame: horizontal tabs, and no split-view button, bookmark star,
+# bookmarks bar or window buttons. BrowserOS has no switches for these yet, so
+# this sets Chromium's own prefs, policies and GTK layout on every start,
+# overriding changes made in the viewer. Replace it with switches in start_neo
+# once the browser has them.
+apply_minimal_ui() {
+  # Chromium has no policy for these prefs. BrowserOS copies its vertical-tabs
+  # pref into Chromium's only while Chromium's is unset, so set both. Writing
+  # Preferences before the first launch makes Chromium (under --no-first-run)
+  # treat a fresh profile as an existing one; that only skips new-profile
+  # extras such as BrowserOS's onboarding grace for bundled extension updates.
+  # A damaged Preferences is left for Chromium to recover rather than blocking
+  # startup over appearance.
+  local prefs="$PROFILE/Default/Preferences"
+  [ -d "$PROFILE/Default" ] || install -d -m 700 -o neo -g neo "$PROFILE/Default"
+  merge_json "$prefs" '
+    .vertical_tabs.enabled = false
+    | .browseros.vertical_tabs_enabled = false
+    | .browser.pin_split_tab_button = false' \
+    || log "$prefs is not valid JSON; Chromium will recover it and the minimal frame applies from the next start"
+
+  # The star is only hidden by turning bookmark editing off; claw-server only
+  # reads bookmarks.
+  local managed=/etc/chromium/policies/managed
+  mkdir -p "$managed"
+  echo '{"BookmarkBarEnabled": false, "EditBookmarksEnabled": false}' > "$managed/neo-minimal-ui.json"
+
+  # Chromium takes its frame-button layout from GTK. openbox keeps Neo
+  # maximized, there is no taskbar to restore a minimized window from, and Neo
+  # is restarted here whenever it closes, so the frame needs no buttons.
+  local gtk
+  for gtk in gtk-3.0 gtk-4.0; do
+    mkdir -p "$NEO_HOME/.config/$gtk"
+    printf '[Settings]\ngtk-decoration-layout=:\n' > "$NEO_HOME/.config/$gtk/settings.ini"
+  done
+  chown -R neo:neo "$NEO_HOME/.config"
 }
 
 start_neo() {
@@ -251,6 +292,7 @@ rm -f "$CONFIGURED"
 apply_ids
 prepare_data
 apply_policies
+apply_minimal_ui
 start_display
 start_neo
 configure_neo &
