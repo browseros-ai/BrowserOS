@@ -831,11 +831,40 @@ describe('AcpAgentRuntime', () => {
     ).toBe(false)
   })
 
-  it('keeps the agent process when only the MCP lease header changes', async () => {
+  it('keeps the agent process when only the browser context changes', async () => {
     const fixture = await runtimeFixture({})
     const request = {
       agent: fixture.agent,
       conversationId: 'conversation-lease',
+      readOnly: false,
+      messages: [textMessage('user-1', 'user', 'hello')],
+    }
+
+    await collect(
+      await fixture.runtime.stream({
+        ...request,
+        browserToolLeaseToken: 'lease-token-one',
+        browserContext: { windowId: 1 },
+      }),
+    )
+    await collect(
+      await fixture.runtime.stream({
+        ...request,
+        browserToolLeaseToken: 'lease-token-one',
+        browserContext: { windowId: 2 },
+      }),
+    )
+
+    expect(fixture.providerSettings).toHaveLength(1)
+    expect(fixture.acpRuntime.ensureSessionCalls).toHaveLength(1)
+    expect(fixture.acpRuntime.closeCalls).toEqual([])
+  })
+
+  it('replaces the session when the browser tool lease is re-minted', async () => {
+    const fixture = await runtimeFixture({})
+    const request = {
+      agent: fixture.agent,
+      conversationId: 'conversation-remint',
       readOnly: false,
       messages: [textMessage('user-1', 'user', 'hello')],
     }
@@ -853,9 +882,16 @@ describe('AcpAgentRuntime', () => {
       }),
     )
 
-    expect(fixture.providerSettings).toHaveLength(1)
-    expect(fixture.acpRuntime.ensureSessionCalls).toHaveLength(1)
-    expect(fixture.acpRuntime.closeCalls).toEqual([])
+    // The first token was revoked when the lease was re-minted, so the cached
+    // provider cannot be reused: it has no way to pick up the new header.
+    expect(fixture.providerSettings).toHaveLength(2)
+    expect(fixture.providerSettings[1]?.mcpServers[0]).toMatchObject({
+      name: 'browseros',
+      headers: { 'X-BrowserOS-Internal-Lease': 'lease-token-two' },
+    })
+    expect(fixture.acpRuntime.closeCalls).toEqual([
+      { reason: 'policy-change', discardPersistentState: false },
+    ])
   })
 
   it('replaces the session when the working directory changes', async () => {
