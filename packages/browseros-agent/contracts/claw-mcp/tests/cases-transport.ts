@@ -61,7 +61,7 @@ export const transportCases: ContractCase[] = [
     },
   },
   {
-    name: 'transport: browser-shaped requests are rejected with 403',
+    name: 'transport: Origin is rejected but Fetch metadata is allowed',
     smoke: true,
     async run(ctx) {
       const body = JSON.stringify({
@@ -85,12 +85,14 @@ export const transportCases: ContractCase[] = [
           'content-type': 'application/json',
           accept: 'application/json, text/event-stream',
           'sec-fetch-site': 'cross-site',
+          'sec-fetch-mode': 'cors',
+          'sec-fetch-dest': 'empty',
         },
         body,
       })
-      if (withOrigin.status !== 403 || withSecFetch.status !== 403) {
+      if (withOrigin.status !== 403 || withSecFetch.status !== 200) {
         throw new Error(
-          `expected 403 for browser-shaped requests, got ${withOrigin.status}/${withSecFetch.status}`,
+          `expected Origin to be rejected and Fetch metadata to be allowed, got ${withOrigin.status}/${withSecFetch.status}`,
         )
       }
     },

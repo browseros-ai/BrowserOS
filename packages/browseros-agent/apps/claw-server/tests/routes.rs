@@ -341,7 +341,7 @@ async fn system_shutdown_preserves_contract_body_and_defers_runtime_teardown() -
 }
 
 #[tokio::test]
-async fn mcp_hygiene_rejects_browser_originated_requests() -> anyhow::Result<()> {
+async fn mcp_hygiene_rejects_browser_origin_but_allows_fetch_metadata() -> anyhow::Result<()> {
     let app = test_app().await?;
 
     let (status, _headers, body) = request_json_with_headers(
@@ -355,16 +355,30 @@ async fn mcp_hygiene_rejects_browser_originated_requests() -> anyhow::Result<()>
     assert_eq!(status, StatusCode::FORBIDDEN);
     assert_eq!(body, json!({ "error": "unsupported request" }));
 
+    let initialize = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": { "name": "Cherry Studio", "version": "1.0" }
+        }
+    });
     let (status, _headers, body) = request_json_with_headers(
         &app.router,
-        "GET",
+        "POST",
         "/mcp",
-        None,
-        &[("sec-fetch-site", "cross-site")],
+        Some(initialize),
+        &[
+            ("sec-fetch-site", "same-site"),
+            ("sec-fetch-mode", "cors"),
+            ("sec-fetch-dest", "empty"),
+        ],
     )
     .await?;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(body, json!({ "error": "unsupported request" }));
+    assert_eq!(status, StatusCode::OK, "initialize body: {body:?}");
+    assert_eq!(body["result"]["serverInfo"]["name"], "browseros-neo");
 
     // Hygiene applies to /mcp only: the same origin header is fine elsewhere.
     let (status, _headers, _body) = request_json_with_headers(
