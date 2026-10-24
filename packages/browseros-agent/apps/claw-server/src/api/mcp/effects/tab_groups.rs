@@ -26,8 +26,37 @@ use tracing::warn;
 /// Creates or joins the durable tab group for a successful `tabs new` call.
 pub fn apply(context: ToolEffectContext<'_>) -> BoxFuture<'_, anyhow::Result<Option<ToolResult>>> {
     Box::pin(async move {
-        if context.call.state.config.mode.is_hosted() || context.result.is_error {
+        if context.result.is_error {
             return Ok(None);
+        }
+        if context.call.state.config.mode.is_hosted() {
+            // The shared tool's stale-group note assumes desktop automatic grouping.
+            let Some((index, text)) =
+                context
+                    .result
+                    .content
+                    .iter()
+                    .enumerate()
+                    .find_map(|(index, block)| {
+                        block
+                            .as_text()
+                            .filter(|text| {
+                                text.text.starts_with("note: tab group ")
+                                    && text.text.contains(
+                                        "was not added to it and will go to your own group.",
+                                    )
+                            })
+                            .map(|text| (index, &text.text))
+                    })
+            else {
+                return Ok(None);
+            };
+            let mut result = context.result.clone();
+            result.content[index] = ContentBlock::text(text.replace(
+                "was not added to it and will go to your own group.",
+                "was not added to it and stays ungrouped.",
+            ));
+            return Ok(Some(result));
         }
         if context.call.identity.is_none() || context.call.browser_session.is_none() {
             return Ok(None);

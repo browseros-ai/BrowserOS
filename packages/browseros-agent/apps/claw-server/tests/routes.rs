@@ -2556,6 +2556,17 @@ async fn handle_mock_cdp_method(
         | "Runtime.runIfWaitingForDebugger"
         | "Target.setAutoAttach" => Ok(json!({})),
         "Page.captureScreenshot" => Ok(json!({ "data": "anBlZw==" })),
+        "Browser.getTabGroups" => {
+            let tabs = tabs.lock().await;
+            let ids = tabs
+                .iter()
+                .filter_map(|tab| tab.group_id.as_deref())
+                .collect::<std::collections::BTreeSet<_>>();
+            Ok(json!({"groups": ids.into_iter().map(|id| json!({
+                "groupId":id, "windowId":1, "title":"group", "color":"blue", "collapsed":false,
+                "tabIds":tabs.iter().filter(|tab| tab.group_id.as_deref() == Some(id)).map(|tab|tab.tab_id).collect::<Vec<_>>()
+            })).collect::<Vec<_>>()}))
+        }
         "Browser.createTabGroup" => {
             let mut tabs = tabs.lock().await;
             let group_id = format!(
@@ -2596,6 +2607,13 @@ async fn handle_mock_cdp_method(
                 .unwrap_or("group-1")
                 .to_string();
             let mut tabs = tabs.lock().await;
+            if !tabs
+                .iter()
+                .any(|tab| tab.group_id.as_deref() == Some(group_id.as_str()))
+            {
+                return Err("Tab group not found".to_string());
+            }
+
             let tab_ids = params
                 .get("tabIds")
                 .and_then(Value::as_array)
@@ -2892,12 +2910,21 @@ async fn tests_that_hosted_agents_can_explicitly_group_tabs_and_script_pages() -
         .await?;
         assert_ne!(result["result"]["isError"], true, "{result}");
     }
+    let stale = stateless_mcp_request(&app.router, "tools/call", json!({
+        "name":"tabs", "arguments":{"session":handle, "action":"new", "url":"https://example.com/stale", "groupId":"closed-group"}
+    }), Some("Codex")).await?;
+    assert_ne!(stale["result"]["isError"], true, "{stale}");
+    let text = stale["result"]["content"].to_string();
+    assert!(text.contains("not open"), "{stale}");
+    assert!(!text.contains("your own group"), "{stale}");
     let tabs = mock.tabs.lock().await;
-    assert_eq!(tabs.len(), 3);
+    assert_eq!(tabs.len(), 4);
     assert!(
-        tabs.iter()
+        tabs[..3]
+            .iter()
             .all(|tab| tab.group_id.as_deref() == Some(group_id.as_str()))
     );
+    assert_eq!(tabs[3].group_id, None);
     assert!(mock.group_updates.lock().await.is_empty());
     Ok(())
 }

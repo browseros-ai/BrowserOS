@@ -3555,6 +3555,7 @@ mod tests {
                 "name_session",
                 "taskName",
                 "reclaims",
+                "read as yours again",
                 "your own group",
                 "Record yours",
                 "your continuity across a remade connection is your tab group",

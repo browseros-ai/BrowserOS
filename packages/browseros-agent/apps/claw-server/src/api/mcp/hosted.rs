@@ -74,6 +74,14 @@ pub fn with_tool_guidance(mut tool: Tool) -> Tool {
             tool.description = Some(description.into());
         }
     }
+    if tool.name == "tab_groups"
+        && let Some(description) = tool.description.as_deref()
+    {
+        tool.description = Some(description.replace(
+            " To resume earlier work after a reconnect, pass the remembered group id as groupId on tabs action=\"new\" instead, which also makes that group's tabs read as yours again.",
+            "",
+        ).into());
+    }
     tool.input_schema = Arc::new(schema);
     tool
 }
